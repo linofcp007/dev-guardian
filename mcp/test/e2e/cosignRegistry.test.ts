@@ -110,7 +110,7 @@ describe.skipIf(NOT_READY !== null)(`cosign against a failing registry — exist
   it('nothing attached: absent and absent — the downloads say none, and the registry\'s own index lists nothing', async () => {
     await withRegistry({}, async (reg) => {
       const c = await detectImageSupplyChain(reg.image, ctx);
-      expect(c.run).toMatchObject({ name: 'cosign-tree', status: 'ok', target: reg.image });
+      expect(c.run).toMatchObject({ name: 'cosign-referrers', status: 'ok', target: reg.image });
       expect(c.findings.map((f) => f.rule_id).sort()).toEqual(['image-no-provenance', 'image-unsigned']);
       expect(c.summary).toMatchObject({ signature: 'absent', provenance: 'absent', checked: `${reg.host}/app@${reg.digest}` });
     });

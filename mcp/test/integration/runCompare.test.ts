@@ -936,7 +936,7 @@ describe("Task 15's scanners in the comparison", () => {
     });
 
     it('nor does an existence-only check of the same image', async () => {
-      const { s, p } = pair([verify('registry/app:1', EXPECTED)], [{ name: 'cosign-tree', status: 'ok', target: 'registry/app:1' }]);
+      const { s, p } = pair([verify('registry/app:1', EXPECTED)], [{ name: 'cosign-referrers', status: 'ok', target: 'registry/app:1' }]);
       expect((await diff(s, p, 'containers')).summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
     });
 

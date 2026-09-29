@@ -135,11 +135,8 @@ import { extractVersion } from './toolProbe.js';
 
 /** Findings of a real `cosign verify`. */
 export const COSIGN_VERIFY_TOOL_NAME = 'cosign-verify';
-/**
- * Findings of the existence check (the downloads) — named for the `cosign
- * tree` it first ran, and kept: it is a bookkeeping name history holds.
- */
-export const COSIGN_TREE_TOOL_NAME = 'cosign-tree';
+/** Findings of the existence check: what is attached as OCI referrers (and the legacy tags). */
+export const COSIGN_REFERRERS_TOOL_NAME = 'cosign-referrers';
 
 /** Each cosign call's own ceiling; cosign's own default `--timeout` is 3 min too. */
 export const COSIGN_TIMEOUT_MS = 180_000;
@@ -941,7 +938,7 @@ export interface ImageSignatureSummary {
 }
 
 export interface CosignImageCheck {
-  /** The one `tools_run` entry: `cosign-verify` or `cosign-tree`, with the image as its target. */
+  /** The one `tools_run` entry: `cosign-verify` or `cosign-referrers`, with the image as its target. */
   run: ToolRun;
   findings: Finding[];
   summary: ImageSignatureSummary;
@@ -1058,7 +1055,7 @@ interface Pinned {
  * the tag-only fallback, or — when the registry did not answer — the failed
  * check, returned as such, worded by its cause.
  */
-async function pin(image: string, pass: 'cosign-verify' | 'cosign-tree', run: ImageRun, extra: Partial<ToolRun>): Promise<Pinned | CosignImageCheck> {
+async function pin(image: string, pass: 'cosign-verify' | 'cosign-referrers', run: ImageRun, extra: Partial<ToolRun>): Promise<Pinned | CosignImageCheck> {
   const r = await cosign(['triangulate', '--type', 'digest', image], run);
   const res = classifyTriangulate(r);
   if (res.kind === 'digest') {
@@ -1084,7 +1081,7 @@ async function pin(image: string, pass: 'cosign-verify' | 'cosign-tree', run: Im
     run:
       pass === 'cosign-verify'
         ? { name: 'cosign-verify', status: 'failed', reason: `image ${image}: ${why}`, target: image, ...extra }
-        : { name: 'cosign-tree', status: 'failed', reason: `image ${image}: ${why}`, target: image, ...extra },
+        : { name: 'cosign-referrers', status: 'failed', reason: `image ${image}: ${why}`, target: image, ...extra },
     findings: [],
     summary: {
       image,
@@ -1347,7 +1344,7 @@ async function readAttestation(ref: string, type: string, run: ImageRun): Promis
 /** Whether `image` has a signature and signed SLSA provenance — existence only. */
 export async function detectImageSupplyChain(image: string, ctx: CosignRunContext): Promise<CosignImageCheck> {
   const run = imageRun(ctx);
-  const pinned = await pin(image, 'cosign-tree', run, {});
+  const pinned = await pin(image, 'cosign-referrers', run, {});
   if (isCheck(pinned)) return pinned;
 
   const sig = await readSignature(pinned.ref, run);
@@ -1385,7 +1382,7 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
         : ' Nothing ties it to who built it.';
     findings.push(
       makeFinding({
-        tool: COSIGN_TREE_TOOL_NAME,
+        tool: COSIGN_REFERRERS_TOOL_NAME,
         rule_id: 'image-unsigned',
         severity: 'low',
         category: 'security',
@@ -1406,7 +1403,7 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
   if (provenance === 'absent') {
     findings.push(
       makeFinding({
-        tool: COSIGN_TREE_TOOL_NAME,
+        tool: COSIGN_REFERRERS_TOOL_NAME,
         rule_id: 'image-no-provenance',
         severity: 'info',
         category: 'security',
@@ -1453,7 +1450,7 @@ export async function detectImageSupplyChain(image: string, ctx: CosignRunContex
   notes.push(pinned.scope);
   return {
     run: {
-      name: 'cosign-tree',
+      name: 'cosign-referrers',
       status: complete ? 'ok' : 'failed',
       reason: `image ${image} (${pinned.checked ?? 'tag not pinned'}): ${sigWords[signature]}; ${provWords[provenance]}`,
       target: image,

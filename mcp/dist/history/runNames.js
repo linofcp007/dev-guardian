@@ -151,8 +151,8 @@ export const RUN_NAMES = {
     // needs an image). `cosign` is only ever skipped — not installed, or
     // GUARDIAN_OFFLINE=1 — so neither pass ran.
     'cosign-verify': { measures: ['cosign-verify'], ownTarget: true, onRequest: true },
-    'cosign-tree': { measures: ['cosign-tree'], ownTarget: true, onRequest: true },
-    cosign: scanner('cosign-verify', 'cosign-tree'),
+    'cosign-referrers': { measures: ['cosign-referrers'], ownTarget: true, onRequest: true },
+    cosign: scanner('cosign-verify', 'cosign-referrers'),
     // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
     // existing — independent of Trivy and of each other.
     zizmor: scanner('zizmor'),

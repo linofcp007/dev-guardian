@@ -37,7 +37,7 @@ version bump.
   pusher chose is escaped, and URL query strings are cut, in every reason, finding and log line. One
   registry fault no request reveals (a referrers API answering with no index at all: 400, 406, HTML)
   makes a signed image read unsigned — see `SECURITY.md`. New bookkeeping names `cosign-verify`,
-  `cosign-tree`, `cosign`.
+  `cosign-referrers`, `cosign`.
 - `ci-init github --attest`: the pipeline also writes the JSON report and, on a push, a separate
   `attest` job signs a SLSA build-provenance attestation of it and of the SARIF
   (`actions/attest-build-provenance`, pinned by SHA with `upload-artifact` / `download-artifact` in

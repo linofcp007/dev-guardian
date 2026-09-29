@@ -37,7 +37,7 @@
  *     `.guardian/reports/containers-<scan>/`.
  *
  * Returns `tools_run` with one entry per pass (trivy-dockerfile / trivy-image
- * / hadolint / docker-compose / cosign-verify or cosign-tree; the
+ * / hadolint / docker-compose / cosign-verify or cosign-referrers; the
  * trivy-image and cosign entries name their image in `target`). Trivy's own
  * gap is only counted (added to
  * `missing_tools`) when there was something for it to scan — a project with

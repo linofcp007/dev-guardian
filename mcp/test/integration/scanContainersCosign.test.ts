@@ -332,7 +332,7 @@ describe('scan_containers + cosign: when the check cannot run', () => {
   it('an image its registry does not have (e.g. built locally, never pushed): failed, and the reason says so', async () => {
     fakeCosign({ triangulate: exit(1, 'Error: GET https://index.docker.io/v2/library/myapp/manifests/dev: UNAUTHORIZED: authentication required\n') });
     const r = await scan({ image: 'myapp:dev' });
-    const run = r.tools_run.find((t) => t.name === 'cosign-tree');
+    const run = r.tools_run.find((t) => t.name === 'cosign-referrers');
     expect(run?.status).toBe('failed');
     expect(run?.reason).toMatch(/UNAUTHORIZED/);
     expect(run?.reason).toMatch(/never pushed/);
@@ -344,7 +344,7 @@ describe('scan_containers + cosign: when the check cannot run', () => {
   it('review round 2: a rate-limited registry is worded as rate limiting, never "never pushed"', async () => {
     fakeCosign({ triangulate: exit(1, 'Error: GET https://index.docker.io/v2/library/alpine/manifests/3.20: TOOMANYREQUESTS: pull rate limit\n') });
     const r = await scan({ image: 'alpine:3.20' });
-    const run = r.tools_run.find((t) => t.name === 'cosign-tree');
+    const run = r.tools_run.find((t) => t.name === 'cosign-referrers');
     expect(run?.status).toBe('failed');
     expect(run?.reason).toMatch(/rate-limit/);
     expect(run?.reason).not.toMatch(/never pushed/);
@@ -361,7 +361,7 @@ describe('scan_containers + cosign: the digest cosign checked (review M1)', () =
     expect(r.image_signature?.checked).toBe(PINNED);
     expect(r.image_signature?.note).toMatch(/Trivy resolved the tag on its own/);
     expect(r.image_signature?.note).toMatch(/multi-arch index/);
-    expect(r.tools_run.find((t) => t.name === 'cosign-tree')?.reason).toContain(PINNED);
+    expect(r.tools_run.find((t) => t.name === 'cosign-referrers')?.reason).toContain(PINNED);
   });
 
   it('a cosign without `triangulate` (v4) checks the tag and says the digest was not pinned', async () => {
@@ -382,10 +382,10 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
   it('nothing attached — the downloads say none and the registry\'s index lists nothing: a low "unsigned" and an info "no provenance"', async () => {
     fakeCosign({});
     const r = await scan({});
-    expect(r.tools_run.find((t) => t.name === 'cosign-tree')).toMatchObject({ status: 'ok', target: IMAGE });
+    expect(r.tools_run.find((t) => t.name === 'cosign-referrers')).toMatchObject({ status: 'ok', target: IMAGE });
     expect(cosignFindings(r).map((f) => [f.tool, f.rule_id, f.severity]).sort()).toEqual([
-      ['cosign-tree', 'image-no-provenance', 'info'],
-      ['cosign-tree', 'image-unsigned', 'low'],
+      ['cosign-referrers', 'image-no-provenance', 'info'],
+      ['cosign-referrers', 'image-unsigned', 'low'],
     ]);
     expect(cosignFindings(r).every((f) => f.file_path === IMAGE)).toBe(true);
     expect(r.image_signature).toMatchObject({ check: 'detect', signature: 'absent', provenance: 'absent' });
@@ -403,7 +403,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
   it('review I2: the .sig tag fails loudly — signature unknown, no "unsigned" finding, failed', async () => {
     fakeCosign({ signature: SIG_500 });
     const r = await scan({});
-    const run = r.tools_run.find((t) => t.name === 'cosign-tree');
+    const run = r.tools_run.find((t) => t.name === 'cosign-referrers');
     expect(run?.status).toBe('failed');
     expect(run?.reason).toMatch(/UNKNOWN/);
     expect(cosignFindings(r).map((f) => f.rule_id)).toEqual(['image-no-provenance']);
@@ -414,7 +414,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
   it('review I2: the .att tag fails loudly — provenance unknown, no "no provenance" finding, failed', async () => {
     fakeCosign({ v1: ATT_500 });
     const r = await scan({});
-    expect(r.tools_run.find((t) => t.name === 'cosign-tree')?.status).toBe('failed');
+    expect(r.tools_run.find((t) => t.name === 'cosign-referrers')?.status).toBe('failed');
     expect(cosignFindings(r).map((f) => f.rule_id)).toEqual(['image-unsigned']);
     expect(r.image_signature).toMatchObject({ signature: 'absent', provenance: 'unknown' });
   });
@@ -425,7 +425,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
     expect(cosignFindings(r)).toEqual([]);
     expect(r.image_signature).toMatchObject({ signature: 'present_unverified', provenance: 'present_unverified' });
     expect(r.image_signature?.note).toMatch(/NOT verified/);
-    expect(r.tools_run.find((t) => t.name === 'cosign-tree')?.reason).toMatch(/NOT verified/);
+    expect(r.tools_run.find((t) => t.name === 'cosign-referrers')?.reason).toMatch(/NOT verified/);
     expect(cosignCalls().map((c) => c.slice(0, 2).join(' '))).toEqual(['version', 'triangulate --type', 'download signature', 'download attestation']);
   });
 
@@ -445,7 +445,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
   it('I3: a listed signing bundle whose blob answered 500 — signature unknown (named), no "unsigned" finding', async () => {
     fakeCosign({ referrers: [SIGN_BUNDLE], answers: [[SIGN_BUNDLE.layer ?? '', 500]] });
     const r = await scan({});
-    const run = r.tools_run.find((t) => t.name === 'cosign-tree');
+    const run = r.tools_run.find((t) => t.name === 'cosign-referrers');
     expect(run?.status).toBe('failed');
     expect(run?.reason).toMatch(/signature unknown \(the registry failed to serve/);
     expect(run?.reason).toMatch(/500/);
@@ -481,7 +481,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
     const r = await scan({});
     expect(r.image_signature?.signature).toBe('unknown');
     expect(cosignFindings(r).map((f) => f.rule_id)).not.toContain('image-unsigned');
-    expect(r.tools_run.find((t) => t.name === 'cosign-tree')?.reason).toMatch(/not a bundle it can parse, or the transfer failed mid-body; re-run if the registry was unstable/);
+    expect(r.tools_run.find((t) => t.name === 'cosign-referrers')?.reason).toMatch(/not a bundle it can parse, or the transfer failed mid-body; re-run if the registry was unstable/);
     expect(cosignCalls().filter((c) => c[1] === 'signature')).toHaveLength(2);
   });
 
@@ -528,7 +528,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
   it('the referrers lookup failing (500) — nothing is known about what is attached: unknown, no finding', async () => {
     fakeCosign({ lookup: 500 });
     const r = await scan({});
-    const run = r.tools_run.find((t) => t.name === 'cosign-tree');
+    const run = r.tools_run.find((t) => t.name === 'cosign-referrers');
     expect(run?.status).toBe('failed');
     expect(run?.reason).toMatch(/referrers API answered 500/);
     expect(cosignFindings(r)).toEqual([]);
@@ -539,7 +539,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
     fakeCosign({ trace: `${traceOf([])}…(truncated)\n` });
     const r = await scan({});
     expect(r.image_signature).toMatchObject({ signature: 'unknown', provenance: 'unknown' });
-    expect(r.tools_run.find((t) => t.name === 'cosign-tree')?.reason).toMatch(/cut at its size cap/);
+    expect(r.tools_run.find((t) => t.name === 'cosign-referrers')?.reason).toMatch(/cut at its size cap/);
     expect(cosignFindings(r)).toEqual([]);
   });
 
@@ -556,7 +556,7 @@ describe('scan_containers + cosign: without a signer (existence only)', () => {
     fakeCosign({ referrers: [{ ...PROVENANCE_BUNDLE, predicateType: evilType }], signature: out(`${bundleLine(evilType)}\n`) });
     const r2 = await scan({});
     expect(r2.image_signature?.signature).toBe('attestation_only_unverified');
-    const reason = r2.tools_run.find((t) => t.name === 'cosign-tree')?.reason ?? '';
+    const reason = r2.tools_run.find((t) => t.name === 'cosign-referrers')?.reason ?? '';
     expect(reason).toContain('\\u202e');
     expect(reason).not.toMatch(RAW);
     expect(r2.image_signature?.note).not.toMatch(RAW);

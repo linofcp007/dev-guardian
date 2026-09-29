@@ -47314,7 +47314,7 @@ function firstLine3(text) {
 
 // src/runners/cosignCheck.ts
 var COSIGN_VERIFY_TOOL_NAME = "cosign-verify";
-var COSIGN_TREE_TOOL_NAME = "cosign-tree";
+var COSIGN_REFERRERS_TOOL_NAME = "cosign-referrers";
 var COSIGN_TIMEOUT_MS = 18e4;
 var DEFAULT_IMAGE_BUDGET_MS = 10 * 60 * 1e3;
 var COSIGN_MIN_VERSION = "3.0.0";
@@ -47877,7 +47877,7 @@ async function pin(image, pass2, run, extra) {
   }
   const why = res.why;
   return {
-    run: pass2 === "cosign-verify" ? { name: "cosign-verify", status: "failed", reason: `image ${image}: ${why}`, target: image, ...extra } : { name: "cosign-tree", status: "failed", reason: `image ${image}: ${why}`, target: image, ...extra },
+    run: pass2 === "cosign-verify" ? { name: "cosign-verify", status: "failed", reason: `image ${image}: ${why}`, target: image, ...extra } : { name: "cosign-referrers", status: "failed", reason: `image ${image}: ${why}`, target: image, ...extra },
     findings: [],
     summary: {
       image,
@@ -48062,7 +48062,7 @@ async function readAttestation(ref, type, run) {
 }
 async function detectImageSupplyChain(image, ctx) {
   const run = imageRun(ctx);
-  const pinned = await pin(image, "cosign-tree", run, {});
+  const pinned = await pin(image, "cosign-referrers", run, {});
   if (isCheck(pinned)) return pinned;
   const sig = await readSignature(pinned.ref, run);
   const signature = sig.state;
@@ -48086,7 +48086,7 @@ async function detectImageSupplyChain(image, ctx) {
     const legacyProvenance = provenance === "present" ? " A signed SLSA provenance attestation IS attached as a legacy .att tag, which `cosign verify-attestation` checks \u2014 `cosign verify` does not accept it as the image's signature." : " Nothing ties it to who built it.";
     findings.push(
       makeFinding({
-        tool: COSIGN_TREE_TOOL_NAME,
+        tool: COSIGN_REFERRERS_TOOL_NAME,
         rule_id: "image-unsigned",
         severity: "low",
         category: "security",
@@ -48102,7 +48102,7 @@ async function detectImageSupplyChain(image, ctx) {
   if (provenance === "absent") {
     findings.push(
       makeFinding({
-        tool: COSIGN_TREE_TOOL_NAME,
+        tool: COSIGN_REFERRERS_TOOL_NAME,
         rule_id: "image-no-provenance",
         severity: "info",
         category: "security",
@@ -48142,7 +48142,7 @@ async function detectImageSupplyChain(image, ctx) {
   notes.push(pinned.scope);
   return {
     run: {
-      name: "cosign-tree",
+      name: "cosign-referrers",
       status: complete ? "ok" : "failed",
       reason: `image ${image} (${pinned.checked ?? "tag not pinned"}): ${sigWords[signature]}; ${provWords[provenance]}`,
       target: image
@@ -50855,8 +50855,8 @@ var RUN_NAMES = {
   // needs an image). `cosign` is only ever skipped — not installed, or
   // GUARDIAN_OFFLINE=1 — so neither pass ran.
   "cosign-verify": { measures: ["cosign-verify"], ownTarget: true, onRequest: true },
-  "cosign-tree": { measures: ["cosign-tree"], ownTarget: true, onRequest: true },
-  cosign: scanner("cosign-verify", "cosign-tree"),
+  "cosign-referrers": { measures: ["cosign-referrers"], ownTarget: true, onRequest: true },
+  cosign: scanner("cosign-verify", "cosign-referrers"),
   // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
   // existing — independent of Trivy and of each other.
   zizmor: scanner("zizmor"),
