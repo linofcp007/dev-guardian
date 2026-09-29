@@ -200,7 +200,9 @@ their respective projects.
   audit read one, a `requirements*.txt` (or a file it includes with `-r` /
   `-c`) whose `--index-url`, `--extra-index-url`, `--find-links`,
   `--no-index` or `--trusted-host` decides where pip-audit's resolution
-  installs from, `NuGet.config`, the .NET build's `.editorconfig`,
+  installs from (an include dev-guardian does not read — a URL, an
+  environment variable, a path or link out of the project — is named as
+  such: pip may take its index from it), `NuGet.config`, the .NET build's `.editorconfig`,
   `.globalconfig` and `Directory.Build.props` / `.targets`, and quality_check's
   ruff, jscpd, radon, staticcheck and ESLint configurations. `.guardianignore`
   is named on every run of a scan it shapes.

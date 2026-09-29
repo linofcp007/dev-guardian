@@ -412,7 +412,11 @@ version bump.
   include with `-r` / `-c` inside the project (by path and through links: the server reads nothing outside it) —
   that carries one is in `honoured_config`, and the reason says
   "honoured the project's requirements.txt (its package-index options decide which index pip-audit's resolution
-  installs from)". `runners/repoConfig.ts` has a `pip-audit` entry now; it read none before.
+  installs from)". `runners/repoConfig.ts` has a `pip-audit` entry now; it read none before. An include pip follows
+  and dev-guardian does not read — a URL (`-r https://…`), a path with an environment variable, a path or link out of
+  the project, a file over the size read — is named too, since one line of it picks the index (`requirements.txt
+  includes <target> (not read by dev-guardian): pip may take its index from it`), and the file holding the line is
+  in `honoured_config`. So is a handed requirements file that leads out of the project.
 - `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
   anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
   `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.

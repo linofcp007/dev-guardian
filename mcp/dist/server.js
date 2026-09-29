@@ -54379,33 +54379,25 @@ async function runPipAudit(opts) {
       anyFailed = true;
     }
   }
-  const steering = honouredHandedFiles(
-    ctx.projectPath,
-    "pip-audit",
-    requirementsFilesRead(ctx.projectPath, requirementsFiles)
-  );
+  const read2 = requirementsFilesRead(ctx.projectPath, requirementsFiles);
+  const steering = honouredHandedFiles(ctx.projectPath, "pip-audit", read2.read);
+  const named2 = (run) => withUnreadRequirements(withProjectConfig(run, steering), read2.unread);
   if (anyOk) {
     tools_run.push(
-      withProjectConfig(
-        {
-          name: "pip-audit",
-          status: "ok",
-          reason: anyFailed ? "parsed into findings (failed for at least one target)" : "parsed into findings"
-        },
-        steering
-      )
+      named2({
+        name: "pip-audit",
+        status: "ok",
+        reason: anyFailed ? "parsed into findings (failed for at least one target)" : "parsed into findings"
+      })
     );
     if (anyFailed) missing_tools.push("pip-audit");
   } else {
     tools_run.push(
-      withProjectConfig(
-        {
-          name: "pip-audit",
-          status: "failed",
-          reason: "ran but produced no audit report for any target (resolution failure or unsupported project?)"
-        },
-        steering
-      )
+      named2({
+        name: "pip-audit",
+        status: "failed",
+        reason: "ran but produced no audit report for any target (resolution failure or unsupported project?)"
+      })
     );
     missing_tools.push("pip-audit");
   }
@@ -54413,6 +54405,7 @@ async function runPipAudit(opts) {
 var PIP_INCLUDE = /^[ \t]*(?:--requirement|--constraint|-r|-c)(?:[ \t]*=[ \t]*|[ \t]+|(?=[^\s=]))(\S+)/;
 var MAX_REQUIREMENTS_FILES = 50;
 var MAX_REQUIREMENTS_BYTES = 1024 * 1024;
+var MAX_UNREAD_NAMED = 5;
 function requirementsFilesRead(projectPath, handed) {
   const within = (root, abs) => {
     const rel2 = relative13(root, abs);
@@ -54423,34 +54416,82 @@ function requirementsFilesRead(projectPath, handed) {
   try {
     realRoot = realpathSync6(projectPath);
   } catch {
-    return [];
+    return { read: [], unread: [] };
   }
   const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  const queue = [...handed];
-  while (queue.length > 0 && out.length < MAX_REQUIREMENTS_FILES) {
-    const abs = queue.shift();
-    if (abs === void 0) break;
-    const rel2 = within(projectPath, abs);
-    if (rel2 === null || seen.has(rel2)) continue;
+  const read2 = [];
+  const unread = [];
+  const queue = handed.map((abs) => ({
+    abs,
+    from: null,
+    target: within(projectPath, abs) ?? abs
+  }));
+  const notRead = (item) => {
+    unread.push({ from: item.from, target: item.target });
+  };
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (item === void 0) break;
+    const rel2 = within(projectPath, item.abs);
+    if (rel2 === null) {
+      notRead(item);
+      continue;
+    }
+    if (seen.has(rel2)) continue;
+    if (read2.length >= MAX_REQUIREMENTS_FILES) {
+      notRead(item);
+      continue;
+    }
     seen.add(rel2);
-    let text2;
+    let real;
     try {
-      if (within(realRoot, realpathSync6(abs)) === null) continue;
-      const st = statSync11(abs);
-      if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES) continue;
-      text2 = readFileSync25(abs, "utf8");
+      real = realpathSync6(item.abs);
     } catch {
       continue;
     }
-    out.push(rel2);
+    if (within(realRoot, real) === null) {
+      notRead(item);
+      continue;
+    }
+    let text2;
+    try {
+      const st = statSync11(real);
+      if (!st.isFile() || st.size > MAX_REQUIREMENTS_BYTES) {
+        notRead(item);
+        continue;
+      }
+      text2 = readFileSync25(real, "utf8");
+    } catch {
+      notRead(item);
+      continue;
+    }
+    read2.push(rel2);
     for (const line of text2.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
       const target = PIP_INCLUDE.exec(line)?.[1]?.replace(/^["']|["']$/g, "");
-      if (target === void 0 || target === "" || /^[a-z][a-z0-9+.-]*:\/\//i.test(target) || target.includes("$")) continue;
-      queue.push(resolve12(dirname15(abs), target));
+      if (target === void 0 || target === "") continue;
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) || target.includes("$")) {
+        notRead({ from: rel2, target });
+        continue;
+      }
+      queue.push({ abs: resolve12(dirname15(item.abs), target), from: rel2, target });
     }
   }
-  return out;
+  return { read: read2, unread };
+}
+function withUnreadRequirements(run, unread) {
+  if (unread.length === 0) return run;
+  const notes = [
+    ...new Set(
+      unread.map(
+        (u2) => u2.from === null ? `${u2.target} leads out of the project (not read by dev-guardian): pip may take its index from it` : `${u2.from} includes ${u2.target} (not read by dev-guardian): pip may take its index from it`
+      )
+    )
+  ];
+  const shown = notes.slice(0, MAX_UNREAD_NAMED);
+  const more = notes.length > shown.length ? [`and ${notes.length - shown.length} more not read by dev-guardian`] : [];
+  const reason = [run.reason, ...shown, ...more].filter((s) => s !== void 0 && s.length > 0).join("; ");
+  const holders = unread.map((u2) => u2.from ?? u2.target);
+  return { ...run, reason, honoured_config: [.../* @__PURE__ */ new Set([...run.honoured_config ?? [], ...holders])].sort() };
 }
 async function runDotnetSca(opts) {
   const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
