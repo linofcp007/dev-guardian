@@ -3213,13 +3213,37 @@ function xargsProgram(words, at) {
             return 'appended';
         const c = rest.findIndex((w, k) => k > i && !w.quoted && DASH_C.test(w.value));
         const script = c < 0 ? undefined : rest[c + 1]?.value;
-        return replace !== undefined && script !== undefined && script.includes(replace) ? 'replaced' : undefined;
+        if (script === undefined)
+            return undefined;
+        if (replace !== undefined && script.includes(replace))
+            return 'replaced';
+        return runsItsArguments(script) ? 'appended' : undefined;
     }
     if (!isInterpreter(name))
         return undefined;
     if (/^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last))
         return 'appended';
     return replace !== undefined && inlineCode(rest, i).some((code) => code.includes(replace)) ? 'replaced' : undefined;
+}
+/** A positional parameter: `$0`–`$9`, `$@`, `$*`, `${1}`. */
+const POSITIONAL = /\$(?:[0-9@*]|\{[0-9@*]\})/;
+/**
+ * A `-c` script that runs its own arguments (review 3.0 wave 2, round 2): one
+ * of its commands is `eval` of a positional parameter (`eval "$0"`, `eval
+ * $1`), or is named by one (`"$0"`, `$@`). xargs hands each line it reads to
+ * such a script as an argument, and the script runs it — `sh -c 'echo "$0"'`
+ * only prints it.
+ */
+function runsItsArguments(script) {
+    if (!POSITIONAL.test(script))
+        return false;
+    return splitShell(script).statements.some((st) => st.commands.some((words) => {
+        const at = resolveCommand(words).index;
+        const head = words[at]?.value ?? '';
+        if (POSITIONAL.test(head) && head.replace(POSITIONAL, '') === '')
+            return true;
+        return basename(head) === 'eval' && words.slice(at + 1).some((w) => POSITIONAL.test(w.value));
+    }));
 }
 /**
  * The string xargs replaces with each line it reads, from its own options:

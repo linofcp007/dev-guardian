@@ -486,6 +486,9 @@ version bump.
 - **The xargs deny names the safe form.** A download written into xargs's program through its replacement string
   (`… | jq -r … | xargs -I{} sh -c 'git clone …/{}'`) is denied under its own rule, `xargs-download-program`, whose
   message shows how to hand each line over as data instead: `xargs -I{} sh -c '… "$1"' _ {}` — which passes.
+- **`curl … | xargs -0 sh -c 'eval "$0"'` ran the download.** xargs hands each line to the script as an argument,
+  and a script that `eval`s a positional parameter — or runs one as its command (`"$0"`, `$@`) — runs it. Such a
+  `-c` script now counts as reading its stdin as a program; `sh -c 'echo "$0"'` and `eval` of a literal do not.
 
 ## [3.0.0] - 2026-09-29
 
