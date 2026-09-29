@@ -62,13 +62,14 @@ seria, com razão, apanhada pelas próprias regras que descreve.
 
 As instruções de uma skill são o que o modelo executa, por isso os comandos do
 `SKILL.md` contam tanto como os scripts: as regras de código também leem cada
-bloco de código (com qualquer linguagem indicada, ou nenhuma) e cada trecho de
-código inline, e duas regras de prosa leem, escritos como frases, um script
-remoto entregue a uma shell e um ficheiro de credenciais enviado para um URL.
-Código de um ficheiro de instruções sem qualquer alvo de rede — nenhum URL, IP
-ou host, nem uma variável dada a um cliente de rede — pontua um nível abaixo:
-uma skill que *documenta* um comando destrutivo ou um padrão de deteção não é
-uma skill que o executa.
+bloco de código (delimitado, indentado ou em `<pre>`) e cada trecho de código
+inline, incluindo um ficheiro descarregado e executado mais abaixo, e duas
+regras de prosa leem, escritos como frases, um script remoto entregue a uma
+shell e um ficheiro de credenciais enviado para um URL. Só pontua um nível
+abaixo o código em que um marcador de documentação (reticências, `<url>`,
+`example.com`) ocupa o lugar do alvo: uma skill que *documenta* um comando
+com um marcador não é uma skill que o executa. Código sem alvo nenhum não
+desce de nível — esconder o alvo é uma forma de ofuscação.
 
 ## Pontuação e veredicto
 

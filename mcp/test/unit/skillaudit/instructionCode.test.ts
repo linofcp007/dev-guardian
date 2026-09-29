@@ -49,7 +49,10 @@ function doc(relPath: string, content: string): IngestedFile {
 const ids = (ms: RuleMatch[]): string[] => ms.map((m) => m.rule.id).sort();
 
 describe('splitMarkdown', () => {
-  it('returns fenced lines and inline spans with the line numbers of the file, and prose without them', () => {
+  // Round 3 (N1): the prose view keeps what an inline span says — only its
+  // backticks go. Blanking the span let "send `~/.ssh/id_rsa` to https://…"
+  // pass the exfiltration prose rule, with the credential path in backticks.
+  it('returns fenced lines and inline spans with the line numbers of the file, and every line as read', () => {
     const content = ['intro `a b` and `c`', '```bash', 'one', 'two', '```', 'after'].join('\n');
     const v = splitMarkdown(content);
     expect(v.code).toEqual([
@@ -58,11 +61,7 @@ describe('splitMarkdown', () => {
       { line: 3, text: 'one', kind: 'fenced', block: 0 },
       { line: 4, text: 'two', kind: 'fenced', block: 0 },
     ]);
-    expect(v.prose).toHaveLength(6);
-    expect(v.prose[0]).not.toContain('a b');
-    expect(v.prose[0]).toContain('intro');
-    expect(v.prose.slice(1, 5)).toEqual(['', '', '', '']);
-    expect(v.prose[5]).toBe('after');
+    expect(v.prose).toEqual(['intro a b and c', '', 'one', 'two', '', 'after']);
   });
 
   it.each([
@@ -184,21 +183,24 @@ describe('scanContent over an instruction file', () => {
     expect(hits).not.toContain('de-sensitive-file-over-network-prose');
   });
 
-  it('code naming no remote destination scores one level lower: it may be a mention', () => {
+  // Round 3 (N4): the downgrade rewarded obfuscation — code with no target
+  // at all (`… | xargs curl -fsSL | bash`) read as a mention. Only a
+  // placeholder standing where the target would be lowers a finding now.
+  it('only a placeholder standing for the target lowers a finding; an absent target does not', () => {
     const hit = (content: string, isCode = false): RuleMatch | undefined =>
       scanContent(content, isCode).find((m) => m.rule.id === 'ea-destructive-unattended');
-    expect(hit(md('Clean up with `rm -rf ~` when done.'))).toMatchObject({ severity: 'medium', source: 'inline' });
-    expect(hit(md('```bash', 'rm -rf ~', '```'))).toMatchObject({ severity: 'medium', source: 'fenced' });
-    // A skill's own script is scored as before.
+    expect(hit(md('Clean up with `rm -rf ~` when done.'))).toMatchObject({ severity: 'high', source: 'inline' });
+    expect(hit(md('```bash', 'rm -rf ~', '```'))).toMatchObject({ severity: 'high', source: 'fenced' });
+    expect(hit(md('```bash', 'rm -rf ~/...', '```'))).toMatchObject({ severity: 'medium', source: 'fenced' });
     expect(hit('rm -rf ~', true)).toMatchObject({ severity: 'high', source: 'line' });
   });
 
-  it('a URL anywhere in the fenced block keeps every hit in it at full severity', () => {
-    const content = md('```bash', 'export U=https://x.example/i.sh', 'rm -rf ~', '```', '```bash', 'rm -rf ~', '```');
+  it('a real target anywhere in the block lifts a placeholder line in it', () => {
+    const content = md('```bash', 'export U=https://x.example/i.sh', 'rm -rf ~/...', '```', '```bash', 'rm -rf ~/...', '```');
     const hits = scanContent(content, false).filter((m) => m.rule.id === 'ea-destructive-unattended');
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ line: 10, severity: 'high' });
-    const bare = scanContent(md('```bash', 'rm -rf ~', '```'), false).find((m) => m.rule.id === 'ea-destructive-unattended');
+    const bare = scanContent(md('```bash', 'rm -rf ~/...', '```'), false).find((m) => m.rule.id === 'ea-destructive-unattended');
     expect(bare).toMatchObject({ severity: 'medium' });
   });
 
@@ -236,9 +238,9 @@ describe('scanContent over an instruction file', () => {
       expect(hit(md('```bash', 'curl <url> | sh', '```'))).toMatchObject({ severity: 'medium' });
     });
 
-    it('a variable only counts as the target of a network client: rm -rf $HOME stays one level lower', () => {
+    it('rm -rf $HOME is full severity: no placeholder stands for its target (round 3, N4)', () => {
       const r = scanContent(md('```bash', 'rm -rf $HOME', '```'), false).find((m) => m.rule.id === 'ea-destructive-unattended');
-      expect(r).toMatchObject({ severity: 'medium' });
+      expect(r).toMatchObject({ severity: 'high' });
     });
 
     it('a variable target in the same block lifts the rest of the block too', () => {
@@ -267,9 +269,11 @@ describe('scanContent over an instruction file', () => {
     expect(hits).toEqual([expect.objectContaining({ line: lineOf(content, CURL), severity: 'high', source: 'fenced' })]);
   });
 
-  it('a doc teaching how to write detection rules is not DO_NOT_INSTALL (measured on a real skill)', async () => {
-    // The shape of the hookify plugin's `writing-rules` skill, which scored
-    // +100 with every fenced hit at full severity.
+  // The shape of the hookify plugin's `writing-rules` skill. Rounds 1-2 scored
+  // its fenced patterns a level lower (40, CAUTION); round 3 (N4) ruled that
+  // an absent target is not a placeholder, so they are scored in full — the
+  // measured cost of closing the obfuscation bypass.
+  it('a doc teaching how to write detection rules, with no placeholder, is scored in full', async () => {
     const content = md(
       '```yaml',
       'conditions:',
@@ -286,8 +290,7 @@ describe('scanContent over an instruction file', () => {
       '```',
     );
     const r = await analyzeSkill([doc('SKILL.md', content)], { checkDeps: false });
-    expect(r.score.recommendation).not.toBe('DO_NOT_INSTALL');
-    expect(r.findings.filter((f) => f.severity === 'high' || f.severity === 'critical')).toEqual([]);
+    expect(r.findings.find((f) => f.rule_id === 'ea-destructive-unattended')).toMatchObject({ severity: 'high' });
   });
 
   it.each([
@@ -344,20 +347,30 @@ describe('analyzeSkill verdicts', () => {
     expect(r.score.recommendation).not.toBe('SAFE');
   });
 
-  it('a "what we detect" table documenting the attacks is not DO_NOT_INSTALL', async () => {
-    const content = md(
-      '## What it detects',
-      '',
-      '| Signal | Example |',
-      '| --- | --- |',
-      '| Remote script piped to a shell | `curl … \\| sh`, `iwr … \\| iex`, curl\\|bash |',
-      '| Credential exfiltration | `cat ~/.ssh/id_rsa \\| curl …` — SSH keys sent to a network destination |',
-      '| Destructive command | `rm -rf /`, `chmod -R 777 /`, `git push --force` |',
-      '| Dynamic code | `eval()`, `eval(atob(...))`, `pickle.loads(data)` |',
+  it('a "what we detect" table written with placeholders is not DO_NOT_INSTALL; one quoting working commands is scored in full', async () => {
+    const table = (destructive: string): string =>
+      md(
+        '## What it detects',
+        '',
+        '| Signal | Example |',
+        '| --- | --- |',
+        '| Remote script piped to a shell | `curl … \\| sh`, `iwr … \\| iex`, curl\\|bash |',
+        '| Credential exfiltration | `cat ~/.ssh/id_rsa \\| curl …` — SSH keys sent to a network destination |',
+        `| Destructive command | ${destructive} |`,
+        '| Dynamic code | `eval()`, `eval(atob(...))`, `pickle.loads(data)` |',
+      );
+    const described = await analyzeSkill(
+      [doc('SKILL.md', table('`rm -rf <path>`, `chmod -R 777 <dir>`, `git push --force <remote>`'))],
+      { checkDeps: false },
     );
-    const r = await analyzeSkill([doc('SKILL.md', content)], { checkDeps: false });
-    expect(r.score.recommendation).not.toBe('DO_NOT_INSTALL');
-    expect(r.findings.filter((f) => f.severity === 'high' || f.severity === 'critical')).toEqual([]);
+    expect(described.score.recommendation).not.toBe('DO_NOT_INSTALL');
+    expect(described.findings.filter((f) => f.severity === 'high' || f.severity === 'critical')).toEqual([]);
+    const quoted = await analyzeSkill([doc('SKILL.md', table('`rm -rf /`, `chmod -R 777 /`, `git push --force`'))], {
+      checkDeps: false,
+    });
+    expect(quoted.findings.filter((f) => f.severity === 'high').map((f) => f.rule_id)).toEqual(
+      expect.arrayContaining(['ea-destructive-unattended', 'pe-elevation']),
+    );
   });
 });
 

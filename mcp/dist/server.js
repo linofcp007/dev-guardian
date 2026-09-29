@@ -10540,7 +10540,7 @@ var getStreamContents, appendFinalChunk, appendChunk, addNewChunk, getChunkType,
 var init_contents = __esm({
   "node_modules/get-stream/source/contents.js"() {
     init_stream();
-    getStreamContents = async (stream, { init, convertChunk, getSize, truncateChunk, addChunk, getFinalChunk, finalize }, { maxBuffer = Number.POSITIVE_INFINITY } = {}) => {
+    getStreamContents = async (stream, { init, convertChunk, getSize, truncateChunk, addChunk, getFinalChunk, finalize: finalize2 }, { maxBuffer = Number.POSITIVE_INFINITY } = {}) => {
       const asyncIterable = getAsyncIterable(stream);
       const state = init();
       state.length = 0;
@@ -10566,10 +10566,10 @@ var init_contents = __esm({
           getFinalChunk,
           maxBuffer
         });
-        return finalize(state);
+        return finalize2(state);
       } catch (error2) {
         const normalizedError = typeof error2 === "object" && error2 !== null ? error2 : new Error(error2);
-        normalizedError.bufferedData = finalize(state);
+        normalizedError.bufferedData = finalize2(state);
         throw normalizedError;
       }
     };
@@ -45414,14 +45414,14 @@ async function runScanBody(args) {
     plugin.storage.cves.bulkUpsert(cves.map((c3) => ({ ...c3, scan_id: scanId })));
   }
   const status = invocation.outcome === "completed" ? "completed" : invocation.outcome === "cancelled" ? "cancelled" : "failed";
-  const finalize = {
+  const finalize2 = {
     scan_id: scanId,
     status,
     tools_run: invocation.tools_run,
     missing_tools: invocation.missing_tools
   };
-  if (invocation.report_paths[0] !== void 0) finalize.report_dir = invocation.report_paths[0];
-  if (invocation.error !== void 0) finalize.error = invocation.error;
+  if (invocation.report_paths[0] !== void 0) finalize2.report_dir = invocation.report_paths[0];
+  if (invocation.error !== void 0) finalize2.error = invocation.error;
   const meta = { ...invocation.extras ?? {} };
   if (input.severity_min !== void 0) meta["severity_min"] = input.severity_min;
   if (args.parentScanId !== void 0) meta["parent_scan_id"] = args.parentScanId;
@@ -45440,8 +45440,8 @@ async function runScanBody(args) {
   if (OWASP_SCAN_TYPES.has(config2.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === void 0) {
     meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
   }
-  if (Object.keys(meta).length > 0) finalize.meta = meta;
-  const finishedAt = plugin.storage.scans.finalize(finalize);
+  if (Object.keys(meta).length > 0) finalize2.meta = meta;
+  const finishedAt = plugin.storage.scans.finalize(finalize2);
   if (status === "cancelled") {
     return failDomain("cancelled", "Scan was cancelled by the host.");
   }
@@ -67428,60 +67428,181 @@ function dedupe(queries) {
 
 // src/skillaudit/markdownCode.ts
 var FENCE_OPEN = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
-var CONTINUATION = /\\[ \t]*$/;
-function splitMarkdown(content) {
+var INDENTED = /^(?: {4,}|\t)(?=\S)/;
+var HTML_CODE_TAG = /<\/?(?:pre|code|kbd|samp|tt)\b[^>]*>/gi;
+var HTML_CODE_INLINE = /<(pre|code|kbd|samp|tt)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+var PRE_OPEN = /<pre\b[^>]*>/i;
+var CODE_BLOCK_OPEN = /^[ \t>]{0,3}<code\b[^>]*>/i;
+var BACKSLASH_CONTINUATION = /\\[ \t]*$/;
+var PIPE_CONTINUATION = /(?<!\|)\|[ \t]*$/;
+function continues(text2) {
+  return BACKSLASH_CONTINUATION.test(text2) || PIPE_CONTINUATION.test(text2);
+}
+function joinContinued(first, next) {
+  return `${first.replace(BACKSLASH_CONTINUATION, "")} ${next.trim()}`;
+}
+var NAMED_ENTITIES = {
+  lt: "<",
+  gt: ">",
+  amp: "&",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  verbar: "|",
+  vert: "|",
+  VerticalLine: "|",
+  dollar: "$",
+  lpar: "(",
+  rpar: ")",
+  sol: "/"
+};
+function decodeEntities(text2) {
+  return text2.replace(/&(#x[0-9a-f]+|#\d+|[A-Za-z]+);/gi, (whole, ref) => {
+    if (ref.startsWith("#x") || ref.startsWith("#X")) return safeCodePoint(Number.parseInt(ref.slice(2), 16), whole);
+    if (ref.startsWith("#")) return safeCodePoint(Number.parseInt(ref.slice(1), 10), whole);
+    return NAMED_ENTITIES[ref] ?? whole;
+  });
+}
+function safeCodePoint(code, fallback) {
+  return Number.isInteger(code) && code > 0 && code <= 1114111 ? String.fromCodePoint(code) : fallback;
+}
+var BlockLines = class {
+  constructor(out) {
+    this.out = out;
+  }
+  out;
+  pending = null;
+  add(unit) {
+    this.out.push(unit);
+    const more = continues(unit.text);
+    if (this.pending) {
+      const joined = { ...this.pending, text: joinContinued(this.pending.text, unit.text) };
+      if (more) {
+        this.pending = joined;
+      } else {
+        this.out.push(joined);
+        this.pending = null;
+      }
+    } else if (more) {
+      this.pending = unit;
+    }
+  }
+  end() {
+    if (this.pending) this.out.push(this.pending);
+    this.pending = null;
+  }
+};
+function splitMarkdown(content, opts = {}) {
+  const indentedCode = opts.indentedCode !== false;
   const lines = content.split(/\r?\n/);
   const code = [];
   const prose = [];
-  let fence = null;
+  const block = new BlockLines(code);
+  let state = null;
   let blocks = 0;
-  let pending = null;
+  let previousBlank = true;
   for (let i2 = 0; i2 < lines.length; i2 += 1) {
     const line = lines[i2] ?? "";
     const lineNo = i2 + 1;
-    if (fence) {
-      if (isClosingFence(line, fence)) {
-        if (pending) code.push(pending);
-        pending = null;
-        fence = null;
+    const current = blocks - 1;
+    if (state?.kind === "fenced") {
+      if (isClosingFence(line, state)) {
+        block.end();
+        state = null;
+        prose.push("");
       } else {
-        const block = blocks - 1;
-        code.push({ line: lineNo, text: line, kind: "fenced", block });
-        const continues = CONTINUATION.test(line);
-        if (pending) {
-          const joined = {
-            line: pending.line,
-            text: `${pending.text.replace(CONTINUATION, "")} ${line.trim()}`,
-            kind: "fenced",
-            block
-          };
-          if (continues) {
-            pending = joined;
-          } else {
-            code.push(joined);
-            pending = null;
-          }
-        } else if (continues) {
-          pending = { line: lineNo, text: line, kind: "fenced", block };
-        }
+        block.add({ line: lineNo, text: line, kind: "fenced", block: current });
+        prose.push(line);
       }
-      prose.push("");
+      previousBlank = line.trim() === "";
       continue;
+    }
+    if (state?.kind === "pre" && state.endsAtBlank && line.trim() === "") {
+      block.end();
+      state = null;
+    }
+    if (state?.kind === "pre") {
+      const close = state.close.exec(line);
+      const inside = decodeEntities((close ? line.slice(0, close.index) : line).replace(HTML_CODE_TAG, ""));
+      if (inside.trim() !== "") block.add({ line: lineNo, text: inside, kind: "pre", block: current });
+      prose.push(inside);
+      if (close) {
+        block.end();
+        state = null;
+      }
+      previousBlank = line.trim() === "";
+      continue;
+    }
+    if (state?.kind === "indented") {
+      if (INDENTED.test(line)) {
+        block.add({ line: lineNo, text: line.replace(/^(?: {4}|\t)/, ""), kind: "indented", block: current });
+        prose.push(line.trim());
+        previousBlank = false;
+        continue;
+      }
+      if (line.trim() === "") {
+        prose.push("");
+        previousBlank = true;
+        continue;
+      }
+      block.end();
+      state = null;
     }
     const open = FENCE_OPEN.exec(line);
     const run = open?.[1];
     if (open && run && !(run.startsWith("`") && (open[2] ?? "").includes("`"))) {
-      fence = { char: run.charAt(0), length: run.length };
+      state = { kind: "fenced", char: run.charAt(0), length: run.length };
       blocks += 1;
       prose.push("");
+      previousBlank = false;
       continue;
     }
     const spans = inlineSpans(line);
+    const outside = blankSpans(line, spans);
+    const opener = htmlBlockOpener(outside);
+    if (opener) {
+      state = { kind: "pre", close: opener.close, endsAtBlank: opener.endsAtBlank };
+      blocks += 1;
+      const after2 = decodeEntities(line.slice(opener.end).replace(HTML_CODE_TAG, ""));
+      if (after2.trim() !== "") block.add({ line: lineNo, text: after2, kind: "pre", block: blocks - 1 });
+      prose.push(decodeEntities(line.replace(HTML_CODE_TAG, "")));
+      previousBlank = false;
+      continue;
+    }
+    if (indentedCode && previousBlank && INDENTED.test(line)) {
+      state = { kind: "indented" };
+      blocks += 1;
+      block.add({ line: lineNo, text: line.replace(/^(?: {4}|\t)/, ""), kind: "indented", block: blocks - 1 });
+      prose.push(line.trim());
+      previousBlank = false;
+      continue;
+    }
     for (const s of spans) code.push({ line: lineNo, text: s.text, kind: "inline", block: null });
-    prose.push(blank(line, spans));
+    for (const m of outside.matchAll(HTML_CODE_INLINE)) {
+      const text2 = decodeEntities((m[2] ?? "").replace(HTML_CODE_TAG, ""));
+      if (text2.trim() !== "") code.push({ line: lineNo, text: text2, kind: "inline", block: null });
+    }
+    prose.push(decodeEntities(keepSpanText(line, spans).replace(HTML_CODE_TAG, "")));
+    previousBlank = line.trim() === "";
   }
-  if (pending) code.push(pending);
+  block.end();
   return { code, prose };
+}
+function htmlBlockOpener(outside) {
+  const pre = PRE_OPEN.exec(outside);
+  if (pre && !/<\/pre\s*>/i.test(outside.slice(pre.index))) {
+    return { close: /<\/pre\s*>/i, endsAtBlank: false, end: pre.index + pre[0].length };
+  }
+  const codeOpen = CODE_BLOCK_OPEN.exec(outside);
+  if (codeOpen && !/<\/code\s*>/i.test(outside)) {
+    return { close: /<\/code\s*>/i, endsAtBlank: true, end: codeOpen.index + codeOpen[0].length };
+  }
+  return null;
+}
+function blankSpans(line, spans) {
+  let out = line;
+  for (const s of spans) out = out.slice(0, s.start) + " ".repeat(s.end - s.start) + out.slice(s.end);
+  return out;
 }
 function isClosingFence(line, fence) {
   const m = /^[ \t>]*(`{3,}|~{3,})[ \t]*$/.exec(line);
@@ -67527,12 +67648,12 @@ function inlineSpans(line) {
   }
   return out;
 }
-function blank(line, spans) {
+function keepSpanText(line, spans) {
   if (spans.length === 0) return line;
   let out = "";
   let at = 0;
   for (const s of spans) {
-    out += `${line.slice(at, s.start)} `;
+    out += line.slice(at, s.start) + s.text;
     at = s.end;
   }
   return out + line.slice(at);
@@ -67699,6 +67820,8 @@ var NET_COMMAND_WITH_TARGET_RE = new RegExp(
 function hasFetchTarget(text2) {
   return REMOTE_DESTINATION_RE.test(text2) || NET_COMMAND_WITH_TARGET_RE.test(text2);
 }
+var INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
+var PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
 var AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 var SKILL_RULES = [
   // ───────────────────────────── prompt_injection ─────────────────────────
@@ -67912,13 +68035,14 @@ var SKILL_RULES = [
     message: "Downloads a remote script and executes it unverified (curl|bash and friends).",
     target: "code",
     patterns: [
-      /\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node)\b/i,
+      new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
       /\beval\s+"\$\(\s*(curl|wget)\b/i,
       /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
-      // `bash <(curl …)`, `sh -c "$(curl …)"` — the other two ways install
-      // one-liners are written, and the hook's block list names both.
-      /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b/i,
-      /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b/i,
+      // `bash <(curl …)`, `sh -c "$(curl …)"`, and the same with any
+      // interpreter (`python3 -c "$(curl …)"`, `node -e`, `perl -e`, `php -r`,
+      // `pwsh -Command`): an interpreter reading a program it just downloaded.
+      new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b`, "i"),
+      new RegExp(String.raw`\b${INTERPRETER}\s+(-\S+\s+)*-(c|e|r|Command|EncodedCommand)\s+["']?\$\(\s*(curl|wget)\b`, "i"),
       /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b/i
     ]
   },
@@ -67927,21 +68051,38 @@ var SKILL_RULES = [
     category: "supply_chain",
     severity: "high",
     title: "Instruction to pipe a remote script to a shell",
-    message: 'The prose of an instruction file tells the reader to download a script from a concrete target \u2014 a URL, or a variable set elsewhere \u2014 and run it unverified. The documentation shape (`curl \u2026 | sh`, "curl|bash") names no target and is not reported.',
+    message: 'The prose of an instruction file tells the reader to download a script from a concrete target \u2014 a URL, a host, or a variable set elsewhere \u2014 and run it unverified. The documentation shape (`curl \u2026 | sh`, "curl|bash") names no target and is not reported.',
     target: "prose",
     patterns: [
-      /\b(curl|wget)\b[^|]{0,200}?\b(https?|ftp):\/\/[^|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b/i,
-      // The URL moved out of the command (`URL=https://…`, then `curl -s $URL | bash`).
+      // A URL, a host with no scheme (`curl -fsSL get.example.io | sh`, the
+      // get.docker.com shape), or a variable (`URL=https://…`, then
+      // `curl -s $URL | bash`) as the target.
       new RegExp(
-        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${SHELL_VALUE}[^|\n]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b`,
+        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`,
         "i"
       ),
-      /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
-      /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
-      /\beval\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
-      /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]{0,200}?\bhttps?:\/\/[^|]{0,300}\|\s*(iex|invoke-expression)\b/i,
+      new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, "i"),
+      new RegExp(
+        String.raw`\b${INTERPRETER}\s+(-\S+\s+)*-(c|e|r|Command|EncodedCommand)\s+["']?\$\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`,
+        "i"
+      ),
+      new RegExp(String.raw`\beval\s+["']?\$\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, "i"),
+      new RegExp(
+        String.raw`\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(iex|invoke-expression)\b`,
+        "i"
+      ),
       /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b.{0,300}\bhttps?:\/\//i
     ]
+  },
+  {
+    id: "sc-download-then-run",
+    category: "supply_chain",
+    severity: "high",
+    title: "Remote file downloaded, then run",
+    message: "A file is downloaded (curl -o / -O, wget, iwr -OutFile) and later run from a shell or an interpreter, on the same line or further down the same file \u2014 curl|bash in two steps.",
+    target: "code",
+    // Read by `downloadThenRun` over the whole file, not line by line.
+    patterns: []
   },
   {
     id: "sc-untrusted-install",
@@ -68069,29 +68210,59 @@ var SKILL_RULES = [
     ]
   }
 ];
-function scanContent(content, isCode) {
+function scanContent(content, isCode, opts = {}) {
   const lines = content.split(/\r?\n/);
-  const whole = lines.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "line", namesRemote: true }));
   if (isCode) {
-    return dedupeByRuleLine(matchUnits(rulesFor("code", "any"), whole));
+    const units = codeFileUnits(lines);
+    return finalize([...matchUnits(rulesFor("code", "any"), units), ...downloadThenRun(units, false)]);
   }
-  const views = splitMarkdown(content);
+  const whole = lines.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "line", lowered: false }));
+  const views = splitMarkdown(content, { indentedCode: opts.markdown !== false });
   const targetBlocks = /* @__PURE__ */ new Set();
   for (const u2 of views.code) {
-    if (u2.block !== null && hasFetchTarget(u2.text)) targetBlocks.add(u2.block);
+    if (u2.block !== null && hasRealTarget(u2.text)) targetBlocks.add(u2.block);
   }
-  const prose = views.prose.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "prose", namesRemote: true }));
-  const code = views.code.filter((u2) => u2.kind === "fenced" || isWholeCommand(u2.text)).map((u2) => ({
+  const prose = views.prose.map((text2, i2) => ({
+    line: i2 + 1,
+    text: withoutDocHosts(text2),
+    display: text2,
+    source: "prose",
+    lowered: false
+  }));
+  const code = views.code.filter((u2) => u2.kind !== "inline" || isWholeCommand(u2.text)).map((u2) => ({
     line: u2.line,
     text: u2.text,
     source: u2.kind,
-    namesRemote: u2.block === null ? hasFetchTarget(u2.text) : targetBlocks.has(u2.block)
+    lowered: isPlaceholder(u2.text) && !(u2.block !== null && targetBlocks.has(u2.block))
   }));
-  return dedupeByRuleLine([
+  return finalize([
     ...matchUnits(rulesFor("text", "any"), whole),
     ...matchUnits(rulesFor("prose"), prose),
-    ...matchUnits(rulesFor("code"), code)
+    ...matchUnits(rulesFor("code"), code),
+    ...downloadThenRun([...code, ...prose].sort((a2, b) => a2.line - b.line), true)
   ]);
+}
+function codeFileUnits(lines) {
+  const units = [];
+  let pending = null;
+  lines.forEach((text2, i2) => {
+    const unit = { line: i2 + 1, text: text2, source: "line", lowered: false };
+    units.push(unit);
+    const more = continues(text2);
+    if (pending) {
+      const joined = { ...pending, text: joinContinued(pending.text, text2) };
+      if (more) {
+        pending = joined;
+      } else {
+        units.push(joined);
+        pending = null;
+      }
+    } else if (more) {
+      pending = unit;
+    }
+  });
+  if (pending) units.push(pending);
+  return units;
 }
 function rulesFor(...targets) {
   return SKILL_RULES.filter((r) => targets.includes(r.target));
@@ -68106,9 +68277,9 @@ function matchUnits(rules2, units) {
       for (const unit of units) {
         pattern.lastIndex = 0;
         if (!pattern.test(unit.text)) continue;
-        const severity = severityFor(rule, unit);
+        const severity = unit.lowered ? ONE_LEVEL_LOWER[full] : full;
         if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
-          best = { rule, line: unit.line, snippet: unit.text.trim().slice(0, 240), source: unit.source, severity };
+          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity };
         }
         if (severity === full) break;
       }
@@ -68117,9 +68288,27 @@ function matchUnits(rules2, units) {
   }
   return matches3;
 }
+function snippetOf(unit) {
+  return (unit.display ?? unit.text).trim().slice(0, 240);
+}
+var PLACEHOLDER_TOKEN_RE = /…|(?<![\w.])\.\.\.(?![\w.])|(?<=^|[\s=:'"(\[])<[A-Za-z][\w-]*>(?=$|[\s|;&)'"\/\]])/;
+var DOC_HOST_RE = /(?:\b(?:https?|s?ftp):\/\/)?(?<![\w.@-])(?:www\.)?example\.(?:com|org|net)(?![\w.-])(?:[:/][^\s'"<>|;&)]*)?/gi;
+function withoutDocHosts(text2) {
+  return text2.replace(DOC_HOST_RE, "<url>");
+}
+function hasRealTarget(text2) {
+  return hasFetchTarget(withoutDocHosts(text2));
+}
+function isPlaceholder(text2) {
+  if (hasRealTarget(text2)) return false;
+  DOC_HOST_RE.lastIndex = 0;
+  const docHost = DOC_HOST_RE.test(text2);
+  DOC_HOST_RE.lastIndex = 0;
+  return PLACEHOLDER_TOKEN_RE.test(text2) || docHost;
+}
 function isWholeCommand(span) {
   const t = span.trim();
-  return (/\s/.test(t) || hasFetchTarget(t)) && !/…|\.\.\./.test(t);
+  return (/\s/.test(t) || hasRealTarget(t)) && !isPlaceholder(t);
 }
 var ONE_LEVEL_LOWER = {
   critical: "high",
@@ -68128,20 +68317,73 @@ var ONE_LEVEL_LOWER = {
   low: "info",
   info: "info"
 };
-function severityFor(rule, unit) {
-  const base = severityOfRule(rule);
-  return unit.namesRemote ? base : ONE_LEVEL_LOWER[base];
-}
-function dedupeByRuleLine(matches3) {
-  const seen = /* @__PURE__ */ new Set();
+var CURL_OUTPUT = /\bcurl\b[^|;&\n]*?(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
+var CURL_REDIRECT = /\bcurl\b[^|;&\n]*?\s>\s*["']?([^\s"'|;&<>]+)/g;
+var CURL_REMOTE_NAME = /\bcurl\b[^|;&\n]*?\s(?:-[A-Za-z]*O[A-Za-z]*|--remote-name)(?=\s|$)[^|;&\n]*/g;
+var WGET_OUTPUT = /\bwget\b[^|;&\n]*?(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
+var WGET_REMOTE_NAME = /\bwget\b(?![^|;&\n]*\s-[A-Za-z]*O)[^|;&\n]*/g;
+var PS_OUTFILE = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|;&\n]*?\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
+var URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
+function downloadsIn(unit) {
   const out = [];
-  for (const m of matches3) {
-    const key = `${m.rule.id}:${m.line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(m);
+  const add = (m, file) => {
+    const base = basenameOf(file ?? "");
+    if (base !== "") out.push({ unit, end: m.index + m[0].length, file: base });
+  };
+  for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
+    for (const m of unit.text.matchAll(re)) add(m, m[1]);
+  }
+  for (const re of [CURL_REMOTE_NAME, WGET_REMOTE_NAME]) {
+    for (const m of unit.text.matchAll(re)) {
+      const url2 = URL_IN.exec(m[0]);
+      if (url2) add(m, url2[0].replace(/[?#].*$/, ""));
+    }
   }
   return out;
+}
+function basenameOf(path8) {
+  const base = path8.split(/[/\\]/).pop() ?? "";
+  return /[A-Za-z0-9]/.test(base) ? base : "";
+}
+var RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
+function runsFile(text2, file) {
+  const f = file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const end = String.raw`(?=$|[\s"'|;&)])`;
+  const viaRunner = String.raw`(?:^|[\s;&|(])(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\s+(?:-\S+\s+)*["']?(?:[^\s"'|;&]*[\/\\])?${f}${end}`;
+  const direct = String.raw`(?:^\s*|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)["']?[^\s"'|;&]*[\/\\]${f}${end}`;
+  return new RegExp(`${viaRunner}|${direct}`).test(text2);
+}
+var DOWNLOAD_THEN_RUN = SKILL_RULES.find((r) => r.id === "sc-download-then-run");
+function downloadThenRun(units, instructionFile) {
+  if (!DOWNLOAD_THEN_RUN) return [];
+  const full = severityOfRule(DOWNLOAD_THEN_RUN);
+  for (const dl of units.flatMap(downloadsIn)) {
+    const rest = dl.unit.text.slice(dl.end);
+    const run = runsFile(rest, dl.file) ? dl.unit : units.find((u2) => u2.line > dl.unit.line && runsFile(u2.text, dl.file));
+    if (!run) continue;
+    const lowered = instructionFile && isPlaceholder(dl.unit.text);
+    return [
+      {
+        rule: DOWNLOAD_THEN_RUN,
+        line: run.line,
+        snippet: `${snippetOf(run)} (downloaded at line ${dl.unit.line})`.slice(0, 240),
+        source: run.source,
+        severity: lowered ? ONE_LEVEL_LOWER[full] : full
+      }
+    ];
+  }
+  return [];
+}
+function finalize(matches3) {
+  const best = /* @__PURE__ */ new Map();
+  for (const m of matches3) {
+    const key = `${m.rule.id.replace(/-prose$/, "")}:${m.line}`;
+    const seen = best.get(key);
+    if (seen === void 0 || SEVERITY_RANK[m.severity] > SEVERITY_RANK[seen.severity] || m.severity === seen.severity && seen.source === "prose" && m.source !== "prose") {
+      best.set(key, m);
+    }
+  }
+  return [...best.values()];
 }
 function severityOfRule(rule) {
   return rule.severity ?? THREAT_CATEGORY_META[rule.category].defaultSeverity;
@@ -68370,7 +68612,7 @@ async function analyzeSkill(files, opts = {}) {
   }
   for (const file of files) {
     if (file.isExecutable) executableFiles += 1;
-    for (const m of scanContent(file.content, file.isCode)) {
+    for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
       push(
         makeFinding({
           tool: TOOL,
@@ -68493,11 +68735,22 @@ async function analyzeSkill(files, opts = {}) {
     hidden_unicode_files: hiddenUnicodeFiles
   };
 }
+function isMarkdownLike(relPath) {
+  const name = relPath.split("/").pop() ?? "";
+  return /\.(md|markdown|mdx|txt|rst|adoc)$/i.test(name) || !name.includes(".");
+}
+var CODE_SOURCE_TEXT = {
+  fenced: "a fenced code block",
+  indented: "an indented code block",
+  pre: "an HTML <pre> / <code> block",
+  inline: "inline code"
+};
 function whereFound(m) {
-  if (m.source !== "fenced" && m.source !== "inline") return "";
-  const where = m.source === "fenced" ? " Found in a fenced code block of an instruction file, which the model may run as written." : " Found in inline code of an instruction file, which the model may run as written.";
+  const kind = CODE_SOURCE_TEXT[m.source];
+  if (kind === void 0) return "";
+  const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
   const lowered = m.severity !== severityOfRule(m.rule);
-  return lowered ? `${where} Scored one level below the rule: nothing in it, or in its block, is a fetch target (no URL, IP, host, or variable given to a network client), and such code is as often a mention of the command as an instruction to run it.` : where;
+  return lowered ? `${where} Scored one level below the rule: a placeholder (\u2026, <url>, example.com) stands where its target would be, and nothing in it or in its block is a real target \u2014 the shape of documentation.` : where;
 }
 function emptyBreakdown() {
   const out = {};
@@ -69043,7 +69296,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced blocks, inline code and prose) are scored like the skill's own scripts; code there with no fetch target (no URL, IP, host, or variable given to a network client) scores one level lower, as it may be a mention. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down; only code where a placeholder (\u2026, <url>, example.com) stands for the target scores one level lower, as documentation. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };

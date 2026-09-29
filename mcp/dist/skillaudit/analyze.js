@@ -64,7 +64,7 @@ export async function analyzeSkill(files, opts = {}) {
         if (file.isExecutable)
             executableFiles += 1;
         // 1. Pattern rules.
-        for (const m of scanContent(file.content, file.isCode)) {
+        for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
             push(makeFinding({
                 tool: TOOL,
                 rule_id: m.rule.id,
@@ -183,18 +183,27 @@ export async function analyzeSkill(files, opts = {}) {
         hidden_unicode_files: hiddenUnicodeFiles,
     };
 }
+/** Markdown or plain text, where an indented block is code: `.md`, `.txt`, `.rst`, `.adoc`, or no extension. */
+function isMarkdownLike(relPath) {
+    const name = relPath.split('/').pop() ?? '';
+    return /\.(md|markdown|mdx|txt|rst|adoc)$/i.test(name) || !name.includes('.');
+}
 /** Says which part of an instruction file a code rule read, and why a hit scores below its rule. */
+const CODE_SOURCE_TEXT = {
+    fenced: 'a fenced code block',
+    indented: 'an indented code block',
+    pre: 'an HTML <pre> / <code> block',
+    inline: 'inline code',
+};
 function whereFound(m) {
-    if (m.source !== 'fenced' && m.source !== 'inline')
+    const kind = CODE_SOURCE_TEXT[m.source];
+    if (kind === undefined)
         return '';
-    const where = m.source === 'fenced'
-        ? ' Found in a fenced code block of an instruction file, which the model may run as written.'
-        : ' Found in inline code of an instruction file, which the model may run as written.';
+    const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
     const lowered = m.severity !== severityOfRule(m.rule);
     return lowered
-        ? `${where} Scored one level below the rule: nothing in it, or in its block, is a fetch target ` +
-            '(no URL, IP, host, or variable given to a network client), and such code is as often a mention of ' +
-            'the command as an instruction to run it.'
+        ? `${where} Scored one level below the rule: a placeholder (…, <url>, example.com) stands where its ` +
+            'target would be, and nothing in it or in its block is a real target — the shape of documentation.'
         : where;
 }
 function emptyBreakdown() {
