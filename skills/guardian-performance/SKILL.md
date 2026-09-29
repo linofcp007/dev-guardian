@@ -90,7 +90,7 @@ scenarios:
 
 - **Em CI** após cada PR contra ambiente de teste — apanha regressões cedo
 - **Antes de releases** importantes — confirma SLAs
-- **Periodicamente** (nightly) em staging — detecta degradação lenta
+- **Periodicamente** (nightly) em staging — deteta degradação lenta
 
 ## Profiling
 
@@ -140,7 +140,7 @@ for user in users:
 users = User.objects.select_related('profile').all()
 ```
 
-Detecção:
+Deteção:
 
 - Django: `django-silk` ou `django-debug-toolbar`
 - Node + Prisma/TypeORM: log queries em dev
@@ -174,7 +174,7 @@ Procura libs gigantes (moment.js → day.js, lodash → lodash-es + tree-shake, 
 
 ```bash
 node --inspect app.js
-# Em DevTools: Memory tab → Take heap snapshot, faz acções, take outro snapshot, compara
+# Em DevTools: Memory tab → Take heap snapshot, faz ações, take outro snapshot, compara
 ```
 
 Suspeitos comuns:

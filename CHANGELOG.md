@@ -76,6 +76,11 @@ version bump.
   restore still contacts NuGet, as SECURITY.md says; and the
   `security_scan_full` and `review_pr` descriptions left the plugin's LLM
   pack out of the rules on disk it still runs. All three now say so.
+- European Portuguese: "Detecção" (twice) and "detecta" in the skills are now
+  "Deteção" and "deteta", and a pre-AO90 "acções" is "ações". A test holds
+  the skills, the commands, `README.pt-PT.md` and the Semgrep packs' messages
+  and comments to a list of Brazilian markers (`usuário`, `arquivo`,
+  `você`, `registrar`, `seção`, `equipe`, the `está fazendo` gerund, …).
 - **`wp_plugin_check` said it did two things it never did.** Its description
   promised the "latest known" version and, with `target_url`, "a fresh WPScan
   lookup"; the handler makes no network call at all, and `target_url` only
