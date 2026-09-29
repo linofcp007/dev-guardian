@@ -2357,15 +2357,124 @@ function inlineCode(words: readonly ShellWord[], start: number): string[] {
 
 /**
  * True when `words` runs an interpreter that reads its program from stdin —
- * the interpreter and, at most, flags (or `-`); no `-c`/`-e` text, no module,
- * no script file. What `python - <<EOF … EOF` and `echo '…' | node` hand it is
- * its program.
+ * no `-c`/`-e` text, no module, no script file, whatever options come first
+ * ({@link interpreterProgram}). What `python - <<EOF … EOF` and `echo '…' |
+ * node` hand it is its program.
  */
 function isBareInterpreterStdin(words: readonly ShellWord[]): boolean {
-  const name = commandName(words[0]?.value ?? '');
-  if (!isInterpreter(name) || name === 'pwsh' || name === 'powershell' || name === 'deno') return false;
-  if (!words.slice(1).every((w) => w.value.startsWith('-'))) return false;
-  return inlineCode(words, 0).length === 0 && !words.some((w) => /^-[A-Za-z]*m$/.test(w.value));
+  const program = interpreterProgram(withoutRedirectWords(words), 0);
+  return program.kind === 'dash' || (program.kind === 'none' && program.readsStdin);
+}
+
+/**
+ * Where an interpreter's program comes from (review round 3, item 2):
+ *
+ *   - `inline` — on its command line (`python -c`, `node -e`, `perl -e`,
+ *     `php -r`, `deno eval`), or a module (`python -m json.tool`): stdin, or
+ *     any operand, is data;
+ *   - `file` — its first operand, `words[index]`;
+ *   - `dash` — an explicit `-`: stdin;
+ *   - `none` — no program at all, which `readsStdin` interpreters (python,
+ *     node, perl, ruby, php) then read from stdin; and the operand a process
+ *     substitution right after them would fill;
+ *   - `unknown` — not an interpreter this knows the options of.
+ *
+ * Read with each interpreter's own table of options that take a value, so
+ * `python3 -W ignore -`, `node --max-old-space-size 4096 i.js` and `perl -I lib
+ * f.pl` find the program behind them — `-W ignore` read `ignore` as the script.
+ */
+type InterpreterProgram =
+  | { kind: 'inline' }
+  | { kind: 'file'; index: number }
+  | { kind: 'dash' }
+  | { kind: 'none'; readsStdin: boolean }
+  | { kind: 'unknown' };
+
+/** Node's own options that take the next word as their value (besides `--opt=value`). */
+const NODE_OPTION_VALUED = new Set([
+  ...NODE_VALUED,
+  '--max-old-space-size', '--max-semi-space-size', '--stack-size', '--max-http-header-size', '--inspect-port',
+  '--debug-port', '--openssl-config', '--icu-data-dir', '--redirect-warnings', '--report-dir', '--report-directory',
+  '--report-filename', '--report-signal', '--diagnostic-dir', '--heapsnapshot-signal', '--heapsnapshot-near-heap-limit',
+  '--dns-result-order', '--unhandled-rejections', '--disable-warning', '--watch-path', '--test-reporter',
+  '--test-reporter-destination', '--test-name-pattern', '--test-concurrency', '--experimental-policy',
+  '--policy-integrity', '--secure-heap', '--secure-heap-min', '--cpu-prof-dir', '--cpu-prof-name', '--cpu-prof-interval',
+  '--heap-prof-dir', '--heap-prof-name', '--heap-prof-interval', '--trace-event-categories',
+  '--trace-event-file-pattern', '--use-largepages', '--tls-cipher-list', '--tls-keylog', '--localstorage-file',
+  '--env-file-if-exists', '--experimental-sea-config',
+]);
+
+/** deno run's and bun run's options that take the next word as their value. */
+const DENO_RUN_VALUED = new Set(['-c', '--config', '--import-map', '--lock', '--cert', '--location', '--seed', '--env-file', '--ext']);
+const BUN_RUN_VALUED = new Set([
+  '--cwd', '-c', '--config', '--env-file', '-r', '--preload', '--tsconfig-override', '-d', '--define', '-l', '--loader',
+  '--main-fields', '--conditions', '--filter', '-F', '--elide-lines', '--shell',
+]);
+
+/** The operand at `i`: `-` is stdin, anything else the program file. */
+function operandAt(words: readonly ShellWord[], i: number, readsStdin: boolean): InterpreterProgram {
+  const w = words[i];
+  if (w === undefined) return { kind: 'none', readsStdin };
+  return w.value === '-' ? { kind: 'dash' } : { kind: 'file', index: i };
+}
+
+/**
+ * A POSIX-style option cluster (`-uW ignore`, `-Wignore`, `-e 'code'`): `inline`
+ * letters define the program, `valued` letters take the rest of the cluster or
+ * the next word. Returns how many words the option used, or `inline`.
+ */
+function clusterWords(word: string, inline: string, valued: string): number | 'inline' {
+  for (let k = 1; k < word.length; k += 1) {
+    const c = word.charAt(k);
+    if (inline.includes(c)) return 'inline';
+    if (valued.includes(c)) return k === word.length - 1 ? 2 : 1;
+  }
+  return 1;
+}
+
+function interpreterProgram(words: readonly ShellWord[], at: number): InterpreterProgram {
+  const name = interpreterName(words[at]?.value ?? '');
+  const python = PYTHON.test(name);
+  const nodeLike = ['node', 'nodejs', 'tsx', 'ts-node'].includes(name);
+  if (!python && !nodeLike && !['perl', 'ruby', 'php', 'deno', 'bun'].includes(name)) return { kind: 'unknown' };
+  let i = at + 1;
+  if (name === 'deno' || name === 'bun') {
+    const sub = words[i]?.value ?? '';
+    if (sub === 'eval' || (name === 'bun' && /^(?:-e|-p|--eval|--print)$/.test(sub))) return { kind: 'inline' };
+    if (sub === 'run') i += 1;
+    else if (name === 'deno' || sub !== '-') return { kind: 'unknown' };
+  }
+  const readsStdin = !['deno', 'bun', 'tsx', 'ts-node'].includes(name);
+  for (; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (v === '--') return operandAt(words, i + 1, readsStdin);
+    if (v === '-' || !v.startsWith('-')) return operandAt(words, i, readsStdin);
+    if (python) {
+      if (v.startsWith('--')) {
+        if (v === '--check-hash-based-pycs') i += 1;
+        continue;
+      }
+      const used = clusterWords(v, 'cm', 'WXQ');
+      if (used === 'inline') return { kind: 'inline' };
+      i += used - 1;
+    } else if (nodeLike) {
+      if (/^-(?:e|p|pe|ep)$/.test(v) || /^--(?:eval|print)(?:=|$)/.test(v)) return { kind: 'inline' };
+      if (!v.includes('=') && NODE_OPTION_VALUED.has(v)) i += 1;
+    } else if (name === 'deno' || name === 'bun') {
+      if (!v.includes('=') && (name === 'deno' ? DENO_RUN_VALUED : BUN_RUN_VALUED).has(v)) i += 1;
+    } else if (name === 'php') {
+      if (/^-[rBRE]/.test(v)) return { kind: 'inline' };
+      if (v === '-f' || v === '-F') return operandAt(words, i + 1, readsStdin);
+      if (/^-[dcz]$/.test(v)) i += 1;
+    } else {
+      // perl and ruby: `-e` program text; the letters that take a value, as `perlLike` reads them.
+      if (v.startsWith('--')) continue;
+      const used = clusterWords(v, name === 'perl' ? 'eE' : 'e', name === 'perl' ? 'IMm' : 'IrCEFx');
+      if (used === 'inline') return { kind: 'inline' };
+      i += used - 1;
+    }
+  }
+  return { kind: 'none', readsStdin };
 }
 
 /** How a program's string literals are written: Python, JavaScript, or the rest (Perl, Ruby, PHP, PowerShell). */
@@ -2945,7 +3054,24 @@ function readsStdinAsScript(words: readonly ShellWord[], at: number): boolean {
   const name = commandName(words[at]?.value ?? '');
   if (STDIN_SHELLS.has(name)) return true;
   if ((name === 'source' || name === '.') && STDIN_PATHS.has(words[at + 1]?.value ?? '')) return true;
+  if (name === 'xargs') return xargsRunsStdin(words, at);
   return isInterpreter(name) && isBareInterpreterStdin(withoutRedirectWords(words.slice(at)));
+}
+
+/**
+ * `xargs [options] sh -c` with no script after `-c` (review round 3, item 2):
+ * xargs appends what it reads on stdin, so that text becomes the `-c` script —
+ * `curl … | xargs -0 sh -c` runs the download. Also an interpreter's `-c` /
+ * `-e` left without its program text.
+ */
+function xargsRunsStdin(words: readonly ShellWord[], at: number): boolean {
+  const rest = withoutRedirectWords(words.slice(at));
+  const i = resolveCommand(rest).index;
+  const name = commandName(rest[i]?.value ?? '');
+  const last = rest[rest.length - 1]?.value ?? '';
+  if (i >= rest.length - 1) return false;
+  if (SCRIPT_SHELLS.has(name) || name === 'su') return DASH_C.test(last);
+  return isInterpreter(name) && /^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last);
 }
 
 /** `words` without their redirections (`<<< text`, `> f`, `2>&1`) — the operator word and a detached target both go. */
@@ -2961,9 +3087,27 @@ function withoutRedirectWords(words: readonly ShellWord[]): ShellWord[] {
   return out;
 }
 
-/** An interpreter whose script operand is a process substitution that downloads: `python3 <(curl …)`, `node -u <(wget …)`. */
-const INTERPRETER_FETCH =
-  /(?:^|[\s;&|(){}])(?:[\w./-]*\/)?(?:python[0-9.]*|py|pypy[0-9.]*|node|nodejs|perl|ruby|php|bun|tsx|ts-node)(?:\s+-[\w-]+)*\s+<\(\s*(?:curl|wget)\b/i;
+/**
+ * An interpreter whose program is a process substitution that downloads:
+ * `python3 <(curl …)`, `node --max-old-space-size 4096 <(wget …)`. The `<(`
+ * ends statement `k` (`(` is a statement boundary), so its command's last word
+ * is the `<` and statement `k + 1` is what the substitution runs; the
+ * substitution is the program exactly when, without it, the interpreter has
+ * no program at all ({@link interpreterProgram}) — `python3 process.py <(curl
+ * …)` hands the download to a script as data.
+ */
+function interpreterRunsFetch(statements: readonly ShellStatement[], k: number): boolean {
+  const statement = statements[k];
+  if (statement === undefined || !statement.masked.endsWith('<')) return false;
+  const words = statement.commands[statement.commands.length - 1];
+  const lastWord = words?.[words.length - 1];
+  if (words === undefined || lastWord === undefined || lastWord.value !== '<' || lastWord.redirectAt?.[0] !== 0) return false;
+  const next = statements[k + 1]?.commands[0];
+  if (next === undefined || !['curl', 'wget'].includes(commandName(next[resolveCommand(next).index]?.value ?? ''))) return false;
+  const head = words.slice(0, -1);
+  const at = resolveCommand(head).index;
+  return interpreterProgram(head, at).kind === 'none';
+}
 
 const RULE_PROCESS_FETCH: MatchedRule = {
   id: 'process-substitution-remote-fetch',
@@ -3250,7 +3394,14 @@ function scriptOperand(words: readonly ShellWord[], at: number, name: string): s
   const rest = words.slice(at + 1);
   if (SCRIPT_SHELLS.has(name)) {
     if (rest.some((w) => !w.quoted && DASH_C.test(w.value))) return undefined;
-  } else if (inlineCode(words, at).length > 0 || rest.some((w) => /^-[A-Za-z]*m$/.test(w.value))) return undefined;
+    return withoutRedirections(rest).find((v) => !v.startsWith('-'));
+  }
+  // An interpreter's own options, read with its table of valued ones (round 3, item 2).
+  const plain = withoutRedirectWords(words.slice(at));
+  const program = interpreterProgram(plain, 0);
+  if (program.kind === 'file') return plain[program.index]?.value;
+  if (program.kind !== 'unknown') return undefined;
+  if (inlineCode(words, at).length > 0 || rest.some((w) => /^-[A-Za-z]*m$/.test(w.value))) return undefined;
   return withoutRedirections(rest).find((v) => !v.startsWith('-'));
 }
 
@@ -3447,7 +3598,9 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   if (powershellDownloadExecution(commandText)) out.push(RULE_IEX_DOWNLOAD);
   if (downloadsThenRuns(cmd, statements)) out.push(RULE_DOWNLOAD_RUN);
   // `python3 <(curl …)`: an interpreter's script is a download (round 2, ruling 2).
-  if (/<\(\s*(?:curl|wget)/i.test(commandText) && INTERPRETER_FETCH.test(commandText)) out.push(RULE_PROCESS_FETCH);
+  if (/<\(\s*(?:curl|wget)/i.test(commandText) && statements.some((_s, k) => interpreterRunsFetch(statements, k))) {
+    out.push(RULE_PROCESS_FETCH);
+  }
 
   for (const statement of statements) {
     // The total time budget: a hook that outlives Claude Code's 15 s timeout

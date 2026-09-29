@@ -81003,6 +81003,66 @@ function processSubstitutionFetch(text2) {
   }
   return false;
 }
+var NODE_VALUED = /* @__PURE__ */ new Set([
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+  "-C",
+  "--conditions",
+  "--input-type",
+  "--env-file",
+  "--title",
+  "--cwd",
+  "--config",
+  "--preload"
+]);
+var NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
+  ...NODE_VALUED,
+  "--max-old-space-size",
+  "--max-semi-space-size",
+  "--stack-size",
+  "--max-http-header-size",
+  "--inspect-port",
+  "--debug-port",
+  "--openssl-config",
+  "--icu-data-dir",
+  "--redirect-warnings",
+  "--report-dir",
+  "--report-directory",
+  "--report-filename",
+  "--report-signal",
+  "--diagnostic-dir",
+  "--heapsnapshot-signal",
+  "--heapsnapshot-near-heap-limit",
+  "--dns-result-order",
+  "--unhandled-rejections",
+  "--disable-warning",
+  "--watch-path",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-name-pattern",
+  "--test-concurrency",
+  "--experimental-policy",
+  "--policy-integrity",
+  "--secure-heap",
+  "--secure-heap-min",
+  "--cpu-prof-dir",
+  "--cpu-prof-name",
+  "--cpu-prof-interval",
+  "--heap-prof-dir",
+  "--heap-prof-name",
+  "--heap-prof-interval",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--use-largepages",
+  "--tls-cipher-list",
+  "--tls-keylog",
+  "--localstorage-file",
+  "--env-file-if-exists",
+  "--experimental-sea-config"
+]);
 var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "su", "pwsh", "powershell"]);
 var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
 var MAX_STATEMENT_LENGTH = 16 * 1024;
