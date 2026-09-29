@@ -697,7 +697,7 @@ Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak
 
 ### `wp_vuln_check`
 
-Run WPScan against a target URL (or against the URL inferred from a local install\_path) and return vulnerabilities affecting core / plugins / themes. Token optional; without one, you are rate-limited by the public DB.
+Run WPScan against a target URL (or against the URL inferred from a local install\_path) and return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan database is downloaded once (wpscan --update) unless GUARDIAN\_OFFLINE=1.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

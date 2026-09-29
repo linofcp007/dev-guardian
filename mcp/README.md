@@ -110,6 +110,7 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 - Files you asked for: `init_project` and `observability_setup` with `apply: true`, `precommit_install` (git hooks, through `pre-commit install`), and `scan_sast` / `bug_hunt` / `scan_wordpress` / `security_scan_full` with `auto_fix: true` — which refuses unless git confirms a clean tree or `allow_dirty: true` is passed.
 - `create_fix_pr` works in disposable git worktrees and removes them; only `apply: true` commits, pushes and opens pull requests.
 - `wp_vuln_check_source` caches the Wordfence feed in the user cache directory, never in the project.
+- `wp_vuln_check` writes its WPScan report under the install's `.guardian/reports/` when the install is on this machine, else under `wp-vuln-check/` in that user cache directory — never the server's working directory.
 - Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards.
 
 ## Adding a scan tool

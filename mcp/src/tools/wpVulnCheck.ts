@@ -6,21 +6,46 @@
  * live site) or `wp_install_path` (we infer versions via WP-CLI then
  * pass `--url` pointing at the bundled wp-config home_url).
  *
- * API token: read from `api_token` input or `WPSCAN_API_TOKEN` env. When
- * absent, surface a warning about rate limits but proceed.
+ * API token: read from `api_token` input or `WPSCAN_API_TOKEN` env.
+ *
+ * ---- Judged by WPScan's report, never its exit code alone (review C1) --
+ *
+ * It used to pass `--no-update` and never update, count any non-`completed`
+ * outcome as failed, and answer `ok: true` with no status, tools_run or
+ * coverage. With no database WPScan writes `{"scan_aborted": "Update
+ * required, …"}` and exits 4 — reproduced on 4.1.0 as `findings_count: 0`
+ * and a "rate limit" warning; exit 5 (VULNERABLE) was stored as failed; and
+ * without a token WPScan outputs NO vulnerability data at all
+ * (`vuln_api.error`), which read as a clean site. Now:
+ *
+ *   - exits 0 and 5 finish a scan; any other exit, or `scan_aborted`, is
+ *     `failed`;
+ *   - a missing database is downloaded once (`wpscan --update`, egress to
+ *     data.wpscan.org — SECURITY.md), then the scan runs again; with
+ *     GUARDIAN_OFFLINE=1 the scan is `failed` with that instruction instead;
+ *   - vulnerabilities were checked only when `vuln_api` answered (or the
+ *     report holds some): without a token the `wpscan` entry is `skipped`,
+ *     an API error `failed` — coverage none, `vulnerabilities_checked:
+ *     false`, never a clean 0;
+ *   - the response carries status / tools_run / missing_tools / coverage like
+ *     every other scan tool;
+ *   - the report goes under the install, or the per-user cache for a URL —
+ *     never the server's working directory.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { canonicalPath } from '../platform/projectPath.js';
-import { runProcess } from '../runners/processRunner.js';
+import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { wpscanParser } from '../runners/scannerParsers/wpscan.js';
+import { computeCoverage } from './scanCoverage.js';
 import { scannerAvailable } from './scanHelpers.js';
-import type { DomainError, ToolResult } from '../types.js';
+import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { wpInstallPathProblem, wpSiteKey } from '../wordpress/siteKeys.js';
+import { defaultWordfenceCacheDir } from '../wordpress/vulnFeed.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
@@ -46,8 +71,9 @@ const tool: ToolModule = {
   title: 'WordPress vuln-DB lookup (WPScan)',
   description:
     'Run WPScan against a target URL (or against the URL inferred from a local install_path) and ' +
-    'return vulnerabilities affecting core / plugins / themes. Token optional; without one, you ' +
-    'are rate-limited by the public DB.',
+    'return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no ' +
+    'vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan ' +
+    'database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -90,7 +116,6 @@ async function handler(
 
   // Resolve URL. When only the install path is given, ask WP-CLI for the home_url.
   let url = inp.target_url;
-  const warnings: string[] = [];
   if (!url && inp.wp_install_path) {
     const wpBin = await scannerAvailable('wp');
     if (!wpBin) {
@@ -122,16 +147,16 @@ async function handler(
   }
 
   const token = inp.api_token ?? process.env['WPSCAN_API_TOKEN'] ?? '';
-  if (!token) warnings.push('No WPSCAN_API_TOKEN — public-no-token rate limit applies.');
 
-  // Persist scan row first so we can attach findings/CVEs to it.
+  // The report goes under the install when it is on this machine, else the
+  // per-user dev-guardian cache — never the server's working directory,
+  // which is nobody's project (review C1). WPScan runs in that directory
+  // too: it reads `./.wpscan/scan.yml` from where it starts.
   const scanId = randomUUID();
-  const reportDir = join(
-    localInstall ?? process.cwd(),
-    '.guardian',
-    'reports',
-    `wpvuln-${scanId.slice(0, 8)}`,
-  );
+  const reportDir =
+    localInstall !== undefined
+      ? join(localInstall, '.guardian', 'reports', `wpvuln-${scanId.slice(0, 8)}`)
+      : join(defaultWordfenceCacheDir(), 'wp-vuln-check', `wpvuln-${scanId.slice(0, 8)}`);
   mkdirSync(reportDir, { recursive: true });
   const outFile = join(reportDir, 'wpscan.json');
 
@@ -146,92 +171,237 @@ async function handler(
     report_dir: reportDir,
   });
 
-  const args = [
-    '--no-update',
-    '--no-banner',
-    '--format',
-    'json',
-    '--output',
-    outFile,
-    '--enumerate',
-    'vp,vt',
-    '--url',
-    url,
-  ];
+  const args = ['--no-update', '--no-banner', '--format', 'json', '--output', outFile, '--enumerate', 'vp,vt', '--url', url];
   if (token) args.push('--api-token', token);
+  const scan = async (): Promise<WpscanAttempt> => {
+    rmSync(outFile, { force: true });
+    const run = await runProcess({ command: 'wpscan', args, cwd: reportDir, timeoutMs: 5 * 60_000 });
+    const raw = readReport(outFile, run.stdout);
+    return { run, raw, report: readWpscanReport(raw) };
+  };
 
-  const r = await runProcess({
-    command: 'wpscan',
-    args,
-    cwd: localInstall ?? process.cwd(),
-    timeoutMs: 5 * 60_000,
-  });
-
-  // Rate-limit signature
-  const rateLimited =
-    r.exitCode === 50 ||
-    /rate limit|throttled/i.test(r.stderr) ||
-    /rate limit|throttled/i.test(r.stdout);
-  if (rateLimited) {
-    warnings.push('WPScan rate-limited — results are partial. Try again later or set WPSCAN_API_TOKEN.');
-  }
-
-  let raw: string | null = null;
-  if (existsSync(outFile)) {
-    try {
-      raw = readFileSync(outFile, 'utf8');
-    } catch {
-      raw = null;
+  let attempt = await scan();
+  let failure: string | null = null;
+  let dbNote: string | null = null;
+  if (attempt.report.aborted !== null && MISSING_DB.test(attempt.report.aborted)) {
+    if (process.env['GUARDIAN_OFFLINE'] === '1') {
+      failure =
+        'WPScan has no local database, and GUARDIAN_OFFLINE=1 forbids downloading one: run `wpscan --update` ' +
+        'once (it downloads the database from data.wpscan.org), or unset GUARDIAN_OFFLINE, and re-run — nothing was scanned';
+    } else {
+      // Once. The update is its own run: no target, no token.
+      const update = await runProcess({
+        command: 'wpscan',
+        args: ['--update', '--no-banner'],
+        cwd: reportDir,
+        timeoutMs: 10 * 60_000,
+      });
+      if (update.outcome !== 'completed') {
+        failure =
+          `WPScan has no local database and \`wpscan --update\` failed (${firstLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) ` +
+          '— nothing was scanned; run `wpscan --update` by hand and re-run';
+      } else {
+        dbNote = 'database downloaded (wpscan --update)';
+        attempt = await scan();
+      }
     }
   }
-  // Fallback: wpscan stdout
-  if (!raw && r.stdout && r.stdout.trim().startsWith('{')) {
-    raw = r.stdout;
-    try {
-      writeFileSync(outFile, raw, 'utf8');
-    } catch {
-      /* ignore */
-    }
-  }
 
+  // Findings the report holds are real whatever the verdict.
   let findingsCount = 0;
   let cvesCount = 0;
-  if (raw) {
-    const parsed = wpscanParser.parse(raw);
+  if (attempt.raw !== null) {
+    const parsed = wpscanParser.parse(attempt.raw);
     if (parsed.findings.length > 0) {
-      ctx.storage.findings.bulkInsert(
-        parsed.findings.map((f) => ({ ...f, scan_id: scanId })),
-      );
+      ctx.storage.findings.bulkInsert(parsed.findings.map((f) => ({ ...f, scan_id: scanId })));
       findingsCount = parsed.findings.length;
     }
     if (parsed.cves.length > 0) {
       ctx.storage.cves.bulkUpsert(parsed.cves.map((c) => ({ ...c, scan_id: scanId })));
       cvesCount = parsed.cves.length;
     }
-  } else {
-    warnings.push('WPScan produced no parseable JSON output.');
+  }
+
+  const verdict = failure !== null ? { status: 'failed' as const, reason: failure, checked: false } : judgeWpscan(attempt, token.length > 0);
+  const toolRun: ToolRun = {
+    name: 'wpscan',
+    status: verdict.status,
+    reason: [verdict.reason, ...(dbNote !== null ? [dbNote] : [])].join('; '),
+  };
+  const tools_run = [toolRun];
+  const missing_tools = verdict.status === 'ok' ? [] : ['wpscan'];
+  const coverage = computeCoverage(tools_run, missing_tools);
+  const status = verdict.status === 'failed' ? 'failed' : 'completed';
+  const rateLimited = /limit/i.test(`${attempt.report.aborted ?? ''} ${attempt.report.vulnApiMessage ?? ''}`);
+
+  const warnings: string[] = [];
+  if (!verdict.checked) {
+    warnings.push(
+      verdict.status === 'failed'
+        ? `⚠️ wp_vuln_check: the scan did not complete (${verdict.reason}). A "0 findings" result is NOT a clean bill of health.`
+        : `⚠️ wp_vuln_check: ${verdict.reason}. A "0 findings" result is NOT a clean bill of health — ` +
+            'set WPSCAN_API_TOKEN (or pass api_token) and re-run.',
+    );
   }
 
   ctx.storage.scans.finalize({
     scan_id: scanId,
-    status: r.outcome === 'completed' || rateLimited ? 'completed' : 'failed',
-    tools_run: [{ name: 'wpscan', status: r.outcome === 'completed' ? 'ok' : 'failed' }],
-    missing_tools: [],
+    status,
+    tools_run,
+    missing_tools,
     report_dir: reportDir,
-    meta: { url, rate_limited: rateLimited, has_token: token.length > 0 },
+    meta: { url, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked },
   });
 
   return {
     ok: true,
     scan_id: scanId,
+    status,
     url,
     has_token: token.length > 0,
     rate_limited: rateLimited,
+    vulnerabilities_checked: verdict.checked,
+    coverage,
+    tools_run,
+    missing_tools,
     findings_count: findingsCount,
     cves_count: cvesCount,
     report_path: outFile,
     warnings,
   };
+}
+
+/** WPScan's own words for a scan it refused without a database (`lib/wpscan/errors/update.rb`). */
+const MISSING_DB = /update required|database file is missing/i;
+
+interface WpscanReport {
+  /** `scan_aborted`: why WPScan did not scan (`app/views/json/scan_aborted.erb`). */
+  aborted: string | null;
+  /**
+   * `vuln_api` (`app/views/json/vuln_api/status.erb`): `answered` (a plan and
+   * request counts), `no_token` (its `error`: "No WPScan API Token given, as
+   * a result vulnerability data has not been output"), `failed` (its
+   * `http_error` / `parse_error`), or `absent`.
+   */
+  vulnApi: 'answered' | 'no_token' | 'failed' | 'absent';
+  vulnApiMessage: string | null;
+  /** Vulnerabilities in the report: proof the API answered, whatever `vuln_api` says. */
+  vulnerabilities: number;
+}
+
+interface WpscanAttempt {
+  run: ProcessRunResult;
+  raw: string | null;
+  report: WpscanReport;
+}
+
+function readReport(outFile: string, stdout: string): string | null {
+  if (existsSync(outFile)) {
+    try {
+      const text = readFileSync(outFile, 'utf8');
+      if (text.trim().startsWith('{')) return text;
+    } catch {
+      /* fall through to stdout */
+    }
+  }
+  if (stdout.trim().startsWith('{')) {
+    try {
+      writeFileSync(outFile, stdout, 'utf8');
+    } catch {
+      /* the report path is best-effort; the verdict is not */
+    }
+    return stdout;
+  }
+  return null;
+}
+
+export function readWpscanReport(raw: string | null): WpscanReport {
+  const none: WpscanReport = { aborted: null, vulnApi: 'absent', vulnApiMessage: null, vulnerabilities: 0 };
+  if (raw === null) return none;
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return none;
+  }
+  if (typeof json !== 'object' || json === null) return none;
+  const root = json as Record<string, unknown>;
+  const aborted = typeof root['scan_aborted'] === 'string' ? root['scan_aborted'] : null;
+  const api = root['vuln_api'];
+  let vulnApi: WpscanReport['vulnApi'] = 'absent';
+  let vulnApiMessage: string | null = null;
+  if (typeof api === 'object' && api !== null) {
+    const a = api as Record<string, unknown>;
+    const text = (v: unknown): string | null => (typeof v === 'string' ? v : v === undefined ? null : JSON.stringify(v));
+    if (a['http_error'] !== undefined || a['parse_error'] !== undefined) {
+      vulnApi = 'failed';
+      vulnApiMessage = text(a['http_error'] ?? a['parse_error']);
+    } else if (a['error'] !== undefined) {
+      vulnApi = 'no_token';
+      vulnApiMessage = text(a['error']);
+    } else if (a['plan'] !== undefined || a['requests_remaining'] !== undefined) {
+      vulnApi = 'answered';
+    }
+  }
+  return { aborted, vulnApi, vulnApiMessage, vulnerabilities: wpscanParser.parse(raw).findings.length };
+}
+
+/**
+ * The `wpscan` entry: exits 0 (OK) and 5 (VULNERABLE) are a finished scan,
+ * anything else is not (`lib/wpscan/exit_code.rb`: 1 option error, 2
+ * interrupted, 3 exception, 4 "scan did not finish"); a `scan_aborted`
+ * report is not either. A finished scan checked vulnerabilities only when
+ * the API answered — WPScan outputs no vulnerability data at all without a
+ * token — so it is `ok` only then: `skipped` without a token, `failed` when
+ * the API erred. `checked` says whether vulnerabilities were looked up.
+ */
+function judgeWpscan(
+  attempt: WpscanAttempt,
+  hasToken: boolean,
+): { status: ToolRun['status']; reason: string; checked: boolean } {
+  const { run, raw, report } = attempt;
+  if (report.aborted !== null) {
+    return { status: 'failed', reason: `WPScan aborted the scan: ${report.aborted}`, checked: false };
+  }
+  const exit = run.exitCode;
+  const finished = (run.outcome === 'completed' || run.outcome === 'failed') && (exit === 0 || exit === 5);
+  if (!finished) {
+    const why = firstLine(run);
+    return {
+      status: 'failed',
+      reason: `wpscan did not finish (${run.outcome}, exit ${String(exit)})${why !== null ? `: ${why}` : ''}`,
+      checked: false,
+    };
+  }
+  if (raw === null) return { status: 'failed', reason: `wpscan exit ${String(exit)} but wrote no JSON report`, checked: false };
+  const exitText = exit === 5 ? 'exit 5 (vulnerable)' : `exit ${String(exit)}`;
+  if (report.vulnApi === 'answered' || report.vulnerabilities > 0) return { status: 'ok', reason: exitText, checked: true };
+  if (report.vulnApi === 'failed') {
+    return {
+      status: 'failed',
+      reason: `the WPScan vulnerability API failed (${report.vulnApiMessage ?? 'no detail'}) — vulnerabilities were not checked`,
+      checked: false,
+    };
+  }
+  if (report.vulnApi === 'no_token' || !hasToken) {
+    return {
+      status: 'skipped',
+      reason:
+        'WPScan enumerated the site, but no WPScan API token was given, so it fetched no vulnerability data — ' +
+        'vulnerabilities were not checked',
+      checked: false,
+    };
+  }
+  return {
+    status: 'skipped',
+    reason: "WPScan's report says nothing of its vulnerability API — vulnerabilities cannot be shown to have been checked",
+    checked: false,
+  };
+}
+
+function firstLine(r: Pick<ProcessRunResult, 'stderr' | 'stdout'>): string | null {
+  const line = `${r.stderr}\n${r.stdout}`.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return line === undefined ? null : line.trim().slice(0, 300);
 }
 
 function failDomain(

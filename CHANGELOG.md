@@ -51,6 +51,16 @@ version bump.
   `.tf.json`, Dockerfiles by Trivy's names, a Helm `Chart.yaml`, YAML/JSON with top-level `apiVersion` and `kind`,
   CloudFormation): plain YAML never trips it. `scan_iac` passes `.guardianignore` to Trivy natively. cosign is
   unchanged.
+- `wp_vuln_check` is judged by WPScan's report. With no WPScan database (a fresh machine), WPScan writes
+  `{"scan_aborted": "Update required, …"}` and exits 4 — the tool answered `ok`, 0 findings, with only a "rate
+  limit" warning and no status or coverage. Now: exits 0 and 5 (VULNERABLE, which used to be stored as failed)
+  finish a scan, anything else or `scan_aborted` is `failed`; a missing database is downloaded once with
+  `wpscan --update` and the scan re-run (with `GUARDIAN_OFFLINE=1`, failed with that instruction instead); without
+  an API token WPScan returns no vulnerability data (`vuln_api.error`), so the pass is `skipped`, coverage `none`,
+  `vulnerabilities_checked: false` — never a clean 0 — and an API error is `failed`. The response carries
+  `status`, `tools_run`, `missing_tools` and `coverage`. Its report goes under the install, or the per-user cache
+  for a URL, never the server's working directory, and WPScan runs there (it reads `./.wpscan/scan.yml`). Its
+  description no longer says a missing token only rate-limits.
 
 ## [3.0.0] - 2026-09-29
 

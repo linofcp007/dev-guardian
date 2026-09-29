@@ -45987,11 +45987,11 @@ function classifyRestoreFailure(stdout, stderr) {
   const lines = `${stderr}
 ${stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const errorLine = lines.find((l) => /\berror\s+[A-Z]+\d+\b/.test(l)) ?? lines.find((l) => /\berror\b/i.test(l));
-  const firstLine6 = errorLine ?? lines[0] ?? "(no output)";
-  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine6)?.[1] ?? "restore_failed";
+  const firstLine7 = errorLine ?? lines[0] ?? "(no output)";
+  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine7)?.[1] ?? "restore_failed";
   const kind = KIND_BY_CODE[code] ?? "other";
   const lead = kind === "lock_out_of_sync" ? "packages.lock.json is out of sync with the project (restore runs in --locked-mode and never rewrites it)" : kind === "package_not_found" ? "a package or version could not be found on the configured feeds" : kind === "feed_unreachable" ? "a package feed could not be reached" : "restore failed";
-  const stripped = firstLine6.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
+  const stripped = firstLine7.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
   const message3 = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
   return { code, kind, reason: `${lead} (${code}: ${message3})` };
 }
@@ -46034,8 +46034,8 @@ async function resolveBinary(name) {
   try {
     const result = await execa(finder, [name], { timeout: 2e3, reject: false });
     if (result.exitCode !== 0) return null;
-    const firstLine6 = result.stdout.split(/\r?\n/)[0]?.trim();
-    return firstLine6 && firstLine6.length > 0 ? firstLine6 : null;
+    const firstLine7 = result.stdout.split(/\r?\n/)[0]?.trim();
+    return firstLine7 && firstLine7.length > 0 ? firstLine7 : null;
   } catch {
     return null;
   }
@@ -46899,8 +46899,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message3, checkId) {
   if (message3 && message3.length > 0) {
-    const firstLine6 = message3.split(/\r?\n/)[0] ?? message3;
-    return firstLine6.length > 140 ? firstLine6.slice(0, 137) + "\u2026" : firstLine6;
+    const firstLine7 = message3.split(/\r?\n/)[0] ?? message3;
+    return firstLine7.length > 140 ? firstLine7.slice(0, 137) + "\u2026" : firstLine7;
   }
   return checkId;
 }
@@ -62459,8 +62459,8 @@ async function handler19(input, _ctx) {
     if (r.outcome === "completed") {
       stagesInstalled.push(stage);
     } else {
-      const firstLine6 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
-      stagesFailed.push({ stage, error: firstLine6?.trim() ?? r.outcome });
+      const firstLine7 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine7?.trim() ?? r.outcome });
     }
   }
   return {
@@ -64700,9 +64700,9 @@ function failDomain19(code, message3) {
 }
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync43, mkdirSync as mkdirSync10, readFileSync as readFileSync30, writeFileSync as writeFileSync14 } from "node:fs";
-import { randomUUID as randomUUID8 } from "node:crypto";
-import { join as join55 } from "node:path";
+import { existsSync as existsSync43, mkdirSync as mkdirSync11, readFileSync as readFileSync30, rmSync as rmSync7, writeFileSync as writeFileSync15 } from "node:fs";
+import { randomUUID as randomUUID9 } from "node:crypto";
+import { join as join56 } from "node:path";
 
 // src/runners/scannerParsers/wpscan.ts
 var WPSCAN_TOOL_NAME = "wpscan";
@@ -64834,345 +64834,12 @@ function unique3(keys) {
   return [...new Set(keys)];
 }
 
-// src/tools/wpVulnCheck.ts
-var inputSchema16 = {
-  wp_install_path: external_exports.string().optional().describe(
-    "Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine."
-  ),
-  target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
-  api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
-};
-var tool29 = {
-  name: "wp_vuln_check",
-  title: "WordPress vuln-DB lookup (WPScan)",
-  description: "Run WPScan against a target URL (or against the URL inferred from a local install_path) and return vulnerabilities affecting core / plugins / themes. Token optional; without one, you are rate-limited by the public DB.",
-  inputSchema: inputSchema16,
-  handler: async (input, ctx) => handler26(input, ctx)
-};
-registerToolModule(tool29);
-async function handler26(input, ctx) {
-  const inp = input;
-  if (!inp.target_url && !inp.wp_install_path) {
-    return failDomain20(
-      "unknown_scan_id",
-      "Provide either target_url or wp_install_path."
-    );
-  }
-  const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
-  if (installProblem !== null) return failDomain20("unsupported_target", installProblem);
-  const localInstall = inp.wp_install_path && existsSync43(inp.wp_install_path) ? inp.wp_install_path : void 0;
-  const wpscanBin = await scannerAvailable("wpscan");
-  if (!wpscanBin) {
-    return failDomain20(
-      "missing_scanner",
-      'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].'
-    );
-  }
-  let url2 = inp.target_url;
-  const warnings = [];
-  if (!url2 && inp.wp_install_path) {
-    const wpBin = await scannerAvailable("wp");
-    if (!wpBin) {
-      return failDomain20(
-        "missing_scanner",
-        "wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url."
-      );
-    }
-    const r2 = await runProcess({
-      command: "wp",
-      args: ["option", "get", "home", `--path=${inp.wp_install_path}`],
-      cwd: localInstall ?? process.cwd(),
-      timeoutMs: 3e4
-    });
-    if (r2.outcome === "completed") {
-      url2 = r2.stdout.trim();
-    } else {
-      return failDomain20(
-        "scanner_failed",
-        `wp option get home failed: ${r2.stderr.split(/\r?\n/)[0] ?? r2.outcome}`
-      );
-    }
-  }
-  if (!url2) {
-    return failDomain20("scanner_failed", "Could not resolve a target URL for WPScan.");
-  }
-  const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
-  if (!token) warnings.push("No WPSCAN_API_TOKEN \u2014 public-no-token rate limit applies.");
-  const scanId = randomUUID8();
-  const reportDir = join55(
-    localInstall ?? process.cwd(),
-    ".guardian",
-    "reports",
-    `wpvuln-${scanId.slice(0, 8)}`
-  );
-  mkdirSync10(reportDir, { recursive: true });
-  const outFile = join55(reportDir, "wpscan.json");
-  ctx.storage.scans.insert({
-    scan_id: scanId,
-    scan_type: "wp_vuln_check",
-    // Filed under the key the project-scoped readers look it up by
-    // (`wp_describe_setup`, `wp_plugin_check`): the install root in its
-    // canonical spelling, or the site URL the way wp_rest_audit files it.
-    project_path: inp.wp_install_path !== void 0 ? canonicalPath(inp.wp_install_path) : wpSiteKey(url2),
-    tree_hash: "",
-    report_dir: reportDir
-  });
-  const args = [
-    "--no-update",
-    "--no-banner",
-    "--format",
-    "json",
-    "--output",
-    outFile,
-    "--enumerate",
-    "vp,vt",
-    "--url",
-    url2
-  ];
-  if (token) args.push("--api-token", token);
-  const r = await runProcess({
-    command: "wpscan",
-    args,
-    cwd: localInstall ?? process.cwd(),
-    timeoutMs: 5 * 6e4
-  });
-  const rateLimited = r.exitCode === 50 || /rate limit|throttled/i.test(r.stderr) || /rate limit|throttled/i.test(r.stdout);
-  if (rateLimited) {
-    warnings.push("WPScan rate-limited \u2014 results are partial. Try again later or set WPSCAN_API_TOKEN.");
-  }
-  let raw = null;
-  if (existsSync43(outFile)) {
-    try {
-      raw = readFileSync30(outFile, "utf8");
-    } catch {
-      raw = null;
-    }
-  }
-  if (!raw && r.stdout && r.stdout.trim().startsWith("{")) {
-    raw = r.stdout;
-    try {
-      writeFileSync14(outFile, raw, "utf8");
-    } catch {
-    }
-  }
-  let findingsCount = 0;
-  let cvesCount = 0;
-  if (raw) {
-    const parsed = wpscanParser.parse(raw);
-    if (parsed.findings.length > 0) {
-      ctx.storage.findings.bulkInsert(
-        parsed.findings.map((f) => ({ ...f, scan_id: scanId }))
-      );
-      findingsCount = parsed.findings.length;
-    }
-    if (parsed.cves.length > 0) {
-      ctx.storage.cves.bulkUpsert(parsed.cves.map((c3) => ({ ...c3, scan_id: scanId })));
-      cvesCount = parsed.cves.length;
-    }
-  } else {
-    warnings.push("WPScan produced no parseable JSON output.");
-  }
-  ctx.storage.scans.finalize({
-    scan_id: scanId,
-    status: r.outcome === "completed" || rateLimited ? "completed" : "failed",
-    tools_run: [{ name: "wpscan", status: r.outcome === "completed" ? "ok" : "failed" }],
-    missing_tools: [],
-    report_dir: reportDir,
-    meta: { url: url2, rate_limited: rateLimited, has_token: token.length > 0 }
-  });
-  return {
-    ok: true,
-    scan_id: scanId,
-    url: url2,
-    has_token: token.length > 0,
-    rate_limited: rateLimited,
-    findings_count: findingsCount,
-    cves_count: cvesCount,
-    report_path: outFile,
-    warnings
-  };
-}
-function failDomain20(code, message3) {
-  return { ok: false, error: { code, message: message3 } };
-}
-
-// src/tools/wpVulnCheckSource.ts
-import { existsSync as existsSync44 } from "node:fs";
-import { join as join58 } from "node:path";
-
-// src/wordpress/sourceInventory.ts
-import { join as join56 } from "node:path";
-var MAX_HEADER_BYTES = 8192;
-var MAX_README_BYTES = 16384;
-function inventoryWordPressSource(wpPath) {
-  const warnings = [];
-  const coreVersion = readCoreVersion(wpPath);
-  if (coreVersion === null) {
-    warnings.push(
-      "wp-includes/version.php not found or unparsable under the given path \u2014 core version unknown."
-    );
-  }
-  return {
-    core: { version: coreVersion },
-    plugins: inventoryPlugins(wpPath, warnings),
-    themes: inventoryThemes(wpPath, warnings),
-    mu_plugins: inventoryMuPlugins(wpPath, warnings),
-    warnings
-  };
-}
-function warnUnversioned(warnings, label, stableTag) {
-  const stableTagNote = stableTag === void 0 ? "" : stableTag === null ? " (no readme.txt Stable tag either)" : ` (readme.txt's Stable tag is "${stableTag}", not a usable version)`;
-  warnings.push(`${label}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
-}
-function readCoreVersion(wpPath) {
-  const text2 = readTextSafe(join56(wpPath, "wp-includes", "version.php"));
-  if (text2 === null) return null;
-  const m = /\$wp_version\s*=\s*'([^']+)'/.exec(text2);
-  return m?.[1] ?? null;
-}
-function inventoryPlugins(wpPath, warnings) {
-  const pluginsDir = join56(wpPath, "wp-content", "plugins");
-  const out = [];
-  for (const entry of readDirSafe(pluginsDir)) {
-    if (entry.isDirectory()) {
-      const dir = join56(pluginsDir, entry.name);
-      const main2 = findMainFile(dir, entry.name, "Plugin Name");
-      if (main2 === null) {
-        warnings.push(`wp-content/plugins/${entry.name}: no file with a "Plugin Name:" header \u2014 skipped.`);
-        continue;
-      }
-      const text2 = readTextSafe(main2, MAX_HEADER_BYTES) ?? "";
-      const stableTag = readStableTag(join56(dir, "readme.txt"));
-      const headerVersion = extractHeader(text2, "Version");
-      const version2 = headerVersion ?? usableVersion(stableTag);
-      const component = {
-        slug: entry.name,
-        name: extractHeader(text2, "Plugin Name"),
-        version: version2,
-        path: main2
-      };
-      if (stableTag !== null) component.stable_tag = stableTag;
-      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, stableTag);
-      out.push(component);
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".php")) {
-      const filePath = join56(pluginsDir, entry.name);
-      const text2 = readTextSafe(filePath, MAX_HEADER_BYTES);
-      if (text2 === null || !hasHeader(text2, "Plugin Name")) continue;
-      const version2 = extractHeader(text2, "Version");
-      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, void 0);
-      out.push({
-        slug: entry.name.slice(0, -".php".length),
-        name: extractHeader(text2, "Plugin Name"),
-        version: version2,
-        path: filePath
-      });
-    }
-  }
-  return out;
-}
-function inventoryThemes(wpPath, warnings) {
-  const themesDir = join56(wpPath, "wp-content", "themes");
-  const out = [];
-  for (const entry of readDirSafe(themesDir)) {
-    if (!entry.isDirectory()) continue;
-    const styleCssPath = join56(themesDir, entry.name, "style.css");
-    const text2 = readTextSafe(styleCssPath, MAX_HEADER_BYTES);
-    if (text2 === null || !hasHeader(text2, "Theme Name")) {
-      warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header \u2014 skipped.`);
-      continue;
-    }
-    const version2 = extractHeader(text2, "Version");
-    if (version2 === null) warnUnversioned(warnings, `wp-content/themes/${entry.name}`, void 0);
-    out.push({
-      slug: entry.name,
-      name: extractHeader(text2, "Theme Name"),
-      version: version2,
-      path: styleCssPath
-    });
-  }
-  return out;
-}
-var MU_PLUGIN_LOADER_RE = /(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__|dirname\s*\(\s*__FILE__\s*\)|WPMU_PLUGIN_DIR|WP_PLUGIN_DIR)\s*\.\s*['"]\/?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+\.php)['"]/gi;
-function inventoryMuPlugins(wpPath, warnings) {
-  const muDir = join56(wpPath, "wp-content", "mu-plugins");
-  const out = [];
-  for (const entry of readDirSafe(muDir)) {
-    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".php")) continue;
-    const filePath = join56(muDir, entry.name);
-    const text2 = readTextSafe(filePath, MAX_HEADER_BYTES);
-    if (text2 === null) continue;
-    if (hasHeader(text2, "Plugin Name")) {
-      const slug = entry.name.slice(0, -".php".length);
-      const version2 = extractHeader(text2, "Version");
-      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${entry.name}`, void 0);
-      out.push({
-        slug,
-        name: extractHeader(text2, "Plugin Name"),
-        version: version2,
-        path: filePath
-      });
-      continue;
-    }
-    for (const match of text2.matchAll(MU_PLUGIN_LOADER_RE)) {
-      const subDir = match[1];
-      const subFile = match[2];
-      if (subDir === void 0 || subFile === void 0) continue;
-      const targetPath = join56(muDir, subDir, subFile);
-      const targetText = readTextSafe(targetPath, MAX_HEADER_BYTES);
-      if (targetText === null || !hasHeader(targetText, "Plugin Name")) continue;
-      const version2 = extractHeader(targetText, "Version");
-      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${subDir}`, void 0);
-      out.push({
-        slug: subDir,
-        name: extractHeader(targetText, "Plugin Name"),
-        version: version2,
-        path: targetPath
-      });
-    }
-  }
-  return out;
-}
-function findMainFile(dir, dirName, nameHeader) {
-  const candidates2 = readDirSafe(dir).filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".php"));
-  const preferredName = `${dirName.toLowerCase()}.php`;
-  const preferred = candidates2.find((e) => e.name.toLowerCase() === preferredName);
-  const ordered = preferred ? [preferred, ...candidates2.filter((e) => e !== preferred)] : candidates2;
-  for (const entry of ordered) {
-    const path8 = join56(dir, entry.name);
-    const text2 = readTextSafe(path8, MAX_HEADER_BYTES);
-    if (text2 !== null && hasHeader(text2, nameHeader)) return path8;
-  }
-  return null;
-}
-function readStableTag(readmePath) {
-  const text2 = readTextSafe(readmePath, MAX_README_BYTES);
-  if (text2 === null) return null;
-  const value = extractHeader(text2, "Stable tag");
-  return value;
-}
-function usableVersion(stableTag) {
-  if (stableTag === null) return null;
-  return /^trunk$/i.test(stableTag) ? null : stableTag;
-}
-function hasHeader(text2, name) {
-  return headerRegex(name).test(text2);
-}
-function extractHeader(text2, name) {
-  const m = headerRegex(name).exec(text2);
-  if (!m) return null;
-  const cleaned = (m[1] ?? "").trim().replace(/\*\/\s*$/, "").replace(/\?>\s*$/, "").trim();
-  return cleaned.length > 0 ? cleaned : null;
-}
-function headerRegex(name) {
-  return new RegExp(`^[ \\t/*#@]*${name}:(.*)$`, "im");
-}
-
 // src/wordpress/vulnFeed.ts
-import { mkdirSync as mkdirSync11, renameSync, writeFileSync as writeFileSync15 } from "node:fs";
+import { mkdirSync as mkdirSync10, renameSync, writeFileSync as writeFileSync14 } from "node:fs";
 import { readFile as readFile3 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { join as join57 } from "node:path";
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { join as join55 } from "node:path";
+import { randomUUID as randomUUID8 } from "node:crypto";
 var WORDFENCE_TOOL_NAME = "wordfence";
 var WORDFENCE_BASE_URL = "https://www.wordfence.com/api/intelligence/v3";
 var WORDFENCE_PRODUCTION_PATH = "/vulnerabilities/production";
@@ -65268,21 +64935,21 @@ function defaultWordfenceCacheDir(env = process.env) {
   const override = env["GUARDIAN_CACHE_DIR"];
   if (override !== void 0 && override.length > 0) return override;
   if (process.platform === "win32") {
-    const base2 = env["LOCALAPPDATA"] ?? join57(homedir2(), "AppData", "Local");
-    return join57(base2, "dev-guardian", "cache");
+    const base2 = env["LOCALAPPDATA"] ?? join55(homedir2(), "AppData", "Local");
+    return join55(base2, "dev-guardian", "cache");
   }
   if (process.platform === "darwin") {
-    const base2 = env["XDG_CACHE_HOME"] ?? join57(homedir2(), "Library", "Caches");
-    return join57(base2, "dev-guardian");
+    const base2 = env["XDG_CACHE_HOME"] ?? join55(homedir2(), "Library", "Caches");
+    return join55(base2, "dev-guardian");
   }
-  const base = env["XDG_CACHE_HOME"] ?? join57(homedir2(), ".cache");
-  return join57(base, "dev-guardian");
+  const base = env["XDG_CACHE_HOME"] ?? join55(homedir2(), ".cache");
+  return join55(base, "dev-guardian");
 }
 async function getWordfenceFeed(opts = {}) {
   const now = opts.now ?? Date.now();
   const env = opts.env ?? process.env;
   const cacheDir = opts.cacheDir ?? defaultWordfenceCacheDir(env);
-  const cachePath = join57(cacheDir, CACHE_FILE_NAME);
+  const cachePath = join55(cacheDir, CACHE_FILE_NAME);
   const cached2 = await readCachedFeed(cachePath);
   const cachedFresh = cached2 !== null && now - Date.parse(cached2.fetched_at) < WORDFENCE_FEED_TTL_MS;
   if (cachedFresh && cached2 !== null) {
@@ -65332,9 +64999,9 @@ async function readCachedFeed(cachePath) {
   }
 }
 async function writeCachedFeed(cachePath, payload) {
-  mkdirSync11(join57(cachePath, ".."), { recursive: true });
-  const tmpPath = `${cachePath}.${randomUUID9()}.tmp`;
-  writeFileSync15(tmpPath, JSON.stringify(payload), "utf8");
+  mkdirSync10(join55(cachePath, ".."), { recursive: true });
+  const tmpPath = `${cachePath}.${randomUUID8()}.tmp`;
+  writeFileSync14(tmpPath, JSON.stringify(payload), "utf8");
   renameSync(tmpPath, cachePath);
 }
 var CORE_SLUG = "wordpress";
@@ -65426,6 +65093,432 @@ function wordfenceMatchToFindingAndCve(match) {
     severity: match.severity
   };
   return { finding: finding4, cve };
+}
+
+// src/tools/wpVulnCheck.ts
+var inputSchema16 = {
+  wp_install_path: external_exports.string().optional().describe(
+    "Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine."
+  ),
+  target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
+  api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
+};
+var tool29 = {
+  name: "wp_vuln_check",
+  title: "WordPress vuln-DB lookup (WPScan)",
+  description: "Run WPScan against a target URL (or against the URL inferred from a local install_path) and return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.",
+  inputSchema: inputSchema16,
+  handler: async (input, ctx) => handler26(input, ctx)
+};
+registerToolModule(tool29);
+async function handler26(input, ctx) {
+  const inp = input;
+  if (!inp.target_url && !inp.wp_install_path) {
+    return failDomain20(
+      "unknown_scan_id",
+      "Provide either target_url or wp_install_path."
+    );
+  }
+  const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
+  if (installProblem !== null) return failDomain20("unsupported_target", installProblem);
+  const localInstall = inp.wp_install_path && existsSync43(inp.wp_install_path) ? inp.wp_install_path : void 0;
+  const wpscanBin = await scannerAvailable("wpscan");
+  if (!wpscanBin) {
+    return failDomain20(
+      "missing_scanner",
+      'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].'
+    );
+  }
+  let url2 = inp.target_url;
+  if (!url2 && inp.wp_install_path) {
+    const wpBin = await scannerAvailable("wp");
+    if (!wpBin) {
+      return failDomain20(
+        "missing_scanner",
+        "wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url."
+      );
+    }
+    const r = await runProcess({
+      command: "wp",
+      args: ["option", "get", "home", `--path=${inp.wp_install_path}`],
+      cwd: localInstall ?? process.cwd(),
+      timeoutMs: 3e4
+    });
+    if (r.outcome === "completed") {
+      url2 = r.stdout.trim();
+    } else {
+      return failDomain20(
+        "scanner_failed",
+        `wp option get home failed: ${r.stderr.split(/\r?\n/)[0] ?? r.outcome}`
+      );
+    }
+  }
+  if (!url2) {
+    return failDomain20("scanner_failed", "Could not resolve a target URL for WPScan.");
+  }
+  const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
+  const scanId = randomUUID9();
+  const reportDir = localInstall !== void 0 ? join56(localInstall, ".guardian", "reports", `wpvuln-${scanId.slice(0, 8)}`) : join56(defaultWordfenceCacheDir(), "wp-vuln-check", `wpvuln-${scanId.slice(0, 8)}`);
+  mkdirSync11(reportDir, { recursive: true });
+  const outFile = join56(reportDir, "wpscan.json");
+  ctx.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: "wp_vuln_check",
+    // Filed under the key the project-scoped readers look it up by
+    // (`wp_describe_setup`, `wp_plugin_check`): the install root in its
+    // canonical spelling, or the site URL the way wp_rest_audit files it.
+    project_path: inp.wp_install_path !== void 0 ? canonicalPath(inp.wp_install_path) : wpSiteKey(url2),
+    tree_hash: "",
+    report_dir: reportDir
+  });
+  const args = ["--no-update", "--no-banner", "--format", "json", "--output", outFile, "--enumerate", "vp,vt", "--url", url2];
+  if (token) args.push("--api-token", token);
+  const scan2 = async () => {
+    rmSync7(outFile, { force: true });
+    const run = await runProcess({ command: "wpscan", args, cwd: reportDir, timeoutMs: 5 * 6e4 });
+    const raw = readReport(outFile, run.stdout);
+    return { run, raw, report: readWpscanReport(raw) };
+  };
+  let attempt = await scan2();
+  let failure = null;
+  let dbNote = null;
+  if (attempt.report.aborted !== null && MISSING_DB.test(attempt.report.aborted)) {
+    if (process.env["GUARDIAN_OFFLINE"] === "1") {
+      failure = "WPScan has no local database, and GUARDIAN_OFFLINE=1 forbids downloading one: run `wpscan --update` once (it downloads the database from data.wpscan.org), or unset GUARDIAN_OFFLINE, and re-run \u2014 nothing was scanned";
+    } else {
+      const update = await runProcess({
+        command: "wpscan",
+        args: ["--update", "--no-banner"],
+        cwd: reportDir,
+        timeoutMs: 10 * 6e4
+      });
+      if (update.outcome !== "completed") {
+        failure = `WPScan has no local database and \`wpscan --update\` failed (${firstLine6(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) \u2014 nothing was scanned; run \`wpscan --update\` by hand and re-run`;
+      } else {
+        dbNote = "database downloaded (wpscan --update)";
+        attempt = await scan2();
+      }
+    }
+  }
+  let findingsCount = 0;
+  let cvesCount = 0;
+  if (attempt.raw !== null) {
+    const parsed = wpscanParser.parse(attempt.raw);
+    if (parsed.findings.length > 0) {
+      ctx.storage.findings.bulkInsert(parsed.findings.map((f) => ({ ...f, scan_id: scanId })));
+      findingsCount = parsed.findings.length;
+    }
+    if (parsed.cves.length > 0) {
+      ctx.storage.cves.bulkUpsert(parsed.cves.map((c3) => ({ ...c3, scan_id: scanId })));
+      cvesCount = parsed.cves.length;
+    }
+  }
+  const verdict = failure !== null ? { status: "failed", reason: failure, checked: false } : judgeWpscan(attempt, token.length > 0);
+  const toolRun = {
+    name: "wpscan",
+    status: verdict.status,
+    reason: [verdict.reason, ...dbNote !== null ? [dbNote] : []].join("; ")
+  };
+  const tools_run = [toolRun];
+  const missing_tools = verdict.status === "ok" ? [] : ["wpscan"];
+  const coverage = computeCoverage(tools_run, missing_tools);
+  const status = verdict.status === "failed" ? "failed" : "completed";
+  const rateLimited = /limit/i.test(`${attempt.report.aborted ?? ""} ${attempt.report.vulnApiMessage ?? ""}`);
+  const warnings = [];
+  if (!verdict.checked) {
+    warnings.push(
+      verdict.status === "failed" ? `\u26A0\uFE0F wp_vuln_check: the scan did not complete (${verdict.reason}). A "0 findings" result is NOT a clean bill of health.` : `\u26A0\uFE0F wp_vuln_check: ${verdict.reason}. A "0 findings" result is NOT a clean bill of health \u2014 set WPSCAN_API_TOKEN (or pass api_token) and re-run.`
+    );
+  }
+  ctx.storage.scans.finalize({
+    scan_id: scanId,
+    status,
+    tools_run,
+    missing_tools,
+    report_dir: reportDir,
+    meta: { url: url2, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked }
+  });
+  return {
+    ok: true,
+    scan_id: scanId,
+    status,
+    url: url2,
+    has_token: token.length > 0,
+    rate_limited: rateLimited,
+    vulnerabilities_checked: verdict.checked,
+    coverage,
+    tools_run,
+    missing_tools,
+    findings_count: findingsCount,
+    cves_count: cvesCount,
+    report_path: outFile,
+    warnings
+  };
+}
+var MISSING_DB = /update required|database file is missing/i;
+function readReport(outFile, stdout) {
+  if (existsSync43(outFile)) {
+    try {
+      const text2 = readFileSync30(outFile, "utf8");
+      if (text2.trim().startsWith("{")) return text2;
+    } catch {
+    }
+  }
+  if (stdout.trim().startsWith("{")) {
+    try {
+      writeFileSync15(outFile, stdout, "utf8");
+    } catch {
+    }
+    return stdout;
+  }
+  return null;
+}
+function readWpscanReport(raw) {
+  const none = { aborted: null, vulnApi: "absent", vulnApiMessage: null, vulnerabilities: 0 };
+  if (raw === null) return none;
+  let json;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return none;
+  }
+  if (typeof json !== "object" || json === null) return none;
+  const root = json;
+  const aborted4 = typeof root["scan_aborted"] === "string" ? root["scan_aborted"] : null;
+  const api = root["vuln_api"];
+  let vulnApi = "absent";
+  let vulnApiMessage = null;
+  if (typeof api === "object" && api !== null) {
+    const a2 = api;
+    const text2 = (v) => typeof v === "string" ? v : v === void 0 ? null : JSON.stringify(v);
+    if (a2["http_error"] !== void 0 || a2["parse_error"] !== void 0) {
+      vulnApi = "failed";
+      vulnApiMessage = text2(a2["http_error"] ?? a2["parse_error"]);
+    } else if (a2["error"] !== void 0) {
+      vulnApi = "no_token";
+      vulnApiMessage = text2(a2["error"]);
+    } else if (a2["plan"] !== void 0 || a2["requests_remaining"] !== void 0) {
+      vulnApi = "answered";
+    }
+  }
+  return { aborted: aborted4, vulnApi, vulnApiMessage, vulnerabilities: wpscanParser.parse(raw).findings.length };
+}
+function judgeWpscan(attempt, hasToken) {
+  const { run, raw, report } = attempt;
+  if (report.aborted !== null) {
+    return { status: "failed", reason: `WPScan aborted the scan: ${report.aborted}`, checked: false };
+  }
+  const exit = run.exitCode;
+  const finished8 = (run.outcome === "completed" || run.outcome === "failed") && (exit === 0 || exit === 5);
+  if (!finished8) {
+    const why = firstLine6(run);
+    return {
+      status: "failed",
+      reason: `wpscan did not finish (${run.outcome}, exit ${String(exit)})${why !== null ? `: ${why}` : ""}`,
+      checked: false
+    };
+  }
+  if (raw === null) return { status: "failed", reason: `wpscan exit ${String(exit)} but wrote no JSON report`, checked: false };
+  const exitText = exit === 5 ? "exit 5 (vulnerable)" : `exit ${String(exit)}`;
+  if (report.vulnApi === "answered" || report.vulnerabilities > 0) return { status: "ok", reason: exitText, checked: true };
+  if (report.vulnApi === "failed") {
+    return {
+      status: "failed",
+      reason: `the WPScan vulnerability API failed (${report.vulnApiMessage ?? "no detail"}) \u2014 vulnerabilities were not checked`,
+      checked: false
+    };
+  }
+  if (report.vulnApi === "no_token" || !hasToken) {
+    return {
+      status: "skipped",
+      reason: "WPScan enumerated the site, but no WPScan API token was given, so it fetched no vulnerability data \u2014 vulnerabilities were not checked",
+      checked: false
+    };
+  }
+  return {
+    status: "skipped",
+    reason: "WPScan's report says nothing of its vulnerability API \u2014 vulnerabilities cannot be shown to have been checked",
+    checked: false
+  };
+}
+function firstLine6(r) {
+  const line = `${r.stderr}
+${r.stdout}`.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return line === void 0 ? null : line.trim().slice(0, 300);
+}
+function failDomain20(code, message3) {
+  return { ok: false, error: { code, message: message3 } };
+}
+
+// src/tools/wpVulnCheckSource.ts
+import { existsSync as existsSync44 } from "node:fs";
+import { join as join58 } from "node:path";
+
+// src/wordpress/sourceInventory.ts
+import { join as join57 } from "node:path";
+var MAX_HEADER_BYTES = 8192;
+var MAX_README_BYTES = 16384;
+function inventoryWordPressSource(wpPath) {
+  const warnings = [];
+  const coreVersion = readCoreVersion(wpPath);
+  if (coreVersion === null) {
+    warnings.push(
+      "wp-includes/version.php not found or unparsable under the given path \u2014 core version unknown."
+    );
+  }
+  return {
+    core: { version: coreVersion },
+    plugins: inventoryPlugins(wpPath, warnings),
+    themes: inventoryThemes(wpPath, warnings),
+    mu_plugins: inventoryMuPlugins(wpPath, warnings),
+    warnings
+  };
+}
+function warnUnversioned(warnings, label, stableTag) {
+  const stableTagNote = stableTag === void 0 ? "" : stableTag === null ? " (no readme.txt Stable tag either)" : ` (readme.txt's Stable tag is "${stableTag}", not a usable version)`;
+  warnings.push(`${label}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
+}
+function readCoreVersion(wpPath) {
+  const text2 = readTextSafe(join57(wpPath, "wp-includes", "version.php"));
+  if (text2 === null) return null;
+  const m = /\$wp_version\s*=\s*'([^']+)'/.exec(text2);
+  return m?.[1] ?? null;
+}
+function inventoryPlugins(wpPath, warnings) {
+  const pluginsDir = join57(wpPath, "wp-content", "plugins");
+  const out = [];
+  for (const entry of readDirSafe(pluginsDir)) {
+    if (entry.isDirectory()) {
+      const dir = join57(pluginsDir, entry.name);
+      const main2 = findMainFile(dir, entry.name, "Plugin Name");
+      if (main2 === null) {
+        warnings.push(`wp-content/plugins/${entry.name}: no file with a "Plugin Name:" header \u2014 skipped.`);
+        continue;
+      }
+      const text2 = readTextSafe(main2, MAX_HEADER_BYTES) ?? "";
+      const stableTag = readStableTag(join57(dir, "readme.txt"));
+      const headerVersion = extractHeader(text2, "Version");
+      const version2 = headerVersion ?? usableVersion(stableTag);
+      const component = {
+        slug: entry.name,
+        name: extractHeader(text2, "Plugin Name"),
+        version: version2,
+        path: main2
+      };
+      if (stableTag !== null) component.stable_tag = stableTag;
+      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, stableTag);
+      out.push(component);
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".php")) {
+      const filePath = join57(pluginsDir, entry.name);
+      const text2 = readTextSafe(filePath, MAX_HEADER_BYTES);
+      if (text2 === null || !hasHeader(text2, "Plugin Name")) continue;
+      const version2 = extractHeader(text2, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, void 0);
+      out.push({
+        slug: entry.name.slice(0, -".php".length),
+        name: extractHeader(text2, "Plugin Name"),
+        version: version2,
+        path: filePath
+      });
+    }
+  }
+  return out;
+}
+function inventoryThemes(wpPath, warnings) {
+  const themesDir = join57(wpPath, "wp-content", "themes");
+  const out = [];
+  for (const entry of readDirSafe(themesDir)) {
+    if (!entry.isDirectory()) continue;
+    const styleCssPath = join57(themesDir, entry.name, "style.css");
+    const text2 = readTextSafe(styleCssPath, MAX_HEADER_BYTES);
+    if (text2 === null || !hasHeader(text2, "Theme Name")) {
+      warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header \u2014 skipped.`);
+      continue;
+    }
+    const version2 = extractHeader(text2, "Version");
+    if (version2 === null) warnUnversioned(warnings, `wp-content/themes/${entry.name}`, void 0);
+    out.push({
+      slug: entry.name,
+      name: extractHeader(text2, "Theme Name"),
+      version: version2,
+      path: styleCssPath
+    });
+  }
+  return out;
+}
+var MU_PLUGIN_LOADER_RE = /(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__|dirname\s*\(\s*__FILE__\s*\)|WPMU_PLUGIN_DIR|WP_PLUGIN_DIR)\s*\.\s*['"]\/?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+\.php)['"]/gi;
+function inventoryMuPlugins(wpPath, warnings) {
+  const muDir = join57(wpPath, "wp-content", "mu-plugins");
+  const out = [];
+  for (const entry of readDirSafe(muDir)) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".php")) continue;
+    const filePath = join57(muDir, entry.name);
+    const text2 = readTextSafe(filePath, MAX_HEADER_BYTES);
+    if (text2 === null) continue;
+    if (hasHeader(text2, "Plugin Name")) {
+      const slug = entry.name.slice(0, -".php".length);
+      const version2 = extractHeader(text2, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${entry.name}`, void 0);
+      out.push({
+        slug,
+        name: extractHeader(text2, "Plugin Name"),
+        version: version2,
+        path: filePath
+      });
+      continue;
+    }
+    for (const match of text2.matchAll(MU_PLUGIN_LOADER_RE)) {
+      const subDir = match[1];
+      const subFile = match[2];
+      if (subDir === void 0 || subFile === void 0) continue;
+      const targetPath = join57(muDir, subDir, subFile);
+      const targetText = readTextSafe(targetPath, MAX_HEADER_BYTES);
+      if (targetText === null || !hasHeader(targetText, "Plugin Name")) continue;
+      const version2 = extractHeader(targetText, "Version");
+      if (version2 === null) warnUnversioned(warnings, `wp-content/mu-plugins/${subDir}`, void 0);
+      out.push({
+        slug: subDir,
+        name: extractHeader(targetText, "Plugin Name"),
+        version: version2,
+        path: targetPath
+      });
+    }
+  }
+  return out;
+}
+function findMainFile(dir, dirName, nameHeader) {
+  const candidates2 = readDirSafe(dir).filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".php"));
+  const preferredName = `${dirName.toLowerCase()}.php`;
+  const preferred = candidates2.find((e) => e.name.toLowerCase() === preferredName);
+  const ordered = preferred ? [preferred, ...candidates2.filter((e) => e !== preferred)] : candidates2;
+  for (const entry of ordered) {
+    const path8 = join57(dir, entry.name);
+    const text2 = readTextSafe(path8, MAX_HEADER_BYTES);
+    if (text2 !== null && hasHeader(text2, nameHeader)) return path8;
+  }
+  return null;
+}
+function readStableTag(readmePath) {
+  const text2 = readTextSafe(readmePath, MAX_README_BYTES);
+  if (text2 === null) return null;
+  const value = extractHeader(text2, "Stable tag");
+  return value;
+}
+function usableVersion(stableTag) {
+  if (stableTag === null) return null;
+  return /^trunk$/i.test(stableTag) ? null : stableTag;
+}
+function hasHeader(text2, name) {
+  return headerRegex(name).test(text2);
+}
+function extractHeader(text2, name) {
+  const m = headerRegex(name).exec(text2);
+  if (!m) return null;
+  const cleaned = (m[1] ?? "").trim().replace(/\*\/\s*$/, "").replace(/\?>\s*$/, "").trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+function headerRegex(name) {
+  return new RegExp(`^[ \\t/*#@]*${name}:(.*)$`, "im");
 }
 
 // src/wordpress/wpOrgHealth.ts
@@ -68708,7 +68801,7 @@ import {
   readdirSync as readdirSync25,
   readlinkSync,
   realpathSync as realpathSync6,
-  rmSync as rmSync7,
+  rmSync as rmSync8,
   statSync as statSync19,
   writeFileSync as writeFileSync16
 } from "node:fs";
@@ -69114,7 +69207,7 @@ function looksBinary(buf) {
 }
 function safeRm(dir) {
   try {
-    rmSync7(dir, { recursive: true, force: true });
+    rmSync8(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -70042,8 +70135,8 @@ function buildToolRun(run, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine6 ?? "fallback failed"}` : firstLine6 ?? "unknown";
+  const firstLine7 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine7 ?? "fallback failed"}` : firstLine7 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 var SEMGREP_DEFAULT_IGNORED_DIRS = [
@@ -71877,8 +71970,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run) {
   if (run.outcome === "completed") return { ok: true };
-  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine6 ?? `nuclei ${run.outcome}` };
+  const firstLine7 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine7 ?? `nuclei ${run.outcome}` };
 }
 
 // src/dast/normalizeNuclei.ts
@@ -73156,7 +73249,7 @@ import { existsSync as existsSync54, readFileSync as readFileSync42 } from "node
 import { isAbsolute as isAbsolute12, join as join78, relative as relative22 } from "node:path";
 
 // src/fixpr/apply.ts
-import { existsSync as existsSync51, readFileSync as readFileSync40, rmSync as rmSync8, writeFileSync as writeFileSync19 } from "node:fs";
+import { existsSync as existsSync51, readFileSync as readFileSync40, rmSync as rmSync9, writeFileSync as writeFileSync19 } from "node:fs";
 import { isAbsolute as isAbsolute11, join as join74, relative as relative21, resolve as resolve16, sep as sep12 } from "node:path";
 async function applyGroup(opts) {
   const run = opts.run ?? runProcess;
@@ -73196,7 +73289,7 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   for (let i2 = 0; i2 < batches.length; i2++) {
     const batch = batches[i2] ?? [];
     const report = join74(plan.dir, `fix-${String(i2).padStart(3, "0")}.json`);
-    rmSync8(report, { force: true });
+    rmSync9(report, { force: true });
     const result = await run({
       command: "semgrep",
       args: [...fixed, "--output", report, "--", ...batch],
@@ -73740,7 +73833,7 @@ function errorMessage2(e) {
 
 // src/fixpr/semgrepFix.ts
 var import_yaml9 = __toESM(require_dist2(), 1);
-import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync41, rmSync as rmSync9, statSync as statSync21, writeFileSync as writeFileSync20 } from "node:fs";
+import { mkdirSync as mkdirSync13, mkdtempSync as mkdtempSync6, readFileSync as readFileSync41, rmSync as rmSync10, statSync as statSync21, writeFileSync as writeFileSync20 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { basename as basename8, dirname as dirname19, join as join75 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
@@ -73802,7 +73895,7 @@ function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
 }
 function disposeSemgrepFixPlan(plan) {
   try {
-    rmSync9(plan.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    rmSync10(plan.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   } catch {
   }
 }
@@ -74091,7 +74184,7 @@ function headOf(stdout, stderr) {
 }
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync53, mkdtempSync as mkdtempSync7, realpathSync as realpathSync8, rmSync as rmSync10 } from "node:fs";
+import { existsSync as existsSync53, mkdtempSync as mkdtempSync7, realpathSync as realpathSync8, rmSync as rmSync11 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
 import { join as join77, resolve as resolve17 } from "node:path";
 var WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
@@ -74231,7 +74324,7 @@ function firstNonEmptyLine2(text2) {
 }
 function safeRmDir(dir) {
   try {
-    rmSync10(dir, { recursive: true, force: true });
+    rmSync11(dir, { recursive: true, force: true });
   } catch {
   }
 }
