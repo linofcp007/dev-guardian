@@ -57,6 +57,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import type { StatementSync, SQLInputValue } from 'node:sqlite';
 import { canonicalPath } from '../platform/projectPath.js';
+import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { GuardianDbError } from './dbError.js';
 import {
   adoptionProblem,
@@ -64,6 +65,8 @@ import {
   gitProblem,
   locationProblem,
   probeDatabase,
+  summarizeDatabase,
+  type DatabaseContents,
   type GitIndexAnswer,
 } from './dbProvenance.js';
 import { DB_ID_KEY, forgetDbId, lookupDbId, newDbId, registerDbId, type RegistryEntry } from './dbRegistry.js';
@@ -476,7 +479,7 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
   } else if (!existingOnly || existsSync(preferredPath)) {
     const verdict = judgeProjectDatabase(projectPath, preferredPath);
     if (verdict.kind === 'foreign') {
-      refusal = foreignReason(preferredPath, verdict);
+      refusal = foreignReason(projectPath, preferredPath, verdict);
     } else if (!(existingOnly && verdict.kind === 'create')) {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
@@ -585,17 +588,129 @@ function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
 }
 
 /** The refusal of a foreign database: why, that the file is untouched, and how to recover. */
-function foreignReason(dbPath: string, verdict: Extract<Verdict, { kind: 'foreign' }>): string {
+function foreignReason(projectPath: string, dbPath: string, verdict: Extract<Verdict, { kind: 'foreign' }>): string {
   const recovery = verdict.tracked
     ? 'One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. ' +
       'One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)'
-    : 'If it is yours, delete it or move it aside, and dev-guardian starts a new one there — there is no way ' +
-      'to mark a database as trusted';
+    : 'If it is yours — one the checks cannot tell from a copy, such as scans filed under a link (macOS ' +
+      `/var, a symlinked home) or only failed scans — \`${adoptCommand(projectPath)}\` shows what it holds ` +
+      '(its projects, scans, dates and suppressions) and, with --yes, registers it as yours. Otherwise delete ' +
+      'it or move it aside, and dev-guardian starts a new one there';
   return (
     `'${dbPath}' is not used: ${verdict.why}. A database that is not this user's own is not trusted — SQL or ` +
     'data stored in it (a trigger, a constraint, a suppression that matches every project) can hide findings ' +
     `from every reader. The file is left as it is. ${recovery}`
   );
+}
+
+/** The CLI command that inspects, and with `--yes` registers, `projectPath`'s database. */
+export function adoptCommand(projectPath: string): string {
+  const cli = join(dirname(resolveScriptsDir()), 'cli', 'dev-guardian.mjs');
+  return `node "${cli}" db adopt --project "${projectPath}"`;
+}
+
+// ---- `dev-guardian db adopt` ------------------------------------------------
+
+/** What `dev-guardian db adopt` reports about a project's database. */
+export interface ProjectDatabaseReport {
+  db_path: string;
+  exists: boolean;
+  /**
+   * What the server does with it now: `trusted` (registered for this
+   * location), `adoptable` (its next start adopts it), `foreign` (not used —
+   * `why`), `none` (no database, or an empty file).
+   */
+  status: 'none' | 'trusted' | 'adoptable' | 'foreign';
+  why: string | null;
+  /**
+   * Why it cannot be registered even by hand — what every database, however
+   * it is trusted, must pass: not a link, not tracked by git, no schema
+   * object the migrations never create. Empty when it can be.
+   */
+  blockers: string[];
+  contents: DatabaseContents | null;
+}
+
+/**
+ * Everything a person needs to decide whether `.guardian/guardian.db` is
+ * theirs, read without changing it. Throws a `GuardianDbError` of kind
+ * `corrupt` for a file SQLite cannot read.
+ */
+export function inspectProjectDatabase(projectPath: string): ProjectDatabaseReport {
+  const project = resolve(projectPath);
+  const dbPath = join(project, '.guardian', 'guardian.db');
+  const none: ProjectDatabaseReport = { db_path: dbPath, exists: false, status: 'none', why: null, blockers: [], contents: null };
+  if (!existsSync(dbPath)) return none;
+  const verdict = judgeProjectDatabase(project, dbPath);
+  const blockers: string[] = [];
+  const location = locationProblem(project, dbPath);
+  if (location !== null) blockers.push(location);
+  const fromGit = gitProblem(gitIndexAt(project));
+  if (fromGit !== null) blockers.push(fromGit);
+  const schema = location === null ? schemaProblem(dbPath) : null;
+  if (schema !== null) blockers.push(schema);
+  return {
+    db_path: dbPath,
+    exists: true,
+    status:
+      verdict.kind === 'create'
+        ? 'none'
+        : verdict.kind === 'trusted'
+          ? 'trusted'
+          : verdict.kind === 'adopt'
+            ? 'adoptable'
+            : 'foreign',
+    why: verdict.kind === 'foreign' ? verdict.why : null,
+    blockers,
+    contents: summarizeDatabase(dbPath),
+  };
+}
+
+/** What the schema check refuses in `dbPath`, read through a read-only connection; null when nothing. */
+function schemaProblem(dbPath: string): string | null {
+  const db = new GuardianDatabase(new (loadSqlite().DatabaseSync)(dbPath, { readOnly: true }));
+  try {
+    db.pragma('trusted_schema = OFF');
+    const newerBuild = recordsNewerMigrations(db, latestMigration());
+    const found = untrustedObjects(db, expectedSchema(), { newerBuild });
+    if (found.length === 0) return null;
+    return `its schema holds what dev-guardian's migrations never create (${found.slice(0, 5).join('; ')}${found.length > 5 ? '; …' : ''})`;
+  } catch (error) {
+    throw asCorruptionError(error, dbPath);
+  } finally {
+    closeQuietly(db);
+  }
+}
+
+/**
+ * Registers `projectPath`'s database as this user's — `dev-guardian db adopt
+ * --yes`, after the person saw {@link inspectProjectDatabase}'s report. What
+ * the adoption rules could not decide (scans under a link, only failed
+ * scans, a copy the user made) the person can; the checks every trusted
+ * database must pass still apply, and a blocker is refused. Migrates it
+ * (as the server would) and writes a freshly registered id.
+ */
+export function registerProjectDatabase(projectPath: string): { db_path: string; db_id: string; already: boolean } {
+  const report = inspectProjectDatabase(projectPath);
+  if (!report.exists) throw new Error(`there is no database at '${report.db_path}'`);
+  if (report.blockers.length > 0) {
+    throw new Error(`'${report.db_path}' cannot be registered: ${report.blockers.join('; ')}`);
+  }
+  const dbPath = report.db_path;
+  if (report.status === 'trusted') return { db_path: dbPath, db_id: probeDatabase(dbPath).dbId ?? '', already: true };
+  ensurePrivateSubdir('registry');
+  const db = openWritable(dbPath);
+  try {
+    const id = claimDbId(db, (mine) => ({
+      db_id: mine,
+      db_path: safeCanonical(dbPath),
+      project_path: safeCanonical(resolve(projectPath)),
+      created_at: new Date().toISOString(),
+    }));
+    return { db_path: dbPath, db_id: id, already: false };
+  } finally {
+    closeQuietly(db);
+  }
 }
 
 /**

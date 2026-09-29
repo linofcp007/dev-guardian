@@ -279,45 +279,24 @@ function scanProblem(projectPath, scans, isGitProject, options) {
         'existed — an archive or a clone brings one');
 }
 let sqlite;
-/** Project paths a probe reads; a database written for one project holds one or a few. */
-const MAX_SCAN_PROJECTS = 200;
 /**
- * Reads what {@link DatabaseProbe} names through a READ-ONLY connection with
- * `trusted_schema` off: nothing in the file runs, nothing is written, the
- * journal mode is left alone. A file SQLite cannot read is a
- * `GuardianDbError` of kind `corrupt`.
+ * Runs `read` on a READ-ONLY connection to `dbPath` with `trusted_schema`
+ * off: nothing in the file runs, nothing is written, the journal mode is left
+ * alone. A file SQLite cannot read is a `GuardianDbError` of kind `corrupt`.
  */
-export function probeDatabase(dbPath, now = Date.now()) {
+function readOnly(dbPath, read) {
     sqlite ??= createRequire(import.meta.url)('node:sqlite');
     let db;
     try {
-        db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-        db.exec('PRAGMA busy_timeout = 5000');
-        db.exec('PRAGMA trusted_schema = OFF');
-        db.exec('PRAGMA cell_size_check = ON');
-        const count = db.prepare('SELECT COUNT(*) AS n FROM sqlite_master').get();
-        if ((count?.n ?? 0) === 0)
-            return { empty: true, dbId: null, scans: [] };
+        const raw = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+        db = raw;
+        raw.exec('PRAGMA busy_timeout = 5000');
+        raw.exec('PRAGMA trusted_schema = OFF');
+        raw.exec('PRAGMA cell_size_check = ON');
         // Read only real tables, never through a view of the same name.
-        const isTable = (name) => db?.prepare('SELECT type FROM sqlite_master WHERE name = ?').get(name)?.type ===
+        const isTable = (name) => raw.prepare('SELECT type FROM sqlite_master WHERE name = ?').get(name)?.type ===
             'table';
-        let id = null;
-        if (isTable('schema_meta')) {
-            const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY);
-            id = typeof row?.value === 'string' && DB_ID_SHAPE.test(row.value) ? row.value : null;
-        }
-        // julianday() bounds the finish time whatever its spelling; MAX over the
-        // ISO strings every build writes picks the latest.
-        const scans = isTable('scans')
-            ? db
-                .prepare(`SELECT project_path AS p,
-                      MAX(CASE WHEN julianday(finished_at) <= julianday(?) THEN finished_at END) AS f
-                 FROM scans WHERE status = 'completed' GROUP BY project_path LIMIT ?`)
-                .all(new Date(now + ADOPTION_CLOCK_SKEW_MS).toISOString(), MAX_SCAN_PROJECTS)
-                .filter((r) => typeof r.p === 'string')
-                .map((r) => ({ path: r.p, latestFinished: typeof r.f === 'string' ? r.f : null }))
-            : [];
-        return { empty: false, dbId: id, scans };
+        return read(raw, isTable);
     }
     catch (error) {
         const code = sqliteCode(error);
@@ -336,6 +315,90 @@ export function probeDatabase(dbPath, now = Date.now()) {
             /* nothing was written */
         }
     }
+}
+/** Project paths a probe reads; a database written for one project holds one or a few. */
+const MAX_SCAN_PROJECTS = 200;
+/** What {@link DatabaseProbe} names, read without changing the file ({@link readOnly}). */
+export function probeDatabase(dbPath, now = Date.now()) {
+    return readOnly(dbPath, (db, isTable) => {
+        const count = db.prepare('SELECT COUNT(*) AS n FROM sqlite_master').get();
+        if ((count?.n ?? 0) === 0)
+            return { empty: true, dbId: null, scans: [] };
+        let id = null;
+        if (isTable('schema_meta')) {
+            const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY);
+            id = typeof row?.value === 'string' && DB_ID_SHAPE.test(row.value) ? row.value : null;
+        }
+        // julianday() bounds the finish time whatever its spelling; MAX over the
+        // ISO strings every build writes picks the latest.
+        const scans = isTable('scans')
+            ? db
+                .prepare(`SELECT project_path AS p,
+                      MAX(CASE WHEN julianday(finished_at) <= julianday(?) THEN finished_at END) AS f
+                 FROM scans WHERE status = 'completed' GROUP BY project_path LIMIT ?`)
+                .all(new Date(now + ADOPTION_CLOCK_SKEW_MS).toISOString(), MAX_SCAN_PROJECTS)
+                .filter((r) => typeof r.p === 'string')
+                .map((r) => ({ path: r.p, latestFinished: typeof r.f === 'string' ? r.f : null }))
+            : [];
+        return { empty: false, dbId: id, scans };
+    });
+}
+const SHOWN_PROJECTS = 20;
+/** {@link DatabaseContents}, read without changing the file ({@link readOnly}). */
+export function summarizeDatabase(dbPath) {
+    return readOnly(dbPath, (db, isTable) => {
+        const count = (sql) => db.prepare(sql).get()?.n ?? 0;
+        const contents = {
+            projects: [],
+            more_projects: 0,
+            scans: 0,
+            completed: 0,
+            first_started: null,
+            last_finished: null,
+            suppressions: 0,
+            null_scoped_suppressions: 0,
+            baselines: 0,
+        };
+        if (isTable('scans')) {
+            const all = db
+                .prepare(`SELECT project_path AS p, COUNT(*) AS n, SUM(status = 'completed') AS c,
+                  MIN(started_at) AS first, MAX(finished_at) AS last
+             FROM scans GROUP BY project_path ORDER BY n DESC, p`)
+                .all();
+            const text = (v) => (typeof v === 'string' ? v : null);
+            for (const row of all) {
+                contents.scans += row.n;
+                contents.completed += row.c ?? 0;
+                const first = text(row.first);
+                const last = text(row.last);
+                if (first !== null && (contents.first_started === null || first < contents.first_started)) {
+                    contents.first_started = first;
+                }
+                if (last !== null && (contents.last_finished === null || last > contents.last_finished)) {
+                    contents.last_finished = last;
+                }
+            }
+            contents.projects = all.slice(0, SHOWN_PROJECTS).map((row) => ({
+                project_path: typeof row.p === 'string' ? row.p : String(row.p),
+                scans: row.n,
+                completed: row.c ?? 0,
+                first_started: text(row.first),
+                last_finished: text(row.last),
+            }));
+            contents.more_projects = Math.max(0, all.length - SHOWN_PROJECTS);
+        }
+        if (isTable('suppressions')) {
+            contents.suppressions = count('SELECT COUNT(*) AS n FROM suppressions');
+            const columns = db.prepare(`SELECT name FROM pragma_table_info('suppressions')`).all();
+            // Before migration 011 no suppression had a project: every one applied everywhere.
+            contents.null_scoped_suppressions = columns.some((c) => c.name === 'project_path')
+                ? count('SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL')
+                : contents.suppressions;
+        }
+        if (isTable('baselines'))
+            contents.baselines = count('SELECT COUNT(*) AS n FROM baselines');
+        return contents;
+    });
 }
 function sqliteCode(error) {
     if (typeof error !== 'object' || error === null || !('errcode' in error))

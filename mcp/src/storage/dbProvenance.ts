@@ -328,7 +328,48 @@ function scanProblem(
 // ---- Reading a database without changing it ---------------------------------
 
 type SqliteModule = typeof import('node:sqlite');
+type RawDatabase = InstanceType<SqliteModule['DatabaseSync']>;
 let sqlite: SqliteModule | undefined;
+
+/**
+ * Runs `read` on a READ-ONLY connection to `dbPath` with `trusted_schema`
+ * off: nothing in the file runs, nothing is written, the journal mode is left
+ * alone. A file SQLite cannot read is a `GuardianDbError` of kind `corrupt`.
+ */
+function readOnly<T>(dbPath: string, read: (db: RawDatabase, isTable: (name: string) => boolean) => T): T {
+  sqlite ??= createRequire(import.meta.url)('node:sqlite') as SqliteModule;
+  let db: RawDatabase | undefined;
+  try {
+    const raw = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    db = raw;
+    raw.exec('PRAGMA busy_timeout = 5000');
+    raw.exec('PRAGMA trusted_schema = OFF');
+    raw.exec('PRAGMA cell_size_check = ON');
+    // Read only real tables, never through a view of the same name.
+    const isTable = (name: string): boolean =>
+      (raw.prepare('SELECT type FROM sqlite_master WHERE name = ?').get(name) as { type: string } | undefined)?.type ===
+      'table';
+    return read(raw, isTable);
+  } catch (error) {
+    const code = sqliteCode(error);
+    if (code === 11 || code === 26) {
+      throw new GuardianDbError(
+        'corrupt',
+        dbPath,
+        `the database '${dbPath}' cannot be read (${error instanceof Error ? error.message : String(error)}). ` +
+          'Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is ' +
+          'created in its place, and the old file stays available for recovery.',
+      );
+    }
+    throw error;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      /* nothing was written */
+    }
+  }
+}
 
 export interface DatabaseProbe {
   /** The file holds no schema object at all: a database being created, or an empty file. */
@@ -347,26 +388,11 @@ export interface DatabaseProbe {
 /** Project paths a probe reads; a database written for one project holds one or a few. */
 const MAX_SCAN_PROJECTS = 200;
 
-/**
- * Reads what {@link DatabaseProbe} names through a READ-ONLY connection with
- * `trusted_schema` off: nothing in the file runs, nothing is written, the
- * journal mode is left alone. A file SQLite cannot read is a
- * `GuardianDbError` of kind `corrupt`.
- */
+/** What {@link DatabaseProbe} names, read without changing the file ({@link readOnly}). */
 export function probeDatabase(dbPath: string, now: number = Date.now()): DatabaseProbe {
-  sqlite ??= createRequire(import.meta.url)('node:sqlite') as SqliteModule;
-  let db: InstanceType<SqliteModule['DatabaseSync']> | undefined;
-  try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.exec('PRAGMA trusted_schema = OFF');
-    db.exec('PRAGMA cell_size_check = ON');
+  return readOnly(dbPath, (db, isTable) => {
     const count = db.prepare('SELECT COUNT(*) AS n FROM sqlite_master').get() as { n: number } | undefined;
     if ((count?.n ?? 0) === 0) return { empty: true, dbId: null, scans: [] };
-    // Read only real tables, never through a view of the same name.
-    const isTable = (name: string): boolean =>
-      (db?.prepare('SELECT type FROM sqlite_master WHERE name = ?').get(name) as { type: string } | undefined)?.type ===
-      'table';
     let id: string | null = null;
     if (isTable('schema_meta')) {
       const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY) as
@@ -393,25 +419,96 @@ export function probeDatabase(dbPath: string, now: number = Date.now()): Databas
           .map((r) => ({ path: r.p, latestFinished: typeof r.f === 'string' ? r.f : null }))
       : [];
     return { empty: false, dbId: id, scans };
-  } catch (error) {
-    const code = sqliteCode(error);
-    if (code === 11 || code === 26) {
-      throw new GuardianDbError(
-        'corrupt',
-        dbPath,
-        `the database '${dbPath}' cannot be read (${error instanceof Error ? error.message : String(error)}). ` +
-          'Move it aside (rename it, for example to guardian.db.corrupt) and restart: a new, empty database is ' +
-          'created in its place, and the old file stays available for recovery.',
-      );
+  });
+}
+
+/** One project a database holds scans of ({@link DatabaseContents}). */
+export interface ProjectScans {
+  project_path: string;
+  scans: number;
+  completed: number;
+  first_started: string | null;
+  last_finished: string | null;
+}
+
+/**
+ * What a database holds, for a person deciding whether it is theirs
+ * (`dev-guardian db adopt`): whose scans, how many, over what dates, and the
+ * suppressions — those with no project first, since they apply to every
+ * project.
+ */
+export interface DatabaseContents {
+  /** The projects with the most scans, at most {@link SHOWN_PROJECTS}. */
+  projects: ProjectScans[];
+  /** How many more projects it holds scans of. */
+  more_projects: number;
+  scans: number;
+  completed: number;
+  first_started: string | null;
+  last_finished: string | null;
+  suppressions: number;
+  null_scoped_suppressions: number;
+  baselines: number;
+}
+
+const SHOWN_PROJECTS = 20;
+
+/** {@link DatabaseContents}, read without changing the file ({@link readOnly}). */
+export function summarizeDatabase(dbPath: string): DatabaseContents {
+  return readOnly(dbPath, (db, isTable) => {
+    const count = (sql: string): number => (db.prepare(sql).get() as { n: number | null } | undefined)?.n ?? 0;
+    const contents: DatabaseContents = {
+      projects: [],
+      more_projects: 0,
+      scans: 0,
+      completed: 0,
+      first_started: null,
+      last_finished: null,
+      suppressions: 0,
+      null_scoped_suppressions: 0,
+      baselines: 0,
+    };
+    if (isTable('scans')) {
+      const all = db
+        .prepare(
+          `SELECT project_path AS p, COUNT(*) AS n, SUM(status = 'completed') AS c,
+                  MIN(started_at) AS first, MAX(finished_at) AS last
+             FROM scans GROUP BY project_path ORDER BY n DESC, p`,
+        )
+        .all() as Array<{ p: unknown; n: number; c: number | null; first: unknown; last: unknown }>;
+      const text = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+      for (const row of all) {
+        contents.scans += row.n;
+        contents.completed += row.c ?? 0;
+        const first = text(row.first);
+        const last = text(row.last);
+        if (first !== null && (contents.first_started === null || first < contents.first_started)) {
+          contents.first_started = first;
+        }
+        if (last !== null && (contents.last_finished === null || last > contents.last_finished)) {
+          contents.last_finished = last;
+        }
+      }
+      contents.projects = all.slice(0, SHOWN_PROJECTS).map((row) => ({
+        project_path: typeof row.p === 'string' ? row.p : String(row.p),
+        scans: row.n,
+        completed: row.c ?? 0,
+        first_started: text(row.first),
+        last_finished: text(row.last),
+      }));
+      contents.more_projects = Math.max(0, all.length - SHOWN_PROJECTS);
     }
-    throw error;
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      /* nothing was written */
+    if (isTable('suppressions')) {
+      contents.suppressions = count('SELECT COUNT(*) AS n FROM suppressions');
+      const columns = db.prepare(`SELECT name FROM pragma_table_info('suppressions')`).all() as Array<{ name: unknown }>;
+      // Before migration 011 no suppression had a project: every one applied everywhere.
+      contents.null_scoped_suppressions = columns.some((c) => c.name === 'project_path')
+        ? count('SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL')
+        : contents.suppressions;
     }
-  }
+    if (isTable('baselines')) contents.baselines = count('SELECT COUNT(*) AS n FROM baselines');
+    return contents;
+  });
 }
 
 function sqliteCode(error: unknown): number | undefined {

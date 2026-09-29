@@ -38274,29 +38274,17 @@ function scanProblem(projectPath, scans, isGitProject, options) {
   return `its scans of this project all finished before the project directory was created (${new Date(birth).toISOString()}), or in the future: a database made before this copy of the project existed \u2014 an archive or a clone brings one`;
 }
 var sqlite;
-var MAX_SCAN_PROJECTS = 200;
-function probeDatabase(dbPath, now = Date.now()) {
+function readOnly(dbPath, read2) {
   sqlite ??= createRequire(import.meta.url)("node:sqlite");
   let db;
   try {
-    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-    db.exec("PRAGMA busy_timeout = 5000");
-    db.exec("PRAGMA trusted_schema = OFF");
-    db.exec("PRAGMA cell_size_check = ON");
-    const count2 = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get();
-    if ((count2?.n ?? 0) === 0) return { empty: true, dbId: null, scans: [] };
-    const isTable = (name) => db?.prepare("SELECT type FROM sqlite_master WHERE name = ?").get(name)?.type === "table";
-    let id = null;
-    if (isTable("schema_meta")) {
-      const row = db.prepare("SELECT value FROM schema_meta WHERE key = ?").get(DB_ID_KEY);
-      id = typeof row?.value === "string" && DB_ID_SHAPE.test(row.value) ? row.value : null;
-    }
-    const scans = isTable("scans") ? db.prepare(
-      `SELECT project_path AS p,
-                      MAX(CASE WHEN julianday(finished_at) <= julianday(?) THEN finished_at END) AS f
-                 FROM scans WHERE status = 'completed' GROUP BY project_path LIMIT ?`
-    ).all(new Date(now + ADOPTION_CLOCK_SKEW_MS).toISOString(), MAX_SCAN_PROJECTS).filter((r) => typeof r.p === "string").map((r) => ({ path: r.p, latestFinished: typeof r.f === "string" ? r.f : null })) : [];
-    return { empty: false, dbId: id, scans };
+    const raw = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    db = raw;
+    raw.exec("PRAGMA busy_timeout = 5000");
+    raw.exec("PRAGMA trusted_schema = OFF");
+    raw.exec("PRAGMA cell_size_check = ON");
+    const isTable = (name) => raw.prepare("SELECT type FROM sqlite_master WHERE name = ?").get(name)?.type === "table";
+    return read2(raw, isTable);
   } catch (error2) {
     const code = sqliteCode(error2);
     if (code === 11 || code === 26) {
@@ -38313,6 +38301,24 @@ function probeDatabase(dbPath, now = Date.now()) {
     } catch {
     }
   }
+}
+var MAX_SCAN_PROJECTS = 200;
+function probeDatabase(dbPath, now = Date.now()) {
+  return readOnly(dbPath, (db, isTable) => {
+    const count2 = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get();
+    if ((count2?.n ?? 0) === 0) return { empty: true, dbId: null, scans: [] };
+    let id = null;
+    if (isTable("schema_meta")) {
+      const row = db.prepare("SELECT value FROM schema_meta WHERE key = ?").get(DB_ID_KEY);
+      id = typeof row?.value === "string" && DB_ID_SHAPE.test(row.value) ? row.value : null;
+    }
+    const scans = isTable("scans") ? db.prepare(
+      `SELECT project_path AS p,
+                      MAX(CASE WHEN julianday(finished_at) <= julianday(?) THEN finished_at END) AS f
+                 FROM scans WHERE status = 'completed' GROUP BY project_path LIMIT ?`
+    ).all(new Date(now + ADOPTION_CLOCK_SKEW_MS).toISOString(), MAX_SCAN_PROJECTS).filter((r) => typeof r.p === "string").map((r) => ({ path: r.p, latestFinished: typeof r.f === "string" ? r.f : null })) : [];
+    return { empty: false, dbId: id, scans };
+  });
 }
 function sqliteCode(error2) {
   if (typeof error2 !== "object" || error2 === null || !("errcode" in error2)) return void 0;
@@ -40057,7 +40063,7 @@ function openDatabase(options) {
   } else if (!existingOnly || existsSync7(preferredPath)) {
     const verdict = judgeProjectDatabase(projectPath, preferredPath);
     if (verdict.kind === "foreign") {
-      refusal = foreignReason(preferredPath, verdict);
+      refusal = foreignReason(projectPath, preferredPath, verdict);
     } else if (!(existingOnly && verdict.kind === "create")) {
       try {
         return openProjectDatabase(projectPath, preferredPath, verdict);
@@ -40122,9 +40128,13 @@ function judgeProjectDatabase(projectPath, dbPath) {
     tracked: false
   };
 }
-function foreignReason(dbPath, verdict) {
-  const recovery = verdict.tracked ? "One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)" : "If it is yours, delete it or move it aside, and dev-guardian starts a new one there \u2014 there is no way to mark a database as trusted";
+function foreignReason(projectPath, dbPath, verdict) {
+  const recovery = verdict.tracked ? "One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)" : `If it is yours \u2014 one the checks cannot tell from a copy, such as scans filed under a link (macOS /var, a symlinked home) or only failed scans \u2014 \`${adoptCommand(projectPath)}\` shows what it holds (its projects, scans, dates and suppressions) and, with --yes, registers it as yours. Otherwise delete it or move it aside, and dev-guardian starts a new one there`;
   return `'${dbPath}' is not used: ${verdict.why}. A database that is not this user's own is not trusted \u2014 SQL or data stored in it (a trigger, a constraint, a suppression that matches every project) can hide findings from every reader. The file is left as it is. ${recovery}`;
+}
+function adoptCommand(projectPath) {
+  const cli = join9(dirname5(resolveScriptsDir()), "cli", "dev-guardian.mjs");
+  return `node "${cli}" db adopt --project "${projectPath}"`;
 }
 function openProjectDatabase(projectPath, dbPath, verdict) {
   const entryFor = (id) => ({

@@ -10,6 +10,15 @@ version bump.
 
 ### Added
 
+- `dev-guardian db adopt [--project <path>] [--yes]` (CLI only, never an MCP tool): the way back
+  for a database of yours that the adoption rules cannot tell from a copy — scans filed under a
+  link (macOS `/var`, a symlinked home), only failed scans, a repository you moved or copied. It
+  prints what the database holds (its projects with scan counts and dates, the suppressions, and
+  how many of those have no project and so apply to every project) and registers it only with
+  `--yes`. A database git tracks, one reached through a link, or one whose schema holds what the
+  migrations never create is refused even then. The foreign-database warning names the command
+  with this install's path.
+
 - CWE (and, through OWASP's own CWE lists, the Top 10:2025 category) on the findings 3.0.0 left
   without one, although its notes said "every finding": WPScan's vulnerable components are
   dependencies like the others (CWE-1395, A03 only); cosign's `image-signature-not-verified` is
@@ -72,8 +81,8 @@ version bump.
   per-user fallback is used, the project file is left untouched (it is only read, read-only, for
   its id), and the warning says why, that the scans made meanwhile stay in the fallback and are
   not merged back, and how to recover (delete a database that came with the repository; `git rm
-  --cached` one committed by mistake; there is no way to mark a database as trusted). The CLI's
-  `status` / `dashboard` decide the same way.
+  --cached` one committed by mistake; `dev-guardian db adopt`, printed with its full path, for one
+  that is yours). The CLI's `status` / `dashboard` decide the same way.
 - A per-user data directory that cannot be used is never fatal. The registry and the fallback
   live there, so the first cut exited 1 when it could not be created — in Docker `node:22` as
   uid 4242 with no passwd entry (`HOME=/`): `fatal: Error: EACCES: permission denied, mkdir
