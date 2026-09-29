@@ -49,7 +49,11 @@
  * loopback: remote either way. WHATWG's own normalisation counts for
  * http(s): `http://127.1` and `http://0x7f000001` are 127.0.0.1. Every URL
  * in a string is checked; a loopback one is skipped, never the end of the
- * scan.
+ * scan. Each value is first read as URL parsers read it — TAB and newline
+ * deleted anywhere, C0 controls and spaces trimmed from both ends — and a
+ * loopback URL whose host the gate stopped reading at a space, a quote or a
+ * control character, before any `/`, `?` or `#`, is not exempt: WHATWG
+ * reads on past them as userinfo (`http://127.0.0.1:80 @other/` is other).
  *
  * The limit: loopback is where a TUNNEL starts. `ssh -L 5432:db.internal:5432`,
  * `kubectl port-forward`, a local proxy or a VPN client listening on
@@ -177,8 +181,9 @@ function urlLabel(url) {
  * EVERY URL in it is checked: a loopback one is skipped, never the end of
  * the scan.
  */
-function remoteInText(text) {
-    if (UNC_ANYWHERE.test(text))
+function remoteInText(raw) {
+    const text = asUrlParsersRead(raw);
+    if (UNC_ANYWHERE.test(raw) || UNC_ANYWHERE.test(text))
         return 'names a network or device path';
     const starts = new Set();
     for (const m of text.matchAll(SPECIAL_SCHEME))
@@ -197,15 +202,38 @@ function remoteInText(text) {
         if (url.hostname === '')
             continue;
         if (isLoopbackName(url.hostname)) {
-            if (unambiguous(url, written))
+            const cutInAuthority = start + written.length < text.length && authorityOpen(written);
+            if (!cutInAuthority && unambiguous(url, written))
                 continue;
             return (`names ${hostLabel(url)} written so that another client may read another host ` +
-                '(a backslash, several @, a host after the @ that is not loopback as written, ' +
-                'or a query on a non-HTTP scheme)');
+                '(a backslash, several @, a host after the @ that is not loopback as written, a query on a ' +
+                'non-HTTP scheme, or a space, quote or control character inside its host)');
         }
         return `names ${hostLabel(url)} (a proxy, a client or a source on another machine)`;
     }
     return null;
+}
+/**
+ * A value as a URL parser reads it (final review): WHATWG deletes ASCII TAB
+ * and newline ANYWHERE in its input, and strips leading and trailing C0
+ * controls and spaces — so does Python's `urlsplit` for the first. The gate
+ * cut `http://127.0.0.1:80<TAB>@other.example/` at the TAB and exempted the
+ * loopback it saw; the server read other.example.
+ */
+function asUrlParsersRead(value) {
+    return value.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
+}
+/**
+ * The authority of `written` is still open where the gate stopped reading
+ * it: no `/`, `?` or `#` after the scheme. A parser that does not stop where
+ * the gate did — WHATWG reads on past a space or a quote as userinfo, so
+ * `http://127.0.0.1:80 @other.example/` is other.example — can find another
+ * host there, so such a URL is never exempt. One whose path has begun can
+ * gain nothing but path.
+ */
+function authorityOpen(written) {
+    const afterScheme = written.slice(written.indexOf(':') + 1).replace(/^\/*/, '');
+    return !/[/?#]/.test(afterScheme);
 }
 /** A command's own name: `C:\…\ssh.exe` → `ssh`. */
 function commandName(command) {

@@ -74883,8 +74883,9 @@ function urlLabel(url2) {
     return "a URL that does not parse";
   }
 }
-function remoteInText(text) {
-  if (UNC_ANYWHERE.test(text)) return "names a network or device path";
+function remoteInText(raw) {
+  const text = asUrlParsersRead(raw);
+  if (UNC_ANYWHERE.test(raw) || UNC_ANYWHERE.test(text)) return "names a network or device path";
   const starts = /* @__PURE__ */ new Set();
   for (const m of text.matchAll(SPECIAL_SCHEME)) starts.add(m.index);
   for (const m of text.matchAll(ANY_SCHEME_WITH_SLASHES)) starts.add(m.index);
@@ -74898,12 +74899,20 @@ function remoteInText(text) {
     }
     if (url2.hostname === "") continue;
     if (isLoopbackName(url2.hostname)) {
-      if (unambiguous(url2, written)) continue;
-      return `names ${hostLabel(url2)} written so that another client may read another host (a backslash, several @, a host after the @ that is not loopback as written, or a query on a non-HTTP scheme)`;
+      const cutInAuthority = start + written.length < text.length && authorityOpen(written);
+      if (!cutInAuthority && unambiguous(url2, written)) continue;
+      return `names ${hostLabel(url2)} written so that another client may read another host (a backslash, several @, a host after the @ that is not loopback as written, a query on a non-HTTP scheme, or a space, quote or control character inside its host)`;
     }
     return `names ${hostLabel(url2)} (a proxy, a client or a source on another machine)`;
   }
   return null;
+}
+function asUrlParsersRead(value) {
+  return value.replace(/[\t\n\r]/g, "").replace(/^[\u0000- ]+|[\u0000- ]+$/g, "");
+}
+function authorityOpen(written) {
+  const afterScheme = written.slice(written.indexOf(":") + 1).replace(/^\/*/, "");
+  return !/[/?#]/.test(afterScheme);
 }
 function commandName(command) {
   const base = command.replace(/\\/g, "/").split("/").pop() ?? command;

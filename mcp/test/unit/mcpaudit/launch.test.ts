@@ -134,6 +134,37 @@ describe('remoteReasonOf: loopback look-alikes stay remote', () => {
     expect(remoteReasonOf(entry('node', ['--x=http://localhost/;https:evil.example']))).not.toBeNull();
   });
 
+  /**
+   * Final review (reproduced end to end): the gate cut a URL at the first
+   * whitespace, so it parsed `http://127.0.0.1:80` and exempted it — but
+   * WHATWG (and urlsplit) delete TAB and newline anywhere, and read on past
+   * a space or a quote as userinfo: the server computed other.example.
+   */
+  it.each([
+    ['a TAB before @', 'http://127.0.0.1:80\t@other.example/'],
+    ['a newline before @', 'http://localhost\n@other.example/'],
+    ['a TAB inside the host', 'http://127.0.0.1\t.other.example/'],
+    ['a carriage return before @', 'http://localhost\r@other.example/'],
+    ['a space before @', 'http://127.0.0.1:80 @other.example/'],
+    ['a quote before @', 'http://localhost"@other.example/'],
+    ['a space on a database URL', 'postgres://localhost @other.example/db'],
+  ])('a URL read past what the gate saw: %s', (_what, url) => {
+    expect(remoteReasonOf(entry('node', ['server.js'], { API_URL: url }))).not.toBeNull();
+  });
+
+  it('a TAB inside the host of an argument', () => {
+    expect(remoteReasonOf(entry('npx', ['mcp-remote', 'http://localhost\t.other.example/sse']))).not.toBeNull();
+  });
+
+  it.each([
+    ['surrounding spaces', ' http://localhost:3000/ '],
+    ['a trailing newline', 'http://localhost:3000/\n'],
+    ['a newline inside the path', 'http://localhost:3000/a\nb'],
+    ['a space after the path began', 'postgres://localhost/app extra'],
+  ])('a loopback URL is still local with %s', (_what, url) => {
+    expect(remoteReasonOf(entry('node', ['server.js'], { API_URL: url }))).toBeNull();
+  });
+
   it('a UNC path after a loopback URL is still remote', () => {
     expect(remoteReasonOf(entry('cmd', ['/c', 'curl http://localhost/ & type \\\\192.0.2.1\\s\\x']))).not.toBeNull();
   });

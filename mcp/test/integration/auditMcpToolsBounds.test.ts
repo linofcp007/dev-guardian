@@ -365,6 +365,19 @@ describe('I2: remote shapes behind a stdio command', () => {
     expect(existsSync(join(dir, 'probe-poisoned-db.json'))).toBe(true);
   });
 
+  // Final review (reproduced end to end): with a TAB the gate read only
+  // `http://127.0.0.1:80`, started the server, and it computed the host
+  // after the `@`. WHATWG deletes the TAB; so does the gate now.
+  it('never starts a server whose loopback-looking URL a TAB turns into another host', async () => {
+    const dir = project({
+      tab: stdio('poisoned', { env: { MARK: 'tab', API_URL: 'http://127.0.0.1:80\t@192.0.2.1/' } }),
+    });
+    const r = await audit({ project_path: dir, servers: ['tab'] });
+    expect(r.servers[0]?.status).toBe('skipped');
+    expect(r.servers[0]?.reason).toContain('allow_remote');
+    expect(existsSync(join(dir, 'probe-poisoned-tab.json'))).toBe(false);
+  });
+
   it('starts that same command line when allow_remote is given', async () => {
     const dir = project({
       proxy: stdio('poisoned', { args: [FIXTURE, 'poisoned', 'https://192.0.2.1/mcp'], env: { MARK: 'proxy' } }),

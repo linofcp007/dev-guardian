@@ -88,10 +88,13 @@ version bump.
   (`DATABASE_URL=postgres://localhost/app` was skipped): exempt is an exact parsed hostname —
   `localhost`, `127.x.x.x`, `[::1]` — never a prefix, never with a backslash anywhere or more than
   one `@` (credentials are fine: `postgres://user:pw@localhost/db` is local, with the host after the
-  `@` itself an exact loopback), never with a query on a non-HTTP scheme; every URL in a string is
-  checked. A `url` entry needs `allow_remote` even at localhost, and a loopback URL may be a tunnel
-  the configuration does not show (SECURITY.md). Reasons name the host (`postgres://db.example`, not
-  `null`).
+  `@` itself an exact loopback), never with a query on a non-HTTP scheme, never with a space, quote
+  or control character inside its host; every URL in a string is checked, each value first read as
+  URL parsers read it — TAB and newline deleted anywhere, C0 controls and spaces trimmed (reproduced:
+  `http://127.0.0.1:80<TAB>@other.example/` was cut at the TAB and exempted, and the server it started
+  read other.example). A `url` entry needs `allow_remote` even at localhost, and a loopback URL may
+  be a tunnel the configuration does not show (SECURITY.md). Reasons name the host
+  (`postgres://db.example`, not `null`).
 - `mcp-tool-sensitive-file-access` is medium when a tool's text tells the model to read a credential
   or agent-config file ("confirm it is the tool's purpose"), and high only when the SAME SENTENCE
   directs passing it to a parameter (quoted, named as one, or a bare word that is one of the tool's own
