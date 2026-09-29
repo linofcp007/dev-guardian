@@ -720,12 +720,15 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist, toolName) {
     // `projectOverrides`), and the file that CAN change it is
     // one an assistant is refused permission to write — see
     // `guardianConfigWriteGuard`.
+    // A rule that words its whole message (`db adopt --yes`: not catastrophic,
+    // but the user's decision) is sent as it is.
     emit('PreToolUse', {
       permissionDecision: 'deny',
       permissionDecisionReason:
+        a.denyMessage ??
         `dev-guardian blocked a catastrophic command: ${a.reasons.join('; ')}. ` +
-        `If this is genuinely intended, run it yourself in a terminal — the user can adjust the ` +
-        `guard settings if this should not be blocked.`,
+          `If this is genuinely intended, run it yourself in a terminal — the user can adjust the ` +
+          `guard settings if this should not be blocked.`,
     });
   }
 
