@@ -67317,6 +67317,118 @@ function dedupe(queries) {
   return out;
 }
 
+// src/skillaudit/markdownCode.ts
+var FENCE_OPEN = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
+var CONTINUATION = /\\[ \t]*$/;
+function splitMarkdown(content) {
+  const lines = content.split(/\r?\n/);
+  const code = [];
+  const prose = [];
+  let fence = null;
+  let blocks = 0;
+  let pending = null;
+  for (let i2 = 0; i2 < lines.length; i2 += 1) {
+    const line = lines[i2] ?? "";
+    const lineNo = i2 + 1;
+    if (fence) {
+      if (isClosingFence(line, fence)) {
+        if (pending) code.push(pending);
+        pending = null;
+        fence = null;
+      } else {
+        const block = blocks - 1;
+        code.push({ line: lineNo, text: line, kind: "fenced", block });
+        const continues = CONTINUATION.test(line);
+        if (pending) {
+          const joined = {
+            line: pending.line,
+            text: `${pending.text.replace(CONTINUATION, "")} ${line.trim()}`,
+            kind: "fenced",
+            block
+          };
+          if (continues) {
+            pending = joined;
+          } else {
+            code.push(joined);
+            pending = null;
+          }
+        } else if (continues) {
+          pending = { line: lineNo, text: line, kind: "fenced", block };
+        }
+      }
+      prose.push("");
+      continue;
+    }
+    const open = FENCE_OPEN.exec(line);
+    const run = open?.[1];
+    if (open && run && !(run.startsWith("`") && (open[2] ?? "").includes("`"))) {
+      fence = { char: run.charAt(0), length: run.length };
+      blocks += 1;
+      prose.push("");
+      continue;
+    }
+    const spans = inlineSpans(line);
+    for (const s of spans) code.push({ line: lineNo, text: s.text, kind: "inline", block: null });
+    prose.push(blank(line, spans));
+  }
+  if (pending) code.push(pending);
+  return { code, prose };
+}
+function isClosingFence(line, fence) {
+  const m = /^[ \t>]*(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const run = m?.[1];
+  return run !== void 0 && run.charAt(0) === fence.char && run.length >= fence.length;
+}
+function inlineSpans(line) {
+  const out = [];
+  let i2 = 0;
+  while (i2 < line.length) {
+    if (line[i2] !== "`") {
+      i2 += 1;
+      continue;
+    }
+    let n2 = 0;
+    while (line[i2 + n2] === "`") n2 += 1;
+    const openEnd = i2 + n2;
+    let j = openEnd;
+    let close = -1;
+    while (j < line.length) {
+      if (line[j] !== "`") {
+        j += 1;
+        continue;
+      }
+      let m = 0;
+      while (line[j + m] === "`") m += 1;
+      if (m === n2) {
+        close = j;
+        break;
+      }
+      j += m;
+    }
+    if (close === -1) {
+      i2 = openEnd;
+      continue;
+    }
+    let text2 = line.slice(openEnd, close);
+    if (text2.length >= 2 && text2.startsWith(" ") && text2.endsWith(" ") && text2.trim() !== "") {
+      text2 = text2.slice(1, -1);
+    }
+    out.push({ start: i2, end: close + n2, text: text2 });
+    i2 = close + n2;
+  }
+  return out;
+}
+function blank(line, spans) {
+  if (spans.length === 0) return line;
+  let out = "";
+  let at = 0;
+  for (const s of spans) {
+    out += `${line.slice(at, s.start)} `;
+    at = s.end;
+  }
+  return out + line.slice(at);
+}
+
 // src/skillaudit/taxonomy.ts
 var THREAT_CATEGORIES = [
   "prompt_injection",
@@ -67463,6 +67575,12 @@ var SEVERITY_POINTS = {
 var EXECUTABLE_MULTIPLIER = 1.3;
 
 // src/skillaudit/patterns.ts
+var SENSITIVE_FILE = String.raw`(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data|(?<![\w$)\]])\.env\b)`;
+var NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
+var SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
+var REMOTE_DESTINATION = String.raw`(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
+var REMOTE_DESTINATION_RE = new RegExp(REMOTE_DESTINATION, "i");
+var AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 var SKILL_RULES = [
   // ───────────────────────────── prompt_injection ─────────────────────────
   {
@@ -67574,7 +67692,25 @@ var SKILL_RULES = [
     patterns: [
       /(fetch|axios|requests?\.(post|get|put)|http[s]?\.request|urllib|httpx)[^\n]{0,120}(process\.env|os\.environ|getenv|ENV\[)/i,
       /(process\.env|os\.environ|getenv)[^\n]{0,120}(fetch|axios|requests?\.|\.post\(|upload|send\()/i,
-      /\b(curl|wget)\b[^\n]{0,200}(\$\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))/i
+      // Not when the secret authenticates the request — that is the next
+      // rule. Measured: an official plugin's `curl -H "Authorization: Bearer
+      // $API_TOKEN" https://api.example.com/mcp/health`, a health check in a
+      // reference doc, read critical and took its skill to DO_NOT_INSTALL.
+      new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTH_HEADER}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, "i")
+    ]
+  },
+  {
+    id: "de-secret-in-auth-header",
+    category: "data_exfiltration",
+    severity: "medium",
+    title: "Secret from the environment sent as request authentication",
+    message: "A request authenticates with a token, key or password from the environment. That is how an API is called \u2014 and also how a stolen token reaches a server that is not its own. Confirm the endpoint is the service the secret belongs to.",
+    target: "code",
+    patterns: [
+      new RegExp(
+        `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTH_HEADER}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
+        "i"
+      )
     ]
   },
   {
@@ -67584,8 +67720,26 @@ var SKILL_RULES = [
     title: "Reads sensitive local credential files",
     message: "Code references SSH keys, cloud credentials, browser data or .env \u2014 sensitive material a skill rarely needs.",
     target: "code",
+    patterns: [new RegExp(SENSITIVE_FILE, "i")]
+  },
+  {
+    id: "de-sensitive-file-over-network",
+    category: "data_exfiltration",
+    severity: "critical",
+    title: "Credential file sent over the network",
+    message: "One command both names a credential file (SSH key, cloud credentials, .netrc/.npmrc, browser data, .env) and a network client \u2014 the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://\u2026`.",
+    target: "code",
+    patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, "i")]
+  },
+  {
+    id: "de-sensitive-file-over-network-prose",
+    category: "data_exfiltration",
+    severity: "high",
+    title: "Instruction to send a credential file to a remote endpoint",
+    message: "The prose of an instruction file names a credential file, a way to send it and a concrete destination (a URL or an IP address) in one sentence. A description of the attack names no endpoint; an instruction to carry it out has to.",
+    target: "prose",
     patterns: [
-      /(id_rsa|\.ssh\/|\.aws\/credentials|\.npmrc|\.netrc|\.env\b|cookies\.sqlite|Login\s+Data)/i
+      new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*(${NETWORK_SENDER}|${SEND_VERB}))(?=.*${REMOTE_DESTINATION})`, "i")
     ]
   },
   {
@@ -67639,9 +67793,30 @@ var SKILL_RULES = [
     message: "Downloads a remote script and executes it unverified (curl|bash and friends).",
     target: "code",
     patterns: [
-      /\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+)?(bash|sh|zsh|python[23]?|node)\b/i,
+      /\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node)\b/i,
       /\beval\s+"\$\(\s*(curl|wget)\b/i,
-      /(iwr|invoke-webrequest|invoke-restmethod)[^\n|]{0,200}\|\s*(iex|invoke-expression)/i
+      /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
+      // `bash <(curl …)`, `sh -c "$(curl …)"` — the other two ways install
+      // one-liners are written, and the hook's block list names both.
+      /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b/i,
+      /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b/i,
+      /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b/i
+    ]
+  },
+  {
+    id: "sc-curl-pipe-shell-prose",
+    category: "supply_chain",
+    severity: "high",
+    title: "Instruction to pipe a remote script to a shell",
+    message: 'The prose of an instruction file tells the reader to download a script from a concrete URL and run it unverified. The documentation shape (`curl \u2026 | sh`, "curl|bash") names no URL and is not reported.',
+    target: "prose",
+    patterns: [
+      /\b(curl|wget)\b[^|]{0,200}?\b(https?|ftp):\/\/[^|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b/i,
+      /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
+      /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
+      /\beval\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
+      /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]{0,200}?\bhttps?:\/\/[^|]{0,300}\|\s*(iex|invoke-expression)\b/i,
+      /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b.{0,300}\bhttps?:\/\//i
     ]
   },
   {
@@ -67752,7 +67927,9 @@ var SKILL_RULES = [
     title: "Shell/network access from a non-execution helper",
     message: "A skill that presents as read-only/formatting still reaches for shell or process-spawn primitives.",
     target: "code",
-    patterns: [/(spawn|spawnSync|popen|system)\s*\(/i]
+    // Not after `::`: `thread::spawn(` / `tokio::spawn(` start a thread or a
+    // task, not a process.
+    patterns: [/(?<!::)(spawn|spawnSync|popen|system)\s*\(/i]
   },
   // ──────────────────────────── mcp_tool_poisoning ────────────────────────
   {
@@ -67769,27 +67946,67 @@ var SKILL_RULES = [
   }
 ];
 function scanContent(content, isCode) {
-  const matches3 = [];
   const lines = content.split(/\r?\n/);
-  for (const rule of SKILL_RULES) {
-    if (rule.target === "code" && !isCode) continue;
-    if (rule.target === "text" && isCode) continue;
+  const whole = lines.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "line", namesRemote: true }));
+  if (isCode) {
+    return dedupeByRuleLine(matchUnits(rulesFor("code", "any"), whole));
+  }
+  const views = splitMarkdown(content);
+  const remoteBlocks = /* @__PURE__ */ new Set();
+  for (const u2 of views.code) {
+    if (u2.block !== null && REMOTE_DESTINATION_RE.test(u2.text)) remoteBlocks.add(u2.block);
+  }
+  const prose = views.prose.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "prose", namesRemote: true }));
+  const code = views.code.filter((u2) => u2.kind === "fenced" || isWholeCommand(u2.text)).map((u2) => ({
+    line: u2.line,
+    text: u2.text,
+    source: u2.kind,
+    namesRemote: u2.block === null ? REMOTE_DESTINATION_RE.test(u2.text) : remoteBlocks.has(u2.block)
+  }));
+  return dedupeByRuleLine([
+    ...matchUnits(rulesFor("text", "any"), whole),
+    ...matchUnits(rulesFor("prose"), prose),
+    ...matchUnits(rulesFor("code"), code)
+  ]);
+}
+function rulesFor(...targets) {
+  return SKILL_RULES.filter((r) => targets.includes(r.target));
+}
+var SEVERITY_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+function matchUnits(rules2, units) {
+  const matches3 = [];
+  for (const rule of rules2) {
+    const full = severityOfRule(rule);
     for (const pattern of rule.patterns) {
-      for (let i2 = 0; i2 < lines.length; i2 += 1) {
-        const line = lines[i2] ?? "";
+      let best = null;
+      for (const unit of units) {
         pattern.lastIndex = 0;
-        if (pattern.test(line)) {
-          matches3.push({
-            rule,
-            line: i2 + 1,
-            snippet: line.trim().slice(0, 240)
-          });
-          break;
+        if (!pattern.test(unit.text)) continue;
+        const severity = severityFor(rule, unit);
+        if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
+          best = { rule, line: unit.line, snippet: unit.text.trim().slice(0, 240), source: unit.source, severity };
         }
+        if (severity === full) break;
       }
+      if (best) matches3.push(best);
     }
   }
-  return dedupeByRuleLine(matches3);
+  return matches3;
+}
+function isWholeCommand(span) {
+  const t = span.trim();
+  return /\s/.test(t) && !/…|\.\.\./.test(t);
+}
+var ONE_LEVEL_LOWER = {
+  critical: "high",
+  high: "medium",
+  medium: "low",
+  low: "info",
+  info: "info"
+};
+function severityFor(rule, unit) {
+  const base = severityOfRule(rule);
+  return unit.namesRemote ? base : ONE_LEVEL_LOWER[base];
 }
 function dedupeByRuleLine(matches3) {
   const seen = /* @__PURE__ */ new Set();
@@ -68030,16 +68247,15 @@ async function analyzeSkill(files, opts = {}) {
   for (const file of files) {
     if (file.isExecutable) executableFiles += 1;
     for (const m of scanContent(file.content, file.isCode)) {
-      const sev = severityOfRule(m.rule);
       push(
         makeFinding({
           tool: TOOL,
           rule_id: m.rule.id,
-          severity: sev,
+          severity: m.severity,
           category: "security",
           subcategory: m.rule.category,
           title: m.rule.title,
-          message: m.rule.message,
+          message: m.rule.message + whereFound(m),
           file_path: file.relPath,
           line_start: m.line,
           line_end: m.line,
@@ -68152,6 +68368,12 @@ async function analyzeSkill(files, opts = {}) {
     executable_files: executableFiles,
     hidden_unicode_files: hiddenUnicodeFiles
   };
+}
+function whereFound(m) {
+  if (m.source !== "fenced" && m.source !== "inline") return "";
+  const where = m.source === "fenced" ? " Found in a fenced code block of an instruction file, which the model may run as written." : " Found in inline code of an instruction file, which the model may run as written.";
+  const lowered = m.severity !== severityOfRule(m.rule);
+  return lowered ? `${where} Scored one level below the rule: it names no URL or IP address, and such code is as often a mention of the command as an instruction to run it.` : where;
 }
 function emptyBreakdown() {
   const out = {};
@@ -68697,7 +68919,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced blocks, inline code and prose) are scored like the skill's own scripts; code there that names no URL or IP scores one level lower, as it may be a mention. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };

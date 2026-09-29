@@ -4,11 +4,38 @@
  * Each rule maps to one `ThreatCategory` and is matched line-by-line against
  * a file's content. A rule declares a `target`:
  *   - 'text' → only run against instruction/doc artifacts (SKILL.md, README,
- *     *.md, *.txt, plain MCP manifest prose). These are where prompt-level
- *     attacks live.
- *   - 'code' → only run against executable/source artifacts (*.sh, *.py,
- *     *.js, *.ts, *.ps1, …). These are where real code execution lives.
- *   - 'any'  → both.
+ *     *.md, *.txt, plain MCP manifest prose), over the whole file. These are
+ *     where prompt-level attacks live.
+ *   - 'code' → run against executable/source artifacts (*.sh, *.py, *.js,
+ *     *.ts, *.ps1, …), AND against the code inside an instruction file: its
+ *     fenced blocks and inline code spans (`markdownCode.ts`). For a
+ *     third-party skill the instructions are what the model runs, so a
+ *     ```bash``` block in SKILL.md is as executable as `scripts/setup.sh`.
+ *   - 'prose' → only the prose of an instruction file, with its code blanked
+ *     out: the same command written as a sentence ("run curl … | bash").
+ *     Each prose rule is the variant of a code rule with the same id plus
+ *     `-prose`, so a command is scored once, by the shape it is written in.
+ *   - 'any'  → both kinds of file, whole content.
+ *
+ * The code in an instruction file is as often a MENTION as an instruction:
+ * `rm -rf /` in the list of what a hook blocks, `pattern: \.env$` in a doc
+ * about writing detection rules, `exec(` in a bug catalogue. Measured twice:
+ *   - this repo's own docs, which document every attack here: 82 code-rule
+ *     hits in inline spans and fenced blocks, every one a mention — a bare
+ *     name (`eval()`, `.env`), a placeholder (`curl … | sh`) or a quoted
+ *     example. None named a URL;
+ *   - 75 legitimate third-party skills installed on the development machine
+ *     (Anthropic's official plugins among them): at full severity, a skill
+ *     that teaches how to write hook rules scored +100 from fenced YAML
+ *     patterns and one about writing hooks +125, both DO_NOT_INSTALL. The one
+ *     hit that was an instruction to run a remote script — Homebrew's
+ *     `/bin/bash -c "$(curl -fsSL https://…)"` — named a URL.
+ * So an inline span is scanned only when it is a whole command (it has an
+ * argument, and no `…` / `...` placeholder), and a code hit in an instruction
+ * file scores a level below its rule unless its span, or its fenced block,
+ * names a remote destination (a URL or an IP address) — the one thing a
+ * mention of an attack leaves out and an instruction to carry it out cannot.
+ * A skill's own scripts are scored as before, at full severity.
  *
  * Rules are intentionally conservative regexes: a hit is a *signal*, scored
  * by severity, never an automatic verdict. The scorer aggregates them.
@@ -19,7 +46,24 @@
  *
  * Pure data + pure functions. No I/O.
  */
+import { splitMarkdown } from './markdownCode.js';
 import { THREAT_CATEGORY_META } from './taxonomy.js';
+/**
+ * A credential file, named as a path. `.env` only as a FILE: `process.env` is
+ * a property, and matching it read every Node script that reads a setting as
+ * "reads sensitive local credential files". A public key (`*.pub`) is not a
+ * credential — sending one to a server is how you register it.
+ */
+const SENSITIVE_FILE = String.raw `(id_rsa(?!\.pub)|id_ed25519(?!\.pub)|id_ecdsa(?!\.pub)|\.ssh\/(?![\w.-]*\.pub\b)|\.aws\/credentials|\.netrc|\.npmrc|\.git-credentials|\.kube\/config|\.docker\/config\.json|cookies\.sqlite|Login\s+Data|(?<![\w$)\]])\.env\b)`;
+/** A program or API call that sends bytes off the machine. */
+const NETWORK_SENDER = String.raw `\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
+/** The same act, in words. */
+const SEND_VERB = String.raw `\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
+/** A concrete remote endpoint: what an instruction to exfiltrate has and a description of one does not. */
+const REMOTE_DESTINATION = String.raw `(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
+const REMOTE_DESTINATION_RE = new RegExp(REMOTE_DESTINATION, 'i');
+/** What precedes a secret that AUTHENTICATES a request rather than being its payload. */
+const AUTH_HEADER = String.raw `(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 export const SKILL_RULES = [
     // ───────────────────────────── prompt_injection ─────────────────────────
     {
@@ -131,7 +175,24 @@ export const SKILL_RULES = [
         patterns: [
             /(fetch|axios|requests?\.(post|get|put)|http[s]?\.request|urllib|httpx)[^\n]{0,120}(process\.env|os\.environ|getenv|ENV\[)/i,
             /(process\.env|os\.environ|getenv)[^\n]{0,120}(fetch|axios|requests?\.|\.post\(|upload|send\()/i,
-            /\b(curl|wget)\b[^\n]{0,200}(\$\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))/i,
+            // Not when the secret authenticates the request — that is the next
+            // rule. Measured: an official plugin's `curl -H "Authorization: Bearer
+            // $API_TOKEN" https://api.example.com/mcp/health`, a health check in a
+            // reference doc, read critical and took its skill to DO_NOT_INSTALL.
+            new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTH_HEADER}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, 'i'),
+        ],
+    },
+    {
+        id: 'de-secret-in-auth-header',
+        category: 'data_exfiltration',
+        severity: 'medium',
+        title: 'Secret from the environment sent as request authentication',
+        message: 'A request authenticates with a token, key or password from the environment. That is how an API is called — ' +
+            'and also how a stolen token reaches a server that is not its own. Confirm the endpoint is the service the ' +
+            'secret belongs to.',
+        target: 'code',
+        patterns: [
+            new RegExp(`\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTH_HEADER}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`, 'i'),
         ],
     },
     {
@@ -141,8 +202,29 @@ export const SKILL_RULES = [
         title: 'Reads sensitive local credential files',
         message: 'Code references SSH keys, cloud credentials, browser data or .env — sensitive material a skill rarely needs.',
         target: 'code',
+        patterns: [new RegExp(SENSITIVE_FILE, 'i')],
+    },
+    {
+        id: 'de-sensitive-file-over-network',
+        category: 'data_exfiltration',
+        severity: 'critical',
+        title: 'Credential file sent over the network',
+        message: 'One command both names a credential file (SSH key, cloud credentials, .netrc/.npmrc, browser data, .env) ' +
+            'and a network client — the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://…`.',
+        target: 'code',
+        patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, 'i')],
+    },
+    {
+        id: 'de-sensitive-file-over-network-prose',
+        category: 'data_exfiltration',
+        severity: 'high',
+        title: 'Instruction to send a credential file to a remote endpoint',
+        message: 'The prose of an instruction file names a credential file, a way to send it and a concrete destination ' +
+            '(a URL or an IP address) in one sentence. A description of the attack names no endpoint; ' +
+            'an instruction to carry it out has to.',
+        target: 'prose',
         patterns: [
-            /(id_rsa|\.ssh\/|\.aws\/credentials|\.npmrc|\.netrc|\.env\b|cookies\.sqlite|Login\s+Data)/i,
+            new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*(${NETWORK_SENDER}|${SEND_VERB}))(?=.*${REMOTE_DESTINATION})`, 'i'),
         ],
     },
     {
@@ -196,9 +278,31 @@ export const SKILL_RULES = [
         message: 'Downloads a remote script and executes it unverified (curl|bash and friends).',
         target: 'code',
         patterns: [
-            /\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+)?(bash|sh|zsh|python[23]?|node)\b/i,
+            /\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node)\b/i,
             /\beval\s+"\$\(\s*(curl|wget)\b/i,
-            /(iwr|invoke-webrequest|invoke-restmethod)[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
+            /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
+            // `bash <(curl …)`, `sh -c "$(curl …)"` — the other two ways install
+            // one-liners are written, and the hook's block list names both.
+            /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b/i,
+            /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b/i,
+            /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b/i,
+        ],
+    },
+    {
+        id: 'sc-curl-pipe-shell-prose',
+        category: 'supply_chain',
+        severity: 'high',
+        title: 'Instruction to pipe a remote script to a shell',
+        message: 'The prose of an instruction file tells the reader to download a script from a concrete URL and run it ' +
+            'unverified. The documentation shape (`curl … | sh`, "curl|bash") names no URL and is not reported.',
+        target: 'prose',
+        patterns: [
+            /\b(curl|wget)\b[^|]{0,200}?\b(https?|ftp):\/\/[^|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?(bash|sh|zsh|dash|ksh|python[23]?|node|perl|ruby)\b/i,
+            /\b(bash|sh|zsh|dash|ksh|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
+            /\b(bash|sh|zsh|dash|ksh)\s+-c\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
+            /\beval\s+["']?\$\(\s*(curl|wget)\b[^)]{0,300}\b(https?|ftp):\/\//i,
+            /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]{0,200}?\bhttps?:\/\/[^|]{0,300}\|\s*(iex|invoke-expression)\b/i,
+            /\b(iex|invoke-expression)\b\s*\(?\s*\(?\s*(iwr|irm|invoke-webrequest|invoke-restmethod|new-object\s+(system\.)?net\.webclient)\b.{0,300}\bhttps?:\/\//i,
         ],
     },
     {
@@ -309,7 +413,9 @@ export const SKILL_RULES = [
         title: 'Shell/network access from a non-execution helper',
         message: 'A skill that presents as read-only/formatting still reaches for shell or process-spawn primitives.',
         target: 'code',
-        patterns: [/(spawn|spawnSync|popen|system)\s*\(/i],
+        // Not after `::`: `thread::spawn(` / `tokio::spawn(` start a thread or a
+        // task, not a process.
+        patterns: [/(?<!::)(spawn|spawnSync|popen|system)\s*\(/i],
     },
     // ──────────────────────────── mcp_tool_poisoning ────────────────────────
     {
@@ -331,29 +437,83 @@ export const SKILL_RULES = [
  * targets apply.
  */
 export function scanContent(content, isCode) {
-    const matches = [];
     const lines = content.split(/\r?\n/);
-    for (const rule of SKILL_RULES) {
-        if (rule.target === 'code' && !isCode)
-            continue;
-        if (rule.target === 'text' && isCode)
-            continue;
+    const whole = lines.map((text, i) => ({ line: i + 1, text, source: 'line', namesRemote: true }));
+    if (isCode) {
+        return dedupeByRuleLine(matchUnits(rulesFor('code', 'any'), whole));
+    }
+    const views = splitMarkdown(content);
+    const remoteBlocks = new Set();
+    for (const u of views.code) {
+        if (u.block !== null && REMOTE_DESTINATION_RE.test(u.text))
+            remoteBlocks.add(u.block);
+    }
+    const prose = views.prose.map((text, i) => ({ line: i + 1, text, source: 'prose', namesRemote: true }));
+    const code = views.code
+        .filter((u) => u.kind === 'fenced' || isWholeCommand(u.text))
+        .map((u) => ({
+        line: u.line,
+        text: u.text,
+        source: u.kind,
+        namesRemote: u.block === null ? REMOTE_DESTINATION_RE.test(u.text) : remoteBlocks.has(u.block),
+    }));
+    return dedupeByRuleLine([
+        ...matchUnits(rulesFor('text', 'any'), whole),
+        ...matchUnits(rulesFor('prose'), prose),
+        ...matchUnits(rulesFor('code'), code),
+    ]);
+}
+function rulesFor(...targets) {
+    return SKILL_RULES.filter((r) => targets.includes(r.target));
+}
+const SEVERITY_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+/**
+ * One hit per (rule, pattern) is enough signal — but it is the most severe
+ * one, not the first: a mention early in a file (scored a level lower) must
+ * not hide the real command further down that names its endpoint.
+ */
+function matchUnits(rules, units) {
+    const matches = [];
+    for (const rule of rules) {
+        const full = severityOfRule(rule);
         for (const pattern of rule.patterns) {
-            for (let i = 0; i < lines.length; i += 1) {
-                const line = lines[i] ?? '';
+            let best = null;
+            for (const unit of units) {
                 pattern.lastIndex = 0;
-                if (pattern.test(line)) {
-                    matches.push({
-                        rule,
-                        line: i + 1,
-                        snippet: line.trim().slice(0, 240),
-                    });
-                    break; // one hit per (rule, pattern) is enough signal
+                if (!pattern.test(unit.text))
+                    continue;
+                const severity = severityFor(rule, unit);
+                if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
+                    best = { rule, line: unit.line, snippet: unit.text.trim().slice(0, 240), source: unit.source, severity };
                 }
+                if (severity === full)
+                    break; // nothing later can outrank it
             }
+            if (best)
+                matches.push(best);
         }
     }
-    return dedupeByRuleLine(matches);
+    return matches;
+}
+/**
+ * An inline span worth reading as code: it has an argument (`rm -rf /`, not
+ * `eval()` or `.env`) and no placeholder (`curl … | sh` cannot be run as
+ * written). See the header for the measurement behind both.
+ */
+function isWholeCommand(span) {
+    const t = span.trim();
+    return /\s/.test(t) && !/…|\.\.\./.test(t);
+}
+const ONE_LEVEL_LOWER = {
+    critical: 'high',
+    high: 'medium',
+    medium: 'low',
+    low: 'info',
+    info: 'info',
+};
+function severityFor(rule, unit) {
+    const base = severityOfRule(rule);
+    return unit.namesRemote ? base : ONE_LEVEL_LOWER[base];
 }
 /** Collapse multiple patterns of the same rule hitting the same line. */
 function dedupeByRuleLine(matches) {

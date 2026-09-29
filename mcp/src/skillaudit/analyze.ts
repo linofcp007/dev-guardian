@@ -5,7 +5,9 @@
  * and produces canonical `Finding`s plus the rolled-up risk score and
  * per-category breakdown:
  *
- *   1. Pattern rules     (patterns.ts)      — prompt-level + code-level signals
+ *   1. Pattern rules     (patterns.ts)      — prompt-level + code-level signals,
+ *                                            the code rules also over the fenced
+ *                                            and inline code of an instruction file
  *   2. YARA signatures   (yaraSignatures.ts)— known-bad artifacts
  *   3. Taint-light       (taint.ts)         — source→sink within a file
  *   4. Hidden Unicode    (here)             — invisible instruction smuggling
@@ -23,7 +25,7 @@ import { queryOsv, type OsvResult } from '../runners/osv.js';
 import type { Finding, Severity } from '../types.js';
 import { extractDependencies } from './deps.js';
 import type { IngestedFile, SymlinkEntry } from './ingest.js';
-import { scanContent, severityOfRule } from './patterns.js';
+import { scanContent, severityOfRule, type RuleMatch } from './patterns.js';
 import { scoreFindings, type ScoreResult, type ScoreSignal } from './score.js';
 import { detectTaint } from './taint.js';
 import { THREAT_CATEGORIES, type ThreatCategory } from './taxonomy.js';
@@ -103,16 +105,15 @@ export async function analyzeSkill(
 
     // 1. Pattern rules.
     for (const m of scanContent(file.content, file.isCode)) {
-      const sev = severityOfRule(m.rule);
       push(
         makeFinding({
           tool: TOOL,
           rule_id: m.rule.id,
-          severity: sev,
+          severity: m.severity,
           category: 'security',
           subcategory: m.rule.category,
           title: m.rule.title,
-          message: m.rule.message,
+          message: m.rule.message + whereFound(m),
           file_path: file.relPath,
           line_start: m.line,
           line_end: m.line,
@@ -244,6 +245,20 @@ export async function analyzeSkill(
     executable_files: executableFiles,
     hidden_unicode_files: hiddenUnicodeFiles,
   };
+}
+
+/** Says which part of an instruction file a code rule read, and why a hit scores below its rule. */
+function whereFound(m: RuleMatch): string {
+  if (m.source !== 'fenced' && m.source !== 'inline') return '';
+  const where =
+    m.source === 'fenced'
+      ? ' Found in a fenced code block of an instruction file, which the model may run as written.'
+      : ' Found in inline code of an instruction file, which the model may run as written.';
+  const lowered = m.severity !== severityOfRule(m.rule);
+  return lowered
+    ? `${where} Scored one level below the rule: it names no URL or IP address, and such code is as ` +
+        'often a mention of the command as an instruction to run it.'
+    : where;
 }
 
 function emptyBreakdown(): Record<ThreatCategory, number> {

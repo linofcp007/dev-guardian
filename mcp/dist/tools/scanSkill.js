@@ -71,7 +71,9 @@ const tool = {
         'privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt ' +
         'leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, ' +
         'taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE ' +
-        'lookups on declared dependencies. Returns a 0-100 risk score and an install recommendation ' +
+        'lookups on declared dependencies. The commands in an instruction file (a SKILL.md\'s fenced blocks, ' +
+        'inline code and prose) are scored like the skill\'s own scripts; code there that names no URL or IP ' +
+        'scores one level lower, as it may be a mention. Returns a 0-100 risk score and an install recommendation ' +
         '(SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).',
     inputSchema,
     handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),

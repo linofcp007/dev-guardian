@@ -56,6 +56,14 @@ scan_skill(target?, check_deps?, write_reports?, severity_min?, fail_on?)
 | `mcp_least_privilege` | An MCP manifest granting `*` / `all` scopes it doesn't need |
 | `mcp_tool_poisoning` | Hidden directives inside MCP tool names / descriptions |
 
+The instructions of a skill are what the model runs, so the commands in its
+`SKILL.md` count as much as its scripts: the code rules also read every fenced
+block (any language tag, or none) and every inline code span, and two prose
+rules read a remote script piped to a shell, and a credential file sent to a
+URL, written as sentences. Code in an instruction file that names no URL or IP
+address scores one level lower — a skill that *documents* a destructive command
+or a detection pattern is not one that runs it.
+
 ## Risk score & verdict
 
 The tool returns a **0-100 risk score** (severity-weighted; findings in
