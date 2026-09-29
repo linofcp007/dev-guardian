@@ -107,6 +107,11 @@ version bump.
   judged by its size, before reading it) or one that cannot be read is no longer counted in `files_scanned`: it is
   named in `files_not_scanned` with the reason, and the scan is partial (`tools_run`, `missing_tools` and
   `coverage` are in the response).
+- `perf_check` reads Lighthouse's verdict. A page Lighthouse could not load is reported in its own report
+  (`runtimeError`) and the CLI exits 1 after saving it; `perf_check` read neither, so the run gave null scores and
+  budgets "ok". A `runtimeError` or a non-zero exit is now a failed check naming the code and message. A configured
+  budget whose metric Lighthouse returned no value for is `budgets.status: "not_measured"` (listed in
+  `not_measured`, with a warning), never `ok`; the measured ones are still evaluated.
 
 ## [3.0.0] - 2026-09-29
 

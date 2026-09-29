@@ -323,7 +323,7 @@ Propose stack-appropriate observability files (Pino logger / structlog / Monolog
 
 ### `perf_check`
 
-Run Lighthouse against target\_url, or k6 against k6\_script\_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/invalid — an invalid file is never reported the same as "no budgets" or "within budget".
+Run Lighthouse against target\_url, or k6 against k6\_script\_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/not\_measured/invalid — an invalid file, or a budget whose metric Lighthouse did not measure, is never reported as "within budget". A page Lighthouse could not load (runtimeError, non-zero exit) is a failed check.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

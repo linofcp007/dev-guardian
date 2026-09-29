@@ -58002,7 +58002,7 @@ var inputSchema3 = {
 var tool9 = {
   name: "perf_check",
   title: "Performance probe (Lighthouse or k6)",
-  description: 'Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/invalid \u2014 an invalid file is never reported the same as "no budgets" or "within budget".',
+  description: 'Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/not_measured/invalid \u2014 an invalid file, or a budget whose metric Lighthouse did not measure, is never reported as "within budget". A page Lighthouse could not load (runtimeError, non-zero exit) is a failed check.',
   inputSchema: inputSchema3,
   handler: async (input, ctx) => handler6(input, ctx)
 };
@@ -58078,6 +58078,19 @@ async function runLighthouse(opts) {
   } catch {
     return failDomain7("scanner_failed", "Lighthouse output was not valid JSON.");
   }
+  const runtimeError = getProp(parsed, "runtimeError");
+  if (runtimeError !== void 0 && runtimeError !== null) {
+    const code = getString(runtimeError, "code") ?? "UNKNOWN";
+    const message3 = getString(runtimeError, "message") ?? "";
+    return failDomain7(
+      "scanner_failed",
+      `Lighthouse could not measure ${opts.url}: ${code}${message3 ? ` \u2014 ${message3}` : ""} (report: ${outFile})`
+    );
+  }
+  if (result.exitCode !== 0) {
+    const line = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? result.outcome;
+    return failDomain7("scanner_failed", `Lighthouse exit ${String(result.exitCode)}: ${line} (report: ${outFile})`);
+  }
   const summary2 = summariseLighthouse(parsed);
   const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary2.core_web_vitals);
   return {
@@ -58119,6 +58132,17 @@ function evaluateLighthouseBudgets(projectPath, cwv) {
   };
   const violations = evaluatePerfBudgets(measured, loaded.budgets.perf);
   const findings = budgetViolationFindings(violations, relPath);
+  const perf = loaded.budgets.perf;
+  const unmeasured = Object.keys(perf).filter((key) => perf[key] !== void 0 && (measured[key] === void 0 || measured[key] === null)).map((key) => `perf.${key}`);
+  if (unmeasured.length > 0) {
+    return {
+      findings,
+      budgets: { status: "not_measured", path: relPath, violations: findings.length, not_measured: unmeasured },
+      warnings: [
+        `${unmeasured.join(", ")} not measured: Lighthouse reported no value for ${unmeasured.length === 1 ? "that metric" : "those metrics"}, so ${unmeasured.length === 1 ? "that budget was" : "those budgets were"} not checked \u2014 never read that as within budget.`
+      ]
+    };
+  }
   return { findings, budgets: { status: "ok", path: relPath, violations: findings.length }, warnings: [] };
 }
 function summariseLighthouse(root) {
