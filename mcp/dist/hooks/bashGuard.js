@@ -559,12 +559,14 @@ export function splitShell(command) {
         words = [];
         dashTail = true;
     };
-    const endStatement = () => {
+    const endStatement = (end) => {
         endCommand();
         const text = masked.trim();
         if (text.length > 0 || commands.length > 0) {
             currentStatement.masked = text;
             currentStatement.commands = commands;
+            if (end !== undefined)
+                currentStatement.end = end;
             statements.push(currentStatement);
         }
         masked = '';
@@ -627,7 +629,7 @@ export function splitShell(command) {
             continue;
         }
         if (ch === '\n') {
-            endStatement();
+            endStatement('\n');
             maskedCommand += '\n';
             // skipHeredocBodies attaches each body directly, via the statement
             // reference each PendingHeredoc recorded when its `<<` was parsed —
@@ -639,7 +641,7 @@ export function splitShell(command) {
             continue;
         }
         if (ch === ';') {
-            endStatement();
+            endStatement(';');
             maskedCommand += ';';
             i += 1;
             continue;
@@ -649,7 +651,7 @@ export function splitShell(command) {
         // POSIX shell reads it as part of a word; ending the statement there only
         // ever assesses more. Pending heredocs keep waiting for the real newline.
         if (ch === '\r' && command.charAt(i + 1) !== '\n') {
-            endStatement();
+            endStatement('\n');
             maskedCommand += '\n';
             i += 1;
             continue;
@@ -670,7 +672,7 @@ export function splitShell(command) {
                 closedWord = inBacktick;
                 inBacktick = !inBacktick;
             }
-            endStatement();
+            endStatement(ch === '(' ? '(' : ch === ')' ? ')' : '`');
             maskedCommand += ch;
             i += 1;
             continue;
@@ -678,7 +680,7 @@ export function splitShell(command) {
         if (ch === '&') {
             const next = command.charAt(i + 1);
             if (next === '&') {
-                endStatement();
+                endStatement('&&');
                 maskedCommand += '&&';
                 i += 2;
                 continue;
@@ -689,7 +691,7 @@ export function splitShell(command) {
                 i += 1;
                 continue;
             }
-            endStatement();
+            endStatement('&');
             maskedCommand += '&';
             i += 1;
             continue;
@@ -703,7 +705,7 @@ export function splitShell(command) {
             }
             const next = command.charAt(i + 1);
             if (next === '|') {
-                endStatement();
+                endStatement('||');
                 maskedCommand += '||';
                 i += 2;
                 continue;
@@ -2764,13 +2766,43 @@ const RULE_DOWNLOAD_RUN = {
     level: 'block',
     reason: 'Downloads a file and runs it in the same command (DownloadFile / -OutFile, then &, ., Start-Process, …)',
 };
-/** Whether a command reads its stdin as a script: a shell, or `source` / `.` of `/dev/stdin`. */
+/**
+ * Whether a command reads its stdin as a script: a shell, `source` / `.` of
+ * `/dev/stdin`, or an interpreter given no program of its own — `python3 -`,
+ * bare `node`, `perl`, `ruby`, `php` (review round 2, ruling 2). An
+ * interpreter handed its program (`python3 -c '…'`, `python3 script.py`,
+ * `python3 -m json.tool`, `perl -ne '…'`) reads stdin as data.
+ */
 function readsStdinAsScript(words, at) {
     const name = commandName(words[at]?.value ?? '');
     if (STDIN_SHELLS.has(name))
         return true;
-    return (name === 'source' || name === '.') && STDIN_PATHS.has(words[at + 1]?.value ?? '');
+    if ((name === 'source' || name === '.') && STDIN_PATHS.has(words[at + 1]?.value ?? ''))
+        return true;
+    return isInterpreter(name) && isBareInterpreterStdin(withoutRedirectWords(words.slice(at)));
 }
+/** `words` without their redirections (`<<< text`, `> f`, `2>&1`) — the operator word and a detached target both go. */
+function withoutRedirectWords(words) {
+    const out = [];
+    for (let i = 0; i < words.length; i += 1) {
+        const word = words[i];
+        if (word === undefined)
+            continue;
+        const r = parseRedirect(word);
+        if (r === null)
+            out.push(word);
+        else if (r.inline === '')
+            i += 1;
+    }
+    return out;
+}
+/** An interpreter whose script operand is a process substitution that downloads: `python3 <(curl …)`, `node -u <(wget …)`. */
+const INTERPRETER_FETCH = /(?:^|[\s;&|(){}])(?:[\w./-]*\/)?(?:python[0-9.]*|py|pypy[0-9.]*|node|nodejs|perl|ruby|php|bun|tsx|ts-node)(?:\s+-[\w-]+)*\s+<\(\s*(?:curl|wget)\b/i;
+const RULE_PROCESS_FETCH = {
+    id: 'process-substitution-remote-fetch',
+    level: 'block',
+    reason: 'Executes a downloaded script via process substitution (bash <(curl …))',
+};
 /**
  * `curl … | bash`, judged on the pipeline's structure rather than its text
  * (review I1): a member that downloads, and after it a member whose command —
@@ -2808,9 +2840,11 @@ function hereStringFetchIntoShell(words, at) {
 const PS_DOWNLOAD = /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|start-bitstransfer)(?![\w-])|\.\s*(?:downloadstring|downloaddata|downloadfile|openread|getstringasync|getbytearrayasync|getstreamasync)\s*\(/i;
 /**
  * The tokens {@link powershellDownloadExecution} reads: `iex`, a download,
- * parentheses, pipes and statement separators.
+ * parentheses, pipes and statement separators. `iex` is a command only as a
+ * word of its own — never a file's name or extension (`x.iex`, `out\run.iex`:
+ * review round 2).
  */
-const PS_EXEC_TOKENS = /(?<![\w$-])(?:iex|invoke-expression)(?![\w-])|(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b|&&|\|\||[()|;\n]/gi;
+const PS_EXEC_TOKENS = /(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b|&&|\|\||[()|;\n]/gi;
 /**
  * `Invoke-Expression` over a download, on the masked command text (review I1):
  * `iex ((New-Object Net.WebClient).DownloadString(…))` (Chocolatey's official
@@ -2879,122 +2913,347 @@ const DOWNLOAD_FILE_CALL = /\.\s*DownloadFile(?:Async|TaskAsync)?\s*\(/gi;
 const SAVING_CMDLETS = new Set(['iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod', 'start-bitstransfer', 'curl', 'wget']);
 /** `-OutFile` (from `-OutF`) and BITS's `-Destination` (from `-Dest`), with an attached `:value` or not. */
 const SAVE_PARAM = /^-(?:outf(?:i(?:le?)?)?|dest(?:i(?:n(?:a(?:t(?:i(?:on?)?)?)?)?)?)?)(?::(.*))?$/i;
-/** Commands that run a file named anywhere in their arguments. */
-const RUNS_ARGUMENT = new Set([
-    'start', 'start-process', 'saps', 'invoke-item', 'ii', 'msiexec', 'cscript', 'wscript', 'rundll32', 'sh', 'bash', 'zsh',
-    'iex', 'invoke-expression',
-]);
-/** Commands that print a file, so `gc x | iex` runs it. */
-const READERS = new Set(['get-content', 'gc', 'cat', 'type']);
+/** curl's short options that take a value: in a cluster, the first of them takes the rest of it, or the next word. */
+const CURL_SHORT_VALUED = 'AbcCdDeEFHKmoPQrtTuUwxXyYz';
+/** wget's short options that take a value (`-o` is its LOG file, not the download). */
+const WGET_SHORT_VALUED = 'OoPtTwUeiaBQlDIXRA';
+/** A URL argument. */
+const URL_ARG = /^[a-z][a-z0-9+.-]*:\/\//i;
+/** The name curl `-O` / wget give a download: the URL path's last segment (wget: `index.html` when there is none). */
+function remoteName(url, fallback) {
+    const path = url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '').replace(/[?#].*$/, '');
+    const last = path.split('/').pop() ?? '';
+    return last !== '' ? last : fallback;
+}
 /**
- * The files a command line downloads — `.DownloadFile(url, path)` (outside a
- * quoted span), and `Invoke-WebRequest … -OutFile path` / `Start-BitsTransfer
- * … -Destination path` — as {@link runKey}s. In the POSIX reading of a
- * PowerShell command an unquoted comma is a space, so a call's arguments may
- * arrive as one: its last string literal is then the destination.
+ * The files a POSIX `curl` or `wget` saves (review round 2, ruling 1):
+ * `curl -o f` / `--output f` / `-fsSLo f`, `curl -O URL` (named after the
+ * URL), `wget -O f` / `--output-document=f`, `wget URL` (named after the URL,
+ * under `-P dir`), and either with its stdout redirected (`curl URL > f`).
+ * `-O -` is stdout, not a file.
  */
-function downloadedFiles(text, statements) {
-    const out = new Set();
-    if (/downloadfile/i.test(text)) {
-        const unquotedAt = quoteTracker(text);
-        for (const m of text.matchAll(DOWNLOAD_FILE_CALL)) {
-            if (!unquotedAt(m.index))
-                continue;
-            const { args } = callArgs(text, m.index + m[0].length);
-            const second = args[1];
-            const literals = codeLiterals(args[0] ?? '', 'other');
-            const dest = second !== undefined ? argPath(second) : literals.length >= 2 ? literals[literals.length - 1] : undefined;
-            if (dest !== undefined && dest.trim() !== '')
-                out.add(runKey(dest));
+function posixSaves(name, words, at) {
+    if (name !== 'curl' && name !== 'wget')
+        return [];
+    const wget = name === 'wget';
+    const valued = wget ? WGET_SHORT_VALUED : CURL_SHORT_VALUED;
+    const saved = [...redirectTargets(words.slice(at + 1))];
+    const urls = [];
+    let named = false;
+    let remote = false;
+    let dir = '';
+    const save = (f) => {
+        if (f === undefined || f === '' || f === '-') {
+            if (f === '-')
+                named = true;
+            return;
+        }
+        named = true;
+        saved.push(f);
+    };
+    const args = words.slice(at + 1).map((w) => w.value);
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        const long = /^--([a-z-]+)(?:=(.*))?$/i.exec(a);
+        if (long !== null) {
+            const flag = (long[1] ?? '').toLowerCase();
+            const value = () => (long[2] !== undefined ? long[2] : args[(i += 1)]);
+            if (!wget && flag === 'output')
+                save(value());
+            else if (wget && flag === 'output-document')
+                save(value());
+            else if (!wget && (flag === 'remote-name' || flag === 'remote-name-all'))
+                remote = true;
+            else if ((!wget && flag === 'output-dir') || (wget && flag === 'directory-prefix'))
+                dir = value() ?? '';
+            continue;
+        }
+        if (a.startsWith('-') && a.length > 1) {
+            for (let k = 1; k < a.length; k += 1) {
+                const c = a.charAt(k);
+                if (!wget && c === 'O')
+                    remote = true;
+                if (!valued.includes(c))
+                    continue;
+                const v = k < a.length - 1 ? a.slice(k + 1) : args[(i += 1)];
+                if ((wget && c === 'O') || (!wget && c === 'o'))
+                    save(v);
+                else if (wget && c === 'P')
+                    dir = v ?? '';
+                break;
+            }
+            continue;
+        }
+        if (URL_ARG.test(a))
+            urls.push(a);
+    }
+    if ((wget && !named) || (!wget && remote && !named)) {
+        for (const url of urls) {
+            const file = remoteName(url, wget ? 'index.html' : undefined);
+            if (file !== undefined)
+                saved.push(dir === '' ? file : `${dir.replace(/[\\/]+$/, '')}/${file}`);
         }
     }
-    for (const statement of statements) {
-        for (const words of statement.commands) {
-            const at = resolveCommand(words).index;
-            if (!SAVING_CMDLETS.has(commandName(words[at]?.value ?? '')))
-                continue;
-            for (let i = at + 1; i < words.length; i += 1) {
-                const m = SAVE_PARAM.exec(words[i]?.value ?? '');
-                if (m === null)
-                    continue;
-                const dest = m[1] !== undefined && m[1] !== '' ? m[1] : words[i + 1]?.value;
-                if (dest !== undefined && dest.trim() !== '')
-                    out.add(runKey(dest));
-            }
-        }
+    else if (dir !== '') {
+        return saved.map((f) => (isAbsolutePath(f) ? f : `${dir.replace(/[\\/]+$/, '')}/${f}`));
+    }
+    return saved;
+}
+/** The files a PowerShell web cmdlet saves: `-OutFile path`, BITS's `-Destination path`. */
+function powershellSaves(name, words, at) {
+    if (!SAVING_CMDLETS.has(name))
+        return [];
+    const out = [];
+    for (let i = at + 1; i < words.length; i += 1) {
+        const m = SAVE_PARAM.exec(words[i]?.value ?? '');
+        if (m === null)
+            continue;
+        const dest = m[1] !== undefined && m[1] !== '' ? m[1] : words[i + 1]?.value;
+        if (dest !== undefined && dest.trim() !== '')
+            out.push(dest);
     }
     return out;
 }
+/** The destinations of `.DownloadFile(url, path)` calls outside a quoted span. */
+function downloadFileCalls(text) {
+    if (!/downloadfile/i.test(text))
+        return [];
+    const out = [];
+    const unquotedAt = quoteTracker(text);
+    for (const m of text.matchAll(DOWNLOAD_FILE_CALL)) {
+        if (!unquotedAt(m.index))
+            continue;
+        // In the POSIX reading of a PowerShell command an unquoted comma is a
+        // space, so the arguments may arrive as one: its last literal is the path.
+        const { args } = callArgs(text, m.index + m[0].length);
+        const second = args[1];
+        const literals = codeLiterals(args[0] ?? '', 'other');
+        const dest = second !== undefined ? argPath(second) : literals.length >= 2 ? literals[literals.length - 1] : undefined;
+        if (dest !== undefined && dest.trim() !== '')
+            out.push(dest);
+    }
+    return out;
+}
+/** Shells, which run their first operand as a script unless given one with `-c`. */
+const SCRIPT_SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'fish', 'csh', 'tcsh']);
+/** Commands that open whatever they are given — a program runs, a document only opens. */
+const OPENERS = new Set(['start', 'start-process', 'saps', 'invoke-item', 'ii']);
+/** Commands that run a file named anywhere in their arguments. */
+const RUNS_ARGUMENT = new Set(['msiexec', 'cscript', 'wscript', 'rundll32', 'iex', 'invoke-expression']);
+/** Commands that print a file, so `gc x | iex` and `cat x | sh` run it. */
+const READERS = new Set(['get-content', 'gc', 'cat', 'type']);
 /**
- * The files a command line runs, as {@link runKey}s: a command named by its
- * path (`.\i.ps1`, `& "$env:TEMP\i.ps1"` — the `&` is a separator here),
- * `. file`, `powershell -File file`, `cmd /c file`, `Start-Process file`,
- * `msiexec /i file`, and `Get-Content file | iex` or `iex (gc file)`.
+ * File types an opener RUNS rather than displays (review round 2: `Start-Process
+ * readme.txt` opens Notepad, and a downloaded document opened that way is no
+ * download-then-run). A name with no extension counts: it may be a program.
  */
-function ranFiles(statements) {
-    const out = new Set();
-    const add = (v) => {
-        if (v !== undefined && v !== '' && !v.startsWith('-'))
-            out.add(runKey(v));
-    };
-    statements.forEach((statement, k) => {
+const RUNNABLE_EXTENSIONS = new Set([
+    'exe', 'com', 'bat', 'cmd', 'msi', 'msp', 'msix', 'msixbundle', 'appx', 'appxbundle', 'ps1', 'psm1', 'vbs', 'vbe', 'js',
+    'jse', 'wsf', 'wsh', 'hta', 'scr', 'cpl', 'jar', 'reg', 'lnk', 'application', 'appref-ms', 'sh', 'bash', 'command', 'py',
+    'pyw', 'pl', 'rb', 'php', 'app', 'pkg',
+]);
+function isRunnableName(path) {
+    const last = stripQuotes(path).split(/[\\/]/).pop() ?? '';
+    const ext = /\.([A-Za-z0-9-]+)$/.exec(last)?.[1];
+    return ext === undefined || RUNNABLE_EXTENSIONS.has(ext.toLowerCase());
+}
+/** Start-Process's `-ArgumentList` (`-Args`, and its abbreviations) and `-FilePath` (`-Path`, `-PSPath`, `-LP`). */
+const PS_ARGUMENT_LIST = /^-(?:args|a(?:r(?:g(?:u(?:m(?:e(?:n(?:t(?:l(?:i(?:st?)?)?)?)?)?)?)?)?)?)?)$/i;
+const PS_FILE_PATH = /^-(?:f(?:i(?:l(?:e(?:p(?:a(?:th?)?)?)?)?)?)?|path|pspath|lp)$/i;
+/**
+ * The first operand of a shell or an interpreter — the script it runs — or
+ * none when it runs program text instead (`sh -c`, `python -c`, `node -e`,
+ * `python -m`).
+ */
+function scriptOperand(words, at, name) {
+    const rest = words.slice(at + 1);
+    if (SCRIPT_SHELLS.has(name)) {
+        if (rest.some((w) => !w.quoted && DASH_C.test(w.value)))
+            return undefined;
+    }
+    else if (inlineCode(words, at).length > 0 || rest.some((w) => /^-[A-Za-z]*m$/.test(w.value)))
+        return undefined;
+    return withoutRedirections(rest).find((v) => !v.startsWith('-'));
+}
+/** Whether a pipeline member reads its stdin as a program: a shell, `source /dev/stdin`, or a bare interpreter. */
+function runsStdin(words, at) {
+    return readsStdinAsScript(words, at);
+}
+/**
+ * The files one simple command runs: itself when it is named by its path
+ * (`./f`, `.\i.ps1`, `& "$env:TEMP\i.ps1"` — the `&` is a separator here),
+ * `. file` / `source file`, a shell's or interpreter's script (`sh f`,
+ * `python3 f.py`), `powershell -File file`, `cmd /c file`, a program an opener
+ * starts (`Start-Process setup.exe`, `ii i.ps1`, `Start-Process msiexec
+ * -ArgumentList '/i x.msi'` — never a document), `msiexec /i file`, and a
+ * file printed into something that runs its stdin (`gc f | iex`, `cat f | sh`).
+ */
+function commandRuns(statement, c, heads, pipedIntoRunner) {
+    const words = statement.commands[c];
+    const at = heads[c] ?? 0;
+    const head = words?.[at];
+    if (words === undefined || head === undefined)
+        return [];
+    const name = commandName(head.value);
+    const out = [head.value];
+    const rest = withoutRedirections(words.slice(at + 1));
+    const operands = rest.filter((v) => v !== '' && !v.startsWith('-') && !/^\/[A-Za-z]+$/.test(v));
+    if (name === '.' || name === 'source') {
+        if (rest[0] !== undefined)
+            out.push(rest[0]);
+    }
+    else if (name === 'powershell' || name === 'pwsh') {
+        const file = rest.findIndex((v) => /^-f(?:i(?:le?)?)?$/i.test(v));
+        if (file >= 0)
+            out.push(rest[file + 1] ?? '');
+        else
+            out.push(...operands);
+    }
+    else if (name === 'cmd') {
+        const run = rest.findIndex((v) => /^\/[ck]$/i.test(v));
+        if (run >= 0)
+            out.push(rest[run + 1] ?? '');
+    }
+    else if (SCRIPT_SHELLS.has(name) || isInterpreter(name)) {
+        const script = scriptOperand(words, at, name);
+        if (script !== undefined)
+            out.push(script);
+    }
+    else if (OPENERS.has(name)) {
+        const files = [];
+        for (let i = 0; i < rest.length; i += 1) {
+            const v = rest[i] ?? '';
+            if (PS_ARGUMENT_LIST.test(v))
+                files.push(...(rest[(i += 1)] ?? '').split(/[\s,]+/));
+            else if (PS_FILE_PATH.test(v))
+                files.push(rest[(i += 1)] ?? '');
+            else if (v.startsWith('-'))
+                i += /^-(?:verb|wo\w*|windowstyle|w|redirect\w*|credential|cred)$/i.test(v) ? 1 : 0;
+            else
+                files.push(v);
+        }
+        out.push(...files.filter((f) => f !== '' && !/^\/[A-Za-z]+$/.test(f) && isRunnableName(f)));
+    }
+    else if (RUNS_ARGUMENT.has(name)) {
+        out.push(...operands);
+    }
+    else if (READERS.has(name) && pipedIntoRunner) {
+        out.push(...operands);
+    }
+    return out.filter((f) => f !== '');
+}
+/** Per pipeline member: whether a LATER member runs its stdin (`iex`, a shell, a bare interpreter) — one pass from the end. */
+function pipedIntoRunners(statement, heads) {
+    const out = new Array(statement.commands.length).fill(false);
+    let later = false;
+    for (let c = statement.commands.length - 1; c >= 0; c -= 1) {
+        out[c] = later;
+        const words = statement.commands[c] ?? [];
+        const i = heads[c] ?? 0;
+        const n = commandName(words[i]?.value ?? '');
+        if (n === 'iex' || n === 'invoke-expression' || runsStdin(words, i))
+            later = true;
+    }
+    return out;
+}
+/** Whether a command line may download anything at all — the cheap test before the walk. */
+const MAY_DOWNLOAD = /curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer|downloadfile/i;
+/** Checksum and signature tools, as `(name, words) => whether this invocation checks`. */
+function isIntegrityCheck(words, at) {
+    const name = commandName(words[at]?.value ?? '');
+    const args = words.slice(at + 1).map((w) => w.value);
+    if (/^(?:sha(?:1|224|256|384|512)sum|b2sum|shasum)$/.test(name)) {
+        return args.some((a) => a === '--check' || /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
+    }
+    if (name === 'gpg' || name === 'gpg2')
+        return args.includes('--verify');
+    if (name === 'gpgv')
+        return true;
+    if (name === 'minisign' || name === 'signify')
+        return args.some((a) => /^-[A-Za-z]*V/.test(a));
+    if (name === 'cosign')
+        return args.includes('verify-blob');
+    if (name === 'openssl')
+        return args.some((a) => a === '-verify' || a === '-prverify');
+    return false;
+}
+/** Where a directory change leaves relative paths: `cd`, `pushd`, `Set-Location` (a `popd` goes back to the start). */
+function cwdFor(name, args, cwd) {
+    if (CD_RETURNS.has(name))
+        return '';
+    if (!CD_COMMANDS.has(name))
+        return cwd;
+    const dir = psParam(args, ['path', 'literalpath']) ?? args.find((a) => !(a.startsWith('-') || /^\/d$/i.test(a)));
+    if (dir === undefined)
+        return '~';
+    const next = resolveFrom(cwd, dir);
+    return next.length > MAX_CWD ? '' : next;
+}
+/**
+ * A file downloaded and run by the same command line (review I1, PowerShell's
+ * `DownloadFile` / `-OutFile` then run; round 2, ruling 1, POSIX `curl -o f
+ * && sh f` and the like). Paths are compared after the `cd`s before them. A run
+ * is not counted when a checksum or signature check lies between the latest
+ * download of that file and the run and every statement from the check to the
+ * run is joined by `&&` — the run is then conditional on the check. A run in a
+ * later, separate command is not seen at all: that is download, inspect, run.
+ */
+function downloadsThenRuns(text, statements) {
+    if (!MAY_DOWNLOAD.test(text))
+        return false;
+    /** Per file, the statement of its latest download so far; `.DownloadFile` calls come before every statement. */
+    const downloads = new Map();
+    for (const dest of downloadFileCalls(text))
+        downloads.set(runKey(resolveFrom('', dest)), -1);
+    /**
+     * The latest integrity check joined to the current statement by `&&` all
+     * the way (-2 for none), carried forward so that each run is judged in
+     * constant time.
+     */
+    let chainedCheck = -2;
+    let cwd = '';
+    for (let k = 0; k < statements.length; k += 1) {
+        const statement = statements[k];
+        if (statement === undefined)
+            continue;
         const heads = statement.commands.map((words) => resolveCommand(words).index);
+        const ran = [];
+        const saved = [];
+        // Nothing downloaded yet: nothing a run could match, so runs are not read.
+        const reading = downloads.size > 0;
+        const piped = reading ? pipedIntoRunners(statement, heads) : [];
         statement.commands.forEach((words, c) => {
             const at = heads[c] ?? 0;
-            const head = words[at];
-            if (head === undefined)
-                return;
-            const name = commandName(head.value);
-            out.add(runKey(head.value));
-            const rest = words.slice(at + 1).map((w) => w.value);
-            if (name === '.' || name === 'source')
-                add(rest[0]);
-            else if (name === 'powershell' || name === 'pwsh') {
-                const file = rest.findIndex((v) => /^-f(?:i(?:le?)?)?$/i.test(v));
-                if (file >= 0)
-                    add(rest[file + 1]);
-                else
-                    rest.forEach(add);
-            }
-            else if (name === 'cmd') {
-                const run = rest.findIndex((v) => /^\/[ck]$/i.test(v));
-                if (run >= 0)
-                    add(rest[run + 1]);
-            }
-            else if (RUNS_ARGUMENT.has(name)) {
-                // Not cmd-style switches (`msiexec /i x.msi /qn`).
-                for (const v of rest)
-                    if (!/^\/[A-Za-z]+$/.test(v))
-                        add(v);
-            }
-            else if (READERS.has(name)) {
-                const piped = statement.commands.slice(c + 1).some((w, d) => {
-                    const n = commandName(w[heads[c + 1 + d] ?? 0]?.value ?? '');
-                    return n === 'iex' || n === 'invoke-expression';
-                });
-                if (piped)
-                    rest.forEach(add);
-            }
+            const name = commandName(words[at]?.value ?? '');
+            for (const dest of [...posixSaves(name, words, at), ...powershellSaves(name, words, at)])
+                saved.push(runKey(resolveFrom(cwd, dest)));
+            if (reading)
+                for (const file of commandRuns(statement, c, heads, piped[c] === true))
+                    ran.push(runKey(resolveFrom(cwd, file)));
+            cwd = cwdFor(name, withoutRedirections(words.slice(at + 1)), cwd);
         });
         // `iex (Get-Content file -Raw)`: the `(` ended the statement holding `iex`.
         const only = statement.commands.length === 1 ? statement.commands[0] : undefined;
         const lone = only !== undefined && only.length === 1 ? commandName(only[0]?.value ?? '') : '';
-        if (lone === 'iex' || lone === 'invoke-expression') {
-            const next = statements[k + 1]?.commands[0];
-            if (next !== undefined && READERS.has(commandName(next[0]?.value ?? '')))
-                next.slice(1).forEach((w) => add(w.value));
+        const next = statements[k + 1]?.commands[0];
+        if (reading && (lone === 'iex' || lone === 'invoke-expression') && next !== undefined && READERS.has(commandName(next[0]?.value ?? ''))) {
+            for (const w of next.slice(1))
+                if (!w.value.startsWith('-'))
+                    ran.push(runKey(resolveFrom(cwd, w.value)));
         }
-    });
-    return out;
-}
-/** A file downloaded and run by the same command line (review I1: PowerShell's `DownloadFile` then run). */
-function downloadsThenRuns(text, statements) {
-    const downloaded = downloadedFiles(text, statements);
-    if (downloaded.size === 0)
-        return false;
-    for (const ran of ranFiles(statements))
-        if (downloaded.has(ran))
-            return true;
+        for (const file of ran) {
+            const d = downloads.get(file);
+            // Run after its download, and not behind a check made after that download.
+            if (d !== undefined && d < k && !(chainedCheck > d))
+                return true;
+        }
+        for (const file of saved)
+            downloads.set(file, k);
+        // A pipeline's status is its last member's: only a check there decides.
+        const last = statement.commands.length - 1;
+        const checks = isIntegrityCheck(statement.commands[last] ?? [], heads[last] ?? 0);
+        chainedCheck = statement.end !== '&&' ? -2 : checks ? k : chainedCheck;
+    }
     return false;
 }
 // ──────────────────────────────────────────────────────────── assessment
@@ -3035,6 +3294,9 @@ function collect(command, depth, out, scope) {
         out.push(RULE_IEX_DOWNLOAD);
     if (downloadsThenRuns(cmd, statements))
         out.push(RULE_DOWNLOAD_RUN);
+    // `python3 <(curl …)`: an interpreter's script is a download (round 2, ruling 2).
+    if (/<\(\s*(?:curl|wget)/i.test(commandText) && INTERPRETER_FETCH.test(commandText))
+        out.push(RULE_PROCESS_FETCH);
     for (const statement of statements) {
         // The total time budget: a hook that outlives Claude Code's 15 s timeout
         // lets the command run unassessed, so what is left is reported instead.
@@ -3069,6 +3331,10 @@ function collect(command, depth, out, scope) {
             if (find !== null)
                 out.push(find);
             if (hereStringFetchIntoShell(words, resolved.index))
+                out.push(RULE_FETCH_EXEC);
+            // `python3 -c "$(curl …)"`, `node -e "$(curl …)"`: the program IS a
+            // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
+            if (inlineCode(words, resolved.index).some(isBareRemoteFetch))
                 out.push(RULE_FETCH_EXEC);
             pushAll(out, assessGuardConfig(words, resolved.index, scope));
             const scripts = nestedScripts(words, resolved.index);
@@ -3192,22 +3458,23 @@ export function assessBashCommand(command, opts = {}) {
     const cut = whole.length > MAX_COMMAND_LENGTH;
     const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
     const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
+    const where = { home };
     if (opts.shell !== 'powershell')
-        return assessReadings([text], cut, now, deadline, home);
+        return assessReadings([text], cut, now, deadline, where);
     // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
     // closing quote and swallows the rest of the command, with no warning.
     // PowerShell's own reading goes first, so the one budget is never spent on
     // the POSIX reading before the reading that matches what will run; a block
     // needs no second reading. The POSIX reading sees here-strings and block
     // comments for what they are: nothing else can be meant by them.
-    return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, home);
+    return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
 }
 /**
  * The readings of one command, assessed into one verdict: every rule any
  * reading matched, and one partial note for all of them — so on a tie no
  * reading's reasons are dropped. A reading after one that blocked is skipped.
  */
-function assessReadings(readings, cut, now, deadline, home) {
+function assessReadings(readings, cut, now, deadline, where) {
     const notes = {
         statement: false,
         command: cut,
@@ -3229,7 +3496,7 @@ function assessReadings(readings, cut, now, deadline, home) {
         // 125 000 operands overflowed the stack). Whatever throws now, the answer
         // is at least a warning, and a block found before it still blocks.
         try {
-            collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, home });
+            collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where });
         }
         catch {
             notes.failed = true;
