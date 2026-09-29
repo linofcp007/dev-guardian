@@ -478,6 +478,11 @@ version bump.
   one-letter prefix as ambiguous, but PowerShell (pwsh 7.6 and 5.1 alike) never lets a common parameter make one
   so: `-i` is `-ItemType`, `-v` is `-Value`, `-p` is `-Path`. A prefix now names the parameter it alone begins;
   `-t` (`-Type` or `-Target`), which PowerShell refuses, names none.
+- **A quoted `-OutVariable 'r'` tainted every variable.** Its name was masked like any quoted text and read as "any
+  variable", so in `$resp = irm URL -OutVariable 'r'; $cmd = 'npm test'; iex $cmd` the `iex` of a literal was
+  denied. A quoted name where a name goes (`-OutVariable`, `-ov`, `Tee-Object -Variable`, `-Name`, right after
+  `Set-` / `New-` / `Get-Variable`) now names that variable only, as the unquoted one does; a name computed at run
+  time (`-OutVariable $n`) still stands for any.
 
 ## [3.0.0] - 2026-09-29
 

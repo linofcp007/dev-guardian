@@ -392,6 +392,23 @@ function interpolatedVariables(inner) {
     }
     return out;
 }
+/**
+ * The end of the masked text where a variable's NAME comes next: after
+ * `-OutVariable` / `-ov`, `Tee-Object`'s `-Variable`, `-Name`, or right after
+ * `Set-` / `New-` / `Get-Variable`. A quoted name there is written back too
+ * (review 3.0 wave 2, round 2), so `-OutVariable 'r'` fills `$r` and not, as a
+ * masked name did, every variable.
+ */
+const NAME_POSITION = /(?:(?:^|[\s;|&(])-(?:ov|outv[a-z]*|v[a-z]*|n[a-z]*)[ \t]*:?[ \t]*|(?:^|[\s;|&(])(?:set-variable|new-variable|get-variable|sv|nv|gv)[ \t]+)$/i;
+/** A variable's name, with its scope — never one of the words the flow tokens read as a command. */
+const QUOTED_NAME = /^(?:(?:global|script|local|private|using|variable):)?[A-Za-z_]\w{0,63}$/i;
+const TOKEN_WORD = /^(?:iex|invoke-expression|irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|set-variable|new-variable|get-variable|sv|nv|gv|tee|tee-object)$/i;
+/** A quoted span's text, when it is a variable's name in a place a name goes ({@link NAME_POSITION}). */
+function quotedName(maskedBefore, inner) {
+    if (!QUOTED_NAME.test(inner) || TOKEN_WORD.test(inner))
+        return undefined;
+    return NAME_POSITION.test(maskedBefore.slice(-48)) ? inner : undefined;
+}
 /** `masked` with each interpolation's variables written back after the mask that ends at its offset. */
 function withInterpolations(masked, interpolations) {
     if (interpolations.length === 0)
@@ -671,13 +688,14 @@ export function splitShell(command) {
             buf += scanned.inner;
             bufQuoted = true;
             hasWord = true;
+            const name = quotedName(maskedCommand, scanned.inner);
             masked += MASK;
             maskedCommand += MASK;
-            if (ch === '"') {
-                const vars = interpolatedVariables(scanned.inner);
-                if (vars.length > 0)
-                    interpolations.push({ at: maskedCommand.length, vars: vars.join(' ') });
-            }
+            const vars = ch === '"' ? interpolatedVariables(scanned.inner) : [];
+            if (name !== undefined)
+                vars.push(name);
+            if (vars.length > 0)
+                interpolations.push({ at: maskedCommand.length, vars: vars.join(' ') });
             lastCode = MASK;
             i = scanned.next;
             continue;
@@ -3330,7 +3348,7 @@ const PS_DOWNLOAD = /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|c
  *     (`gv`), a read of the variable it names;
  *   - parentheses, pipes and statement separators.
  */
-const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<ref>\$(?:\{[^}\n]{0,128}\}|[\w:]+))(?<assign>\s*\+?=(?!=))?|(?<setvar>(?<![\w$.\\/-])(?:set-variable|new-variable|sv|nv)(?![\w.-]))|(?<getvar>(?<![\w$.\\/-])(?:get-variable|gv)(?![\w.-]))|(?<tee>(?<![\w$.\\/-])(?:tee-object|tee)(?![\w.-]))|(?<outvar>(?<![\w-])-(?:ov|outv(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?)(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)\+?(?<outname>[A-Za-z_]\w*))?)|(?<teevar>(?<![\w-])-v(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)(?<teename>[A-Za-z_]\w*))?)|&&|\|\||[()|;\n]/gi;
+const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<ref>\$(?:\{[^}\n]{0,128}\}|[\w:]+))(?<assign>\s*\+?=(?!=))?|(?<setvar>(?<![\w$.\\/-])(?:set-variable|new-variable|sv|nv)(?![\w.-]))|(?<getvar>(?<![\w$.\\/-])(?:get-variable|gv)(?![\w.-]))|(?<tee>(?<![\w$.\\/-])(?:tee-object|tee)(?![\w.-]))|(?<outvar>(?<![\w-])-(?:ov|outv(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?)(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)\+?(?<outname>[A-Za-z_][\w:]*))?)|(?<teevar>(?<![\w-])-v(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)(?<teename>[A-Za-z_][\w:]*))?)|&&|\|\||[()|;\n]/gi;
 /**
  * A variable as one name: `$` and the name, lower-cased, without braces or a
  * scope — `${Script:S}`, `$script:s` and `$s` are all `$s` (`$env:x` stays
