@@ -19,6 +19,7 @@ Set them where the process that reads them starts: in the `env` block of the MCP
 | `GUARDIAN_HOOKS_BASH_BLOCK` | hooks | unset | `0` / `false`: catastrophic commands are only warned about; `1` / `true`: always blocked. Wins over both config files. A project's `.guardian/hooks.config.json` cannot switch the block off — see [hooks.md](hooks.md). |
 | `GUARDIAN_HOOKS_DEBUG` | hooks | unset | `1` writes the hooks' diagnostics to stderr (they are silent and fail open otherwise). |
 | `GUARDIAN_PKG_VET` | hooks | unset | `0` turns off install-time package vetting in the PreToolUse hook. No project file can do it — not even with `"enabled": false`; the user-level config's `"enabled": false` turns it off along with every other hook. The `vet_packages` tool is unaffected. |
+| `GUARDIAN_PKG_VET_DEADLINE_MS` | hooks | `8000` | The one deadline for install-time package vetting in a PreToolUse hook call, in ms from the start of the call (at most `14000`: Claude Code kills a hook at 15 s, and the command then runs with no verdict). The 3 s network budget is cut to it; what is left when it passes reads "vetting time budget exhausted" — not verified, never ok. |
 
 ## Set by dev-guardian, not by you
 
