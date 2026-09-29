@@ -53,7 +53,9 @@ import { runProcess } from '../runners/processRunner.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
+import { planSemgrepConfigs, semgrepEngineNote } from '../runners/semgrepConfigs.js';
+import { semgrepEngineOf } from '../runners/semgrepReport.js';
+import { mayHoldTaintRules, pluginPackCheckIds } from '../runners/semgrepRuleIds.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -272,17 +274,30 @@ async function runSemgrep(
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
-    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot } },
+    rules: {
+      configs: plan.rulePacks,
+      ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot },
+      loadedFrom: plan.ruleConfigs,
+      // The plugin's pack's own fixpoint timeouts are its gap, not the review's.
+      packCheckIds: pluginPackCheckIds(plan.pluginPacks, { cwd: args.scanRoot }),
+      nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs),
+    },
   });
   // Run from `scanRoot` (a temporary tree for a ref), Semgrep names the
   // project's rules by their absolute path; stored canonical, as scan_sast's.
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
-  out.tools_run.push(withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : [])]));
+  // What the engine cannot do — report taint fixpoint timeouts, resolve the
+  // LLM pack's node: imports — said once, as scan_sast says it.
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  out.tools_run.push(
+    withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : []), ...(engineNote !== null ? [engineNote] : [])]),
+  );
   // Scanned nothing at all, not every changed file, or some only partly
   // parsed or rules that did not load (`ok` + missing, runners/semgrepReport.ts):
   // a gap, not a clean result.
-  const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0);
+  // The plugin's LLM pack missing from disk (runners/semgrepConfigs.ts) is a gap too.
+  const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
   if (run.nothingScanned || gap !== null || partial) out.missing_tools.push('semgrep');
   out.cancelled ||= run.cancelled;
 }

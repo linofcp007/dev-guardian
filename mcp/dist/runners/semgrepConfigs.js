@@ -10,10 +10,104 @@
  * this project with `register_custom_rules`. `local_only` also turns metrics
  * off, which is only possible once `--config=auto` is gone: Semgrep refuses
  * to build an auto config with metrics off.
+ *
+ * Last, the plugin's own LLM-application pack (`configs/semgrep/llm.yml`:
+ * model output reaching an interpreter, remote code in a model load, request
+ * data in a system prompt, a completion with no token cap), in both modes — it
+ * is a rule file on disk, so `local_only` runs it too. It is an ADDITION, not
+ * a SAST ruleset: `local_only` with no project or registered rules is still
+ * no scan (`nothingToRun`), because a run of a dozen LLM rules reported as a
+ * clean SAST scan would be exactly the false clean this product refuses. For
+ * the same reason it cannot MAKE a SAST scan either: "no rule loaded" is
+ * judged over `ruleConfigs` (registry, project and registered configs), so a
+ * `local_only` run whose every project rule is broken stays failed whatever
+ * the pack found — its findings are still recorded. Its rule ids come out bare
+ * (`runners/semgrepRuleIds.ts`: a file directly in the plugin's pack
+ * directory). The Docker fallback mounts that directory read-only at
+ * {@link CONTAINER_PACKS_ROOT}. A damaged install without the pack runs
+ * without it, and the run is partial with the gap named (`packMissing`).
  */
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { inspectCustomSemgrepConfigs, legacyRegistrationNote, legacyRegistrationsNotApplied, } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
+import { semgrepEngineOf } from './semgrepReport.js';
+import { pluginPacksDir } from './semgrepRuleIds.js';
+/** The plugin's LLM-application pack, by file name in `configs/semgrep/`. */
+export const LLM_RULES_FILE = 'llm.yml';
+/** Absolute path of the plugin's LLM-application pack. */
+export function llmRulesPath() {
+    return join(pluginPacksDir(), LLM_RULES_FILE);
+}
+/** Where the Docker fallback mounts the plugin's pack directory, read-only. */
+export const CONTAINER_PACKS_ROOT = '/guardian-packs';
+/**
+ * The Semgrep the LLM pack was measured on. Older engines (1.86.0 through
+ * 1.170.1, measured) do not resolve `import … from 'node:child_process'` in
+ * taint mode, so the JS rule misses those sinks there ({@link semgrepEngineNote}).
+ */
+export const LLM_PACK_MEASURED_SEMGREP = '1.176.1';
+/** Whether `version` is older than `than` (both `x.y.z`); false when either cannot be read. */
+function olderThan(version, than) {
+    const parse = (v) => v.split(/[.+-]/).slice(0, 3).map((p) => Number.parseInt(p, 10));
+    const have = parse(version);
+    const need = parse(than);
+    if (have.some((n) => Number.isNaN(n)) || need.some((n) => Number.isNaN(n)))
+        return false;
+    for (let i = 0; i < 3; i += 1) {
+        const a = have[i] ?? 0;
+        const b = need[i] ?? 0;
+        if (a !== b)
+            return a < b;
+    }
+    return false;
+}
+/**
+ * The one note a Semgrep run carries about the engine that ran it (its
+ * report's `version`, `semgrepReport.ts#semgrepEngineOf`), or null when there
+ * is nothing to say. Two things an older engine cannot do, said once, the
+ * engine named once:
+ *
+ *   - report taint fixpoint timeouts (`time.fixpoint_timeouts`, absent
+ *     before 1.170): a function its taint analysis gave up on is invisible,
+ *     so a complete-looking run may not be — a note, not a partial;
+ *   - with the plugin's LLM pack (`llmPack`), resolve `import … from
+ *     'node:child_process'` in taint mode: older than
+ *     {@link LLM_PACK_MEASURED_SEMGREP}, the pack's JS rule misses those sinks
+ *     (160 of 184 fixture findings on 1.86.0, 1.120.1 and 1.170.1).
+ */
+export function semgrepEngineNote(engine, opts) {
+    const version = engine.version;
+    if (version === undefined)
+        return null;
+    const fixpoint = engine.fixpointTimeoutsReported === false;
+    const llm = opts.llmPack && olderThan(version, LLM_PACK_MEASURED_SEMGREP);
+    const childProcess = "resolve `import … from 'node:child_process'` in taint mode — " +
+        `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}, and its child_process coverage is reduced ` +
+        '(160 of 184 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 24 missing are node:child_process sinks)';
+    const fixpointNote = 'does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected';
+    if (fixpoint && llm)
+        return `this Semgrep (${version}) ${fixpointNote}; nor does it ${childProcess}`;
+    if (fixpoint)
+        return `this Semgrep (${version}) ${fixpointNote}`;
+    if (llm)
+        return `this Semgrep (${version}) does not ${childProcess}`;
+    return null;
+}
+/**
+ * `run` with {@link semgrepEngineNote} for the engine that wrote `raw`
+ * appended to its reason — on a run that scanned (`ok`, full or with a
+ * narrower gap) only: a failed or skipped run's reason is about something
+ * else. For callers that never run the LLM pack (bug_hunt, scan_wordpress).
+ */
+export function withSemgrepEngineNote(run, raw) {
+    if (run.status !== 'ok')
+        return run;
+    const note = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: false });
+    if (note === null)
+        return run;
+    return { ...run, reason: [run.reason, note].filter((s) => s !== undefined).join('; ') };
+}
 export function planSemgrepConfigs(projectPath, plugin, localOnly) {
     const inspection = inspectProjectSemgrepConfigs(projectPath);
     const custom = inspectCustomSemgrepConfigs(plugin, projectPath);
@@ -21,18 +115,27 @@ export function planSemgrepConfigs(projectPath, plugin, localOnly) {
     const projectConfigs = inspection.usable.map((c) => c.path);
     const local = [...projectConfigs, ...custom.usable];
     const registry = localOnly ? [] : ['auto', ...(hasDotnetProject(projectPath) ? ['p/csharp'] : [])];
-    const rulePacks = [...registry, ...local];
+    // Never pass a --config that does not resolve: Semgrep aborts the WHOLE
+    // scan when one fails to load. A damaged install without the pack says so.
+    const llmPack = llmRulesPath();
+    const pluginPacks = existsSync(llmPack) ? [llmPack] : [];
+    const rulePacks = [...registry, ...local, ...pluginPacks];
     return {
         args: [...(localOnly ? ['--metrics=off'] : []), ...rulePacks.map((c) => `--config=${c}`)],
         rulePacks,
         registry,
         projectConfigs,
+        pluginPacks,
+        pluginPacksDir: pluginPacksDir(),
+        packMissing: pluginPacks.length === 0,
+        ruleConfigs: [...registry, ...local],
         notes: [
             ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
             ...custom.unusable.map((u) => `${u.path} not loaded (${u.reason})`),
             ...(legacy !== null ? [legacy] : []),
+            ...(pluginPacks.length === 0 ? [`the plugin's LLM-application pack was not found at ${llmPack} — its rules did not run`] : []),
         ],
-        nothingToRun: rulePacks.length === 0,
+        nothingToRun: registry.length === 0 && local.length === 0,
     };
 }
 /** A `.csproj` / `.fsproj` at the project root — `scan_sast`'s own .NET signal. */

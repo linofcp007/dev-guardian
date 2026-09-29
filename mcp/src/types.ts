@@ -153,6 +153,30 @@ export interface ToolRun {
    * scanner" (`tools/scanCoverage.ts`).
    */
   rule_config_error?: true;
+  /**
+   * With `rule_config_error` on a scan_sast Semgrep run: no registry or
+   * project rule loaded, but the plugin's own LLM-application pack did, and
+   * its findings are recorded. The run stays `failed` (the pack alone is not
+   * a SAST scan); the coverage warning says what ran instead of "NOTHING was
+   * scanned" (`tools/scanCoverage.ts`).
+   */
+  plugin_pack_only?: true;
+  /**
+   * A Semgrep run that ran the plugin's own packs, when one of them did not
+   * fully run: by pack (`llm`), its status and why. Today only the LLM pack's
+   * own taint fixpoint timeouts (`runners/semgrepReport.ts`,
+   * `PluginPackFixpoint`) — the pack's gap, not the scan's: the run's status,
+   * `missing_tools` and the CI gate are untouched. Absent: every pack the run
+   * passed ran complete.
+   */
+  plugin_packs?: Record<string, { status: 'partial'; reason: string }>;
+  /**
+   * Responses only (`tools/responseBounds.ts`), never stored: when
+   * `partially_parsed` was cut to its first entries for the MCP response,
+   * how many the run named in all, and how many of each type.
+   */
+  partially_parsed_total?: number;
+  partially_parsed_by_type?: Record<string, number>;
 }
 
 /** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */
@@ -675,6 +699,12 @@ export interface PartialParse {
   type: string;
   /** The first line of Semgrep's message. */
   message: string;
+  /**
+   * `Fixpoint timeout` entries only (`runners/semgrepReport.ts`): how many
+   * functions of this file the taint analysis gave up on. One entry per
+   * file, however many functions.
+   */
+  functions?: number;
 }
 
 /**

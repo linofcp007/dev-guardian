@@ -84,10 +84,25 @@ por defeito, e vale a pena dizê-lo ao utilizador quando ele pergunta se algo
 sai da máquina.
 
 Alternativa: `scan_sast` com `local_only: true` — sem registry, com
-`--metrics=off`, só regras já em disco (o `.semgrep.yml` do projeto e o que
-tenha sido registado com `register_custom_rules`). Menos regras que o modo por
-defeito; nada sai da máquina. Sem regras locais, o scan é reportado como
-skipped e não como resultado limpo.
+`--metrics=off`, só regras já em disco (o `.semgrep.yml` do projeto, o que
+tenha sido registado com `register_custom_rules` e o pack LLM do plugin). Menos
+regras que o modo por defeito; nada sai da máquina. Sem regras do projeto, o
+scan é reportado como skipped e não como resultado limpo.
+
+#### Aplicações com LLM
+
+Em todas as corridas, com e sem `local_only`, o `scan_sast` corre também o
+pack do plugin `configs/semgrep/llm.yml` (Python e JS/TS): saída de um modelo
+que chega a `eval`/`exec`, à shell, ao programa ou ao script `-c` de um
+processo, ou a SQL; o nome de uma ferramenta escolhido pelo modelo usado com
+`getattr`/`import` sem lista de permitidos; `trust_remote_code=True` sem revisão
+fixada num commit; `torch.load` com `weights_only=False` (ou sem o argumento,
+em baixa severidade: só é inseguro antes do torch 2.6); dados do pedido HTTP no
+prompt de sistema; chamadas à OpenAI sem limite de tokens. Os findings são `security`, com a subcategoria
+`llm-*` e a categoria da OWASP Top 10 para LLM 2025 nos metadados da regra. O
+fallback de Docker monta a pasta dos packs do plugin só de leitura e corre-o
+também. Como no `local_only`, o pack sozinho não faz um scan SAST: se todas as
+regras do projeto falharem a carregar, o scan continua `failed`.
 
 ### 3. Triagem inteligente
 

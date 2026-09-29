@@ -36,10 +36,25 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
     );
   return { ...actual, scannerAvailable: vi.fn() };
 });
+// The plugin's pack directory, overridable per test: a damaged install whose
+// `configs/semgrep/` lacks the LLM pack is simulated by pointing it at an
+// empty directory. Everything else in the module stays real.
+const packsDirOverride = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+vi.mock('../../src/runners/semgrepRuleIds.js', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../src/runners/semgrepRuleIds.js')>(
+      '../../src/runners/semgrepRuleIds.js',
+    );
+  return { ...actual, pluginPacksDir: () => packsDirOverride.dir ?? actual.pluginPacksDir() };
+});
 
 import type { PluginContext } from '../../src/context.js';
+import { evaluateGate } from '../../src/ci/gate.js';
+import { CI_EXIT } from '../../src/ci/types.js';
+import type { ToolRun } from '../../src/types.js';
 import { CUSTOM_RULES_META_KEY, customRulesMetaKey } from '../../src/platform/customRules.js';
 import { planSemgrepConfigs } from '../../src/runners/semgrepConfigs.js';
+import { ruleIdsInFile, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
 import { runProcess } from '../../src/runners/processRunner.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -58,6 +73,34 @@ beforeAll(async () => {
 
 const RULES =
   'rules:\n  - id: x\n    pattern: foo(...)\n    message: m\n    languages: [python]\n    severity: WARNING\n';
+
+/**
+ * The plugin's own LLM-application pack. Every native Semgrep run of
+ * scan_sast appends it (runners/semgrepConfigs.ts), in both modes: it is a
+ * rule file on disk, so `local_only` runs it too. Located from this file, not
+ * through the code under test.
+ */
+const LLM_PACK = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'configs', 'semgrep', 'llm.yml');
+
+/**
+ * A report in which every rule of `.semgrep.yml` (`projectIds`) AND every
+ * rule of the LLM pack failed to load — the pack's ids spelled as Semgrep
+ * reports a rule file outside its working directory (the whole path, dotted).
+ */
+function everyRuleFailed(projectIds: readonly string[], scanned: string): unknown {
+  const pack = ruleIdsInFile(LLM_PACK).map((id) => `${semgrepConfigPrefix(LLM_PACK)}.${id}`);
+  return {
+    results: [],
+    errors: [...projectIds, ...pack].map((id) => ({
+      code: 2,
+      level: 'error',
+      type: 'Rule parse error',
+      rule_id: id,
+      message: `Rule parse error in rule ${id}:\n Invalid pattern`,
+    })),
+    paths: { scanned: [scanned] },
+  };
+}
 
 function getTool(name: string) {
   const t = TOOLS.find((x) => x.name === name);
@@ -130,6 +173,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(runProcess).mockReset();
   vi.mocked(scannerAvailable).mockReset();
+  packsDirOverride.dir = undefined;
 });
 
 describe('scan_sast loads the project’s own Semgrep rules', () => {
@@ -318,10 +362,43 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     paths: { scanned: ['a.py'] },
   };
 
-  it('local_only, and every rule of .semgrep.yml failed to load: failed — no rule loaded — never ok, never "install semgrep"', async () => {
+  it('local_only, and every rule of every config — .semgrep.yml and the LLM pack — failed to load: failed — no rule loaded — never ok, never "install semgrep"', async () => {
     const project = makeTempDir('sast-rules-none-');
     writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
-    mockSemgrepOnPath(2, ALL_FAILED);
+    const packIds = ruleIdsInFile(LLM_PACK);
+    expect(packIds.length).toBeGreaterThan(0);
+    mockSemgrepOnPath(2, everyRuleFailed(['x'], 'a.py'));
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as
+      | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
+      | undefined;
+    expect(run?.status).toBe('failed');
+    expect(run?.reason).toMatch(
+      new RegExp(`no rule loaded: Semgrep ran, but every one of its ${1 + packIds.length} rule\\(s\\) failed to load \\(x — Invalid pattern`),
+    );
+    // The pack's rules are named as their findings are stored: bare.
+    expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x', ...packIds]);
+    expect(run?.rule_config_error).toBe(true);
+    const out = r as unknown as { coverage: string; warnings: string[] };
+    expect(out.coverage).toBe('none');
+    expect(out.warnings.join(' ')).toMatch(/semgrep ran, but its rules did not load/);
+    expect(out.warnings.join(' ')).not.toMatch(/install semgrep/i);
+  });
+
+  // Review of the LLM pack, M-1: the pack alone is not a SAST scan, so it
+  // cannot make one either. "No rule loaded" is judged over the project's and
+  // the registered configs only; the pack's findings are still recorded.
+  it('local_only, every rule of .semgrep.yml failed while the LLM pack loaded and found something: still failed — no rule loaded — the pack finding recorded', async () => {
+    const project = makeTempDir('sast-rules-none-pack-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    const packFinding = {
+      check_id: `${semgrepConfigPrefix(LLM_PACK)}.llm-trust-remote-code`,
+      path: 'a.py',
+      start: { line: 1 },
+      end: { line: 1 },
+      extra: { severity: 'WARNING', message: 'm', lines: 'x', metadata: { category: 'security' } },
+    };
+    mockSemgrepOnPath(2, { ...ALL_FAILED, results: [packFinding] });
     const r = await runSast(project, makePlugin(project), { local_only: true });
     const run = r.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
@@ -330,10 +407,26 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 1 rule\(s\) failed to load \(x — Invalid pattern\)/);
     expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x']);
     expect(run?.rule_config_error).toBe(true);
-    const out = r as unknown as { coverage: string; warnings: string[] };
+    const out = r as unknown as { coverage: string; findings_count_by_severity: Record<string, number>; warnings: string[] };
     expect(out.coverage).toBe('none');
-    expect(out.warnings.join(' ')).toMatch(/semgrep ran, but its rules did not load/);
-    expect(out.warnings.join(' ')).not.toMatch(/install semgrep/i);
+    // The pack's finding is real and kept, under its bare id.
+    expect(out.findings_count_by_severity['medium']).toBe(1);
+    // Review round 2: "NOTHING was scanned" is false beside a recorded
+    // finding — say what did and did not run.
+    expect((run as { plugin_pack_only?: boolean } | undefined)?.plugin_pack_only).toBe(true);
+    const warning = out.warnings.join(' ');
+    expect(warning).toMatch(/no registry or project rule loaded; only the plugin's LLM pack ran/);
+    expect(warning).not.toMatch(/NOTHING was scanned/);
+  });
+
+  it('every rule of every config failed, the LLM pack included: nothing ran — the warning says so', async () => {
+    const project = makeTempDir('sast-rules-none-all-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(2, everyRuleFailed(['x'], 'a.py'));
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    const run = r.tools_run.find((t) => t.name === 'semgrep') as { plugin_pack_only?: boolean } | undefined;
+    expect(run?.plugin_pack_only).toBeUndefined();
+    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).toMatch(/NOTHING was scanned/);
   });
 
   it('the same failure with the registry ruleset in the run: the registry rules ran — partial stays', async () => {
@@ -368,7 +461,9 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
       return { outcome: 'failed' as const, exitCode: 2, stdout: '', stderr: '', truncated: false };
     });
     const r = await runSast(project, makePlugin(project), { local_only: true });
-    expect(configs).toEqual(['--config=/src/.semgrep.yml']);
+    // The LLM pack rides along through its read-only mount, and does not
+    // count toward "a rule loaded".
+    expect(configs).toEqual(['--config=/src/.semgrep.yml', '--config=/guardian-packs/llm.yml']);
     const run = r.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
       | undefined;
@@ -377,10 +472,13 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     expect(run?.reason).toMatch(/no rule loaded: Semgrep ran, but every one of its 2 rule\(s\) failed to load/);
     expect(run?.failed_rules?.map((f) => f.rule_id)).toEqual(['x', 'y']);
     expect(run?.rule_config_error).toBe(true);
-    expect((r as unknown as { warnings: string[] }).warnings.join(' ')).not.toMatch(/install semgrep/i);
+    const warning = (r as unknown as { warnings: string[] }).warnings.join(' ');
+    expect(warning).not.toMatch(/install semgrep/i);
+    // The pack ran from its mount (none of its rules failed): say so.
+    expect(warning).toMatch(/no registry or project rule loaded; only the plugin's LLM pack ran/);
   });
 
-  it('a scoped (batched) local_only run in which no rule loaded is failed too', async () => {
+  it('a scoped (batched) local_only run in which no project rule loaded is failed too, the LLM pack notwithstanding', async () => {
     const project = makeTempDir('sast-rules-none-scope-');
     writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
     writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
@@ -583,7 +681,7 @@ describe('scan_sast argv and cache key come from one plan', () => {
     await runSast(project, plugin);
     const configs = semgrepArgs().filter((a) => a.startsWith('--config=')).map((a) => a.slice('--config='.length));
     expect(configs).toEqual(planSemgrepConfigs(project, plugin, false).rulePacks);
-    expect(configs).toEqual(['auto', join(project, '.semgrep.yml'), team]);
+    expect(configs).toEqual(['auto', join(project, '.semgrep.yml'), team, LLM_PACK]);
   });
 
   it('says, in the response warnings, which 2.0.x registrations outside the project it no longer runs', async () => {
@@ -616,6 +714,141 @@ describe('scan_sast argv and cache key come from one plan', () => {
 
     await runSast(project, plugin);
     expect(semgrepArgs()).not.toContain(`--config=${otherRules}`);
+  });
+});
+
+describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.yml)", () => {
+  it('the pack is on disk where the plan looks for it', () => {
+    expect(existsSync(LLM_PACK)).toBe(true);
+    const plan = planSemgrepConfigs(makeTempDir('sast-llm-plan-'), makePlugin(makeTempDir('sast-llm-plugin-')), false);
+    expect(plan.pluginPacks).toEqual([LLM_PACK]);
+  });
+
+  it('appends it to every native run, after the registry and the project rules — and local_only runs it too', async () => {
+    const project = makeTempDir('sast-llm-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    for (const local_only of [false, true]) {
+      captured.length = 0;
+      mockSemgrepOnPath();
+      await runSast(project, makePlugin(project), { local_only });
+      const configs = semgrepArgs().filter((a) => a.startsWith('--config='));
+      expect(configs.at(-1)).toBe(`--config=${LLM_PACK}`);
+      expect(configs.filter((c) => c === `--config=${LLM_PACK}`)).toHaveLength(1);
+    }
+  });
+
+  it('a scoped run passes it too', async () => {
+    const project = makeTempDir('sast-llm-scope-');
+    writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
+    mockSemgrepOnPath();
+    await runSast(project, makePlugin(project), { scope: { paths: ['a.py'] } });
+    expect(semgrepArgs()).toContain(`--config=${LLM_PACK}`);
+  });
+
+  it('local_only with no rules of the project is still no scan: the LLM pack alone is not a SAST ruleset', async () => {
+    const project = makeTempDir('sast-llm-alone-');
+    mockSemgrepOnPath();
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    expect(captured.some((c) => c.command === 'semgrep')).toBe(false);
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('skipped');
+    expect(run?.reason ?? '').toContain('llm.yml');
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
+  // Review of the LLM pack, M-2: the fallback used to leave the pack out and
+  // report every Docker scan_sast partial. It now mounts the plugin's pack
+  // directory READ-ONLY beside the project and runs the pack from there.
+  it('the Docker fallback mounts the pack read-only and runs it: bare ids, full coverage', async () => {
+    const project = makeTempDir('sast-llm-docker-');
+    const finding = {
+      check_id: 'guardian-packs.llm-trust-remote-code',
+      path: '/src/a.py',
+      start: { line: 1 },
+      end: { line: 1 },
+      extra: { severity: 'WARNING', message: 'm', lines: 'x', metadata: { category: 'security' } },
+    };
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      captured.push({ command: opts.command, args: [...(opts.args ?? [])] });
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        writeFileSync(host, JSON.stringify({ results: [finding], errors: [], paths: { scanned: ['/src/a.py'] } }), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 1, stdout: '', stderr: '', truncated: false };
+    });
+    const plugin = makePlugin(project);
+    const r = await runSast(project, plugin);
+    const call = captured.find((c) => c.command === 'docker');
+    if (call === undefined) throw new Error('docker was never invoked');
+    const mounts = call.args.filter((_a, i) => call.args[i - 1] === '--mount');
+    expect(mounts).toContain(`type=bind,source=${dirname(LLM_PACK)},target=/guardian-packs,readonly`);
+    expect(call.args).toContain('--config=/guardian-packs/llm.yml');
+    // Only the project mount is writable.
+    expect(mounts.filter((m) => !m.endsWith(',readonly'))).toEqual([`type=bind,source=${project},target=/src`]);
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('ok');
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).toBe('full');
+    const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
+    expect(set.findings.map((f) => [f.rule_id, f.file_path])).toEqual([['llm-trust-remote-code', 'a.py']]);
+  });
+
+  // Review round 2: the pack was measured on Semgrep 1.176.1; older engines
+  // do not resolve `node:child_process` imports in taint mode.
+  it('a Semgrep older than the pack was measured on: a named note that its child_process coverage is reduced', async () => {
+    const project = makeTempDir('sast-llm-oldsemgrep-');
+    for (const [version, noted] of [['1.170.1', true], ['1.86.0', true], ['1.176.1', false], ['1.180.0', false]] as const) {
+      captured.length = 0;
+      // As each engine writes it: 1.170 and later always carry `time.fixpoint_timeouts`.
+      mockSemgrepOnPath(0, { ...CLEAN_REPORT, version, ...(version === '1.86.0' ? {} : { time: { fixpoint_timeouts: [] } }) });
+      const r = await runSast(project, makePlugin(project));
+      const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
+      expect([version, /llm\.yml.*measured on Semgrep 1\.176\.1.*child_process/.test(reason)]).toEqual([version, noted]);
+      // 1.86.0 also cannot report fixpoint timeouts: one note, the engine named once.
+      expect([version, (reason.match(/this Semgrep/g) ?? []).length]).toEqual([version, noted ? 1 : 0]);
+    }
+    expect(true).toBe(true);
+  });
+
+  it('local_only in the Docker fallback with no project rules is still no scan — the pack alone is not a SAST ruleset', async () => {
+    const project = makeTempDir('sast-llm-docker-alone-');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      captured.push({ command: opts.command, args: [...(opts.args ?? [])] });
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    expect(captured.some((c) => c.command === 'docker')).toBe(false);
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('skipped');
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
+  // Review of the LLM pack, M-3: a damaged install without the pack used to
+  // be a note on an otherwise full scan.
+  it('a native run with the pack missing from disk is partial, the gap named — never full', async () => {
+    packsDirOverride.dir = makeTempDir('sast-llm-nopack-');
+    const project = makeTempDir('sast-llm-missing-');
+    mockSemgrepOnPath();
+    const r = await runSast(project, makePlugin(project));
+    expect(semgrepArgs().some((a) => a.includes('llm.yml'))).toBe(false);
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason ?? '').toMatch(/LLM-application pack was not found at .*llm\.yml — its rules did not run/);
+    expect(r.missing_tools).toContain('semgrep');
+    expect((r as unknown as { coverage: string }).coverage).toBe('partial');
+  });
+
+  it('a scoped run with the pack missing from disk is partial too', async () => {
+    packsDirOverride.dir = makeTempDir('sast-llm-nopack-scope-');
+    const project = makeTempDir('sast-llm-missing-scope-');
+    writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
+    mockSemgrepOnPath();
+    const r = await runSast(project, makePlugin(project), { scope: { paths: ['a.py'] } });
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(r.missing_tools).toContain('semgrep');
   });
 });
 
@@ -992,5 +1225,334 @@ describe('scan_sast: a partly parsed file keeps its older finding in the open se
       components: { findings: { open_findings: number } };
     };
     expect(r.components.findings.open_findings).toBe(2);
+  });
+});
+
+/**
+ * Review of the LLM pack, round 2 (I-C): a taint rule that runs out of
+ * budget on one function gives that function up, and Semgrep says so only
+ * under `time.fixpoint_timeouts` — `errors: []`, `paths.scanned` full. It is
+ * read like a per-rule Timeout: the file was not fully analysed, so the run
+ * is partial with the file named, and a finding missing from that file is
+ * not re-measured, never fixed. An engine that cannot report the field gets
+ * a named note instead.
+ */
+describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
+  // The 1.176.1 shape, verbatim but for the path.
+  const fixpoint = (path: string) => ({
+    error_type: 'Fixpoint timeout',
+    severity: 'warn',
+    message: `Fixpoint timeout while performing taint analysis at ${path}:113:8 [rules: 1, first: python.lang.security.audit.eval-detected]`,
+    location: { path, start: { line: 113, col: 9, offset: 4419 }, end: { line: 113, col: 14, offset: 4424 } },
+  });
+  const hit = (path: string) => ({
+    check_id: 'python.lang.security.audit.eval-detected',
+    path,
+    start: { line: 178 },
+    end: { line: 178 },
+    extra: { severity: 'WARNING', message: 'eval', lines: 'eval(llm_output)' },
+  });
+  const FIXPOINT_REPORT = {
+    version: '1.176.1',
+    results: [],
+    errors: [],
+    paths: { scanned: ['sql/base.py', 'app.py'] },
+    time: { fixpoint_timeouts: [fixpoint('sql/base.py')] },
+  };
+  type SemgrepRun = { status: string; reason?: string; partially_parsed?: Array<{ file: string; type: string; functions?: number }> };
+  const semgrepRun = (r: { tools_run: unknown[] }): SemgrepRun | undefined =>
+    (r.tools_run as Array<SemgrepRun & { name: string }>).find((t) => t.name === 'semgrep');
+  const coverage = (r: unknown): string => (r as { coverage: string }).coverage;
+
+  function expectPartialOnFixpoint(r: { tools_run: unknown[]; missing_tools: string[] }): void {
+    const run = semgrepRun(r);
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): sql\/base\.py/);
+    expect(run?.partially_parsed?.map((p) => [p.file, p.type, p.functions])).toEqual([['sql/base.py', 'Fixpoint timeout', 1]]);
+    expect(r.missing_tools).toContain('semgrep');
+    expect(coverage(r)).toBe('partial');
+  }
+
+  it('native whole-project run: errors [] and every file scanned, yet partial — the file named', async () => {
+    const project = makeTempDir('sast-fixpoint-');
+    mockSemgrepOnPath(0, FIXPOINT_REPORT);
+    expectPartialOnFixpoint(await runSast(project, makePlugin(project)));
+  });
+
+  it('a scoped (batched) run reads it the same way', async () => {
+    const project = makeTempDir('sast-fixpoint-scope-');
+    mkdirSync(join(project, 'sql'));
+    writeFileSync(join(project, 'sql', 'base.py'), 'x = 1\n', 'utf8');
+    mockSemgrepOnPath(0, FIXPOINT_REPORT);
+    expectPartialOnFixpoint(await runSast(project, makePlugin(project), { scope: { paths: ['sql/base.py'] } }));
+  });
+
+  it('the Docker fallback reads it the same way, the container path mapped back', async () => {
+    const project = makeTempDir('sast-fixpoint-docker-');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        const report = {
+          ...FIXPOINT_REPORT,
+          paths: { scanned: ['/src/sql/base.py'] },
+          time: { fixpoint_timeouts: [fixpoint('/src/sql/base.py')] },
+        };
+        writeFileSync(host, JSON.stringify(report), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    expectPartialOnFixpoint(await runSast(project, makePlugin(project)));
+  });
+
+  it('a finding missing from a file in the fixpoint set is not re-measured, never resolved; one elsewhere is resolved', async () => {
+    await import('../../src/tools/diffScans.js');
+    const project = makeTempDir('sast-fixpoint-history-');
+    const plugin = makePlugin(project);
+    mockSemgrepOnPath(1, { ...FIXPOINT_REPORT, results: [hit('sql/base.py'), hit('app.py')], time: { fixpoint_timeouts: [] } });
+    await runSast(project, plugin);
+    mockSemgrepOnPath(0, FIXPOINT_REPORT);
+    await runSast(project, plugin);
+
+    const diff = okResult<{ summary: Record<string, number>; not_measured?: string[] }>(
+      await getTool('diff_scans').handler({ project_path: project, scan_type: 'sast' }, plugin),
+    );
+    expect(diff.summary).toMatchObject({ resolved: 1, not_remeasured: 1, new: 0 });
+    expect(diff.not_measured).toEqual(['semgrep (partly parsed: sql/base.py)']);
+    const set = openSetForProject(plugin.storage, resolveProjectPath(project).path);
+    expect(set.findings.map((f) => `${f.file_path}${f.not_remeasured === true ? ' (not re-measured)' : ''}`)).toEqual([
+      'sql/base.py (not re-measured)',
+    ]);
+  });
+
+  // Round 3 (N-1): the pack's JS taint rules time out on code with no model
+  // call in it. A timeout whose only rule is a pack rule is the pack's gap.
+  const packFixpoint = (path: string, rules: string) => ({
+    ...fixpoint(path),
+    message: `Fixpoint timeout while performing taint analysis at ${path}:10:2 [${rules}]`,
+  });
+  const PACK_RULE = `${semgrepConfigPrefix(LLM_PACK)}.llm-output-to-interpreter-js`;
+  /** The CI gate's exit code for this scan_sast result as its only step (ci/gate.ts). */
+  const gateExit = (r: { tools_run: unknown[]; missing_tools: string[] }): number =>
+    evaluateGate({
+      findings: [],
+      baseline: null,
+      failOn: 'high',
+      steps: [{ tool: 'scan_sast', ran: true, tools_run: r.tools_run as ToolRun[], missing_tools: r.missing_tools }],
+      droppedBaselineEntries: 0,
+    }).exitCode;
+
+  it("the plugin pack's own fixpoint timeout: ok, full, a named note, plugin_packs.llm partial — and history not re-measured", async () => {
+    await import('../../src/tools/diffScans.js');
+    const project = makeTempDir('sast-fixpoint-pack-');
+    const plugin = makePlugin(project);
+    const scanned = { paths: { scanned: ['hooks/bashGuard.ts', 'app.py'] } };
+    mockSemgrepOnPath(1, { ...FIXPOINT_REPORT, ...scanned, results: [hit('hooks/bashGuard.ts')], time: { fixpoint_timeouts: [] } });
+    await runSast(project, plugin);
+    mockSemgrepOnPath(0, {
+      ...FIXPOINT_REPORT,
+      ...scanned,
+      time: { fixpoint_timeouts: [packFixpoint('hooks/bashGuard.ts', `rules: 1, first: ${PACK_RULE}`)] },
+    });
+    const r = await runSast(project, plugin);
+    const run = semgrepRun(r) as SemgrepRun & { plugin_packs?: Record<string, { status: string; reason: string }> };
+    expect(run.status).toBe('ok');
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect(coverage(r)).toBe('full');
+    expect(run.reason).toMatch(
+      /the plugin's LLM pack: taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): hooks\/bashGuard\.ts/,
+    );
+    expect(run.reason).not.toMatch(/^partial|; partial/);
+    expect(run.plugin_packs?.['llm']?.status).toBe('partial');
+    expect(run.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['hooks/bashGuard.ts', 'Fixpoint timeout (plugin pack)']]);
+    // The file's findings were not all looked for again: not re-measured, never resolved.
+    const diff = okResult<{ summary: Record<string, number> }>(
+      await getTool('diff_scans').handler({ project_path: project, scan_type: 'sast' }, plugin),
+    );
+    expect(diff.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+  });
+
+  // The review's reproduction: local_only on a copy of mcp/src, a trivial
+  // .semgrep.yml and the pack. Two of the pack's rules timing out in one
+  // function name the pack rule first of two; with no other taint rule in
+  // the run, both are the pack's.
+  it('local_only with project rules that hold no taint rule: a pack rule first of several is still the pack\'s — ok, full', async () => {
+    const project = makeTempDir('sast-fixpoint-pack-local-');
+    writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
+    mockSemgrepOnPath(0, {
+      ...FIXPOINT_REPORT,
+      paths: { scanned: ['hooks/bashGuard.ts'] },
+      time: { fixpoint_timeouts: [packFixpoint('hooks/bashGuard.ts', `rules: 2, first: ${PACK_RULE}`)] },
+    });
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    const run = semgrepRun(r) as SemgrepRun & { plugin_packs?: Record<string, { status: string }> };
+    expect(run.status).toBe('ok');
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect(coverage(r)).toBe('full');
+    expect(run.plugin_packs?.['llm']?.status).toBe('partial');
+    expect(gateExit(r)).toBe(CI_EXIT.PASS);
+    // A project rule that IS a taint rule makes the same timeout ambiguous again.
+    writeFileSync(
+      join(project, '.semgrep.yml'),
+      'rules:\n  - id: t\n    mode: taint\n    languages: [python]\n    severity: WARNING\n    message: m\n' +
+        '    pattern-sources:\n      - pattern: input()\n    pattern-sinks:\n      - pattern: eval(...)\n',
+      'utf8',
+    );
+    const again = await runSast(project, makePlugin(project), { local_only: true });
+    expect(semgrepRun(again)?.status).toBe('ok');
+    expect(again.missing_tools).toContain('semgrep');
+    expect(gateExit(again)).toBe(CI_EXIT.INCOMPLETE_SCAN);
+  });
+
+  // Round 4, A-1: a project-root rule whose id equals a pack rule's is spelled
+  // bare by Semgrep; the pack's own rule carries its config-path prefix.
+  // Matched through the normalised id, the project rule's timeout read as the
+  // pack's: full coverage, CI exit 0. Control: the same rule named otherwise.
+  it("a project rule named like a pack rule is not the pack's: partial, the gate exits 2 — as its differently named control", async () => {
+    const taintRule = (id: string): string =>
+      `rules:\n  - id: ${id}\n    mode: taint\n    languages: [python]\n    severity: WARNING\n    message: m\n` +
+      '    pattern-sources:\n      - pattern: input(...)\n    pattern-sinks:\n      - pattern: exec(...)\n';
+    for (const id of ['llm-output-to-interpreter-py', 'my-taint-exec']) {
+      const project = makeTempDir('sast-fixpoint-collide-');
+      writeFileSync(join(project, '.semgrep.yml'), taintRule(id), 'utf8');
+      mockSemgrepOnPath(0, {
+        ...FIXPOINT_REPORT,
+        time: { fixpoint_timeouts: [packFixpoint('sql/base.py', `rules: 1, first: ${id}`)] },
+      });
+      const r = await runSast(project, makePlugin(project), { local_only: true });
+      const run = semgrepRun(r) as SemgrepRun & { plugin_packs?: unknown };
+      expect([id, run.partially_parsed?.map((p) => p.type)]).toEqual([id, ['Fixpoint timeout']]);
+      expect([id, run.plugin_packs]).toEqual([id, undefined]);
+      expect([id, coverage(r), gateExit(r)]).toEqual([id, 'partial', CI_EXIT.INCOMPLETE_SCAN]);
+    }
+  });
+
+  // Round 4, A-2: Semgrep 1.176.1 runs a rule with a `taint:` block and no
+  // `mode:`. Grouped with the pack's rule in one function, the timeout names
+  // the pack rule first of two; read by `mode` alone, the project's rules
+  // looked taint-free and the pack took the group.
+  it("a project rule with a `taint:` block and no mode keeps a two-rule group the scan's: partial, the gate exits 2", async () => {
+    const project = makeTempDir('sast-fixpoint-taint-block-');
+    writeFileSync(
+      join(project, '.semgrep.yml'),
+      'rules:\n  - id: my-taint-exec\n    languages: [python]\n    severity: WARNING\n    message: m\n' +
+        '    taint:\n      sources:\n        - pattern: input(...)\n      sinks:\n        - pattern: exec(...)\n',
+      'utf8',
+    );
+    mockSemgrepOnPath(0, {
+      ...FIXPOINT_REPORT,
+      time: { fixpoint_timeouts: [packFixpoint('sql/base.py', `rules: 2, first: ${PACK_RULE.replace('-js', '-py')}`)] },
+    });
+    const r = await runSast(project, makePlugin(project), { local_only: true });
+    expect(semgrepRun(r)?.partially_parsed?.map((p) => p.type)).toEqual(['Fixpoint timeout']);
+    expect([coverage(r), gateExit(r)]).toEqual(['partial', CI_EXIT.INCOMPLETE_SCAN]);
+  });
+
+  it("a scoped (batched) run attributes the pack's timeout the same way", async () => {
+    const project = makeTempDir('sast-fixpoint-pack-scope-');
+    mkdirSync(join(project, 'hooks'));
+    writeFileSync(join(project, 'hooks', 'bashGuard.ts'), 'export const x = 1;\n', 'utf8');
+    mockSemgrepOnPath(0, {
+      ...FIXPOINT_REPORT,
+      paths: { scanned: ['hooks/bashGuard.ts'] },
+      time: { fixpoint_timeouts: [packFixpoint('hooks/bashGuard.ts', `rules: 1, first: ${PACK_RULE}`)] },
+    });
+    const r = await runSast(project, makePlugin(project), { scope: { paths: ['hooks/bashGuard.ts'] } });
+    const run = semgrepRun(r) as SemgrepRun & { plugin_packs?: Record<string, { status: string }> };
+    expect(run.status).toBe('ok');
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect(run.plugin_packs?.['llm']?.status).toBe('partial');
+    expect(run.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['hooks/bashGuard.ts', 'Fixpoint timeout (plugin pack)']]);
+  });
+
+  it("the Docker fallback attributes the pack's timeout the same way (its rules come out under /guardian-packs)", async () => {
+    const project = makeTempDir('sast-fixpoint-pack-docker-');
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        const host = join(project, ...containerOut.replace('/src/', '').split('/'));
+        const report = {
+          ...FIXPOINT_REPORT,
+          paths: { scanned: ['/src/hooks/bashGuard.ts'] },
+          time: { fixpoint_timeouts: [packFixpoint('/src/hooks/bashGuard.ts', 'rules: 1, first: guardian-packs.llm-output-to-interpreter-js')] },
+        };
+        writeFileSync(host, JSON.stringify(report), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = await runSast(project, makePlugin(project));
+    const run = semgrepRun(r);
+    expect(run?.status).toBe('ok');
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect(run?.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['hooks/bashGuard.ts', 'Fixpoint timeout (plugin pack)']]);
+  });
+
+  it.each([
+    ['more than one rule, the first a pack rule', `rules: 2, first: ${'PACK'}`],
+    ['a registry rule', 'rules: 1, first: javascript.lang.security.audit.detect-eval'],
+  ])('%s: the scan\'s gap — partial, gated as before', async (_label, rules) => {
+    const project = makeTempDir('sast-fixpoint-mixed-');
+    mockSemgrepOnPath(0, {
+      ...FIXPOINT_REPORT,
+      time: { fixpoint_timeouts: [packFixpoint('sql/base.py', rules.replace('PACK', PACK_RULE))] },
+    });
+    expectPartialOnFixpoint(await runSast(project, makePlugin(project)));
+  });
+
+  // Round 3 (N-2): a loaded scan names hundreds of files. The row keeps them
+  // all; the MCP response carries the first 20 and the counts; every reason
+  // names a few.
+  it('a 1000-file partial report: the row keeps every file, the response stays small, the reason names a few', async () => {
+    const { toCallToolResult } = await import('../../src/tools/index.js');
+    const project = makeTempDir('sast-fixpoint-1000-');
+    const plugin = makePlugin(project);
+    const parse = Array.from({ length: 500 }, (_, i) => ({
+      level: 'warn',
+      type: 'PartialParsing',
+      message: `Syntax error at line src/p${i}.php:3`,
+      path: `src/p${i}.php`,
+    }));
+    const timeouts = Array.from({ length: 500 }, (_, i) => fixpoint(`src/f${i}.py`));
+    mockSemgrepOnPath(0, { ...FIXPOINT_REPORT, errors: parse, time: { fixpoint_timeouts: timeouts } });
+    const result = await getTool('scan_sast').handler({ project_path: project, force: true }, plugin);
+    if (!result.ok) throw new Error('scan_sast refused');
+    const full = (result as unknown as { scan_id: string; tools_run: Array<SemgrepRun & { name: string }> }).tools_run.find((t) => t.name === 'semgrep');
+    // The handler's own result — what security_scan_full and the CI gate read — and the row: every file.
+    expect(full?.partially_parsed).toHaveLength(1000);
+    const row = plugin.storage.scans.getById((result as unknown as { scan_id: string }).scan_id);
+    expect(row?.tools_run.find((t) => t.name === 'semgrep')?.partially_parsed).toHaveLength(1000);
+    expect(JSON.stringify(full).length).toBeGreaterThan(100_000);
+    // Every reason names a few, then counts.
+    expect(full?.reason?.length ?? 0).toBeLessThan(1_000);
+    expect(full?.reason).toMatch(/partial: 500 file\(s\) only partly parsed .*; \+495 more\)/);
+    expect(full?.reason).toMatch(/in 500 function\(s\) across 500 file\(s\): src\/f0\.py, .*, \+495 more/);
+    // The response: the first 20, the whole count and the count per type.
+    const call = toCallToolResult(result, []);
+    const sent = call.structuredContent['tools_run'] as Array<Record<string, unknown>>;
+    const semgrep = sent.find((t) => t['name'] === 'semgrep');
+    expect((semgrep?.['partially_parsed'] as unknown[]).length).toBe(20);
+    expect(semgrep?.['partially_parsed_total']).toBe(1000);
+    expect(semgrep?.['partially_parsed_by_type']).toEqual({ PartialParsing: 500, 'Fixpoint timeout': 500 });
+    const size = JSON.stringify(call).length;
+    expect(size).toBeLessThan(24_000);
+  });
+
+  it('an engine that does not report the field: a named note, not a partial', async () => {
+    const project = makeTempDir('sast-fixpoint-old-');
+    mockSemgrepOnPath(0, { ...CLEAN_REPORT, version: '1.120.1' });
+    const r = await runSast(project, makePlugin(project));
+    const run = semgrepRun(r);
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/this Semgrep \(1\.120\.1\) does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected/);
+    expect(run?.reason?.match(/this Semgrep/g)).toHaveLength(1);
+    expect(r.missing_tools).not.toContain('semgrep');
+    expect(coverage(r)).toBe('full');
+    // An engine that does report it, with nothing to report: no note.
+    mockSemgrepOnPath(0, { ...CLEAN_REPORT, version: '1.176.1', time: { fixpoint_timeouts: [] } });
+    expect(semgrepRun(await runSast(project, makePlugin(project)))?.reason ?? '').not.toMatch(/fixpoint/);
   });
 });

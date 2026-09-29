@@ -114,6 +114,7 @@ import { legacyRegistrationNote, legacyRegistrationsNotApplied, resolveCustomSem
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { semgrepOnFiles } from '../runners/fileBatchScan.js';
+import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded } from '../runners/semgrepReport.js';
 import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
@@ -692,6 +693,11 @@ async function invokeBugHunt(input, ctx) {
  *   - anything else → failed, the errors as its reason.
  */
 function judgeBugHuntRun(raw, run, ctx, packs) {
+    // What the engine cannot report (taint fixpoint timeouts), on a run that scanned.
+    const judged = judgeBugHuntReport(raw, run, ctx, packs);
+    return { ...judged, toolRun: withSemgrepEngineNote(judged.toolRun, raw) };
+}
+function judgeBugHuntReport(raw, run, ctx, packs) {
     const check = checkSemgrepReport({
         raw,
         exitCode: run.exitCode,
@@ -814,7 +820,7 @@ async function invokeBugHuntOnScope(args) {
     if (failures.length === 0) {
         for (const raw of first.reports)
             parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
-        tools_run.push(first.toolRun);
+        tools_run.push(withSemgrepEngineNote(first.toolRun, first.reports[0] ?? null));
         // Scanned nothing, or some files only partly parsed or rules not loaded (`ok` + missing).
         const narrower = first.partial.length > 0 || first.failedRules.length > 0;
         if (first.nothingScanned || (first.toolRun.status === 'ok' && narrower))
@@ -839,9 +845,10 @@ async function invokeBugHuntOnScope(args) {
         return reportGap([...failures, ...retryFailures]);
     for (const raw of retry.reports)
         parser_inputs.push({ parser: bugCategoryParserFor(packs, ctx), input: raw });
+    const retried = withSemgrepEngineNote(retry.toolRun, retry.reports[0] ?? null);
     tools_run.push({
-        ...retry.toolRun,
-        reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, retry.toolRun.reason]
+        ...retried,
+        reason: [`ran with ${survivors.join(', ')} only — ${describeConfigFailures(failures)}`, retried.reason]
             .filter((s) => s !== undefined)
             .join('; '),
     });

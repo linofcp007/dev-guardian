@@ -36,6 +36,22 @@ describe('buildSemgrepDockerArgs', () => {
     expect(args).toContain('--autofix');
   });
 
+  it('binds further host directories READ-ONLY, after the project mount and before the image', () => {
+    const args = buildSemgrepDockerArgs({
+      projectPath: 'C:\\p x',
+      outFileHost: 'C:\\p x\\o.json',
+      configs: ['/guardian-packs/llm.yml'],
+      readOnlyMounts: [{ source: 'C:\\plugin dir\\configs\\semgrep', target: '/guardian-packs' }],
+    });
+    const mounts = args.filter((_a, i) => args[i - 1] === '--mount');
+    expect(mounts).toEqual([
+      'type=bind,source=C:\\p x,target=/src',
+      'type=bind,source=C:\\plugin dir\\configs\\semgrep,target=/guardian-packs,readonly',
+    ]);
+    expect(args.indexOf('semgrep/semgrep')).toBeGreaterThan(args.lastIndexOf('--mount'));
+    expect(args).toContain('--config=/guardian-packs/llm.yml');
+  });
+
   it('replaces --config=auto with the caller-supplied configs', () => {
     // map_attack_surface runs its own rule pack instead of `auto`; before this
     // option it re-implemented the whole argv builder to change one flag.

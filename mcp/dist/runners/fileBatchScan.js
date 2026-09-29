@@ -25,7 +25,7 @@ import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
 import { runProcess } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
-import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, } from './semgrepReport.js';
+import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, withPluginPackFixpoint, } from './semgrepReport.js';
 import { localRuleIdNormalizer, noRuleLoaded } from './semgrepRuleIds.js';
 import { toRelativeIfPossible } from './scannerParsers/index.js';
 export async function scanFileBatches(opts) {
@@ -40,6 +40,8 @@ export async function scanFileBatches(opts) {
     let configFailures = 0;
     const partial = [];
     const failedRules = [];
+    const packFiles = [];
+    let packFunctions = 0;
     let cancelled = false;
     let scanned = 0;
     for (const [i, batch] of batches.entries()) {
@@ -76,6 +78,12 @@ export async function scanFileBatches(opts) {
             const file = toRelativeIfPossible(p.file, opts.cwd);
             if (!partial.some((q) => q.file === file && q.type === p.type))
                 partial.push({ ...p, file });
+        }
+        // The plugin's pack's own gap: one file is in one batch, so no two batches name it.
+        if (verdict.packFixpoint !== undefined) {
+            packFunctions += verdict.packFixpoint.functions;
+            for (const p of verdict.packFixpoint.files)
+                packFiles.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
         }
         for (const r of verdict.failedRules ?? [])
             if (!failedRules.some((q) => q.rule_id === r.rule_id))
@@ -138,6 +146,9 @@ export async function scanFileBatches(opts) {
             toolRun.partially_parsed = partial;
         if (failedRules.length > 0)
             toolRun.failed_rules = failedRules;
+        // Not in `partial`: the plugin's pack's gap is never the caller's missing tool.
+        if (packFunctions > 0)
+            toolRun = withPluginPackFixpoint(toolRun, { files: packFiles, functions: packFunctions });
     }
     else {
         toolRun = {
@@ -155,6 +166,10 @@ export async function scanFileBatches(opts) {
 export function semgrepOnFiles(args) {
     const rules = args.rules;
     const ruleIdOf = rules === undefined ? undefined : localRuleIdNormalizer(rules.configs, rules.ctx);
+    const pack = {
+        ...(rules?.packCheckIds !== undefined ? { pluginPackCheckIds: rules.packCheckIds } : {}),
+        ...(rules?.nonPackTaintRules !== undefined ? { nonPackTaintRules: rules.nonPackTaintRules } : {}),
+    };
     return scanFileBatches({
         name: 'semgrep',
         command: 'semgrep',
@@ -170,16 +185,18 @@ export function semgrepOnFiles(args) {
         // The shared judge's `partial` verdict is no failure of the batch, and
         // neither are rules that did not load while the others ran.
         check: (args) => {
-            const c = checkSemgrepReport({ ...args, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}) });
+            const c = checkSemgrepReport({ ...args, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}), ...pack });
+            const packFixpoint = c.plugin_pack_fixpoint !== undefined ? { packFixpoint: c.plugin_pack_fixpoint } : {};
             if (c.verdict === 'partial' && c.partial !== undefined) {
-                return { ok: true, scanned: c.scanned, partial: c.partial };
+                return { ok: true, scanned: c.scanned, partial: c.partial, ...packFixpoint };
             }
             if (c.rules_not_loaded !== undefined && c.rules_not_loaded.length > 0) {
-                return { ok: true, scanned: c.scanned, partial: c.partial ?? [], failedRules: c.rules_not_loaded };
+                return { ok: true, scanned: c.scanned, partial: c.partial ?? [], failedRules: c.rules_not_loaded, ...packFixpoint };
             }
             return {
                 ok: c.ok,
                 scanned: c.scanned,
+                ...packFixpoint,
                 ...(c.rule_config_error !== undefined
                     ? { reason: `the rule configuration did not load — ${c.rule_config_error} (semgrep exit ${String(args.exitCode)})` }
                     : c.reason !== undefined
@@ -189,7 +206,9 @@ export function semgrepOnFiles(args) {
             };
         },
         requireScanned: true,
-        ...(rules !== undefined ? { noRuleLoaded: (failed) => noRuleLoaded(rules.configs, failed, rules.ctx) } : {}),
+        ...(rules !== undefined
+            ? { noRuleLoaded: (failed) => noRuleLoaded(rules.loadedFrom ?? rules.configs, failed, rules.ctx) }
+            : {}),
     });
 }
 /** `scanFileBatches` for Bandit: `-f json -o <f> -q -- files`. */

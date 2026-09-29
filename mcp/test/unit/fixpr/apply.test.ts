@@ -345,4 +345,35 @@ describe('applyGroup — semgrep applies only the target rules (Task 11 item 4)'
       expect(r.applied).toBe(false);
     }
   });
+
+  // Review of the LLM pack, round 3: with a fixpoint timeout, --autofix DID
+  // write the fix in the disposable worktree; only the run that would verify
+  // it is incomplete. Named for what happened, never "could not be applied".
+  it('a pass that applied the fix but whose report is incomplete: not applied, outcome "incomplete", worded as applied then discarded', async () => {
+    const worktree = makeTempDir('apply-sg-wt-');
+    mkdirSync(join(worktree, 'src'));
+    writeFileSync(join(worktree, 'src', 'a.js'), 'x\n');
+    const fixpoint = {
+      error_type: 'Fixpoint timeout',
+      severity: 'warn',
+      message: 'Fixpoint timeout while performing taint analysis at src/a.js:3:0 [rules: 1, first: rule.one]',
+      location: { path: 'src/a.js', start: { line: 3, col: 1, offset: 0 }, end: { line: 3, col: 2, offset: 1 } },
+    };
+    const { run } = fakeRun(
+      [{ outcome: 'completed', exitCode: 0 }],
+      writesReport({ results: [], errors: [], paths: { scanned: ['src/a.js'] }, time: { fixpoint_timeouts: [fixpoint] } }),
+    );
+    const r = await applyGroup({ group: semgrepGroup(), worktreePath: worktree, run, lockfileOnly: false, semgrepFix: plan(makeTempDir('apply-sg-plan-')) });
+    expect(r.applied).toBe(false);
+    expect(r.failure?.outcome).toBe('incomplete');
+    expect(r.failure?.stderr_head).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\)/);
+    const { applyFailedNote } = await import('../../../src/tools/createFixPr.js');
+    expect(applyFailedNote(r.failure)).toMatch(
+      /^apply_failed: applied, then discarded: the verification scan would be incomplete \(taint analysis incomplete/,
+    );
+    expect(applyFailedNote(r.failure)).not.toMatch(/could not be applied/);
+    expect(applyFailedNote({ command: 'npm i', outcome: 'failed', exit_code: 1, stderr_head: 'boom' })).toBe(
+      "apply_failed: the fix could not be applied — 'npm i' failed (exit 1): boom",
+    );
+  });
 });

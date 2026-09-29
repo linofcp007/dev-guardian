@@ -9,7 +9,9 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { evaluateGate } from '../../src/ci/gate.js';
 import { runScans, SCAN_SEQUENCE } from '../../src/ci/runScans.js';
+import { CI_EXIT } from '../../src/ci/types.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
@@ -250,6 +252,51 @@ describe('runScans', () => {
     expect(of('scan_dast')?.partial_parses).toEqual({ 'guardian-dast:partial-surface': [pp('wp/a.php')] });
     expect(of('license_compatibility')?.partial_parses).toBeUndefined();
     expect(of('detect_stack')?.partial_parses).toBeUndefined();
+  });
+
+  // Review of the LLM pack, round 2 (I-C): a file whose taint analysis timed
+  // out travels to the gate with its own type, and the gate treats it exactly
+  // as a per-file Timeout — exit 2, never accepted by --accept-partial-parse.
+  it('a Fixpoint timeout reaches the gate like a per-file Timeout, and gates the same way', async () => {
+    const exitFor = async (type: string, accept: string[]) => {
+      mockTool('security_scan_full', async () =>
+        ok({
+          tools_run: [{ name: 'semgrep', status: 'ok', reason: 'partial', partially_parsed: [{ file: 'sql/base.py', type, message: 'x' }] }],
+          missing_tools: ['semgrep'],
+        }),
+      );
+      const { steps } = await runScans({ projectPath: makeProjectDir() });
+      const step = steps.find((s) => s.tool === 'security_scan_full');
+      expect(step?.partial_parses).toEqual({ semgrep: [{ file: 'sql/base.py', type }] });
+      const v = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps, droppedBaselineEntries: 0, acceptedPartialParses: accept });
+      return { exitCode: v.exitCode, coverage: v.coverage, accepted: v.acceptedGaps.length };
+    };
+    for (const accept of [[], ['sql/base.py']]) {
+      const timeout = await exitFor('Timeout', accept);
+      expect(timeout).toEqual({ exitCode: CI_EXIT.INCOMPLETE_SCAN, coverage: 'partial', accepted: 0 });
+      expect(await exitFor('Fixpoint timeout', accept)).toEqual(timeout);
+    }
+  });
+
+  // Round 3 (N-1): the plugin pack's own fixpoint timeouts stay on the run
+  // for history, but they are not the scan's gap and never reach the gate.
+  it("the plugin pack's own fixpoint timeouts never reach the gate: exit 0 alone, and an accepted parse gap beside them still passes", async () => {
+    const pack = { file: 'hooks/bashGuard.ts', type: 'Fixpoint timeout (plugin pack)', message: 'x', functions: 1 };
+    const gateOf = async (run: Record<string, unknown>, missing: string[], accept: string[]) => {
+      mockTool('security_scan_full', async () => ok({ tools_run: [run], missing_tools: missing }));
+      const { steps } = await runScans({ projectPath: makeProjectDir() });
+      const step = steps.find((s) => s.tool === 'security_scan_full');
+      const v = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps, droppedBaselineEntries: 0, acceptedPartialParses: accept });
+      return { partial_parses: step?.partial_parses, exitCode: v.exitCode, coverage: v.coverage };
+    };
+    expect(await gateOf({ name: 'semgrep', status: 'ok', reason: 'note', partially_parsed: [pack] }, [], [])).toEqual({
+      partial_parses: undefined,
+      exitCode: CI_EXIT.PASS,
+      coverage: 'full',
+    });
+    const parse = { file: 'wp/a.php', type: 'PartialParsing', message: 'x' };
+    const mixed = await gateOf({ name: 'semgrep', status: 'ok', reason: 'partial', partially_parsed: [parse, pack] }, ['semgrep'], ['wp/a.php']);
+    expect(mixed).toEqual({ partial_parses: { semgrep: [{ file: 'wp/a.php', type: 'PartialParsing' }] }, exitCode: CI_EXIT.PASS, coverage: 'partial' });
   });
 
   it('never carries a DAST surface gap that is more than a partial parse', async () => {

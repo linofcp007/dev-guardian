@@ -142,8 +142,8 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **29 of the 142 rules** across the ten packs are
-one of those — 23 bare and 6 positive-only — and they used to appear
+nothing but positive terms. **30 of the 151 rules** across the eleven packs are
+one of those — 24 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
 11. The capability was never missing — there is genuinely nothing to ablate.
@@ -162,6 +162,7 @@ prints `N/A`.
 | `base` | 13 | 7 | 6 |
 | `routes` | 64 | 44 | 20 |
 | `rgpd` | 8 | 8 | 0 |
+| `llm` | 9 | 8 | 1 |
 
 The same numbers, rule by rule, are in [`docs/rule-packs.md`](docs/rule-packs.md),
 which `npm run build` generates; `mcp/test/docs/docs.test.ts` fails when this
@@ -204,10 +205,11 @@ property of the invocation — registered per pack in
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
 skipped) where none exists. **Every pack but `base` has one.** `bugfix-js` and
 `routes` use this repo's `mcp/src`; `rgpd` reads `GUARDIAN_RGPD_SRC` and falls
-back to `mcp/src`; the other six read a path from an environment variable,
+back to `mcp/src`; the other seven read a path from an environment variable,
 because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC`,
 `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`, `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`,
-`GUARDIAN_PHP_SRC`; unset means `N/A`, set-but-missing **throws**. `base` has
+`GUARDIAN_PHP_SRC`, `GUARDIAN_LLM_SRC`; unset means `N/A`, set-but-missing
+**throws**. `base` has
 no real-code corpus registered and always prints `N/A` for axis 3. `rgpd` finds
 nothing in `mcp/src`, so its axis 3 is vacuous there (its header records the
 precision evidence it does have). Measured with the corpora below:
@@ -221,6 +223,7 @@ precision evidence it does have). Measured with the corpora below:
 | `bugfix-cs` | `dotnet/runtime` | 11800 | ~790 | 10 |
 | `bugfix-java` | OpenJDK + Spring | 17347 | — | 5 |
 | `bugfix-rs` | Rust stdlib | 1201 | 0 | 0 |
+| `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
@@ -325,6 +328,40 @@ actually makes.
   abandons rules without touching it. That count read 11 800 on both of the
   two `dotnet/runtime` runs that disagreed by five findings. What moved was in
   `errors`, which is why `ScanResult` now carries `abortedFiles`.
+  The **seventh** mode is quieter still, and is not in `errors` at all: the
+  **taint fixpoint timeout**. When a taint rule's dataflow analysis of one
+  function runs past its budget, Semgrep gives that function up and whatever
+  it had not yet found is lost; `errors` stays empty and `paths.scanned` full. It is
+  reported only under `time.fixpoint_timeouts` — present on Semgrep 1.170+
+  with or without `--time`, absent on 1.86 and 1.120 even with it (measured).
+  The `llm` pack's second review measured one true positive dropping out of 3
+  scans in 17, each with a fixpoint timeout on the function holding it; on
+  this repo's `mcp/src` with `p/default`, two consecutive scans reported 77
+  and 35 fixpoint timeouts and disagreed on one finding. A timeout marks the
+  function *incomplete* rather than empty — one corpus scan timed out on the
+  very function holding that true positive and still reported it — so it is
+  a file whose result cannot be trusted, not a proof of a loss. The harness
+  adds those files to `abortedFiles`, and the product's Semgrep judge
+  (`mcp/src/runners/semgrepReport.ts`) reads the field from every run's plain
+  report — never `--time`, which only adds profiling (94 MB against 1.7 MB on
+  LibreChat): the run is partial with the files named, type `Fixpoint
+  timeout`, gated exactly like a per-rule `Timeout`, and on an engine without
+  the field the run carries a named note instead. The exception is a timeout
+  whose only rule is one of the plugin's own packs', as the pack's rule is
+  spelled in that run (its config-path prefix, or `guardian-packs.` in
+  Docker — never a bare id, which a project-root rule of the same name has):
+  that is the pack's gap — its JS rules have no literal to prefilter
+  on and time out on code with no model call in it — recorded as `Fixpoint
+  timeout (plugin pack)`, noted, never the run's partial verdict nor the gate's.
+  The **eighth** mode leaves no trace anywhere: semgrep-core tracks a fixed
+  number of tainted l-values per function (`Flag_semgrep.max_tainted_vars`;
+  its log says "Already tracking too many tainted l-values, will not track
+  …"), and past it the flow is dropped — no finding, `errors: []`,
+  `fixpoint_timeouts: []`, independent of load. Measured on 1.176.1 and
+  1.86.0: a straight chain `v0 = llm.invoke(q); v1 = v0 + 'x'; …; exec(vN)`
+  fires at N = 50 and reports nothing at N = 51 (carried through a loop, it
+  drops at 50). No report field says so, so the judge cannot see it; the
+  `llm` pack's blind spots record the reproduction.
 - **A round-trip control runs first.** Removal goes through the YAML AST, so
   the unmodified pack is re-serialised and scanned before anything is ablated;
   if it does not reproduce the on-disk result exactly, the run aborts rather

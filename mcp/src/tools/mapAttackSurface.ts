@@ -80,6 +80,7 @@ import { diffSpecRoutes } from '../surface/specDiff.js';
 import { importSpec } from '../surface/specImport.js';
 import { resolveVersion } from '../platform/version.js';
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { nameAFew } from '../runners/semgrepReport.js';
 import { hashRulePacks, surfaceCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import type {
@@ -421,7 +422,7 @@ async function handler(
     };
     return withNote(
       persistAndSummarize(partialSnapshot, toolsRun),
-      `Semgrep only partly parsed ${partiallyParsed.map((p) => p.file).join(', ')} ` +
+      `Semgrep only partly parsed ${nameAFew(partiallyParsed.map((p) => p.file))} ` +
         '(see partially_parsed): routes in the unparsed spans may be missing from this surface, ' +
         'so coverage is partial. Everything else was mapped and persisted.',
     );
