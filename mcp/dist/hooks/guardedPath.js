@@ -20,7 +20,7 @@
  * the hook's timeout. Node built-ins only: the dispatcher loads the compiled
  * copy from `mcp/dist/hooks/`.
  */
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, parse } from 'node:path';
 import { walkLinksUnder } from './configFile.js';
 /** One segment as Windows opens it: no stream suffix and — outside `\\?\` paths — no trailing dots or spaces. */
@@ -75,6 +75,39 @@ function resolveExisting(abs, realpath) {
         }
     }
     return abs;
+}
+/**
+ * The identity of an existing regular file at `abs`, or `undefined` — none for
+ * anything else, for a path that does not exist, and for one reached through a
+ * link to a network or device path, whose stat could wait on the network past
+ * the hook's timeout. `stat` follows a symbolic link to what it names.
+ */
+export function fileIdentity(abs) {
+    try {
+        const root = parse(abs).root;
+        if (root === '' || !walkLinksUnder(root, abs).ok)
+            return undefined;
+        const s = statSync(abs, { bigint: true });
+        return s.isFile() ? { dev: s.dev, ino: s.ino, nlink: s.nlink } : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+/**
+ * The one of `guarded` that `abs` is the same file as — a HARD link to it,
+ * which no path comparison sees (review round 3, item 5: `ln
+ * .guardian/hooks.config.json notes.json`, then a Write of notes.json,
+ * rewrote the configuration). Only a file with more than one link can be one.
+ */
+export function hardLinkedTo(abs, guarded) {
+    const id = fileIdentity(abs);
+    if (id === undefined || id.nlink < 2n)
+        return undefined;
+    return guarded.find((g) => {
+        const other = fileIdentity(g);
+        return other !== undefined && other.dev === id.dev && other.ino === id.ino;
+    });
 }
 /**
  * The file an absolute path writes, for matching against a guarded file: on

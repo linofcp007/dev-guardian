@@ -1333,7 +1333,7 @@ function wildcardMatch(pattern, name) {
     return pi === pat.length;
 }
 function noEffects() {
-    return { writes: [], removes: [], dirs: [], special: [], links: [] };
+    return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [] };
 }
 /**
  * `into.push(...from)` without the spread: a spread passes every element as an
@@ -1351,6 +1351,7 @@ function mergeEffects(into, from) {
     pushAll(into.dirs, from.dirs);
     pushAll(into.special, from.special);
     pushAll(into.links, from.links);
+    pushAll(into.hardLinkSources, from.hardLinkSources);
 }
 /** `a/b/c` → `c`, for either separator. */
 function lastSegment(path) {
@@ -1401,8 +1402,33 @@ function lnDestinations(args) {
     return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
 }
 /** `New-Item`'s item type and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
+/** The files `ln` hard-links to — every source operand, unless `-s` / `--symbolic` makes the links symbolic. */
+function lnHardSources(args) {
+    if (args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a)))
+        return [];
+    let dir = false;
+    const rest = [];
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i] ?? '';
+        if (/^--target-directory=/.test(a))
+            dir = true;
+        else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) {
+            dir = true;
+            i += 1;
+        }
+        else if (/^-t./.test(a))
+            dir = true;
+        else if (a === '-S' || a === '--suffix')
+            i += 1;
+        else
+            rest.push(a);
+    }
+    const names = operands(rest, new Set());
+    return dir || names.length < 2 ? names : names.slice(0, -1);
+}
 function newItemArgs(args) {
     let itemType = '';
+    let target;
     const paths = [];
     const positional = [];
     for (let i = 0; i < args.length; i++) {
@@ -1422,10 +1448,12 @@ function newItemArgs(args) {
             itemType = value;
         else if (name === 'path' || name === 'literalpath' || name === 'name')
             paths.push(value);
+        else if (name === 'target' || name === 'value')
+            target = value;
     }
     if (paths.length === 0 && positional.length > 0)
         paths.push(positional[0] ?? '');
-    return { itemType, paths };
+    return target === undefined ? { itemType, paths } : { itemType, paths, target };
 }
 /** `mklink [/D|/H|/J] LINK TARGET`: the link is the first operand. */
 function mklinkDestinations(args) {
@@ -1942,15 +1970,35 @@ function effectsOf(name, args, cwd, depth = 0) {
             return e;
         case 'ln':
             pushAll(e.links, lnDestinations(args).map(at));
+            pushAll(e.hardLinkSources, lnHardSources(args).map(at));
             return e;
-        case 'mklink':
+        case 'link':
+            pushAll(e.hardLinkSources, operands(args, new Set()).slice(0, 1).map(at));
+            return e;
+        case 'fsutil':
+            // `fsutil hardlink create <new> <existing>`
+            if (/^hardlink$/i.test(args[0] ?? '') && /^create$/i.test(args[1] ?? '')) {
+                if (args[2] !== undefined)
+                    e.links.push(at(args[2]));
+                if (args[3] !== undefined)
+                    e.hardLinkSources.push(at(args[3]));
+            }
+            return e;
+        case 'mklink': {
             pushAll(e.links, mklinkDestinations(args).map(at));
+            // `mklink /H <link> <target>`: a hard link to the target.
+            const names = args.filter((a) => !a.startsWith('/'));
+            if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== undefined)
+                e.hardLinkSources.push(at(names[1]));
             return e;
+        }
         case 'new-item':
         case 'ni': {
             const item = newItemArgs(args);
             if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType))
                 pushAll(e.links, item.paths.map(at));
+            if (/^hardlink$/i.test(item.itemType) && item.target !== undefined)
+                e.hardLinkSources.push(at(item.target));
             else if (item.itemType === '' || /^file$/i.test(item.itemType))
                 pushAll(e.writes, item.paths.map(at));
             return e;
@@ -1968,6 +2016,9 @@ function effectsOf(name, args, cwd, depth = 0) {
             const moves = name === 'mv' || name === 'move-item' || name === 'mi' || name === 'move';
             if (moves)
                 pushAll(e.removes, t.sources.map(at));
+            // `cp -l` / `--link` hard-links instead of copying.
+            if (name === 'cp' && args.some((a) => a === '--link' || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a)))
+                pushAll(e.hardLinkSources, t.sources.map(at));
             if (t.dest === undefined)
                 return e;
             const dest = t.dest;
@@ -2592,6 +2643,11 @@ function dotNetEffects(text, cwd, notes) {
     return e;
 }
 // ── the rules
+const RULE_HARD_LINK = {
+    id: 'guard-config-hard-link',
+    level: 'block',
+    reason: "Makes a hard link to the guardrail hooks' own configuration — a second name through which it can be rewritten",
+};
 const RULE_SPECIAL = {
     id: 'guard-config-special-file',
     level: 'block',
@@ -2638,6 +2694,7 @@ function judgeEffects(effects, scope) {
         dirs: asWindowsOpens(effects.dirs.map(tail)),
         special: asWindowsOpens(effects.special.map(tail)),
         links: asWindowsOpens(effects.links.map(tail)),
+        hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
     };
     const out = [];
     if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
@@ -2650,6 +2707,8 @@ function judgeEffects(effects, scope) {
         out.push({ ...RULE_REMOVE });
     if (e.dirs.some(isHookConfigDir))
         out.push({ ...RULE_DIR });
+    if (e.hardLinkSources.some(isHookConfigPath))
+        out.push({ ...RULE_HARD_LINK });
     if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope))
         out.push({ ...RULE_SETTINGS });
     return out;

@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { guardedPath, windowsName } from '../../../src/hooks/guardedPath.js';
+import { fileIdentity, guardedPath, hardLinkedTo, windowsName } from '../../../src/hooks/guardedPath.js';
 
 // Review of 3.0.0, M1: Windows reads each of these spellings as the file
 // itself (or a stream of it), and each got past the Write/Edit guards.
@@ -66,6 +66,20 @@ describe('guardedPath', () => {
       return; // no symlink privilege here
     }
     expect(guardedPath(join(dir, 'innocent.json'))).toBe(join(dir, '.guardian', 'hooks.config.json'));
+  });
+
+  // Review round 3, item 5.
+  it('hardLinkedTo finds the guarded file a hard link shares its inode with, and nothing else', () => {
+    const config = join(dir, 'hooks.config.json');
+    const other = join(dir, 'other.json');
+    writeFileSync(config, '{}');
+    writeFileSync(other, '{}');
+    expect(hardLinkedTo(other, [config])).toBeUndefined();
+    linkSync(config, join(dir, 'notes.json'));
+    expect(hardLinkedTo(join(dir, 'notes.json'), [other, config])).toBe(config);
+    expect(hardLinkedTo(join(dir, 'missing.json'), [config])).toBeUndefined();
+    expect(fileIdentity(dir)).toBeUndefined();
+    expect(fileIdentity(config)?.nlink).toBe(2n);
   });
 
   it.runIf(process.platform === 'win32')('an 8.3 short name resolves to the long one', () => {

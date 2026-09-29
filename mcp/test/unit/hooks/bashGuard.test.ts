@@ -2582,3 +2582,39 @@ describe('assessBashCommand — download then run: which check, which file (revi
     });
   });
 });
+
+// Review round 3, item 5: a HARD link to the hook configuration is a second
+// name for the same file, and a Write through it rewrote the configuration.
+// Creating one is refused; a symbolic link stays allowed, since the Write
+// guard resolves it.
+describe('assessBashCommand — a hard link to the hook configuration (review round 3, item 5)', () => {
+  it.each([
+    ['ln .guardian/hooks.config.json notes.json', 'bash'],
+    ['ln -f .guardian/hooks-allowlist.json a.json', 'bash'],
+    ['ln ~/.config/dev-guardian/hooks.json ~/notes.json', 'bash'],
+    ['ln -t /tmp .guardian/hooks.config.json', 'bash'],
+    ['link .guardian/hooks.config.json notes.json', 'bash'],
+    ['cp -l .guardian/hooks.config.json notes.json', 'bash'],
+    ['cp --link ~/.config/dev-guardian/hooks.json x.json', 'bash'],
+    ['New-Item -ItemType HardLink -Path notes.json -Target .guardian\\hooks.config.json', 'powershell'],
+    ['New-Item -ItemType HardLink -Path notes.json -Value "$HOME\\.config\\dev-guardian\\hooks.json"', 'powershell'],
+    ['cmd /c mklink /H notes.json .guardian\\hooks.config.json', 'powershell'],
+    ['fsutil hardlink create notes.json .guardian\\hooks.config.json', 'powershell'],
+  ] as const)('%s is denied', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('guard-config-hard-link');
+  });
+
+  it.each([
+    ['ln -s .guardian/hooks.config.json backup.json', 'bash'],
+    ['ln --symbolic ~/.config/dev-guardian/hooks.json b.json', 'bash'],
+    ['ln notes.txt other.txt', 'bash'],
+    ['cp .guardian/hooks.config.json backup.json', 'bash'],
+    ['cmd /c mklink backup.json .guardian\\hooks.config.json', 'powershell'],
+    ['New-Item -ItemType SymbolicLink -Path b.json -Target .guardian\\hooks.config.json', 'powershell'],
+    ['fsutil hardlink list notes.json', 'powershell'],
+  ] as const)('%s is not a hard link to it', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).rules).not.toContain('guard-config-hard-link');
+  });
+});

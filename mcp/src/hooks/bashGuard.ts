@@ -1475,10 +1475,15 @@ interface Effects {
   special: string[];
   /** Links created. */
   links: string[];
+  /**
+   * The files a HARD link is made to — a second name for the same file, through
+   * which a write reaches it (review round 3, item 5).
+   */
+  hardLinkSources: string[];
 }
 
 function noEffects(): Effects {
-  return { writes: [], removes: [], dirs: [], special: [], links: [] };
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [] };
 }
 
 /**
@@ -1497,6 +1502,7 @@ function mergeEffects(into: Effects, from: Effects): void {
   pushAll(into.dirs, from.dirs);
   pushAll(into.special, from.special);
   pushAll(into.links, from.links);
+  pushAll(into.hardLinkSources, from.hardLinkSources);
 }
 
 
@@ -1544,8 +1550,28 @@ function lnDestinations(args: readonly string[]): string[] {
 }
 
 /** `New-Item`'s item type and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
-function newItemArgs(args: readonly string[]): { itemType: string; paths: string[] } {
+/** The files `ln` hard-links to — every source operand, unless `-s` / `--symbolic` makes the links symbolic. */
+function lnHardSources(args: readonly string[]): string[] {
+  if (args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
+  let dir = false;
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? '';
+    if (/^--target-directory=/.test(a)) dir = true;
+    else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) {
+      dir = true;
+      i += 1;
+    } else if (/^-t./.test(a)) dir = true;
+    else if (a === '-S' || a === '--suffix') i += 1;
+    else rest.push(a);
+  }
+  const names = operands(rest, new Set());
+  return dir || names.length < 2 ? names : names.slice(0, -1);
+}
+
+function newItemArgs(args: readonly string[]): { itemType: string; paths: string[]; target?: string } {
   let itemType = '';
+  let target: string | undefined;
   const paths: string[] = [];
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -1562,9 +1588,10 @@ function newItemArgs(args: readonly string[]): { itemType: string; paths: string
     if (value === undefined) continue;
     if (name === 'itemtype' || name === 'type') itemType = value;
     else if (name === 'path' || name === 'literalpath' || name === 'name') paths.push(value);
+    else if (name === 'target' || name === 'value') target = value;
   }
   if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? '');
-  return { itemType, paths };
+  return target === undefined ? { itemType, paths } : { itemType, paths, target };
 }
 
 /** `mklink [/D|/H|/J] LINK TARGET`: the link is the first operand. */
@@ -2078,14 +2105,30 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
       return e;
     case 'ln':
       pushAll(e.links, lnDestinations(args).map(at));
+      pushAll(e.hardLinkSources, lnHardSources(args).map(at));
       return e;
-    case 'mklink':
+    case 'link':
+      pushAll(e.hardLinkSources, operands(args, new Set()).slice(0, 1).map(at));
+      return e;
+    case 'fsutil':
+      // `fsutil hardlink create <new> <existing>`
+      if (/^hardlink$/i.test(args[0] ?? '') && /^create$/i.test(args[1] ?? '')) {
+        if (args[2] !== undefined) e.links.push(at(args[2]));
+        if (args[3] !== undefined) e.hardLinkSources.push(at(args[3]));
+      }
+      return e;
+    case 'mklink': {
       pushAll(e.links, mklinkDestinations(args).map(at));
+      // `mklink /H <link> <target>`: a hard link to the target.
+      const names = args.filter((a) => !a.startsWith('/'));
+      if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== undefined) e.hardLinkSources.push(at(names[1]));
       return e;
+    }
     case 'new-item':
     case 'ni': {
       const item = newItemArgs(args);
       if (/^(?:symboliclink|hardlink|junction)$/i.test(item.itemType)) pushAll(e.links, item.paths.map(at));
+      if (/^hardlink$/i.test(item.itemType) && item.target !== undefined) e.hardLinkSources.push(at(item.target));
       else if (item.itemType === '' || /^file$/i.test(item.itemType)) pushAll(e.writes, item.paths.map(at));
       return e;
     }
@@ -2101,6 +2144,8 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
       const t = parseTransfer(args, name === 'copy' || name === 'move');
       const moves = name === 'mv' || name === 'move-item' || name === 'mi' || name === 'move';
       if (moves) pushAll(e.removes, t.sources.map(at));
+      // `cp -l` / `--link` hard-links instead of copying.
+      if (name === 'cp' && args.some((a) => a === '--link' || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a))) pushAll(e.hardLinkSources, t.sources.map(at));
       if (t.dest === undefined) return e;
       const dest = t.dest;
       if (!t.into) e.writes.push(at(dest));
@@ -2710,6 +2755,12 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
 
 // ── the rules
 
+const RULE_HARD_LINK: MatchedRule = {
+  id: 'guard-config-hard-link',
+  level: 'block',
+  reason: "Makes a hard link to the guardrail hooks' own configuration — a second name through which it can be rewritten",
+};
+
 const RULE_SPECIAL: MatchedRule = {
   id: 'guard-config-special-file',
   level: 'block',
@@ -2757,6 +2808,7 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     dirs: asWindowsOpens(effects.dirs.map(tail)),
     special: asWindowsOpens(effects.special.map(tail)),
     links: asWindowsOpens(effects.links.map(tail)),
+    hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
   };
   const out: MatchedRule[] = [];
   if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
@@ -2767,6 +2819,7 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || (USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p));
   if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
   if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
+  if (e.hardLinkSources.some(isHookConfigPath)) out.push({ ...RULE_HARD_LINK });
   if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
   return out;
 }

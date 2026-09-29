@@ -142,6 +142,8 @@ let readSmallTextFile = () => undefined;
  * Until it is loaded, a path is taken as written.
  */
 let guardedPath = (p) => p;
+/** `hardLinkedTo` from the same module: which guarded file a path is a hard link to (review round 3, item 5). */
+let hardLinkedTo = () => undefined;
 
 async function loadConfigReader() {
   try {
@@ -151,6 +153,7 @@ async function loadConfigReader() {
     if (typeof mod.readSmallTextFile === 'function') readSmallTextFile = mod.readSmallTextFile;
     const paths = await import(pathToFileURL(join(DIST_HOOKS, 'guardedPath.js')).href);
     if (typeof paths.guardedPath === 'function') guardedPath = paths.guardedPath;
+    if (typeof paths.hardLinkedTo === 'function') hardLinkedTo = paths.hardLinkedTo;
   } catch (err) {
     debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -450,8 +453,26 @@ function isGuardianOwnConfigFile(filePath, cwd, root) {
   // in the home or project path, must not make the same file compare unequal.
   const abs = guardedPath(resolve(cwd, filePath));
   if (samePath(abs, guardedPath(userConfigPath()))) return true;
-  if (!/(?:^|\/)\.guardian\/hooks[^/]*\.json$/i.test(normalizePath(abs))) return false;
-  return isBelow(guardedPath(resolve(root)), abs) || isBelow(guardedPath(resolve(cwd)), abs);
+  if (/(?:^|\/)\.guardian\/hooks[^/]*\.json$/i.test(normalizePath(abs))) {
+    if (isBelow(guardedPath(resolve(root)), abs) || isBelow(guardedPath(resolve(cwd)), abs)) return true;
+  }
+  // A HARD link to one of them is the same file under another name, which no
+  // path comparison sees (review round 3, item 5): compared by device + inode.
+  const guarded = [userConfigPath()];
+  for (const dir of new Set([resolve(root), resolve(cwd)])) {
+    guarded.push(join(dir, '.guardian', 'hooks.config.json'), join(dir, '.guardian', 'hooks-allowlist.json'));
+  }
+  return hardLinkedTo(abs, guarded) !== undefined;
+}
+
+/**
+ * Claude Code's settings files a Write could be a hard link to: the project's,
+ * the user's (`~/.claude`), and `CLAUDE_CONFIG_DIR`'s.
+ */
+function claudeSettingsFiles(root) {
+  const dirs = [join(resolve(root), '.claude'), join(homedir(), '.claude')];
+  if (process.env.CLAUDE_CONFIG_DIR) dirs.push(resolve(process.env.CLAUDE_CONFIG_DIR));
+  return dirs.flatMap((d) => [join(d, 'settings.json'), join(d, 'settings.local.json')]);
 }
 
 /** `path` lies strictly below `dir`. */
@@ -778,9 +799,10 @@ async function claudeSettingsWriteGuard(toolName, input, cwd, root) {
   const rawPath = extractFilePath(toolName, input);
   if (!rawPath) return;
   // The file the write reaches (review M1: `settings.json::$DATA` IS
-  // settings.json on Windows). Then a cheap pre-check, so an ordinary edit
-  // never pays for the module import.
-  const abs = guardedPath(resolve(cwd, rawPath));
+  // settings.json on Windows; round 3, item 5: a hard link to it is it too).
+  // Then a cheap pre-check, so an ordinary edit never pays for the module import.
+  const written = guardedPath(resolve(cwd, rawPath));
+  const abs = hardLinkedTo(written, claudeSettingsFiles(root)) ?? written;
   if (!/settings(?:\.local)?\.json$/i.test(abs)) return;
   let added = [];
   try {

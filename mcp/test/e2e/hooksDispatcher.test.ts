@@ -15,7 +15,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1175,6 +1175,47 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
   ])('the dotnet-install one-liner is denied from the PowerShell tool: %s (review round 3)', (command) => {
     const r = runHook(preToolUse('PowerShell', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
     expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+  });
+
+  // Review round 3, item 5: a hard link to the hook configuration is the same
+  // file under another name; a Write through it rewrote the configuration.
+  describe('a Write through a hard link to a guarded file (review round 3, item 5)', () => {
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    const write = (filePath: string, content = '{}'): HookResult =>
+      runHook(preToolUse('Write', { file_path: filePath, content }, projectDir), { cwd: projectDir, homeDir });
+    const linked = (target: string, name: string): string => {
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, '{}');
+      const link = join(projectDir, name);
+      linkSync(target, link);
+      return link;
+    };
+
+    it('to the project hook configuration is denied', () => {
+      expect(decision(write(linked(join(projectDir, '.guardian', 'hooks.config.json'), 'notes.json')))).toBe('deny');
+    });
+
+    it('to the project allowlist is denied', () => {
+      expect(decision(write(linked(join(projectDir, '.guardian', 'hooks-allowlist.json'), 'list.json')))).toBe('deny');
+    });
+
+    it('to the user-level hooks.json is denied', () => {
+      expect(decision(write(linked(join(homeDir, '.config', 'dev-guardian', 'hooks.json'), 'user.json')))).toBe('deny');
+    });
+
+    it("to Claude Code's settings, with disableAllHooks, is denied", () => {
+      const link = linked(join(projectDir, '.claude', 'settings.json'), 'prefs.json');
+      expect(decision(write(link, '{"disableAllHooks": true}'))).toBe('deny');
+      expect(decision(write(link, '{"permissions": {"allow": ["Bash(ls)"]}}'))).toBeUndefined();
+    });
+
+    it('a hard link between two ordinary files is not denied', () => {
+      writeFileSync(join(projectDir, 'a.json'), '{}');
+      linkSync(join(projectDir, 'a.json'), join(projectDir, 'b.json'));
+      expect(decision(write(join(projectDir, 'b.json')))).toBeUndefined();
+    });
   });
 
   // Review round 2, ruling 3: `$CLAUDE_CONFIG_DIR/settings*.json` are Claude
