@@ -41,8 +41,8 @@ const tool: ToolModule = {
   title: 'Bulk wp_audit across many sites',
   description:
     'Run wp_audit on N WP installs in parallel (default concurrency 4). Returns one row per site ' +
-    'with the wp_version, audit scan_id, and a flagged_count (anything in checksum_mismatches.core + ' +
-    'modified plugins + modified themes).',
+    'with the wp_version, audit scan_id, and a flagged_count (checksum_mismatches.core + plugins; theme ' +
+    'files are not checked: WP-CLI has no theme checksums).',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -113,14 +113,12 @@ function summarise(path: string, result: ToolResult<Record<string, unknown>>): S
     checksum_mismatches?: {
       core?: unknown[];
       plugins?: Record<string, unknown[]>;
-      themes?: Record<string, unknown[]>;
     };
   };
   const cm = r.checksum_mismatches ?? {};
   const flagged =
     (cm.core?.length ?? 0) +
-    Object.values(cm.plugins ?? {}).reduce((a, b) => a + (b?.length ?? 0), 0) +
-    Object.values(cm.themes ?? {}).reduce((a, b) => a + (b?.length ?? 0), 0);
+    Object.values(cm.plugins ?? {}).reduce((a, b) => a + (b?.length ?? 0), 0);
   const summary: SiteSummary = {
     wp_install_path: path,
     ok: true,

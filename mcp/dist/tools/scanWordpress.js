@@ -3,7 +3,9 @@
  *
  * Source-side scan (no live WP install required). Aggregates:
  *   - Semgrep with `p/php` (and `p/wordpress` if available locally)
- *   - Trivy fs for composer.lock CVEs
+ *   - Trivy fs for dependency CVEs and licences, judged like scan_deps: a
+ *     manifest Trivy read nothing for (a composer.json with no lock) is a
+ *     named gap (`runners/trivyRun.ts#judgeTrivyFs`)
  *   - gitleaks for secrets
  *   - PHPCS with `WordPress` standard (when phpcs + WPCS installed)
  *
@@ -35,8 +37,9 @@ registerToolModule(makeScanTool({
     name: 'scan_wordpress',
     title: 'WordPress code scan (Semgrep + Trivy + gitleaks + PHPCS-WPCS)',
     description: 'Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + ' +
-        'WP rule pack, Trivy fs for composer.lock CVEs, gitleaks for secrets, PHPCS WordPress ' +
-        'standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
+        'WP rule pack, Trivy fs for dependency CVEs (a manifest it cannot read, e.g. composer.json with no ' +
+        'composer.lock, is a named gap), gitleaks for secrets, PHPCS WordPress standard. Each scanner that ' +
+        'is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
         'for live-install scenarios.',
     scan_type: 'wordpress',
     // Its secrets pass reads git history: HEAD and every ref join the key.

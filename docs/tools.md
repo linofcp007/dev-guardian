@@ -125,7 +125,7 @@ Hunt implementation bugs with Semgrep: the registry packs p/r2c-bug-scan + p/sec
 
 ### `bulk_audit_wordpress_sites`
 
-Run wp\_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp\_version, audit scan\_id, and a flagged\_count (anything in checksum\_mismatches.core + modified plugins + modified themes).
+Run wp\_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp\_version, audit scan\_id, and a flagged\_count (checksum\_mismatches.core + plugins; theme files are not checked: WP-CLI has no theme checksums).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -552,7 +552,7 @@ Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFOR
 
 ### `scan_wordpress`
 
-Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + WP rule pack, Trivy fs for composer.lock CVEs, gitleaks for secrets, PHPCS WordPress standard. Each scanner that is missing is skipped with reason. Use wp\_audit / wp\_vuln\_check for live-install scenarios.
+Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + WP rule pack, Trivy fs for dependency CVEs (a manifest it cannot read, e.g. composer.json with no composer.lock, is a named gap), gitleaks for secrets, PHPCS WordPress standard. Each scanner that is missing is skipped with reason. Use wp\_audit / wp\_vuln\_check for live-install scenarios.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
