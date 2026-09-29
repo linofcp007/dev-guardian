@@ -237,8 +237,9 @@ export interface IacFiles {
 /**
  * Files under `projectPath` that look like something `trivy config` scans —
  * see the module comment for how narrow that is. Bounded like the other
- * project walks: `PROJECT_WALK_EXCLUDE`, hidden directories and
- * `.guardianignore` entries are not entered, symbolic links not followed.
+ * project walks: `PROJECT_WALK_EXCLUDE`, hidden directories, a chart's
+ * `templates/` and `.guardianignore` entries are not entered, symbolic links
+ * not followed; a JSON file is parsed only up to 2 MB.
  */
 export function iacLookingFiles(
   projectPath: string,
