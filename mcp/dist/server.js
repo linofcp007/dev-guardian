@@ -52917,6 +52917,7 @@ var reviewPr = makeScanTool({
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "review");
     const out = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
     const changed = await changedFiles(ctx.projectPath, base, head2);
+    const touched = await touchedPaths(ctx.projectPath, base, head2, changed);
     const headIsCheckedOut = await resolveCommit(ctx.projectPath, "HEAD") === head2;
     let tree = null;
     let cleanupNote = null;
@@ -52937,13 +52938,13 @@ var reviewPr = makeScanTool({
       if (unavailable !== null) {
         out.tools_run.push({ name: "semgrep", status: "failed", reason: unavailable });
         if (changed.some(isPython2)) out.tools_run.push({ name: "bandit", status: "failed", reason: unavailable });
-        if (changed.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
+        if (touched.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
       } else {
         const present2 = changed.filter((f) => isFileOnDisk(join36(scanRoot, f)));
         const submodules = await gitlinksAmong(ctx.projectPath, head2, changed);
         await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where, submodules });
         if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present2.filter(isPython2) });
-        if (!out.cancelled && changed.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir });
+        if (!out.cancelled && touched.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir, touched });
       }
       if (!out.cancelled) {
         const secrets = await runGitleaksScan({
@@ -52970,6 +52971,8 @@ var reviewPr = makeScanTool({
         `This diff changes ${PROJECT_TRIVYIGNORE}, which Trivy honours: every vulnerability id listed there is not reported (this review applied the reviewed tree's copy). Review that change before trusting a quiet dependency result: an entry added there hides a finding, it does not fix it.`
       );
     }
+    const preexisting = preexistingNote(out.preexistingGaps);
+    if (preexisting !== null) warnings.push(preexisting);
     return {
       outcome: out.cancelled ? "cancelled" : "completed",
       tools_run: out.tools_run,
@@ -52988,7 +52991,8 @@ var reviewPr = makeScanTool({
         local_only: input.local_only === true,
         ...projectLanguages !== null ? { [PROJECT_LANGUAGES_META_KEY]: projectLanguages } : {},
         ...cleanupNote !== null ? { cleanup_warning: cleanupNote } : {},
-        ...out.manifestGaps !== void 0 && out.manifestGaps.length > 0 ? { manifest_coverage_gaps: out.manifestGaps } : {}
+        ...out.manifestGaps !== void 0 && out.manifestGaps.length > 0 ? { manifest_coverage_gaps: out.manifestGaps } : {},
+        ...out.preexistingGaps !== void 0 && out.preexistingGaps.length > 0 ? { preexisting_manifest_gaps: out.preexistingGaps } : {}
       }
     };
   }
@@ -53100,10 +53104,12 @@ async function runTrivy2(ctx, out, args) {
   if (run.outcome === "completed" && raw !== null) {
     out.parser_inputs.push({ parser: trivyParser, input: raw });
     const judged = judgeTrivyFs({ projectPath: args.scanRoot, raw, run, exclusions: ctx.exclusions });
+    const scoped = scopeManifestGaps(judged, args.touched);
     const why = "a dependency manifest changed";
-    out.tools_run.push({ ...judged.toolRun, reason: judged.toolRun.reason !== void 0 ? `${judged.toolRun.reason}; ${why}` : why });
-    out.missing_tools.push(...judged.missing);
-    out.manifestGaps = judged.gaps;
+    out.tools_run.push({ ...scoped.toolRun, reason: scoped.toolRun.reason !== void 0 ? `${scoped.toolRun.reason}; ${why}` : why });
+    out.missing_tools.push(...scoped.missing);
+    out.manifestGaps = scoped.gaps;
+    out.preexistingGaps = scoped.preexisting;
   } else {
     out.tools_run.push(
       withHonoured(
@@ -53116,6 +53122,49 @@ async function runTrivy2(ctx, out, args) {
       )
     );
   }
+}
+async function touchedPaths(cwd, base, head2, changed) {
+  const r = await git(cwd, ["diff", "-z", "--name-only", "--relative", "--no-renames", `${base}...${head2}`, "--"]);
+  return r.exitCode === 0 ? splitNul(r.stdout) : [...changed];
+}
+var MAX_PREEXISTING_NAMED = 5;
+function scopeManifestGaps(judged, touched) {
+  if (judged.gaps.length === 0) return { ...judged, preexisting: [] };
+  const set2 = new Set(touched.map((p) => p.split("\\").join("/")));
+  const locks = new Map(MANIFEST_ECOSYSTEM_LOCKFILES.map((e) => [e.ecosystem, e.lockfiles]));
+  const isTouched = (ecosystem, file) => {
+    if (set2.has(file)) return true;
+    const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "";
+    return (locks.get(ecosystem) ?? []).some((lock) => set2.has(`${dir}${lock}`));
+  };
+  const gaps = [];
+  const preexisting = [];
+  for (const g of judged.gaps) {
+    const mine = g.files.filter((f) => isTouched(g.ecosystem, f));
+    const theirs = g.files.filter((f) => !isTouched(g.ecosystem, f));
+    if (mine.length > 0) gaps.push({ ecosystem: g.ecosystem, files: mine });
+    if (theirs.length > 0) preexisting.push({ ecosystem: g.ecosystem, files: theirs });
+  }
+  const walk4 = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP);
+  let toolRun = judged.toolRun;
+  let missing;
+  if (gaps.length > 0) {
+    missing = judged.toolRun.status === "skipped" ? ["trivy", ...walk4] : [...gaps.map((g) => `trivy:${g.ecosystem}`), ...walk4];
+  } else {
+    const reason = judged.toolRun.reason?.replace(/^no_supported_manifest(; )?/, "");
+    toolRun = { ...judged.toolRun, status: "ok" };
+    if (reason !== void 0 && reason.length > 0) toolRun.reason = reason;
+    else delete toolRun.reason;
+    missing = walk4;
+  }
+  return { toolRun, missing, gaps, preexisting };
+}
+function preexistingNote(gaps) {
+  const files = (gaps ?? []).flatMap((g) => g.files);
+  if (files.length === 0) return null;
+  const shown = files.slice(0, MAX_PREEXISTING_NAMED).join(", ");
+  const more = files.length > MAX_PREEXISTING_NAMED ? ` and ${files.length - MAX_PREEXISTING_NAMED} more` : "";
+  return `pre-existing: ${files.length} manifest(s) Trivy cannot read, not changed by this diff: ${shown}${more} \u2014 a gap of the project (scan_deps names it), not of this review`;
 }
 function isFileOnDisk(path8) {
   try {

@@ -34,13 +34,13 @@ import { z } from 'zod';
 import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
-import { changedFiles, git, gitlinksAmong, materialiseCommit, repoState, resolveCommit, showPrefix, } from '../runners/git.js';
+import { changedFiles, git, gitlinksAmong, materialiseCommit, repoState, resolveCommit, showPrefix, splitNul, } from '../runners/git.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
-import { judgeTrivyFs, PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, withHonoured, } from '../runners/trivyRun.js';
+import { judgeTrivyFs, PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, TRIVY_MANIFEST_WALK_GAP, withHonoured, } from '../runners/trivyRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
-import { trivyParser } from '../runners/scannerParsers/trivy.js';
+import { MANIFEST_ECOSYSTEM_LOCKFILES, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { planSemgrepConfigs, semgrepEngineNote } from '../runners/semgrepConfigs.js';
 import { semgrepEngineOf } from '../runners/semgrepReport.js';
 import { mayHoldTaintRules, pluginPackCheckIds } from '../runners/semgrepRuleIds.js';
@@ -89,6 +89,9 @@ const reviewPr = makeScanTool({
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'review');
         const out = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
         const changed = await changedFiles(ctx.projectPath, base, head);
+        // Every path the diff touches, deletions included: a deleted lock file is
+        // what leaves a manifest unreadable (round 3).
+        const touched = await touchedPaths(ctx.projectPath, base, head, changed);
         // Which files ARE the head: the working tree only when head is what is
         // checked out. Otherwise the head's own tree, checked out for this scan —
         // the working tree would hold another version of every file, and no copy
@@ -126,7 +129,7 @@ const reviewPr = makeScanTool({
                 out.tools_run.push({ name: 'semgrep', status: 'failed', reason: unavailable });
                 if (changed.some(isPython))
                     out.tools_run.push({ name: 'bandit', status: 'failed', reason: unavailable });
-                if (changed.some(isManifest))
+                if (touched.some(isManifest))
                     out.tools_run.push({ name: 'trivy', status: 'failed', reason: unavailable });
             }
             else {
@@ -135,8 +138,8 @@ const reviewPr = makeScanTool({
                 await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where, submodules });
                 if (!out.cancelled)
                     await runBandit(ctx, out, { scanRoot, reportDir, files: present.filter(isPython) });
-                if (!out.cancelled && changed.some(isManifest))
-                    await runTrivy(ctx, out, { scanRoot, reportDir });
+                if (!out.cancelled && touched.some(isManifest))
+                    await runTrivy(ctx, out, { scanRoot, reportDir, touched });
             }
             // gitleaks over the PR's commits — and, when head is what is checked
             // out, over the files no commit holds yet (`protect --staged` used to
@@ -175,6 +178,10 @@ const reviewPr = makeScanTool({
                 "not reported (this review applied the reviewed tree's copy). Review that change before trusting a " +
                 'quiet dependency result: an entry added there hides a finding, it does not fix it.');
         }
+        // Manifest gaps the diff did not touch: named, never the review's coverage.
+        const preexisting = preexistingNote(out.preexistingGaps);
+        if (preexisting !== null)
+            warnings.push(preexisting);
         return {
             outcome: out.cancelled ? 'cancelled' : 'completed',
             tools_run: out.tools_run,
@@ -194,6 +201,9 @@ const reviewPr = makeScanTool({
                 ...(projectLanguages !== null ? { [PROJECT_LANGUAGES_META_KEY]: projectLanguages } : {}),
                 ...(cleanupNote !== null ? { cleanup_warning: cleanupNote } : {}),
                 ...(out.manifestGaps !== undefined && out.manifestGaps.length > 0 ? { manifest_coverage_gaps: out.manifestGaps } : {}),
+                ...(out.preexistingGaps !== undefined && out.preexistingGaps.length > 0
+                    ? { preexisting_manifest_gaps: out.preexistingGaps }
+                    : {}),
             },
         };
     },
@@ -336,10 +346,12 @@ async function runTrivy(ctx, out, args) {
         // named gap. Why Trivy ran goes after its verdict: `no_supported_manifest`
         // leads a reason the coverage warning reads.
         const judged = judgeTrivyFs({ projectPath: args.scanRoot, raw, run, exclusions: ctx.exclusions });
+        const scoped = scopeManifestGaps(judged, args.touched);
         const why = 'a dependency manifest changed';
-        out.tools_run.push({ ...judged.toolRun, reason: judged.toolRun.reason !== undefined ? `${judged.toolRun.reason}; ${why}` : why });
-        out.missing_tools.push(...judged.missing);
-        out.manifestGaps = judged.gaps;
+        out.tools_run.push({ ...scoped.toolRun, reason: scoped.toolRun.reason !== undefined ? `${scoped.toolRun.reason}; ${why}` : why });
+        out.missing_tools.push(...scoped.missing);
+        out.manifestGaps = scoped.gaps;
+        out.preexistingGaps = scoped.preexisting;
     }
     else {
         out.tools_run.push(withHonoured({
@@ -348,6 +360,78 @@ async function runTrivy(ctx, out, args) {
             reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
         }, run.honoured));
     }
+}
+/**
+ * Every path `base...head` touches, relative to the project — added,
+ * modified, renamed AND deleted (`changedFiles` leaves deletions out: they
+ * are nothing to scan, but a deleted lock file leaves its manifest
+ * unreadable). `changed` when git cannot answer.
+ */
+async function touchedPaths(cwd, base, head, changed) {
+    const r = await git(cwd, ['diff', '-z', '--name-only', '--relative', '--no-renames', `${base}...${head}`, '--']);
+    return r.exitCode === 0 ? splitNul(r.stdout) : [...changed];
+}
+/** Pre-existing gaps named in the note, at most. */
+const MAX_PREEXISTING_NAMED = 5;
+/**
+ * A review's Trivy verdict, scoped to its diff (round 3) — as its Semgrep
+ * gaps are (M1 / M2: only what the diff touched). A manifest Trivy read
+ * nothing for is the REVIEW's gap only when the diff touches it or a lock
+ * file of its ecosystem beside it; an unchanged, unlocked manifest is the
+ * project's, would make every review of the project partial, and is
+ * returned as `preexisting` — a note, bounded, never lower coverage. The
+ * walk's own gap (`trivy:manifest-walk`) stays: a cut walk cannot say
+ * whether the diff's manifests were read.
+ */
+function scopeManifestGaps(judged, touched) {
+    if (judged.gaps.length === 0)
+        return { ...judged, preexisting: [] };
+    const set = new Set(touched.map((p) => p.split('\\').join('/')));
+    const locks = new Map(MANIFEST_ECOSYSTEM_LOCKFILES.map((e) => [e.ecosystem, e.lockfiles]));
+    const isTouched = (ecosystem, file) => {
+        if (set.has(file))
+            return true;
+        const dir = file.includes('/') ? file.slice(0, file.lastIndexOf('/') + 1) : '';
+        return (locks.get(ecosystem) ?? []).some((lock) => set.has(`${dir}${lock}`));
+    };
+    const gaps = [];
+    const preexisting = [];
+    for (const g of judged.gaps) {
+        const mine = g.files.filter((f) => isTouched(g.ecosystem, f));
+        const theirs = g.files.filter((f) => !isTouched(g.ecosystem, f));
+        if (mine.length > 0)
+            gaps.push({ ecosystem: g.ecosystem, files: mine });
+        if (theirs.length > 0)
+            preexisting.push({ ecosystem: g.ecosystem, files: theirs });
+    }
+    const walk = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP);
+    let toolRun = judged.toolRun;
+    let missing;
+    if (gaps.length > 0) {
+        // Trivy read nothing at all (skipped, bare `trivy`), or missed ecosystems the diff touched.
+        missing = judged.toolRun.status === 'skipped' ? ['trivy', ...walk] : [...gaps.map((g) => `trivy:${g.ecosystem}`), ...walk];
+    }
+    else {
+        // Nothing the diff touched is unread: Trivy's run is the review's, ok.
+        const reason = judged.toolRun.reason?.replace(/^no_supported_manifest(; )?/, '');
+        toolRun = { ...judged.toolRun, status: 'ok' };
+        if (reason !== undefined && reason.length > 0)
+            toolRun.reason = reason;
+        else
+            delete toolRun.reason;
+        missing = walk;
+    }
+    return { toolRun, missing, gaps, preexisting };
+}
+/** The review's note for gaps its diff did not touch, or null. */
+function preexistingNote(gaps) {
+    const files = (gaps ?? []).flatMap((g) => g.files);
+    if (files.length === 0)
+        return null;
+    const shown = files.slice(0, MAX_PREEXISTING_NAMED).join(', ');
+    const more = files.length > MAX_PREEXISTING_NAMED ? ` and ${files.length - MAX_PREEXISTING_NAMED} more` : '';
+    return (`pre-existing: ${files.length} manifest(s) Trivy cannot read, not changed by this diff: ${shown}${more} — ` +
+        'a gap of the project (scan_deps names it), not of this review');
 }
 function isFileOnDisk(path) {
     try {

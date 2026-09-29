@@ -50,8 +50,12 @@ version bump.
   0, and read full.
 - `scan_wordpress`'s Trivy pass runs the same manifest check as `scan_deps` (one shared judgement,
   `runners/trivyRun.ts#judgeTrivyFs`): a plugin whose `composer.json` has no `composer.lock` read trivy ok, full.
-  It also passes `.guardianignore` to Trivy natively now. `review_pr`'s Trivy pass (run when a manifest changed)
-  uses the same judgement over the reviewed tree, with `manifest_coverage_gaps` on its result.
+  It also passes `.guardianignore` to Trivy natively now. `review_pr`'s Trivy pass (run when the diff touches a
+  manifest or lock file, deletions included) uses the same judgement, scoped to the diff as its Semgrep gaps are:
+  a manifest Trivy cannot read is the review's gap (`manifest_coverage_gaps`, partial) only when the diff touches
+  it or a lock file of its ecosystem beside it; an unchanged unlocked manifest is the project's, listed in a
+  warning ("pre-existing: N manifest(s) Trivy cannot read, not changed by this diff: …", at most five named) and
+  in `preexisting_manifest_gaps`, without lowering coverage.
 - `scan_iac` and `scan_containers`: `trivy config` is judged by its log, not its exit code. Trivy drops a file it
   cannot parse with one ERROR line and exits 0, and `--quiet` hid even that: a .tf with an open security group
   and an unclosed `resource {` appended read 0 findings, full; a Dockerfile with `HEALTHCHECK --interval=bogus`

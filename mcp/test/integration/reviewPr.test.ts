@@ -584,6 +584,81 @@ describe('review_pr — secrets, Python, dependencies', () => {
     expect(res.coverage).not.toBe('full');
   });
 
+  /**
+   * Round 3: a manifest gap is the review's only when its diff touches the
+   * manifest or its lock file. A pre-existing one — unchanged, unlocked — is
+   * the project's, would make every review of it partial, and is listed as a
+   * note instead, bounded, without lowering coverage (as M1/M2 name only what
+   * the diff touched).
+   */
+  describe('manifest gaps the diff did not touch', () => {
+    const TRIVY_ROOT_ONLY = JSON.stringify({ Results: [{ Target: 'package-lock.json', Type: 'npm', Vulnerabilities: [] }] });
+    function trivyAnswers(report: string): void {
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        const call: Call = { ...opts, args: opts.args ?? [] };
+        calls.push(call);
+        if (opts.command === 'semgrep') return fakeSemgrep(call);
+        if (opts.command === 'gitleaks') return fakeGitleaks(call);
+        if (opts.command === 'trivy') {
+          writeFileSync(call.args[call.args.indexOf('--output') + 1] ?? '', report);
+          return ok(0);
+        }
+        return ok();
+      });
+    }
+    type WithNotes = ReviewResult & { warnings?: string[]; manifest_coverage_gaps?: unknown };
+
+    it('an unchanged unlocked manifest: full, and a pre-existing note', async () => {
+      const dir = await repo('main', {
+        'package.json': '{"dependencies":{"express":"4.0.0"}}\n',
+        'package-lock.json': '{}\n',
+        'web/package.json': '{"dependencies":{"lodash":"4.17.4"}}\n',
+      });
+      write(dir, 'package.json', '{"dependencies":{"express":"4.1.0"}}\n');
+      await commitAll(dir);
+      trivyAnswers(TRIVY_ROOT_ONLY);
+      const res = (await review(dir, { base_ref: 'main' })).r as unknown as WithNotes;
+      const trivy = res.tools_run.find((t) => t.name === 'trivy');
+      expect(trivy?.status).toBe('ok');
+      expect(res.missing_tools.filter((m) => m.startsWith('trivy'))).toEqual([]);
+      expect(res.manifest_coverage_gaps).toBeUndefined();
+      expect(res.coverage).toBe('full');
+      expect(res.warnings?.join(' ')).toMatch(
+        /pre-existing: 1 manifest\(s\) Trivy cannot read, not changed by this diff: web\/package\.json/,
+      );
+    });
+
+    it('a diff that modifies an unlocked manifest: partial', async () => {
+      const dir = await repo('main', {
+        'package.json': '{"dependencies":{"express":"4.0.0"}}\n',
+        'package-lock.json': '{}\n',
+        'web/package.json': '{"dependencies":{"lodash":"4.17.4"}}\n',
+      });
+      write(dir, 'web/package.json', '{"dependencies":{"lodash":"4.17.5"}}\n');
+      await commitAll(dir);
+      trivyAnswers(TRIVY_ROOT_ONLY);
+      const res = (await review(dir, { base_ref: 'main' })).r as unknown as WithNotes;
+      expect(res.missing_tools).toContain('trivy:npm');
+      expect(res.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['web/package.json'] }]);
+      expect(res.coverage).toBe('partial');
+    });
+
+    it('a diff that deletes a manifest’s lock file: partial', async () => {
+      const dir = await repo('main', {
+        'package.json': '{"dependencies":{"express":"4.0.0"}}\n',
+        'package-lock.json': '{}\n',
+        'web/package.json': '{"dependencies":{"lodash":"4.17.4"}}\n',
+        'web/package-lock.json': '{}\n',
+      });
+      rmSync(join(dir, 'web', 'package-lock.json'));
+      await commitAll(dir);
+      trivyAnswers(TRIVY_ROOT_ONLY);
+      const res = (await review(dir, { base_ref: 'main' })).r as unknown as WithNotes;
+      expect(res.missing_tools).toContain('trivy:npm');
+      expect(res.coverage).toBe('partial');
+    });
+  });
+
   // OWASP coverage reads whether the registry ran from the scan row; a
   // review row that did not say claimed the registry's categories even
   // under local_only (frameworks/coverage.ts#registryRan).

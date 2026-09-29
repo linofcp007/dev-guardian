@@ -174,7 +174,7 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
   'tools/depsAudit.ts:...judged.missing':
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
-  'tools/reviewPr.ts:...judged.missing':
+  'tools/reviewPr.ts:...scoped.missing':
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
   'tools/scanWordpress.ts:...judged.missing':
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
