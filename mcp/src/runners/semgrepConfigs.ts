@@ -85,7 +85,7 @@ function olderThan(version: string, than: string): boolean {
  *   - with the plugin's LLM pack (`llmPack`), resolve `import … from
  *     'node:child_process'` in taint mode: older than
  *     {@link LLM_PACK_MEASURED_SEMGREP}, the pack's JS rule misses those sinks
- *     (154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1).
+ *     (160 of 184 fixture findings on 1.86.0, 1.120.1 and 1.170.1).
  */
 export function semgrepEngineNote(
   engine: { version?: string; fixpointTimeoutsReported?: boolean },
@@ -98,7 +98,7 @@ export function semgrepEngineNote(
   const childProcess =
     "resolve `import … from 'node:child_process'` in taint mode — " +
     `${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}, and its child_process coverage is reduced ` +
-    '(154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)';
+    '(160 of 184 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 24 missing are node:child_process sinks)';
   const fixpointNote = 'does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected';
   if (fixpoint && llm) return `this Semgrep (${version}) ${fixpointNote}; nor does it ${childProcess}`;
   if (fixpoint) return `this Semgrep (${version}) ${fixpointNote}`;

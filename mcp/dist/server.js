@@ -37948,6 +37948,55 @@ function noRuleLoaded(configs, failed, ctx = {}, readAt = (config2) => config2) 
   }
   return true;
 }
+var TAINT_SCAN_FILE_LIMIT = 500;
+function mayHoldTaintRules(configs, readAt = (c3) => c3) {
+  for (const config2 of configs) {
+    const kind = localKind(config2);
+    if (kind === null) return true;
+    const at = readAt(config2);
+    if (kind === "file") {
+      if (fileHoldsTaintRule(at) !== false) return true;
+      continue;
+    }
+    const files = yamlFilesUnder(at, TAINT_SCAN_FILE_LIMIT);
+    if (files === null || files.some((file) => fileHoldsTaintRule(file) !== false)) return true;
+  }
+  return false;
+}
+function fileHoldsTaintRule(file) {
+  let doc;
+  try {
+    doc = (0, import_yaml.parse)(readFileSync6(file, "utf8"));
+  } catch {
+    return null;
+  }
+  const rules = doc !== null && typeof doc === "object" ? doc.rules : void 0;
+  if (!Array.isArray(rules)) return null;
+  return rules.some((rule) => rule !== null && typeof rule === "object" && rule.mode === "taint");
+}
+function yamlFilesUnder(dir, limit) {
+  const out = [];
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === void 0) break;
+    let entries2;
+    try {
+      entries2 = readdirSync2(current, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    for (const entry of entries2) {
+      const full = path6.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (/\.ya?ml$/i.test(entry.name)) {
+        out.push(full);
+        if (out.length > limit) return null;
+      }
+    }
+  }
+  return out;
+}
 function ruleIdsInDir(dir) {
   const ids2 = /* @__PURE__ */ new Set();
   let names;
@@ -40300,6 +40349,44 @@ function attachAllResources(server, ctx) {
   }
 }
 
+// src/tools/responseBounds.ts
+var RESPONSE_PARTIAL_ENTRIES = 20;
+function bound(list2) {
+  if (list2.length <= RESPONSE_PARTIAL_ENTRIES) return null;
+  const byType = {};
+  for (const p of list2) byType[p.type] = (byType[p.type] ?? 0) + 1;
+  return {
+    partially_parsed: list2.slice(0, RESPONSE_PARTIAL_ENTRIES),
+    partially_parsed_total: list2.length,
+    partially_parsed_by_type: byType
+  };
+}
+function isPartialList(value) {
+  return Array.isArray(value) && value.every((p) => p !== null && typeof p === "object" && typeof p.file === "string");
+}
+function boundResponsePayload(payload) {
+  let out = payload;
+  const runs = payload["tools_run"];
+  if (Array.isArray(runs)) {
+    let changed = false;
+    const bounded = runs.map((run) => {
+      if (run === null || typeof run !== "object") return run;
+      const list2 = run.partially_parsed;
+      const cut = list2 === void 0 ? null : bound(list2);
+      if (cut === null) return run;
+      changed = true;
+      return { ...run, ...cut };
+    });
+    if (changed) out = { ...out, tools_run: bounded };
+  }
+  const top = payload["partially_parsed"];
+  if (isPartialList(top)) {
+    const cut = bound(top);
+    if (cut !== null) out = { ...out, ...cut };
+  }
+  return out;
+}
+
 // src/tools/index.ts
 var TOOLS = [];
 function registerToolModule(tool48) {
@@ -40336,7 +40423,7 @@ function attachAllTools(server, ctx) {
 function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
-    const payload = { ok: true, ...rest };
+    const payload = boundResponsePayload({ ok: true, ...rest });
     const structured = { ...payload };
     for (const key of contentOnlyKeys) delete structured[key];
     const indent = contentOnlyKeys.length > 0 ? void 0 : 2;
@@ -40571,7 +40658,7 @@ var SEMGREP_SEVERITIES = [
   "EXPERIMENT",
   "INVENTORY"
 ];
-function yamlFilesUnder(dir) {
+function yamlFilesUnder2(dir) {
   const out = [];
   const walk4 = (d, depth) => {
     if (depth > 8) return;
@@ -40613,7 +40700,7 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
     } catch {
       continue;
     }
-    for (const file of isDir ? yamlFilesUnder(entry) : [entry]) {
+    for (const file of isDir ? yamlFilesUnder2(entry) : [entry]) {
       if (seen.has(file)) continue;
       seen.add(file);
       const verdict = validateSemgrepRulesFile(file);
@@ -40887,6 +40974,7 @@ function parseInputAsJson(input) {
 // src/runners/semgrepReport.ts
 var MAX_ERROR_TEXT = 300;
 var FIXPOINT_TIMEOUT_TYPE = "Fixpoint timeout";
+var FIXPOINT_TIMEOUT_PACK_TYPE = "Fixpoint timeout (plugin pack)";
 var FIXPOINT_FILES_NAMED = 5;
 var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function checkSemgrepReport(args) {
@@ -40906,8 +40994,16 @@ function checkSemgrepReport(args) {
   const errorEntries = asArray(getProp(root, "errors"));
   const errors = describeErrors(errorEntries);
   const exitClean = exitCode === 0 || exitCode === 1;
-  const fixpoint = fixpointTimeoutsOf(root);
+  const all = fixpointTimeoutsOf(
+    root,
+    args.ruleIdOf ?? ((id) => id),
+    args.pluginPackRuleIds ?? /* @__PURE__ */ new Set(),
+    args.nonPackTaintRules ?? true
+  );
+  const fixpoint = all.scan;
   const fixpointFiles = relative25(fixpoint.files);
+  const packGap = all.pack.functions > 0 ? { files: relative25(all.pack.files), functions: all.pack.functions } : null;
+  const withPackGap = (check2) => packGap === null ? check2 : { ...check2, plugin_pack_fixpoint: packGap };
   const problems = [];
   if (!exitClean) problems.push(`exit ${String(exitCode)}`);
   if (targets > 0 && scanned === 0) problems.push(`scanned 0 of ${targets} target(s)`);
@@ -40915,7 +41011,7 @@ function checkSemgrepReport(args) {
     problems.push(`${errors.length} Semgrep error(s): ${clip(errors.join("; "))}`);
   }
   if (fixpoint.functions > 0) problems.push(describeFixpointTimeouts(fixpointFiles, fixpoint.unscoped));
-  if (problems.length === 0) return { ok: true, verdict: "ok", scanned, errors: 0 };
+  if (problems.length === 0) return withPackGap({ ok: true, verdict: "ok", scanned, errors: 0 });
   const reason = problems.join("; ");
   if (exitClean && scanned === 0 && errors.length === 0 && fixpoint.functions === 0) {
     return { ok: false, verdict: "scanned_nothing", scanned, errors: 0, reason };
@@ -40923,7 +41019,14 @@ function checkSemgrepReport(args) {
   if (exitClean && scanned > 0 && fixpoint.unscoped === 0 && (errors.length > 0 || fixpoint.functions > 0)) {
     const partial3 = errors.length > 0 ? perFileErrors(errorEntries) : [];
     if (partial3 !== null) {
-      return { ok: false, verdict: "partial", scanned, errors: errors.length, reason, partial: [...relative25(partial3), ...fixpointFiles] };
+      return withPackGap({
+        ok: false,
+        verdict: "partial",
+        scanned,
+        errors: errors.length,
+        reason,
+        partial: [...relative25(partial3), ...fixpointFiles]
+      });
     }
   }
   const failed = { ok: false, verdict: "failed", scanned, errors: errors.length, reason };
@@ -40934,44 +41037,83 @@ function checkSemgrepReport(args) {
     if (ruleGap !== null) {
       const { rule_config_error: _whole, ...someRan } = failed;
       const files = [...relative25(ruleGap.files), ...fixpointFiles];
-      return {
+      return withPackGap({
         ...someRan,
         rules_not_loaded: ruleGap.rules,
         ...files.length > 0 ? { partial: files } : {}
-      };
+      });
     }
   }
   return failed;
 }
-function fixpointTimeoutsOf(root) {
-  const entries2 = asArray(getProp(getProp(root, "time"), "fixpoint_timeouts"));
-  const files = [];
-  let unscoped = 0;
-  for (const entry of entries2) {
-    const path8 = getString(getProp(entry, "location"), "path");
+function nameAFew(names, separator = ", ") {
+  const more = names.length - FIXPOINT_FILES_NAMED;
+  return [...names.slice(0, FIXPOINT_FILES_NAMED), ...more > 0 ? [`+${more} more`] : []].join(separator);
+}
+function fixpointTimeoutsOf(root, ruleIdOf, packRuleIds, nonPackTaintRules) {
+  const scan2 = new FixpointTally(FIXPOINT_TIMEOUT_TYPE);
+  const pack = new FixpointTally(FIXPOINT_TIMEOUT_PACK_TYPE);
+  for (const entry of asArray(getProp(getProp(root, "time"), "fixpoint_timeouts"))) {
+    const rules = rulesOf(getString(entry, "message"));
+    const firstIsPack = rules !== null && packRuleIds.size > 0 && packRuleIds.has(ruleIdOf(rules.first));
+    const isPack = firstIsPack && (rules.count === 1 || !nonPackTaintRules);
+    (isPack ? pack : scan2).add(getString(getProp(entry, "location"), "path"));
+  }
+  return { scan: scan2, pack };
+}
+function rulesOf(message3) {
+  const m = /\[rules: (\d+), first: ([^\]\s]+)\]/.exec(message3 ?? "");
+  const first = m?.[2];
+  if (m === null || first === void 0) return null;
+  return { count: Number.parseInt(m[1] ?? "0", 10), first };
+}
+var FixpointTally = class {
+  constructor(type) {
+    this.type = type;
+  }
+  type;
+  files = [];
+  functions = 0;
+  unscoped = 0;
+  byFile = /* @__PURE__ */ new Map();
+  add(path8) {
+    this.functions += 1;
     if (path8 === void 0 || path8.length === 0) {
-      unscoped += 1;
-      continue;
+      this.unscoped += 1;
+      return;
     }
     const file = toPosixPath(path8);
-    const known = files.find((f) => f.file === file);
+    const known = this.byFile.get(file);
     if (known !== void 0) {
       known.functions = (known.functions ?? 0) + 1;
       known.message = fixpointMessage(known.functions);
-    } else {
-      files.push({ file, type: FIXPOINT_TIMEOUT_TYPE, message: fixpointMessage(1), functions: 1 });
+      return;
     }
+    const entry = { file, type: this.type, message: fixpointMessage(1), functions: 1 };
+    this.byFile.set(file, entry);
+    this.files.push(entry);
   }
-  return { files, functions: entries2.length, unscoped };
-}
+};
 function fixpointMessage(functions) {
   return `taint analysis gave up on ${functions} function(s) here (Semgrep fixpoint timeout)`;
 }
+function describePluginPackFixpoint(gap) {
+  const unscoped = gap.functions - gap.files.reduce((n2, f) => n2 + (f.functions ?? 1), 0);
+  return `the plugin's LLM pack: ${describeFixpointTimeouts(gap.files, Math.max(0, unscoped))} \u2014 its findings in those functions may be missing; the rest of the scan is not affected`;
+}
+function withPluginPackFixpoint(run, gap) {
+  if (gap === void 0 || gap.functions === 0) return run;
+  const note = describePluginPackFixpoint(gap);
+  return {
+    ...run,
+    reason: [run.reason, note].filter((s) => s !== void 0).join("; "),
+    ...gap.files.length > 0 ? { partially_parsed: [...run.partially_parsed ?? [], ...gap.files] } : {},
+    plugin_packs: { ...run.plugin_packs ?? {}, llm: { status: "partial", reason: note } }
+  };
+}
 function describeFixpointTimeouts(files, unscoped = 0) {
   const functions = files.reduce((n2, f) => n2 + (f.functions ?? 1), 0) + unscoped;
-  const named = files.slice(0, FIXPOINT_FILES_NAMED).map((f) => f.file);
-  const more = files.length - named.length;
-  const list2 = [...named, ...more > 0 ? [`+${more} more`] : []].join(", ");
+  const list2 = nameAFew(files.map((f) => f.file));
   return `taint analysis incomplete (Semgrep fixpoint timeout) in ${functions} function(s)` + (unscoped > 0 ? `, ${unscoped} of them in no named file` : "") + (files.length > 0 ? ` across ${files.length} file(s): ${list2}` : "");
 }
 function semgrepEngineOf(raw) {
@@ -40985,11 +41127,11 @@ function semgrepEngineOf(raw) {
   return scanned > 0 ? { version: version2, fixpointTimeoutsReported: false } : { version: version2 };
 }
 function describePartialParse(partial3, consequence) {
-  const parsed = partial3.filter((p) => p.type !== FIXPOINT_TIMEOUT_TYPE);
+  const parsed = partial3.filter((p) => p.type !== FIXPOINT_TIMEOUT_TYPE && p.type !== FIXPOINT_TIMEOUT_PACK_TYPE);
   const fixpoint = partial3.filter((p) => p.type === FIXPOINT_TIMEOUT_TYPE);
   const parts = [];
   if (parsed.length > 0) {
-    const listed = parsed.map((p) => `${p.type}: ${p.file}`).join("; ");
+    const listed = nameAFew(parsed.map((p) => `${p.type}: ${p.file}`), "; ");
     const files = new Set(parsed.map((p) => p.file)).size;
     parts.push(`partial: ${files} file(s) only partly parsed \u2014 ${consequence} (${listed})`);
   }
@@ -41121,7 +41263,7 @@ function semgrepEngineNote(engine, opts) {
   if (version2 === void 0) return null;
   const fixpoint = engine.fixpointTimeoutsReported === false;
   const llm = opts.llmPack && olderThan(version2, LLM_PACK_MEASURED_SEMGREP);
-  const childProcess = `resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 ${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}, and its child_process coverage is reduced (154 of 172 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 18 missing are node:child_process sinks)`;
+  const childProcess = `resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 ${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}, and its child_process coverage is reduced (160 of 184 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 24 missing are node:child_process sinks)`;
   const fixpointNote = "does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected";
   if (fixpoint && llm) return `this Semgrep (${version2}) ${fixpointNote}; nor does it ${childProcess}`;
   if (fixpoint) return `this Semgrep (${version2}) ${fixpointNote}`;
@@ -44174,6 +44316,8 @@ async function scanFileBatches(opts) {
   let configFailures = 0;
   const partial3 = [];
   const failedRules = [];
+  const packFiles = [];
+  let packFunctions = 0;
   let cancelled = false;
   let scanned = 0;
   for (const [i2, batch] of batches.entries()) {
@@ -44208,6 +44352,10 @@ async function scanFileBatches(opts) {
     for (const p of verdict.partial ?? []) {
       const file = toRelativeIfPossible(p.file, opts.cwd);
       if (!partial3.some((q) => q.file === file && q.type === p.type)) partial3.push({ ...p, file });
+    }
+    if (verdict.packFixpoint !== void 0) {
+      packFunctions += verdict.packFixpoint.functions;
+      for (const p of verdict.packFixpoint.files) packFiles.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
     }
     for (const r of verdict.failedRules ?? []) if (!failedRules.some((q) => q.rule_id === r.rule_id)) failedRules.push(r);
     if (!verdict.ok) {
@@ -44263,6 +44411,7 @@ async function scanFileBatches(opts) {
     };
     if (partial3.length > 0) toolRun.partially_parsed = partial3;
     if (failedRules.length > 0) toolRun.failed_rules = failedRules;
+    if (packFunctions > 0) toolRun = withPluginPackFixpoint(toolRun, { files: packFiles, functions: packFunctions });
   } else {
     toolRun = {
       name: opts.name,
@@ -44276,6 +44425,10 @@ async function scanFileBatches(opts) {
 function semgrepOnFiles(args) {
   const rules = args.rules;
   const ruleIdOf = rules === void 0 ? void 0 : localRuleIdNormalizer(rules.configs, rules.ctx);
+  const pack = {
+    ...rules?.packRuleIds !== void 0 ? { pluginPackRuleIds: rules.packRuleIds } : {},
+    ...rules?.nonPackTaintRules !== void 0 ? { nonPackTaintRules: rules.nonPackTaintRules } : {}
+  };
   return scanFileBatches({
     name: "semgrep",
     command: "semgrep",
@@ -44291,16 +44444,18 @@ function semgrepOnFiles(args) {
     // The shared judge's `partial` verdict is no failure of the batch, and
     // neither are rules that did not load while the others ran.
     check: (args2) => {
-      const c3 = checkSemgrepReport({ ...args2, ...ruleIdOf !== void 0 ? { ruleIdOf } : {} });
+      const c3 = checkSemgrepReport({ ...args2, ...ruleIdOf !== void 0 ? { ruleIdOf } : {}, ...pack });
+      const packFixpoint = c3.plugin_pack_fixpoint !== void 0 ? { packFixpoint: c3.plugin_pack_fixpoint } : {};
       if (c3.verdict === "partial" && c3.partial !== void 0) {
-        return { ok: true, scanned: c3.scanned, partial: c3.partial };
+        return { ok: true, scanned: c3.scanned, partial: c3.partial, ...packFixpoint };
       }
       if (c3.rules_not_loaded !== void 0 && c3.rules_not_loaded.length > 0) {
-        return { ok: true, scanned: c3.scanned, partial: c3.partial ?? [], failedRules: c3.rules_not_loaded };
+        return { ok: true, scanned: c3.scanned, partial: c3.partial ?? [], failedRules: c3.rules_not_loaded, ...packFixpoint };
       }
       return {
         ok: c3.ok,
         scanned: c3.scanned,
+        ...packFixpoint,
         ...c3.rule_config_error !== void 0 ? { reason: `the rule configuration did not load \u2014 ${c3.rule_config_error} (semgrep exit ${String(args2.exitCode)})` } : c3.reason !== void 0 ? { reason: c3.reason } : {},
         ...c3.rule_config_error !== void 0 ? { ruleConfigError: true } : {}
       };
@@ -44826,6 +44981,14 @@ function judgeSemgrepRun(args) {
   const raw = readJsonSafe(outFile);
   const rules = via !== null ? { projectPath: CONTAINER_PROJECT_ROOT, cwd: CONTAINER_PROJECT_ROOT, packsDir: CONTAINER_PACKS_ROOT } : { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
   if (raw) parser_inputs.push({ parser: semgrepParserFor(configs, rules), input: raw });
+  const readAt = (config2) => {
+    if (via === null) return config2;
+    if (packsHostDir !== void 0 && config2.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
+      return join24(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
+    }
+    return fromContainerPath(ctx.projectPath, config2);
+  };
+  const packConfigs = configs.filter((c3) => !loadedFrom.includes(c3)).map(readAt);
   const check2 = checkSemgrepReport({
     raw,
     exitCode: result.exitCode,
@@ -44834,23 +44997,32 @@ function judgeSemgrepRun(args) {
     // The container fallback reports paths under its mount, not the host's.
     projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath,
     // A rule that did not load is named as its findings are stored.
-    ruleIdOf: localRuleIdNormalizer(configs, rules)
+    ruleIdOf: localRuleIdNormalizer(configs, rules),
+    // A fixpoint timeout of the plugin's pack alone is its gap, not the scan's.
+    pluginPackRuleIds: new Set(packConfigs.flatMap((file) => ruleIdsInFile(file))),
+    nonPackTaintRules: mayHoldTaintRules(loadedFrom, readAt)
   });
+  const packGap = check2.plugin_pack_fixpoint;
   const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
   const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...engineNote !== null ? [engineNote] : []];
   if (check2.verdict === "ok") {
     const run = { name: "semgrep", status: "ok" };
     if (reasons.length > 0) run.reason = reasons.join("; ");
-    tools_run.push(run);
+    tools_run.push(withPluginPackFixpoint(run, packGap));
     return;
   }
   if (check2.verdict === "partial" && check2.partial !== void 0) {
-    tools_run.push({
-      name: "semgrep",
-      status: "ok",
-      reason: [...reasons, describePartialParse(check2.partial, "findings in the unparsed spans may be missing")].join("; "),
-      partially_parsed: check2.partial
-    });
+    tools_run.push(
+      withPluginPackFixpoint(
+        {
+          name: "semgrep",
+          status: "ok",
+          reason: [...reasons, describePartialParse(check2.partial, "findings in the unparsed spans may be missing")].join("; "),
+          partially_parsed: check2.partial
+        },
+        packGap
+      )
+    );
     missing_tools.push("semgrep");
     return;
   }
@@ -44864,13 +45036,6 @@ function judgeSemgrepRun(args) {
     return;
   }
   const notLoaded = check2.rules_not_loaded;
-  const readAt = (config2) => {
-    if (via === null) return config2;
-    if (packsHostDir !== void 0 && config2.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
-      return join24(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
-    }
-    return fromContainerPath(ctx.projectPath, config2);
-  };
   if (notLoaded !== void 0 && notLoaded.length > 0 && noRuleLoaded(loadedFrom, notLoaded, rules, readAt)) {
     const run = {
       name: "semgrep",
@@ -44879,7 +45044,6 @@ function judgeSemgrepRun(args) {
       failed_rules: notLoaded,
       rule_config_error: true
     };
-    const packConfigs = configs.filter((c3) => !loadedFrom.includes(c3)).map(readAt);
     if (onlyPluginPackRan(packConfigs, notLoaded)) run.plugin_pack_only = true;
     tools_run.push(run);
     return;
@@ -44896,7 +45060,7 @@ function judgeSemgrepRun(args) {
       failed_rules: notLoaded
     };
     if (check2.partial !== void 0) run.partially_parsed = check2.partial;
-    tools_run.push(run);
+    tools_run.push(withPluginPackFixpoint(run, packGap));
     missing_tools.push("semgrep");
     return;
   }
@@ -44974,7 +45138,9 @@ async function runSemgrepOnScope(args) {
     rules: {
       configs: plan.rulePacks,
       ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath },
-      loadedFrom: plan.ruleConfigs
+      loadedFrom: plan.ruleConfigs,
+      packRuleIds: new Set(plan.pluginPacks.flatMap((file) => ruleIdsInFile(file))),
+      nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs)
     }
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
@@ -49159,7 +49325,14 @@ async function runSemgrep2(ctx, input, out, args) {
     env: ctx.scriptEnv,
     signal: ctx.signal,
     ...ctx.onLog ? { onLog: ctx.onLog } : {},
-    rules: { configs: plan.rulePacks, ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot }, loadedFrom: plan.ruleConfigs }
+    rules: {
+      configs: plan.rulePacks,
+      ctx: { projectPath: ctx.projectPath, cwd: args.scanRoot },
+      loadedFrom: plan.ruleConfigs,
+      // The plugin's pack's own fixpoint timeouts are its gap, not the review's.
+      packRuleIds: new Set(plan.pluginPacks.flatMap((file) => ruleIdsInFile(file))),
+      nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs)
+    }
   });
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
@@ -50334,14 +50507,14 @@ function meetAdmit(s, c3) {
   if (s.all) return onlyConstraint(c3);
   const files = new Set([...s.files].filter((f) => c3.files.has(f)));
   const rules = new Set([...s.rules].filter((r) => c3.rules.has(r)));
-  let bound = 0;
-  for (const rs of s.pairs.values()) bound += rs.size;
+  let bound2 = 0;
+  for (const rs of s.pairs.values()) bound2 += rs.size;
   let filesLeaving = 0;
   for (const f of s.files) if (!c3.files.has(f)) filesLeaving += 1;
   let rulesLeaving = 0;
   for (const r of s.rules) if (!c3.rules.has(r)) rulesLeaving += 1;
-  bound += filesLeaving * c3.rules.size + rulesLeaving * c3.files.size;
-  if (bound > MAX_ADMIT_PAIRS) return onlyConstraint(c3);
+  bound2 += filesLeaving * c3.rules.size + rulesLeaving * c3.files.size;
+  if (bound2 > MAX_ADMIT_PAIRS) return onlyConstraint(c3);
   const pairs = /* @__PURE__ */ new Map();
   const add = (f, r) => {
     if (files.has(f) || rules.has(r)) return;
@@ -57441,7 +57614,7 @@ async function compileWithSemgrep(projectPath, registered, rejected) {
       note: "Not validated by Semgrep (it is not installed): only the rule-file shape was checked, so a rule Semgrep cannot compile (an unknown language, a broken pattern) would still fail later scans."
     };
   }
-  const filesOf = (entry) => isDirectory2(entry) ? yamlFilesUnder(entry).filter((f) => validateSemgrepRulesFile(f).ok) : [entry];
+  const filesOf = (entry) => isDirectory2(entry) ? yamlFilesUnder2(entry).filter((f) => validateSemgrepRulesFile(f).ok) : [entry];
   const verdict = await validateRuleFiles([...new Set(registered.flatMap(filesOf))], projectPath);
   if (!verdict.validated) {
     return {
@@ -57486,7 +57659,7 @@ function consider(path8, registered, rejected) {
     else rejected.push({ path: path8, reason: verdict.reason });
     return;
   }
-  const files = yamlFilesUnder(path8);
+  const files = yamlFilesUnder2(path8);
   let valid = 0;
   for (const file of files) {
     const verdict = validateSemgrepRulesFile(file);
@@ -65231,7 +65404,7 @@ async function handler39(input, ctx) {
     };
     return withNote(
       persistAndSummarize(partialSnapshot, toolsRun),
-      `Semgrep only partly parsed ${partiallyParsed.map((p) => p.file).join(", ")} (see partially_parsed): routes in the unparsed spans may be missing from this surface, so coverage is partial. Everything else was mapped and persisted.`
+      `Semgrep only partly parsed ${nameAFew(partiallyParsed.map((p) => p.file))} (see partially_parsed): routes in the unparsed spans may be missing from this surface, so coverage is partial. Everything else was mapped and persisted.`
     );
   }
   return persistAndSummarize(snapshot, toolsRun);
@@ -67086,7 +67259,7 @@ async function handler40(input, ctx, callMeta) {
     const files = surfaceGaps.partially_parsed.map((p) => p.file);
     const failed = (surfaceGaps.failed_steps ?? []).map((run) => run.name);
     const causes = [
-      ...files.length > 0 ? [`Semgrep only partly parsed ${files.join(", ")}`] : [],
+      ...files.length > 0 ? [`Semgrep only partly parsed ${nameAFew(files)}`] : [],
       ...failed.length > 0 ? [`its ${failed.join(", ")} step failed`] : []
     ];
     warnings.push(
@@ -67873,10 +68046,16 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
     commands.push(invoked);
     const check2 = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });
     if (!check2.ok) {
+      const incomplete = check2.verdict === "partial";
       return {
         applied: false,
         commands,
-        failure: { command: invoked, outcome: result.outcome === "completed" ? "failed" : result.outcome, exit_code: result.exitCode, stderr_head: check2.reason ?? firstStderrLine(result.stderr) }
+        failure: {
+          command: invoked,
+          outcome: incomplete ? "incomplete" : result.outcome === "completed" ? "failed" : result.outcome,
+          exit_code: result.exitCode,
+          stderr_head: check2.reason ?? firstStderrLine(result.stderr)
+        }
       };
     }
   }
@@ -68474,7 +68653,7 @@ function loadLocalRules(configs) {
     } catch {
       continue;
     }
-    for (const file of isDir ? yamlFilesUnder(config2) : [config2]) {
+    for (const file of isDir ? yamlFilesUnder2(config2) : [config2]) {
       let doc;
       try {
         doc = (0, import_yaml8.parse)(readFileSync38(file, "utf8"));
@@ -69209,7 +69388,7 @@ async function processGroup(opts) {
         scan: null,
         tests: null,
         pr: null,
-        note: `apply_failed: the fix could not be applied \u2014 ${describeApplyFailure(applied.failure)}`
+        note: applyFailedNote(applied.failure)
       };
     }
     const rescan = await rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta);
@@ -69316,6 +69495,12 @@ function readManifests(worktreePath) {
     }
   }
   return files;
+}
+function applyFailedNote(failure) {
+  if (failure?.outcome === "incomplete") {
+    return `apply_failed: applied, then discarded: the verification scan would be incomplete (${failure.stderr_head})`;
+  }
+  return `apply_failed: the fix could not be applied \u2014 ${describeApplyFailure(failure)}`;
 }
 function describeApplyFailure(failure) {
   if (failure === null) return "unknown failure";

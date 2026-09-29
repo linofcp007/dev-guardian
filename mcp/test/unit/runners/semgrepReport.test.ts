@@ -4,15 +4,20 @@
  * were targets, and carry no `errors`.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { cleanupTempDirs } from '../../helpers/tempDir.js';
 import {
   checkSemgrepReport,
   describePartialParse,
   describeRulesNotLoaded,
+  FIXPOINT_TIMEOUT_PACK_TYPE,
   FIXPOINT_TIMEOUT_TYPE,
   semgrepEngineOf,
+  withPluginPackFixpoint,
 } from '../../../src/runners/semgrepReport.js';
 import { semgrepEngineNote } from '../../../src/runners/semgrepConfigs.js';
+
+afterAll(cleanupTempDirs);
 
 const report = (over: Record<string, unknown> = {}): string =>
   JSON.stringify({ results: [], errors: [], paths: { scanned: ['a.py'] }, ...over });
@@ -349,7 +354,7 @@ describe('checkSemgrepReport: taint fixpoint timeouts (time.fixpoint_timeouts)',
   const fixpoint = (path: string, line = 152): Record<string, unknown> => ({
     error_type: 'Fixpoint timeout',
     severity: 'warn',
-    message: `Fixpoint timeout while performing taint analysis at ${path}:${line}:4 [rules: 1, first: llm-output-to-interpreter-py]`,
+    message: `Fixpoint timeout while performing taint analysis at ${path}:${line}:4 [rules: 1, first: python.lang.security.audit.eval-detected]`,
     location: { path, start: { line, col: 5, offset: 5084 }, end: { line, col: 34, offset: 5113 } },
   });
   const time = (...entries: unknown[]): Record<string, unknown> => ({ time: { fixpoint_timeouts: entries } });
@@ -438,6 +443,149 @@ describe('checkSemgrepReport: taint fixpoint timeouts (time.fixpoint_timeouts)',
 });
 
 /**
+ * Review of the LLM pack, round 3 (N-1): the pack's JS taint rules have no
+ * literal to prefilter on, so they time out on code with no model call in it
+ * (this repo's mcp/src: 6 to 22 per run). A fixpoint timeout whose only rule
+ * is a plugin-pack rule is the PACK's gap — recorded, noted, never the run's
+ * partial verdict. Any other stays the scan's.
+ */
+describe('checkSemgrepReport: fixpoint timeouts attributed by rule', () => {
+  const PREFIX = 'C.Users.dev..claude.plugins.cache.dev-guardian.3.0.0.configs.semgrep';
+  const PACK = new Set(['llm-output-to-interpreter-js', 'llm-request-in-system-prompt-js']);
+  const strip = (id: string): string => (id.startsWith(`${PREFIX}.`) ? id.slice(PREFIX.length + 1) : id);
+  const at = (path: string, rules: string) => ({
+    error_type: 'Fixpoint timeout',
+    severity: 'warn',
+    message: `Fixpoint timeout while performing taint analysis at ${path}:10:2 [${rules}]`,
+    location: { path, start: { line: 10, col: 3, offset: 0 }, end: { line: 10, col: 9, offset: 6 } },
+  });
+  const judge = (...entries: unknown[]) =>
+    checkSemgrepReport({
+      raw: report({ paths: { scanned: ['hooks/bashGuard.ts', 'app.py'] }, time: { fixpoint_timeouts: entries } }),
+      exitCode: 0,
+      outcome: 'completed',
+      targets: 1,
+      ruleIdOf: strip,
+      pluginPackRuleIds: PACK,
+    });
+
+  it('only a pack rule: the run stays ok, the pack gap recorded with its own type', () => {
+    const r = judge(
+      at('hooks/bashGuard.ts', `rules: 1, first: ${PREFIX}.llm-output-to-interpreter-js`),
+      at('hooks/bashGuard.ts', `rules: 1, first: ${PREFIX}.llm-request-in-system-prompt-js`),
+    );
+    expect(r.verdict).toBe('ok');
+    expect(r.ok).toBe(true);
+    expect(r.partial).toBeUndefined();
+    expect(r.plugin_pack_fixpoint).toEqual({
+      files: [
+        {
+          file: 'hooks/bashGuard.ts',
+          type: FIXPOINT_TIMEOUT_PACK_TYPE,
+          message: 'taint analysis gave up on 2 function(s) here (Semgrep fixpoint timeout)',
+          functions: 2,
+        },
+      ],
+      functions: 2,
+    });
+  });
+
+  it.each([
+    ['a registry rule', 'rules: 1, first: javascript.lang.security.audit.detect-eval'],
+    ['a project rule', 'rules: 1, first: my-rules.no-exec'],
+    ['more than one rule, the first a pack rule (the others are unknown)', `rules: 2, first: ${PREFIX}.llm-output-to-interpreter-js`],
+    ['a message that names no rule', 'no rule list here'],
+  ])('%s: the scan\'s — partial, as before', (_label, rules) => {
+    const r = judge(at('app.py', rules));
+    expect(r.verdict).toBe('partial');
+    expect(r.partial?.map((p) => `${p.type}:${p.file}`)).toEqual(['Fixpoint timeout:app.py']);
+    expect(r.plugin_pack_fixpoint).toBeUndefined();
+  });
+
+  it('mixed: the scan\'s files make it partial, the pack\'s are kept apart', () => {
+    const r = judge(
+      at('hooks/bashGuard.ts', `rules: 1, first: ${PREFIX}.llm-output-to-interpreter-js`),
+      at('app.py', 'rules: 1, first: python.lang.security.audit.eval-detected'),
+    );
+    expect(r.verdict).toBe('partial');
+    expect(r.partial?.map((p) => `${p.type}:${p.file}`)).toEqual(['Fixpoint timeout:app.py']);
+    expect(r.plugin_pack_fixpoint?.files.map((p) => `${p.type}:${p.file}`)).toEqual([`${FIXPOINT_TIMEOUT_PACK_TYPE}:hooks/bashGuard.ts`]);
+    expect(r.reason).not.toMatch(/bashGuard/);
+  });
+
+  it('several rules, the first a pack rule: the pack\'s only when no other config can hold a taint rule', () => {
+    const entry = at('hooks/bashGuard.ts', `rules: 2, first: ${PREFIX}.llm-request-in-system-prompt-js`);
+    const raw = report({ paths: { scanned: ['hooks/bashGuard.ts'] }, time: { fixpoint_timeouts: [entry] } });
+    const base = { raw, exitCode: 0, outcome: 'completed' as const, targets: 1, ruleIdOf: strip, pluginPackRuleIds: PACK };
+    expect(checkSemgrepReport({ ...base, nonPackTaintRules: false }).verdict).toBe('ok');
+    expect(checkSemgrepReport({ ...base, nonPackTaintRules: false }).plugin_pack_fixpoint?.functions).toBe(1);
+    expect(checkSemgrepReport({ ...base, nonPackTaintRules: true }).verdict).toBe('partial');
+    // Never a first rule that is not the pack's, whatever the configs.
+    const other = at('app.py', 'rules: 2, first: my-rules.no-exec');
+    expect(
+      checkSemgrepReport({ ...base, raw: report({ time: { fixpoint_timeouts: [other] } }), nonPackTaintRules: false }).verdict,
+    ).toBe('partial');
+  });
+
+  it('without the pack ids (a caller that runs no plugin pack) every timeout is the scan\'s', () => {
+    const r = checkSemgrepReport({
+      raw: report({ time: { fixpoint_timeouts: [at('a.ts', `rules: 1, first: ${PREFIX}.llm-output-to-interpreter-js`)] } }),
+      exitCode: 0,
+      outcome: 'completed',
+      targets: 1,
+      ruleIdOf: strip,
+    });
+    expect(r.verdict).toBe('partial');
+  });
+
+  it('withPluginPackFixpoint: a note, the files kept for history, plugin_packs.llm partial — status untouched', () => {
+    const gap = judge(...Array.from({ length: 7 }, (_, i) => at(`src/f${i}.ts`, `rules: 1, first: ${PREFIX}.llm-output-to-interpreter-js`)))
+      .plugin_pack_fixpoint;
+    const run = withPluginPackFixpoint({ name: 'semgrep', status: 'ok', reason: 'ran via x' }, gap);
+    expect(run.status).toBe('ok');
+    const note =
+      "the plugin's LLM pack: taint analysis incomplete (Semgrep fixpoint timeout) in 7 function(s) across 7 file(s): " +
+      'src/f0.ts, src/f1.ts, src/f2.ts, src/f3.ts, src/f4.ts, +2 more — its findings in those functions may be missing; ' +
+      'the rest of the scan is not affected';
+    expect(run.reason).toBe(`ran via x; ${note}`);
+    expect(run.partially_parsed).toHaveLength(7);
+    expect(run.plugin_packs).toEqual({ llm: { status: 'partial', reason: note } });
+    expect(withPluginPackFixpoint({ name: 'semgrep', status: 'ok' }, undefined)).toEqual({ name: 'semgrep', status: 'ok' });
+  });
+});
+
+describe('mayHoldTaintRules', () => {
+  const SEARCH = 'rules:\n  - id: s\n    languages: [python]\n    severity: WARNING\n    message: m\n    pattern: eval($X)\n';
+  const TAINT =
+    'rules:\n  - id: t\n    mode: taint\n    languages: [python]\n    severity: WARNING\n    message: m\n' +
+    '    pattern-sources:\n      - pattern: input()\n    pattern-sinks:\n      - pattern: eval(...)\n';
+
+  it('a registry pack, auto or a URL may; a local file answers from its rules', async () => {
+    const { mayHoldTaintRules } = await import('../../../src/runners/semgrepRuleIds.js');
+    const { makeTempDir } = await import('../../helpers/tempDir.js');
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const dir = makeTempDir('taint-rules-');
+    writeFileSync(join(dir, 'search.yml'), SEARCH);
+    writeFileSync(join(dir, 'taint.yml'), TAINT);
+    writeFileSync(join(dir, 'broken.yml'), 'rules: [\n');
+    expect(mayHoldTaintRules(['auto'])).toBe(true);
+    expect(mayHoldTaintRules(['p/default'])).toBe(true);
+    expect(mayHoldTaintRules([join(dir, 'search.yml')])).toBe(false);
+    expect(mayHoldTaintRules([join(dir, 'search.yml'), join(dir, 'taint.yml')])).toBe(true);
+    expect(mayHoldTaintRules([join(dir, 'broken.yml')])).toBe(true);
+    expect(mayHoldTaintRules([])).toBe(false);
+    // A rule directory is read recursively, as Semgrep loads it.
+    const rulesDir = makeTempDir('taint-rules-dir-');
+    mkdirSync(join(rulesDir, 'nested'));
+    writeFileSync(join(rulesDir, 'a.yml'), SEARCH);
+    expect(mayHoldTaintRules([rulesDir])).toBe(false);
+    writeFileSync(join(rulesDir, 'nested', 'b.yaml'), TAINT);
+    expect(mayHoldTaintRules([rulesDir])).toBe(true);
+  });
+});
+
+/**
  * Whether the engine that wrote a report says anything about fixpoint
  * timeouts: 1.170.1 and 1.176.1 always carry `time.fixpoint_timeouts` (an
  * empty list on a clean run, with or without `--time`); 1.86.0, 1.95.0,
@@ -478,7 +626,7 @@ describe('semgrepEngineNote', () => {
   it('with the pack on an engine older than it was measured on: one note, the engine named once', () => {
     const both = semgrepEngineNote({ version: '1.86.0', fixpointTimeoutsReported: false }, { llmPack: true }) ?? '';
     expect(both.startsWith(`this Semgrep (1.86.0) ${FIXPOINT}; nor does it resolve`)).toBe(true);
-    expect(both).toMatch(/llm\.yml was measured on Semgrep 1\.176\.1, and its child_process coverage is reduced \(154 of 172/);
+    expect(both).toMatch(/llm\.yml was measured on Semgrep 1\.176\.1, and its child_process coverage is reduced \(160 of 184/);
     expect(both.match(/this Semgrep/g)).toHaveLength(1);
     const llmOnly = semgrepEngineNote({ version: '1.170.1', fixpointTimeoutsReported: true }, { llmPack: true }) ?? '';
     expect(llmOnly).toMatch(/^this Semgrep \(1\.170\.1\) does not resolve `import … from 'node:child_process'` in taint mode — llm\.yml/);

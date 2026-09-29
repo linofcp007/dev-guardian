@@ -278,6 +278,27 @@ describe('runScans', () => {
     }
   });
 
+  // Round 3 (N-1): the plugin pack's own fixpoint timeouts stay on the run
+  // for history, but they are not the scan's gap and never reach the gate.
+  it("the plugin pack's own fixpoint timeouts never reach the gate: exit 0 alone, and an accepted parse gap beside them still passes", async () => {
+    const pack = { file: 'hooks/bashGuard.ts', type: 'Fixpoint timeout (plugin pack)', message: 'x', functions: 1 };
+    const gateOf = async (run: Record<string, unknown>, missing: string[], accept: string[]) => {
+      mockTool('security_scan_full', async () => ok({ tools_run: [run], missing_tools: missing }));
+      const { steps } = await runScans({ projectPath: makeProjectDir() });
+      const step = steps.find((s) => s.tool === 'security_scan_full');
+      const v = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps, droppedBaselineEntries: 0, acceptedPartialParses: accept });
+      return { partial_parses: step?.partial_parses, exitCode: v.exitCode, coverage: v.coverage };
+    };
+    expect(await gateOf({ name: 'semgrep', status: 'ok', reason: 'note', partially_parsed: [pack] }, [], [])).toEqual({
+      partial_parses: undefined,
+      exitCode: CI_EXIT.PASS,
+      coverage: 'full',
+    });
+    const parse = { file: 'wp/a.php', type: 'PartialParsing', message: 'x' };
+    const mixed = await gateOf({ name: 'semgrep', status: 'ok', reason: 'partial', partially_parsed: [parse, pack] }, ['semgrep'], ['wp/a.php']);
+    expect(mixed).toEqual({ partial_parses: { semgrep: [{ file: 'wp/a.php', type: 'PartialParsing' }] }, exitCode: CI_EXIT.PASS, coverage: 'partial' });
+  });
+
   it('never carries a DAST surface gap that is more than a partial parse', async () => {
     const partial = { file: 'wp/a.php', type: 'PartialParsing', message: 'x' };
     for (const surface_gaps of [

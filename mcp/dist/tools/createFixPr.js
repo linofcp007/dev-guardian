@@ -578,7 +578,7 @@ async function processGroup(opts) {
                 scan: null,
                 tests: null,
                 pr: null,
-                note: `apply_failed: the fix could not be applied — ${describeApplyFailure(applied.failure)}`,
+                note: applyFailedNote(applied.failure),
             };
         }
         const rescan = await rescanAfterFix(findings, origins, projectDir, projectPath, ctx, callMeta);
@@ -717,6 +717,19 @@ function readManifests(worktreePath) {
         }
     }
     return files;
+}
+/**
+ * The `apply_failed` note: what went wrong applying the group. A Semgrep pass
+ * whose fix was written but whose run is incomplete (`fixpr/apply.ts`,
+ * outcome `incomplete`) is said as such — the fix was applied in the
+ * disposable worktree and discarded with it, because the scan that would
+ * verify it would be incomplete; nothing "could not be applied".
+ */
+export function applyFailedNote(failure) {
+    if (failure?.outcome === 'incomplete') {
+        return `apply_failed: applied, then discarded: the verification scan would be incomplete (${failure.stderr_head})`;
+    }
+    return `apply_failed: the fix could not be applied — ${describeApplyFailure(failure)}`;
 }
 function describeApplyFailure(failure) {
     if (failure === null)

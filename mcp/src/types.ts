@@ -150,6 +150,22 @@ export interface ToolRun {
    * scanned" (`tools/scanCoverage.ts`).
    */
   plugin_pack_only?: true;
+  /**
+   * A Semgrep run that ran the plugin's own packs, when one of them did not
+   * fully run: by pack (`llm`), its status and why. Today only the LLM pack's
+   * own taint fixpoint timeouts (`runners/semgrepReport.ts`,
+   * `PluginPackFixpoint`) — the pack's gap, not the scan's: the run's status,
+   * `missing_tools` and the CI gate are untouched. Absent: every pack the run
+   * passed ran complete.
+   */
+  plugin_packs?: Record<string, { status: 'partial'; reason: string }>;
+  /**
+   * Responses only (`tools/responseBounds.ts`), never stored: when
+   * `partially_parsed` was cut to its first entries for the MCP response,
+   * how many the run named in all, and how many of each type.
+   */
+  partially_parsed_total?: number;
+  partially_parsed_by_type?: Record<string, number>;
 }
 
 /** A rule a Semgrep run did not load (`ToolRun.failed_rules`): its stored id, and Semgrep's reason. */

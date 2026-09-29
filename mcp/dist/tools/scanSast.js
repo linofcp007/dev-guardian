@@ -33,8 +33,11 @@
  * `--accept-partial-parse` matches). So is a run whose taint analysis gave
  * up on a function (`time.fixpoint_timeouts`, never in `errors[]`): the file
  * is named with type `Fixpoint timeout`, which the gate never accepts — the
- * same as a per-rule `Timeout`. An engine that cannot report those (before
- * 1.170) carries a named note instead. Anything fatal is `failed` with the
+ * same as a per-rule `Timeout` — unless the plugin's LLM pack is its only
+ * rule: that is the pack's gap, noted and kept for history under its own
+ * type, never the run's partial verdict (`PluginPackFixpoint`). An engine
+ * that cannot report those (before 1.170) carries a named note instead.
+ * Anything fatal is `failed` with the
  * errors as its reason — except rules that did not load while the others
  * ran (a typo'd pattern in the project's `.semgrep.yml` or a registered
  * rule: exit 2, `paths.scanned` filled, the judge's `rules_not_loaded`).
@@ -91,12 +94,12 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
-import { localRuleIdNormalizer, noRuleLoaded, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
+import { localRuleIdNormalizer, mayHoldTaintRules, noRuleLoaded, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
 import { buildSemgrepDockerArgs, CONTAINER_PROJECT_ROOT, DEFAULT_SEMGREP_IMAGE, fromContainerPath, toContainerPath, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { CONTAINER_PACKS_ROOT, hasDotnetProject, LLM_RULES_FILE, planSemgrepConfigs, semgrepEngineNote, } from '../runners/semgrepConfigs.js';
-import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, semgrepEngineOf, } from '../runners/semgrepReport.js';
+import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, semgrepEngineOf, withPluginPackFixpoint, } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { registerToolModule } from './index.js';
@@ -298,6 +301,17 @@ function judgeSemgrepRun(args) {
         : { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath };
     if (raw)
         parser_inputs.push({ parser: semgrepParserFor(configs, rules), input: raw });
+    // The container's configs are read on the host (`/src/…` is the project,
+    // CONTAINER_PACKS_ROOT the plugin's pack directory).
+    const readAt = (config) => {
+        if (via === null)
+            return config;
+        if (packsHostDir !== undefined && config.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
+            return join(packsHostDir, ...config.slice(CONTAINER_PACKS_ROOT.length + 1).split('/'));
+        }
+        return fromContainerPath(ctx.projectPath, config);
+    };
+    const packConfigs = configs.filter((c) => !loadedFrom.includes(c)).map(readAt);
     const check = checkSemgrepReport({
         raw,
         exitCode: result.exitCode,
@@ -307,7 +321,11 @@ function judgeSemgrepRun(args) {
         projectPath: via !== null ? CONTAINER_PROJECT_ROOT : ctx.projectPath,
         // A rule that did not load is named as its findings are stored.
         ruleIdOf: localRuleIdNormalizer(configs, rules),
+        // A fixpoint timeout of the plugin's pack alone is its gap, not the scan's.
+        pluginPackRuleIds: new Set(packConfigs.flatMap((file) => ruleIdsInFile(file))),
+        nonPackTaintRules: mayHoldTaintRules(loadedFrom, readAt),
     });
+    const packGap = check.plugin_pack_fixpoint;
     // What the engine that ran cannot do — report fixpoint timeouts, resolve
     // the pack's node: imports — said once (runners/semgrepConfigs.ts).
     const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
@@ -316,19 +334,20 @@ function judgeSemgrepRun(args) {
         const run = { name: 'semgrep', status: 'ok' };
         if (reasons.length > 0)
             run.reason = reasons.join('; ');
-        tools_run.push(run);
+        // The plugin's pack's own gap (round 3, N-1): noted, never the scan's.
+        tools_run.push(withPluginPackFixpoint(run, packGap));
         return;
     }
     if (check.verdict === 'partial' && check.partial !== undefined) {
         // Partial coverage (the module comment): ran, with a narrower gap inside
         // it — `ok` AND missing, the files named on the run for the CI gate's
         // --accept-partial-parse.
-        tools_run.push({
+        tools_run.push(withPluginPackFixpoint({
             name: 'semgrep',
             status: 'ok',
             reason: [...reasons, describePartialParse(check.partial, 'findings in the unparsed spans may be missing')].join('; '),
             partially_parsed: check.partial,
-        });
+        }, packGap));
         missing_tools.push('semgrep');
         return;
     }
@@ -344,16 +363,6 @@ function judgeSemgrepRun(args) {
         return;
     }
     const notLoaded = check.rules_not_loaded;
-    // The container's configs are read on the host (`/src/…` is the project,
-    // CONTAINER_PACKS_ROOT the plugin's pack directory).
-    const readAt = (config) => {
-        if (via === null)
-            return config;
-        if (packsHostDir !== undefined && config.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
-            return join(packsHostDir, ...config.slice(CONTAINER_PACKS_ROOT.length + 1).split('/'));
-        }
-        return fromContainerPath(ctx.projectPath, config);
-    };
     if (notLoaded !== undefined && notLoaded.length > 0 && noRuleLoaded(loadedFrom, notLoaded, rules, readAt)) {
         // Every rule of the scan's own configs failed and no registry pack ran:
         // nothing was scanned for (M-1) — failed, the rules named, never
@@ -366,7 +375,6 @@ function judgeSemgrepRun(args) {
             failed_rules: notLoaded,
             rule_config_error: true,
         };
-        const packConfigs = configs.filter((c) => !loadedFrom.includes(c)).map(readAt);
         if (onlyPluginPackRan(packConfigs, notLoaded))
             run.plugin_pack_only = true;
         tools_run.push(run);
@@ -387,7 +395,7 @@ function judgeSemgrepRun(args) {
         };
         if (check.partial !== undefined)
             run.partially_parsed = check.partial;
-        tools_run.push(run);
+        tools_run.push(withPluginPackFixpoint(run, packGap));
         missing_tools.push('semgrep');
         return;
     }
@@ -485,6 +493,8 @@ async function runSemgrepOnScope(args) {
             configs: plan.rulePacks,
             ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath },
             loadedFrom: plan.ruleConfigs,
+            packRuleIds: new Set(plan.pluginPacks.flatMap((file) => ruleIdsInFile(file))),
+            nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs),
         },
     });
     const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });

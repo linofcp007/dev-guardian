@@ -41,6 +41,7 @@ import { isScopedScan } from '../history/scanRoles.js';
 import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
+import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
 import { probeShell } from '../platform/shellProbe.js';
 import { GuardianDatabase } from '../storage/db.js';
 import { runMigrations } from '../storage/migrations/runner.js';
@@ -172,7 +173,13 @@ function toToolRunArray(value) {
 function toStringArray(value) {
     return Array.isArray(value) ? value : [];
 }
-/** `{ file, type }` of every well-formed entry of a `partially_parsed` list (type `unknown` when absent). */
+/**
+ * `{ file, type }` of every well-formed entry of a `partially_parsed` list
+ * (type `unknown` when absent) — except the plugin's pack's own fixpoint
+ * timeouts (`FIXPOINT_TIMEOUT_PACK_TYPE`): the pack's gap, kept on the run
+ * for history, is not the scan's and never reaches the gate (review of the
+ * LLM pack, round 3, N-1).
+ */
 function partialFiles(value) {
     if (!Array.isArray(value))
         return [];
@@ -182,6 +189,8 @@ function partialFiles(value) {
             continue;
         const { file, type } = entry;
         if (typeof file !== 'string' || file.length === 0)
+            continue;
+        if (type === FIXPOINT_TIMEOUT_PACK_TYPE)
             continue;
         out.push({ file, type: typeof type === 'string' && type.length > 0 ? type : 'unknown' });
     }

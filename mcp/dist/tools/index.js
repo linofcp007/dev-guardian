@@ -5,6 +5,7 @@
  * server iterates the array on startup and calls `registerTool` for each
  * entry. No other file in the codebase needs to know about the SDK shape.
  */
+import { boundResponsePayload } from './responseBounds.js';
 /**
  * Mutable global registry. Modules append themselves at import time via
  * `registerToolModule`, which lets us keep additions localized to each
@@ -39,10 +40,15 @@ export function attachAllTools(server, ctx) {
         });
     }
 }
-function toCallToolResult(result, contentOnlyKeys) {
+/**
+ * A handler's result as the MCP host receives it. Per-file gap lists are cut
+ * here and only here (`tools/responseBounds.ts`): the row and every internal
+ * caller keep them whole. Exported for the response-size tests.
+ */
+export function toCallToolResult(result, contentOnlyKeys) {
     if (result.ok) {
         const { ok: _ok, ...rest } = result;
-        const payload = { ok: true, ...rest };
+        const payload = boundResponsePayload({ ok: true, ...rest });
         const structured = { ...payload };
         for (const key of contentOnlyKeys)
             delete structured[key];

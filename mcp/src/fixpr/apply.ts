@@ -132,10 +132,21 @@ async function applySemgrepPass(
     commands.push(invoked);
     const check = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });
     if (!check.ok) {
+      // `partial` on a clean exit: --autofix DID write the fix in the
+      // worktree, but the run that would verify it is incomplete (a file not
+      // fully parsed, a taint fixpoint timeout) — `incomplete`, never
+      // "failed" (review of the LLM pack, round 3). Either way the worktree
+      // is discarded and the project is untouched.
+      const incomplete = check.verdict === 'partial';
       return {
         applied: false,
         commands,
-        failure: { command: invoked, outcome: result.outcome === 'completed' ? 'failed' : result.outcome, exit_code: result.exitCode, stderr_head: check.reason ?? firstStderrLine(result.stderr) },
+        failure: {
+          command: invoked,
+          outcome: incomplete ? 'incomplete' : result.outcome === 'completed' ? 'failed' : result.outcome,
+          exit_code: result.exitCode,
+          stderr_head: check.reason ?? firstStderrLine(result.stderr),
+        },
       };
     }
   }

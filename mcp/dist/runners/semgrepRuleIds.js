@@ -188,6 +188,77 @@ export function noRuleLoaded(configs, failed, ctx = {}, readAt = (config) => con
     }
     return true;
 }
+/** How many YAML files {@link mayHoldTaintRules} reads under one rule directory before it answers "may". */
+const TAINT_SCAN_FILE_LIMIT = 500;
+/**
+ * Whether a run of `configs` can hold a taint-mode rule — what tells a
+ * fixpoint timeout that names a plugin-pack rule first of several apart
+ * from one that may also be another config's (`semgrepReport.ts`). True
+ * for anything that cannot be read to the end: a registry pack, `auto`, a
+ * URL, a file that does not parse, a directory past
+ * {@link TAINT_SCAN_FILE_LIMIT} files. A local file or directory (read
+ * recursively, as Semgrep loads it) answers from its rules' `mode`. `readAt`
+ * maps a config to the file to read (the Docker fallback's `/src/…`).
+ */
+export function mayHoldTaintRules(configs, readAt = (c) => c) {
+    for (const config of configs) {
+        const kind = localKind(config);
+        if (kind === null)
+            return true;
+        const at = readAt(config);
+        if (kind === 'file') {
+            if (fileHoldsTaintRule(at) !== false)
+                return true;
+            continue;
+        }
+        const files = yamlFilesUnder(at, TAINT_SCAN_FILE_LIMIT);
+        if (files === null || files.some((file) => fileHoldsTaintRule(file) !== false))
+            return true;
+    }
+    return false;
+}
+/** Whether a YAML rule file declares a `mode: taint` rule; null when it cannot be read or parsed. */
+function fileHoldsTaintRule(file) {
+    let doc;
+    try {
+        doc = parseYaml(readFileSync(file, 'utf8'));
+    }
+    catch {
+        return null;
+    }
+    const rules = doc !== null && typeof doc === 'object' ? doc.rules : undefined;
+    if (!Array.isArray(rules))
+        return null;
+    return rules.some((rule) => rule !== null && typeof rule === 'object' && rule.mode === 'taint');
+}
+/** Every `.yml`/`.yaml` file under `dir`, recursively; null past `limit` files or when `dir` cannot be read. */
+function yamlFilesUnder(dir, limit) {
+    const out = [];
+    const stack = [dir];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (current === undefined)
+            break;
+        let entries;
+        try {
+            entries = readdirSync(current, { withFileTypes: true });
+        }
+        catch {
+            return null;
+        }
+        for (const entry of entries) {
+            const full = path.join(current, entry.name);
+            if (entry.isDirectory())
+                stack.push(full);
+            else if (/\.ya?ml$/i.test(entry.name)) {
+                out.push(full);
+                if (out.length > limit)
+                    return null;
+            }
+        }
+    }
+    return out;
+}
 /** Every rule id the YAML rule files of `dir` declare (not recursive); unreadable files are skipped. */
 export function ruleIdsInDir(dir) {
     const ids = new Set();
