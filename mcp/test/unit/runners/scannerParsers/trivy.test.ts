@@ -530,6 +530,50 @@ describe('assessManifestCoverage — the whole tree', () => {
     // What it did see is still reported.
     expect(r.gaps[0]?.files).toContain('package.json');
   });
+
+  /**
+   * Review 3.0, wave 2 (c): Trivy skips devDependencies by default (measured
+   * on 0.69.3: a lock holding only `dev: true` packages gets no Result). A
+   * package.json with only devDependencies beside a committed lock is still
+   * a gap — nothing was reported for it — but its lock file is there: the
+   * gap says which of its files are that case, so the advice is not "commit
+   * the lock file".
+   */
+  describe('a package.json with only devDependencies', () => {
+    const DEV_ONLY = '{"name":"x","devDependencies":{"lodash":"4.17.4"}}';
+
+    it('beside a lock file: a gap, marked dev_only', () => {
+      const project = tree({ 'package.json': DEV_ONLY, 'package-lock.json': '{"lockfileVersion":3}' });
+      expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([
+        { ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] },
+      ]);
+    });
+
+    it('a workspace member whose root holds the lock file is dev_only too, and so is that root', () => {
+      const project = tree({
+        'package.json': '{"name":"root","private":true,"workspaces":["packages/*"]}',
+        'yarn.lock': '# yarn lockfile v1\n',
+        'packages/a/package.json': DEV_ONLY,
+        // Not a member: no lock of its own, and the root's does not lock it.
+        'tools/b/package.json': DEV_ONLY,
+      });
+      const both = ['package.json', 'packages/a/package.json'];
+      expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([
+        { ecosystem: 'npm', files: [...both, 'tools/b/package.json'], dev_only: both },
+      ]);
+    });
+
+    it('without a lock file, or with a production dependency beside the dev ones: a plain gap', () => {
+      const project = tree({
+        'nolock/package.json': DEV_ONLY,
+        'prod/package.json': '{"name":"p","dependencies":{"express":"4.0.0"},"devDependencies":{"lodash":"4.17.4"}}',
+        'prod/package-lock.json': '{"lockfileVersion":3}',
+      });
+      expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([
+        { ecosystem: 'npm', files: ['nolock/package.json', 'prod/package.json'] },
+      ]);
+    });
+  });
 });
 
 describe('trivyParser (Dockerfile config scan)', () => {

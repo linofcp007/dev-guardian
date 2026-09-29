@@ -29,6 +29,16 @@ import { join } from 'node:path';
 import { git, splitNul } from './git.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 const NUGET_CONFIGS = ['NuGet.config', 'nuget.config', 'NuGet.Config'];
+/**
+ * A line of a pip requirements file that chooses where requirements are
+ * installed from: `--index-url` / `-i`, `--extra-index-url`, `--no-index`,
+ * `--find-links` / `-f` (a directory or page of archives, an index of its
+ * own) and `--trusted-host` (an index served without verified TLS). pip
+ * reads them only at the start of a line (on a requirement's line only
+ * per-requirement options count), a short option's value possibly attached
+ * (`-ihttps://…`).
+ */
+export const PIP_INDEX_OPTION = /^[ \t]*(?:-[if]|--(?:index-url|extra-index-url|no-index|find-links|trusted-host)(?=[\s=]|$))/m;
 /** Which project files each runner reads (or is handed), and what they decide. */
 export const REPO_CONFIG = {
     // Passed explicitly (`--ignorefile`), never found by Trivy itself (trivyRun.ts).
@@ -38,7 +48,8 @@ export const REPO_CONFIG = {
         { file: '.gitleaks.toml', decides: 'its rules and allowlists decide what is reported' },
         { file: '.gitleaksignore', decides: 'its fingerprints are not reported' },
     ],
-    // The root one only, passed with `--ini` (scanSast.ts): one below it is kept out.
+    // The root one only, passed with `--ini` (scanSast.ts), whole-project and
+    // scoped runs alike: one below it is kept out.
     bandit: [{ file: '.bandit', decides: 'its skips and tests decide what is reported' }],
     // Passed with `--config` (scanContainers.ts); hadolint runs outside the project.
     hadolint: [
@@ -57,6 +68,18 @@ export const REPO_CONFIG = {
     semgrep: [{ file: '.semgrepignore', decides: 'its patterns decide which files are scanned', nested: true }],
     // npm audit reads the project's .npmrc (registry, omit=dev, audit-level).
     npm: [{ file: '.npmrc', decides: 'its registry and settings decide what npm audit reads and reports' }],
+    // pip-audit installs the requirements files deps_audit hands it (`-r`) with
+    // pip, which honours their index options, and those of the files they
+    // include (`-r`, `-c`): which index the audited versions come from is
+    // theirs to decide. Handed, not looked for: depsAudit.ts names them.
+    'pip-audit': [
+        {
+            file: 'requirements*.txt',
+            decides: "its package-index options decide which index pip-audit's resolution installs from",
+            when: PIP_INDEX_OPTION,
+            handed: true,
+        },
+    ],
     // `dotnet list package --vulnerable` asks the configured package sources.
     dotnet: NUGET_CONFIGS.map((file) => ({ file, decides: 'its package sources answer the vulnerability lookup', nested: true })),
     // The build the analyzers run in.
@@ -109,7 +132,6 @@ export const NO_REPO_CONFIG = {
     syft: 'runs outside the project with -c on an empty file (syftRun.ts)',
     phpcs: 'given --standard, so no project ruleset is looked up',
     wpscan: 'runs in the report directory; scans a URL or a WordPress install, not the repository',
-    'pip-audit': 'reads the requirements file it is given; no project configuration file',
     cosign: 'reads an image and its registry, not the repository',
     nuclei: 'probes a URL; its configuration is the user\'s own',
     lighthouse: 'measures a URL; no configuration is loaded unless passed',
@@ -141,7 +163,8 @@ function matchesWhen(projectPath, rel, when) {
         return true;
     try {
         const abs = join(projectPath, ...rel.split('/'));
-        if (statSync(abs).size > MAX_WHEN_BYTES)
+        const st = statSync(abs);
+        if (!st.isFile() || st.size > MAX_WHEN_BYTES)
             return false;
         return when.test(readFileSync(abs, 'utf8'));
     }
@@ -197,7 +220,7 @@ async function nestedFiles(projectPath, names) {
  * only when its text matches. Sorted by path.
  */
 export async function honouredFiles(projectPath, runner) {
-    const specs = REPO_CONFIG[runner];
+    const specs = REPO_CONFIG[runner].filter((s) => s.handed !== true);
     const out = [];
     const nested = specs.filter((s) => s.nested === true);
     const found = nested.length > 0 ? await nestedFiles(projectPath, nested.map((s) => s.file)) : [];
@@ -212,13 +235,32 @@ export async function honouredFiles(projectPath, runner) {
                 out.push({ path, decides: spec.decides });
         }
     }
-    return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    return out.sort(byPath);
+}
+function byPath(a, b) {
+    return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 }
 /** The files at the root only (sync): for a runner none of whose files is `nested`. */
 export function honouredRootFiles(projectPath, runner) {
     return REPO_CONFIG[runner]
+        .filter((spec) => spec.handed !== true)
         .filter((spec) => existsExactly(projectPath, spec.file) && matchesWhen(projectPath, spec.file, spec.when))
         .map((spec) => ({ path: spec.file, decides: spec.decides }));
+}
+/**
+ * Of the project files the caller `handed` to `runner` (project-relative,
+ * `/`-separated), those a `handed` entry of its {@link REPO_CONFIG} names:
+ * the first whose `when` matches the file's text. Sorted by path.
+ */
+export function honouredHandedFiles(projectPath, runner, handed) {
+    const specs = REPO_CONFIG[runner].filter((s) => s.handed === true);
+    const out = [];
+    for (const path of new Set(handed)) {
+        const spec = specs.find((s) => matchesWhen(projectPath, path, s.when));
+        if (spec !== undefined)
+            out.push({ path, decides: spec.decides });
+    }
+    return out.sort(byPath);
 }
 /** `honoured the project's A (what it decides), B (…)` — the one wording every runner uses. */
 export function honouredNote(files) {

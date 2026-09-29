@@ -40,8 +40,8 @@ version bump.
   (`security_scan_full`), skips `scan_wordpress`, which has no local-only mode
   (reported `skipped` with the reason, coverage `partial`), is recorded on the
   audit row, and the result's `local_only_gaps` names what it does not stop:
-  Trivy, `deps_audit`'s registry calls, a .NET restore, Semgrep's version
-  check.
+  Trivy, `deps_audit`'s registry calls, a .NET restore. (Semgrep's version
+  check is off on every run — see Security.)
   - `compliance_check` is in `local_only_gaps` too, measured rather than
     assumed: Trivy 0.69.3 running its exact `fs --scanners license --quiet`
     against an empty cache, with every proxy variable on a logging proxy (a
@@ -307,6 +307,19 @@ version bump.
 - `scan_skill` took time quadratic in the length of a line of Markdown with code spans — 42 s for a 1 MB line,
   and it reads files of up to 2 MB, which a minified or generated file fills in one line. The line is now
   blanked in one pass, and a test holds every rule under a budget on 1 MB lines built to be slow for it.
+- A scoped `scan_sast` now reads the project's root `.bandit`, as a whole-project run does, and names it the same
+  way. Bandit handed explicit files looks for no `.bandit` at all (its search walks directory targets only), so
+  the scoped run — every `guardian-diff` / `-file` / `-branch` pass — ignored it: measured on Bandit 1.9.4, with a
+  root `.bandit` skipping B101, the same `a.py` read B404 and B602 whole-project and B101, B404 and B602 scoped.
+  A scoped run now gets the whole-project run's `--ini` (the root `.bandit`, or the empty `[bandit]` file), and
+  `honoured_config: [".bandit"]` with the same reason. `review_pr` still passes none.
+- A `package.json` with only devDependencies beside a committed lock file no longer reads "NOTHING was scanned …
+  no dependency manifest here has a lock file it can read: … commit the lock file". Trivy skips dev dependencies by
+  default — measured on 0.69.3, a lock holding only `dev: true` packages gets no Result, and `--include-dev-deps`
+  brings it back — so the lock was read and there was nothing to report. Still a gap (coverage stays `none` or
+  `partial`), but the manifest is listed in the gap's new `dev_only` and the advice reads "npm (package.json): only
+  devDependencies, which Trivy skips by default". A workspace member whose root holds the lock file counts, and so
+  does that root. A manifest with no lock file keeps the old advice.
 
 ### Security
 
@@ -421,6 +434,15 @@ version bump.
   (`runners/trivyRun.ts`) that a test holds every spawn to. The project's `.trivyignore` is honoured only
   explicitly (`--ignorefile`) and named in the run (`tools_run[].honoured_config` and its reason); `review_pr`
   warns when the diff edits it. `deps_audit` also passes `.guardianignore` to Trivy natively, as `scan_deps` did.
+- `deps_audit` names a requirements file whose index options steer pip-audit, as it names `.npmrc` for npm audit.
+  pip-audit installs `-r` requirements with pip, which honours `--index-url` / `-i`, `--extra-index-url`,
+  `--find-links` / `-f`, `--no-index` and `--trusted-host` written in the file — so the file decides which index the
+  audited versions come from, and a repository could point it at one of its own. Honoured (a private index is
+  legitimate), never silently: every requirements file pip-audit read — the ones it was handed and the ones they
+  include with `-r` / `-c` inside the project (by path and through links: the server reads nothing outside it) —
+  that carries one is in `honoured_config`, and the reason says
+  "honoured the project's requirements.txt (its package-index options decide which index pip-audit's resolution
+  installs from)". `runners/repoConfig.ts` has a `pip-audit` entry now; it read none before.
 - `deps_audit` names the registry that answered `npm audit` when the project's `.npmrc` sets `registry=` to
   anything but `registry.npmjs.org` ("npm audit answered by … (from the project's .npmrc)", credentials removed,
   `honoured_config: [".npmrc"]`). Still honoured — a private registry is legitimate — never silently.
@@ -460,6 +482,23 @@ version bump.
   (gitleaks reads `<source>/.gitleaks.toml` itself: a committed allowlist over the one secret in history read 0
   findings, `ok`), a root `.bandit`, `.hadolint.yaml` / `.hadolint.yml` (hadolint now runs in the report directory
   and is given it with `--config`), `.github/actionlint.yaml` / `.yml`, `zizmor.yml` / `.github/zizmor.yml`.
+- `install_toolchain` installs a pinned, checksummed Syft. Its Linux entry piped `install.sh` from anchore/syft's
+  `main` branch into `sh`, which installed whatever was "latest" when it ran — the route the 2026-03 Trivy compromise
+  took (`TRIVY_INSTALL_TAG`), for a tool in the default profile; the default Linux bootstrap
+  (`scripts/install/install-linux.sh`) did the same. Both now download the v1.52.0 release archive (published
+  2026-09-17, an immutable release) and check its sha256 before unpacking it, as cosign's installer does: each
+  value checked three ways (hashed independently, the release's `syft_1.52.0_checksums.txt`, GitHub's asset digest),
+  a CPU with no pinned sum refused. macOS gets the same archive after Homebrew. Measured in `node:22`: the archive
+  installs Syft 1.52.0; a wrong sum stops before `tar`, and nothing is installed. `SYFT_VERSION` and
+  `SYFT_RELEASE_SHA256` are bumped together, deliberately; a test holds the script to the same values.
+- Semgrep no longer checks for a newer version. Its version check asked `semgrep.dev` on every run — `local_only`,
+  `--metrics=off` and `check_toolchain`'s `semgrep --version` included: measured through a refusing proxy on
+  Semgrep 1.176.1 with a fresh home, `semgrep --version` and a scan with local rules and `--metrics=off` each asked
+  four times; with `SEMGREP_ENABLE_VERSION_CHECK=0`, neither asked, and the scan's results were the same. Every
+  Semgrep spawn now gets it from the one helper (`runners/semgrepRun.ts`), whatever the server's environment says;
+  the Docker fallback passes it into the container (`-e`), `check_toolchain`'s probe and `init_project`'s status
+  script set it too. `audit_executive`'s `local_only_gaps` no longer names it, and SECURITY.md, the READMEs,
+  `docs/ci.md` and `scan --help` say it is off.
 - Trivy no longer phones home. Every Trivy run contacted `check.trivy.dev` — its version check, which carries
   anonymous usage data (an identifier, the command line, OS and architecture) — `fs --scanners license` included.
   Measured through a refusing proxy on Trivy 0.69.3: only both `TRIVY_SKIP_VERSION_CHECK` and

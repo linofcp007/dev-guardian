@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   honouredFiles,
+  honouredHandedFiles,
   honouredNote,
   NO_REPO_CONFIG,
   REPO_CONFIG,
@@ -37,6 +38,12 @@ function tree(files: Record<string, string>): string {
   return dir;
 }
 
+/** Where the table test puts a spec's file: a handed one under a concrete name (`requirements*.txt` names a kind). */
+function pathFor(spec: RepoConfigFile, i: number): string {
+  if (spec.handed === true) return `h${i}/requirements.txt`;
+  return spec.nested === true ? `n${i}/${spec.file}` : spec.file;
+}
+
 /** Text that satisfies a spec's `when`, or a plain line. */
 function bodyFor(spec: RepoConfigFile): string {
   if (spec.when === undefined) return '# config\n';
@@ -46,6 +53,7 @@ function bodyFor(spec: RepoConfigFile): string {
   if (src.includes('radon')) return '[radon]\nexclude = x\n';
   if (src.includes('jscpd')) return '{"name":"x","jscpd":{"threshold":1}}';
   if (src.includes('eslintConfig')) return '{"name":"x","eslintConfig":{}}';
+  if (src.includes('index-url')) return '--index-url https://pypi.example.internal/simple\nrequests==2.0.0\n';
   throw new Error(`no body for ${spec.file}`);
 }
 
@@ -56,16 +64,19 @@ describe('REPO_CONFIG: each runner names exactly the files it reads', () => {
     const specs = REPO_CONFIG[runner];
     const files: Record<string, string> = {};
     const expected: string[] = [];
+    const handed: string[] = [];
     specs.forEach((spec, i) => {
       // A nested file sits below the root (its own directory: file names that
       // differ only in case cannot share one on every file system).
-      const path = spec.nested === true ? `n${i}/${spec.file}` : spec.file;
+      const path = pathFor(spec, i);
       if (files[path] !== undefined) return; // one shared root file, two sections: the first wins
       files[path] = bodyFor(spec);
       expected.push(path);
+      if (spec.handed === true) handed.push(path);
     });
     const dir = tree(files);
-    const run = withProjectConfig({ name: runner, status: 'ok' }, await honouredFiles(dir, runner));
+    const found = [...(await honouredFiles(dir, runner)), ...honouredHandedFiles(dir, runner, handed)];
+    const run = withProjectConfig({ name: runner, status: 'ok' }, found);
     expect([...(run.honoured_config ?? [])].sort()).toEqual([...expected].sort());
     expect(run.reason).toMatch(/^honoured the project's /);
   });
@@ -74,11 +85,21 @@ describe('REPO_CONFIG: each runner names exactly the files it reads', () => {
     '%s: a %s without its section is not named',
     async (runner, file) => {
       const spec = REPO_CONFIG[runner].find((s) => s.file === file);
-      const path = spec?.nested === true ? `sub/${file}` : file;
+      const path = spec?.handed === true ? 'requirements.txt' : spec?.nested === true ? `sub/${file}` : file;
       const dir = tree({ [path]: file.endsWith('.json') ? '{"name":"x"}' : '[other]\nx = 1\n' });
       expect((await honouredFiles(dir, runner)).map((f) => f.path)).not.toContain(path);
+      expect(honouredHandedFiles(dir, runner, [path]).map((f) => f.path)).not.toContain(path);
     },
   );
+
+  it('a handed file is named only among the files handed, never looked for', async () => {
+    const dir = tree({ 'requirements.txt': '--extra-index-url https://x.example/simple\n', 'other.txt': '-i https://x.example/simple\n' });
+    expect(await honouredFiles(dir, 'pip-audit')).toEqual([]);
+    expect(honouredHandedFiles(dir, 'pip-audit', ['requirements.txt', 'missing.txt']).map((f) => f.path)).toEqual([
+      'requirements.txt',
+    ]);
+    expect(honouredHandedFiles(dir, 'npm', ['requirements.txt'])).toEqual([]);
+  });
 
   it('matches names exactly: a NuGet.Config is named as NuGet.Config, once', async () => {
     const dir = tree({ 'NuGet.Config': '<configuration/>' });
@@ -147,13 +168,14 @@ const SPAWNS: Readonly<Record<string, RepoConfigRunner | 'none' | `reads none he
   'runners/trivyRun.ts|trivy': 'trivy',
   'runners/gitleaksScan.ts|gitleaks': 'gitleaks',
   'tools/scanSast.ts|bandit': 'bandit',
+  // The --ini a caller passes (scan_sast's, the whole-project run's) is named by that caller, in tools/scanSast.ts.
   'runners/fileBatchScan.ts|bandit': 'reads none here: explicit file targets — Bandit looks for a .bandit only below a directory target',
   'tools/scanContainers.ts|hadolint': 'hadolint',
   'tools/scanIac.ts|zizmor': 'zizmor',
   'tools/scanIac.ts|actionlint': 'actionlint',
   'tools/depsAudit.ts|npm': 'npm',
   'tools/depsAudit.ts|dotnet': 'dotnet',
-  'tools/depsAudit.ts|pip-audit': 'none',
+  'tools/depsAudit.ts|pip-audit': 'pip-audit',
   'tools/scanSast.ts|dotnet': 'dotnet-analyzers',
   'tools/scanSast.ts|docker': 'none',
   'surface/scanSemgrep.ts|docker': 'none',
@@ -214,7 +236,7 @@ function spawnsInSrc(): Array<{ file: string; command: string }> {
 /** How the file that spawns `runner` shows it names what the runner read. */
 function namesIt(text: string, runner: RepoConfigRunner): boolean {
   if (runner === 'trivy') return true; // every caller: see the trivy test below
-  return /\b(?:nameRepoConfig|honouredRootFiles|honouredFiles)\(/.test(text) && text.includes(`'${runner}'`);
+  return /\b(?:nameRepoConfig|honouredRootFiles|honouredFiles|honouredHandedFiles)\(/.test(text) && text.includes(`'${runner}'`);
 }
 
 describe('every scanner spawned in src/ is accounted for', () => {
