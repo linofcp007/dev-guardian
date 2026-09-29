@@ -126,8 +126,14 @@ const SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-
  */
 const AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]*?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json)`;
 
-/** One argument that is, or lies under, an agent-config path. */
-const AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]*?${AGENT_CONFIG}[^\s"'|;&<>]*["']?`;
+/**
+ * One argument that is, or lies under, an agent-config path. Every run in the
+ * patterns built on it is bounded: a skill's file can be a 2 MB minified
+ * line, and an unbounded `[^…]*` before an alternation is quadratic on it
+ * (cubic with two of them — measured, a `sed -i` pattern did not finish on
+ * 50 KB).
+ */
+const AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]{0,200}?${AGENT_CONFIG}[^\s"'|;&<>]{0,200}["']?`;
 
 /**
  * A local or LAN destination: loopback, a private address, a `.local` /
@@ -224,6 +230,12 @@ export interface SkillRule {
    * the header.
    */
   citable?: boolean;
+  /**
+   * A literal a unit must contain before the patterns are tried at all — a
+   * cheap, linear test in front of patterns that are costly on a long line
+   * with nothing for them to find.
+   */
+  requires?: RegExp;
 }
 
 /**
@@ -365,16 +377,17 @@ export const SKILL_RULES: SkillRule[] = [
       'file, its memory, its settings (where hooks live), or its skills and agents directories. What lands there ' +
       'outlives this skill and steers every later session.',
     target: 'any',
+    requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor/i,
     patterns: [
       // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
       // after a word, a quote or a bracket — not a Markdown `> quote`, not
       // `=>` or `->`.
       new RegExp(String.raw`(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${AGENT_CONFIG_ARG}`, 'i'),
-      new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+)*\s+${AGENT_CONFIG_ARG}`, 'i'),
+      new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+){0,5}\s+${AGENT_CONFIG_ARG}`, 'i'),
       // As the destination — the last argument — of a copy, move or link.
-      new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]*\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, 'i'),
-      new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]*${AGENT_CONFIG}`, 'i'),
-      new RegExp(String.raw`\bsed\b[^|;&\n]*\s-i\S*[^|;&\n]*${AGENT_CONFIG}`, 'i'),
+      new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]{0,300}?\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, 'i'),
+      new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]{0,300}?${AGENT_CONFIG}`, 'i'),
+      new RegExp(String.raw`\bsed\b[^|;&\n]{0,200}?\s-i\S{0,20}[^|;&\n]{0,200}?${AGENT_CONFIG}`, 'i'),
       new RegExp(String.raw`\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${AGENT_CONFIG}`, 'i'),
       new RegExp(String.raw`\bopen\s*\([^\n]{0,160}${AGENT_CONFIG}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, 'i'),
       new RegExp(String.raw`${AGENT_CONFIG}[^\n]{0,80}\.write_text\s*\(`, 'i'),
@@ -440,8 +453,8 @@ export const SKILL_RULES: SkillRule[] = [
       // The whole environment (wave 2 of the 3.0 review: `env | curl -X POST
       // --data-binary @- https://…` read SAFE): piped into a sender, or
       // substituted into its arguments — `curl -d "$(env)"`, `@<(printenv)`.
-      new RegExp(String.raw`(?:^|[;&|({\x60]\s*|\$\(\s*)${ENV_DUMP}\s*\|[^\n]*?${SHELL_SENDER}`, 'i'),
-      new RegExp(String.raw`${SHELL_SENDER}[^\n]*?(?:\$\(|<\(|\x60)\s*${ENV_DUMP}\s*[)\x60|]`, 'i'),
+      new RegExp(String.raw`(?:^|[;&|({\x60]\s*|\$\(\s*)${ENV_DUMP}\s*\|[^\n]{0,300}?${SHELL_SENDER}`, 'i'),
+      new RegExp(String.raw`${SHELL_SENDER}[^\n]{0,300}?(?:\$\(|<\(|\x60)\s*${ENV_DUMP}\s*[)\x60|]`, 'i'),
     ],
   },
   {
@@ -455,7 +468,7 @@ export const SKILL_RULES: SkillRule[] = [
       'secrets included — to a concrete destination, as a pipeline or in words.',
     target: 'prose',
     patterns: [
-      new RegExp(String.raw`(?:^|[\s;&|(]|\$\()(?:env|printenv)(?:\s+-0)?\s*\|[^\n]*?${SHELL_SENDER}[^\n]*?${PROSE_TARGET}`, 'i'),
+      new RegExp(String.raw`(?:^|[\s;&|(]|\$\()(?:env|printenv)(?:\s+-0)?\s*\|[^\n]{0,300}?${SHELL_SENDER}[^\n]{0,300}?${PROSE_TARGET}`, 'i'),
       new RegExp(
         String.raw`\b(send|sends|upload|uploads|post|posts|transmit|forward|submit|exfiltrate|pipe)\s+(the\s+output\s+of\s+["']?(env|printenv)\b["']?|all\s+(of\s+)?(the\s+|your\s+|its\s+)?environment\s+variables|(the\s+|your\s+)?(whole|entire|full|complete)\s+environment)\b[^.\n]{0,100}?${REMOTE_DESTINATION}`,
         'i',
@@ -527,7 +540,7 @@ export const SKILL_RULES: SkillRule[] = [
     target: 'code',
     patterns: [
       // Not to a local or LAN host (see LOCAL_HOST).
-      new RegExp(String.raw`\b(nc|ncat|netcat)\b(?![^\n|;&]*?\s${LOCAL_HOST}(?=[\s:]))\s+[^\n]{0,60}\d{2,5}`, 'i'),
+      new RegExp(String.raw`\b(nc|ncat|netcat)\b(?![^\n|;&]{0,200}?\s${LOCAL_HOST}(?=[\s:]))\s+[^\n]{0,60}\d{2,5}`, 'i'),
       /\b(dig|nslookup|host)\b[^\n]{0,80}\$\(/i,
       /socket\.socket\([^\n]{0,40}SOCK_(STREAM|DGRAM)/i,
     ],
@@ -643,7 +656,7 @@ export const SKILL_RULES: SkillRule[] = [
     target: 'prose',
     patterns: [
       // "Download [agent](https://…/agent.zip) (extract using pass: x) and run the executable".
-      /\b(download|fetch|grab|get)\b[^\n]{0,200}?\b(https?|ftp):\/\/[^\s)'"<>]+?\.(zip|7z|rar|exe|msi|dmg|pkg|appimage|deb|rpm|sh|bash|ps1|bat|cmd|py|pl|rb|jar|run|bin|tar\.gz|tgz|tar\.xz)\b[^\n]{0,200}?\b(run|execute|launch|open|start|double-click)\s+(it|them|this|that|the\s+(executable|binary|installer|script|file|program|app|application|agent|tool|setup))\b/i,
+      /\b(download|fetch|grab|get)\b[^\n]{0,200}?\b(https?|ftp):\/\/[^\s)'"<>]{1,300}?\.(zip|7z|rar|exe|msi|dmg|pkg|appimage|deb|rpm|sh|bash|ps1|bat|cmd|py|pl|rb|jar|run|bin|tar\.gz|tgz|tar\.xz)\b[^\n]{0,200}?\b(run|execute|launch|open|start|double-click)\s+(it|them|this|that|the\s+(executable|binary|installer|script|file|program|app|application|agent|tool|setup))\b/i,
       // "Visit [this page](https://…), copy the installation script and paste it into Terminal".
       /^(?=.*\bhttps?:\/\/)(?=.*\b(copy|paste)\b[^.\n]{0,80}\b(paste|run|execute|enter)\b[^.\n]{0,40}\b(into|in)\s+(the\s+|your\s+|a\s+)?(terminal|shell|command\s+prompt|powershell|console|cmd)\b)/i,
     ],
@@ -942,17 +955,31 @@ function introducingParagraph(lines: string[], first: number): string {
 }
 
 /**
- * `index` lies inside quotation marks — straight double quotes, “…”, «…» —
- * or a code span, opened before it on the line. An unclosed quote runs to
- * the end of the line: a quotation that wraps onto the next one.
+ * Per position of a line: 1 where it lies inside quotation marks — straight
+ * double quotes, “…”, «…» — or a code span, opened before it on the line. An
+ * unclosed quote runs to the end of the line: a quotation that wraps onto the
+ * next one. Built once per line, in one pass: asked per match instead, it
+ * rescanned the line each time, quadratic on a long one.
  */
-function isQuotedAt(text: string, index: number): boolean {
-  const before = text.slice(0, index);
-  if ((before.match(/"/g) ?? []).length % 2 === 1) return true;
-  if (before.lastIndexOf('“') > before.lastIndexOf('”')) return true;
-  if (before.lastIndexOf('«') > before.lastIndexOf('»')) return true;
-  return inlineSpans(text).some((s) => s.start < index && index < s.end);
+function quotedPositions(text: string): Uint8Array {
+  const inside = new Uint8Array(text.length);
+  let straight = false;
+  let curly = false;
+  let guillemet = false;
+  for (let i = 0; i < text.length; i += 1) {
+    if (straight || curly || guillemet) inside[i] = 1;
+    const ch = text[i];
+    if (ch === '"') straight = !straight;
+    else if (ch === '“') curly = true;
+    else if (ch === '”') curly = false;
+    else if (ch === '«') guillemet = true;
+    else if (ch === '»') guillemet = false;
+  }
+  for (const s of inlineSpans(text)) inside.fill(1, s.start + 1, s.end);
+  return inside;
 }
+
+const QUOTED = new WeakMap<Unit, Uint8Array>();
 
 /** Every match of `pattern` in the unit is cited (see the header); false when none is. */
 function isCited(pattern: RegExp, unit: Unit): boolean {
@@ -960,12 +987,17 @@ function isCited(pattern: RegExp, unit: Unit): boolean {
   if (c === undefined) return false;
   if (c.announced) return true;
   if (!c.prose) return false;
+  let quoted = QUOTED.get(unit);
+  if (quoted === undefined) {
+    quoted = quotedPositions(unit.text);
+    QUOTED.set(unit, quoted);
+  }
   const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
   let seen = false;
   for (const m of unit.text.matchAll(global)) {
     if (m[0] === '') break;
     seen = true;
-    if (!isQuotedAt(unit.text, m.index)) return false;
+    if (quoted[m.index] !== 1) return false;
   }
   return seen;
 }
@@ -1016,6 +1048,7 @@ function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
     for (const pattern of rule.patterns) {
       let best: RuleMatch | null = null;
       for (const unit of units) {
+        if (rule.requires !== undefined && !rule.requires.test(unit.text)) continue;
         pattern.lastIndex = 0;
         if (!pattern.test(unit.text)) continue;
         const cited = rule.citable === true && isCited(pattern, unit);

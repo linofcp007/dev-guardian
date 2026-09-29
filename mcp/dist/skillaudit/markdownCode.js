@@ -229,10 +229,15 @@ function htmlBlockOpener(outside) {
 }
 /** The line with each backtick span replaced by spaces, so positions still line up. */
 function blankSpans(line, spans) {
-    let out = line;
-    for (const s of spans)
-        out = out.slice(0, s.start) + ' '.repeat(s.end - s.start) + out.slice(s.end);
-    return out;
+    // In one pass: re-slicing the whole line once per span was quadratic, and a
+    // 1 MB line of spans took 42 s (wave 2 of the 3.0 review).
+    let out = '';
+    let at = 0;
+    for (const s of spans) {
+        out += line.slice(at, s.start) + ' '.repeat(s.end - s.start);
+        at = s.end;
+    }
+    return out + line.slice(at);
 }
 function isClosingFence(line, fence) {
     const m = /^[ \t>]*(`{3,}|~{3,})[ \t]*$/.exec(line);

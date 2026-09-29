@@ -303,6 +303,9 @@ version bump.
   0, with recall on the positive set of attack shapes (see Security) unchanged. The two CAUTION are superpowers'
   brainstorming server, which runs `cp.exec(process.env.BRAINSTORM_OPEN_CMD + …)`. dev-guardian's own `skills/`
   and `commands/` are now held to SAFE by their test, not "SAFE or REVIEW".
+- `scan_skill` took time quadratic in the length of a line of Markdown with code spans — 42 s for a 1 MB line,
+  and it reads files of up to 2 MB, which a minified or generated file fills in one line. The line is now
+  blanked in one pass, and a test holds every rule under a budget on 1 MB lines built to be slow for it.
 
 ### Security
 

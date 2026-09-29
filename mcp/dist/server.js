@@ -69215,9 +69215,13 @@ function htmlBlockOpener(outside) {
   return null;
 }
 function blankSpans(line, spans) {
-  let out = line;
-  for (const s of spans) out = out.slice(0, s.start) + " ".repeat(s.end - s.start) + out.slice(s.end);
-  return out;
+  let out = "";
+  let at = 0;
+  for (const s of spans) {
+    out += line.slice(at, s.start) + " ".repeat(s.end - s.start);
+    at = s.end;
+  }
+  return out + line.slice(at);
 }
 function isClosingFence(line, fence) {
   const m = /^[ \t>]*(`{3,}|~{3,})[ \t]*$/.exec(line);
@@ -69427,7 +69431,7 @@ var SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE}|${SENSITIVE_DIR})`;
 var ENV_DUMP = String.raw`(?:\b(?:env|printenv)(?:\s+-0)?|\bexport\s+-p|\b(?:Get-ChildItem|gci|dir|ls)\s+env:\\?)`;
 var SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b`;
 var AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]*?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json)`;
-var AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]*?${AGENT_CONFIG}[^\s"'|;&<>]*["']?`;
+var AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]{0,200}?${AGENT_CONFIG}[^\s"'|;&<>]{0,200}["']?`;
 var LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:local|localhost|internal|lan|home\.arpa))`;
 var ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 var NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
@@ -69556,16 +69560,17 @@ var SKILL_RULES = [
     title: "Write into the agent\u2019s persistent instructions or settings",
     message: "A command appends to or replaces a file the agent re-reads every session \u2014 CLAUDE.md, AGENTS.md, a rules file, its memory, its settings (where hooks live), or its skills and agents directories. What lands there outlives this skill and steers every later session.",
     target: "any",
+    requires: /claude|agents\.md|gemini|memory\.md|cursorrules|windsurf|clinerules|copilot-instructions|\.cursor/i,
     patterns: [
       // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
       // after a word, a quote or a bracket — not a Markdown `> quote`, not
       // `=>` or `->`.
       new RegExp(String.raw`(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${AGENT_CONFIG_ARG}`, "i"),
-      new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+)*\s+${AGENT_CONFIG_ARG}`, "i"),
+      new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+){0,5}\s+${AGENT_CONFIG_ARG}`, "i"),
       // As the destination — the last argument — of a copy, move or link.
-      new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]*\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, "i"),
-      new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]*${AGENT_CONFIG}`, "i"),
-      new RegExp(String.raw`\bsed\b[^|;&\n]*\s-i\S*[^|;&\n]*${AGENT_CONFIG}`, "i"),
+      new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]{0,300}?\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, "i"),
+      new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]{0,300}?${AGENT_CONFIG}`, "i"),
+      new RegExp(String.raw`\bsed\b[^|;&\n]{0,200}?\s-i\S{0,20}[^|;&\n]{0,200}?${AGENT_CONFIG}`, "i"),
       new RegExp(String.raw`\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${AGENT_CONFIG}`, "i"),
       new RegExp(String.raw`\bopen\s*\([^\n]{0,160}${AGENT_CONFIG}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, "i"),
       new RegExp(String.raw`${AGENT_CONFIG}[^\n]{0,80}\.write_text\s*\(`, "i")
@@ -69625,8 +69630,8 @@ var SKILL_RULES = [
       // The whole environment (wave 2 of the 3.0 review: `env | curl -X POST
       // --data-binary @- https://…` read SAFE): piped into a sender, or
       // substituted into its arguments — `curl -d "$(env)"`, `@<(printenv)`.
-      new RegExp(String.raw`(?:^|[;&|({\x60]\s*|\$\(\s*)${ENV_DUMP}\s*\|[^\n]*?${SHELL_SENDER}`, "i"),
-      new RegExp(String.raw`${SHELL_SENDER}[^\n]*?(?:\$\(|<\(|\x60)\s*${ENV_DUMP}\s*[)\x60|]`, "i")
+      new RegExp(String.raw`(?:^|[;&|({\x60]\s*|\$\(\s*)${ENV_DUMP}\s*\|[^\n]{0,300}?${SHELL_SENDER}`, "i"),
+      new RegExp(String.raw`${SHELL_SENDER}[^\n]{0,300}?(?:\$\(|<\(|\x60)\s*${ENV_DUMP}\s*[)\x60|]`, "i")
     ]
   },
   {
@@ -69638,7 +69643,7 @@ var SKILL_RULES = [
     message: "The prose of an instruction file tells the reader to send the whole environment \u2014 every variable, secrets included \u2014 to a concrete destination, as a pipeline or in words.",
     target: "prose",
     patterns: [
-      new RegExp(String.raw`(?:^|[\s;&|(]|\$\()(?:env|printenv)(?:\s+-0)?\s*\|[^\n]*?${SHELL_SENDER}[^\n]*?${PROSE_TARGET}`, "i"),
+      new RegExp(String.raw`(?:^|[\s;&|(]|\$\()(?:env|printenv)(?:\s+-0)?\s*\|[^\n]{0,300}?${SHELL_SENDER}[^\n]{0,300}?${PROSE_TARGET}`, "i"),
       new RegExp(
         String.raw`\b(send|sends|upload|uploads|post|posts|transmit|forward|submit|exfiltrate|pipe)\s+(the\s+output\s+of\s+["']?(env|printenv)\b["']?|all\s+(of\s+)?(the\s+|your\s+|its\s+)?environment\s+variables|(the\s+|your\s+)?(whole|entire|full|complete)\s+environment)\b[^.\n]{0,100}?${REMOTE_DESTINATION}`,
         "i"
@@ -69701,7 +69706,7 @@ var SKILL_RULES = [
     target: "code",
     patterns: [
       // Not to a local or LAN host (see LOCAL_HOST).
-      new RegExp(String.raw`\b(nc|ncat|netcat)\b(?![^\n|;&]*?\s${LOCAL_HOST}(?=[\s:]))\s+[^\n]{0,60}\d{2,5}`, "i"),
+      new RegExp(String.raw`\b(nc|ncat|netcat)\b(?![^\n|;&]{0,200}?\s${LOCAL_HOST}(?=[\s:]))\s+[^\n]{0,60}\d{2,5}`, "i"),
       /\b(dig|nslookup|host)\b[^\n]{0,80}\$\(/i,
       /socket\.socket\([^\n]{0,40}SOCK_(STREAM|DGRAM)/i
     ]
@@ -69806,7 +69811,7 @@ var SKILL_RULES = [
     target: "prose",
     patterns: [
       // "Download [agent](https://…/agent.zip) (extract using pass: x) and run the executable".
-      /\b(download|fetch|grab|get)\b[^\n]{0,200}?\b(https?|ftp):\/\/[^\s)'"<>]+?\.(zip|7z|rar|exe|msi|dmg|pkg|appimage|deb|rpm|sh|bash|ps1|bat|cmd|py|pl|rb|jar|run|bin|tar\.gz|tgz|tar\.xz)\b[^\n]{0,200}?\b(run|execute|launch|open|start|double-click)\s+(it|them|this|that|the\s+(executable|binary|installer|script|file|program|app|application|agent|tool|setup))\b/i,
+      /\b(download|fetch|grab|get)\b[^\n]{0,200}?\b(https?|ftp):\/\/[^\s)'"<>]{1,300}?\.(zip|7z|rar|exe|msi|dmg|pkg|appimage|deb|rpm|sh|bash|ps1|bat|cmd|py|pl|rb|jar|run|bin|tar\.gz|tgz|tar\.xz)\b[^\n]{0,200}?\b(run|execute|launch|open|start|double-click)\s+(it|them|this|that|the\s+(executable|binary|installer|script|file|program|app|application|agent|tool|setup))\b/i,
       // "Visit [this page](https://…), copy the installation script and paste it into Terminal".
       /^(?=.*\bhttps?:\/\/)(?=.*\b(copy|paste)\b[^.\n]{0,80}\b(paste|run|execute|enter)\b[^.\n]{0,40}\b(into|in)\s+(the\s+|your\s+|a\s+)?(terminal|shell|command\s+prompt|powershell|console|cmd)\b)/i
     ]
@@ -70035,24 +70040,40 @@ function introducingParagraph(lines, first) {
   }
   return paragraph.join(" ");
 }
-function isQuotedAt(text2, index) {
-  const before = text2.slice(0, index);
-  if ((before.match(/"/g) ?? []).length % 2 === 1) return true;
-  if (before.lastIndexOf("\u201C") > before.lastIndexOf("\u201D")) return true;
-  if (before.lastIndexOf("\xAB") > before.lastIndexOf("\xBB")) return true;
-  return inlineSpans(text2).some((s) => s.start < index && index < s.end);
+function quotedPositions(text2) {
+  const inside = new Uint8Array(text2.length);
+  let straight = false;
+  let curly = false;
+  let guillemet = false;
+  for (let i2 = 0; i2 < text2.length; i2 += 1) {
+    if (straight || curly || guillemet) inside[i2] = 1;
+    const ch = text2[i2];
+    if (ch === '"') straight = !straight;
+    else if (ch === "\u201C") curly = true;
+    else if (ch === "\u201D") curly = false;
+    else if (ch === "\xAB") guillemet = true;
+    else if (ch === "\xBB") guillemet = false;
+  }
+  for (const s of inlineSpans(text2)) inside.fill(1, s.start + 1, s.end);
+  return inside;
 }
+var QUOTED = /* @__PURE__ */ new WeakMap();
 function isCited(pattern, unit) {
   const c3 = unit.citing;
   if (c3 === void 0) return false;
   if (c3.announced) return true;
   if (!c3.prose) return false;
+  let quoted = QUOTED.get(unit);
+  if (quoted === void 0) {
+    quoted = quotedPositions(unit.text);
+    QUOTED.set(unit, quoted);
+  }
   const global3 = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
   let seen = false;
   for (const m of unit.text.matchAll(global3)) {
     if (m[0] === "") break;
     seen = true;
-    if (!isQuotedAt(unit.text, m.index)) return false;
+    if (quoted[m.index] !== 1) return false;
   }
   return seen;
 }
@@ -70089,6 +70110,7 @@ function matchUnits(rules2, units) {
     for (const pattern of rule.patterns) {
       let best = null;
       for (const unit of units) {
+        if (rule.requires !== void 0 && !rule.requires.test(unit.text)) continue;
         pattern.lastIndex = 0;
         if (!pattern.test(unit.text)) continue;
         const cited = rule.citable === true && isCited(pattern, unit);
