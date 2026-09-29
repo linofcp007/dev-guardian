@@ -14,7 +14,7 @@ Arguments: $ARGUMENTS
 3. **Live install**, when a path is given (needs WP-CLI):
    - `wp_audit { wp_install_path: "<path>" }` — core/plugin/theme checksums, admin users, `WP_DEBUG` / `DISALLOW_FILE_EDIT` / `FORCE_SSL_ADMIN`;
    - `wp_cron_audit { wp_install_path: "<path>" }` — scheduled events, where persistent backdoors usually live;
-   - `wp_plugin_check { slug: "<plugin slug>", wp_install_path: "<path>" }` for a plugin the user worries about.
+   - `wp_plugin_check { slug: "<plugin slug>", wp_install_path: "<path>" }` for a plugin the user worries about — its installed version and state (WP-CLI) and the CVEs steps 2 and 4 already recorded. It queries nothing online itself, so run it after them; a WP-CLI probe that did not answer is a warning and coverage `partial`, not "not installed".
 4. **Live site**, when a URL is given:
    - `wp_vuln_check { target_url: "<url>" }` — WPScan (a token in `WPSCAN_API_TOKEN` avoids the public rate limit);
    - `wp_rest_audit { target_url: "<url>" }` — read-only GETs against REST endpoints that commonly leak (user enumeration, drafts, comments, `xmlrpc.php`).

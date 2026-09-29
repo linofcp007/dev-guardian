@@ -670,13 +670,13 @@ Aggregate read of one WordPress project's accumulated state (project\_path = the
 
 ### `wp_plugin_check`
 
-Focused check on one plugin: installed version (when wp\_install\_path given), latest known, active CVEs from the dev-guardian cves table. Pass target\_url to also do a fresh WPScan lookup. Read-mostly: no DB writes other than a scan row.
+What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp\_vuln\_check and newest wp\_vuln\_check\_source. It makes no network call — no WPScan query, no latest-version lookup; for fresh data run wp\_vuln\_check (live site) or wp\_vuln\_check\_source (plugin sources) first. With a local wp\_install\_path, WP-CLI reports the installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target\_url sends nothing to the site: it adds the wp\_vuln\_check recorded under that URL. Writes one scoped scan row, no findings.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `slug` | string | yes | — | Plugin slug as known by wp.org (e.g. "contact-form-7"). |
-| `wp_install_path` | string | no | — | Optional path to the WP install (version detection when it is local). Absolute, or existing on this machine. |
-| `target_url` | string | no | — | Optional live URL for fresh WPScan lookup (skipped without API token). |
+| `wp_install_path` | string | no | — | Path to the WordPress install. On this machine, WP-CLI (`wp plugin list`) reads the installed version and active state from it; it also keys the CVE lookup when project\_path is omitted. Absolute, or existing on this machine. |
+| `target_url` | string | no | — | Site URL a wp\_vuln\_check was recorded under: its CVEs are read too. Nothing is sent to the site — for a live WPScan lookup run wp\_vuln\_check. |
 | `project_path` | string | no | — | The WordPress project whose recorded CVEs are searched. Default: wp\_install\_path when given, else the server's working directory. |
 
 ### `wp_recommend_hardening`

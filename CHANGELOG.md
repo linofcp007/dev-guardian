@@ -26,6 +26,21 @@ version bump.
   and `suggest_fix` use, as an alias of `fingerprint`; both with different
   values is an error.
 
+### Fixed
+
+- **`wp_plugin_check` said it did two things it never did.** Its description
+  promised the "latest known" version and, with `target_url`, "a fresh WPScan
+  lookup"; the handler makes no network call at all, and `target_url` only
+  adds the `wp_vuln_check` recorded under that site URL. The description and
+  parameters now say that. And a WP-CLI version probe that was missing,
+  failed, timed out, printed nothing or printed something other than JSON
+  answered `installed_version: null, warnings: []` with its lookup `ok` —
+  the same answer as a plugin that is not installed. Each is now a warning,
+  a `wp-cli` entry in `tools_run` that is `skipped` (and in `missing_tools`)
+  or `failed` with the reason, and `coverage: "partial"`. A new `installed`
+  field is `null` when unknown and `false` only when WP-CLI listed the
+  install's plugins without this one.
+
 ### Security
 
 - **`scan_skill` read the commands in a SKILL.md as nothing.** Every
