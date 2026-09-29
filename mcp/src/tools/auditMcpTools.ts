@@ -114,7 +114,7 @@ const inputSchema = {
         'path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ' +
         'ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use ' +
         'another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it ' +
-        'carries userinfo, a backslash, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is ' +
+        'carries a backslash, more than one @, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is ' +
         'not seen. Off by default: they are skipped.',
     ),
   timeout_ms: z

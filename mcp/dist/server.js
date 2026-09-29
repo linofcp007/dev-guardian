@@ -74856,15 +74856,21 @@ function urlAt(text, start) {
   const end = rest.search(URL_END);
   return end < 0 ? rest : rest.slice(0, end);
 }
-function isLoopbackHost2(url2) {
-  const host = url2.hostname.toLowerCase();
+function isLoopbackName(name) {
+  const host = name.toLowerCase();
   const quad = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   return host === "localhost" || host === "[::1]" || quad !== null && quad.slice(1).every((o2) => Number(o2) <= 255);
 }
 function unambiguous(url2, written) {
-  const afterScheme = written.slice(written.indexOf(":") + 1).replace(/^[/\\]*/, "");
+  if (written.includes("\\")) return false;
+  const afterScheme = written.slice(written.indexOf(":") + 1).replace(/^\/*/, "");
   const authority = afterScheme.split("/")[0] ?? "";
-  if (/[\\@]/.test(authority)) return false;
+  const at = authority.indexOf("@");
+  if (at >= 0) {
+    if (authority.indexOf("@", at + 1) >= 0) return false;
+    const host = /^(\[[^\]]*\]|[^:]*)(?::\d*)?$/.exec(authority.slice(at + 1))?.[1];
+    if (host === void 0 || !isLoopbackName(host)) return false;
+  }
   return QUERY_SAFE_SCHEMES.has(url2.protocol) || !written.includes("?");
 }
 function hostLabel(url2) {
@@ -74891,9 +74897,9 @@ function remoteInText(text) {
       return `names a URL that does not parse (${JSON.stringify(written.slice(0, 80))})`;
     }
     if (url2.hostname === "") continue;
-    if (isLoopbackHost2(url2)) {
+    if (isLoopbackName(url2.hostname)) {
       if (unambiguous(url2, written)) continue;
-      return `names ${hostLabel(url2)} written so that another client may read another host (userinfo, a backslash, or a query on a non-HTTP scheme)`;
+      return `names ${hostLabel(url2)} written so that another client may read another host (a backslash, several @, a host after the @ that is not loopback as written, or a query on a non-HTTP scheme)`;
     }
     return `names ${hostLabel(url2)} (a proxy, a client or a source on another machine)`;
   }
@@ -75631,7 +75637,7 @@ var inputSchema28 = {
     "Also look the names up in the user-level configs (Claude Code, Claude Desktop, Cursor, Windsurf, Gemini). Off by default."
   ),
   allow_remote: external_exports.boolean().optional().default(false).describe(
-    "Contact servers that reach another machine: a url entry (even at localhost), a command on a network path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it carries userinfo, a backslash, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is not seen. Off by default: they are skipped."
+    "Contact servers that reach another machine: a url entry (even at localhost), a command on a network path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it carries a backslash, more than one @, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is not seen. Off by default: they are skipped."
   ),
   timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS7).describe("Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.")
 };

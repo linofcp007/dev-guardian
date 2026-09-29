@@ -113,10 +113,11 @@ their respective projects.
   against another engine (`-H`, `--host`, a context, `--remote`,
   `--connection`, `--url`, `DOCKER_CONTEXT`, `CONTAINER_CONNECTION`). A URL
   whose parsed host is exactly `localhost`, a `127.x.x.x` address or `[::1]`
-  is local (`DATABASE_URL=postgres://localhost/app` needs no
-  `allow_remote`) — unless it carries userinfo or a backslash before its
-  path, or a query on a non-HTTP scheme (libpq reads a host from
-  `?host=`), since another parser may then read another host; a `url` entry
+  is local (`DATABASE_URL=postgres://user:pw@localhost/app` needs no
+  `allow_remote`) — unless it carries a backslash anywhere, more than one
+  `@`, a host after its `@` that is not written as loopback, or a query on
+  a non-HTTP scheme (libpq reads a host from `?host=`), since another
+  parser may then read another host; a `url` entry
   needs `allow_remote` even at localhost. **Loopback is where a tunnel
   starts**: `ssh -L`, `kubectl port-forward`, a local proxy or a VPN client
   listening on 127.0.0.1 make a loopback URL reach another machine, and the

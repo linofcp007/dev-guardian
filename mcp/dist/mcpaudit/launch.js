@@ -39,14 +39,17 @@
  * `127.x.x.x` dotted quad or `[::1]` — never a prefix (`localhost.evil.com`,
  * `127.0.0.1.evil.com`), never `[::ffff:127.0.0.1]` or a DNS name that
  * resolves to loopback — AND it is written so that no other parser can read
- * another host from it: no `\` or `@` before the path (userinfo, and the
- * backslash WHATWG reads as a slash where other parsers do not), and no
- * query string on a scheme other than http(s)/ws(s) (libpq takes a host from
- * `?host=`). A multi-host URL (`mongodb://a:1,b:2/`) does not parse, or
- * parses to a hostname that is not loopback: remote either way. WHATWG's own
- * normalisation counts for http(s): `http://127.1` and `http://0x7f000001`
- * are 127.0.0.1. Every URL in a string is checked; a loopback one is skipped,
- * never the end of the scan.
+ * another host from it: no `\` anywhere (WHATWG reads it as a slash where
+ * other parsers do not); at most one `@` before the path, with an exact
+ * loopback host written after it (`postgres://user:pw@localhost/db` is
+ * local, `http://a@localhost@other/` is not — with several `@` the last
+ * decides for some parsers); and no query string on a scheme other than
+ * http(s)/ws(s) (libpq takes a host from `?host=`). A multi-host URL
+ * (`mongodb://a:1,b:2/`) does not parse, or parses to a hostname that is not
+ * loopback: remote either way. WHATWG's own normalisation counts for
+ * http(s): `http://127.1` and `http://0x7f000001` are 127.0.0.1. Every URL
+ * in a string is checked; a loopback one is skipped, never the end of the
+ * scan.
  *
  * The limit: loopback is where a TUNNEL starts. `ssh -L 5432:db.internal:5432`,
  * `kubectl port-forward`, a local proxy or a VPN client listening on
@@ -119,24 +122,41 @@ function urlAt(text, start) {
  * `url` names only this machine (fix round 5, LOOPBACK): its PARSED hostname
  * is exactly `localhost`, a `127.x.x.x` dotted quad or `[::1]` — never a
  * prefix of a longer name — and nothing in how it is written lets another
- * parser read another host: no `\` or `@` before the path (userinfo, and the
- * backslash WHATWG reads as a slash where other parsers do not), and no
- * query on a scheme whose clients take a host from one (libpq's `?host=`).
- * WHATWG's own normalisation counts: `http://127.1` and `http://0x7f000001`
- * are 127.0.0.1. `[::ffff:127.0.0.1]` and a DNS name that resolves to
- * loopback are not exempt.
+ * parser read another host:
+ *
+ *   - no `\` anywhere: WHATWG reads it as `/` in a special scheme, other
+ *     parsers (Python's `urlsplit`) do not — `http://localhost\@other/`;
+ *   - at most ONE `@` before the path, and the text after it is itself an
+ *     exact loopback host: with several, the last decides for some parsers
+ *     and not for others. Credentials are fine — `postgres://user:pw@localhost/db`
+ *     is the most common DATABASE_URL there is;
+ *   - no query on a scheme whose clients take a host from one (libpq's
+ *     `?host=` / `?hostaddr=`).
+ *
+ * WHATWG's own normalisation counts where there is no userinfo:
+ * `http://127.1` and `http://0x7f000001` are 127.0.0.1. `[::ffff:127.0.0.1]`
+ * and a DNS name that resolves to loopback are not exempt.
  */
-function isLoopbackHost(url) {
-    const host = url.hostname.toLowerCase();
+function isLoopbackName(name) {
+    const host = name.toLowerCase();
     const quad = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
     return host === 'localhost' || host === '[::1]' || (quad !== null && quad.slice(1).every((o) => Number(o) <= 255));
 }
-/** No `\` or `@` before the path, and no query on a scheme that reads a host from one: see above. */
+/** No `\`, at most one `@` and a loopback host after it, no query where one names a host: see above. */
 function unambiguous(url, written) {
-    const afterScheme = written.slice(written.indexOf(':') + 1).replace(/^[/\\]*/, '');
-    const authority = afterScheme.split('/')[0] ?? '';
-    if (/[\\@]/.test(authority))
+    if (written.includes('\\'))
         return false;
+    const afterScheme = written.slice(written.indexOf(':') + 1).replace(/^\/*/, '');
+    const authority = afterScheme.split('/')[0] ?? '';
+    const at = authority.indexOf('@');
+    if (at >= 0) {
+        if (authority.indexOf('@', at + 1) >= 0)
+            return false;
+        // The host as written after the `@`, with its port: nothing else may follow.
+        const host = /^(\[[^\]]*\]|[^:]*)(?::\d*)?$/.exec(authority.slice(at + 1))?.[1];
+        if (host === undefined || !isLoopbackName(host))
+            return false;
+    }
     return QUERY_SAFE_SCHEMES.has(url.protocol) || !written.includes('?');
 }
 /** How a reason names a URL: scheme and host. `origin` is "null" for a non-special scheme (fix round 5, minor 2). */
@@ -176,11 +196,12 @@ function remoteInText(text) {
         }
         if (url.hostname === '')
             continue;
-        if (isLoopbackHost(url)) {
+        if (isLoopbackName(url.hostname)) {
             if (unambiguous(url, written))
                 continue;
             return (`names ${hostLabel(url)} written so that another client may read another host ` +
-                '(userinfo, a backslash, or a query on a non-HTTP scheme)');
+                '(a backslash, several @, a host after the @ that is not loopback as written, ' +
+                'or a query on a non-HTTP scheme)');
         }
         return `names ${hostLabel(url)} (a proxy, a client or a source on another machine)`;
     }
