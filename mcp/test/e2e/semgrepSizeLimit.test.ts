@@ -32,6 +32,10 @@ vi.setConfig({ testTimeout: 300_000 });
 afterAll(cleanupTempDirs);
 beforeAll(async () => {
   await import('../../src/tools/scanSast.js');
+  await import('../../src/tools/bugHunt.js');
+  await import('../../src/tools/scanWordpress.js');
+  await import('../../src/tools/complianceCheck.js');
+  await import('../../src/tools/reviewPr.js');
   resetScannerCache();
 });
 
@@ -98,6 +102,57 @@ describe("files over Semgrep's size limit are a named gap (real Semgrep)", () =>
     const r = await sast(dir, { scope: { paths: ['big.py', 'small.py'] } });
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toMatch(/target limit.*big\.py/);
     expect(r.coverage).toBe('partial');
+  });
+
+  // Round 2: every Semgrep caller, through runners/semgrepCoverageGaps.ts.
+  async function tool(name: string, dir: string, input: Record<string, unknown> = {}) {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const p: PluginContext = { storage: new Storage(db), shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
+    const t = TOOLS.find((x) => x.name === name);
+    if (!t) throw new Error(`${name} not registered`);
+    const r = await t.handler({ project_path: dir, force: true, ...input }, p);
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    return r as unknown as { tools_run: ToolRun[]; missing_tools: string[]; coverage: string };
+  }
+
+  it.skipIf(!SEMGREP_INSTALLED)('bug_hunt names it', async () => {
+    const r = await tool('bug_hunt', await project({ 'src/big.py': BIG, 'src/small.py': 'x = 1\n' }));
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toMatch(/target limit was not scanned: src\/big\.py/);
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
+  it.skipIf(!SEMGREP_INSTALLED)('scan_wordpress names it', async () => {
+    const bigPhp = `<?php\n${'// padding padding padding padding padding padding padding\n'.repeat(20_000)}`;
+    const r = await tool('scan_wordpress', await project({ 'readme.txt': '=== Acme ===\n', 'big.php': bigPhp, 'acme.php': '<?php\necho 1;\n' }));
+    expect(r.tools_run.find((t) => t.name === 'semgrep-wp')?.reason).toMatch(/target limit was not scanned: big\.php/);
+    expect(r.missing_tools).toContain('semgrep-wp');
+  });
+
+  it.skipIf(!SEMGREP_INSTALLED)('compliance_check (RGPD pack) names it', async () => {
+    const r = await tool('compliance_check', await project({ 'big.py': BIG, 'small.py': 'x = 1\n' }));
+    expect(r.tools_run.find((t) => t.name === 'semgrep-rgpd')?.reason).toMatch(/target limit was not scanned: big\.py/);
+    expect(r.missing_tools).toContain('semgrep-rgpd');
+  });
+
+  it.skipIf(!SEMGREP_INSTALLED)('review_pr names a changed file over the limit, and not one the diff did not touch', async () => {
+    const dir = await project({ 'old/big.py': BIG, 'app.py': 'x = 1\n' });
+    await execa('git', ['config', 'user.email', 'guardian-test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Guardian Test'], { cwd: dir });
+    await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
+    await execa('git', ['add', '-A'], { cwd: dir });
+    await execa('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
+    await execa('git', ['branch', '-q', '-M', 'main'], { cwd: dir });
+    await execa('git', ['checkout', '-q', '-b', 'feature'], { cwd: dir });
+    writeFileSync(join(dir, 'new_big.py'), BIG);
+    writeFileSync(join(dir, 'app.py'), 'x = 2\n');
+    await execa('git', ['add', '-A'], { cwd: dir });
+    await execa('git', ['commit', '-q', '-m', 'feature'], { cwd: dir });
+    const r = await tool('review_pr', dir, { base_ref: 'main', local_only: true });
+    const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(semgrep?.reason).toMatch(/target limit was not scanned: new_big\.py/);
+    expect(semgrep?.reason ?? '').not.toMatch(/old\/big\.py/);
+    expect(r.missing_tools).toContain('semgrep');
   });
 
   it.skipIf(!SEMGREP_INSTALLED)('a file over the limit that .guardianignore excludes is no gap', async () => {

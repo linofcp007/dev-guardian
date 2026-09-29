@@ -20,6 +20,7 @@ import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { runSemgrep } from '../runners/semgrepRun.js';
+import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { judgeTrivyFs, runTrivy } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
@@ -102,6 +103,18 @@ registerToolModule(makeScanTool({
                 if (raw)
                     parser_inputs.push({ parser: semgrepParser, input: raw });
                 recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
+                // The shared gaps: files over Semgrep's size limit, initialised
+                // submodules (runners/semgrepCoverageGaps.ts).
+                const at = tools_run.findIndex((t) => t.name === 'semgrep-wp');
+                const entry = tools_run[at];
+                if (entry !== undefined) {
+                    const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
+                        scannedNothing: entry.status === 'skipped',
+                    });
+                    tools_run[at] = applied.toolRun;
+                    if (applied.missing)
+                        markMissing(missing_tools, 'semgrep-wp');
+                }
             })());
         }
         else {

@@ -101,7 +101,13 @@ version bump.
   files (a `vendor/lib` with an `eval` and a committed AWS key, measured) were never scanned while `scan_sast` and
   `scan_secrets` read coverage full. An initialised submodule with content is now a named gap — "submodule
   contents not scanned: vendor/lib", the pass `ok` and listed missing, coverage partial — and still not scanned
-  (scan it as its own project). `scan_sast`'s Docker fallback, which walks its mount, is left out.
+  (scan it as its own project).
+- Both gaps (files over Semgrep's size limit, submodules) are applied by every Semgrep caller from one place,
+  `runners/semgrepCoverageGaps.ts`: `scan_sast` (native, Docker fallback and scoped), `bug_hunt`, `scan_wordpress`,
+  `review_pr`, `compliance_check`'s RGPD pack and `map_attack_surface` (a route in an unread file is missing, so
+  the surface is persisted partial). A test fails on a Semgrep caller that builds its result without them.
+  `review_pr` names only what its diff touched: the changed files over the limit, and the submodules the diff
+  bumps — for Semgrep, and for gitleaks, whose range and diff scopes now name a bumped submodule too.
 - `scan_dotnet_secrets` reports a JWT signing key in JSON: the `dotnet-jwt-secret` pattern refused the quote
   between `"JwtSecret"` and its colon, so no appsettings.json key was ever found. A config file over 2 MB (now
   judged by its size, before reading it) or one that cannot be read is no longer counted in `files_scanned`: it is

@@ -143,8 +143,13 @@ import {
 } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
-import { describeOversized, oversizedSourceFilesAsync, type OversizedFile } from '../frameworks/projectLanguages.js';
-import { describeSubmodules, initialisedSubmodules } from '../runners/git.js';
+import {
+  applySemgrepCoverageGaps,
+  markMissing,
+  scannedNothingBecause,
+  semgrepCoverageGaps,
+  type SemgrepCoverageGaps,
+} from '../runners/semgrepCoverageGaps.js';
 import { registerToolModule } from './index.js';
 import {
   ensureReportDir,
@@ -301,8 +306,7 @@ async function runSemgrep(args: Collect & {
     });
     recordSemgrepRun({
       ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
-      packMissing: plan.packMissing, oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
-      submodules: await initialisedSubmodules(ctx.projectPath), tools_run, missing_tools, parser_inputs,
+      packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath), tools_run, missing_tools, parser_inputs,
     });
     return;
   }
@@ -356,7 +360,11 @@ async function runSemgrep(args: Collect & {
   });
   recordSemgrepRun({
     ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
-    packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir, oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files, submodules: [],
+    packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir,
+    // Which listing Semgrep uses inside the container cannot be checked from
+    // here (git, or a walk of the mount): the submodules are named all the
+    // same — the safe direction (review M2, round 2).
+    gaps: await semgrepCoverageGaps(ctx.projectPath),
     tools_run, missing_tools, parser_inputs,
   });
 }
@@ -381,22 +389,22 @@ interface SemgrepRunRecord extends Collect {
   /** Container runs: the host directory mounted at CONTAINER_PACKS_ROOT. */
   packsHostDir?: string;
   /**
-   * Files Semgrep ignores for their size (over `--max-target-bytes`),
-   * computed here because Semgrep says so only under `--verbose` (review M1):
-   * a named gap — `ok` and missing — and, when nothing else was scanned, the
-   * reason, never "no covered language".
+   * What the run cannot see and does not say — files over Semgrep's size
+   * limit, initialised submodules (review M1 / M2) — from the one shared
+   * place, `runners/semgrepCoverageGaps.ts`: each a named gap.
    */
-  oversized: readonly OversizedFile[];
-  /**
-   * Initialised submodules with content (review M2): the native run lists
-   * its targets with git, which holds a submodule as one gitlink — its files
-   * are not scanned. Empty for the container run, which walks its mount.
-   */
-  submodules: readonly string[];
+  gaps: SemgrepCoverageGaps;
 }
 
 function recordSemgrepRun(args: SemgrepRunRecord): void {
   judgeSemgrepRun(args);
+  // The shared gaps (runners/semgrepCoverageGaps.ts), on the entry just judged.
+  const last = args.tools_run.at(-1);
+  if (last !== undefined && last.name === 'semgrep') {
+    const applied = applySemgrepCoverageGaps(last, args.gaps);
+    args.tools_run[args.tools_run.length - 1] = applied.toolRun;
+    if (applied.missing) markMissing(args.missing_tools, 'semgrep');
+  }
   // A damaged install ran without the pack: the note is on the run, and an
   // otherwise-complete run is partial (review of the LLM pack, M-3).
   if (args.packMissing && args.tools_run.at(-1)?.status === 'ok' && !args.missing_tools.includes('semgrep')) {
@@ -448,19 +456,12 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
   // the pack's node: imports — said once (runners/semgrepConfigs.ts).
   const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
   const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes, ...(engineNote !== null ? [engineNote] : [])];
-  // Files Semgrep ignored for their size (review M1), and submodules whose
-  // files no git listing holds (M2): gaps on any run that ran.
-  const sizeNote = args.oversized.length > 0 ? describeOversized(args.oversized) : null;
-  const moduleNote = args.submodules.length > 0 ? describeSubmodules(args.submodules) : null;
-  const gapNotes = [sizeNote, moduleNote].filter((n): n is string => n !== null);
 
   if (check.verdict === 'ok') {
     const run: ToolRun = { name: 'semgrep', status: 'ok' };
-    const all = [...reasons, ...gapNotes];
-    if (all.length > 0) run.reason = all.join('; ');
+    if (reasons.length > 0) run.reason = reasons.join('; ');
     // The plugin's pack's own gap (round 3, N-1): noted, never the scan's.
     tools_run.push(withPluginPackFixpoint(run, packGap));
-    if (gapNotes.length > 0) missing_tools.push('semgrep');
     return;
   }
   if (check.verdict === 'partial' && check.partial !== undefined) {
@@ -475,7 +476,6 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
           reason: [
             ...reasons,
             describePartialParse(check.partial, 'findings in the unparsed spans may be missing'),
-            ...gapNotes,
           ].join('; '),
           partially_parsed: check.partial,
         },
@@ -494,10 +494,7 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
       status: 'skipped',
       reason: [
         ...reasons,
-        sizeNote !== null
-          ? `semgrep scanned 0 files — ${sizeNote}`
-          : 'semgrep scanned 0 files — nothing here is a language its rules cover',
-        ...(moduleNote !== null ? [moduleNote] : []),
+        scannedNothingBecause(args.gaps) ?? 'semgrep scanned 0 files — nothing here is a language its rules cover',
       ].join('; '),
     });
     missing_tools.push('semgrep');
@@ -530,7 +527,6 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
         ...reasons,
         describeRulesNotLoaded(notLoaded, check.scanned),
         ...(check.partial !== undefined ? [describePartialParse(check.partial, 'findings in the unparsed spans may be missing')] : []),
-        ...gapNotes,
       ].join('; '),
       failed_rules: notLoaded,
     };
@@ -662,13 +658,15 @@ async function runSemgrepOnScope(args: Collect & {
   // No rule applied to any file in scope: a gap, not a clean result. Files
   // only partly parsed, rules that did not load, the plugin's pack missing
   // from disk: ran, with a narrower gap inside it (`ok` + missing).
-  // Scoped files Semgrep ignores for their size (review M1): named, a gap.
-  const oversized = (await oversizedSourceFilesAsync(ctx.projectPath, { only: files })).files;
-  if (oversized.length > 0) {
-    entry.reason = [entry.reason, describeOversized(oversized)].filter((s) => s !== undefined).join('; ');
-  }
-  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing || oversized.length > 0;
+  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || (entry.status === 'ok' && narrower)) missing_tools.push('semgrep');
+  // The scope's files over Semgrep's size limit, and submodules they reach
+  // (runners/semgrepCoverageGaps.ts): named, a gap.
+  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files }), {
+    scannedNothing: run.nothingScanned,
+  });
+  tools_run[tools_run.length - 1] = gapped.toolRun;
+  if (gapped.missing) markMissing(missing_tools, 'semgrep');
 }
 
 /** Bandit over a scope's `.py` files; no entry at all when it holds none. */

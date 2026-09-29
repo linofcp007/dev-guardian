@@ -69,6 +69,7 @@ import { hashRulePacks, surfaceCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
+import { applySemgrepCoverageGaps, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 const SAMPLE_SIZE = 20;
 const WEBHOOK_PATTERN = /webhook|callback|hook/i;
 /**
@@ -281,8 +282,15 @@ async function handler(input, ctx) {
     // Parseable is not scanned: judge the report (exit code, paths.scanned,
     // errors[]) before a single route is believed.
     const judged = judgeSurfaceReport({ run, raw, via, targets, projectPath });
+    // The shared Semgrep coverage gaps (runners/semgrepCoverageGaps.ts): a
+    // route in a file over Semgrep's size limit, or in an initialised
+    // submodule, was never read — named, and the surface is partial.
+    const gapped = applySemgrepCoverageGaps(judged.toolRun, await semgrepCoverageGaps(projectPath), {
+        scannedNothing: judged.verdict === 'scanned_nothing',
+    });
+    const semgrepRun = gapped.toolRun;
     if (judged.verdict === 'scanned_nothing') {
-        return degradedResult([judged.toolRun], ['semgrep'], `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no ` +
+        return degradedResult([semgrepRun], ['semgrep'], `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no ` +
             'surface was mapped and nothing was persisted — an empty result here is a gap, not an ' +
             'application that exposes nothing. Check .semgrepignore.', ctx, projectPath);
     }
@@ -291,13 +299,13 @@ async function handler(input, ctx) {
     // `recoverMetavars` itself is pure and takes the text.
     const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
     if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
-        return degradedResult([judged.toolRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx, projectPath);
+        return degradedResult([semgrepRun, unreadableMatchesToolRun(recovery)], [], unreadableMatchesNote(recovery), ctx, projectPath);
     }
-    const toolsRun = [judged.toolRun, ...recoveryToolRun(recovery)];
+    const toolsRun = [semgrepRun, ...recoveryToolRun(recovery)];
     const snapshot = buildSnapshot(recovery.json, projectPath, ctx, toolsRun, includeEnvVars, recovery.unreadableRouteFiles, inp.spec_paths);
     // A failed run is never the project's surface: shown, never persisted.
     if (judged.verdict === 'failed') {
-        return withNote(summarize(snapshot, null, toolsRun, ctx, projectPath), `Semgrep did not complete a clean scan (${judged.toolRun.reason ?? 'failed'}). The routes ` +
+        return withNote(summarize(snapshot, null, toolsRun, ctx, projectPath), `Semgrep did not complete a clean scan (${semgrepRun.reason ?? 'failed'}). The routes ` +
             'above are what it did read, and they may be incomplete; nothing was persisted, so ' +
             'scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.');
     }
@@ -316,6 +324,10 @@ async function handler(input, ctx) {
         return withNote(persistAndSummarize(partialSnapshot, toolsRun), `Semgrep only partly parsed ${nameAFew(partiallyParsed.map((p) => p.file))} ` +
             '(see partially_parsed): routes in the unparsed spans may be missing from this surface, ' +
             'so coverage is partial. Everything else was mapped and persisted.');
+    }
+    if (gapped.missing) {
+        return withNote(persistAndSummarize({ ...snapshot, missing_tools: ['semgrep'] }, toolsRun), `Part of the project was not read by Semgrep (${semgrepRun.reason ?? 'see tools_run'}): routes there ` +
+            'are missing from this surface, so coverage is partial. Everything else was mapped and persisted.');
     }
     return persistAndSummarize(snapshot, toolsRun);
 }

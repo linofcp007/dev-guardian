@@ -136,6 +136,28 @@ export async function initialisedSubmodules(cwd: string): Promise<string[]> {
   return [...out].sort();
 }
 
+/**
+ * The submodules (gitlinks, mode 160000) among `paths` in the tree of `rev`,
+ * relative to `cwd` — what a review's diff bumped: those commits' files are
+ * in no range of the superproject, whether or not anything is checked out.
+ * Empty when git cannot answer.
+ */
+export async function gitlinksAmong(cwd: string, rev: string, paths: readonly string[]): Promise<string[]> {
+  if (paths.length === 0) return [];
+  const r = await git(cwd, ['ls-tree', '-r', '-z', rev, '--', '.']);
+  if (r.exitCode !== 0) return [];
+  const wanted = new Set(paths.map((p) => p.split('\\').join('/')));
+  const out: string[] = [];
+  for (const entry of splitNul(r.stdout)) {
+    // `<mode> <type> <object>\t<path>`.
+    const tab = entry.indexOf('\t');
+    if (tab < 0 || !entry.startsWith('160000 ')) continue;
+    const path = entry.slice(tab + 1);
+    if (wanted.has(path)) out.push(path);
+  }
+  return out.sort();
+}
+
 /** `submodule contents not scanned: a, b` — the first few, then "and N more". */
 export function describeSubmodules(paths: readonly string[]): string {
   const shown = paths.slice(0, 5).join(', ');

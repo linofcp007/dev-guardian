@@ -68,7 +68,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { openPrivateReportDir, sanitizeGitleaksReport } from '../secrets/verify/rawReport.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
-import { countCommits, describeSubmodules, git, initialisedSubmodules, repoState, resolveCommit, shallowBoundary, uncommittedFiles, } from './git.js';
+import { changedFiles, countCommits, describeSubmodules, git, gitlinksAmong, initialisedSubmodules, repoState, resolveCommit, shallowBoundary, uncommittedFiles, } from './git.js';
 import { runProcess } from './processRunner.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
@@ -150,6 +150,7 @@ async function scan(opts, result) {
         }
         if (opts.scope.workingTree === true && !result.cancelled)
             await workingTreePass(opts, result, true);
+        await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head });
         return;
     }
     const state = await repoState(opts.projectPath);
@@ -189,8 +190,23 @@ async function scan(opts, result) {
  * pass, else the working-tree pass): `ok`, its name missing. Not scanned:
  * a submodule is its own repository, scanned as its own project.
  */
-async function noteSubmodules(projectPath, result) {
-    const submodules = await initialisedSubmodules(projectPath);
+async function noteSubmodules(projectPath, result, 
+/** A range: only the submodules it bumped — their new commits are in no range of this repository. */
+range) {
+    let submodules;
+    if (range === undefined) {
+        submodules = await initialisedSubmodules(projectPath);
+    }
+    else {
+        let changed;
+        try {
+            changed = await changedFiles(projectPath, range.base, range.head);
+        }
+        catch {
+            changed = [];
+        }
+        submodules = await gitlinksAmong(projectPath, range.head, changed);
+    }
     if (submodules.length === 0)
         return;
     const note = describeSubmodules(submodules);
@@ -228,6 +244,9 @@ async function scopedScan(opts, result, scope) {
         }
         else if (commits !== null) {
             await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
+            // A diff scope's range bumps a submodule: its new commits are read by nothing here.
+            if ('base' in history)
+                await noteSubmodules(opts.projectPath, result, history);
         }
     }
     if (result.cancelled)

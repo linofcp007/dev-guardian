@@ -41002,6 +41002,20 @@ async function initialisedSubmodules(cwd) {
   }
   return [...out].sort();
 }
+async function gitlinksAmong(cwd, rev, paths) {
+  if (paths.length === 0) return [];
+  const r = await git(cwd, ["ls-tree", "-r", "-z", rev, "--", "."]);
+  if (r.exitCode !== 0) return [];
+  const wanted = new Set(paths.map((p) => p.split("\\").join("/")));
+  const out = [];
+  for (const entry of splitNul(r.stdout)) {
+    const tab = entry.indexOf("	");
+    if (tab < 0 || !entry.startsWith("160000 ")) continue;
+    const path8 = entry.slice(tab + 1);
+    if (wanted.has(path8)) out.push(path8);
+  }
+  return out.sort();
+}
 function describeSubmodules(paths) {
   const shown = paths.slice(0, 5).join(", ");
   return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""}`;
@@ -47208,6 +47222,49 @@ function shortenTitle(message3, checkId) {
   return checkId;
 }
 
+// src/runners/semgrepCoverageGaps.ts
+async function semgrepCoverageGaps(projectPath, opts = {}) {
+  const sized = await oversizedSourceFilesAsync(projectPath, opts.files !== void 0 ? { only: opts.files } : {});
+  if (opts.submodules !== void 0) {
+    const out2 = { oversized: sized.files, submodules: [...opts.submodules].sort() };
+    if (sized.incomplete !== void 0) out2.incomplete = sized.incomplete;
+    return out2;
+  }
+  const all = await initialisedSubmodules(projectPath);
+  const among = opts.among ?? opts.files;
+  const submodules = among === void 0 ? all : all.filter((sub) => among.some((p) => {
+    const posix2 = p.split("\\").join("/");
+    return posix2 === sub || posix2.startsWith(`${sub}/`);
+  }));
+  const out = { oversized: sized.files, submodules };
+  if (sized.incomplete !== void 0) out.incomplete = sized.incomplete;
+  return out;
+}
+function semgrepGapNotes(gaps) {
+  const notes = [];
+  if (gaps.oversized.length > 0) notes.push(describeOversized(gaps.oversized));
+  if (gaps.submodules.length > 0) notes.push(describeSubmodules(gaps.submodules));
+  if (gaps.incomplete !== void 0) {
+    notes.push(`${gaps.incomplete} \u2014 files over Semgrep's size limit below it were not checked`);
+  }
+  return notes;
+}
+function scannedNothingBecause(gaps) {
+  return gaps.oversized.length > 0 ? `semgrep scanned 0 files \u2014 ${describeOversized(gaps.oversized)}` : null;
+}
+function applySemgrepCoverageGaps(run, gaps, opts = {}) {
+  const notes = semgrepGapNotes(gaps);
+  if (notes.length === 0) return { toolRun: run, missing: false };
+  const because = opts.scannedNothing === true ? scannedNothingBecause(gaps) : null;
+  const base = because ?? run.reason;
+  const added = notes.filter((n2) => base === void 0 || !base.includes(n2));
+  const reason = [base, ...added].filter((s) => s !== void 0 && s.length > 0).join("; ");
+  return { toolRun: { ...run, reason }, missing: run.status !== "failed" };
+}
+function markMissing(missing, name) {
+  if (!missing.includes(name)) missing.push(name);
+}
+
 // src/tools/scanSast.ts
 var DOTNET_BUILD_TIMEOUT_MS = 10 * 6e4;
 registerToolModule(
@@ -47304,8 +47361,7 @@ async function runSemgrep2(args) {
       configs: plan.rulePacks,
       loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing,
-      oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
-      submodules: await initialisedSubmodules(ctx.projectPath),
+      gaps: await semgrepCoverageGaps(ctx.projectPath),
       tools_run,
       missing_tools,
       parser_inputs
@@ -47361,8 +47417,10 @@ async function runSemgrep2(args) {
     loadedFrom,
     packMissing: plan.packMissing,
     packsHostDir: plan.pluginPacksDir,
-    oversized: (await oversizedSourceFilesAsync(ctx.projectPath)).files,
-    submodules: [],
+    // Which listing Semgrep uses inside the container cannot be checked from
+    // here (git, or a walk of the mount): the submodules are named all the
+    // same — the safe direction (review M2, round 2).
+    gaps: await semgrepCoverageGaps(ctx.projectPath),
     tools_run,
     missing_tools,
     parser_inputs
@@ -47370,6 +47428,12 @@ async function runSemgrep2(args) {
 }
 function recordSemgrepRun(args) {
   judgeSemgrepRun(args);
+  const last = args.tools_run.at(-1);
+  if (last !== void 0 && last.name === "semgrep") {
+    const applied = applySemgrepCoverageGaps(last, args.gaps);
+    args.tools_run[args.tools_run.length - 1] = applied.toolRun;
+    if (applied.missing) markMissing(args.missing_tools, "semgrep");
+  }
   if (args.packMissing && args.tools_run.at(-1)?.status === "ok" && !args.missing_tools.includes("semgrep")) {
     args.missing_tools.push("semgrep");
   }
@@ -47408,15 +47472,10 @@ function judgeSemgrepRun(args) {
   const packGap = check2.plugin_pack_fixpoint;
   const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
   const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...engineNote !== null ? [engineNote] : []];
-  const sizeNote = args.oversized.length > 0 ? describeOversized(args.oversized) : null;
-  const moduleNote = args.submodules.length > 0 ? describeSubmodules(args.submodules) : null;
-  const gapNotes = [sizeNote, moduleNote].filter((n2) => n2 !== null);
   if (check2.verdict === "ok") {
     const run = { name: "semgrep", status: "ok" };
-    const all = [...reasons, ...gapNotes];
-    if (all.length > 0) run.reason = all.join("; ");
+    if (reasons.length > 0) run.reason = reasons.join("; ");
     tools_run.push(withPluginPackFixpoint(run, packGap));
-    if (gapNotes.length > 0) missing_tools.push("semgrep");
     return;
   }
   if (check2.verdict === "partial" && check2.partial !== void 0) {
@@ -47427,8 +47486,7 @@ function judgeSemgrepRun(args) {
           status: "ok",
           reason: [
             ...reasons,
-            describePartialParse(check2.partial, "findings in the unparsed spans may be missing"),
-            ...gapNotes
+            describePartialParse(check2.partial, "findings in the unparsed spans may be missing")
           ].join("; "),
           partially_parsed: check2.partial
         },
@@ -47444,8 +47502,7 @@ function judgeSemgrepRun(args) {
       status: "skipped",
       reason: [
         ...reasons,
-        sizeNote !== null ? `semgrep scanned 0 files \u2014 ${sizeNote}` : "semgrep scanned 0 files \u2014 nothing here is a language its rules cover",
-        ...moduleNote !== null ? [moduleNote] : []
+        scannedNothingBecause(args.gaps) ?? "semgrep scanned 0 files \u2014 nothing here is a language its rules cover"
       ].join("; ")
     });
     missing_tools.push("semgrep");
@@ -47471,8 +47528,7 @@ function judgeSemgrepRun(args) {
       reason: [
         ...reasons,
         describeRulesNotLoaded(notLoaded, check2.scanned),
-        ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "findings in the unparsed spans may be missing")] : [],
-        ...gapNotes
+        ...check2.partial !== void 0 ? [describePartialParse(check2.partial, "findings in the unparsed spans may be missing")] : []
       ].join("; "),
       failed_rules: notLoaded
     };
@@ -47570,12 +47626,13 @@ async function runSemgrepOnScope(args) {
     entry.plugin_pack_only = true;
   }
   tools_run.push(entry);
-  const oversized = (await oversizedSourceFilesAsync(ctx.projectPath, { only: files })).files;
-  if (oversized.length > 0) {
-    entry.reason = [entry.reason, describeOversized(oversized)].filter((s) => s !== void 0).join("; ");
-  }
-  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing || oversized.length > 0;
+  const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || entry.status === "ok" && narrower) missing_tools.push("semgrep");
+  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files }), {
+    scannedNothing: run.nothingScanned
+  });
+  tools_run[tools_run.length - 1] = gapped.toolRun;
+  if (gapped.missing) markMissing(missing_tools, "semgrep");
 }
 async function runBanditOnScope(args) {
   const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
@@ -48190,6 +48247,7 @@ async function scan(opts, result) {
       await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
     }
     if (opts.scope.workingTree === true && !result.cancelled) await workingTreePass(opts, result, true);
+    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head });
     return;
   }
   const state = await repoState(opts.projectPath);
@@ -48221,8 +48279,19 @@ async function scan(opts, result) {
       return;
   }
 }
-async function noteSubmodules(projectPath, result) {
-  const submodules = await initialisedSubmodules(projectPath);
+async function noteSubmodules(projectPath, result, range) {
+  let submodules;
+  if (range === void 0) {
+    submodules = await initialisedSubmodules(projectPath);
+  } else {
+    let changed;
+    try {
+      changed = await changedFiles(projectPath, range.base, range.head);
+    } catch {
+      changed = [];
+    }
+    submodules = await gitlinksAmong(projectPath, range.head, changed);
+  }
   if (submodules.length === 0) return;
   const note = describeSubmodules(submodules);
   const entry = result.tools_run.find((t) => t.name === GITLEAKS_HISTORY && t.status === "ok") ?? result.tools_run.find((t) => t.status === "ok") ?? result.tools_run[0];
@@ -48245,6 +48314,7 @@ async function scopedScan(opts, result, scope) {
       result.tools_run.push({ name: GITLEAKS_HISTORY, status: "skipped", reason: `no commits in ${label}` });
     } else if (commits !== null) {
       await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
+      if ("base" in history) await noteSubmodules(opts.projectPath, result, history);
     }
   }
   if (result.cancelled) return;
@@ -51645,9 +51715,22 @@ registerToolModule(
     },
     // The pack choice is recorded on the scan row (meta, via extras) so
     // create_fix_pr can re-scan a fix with the SAME packs that found it.
-    invoke: async (input, ctx) => reportUncoveredLanguages(ctx, recordPackChoice(input, await invokeBugHunt(input, ctx)))
+    invoke: async (input, ctx) => reportUncoveredLanguages(ctx, recordPackChoice(input, await withSemgrepGaps(ctx, await invokeBugHunt(input, ctx))))
   })
 );
+async function withSemgrepGaps(ctx, inv) {
+  const i2 = inv.tools_run.findIndex((t) => t.name === "semgrep");
+  const entry = inv.tools_run[i2];
+  if (entry === void 0) return inv;
+  if (entry.status === "skipped" && (entry.reason === "not_installed" || /scope holds no file/.test(entry.reason ?? ""))) return inv;
+  const gaps = await semgrepCoverageGaps(ctx.projectPath, ctx.scope !== null ? { files: ctx.scope.files } : {});
+  const applied = applySemgrepCoverageGaps(entry, gaps, { scannedNothing: entry.status === "skipped" });
+  const tools_run = [...inv.tools_run];
+  tools_run[i2] = applied.toolRun;
+  const missing_tools = [...inv.missing_tools];
+  if (applied.missing) markMissing(missing_tools, "semgrep");
+  return { ...inv, tools_run, missing_tools };
+}
 async function invokeBugHunt(input, ctx) {
   const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "bugs");
   const tools_run = [];
@@ -52842,7 +52925,8 @@ var reviewPr = makeScanTool({
         if (changed.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
       } else {
         const present2 = changed.filter((f) => isFileOnDisk(join36(scanRoot, f)));
-        await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where });
+        const submodules = await gitlinksAmong(ctx.projectPath, head2, changed);
+        await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where, submodules });
         if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present2.filter(isPython2) });
         if (!out.cancelled && changed.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir });
       }
@@ -52896,6 +52980,15 @@ var reviewPr = makeScanTool({
 var isPython2 = (f) => f.toLowerCase().endsWith(".py");
 var isManifest = (f) => MANIFEST_RE.test(basename5(f));
 async function runSemgrep3(ctx, input, out, args) {
+  const withGaps = async (scannedNothing2) => {
+    const at = out.tools_run.length - 1;
+    const entry = out.tools_run[at];
+    if (entry === void 0 || entry.name !== "semgrep") return;
+    const gaps = await semgrepCoverageGaps(args.scanRoot, { files: args.present, submodules: args.submodules });
+    const applied = applySemgrepCoverageGaps(entry, gaps, { scannedNothing: scannedNothing2 });
+    out.tools_run[at] = applied.toolRun;
+    if (applied.missing) markMissing(out.missing_tools, "semgrep");
+  };
   const missing = args.changed.length - args.present.length;
   const gap = missing > 0 ? `${missing} changed file(s) not in ${args.where} were not scanned` : null;
   if (args.changed.length === 0) {
@@ -52905,6 +52998,7 @@ async function runSemgrep3(ctx, input, out, args) {
   if (args.present.length === 0) {
     out.tools_run.push({ name: "semgrep", status: "skipped", reason: gap ?? "nothing to scan" });
     out.missing_tools.push("semgrep");
+    await withGaps(false);
     return;
   }
   if (!await scannerAvailable("semgrep")) {
@@ -52947,6 +53041,7 @@ async function runSemgrep3(ctx, input, out, args) {
   );
   const partial3 = run.toolRun.status === "ok" && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
   if (run.nothingScanned || gap !== null || partial3) out.missing_tools.push("semgrep");
+  await withGaps(run.nothingScanned);
   out.cancelled ||= run.cancelled;
 }
 async function runBandit2(ctx, out, args) {
@@ -56404,15 +56499,27 @@ function loadedRuleCount(raw) {
   return Array.isArray(rules2) ? rules2.length : null;
 }
 async function runRgpdPack(ctx, reportDir, out) {
+  const before = out.tools_run.length;
+  const ran = await runRgpdPackOnce(ctx, reportDir, out);
+  const at = out.tools_run.findIndex((t, i2) => i2 >= before && t.name === "semgrep-rgpd");
+  const entry = out.tools_run[at];
+  if (!ran || entry === void 0) return;
+  const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
+    scannedNothing: entry.status === "skipped"
+  });
+  out.tools_run[at] = applied.toolRun;
+  if (applied.missing) markMissing(out.missing_tools, "semgrep-rgpd");
+}
+async function runRgpdPackOnce(ctx, reportDir, out) {
   if (!await scannerAvailable("semgrep")) {
     out.tools_run.push({ name: "semgrep-rgpd", status: "skipped", reason: "not_installed" });
     out.missing_tools.push("semgrep");
-    return;
+    return false;
   }
   const pack = rgpdRulesPath();
   if (!existsSync26(pack)) {
     out.tools_run.push({ name: "semgrep-rgpd", status: "failed", reason: `RGPD rule pack not found at ${pack}` });
-    return;
+    return false;
   }
   const outFile = join39(reportDir, "rgpd.json");
   const result = await runSemgrep({
@@ -56440,7 +56547,7 @@ async function runRgpdPack(ctx, reportDir, out) {
   const check2 = checkSemgrepReport({ raw, exitCode: result.exitCode, outcome: result.outcome, targets: 1 });
   if (check2.ok) {
     out.tools_run.push({ name: "semgrep-rgpd", status: "ok" });
-    return;
+    return true;
   }
   const exitClean = result.outcome === "completed" || result.exitCode === 1;
   if (exitClean && raw !== null && check2.scanned === 0 && check2.errors === 0) {
@@ -56451,16 +56558,17 @@ async function runRgpdPack(ctx, reportDir, out) {
         status: "skipped",
         reason: "not applicable: the RGPD pack loaded but found no file it reads here (JS/TS, PHP, Python, C#, and HTML/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars templates)"
       });
-      return;
+      return true;
     }
     out.tools_run.push({
       name: "semgrep-rgpd",
       status: "failed",
       reason: "semgrep scanned 0 files and loaded no rule from the RGPD pack \u2014 a pack that failed to load, not a clean result"
     });
-    return;
+    return true;
   }
   out.tools_run.push({ name: "semgrep-rgpd", status: "failed", reason: check2.reason ?? "semgrep failed" });
+  return true;
 }
 var RISKY_LICENSE_PATTERNS = [
   { pattern: /^AGPL/i, severity: "high" },
@@ -64563,6 +64671,15 @@ registerToolModule(
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
             recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
+            const at = tools_run.findIndex((t) => t.name === "semgrep-wp");
+            const entry = tools_run[at];
+            if (entry !== void 0) {
+              const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
+                scannedNothing: entry.status === "skipped"
+              });
+              tools_run[at] = applied.toolRun;
+              if (applied.missing) markMissing(missing_tools, "semgrep-wp");
+            }
           })()
         );
       } else {
@@ -71126,9 +71243,13 @@ async function handler39(input, ctx) {
     );
   }
   const judged = judgeSurfaceReport({ run, raw, via, targets, projectPath });
+  const gapped = applySemgrepCoverageGaps(judged.toolRun, await semgrepCoverageGaps(projectPath), {
+    scannedNothing: judged.verdict === "scanned_nothing"
+  });
+  const semgrepRun = gapped.toolRun;
   if (judged.verdict === "scanned_nothing") {
     return degradedResult(
-      [judged.toolRun],
+      [semgrepRun],
       ["semgrep"],
       `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no surface was mapped and nothing was persisted \u2014 an empty result here is a gap, not an application that exposes nothing. Check .semgrepignore.`,
       ctx,
@@ -71138,14 +71259,14 @@ async function handler39(input, ctx) {
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
   if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
     return degradedResult(
-      [judged.toolRun, unreadableMatchesToolRun(recovery)],
+      [semgrepRun, unreadableMatchesToolRun(recovery)],
       [],
       unreadableMatchesNote(recovery),
       ctx,
       projectPath
     );
   }
-  const toolsRun = [judged.toolRun, ...recoveryToolRun(recovery)];
+  const toolsRun = [semgrepRun, ...recoveryToolRun(recovery)];
   const snapshot = buildSnapshot(
     recovery.json,
     projectPath,
@@ -71158,7 +71279,7 @@ async function handler39(input, ctx) {
   if (judged.verdict === "failed") {
     return withNote(
       summarize4(snapshot, null, toolsRun, ctx, projectPath),
-      `Semgrep did not complete a clean scan (${judged.toolRun.reason ?? "failed"}). The routes above are what it did read, and they may be incomplete; nothing was persisted, so scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.`
+      `Semgrep did not complete a clean scan (${semgrepRun.reason ?? "failed"}). The routes above are what it did read, and they may be incomplete; nothing was persisted, so scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.`
     );
   }
   if (judged.verdict === "partial") {
@@ -71171,6 +71292,12 @@ async function handler39(input, ctx) {
     return withNote(
       persistAndSummarize(partialSnapshot, toolsRun),
       `Semgrep only partly parsed ${nameAFew(partiallyParsed.map((p) => p.file))} (see partially_parsed): routes in the unparsed spans may be missing from this surface, so coverage is partial. Everything else was mapped and persisted.`
+    );
+  }
+  if (gapped.missing) {
+    return withNote(
+      persistAndSummarize({ ...snapshot, missing_tools: ["semgrep"] }, toolsRun),
+      `Part of the project was not read by Semgrep (${semgrepRun.reason ?? "see tools_run"}): routes there are missing from this surface, so coverage is partial. Everything else was mapped and persisted.`
     );
   }
   return persistAndSummarize(snapshot, toolsRun);

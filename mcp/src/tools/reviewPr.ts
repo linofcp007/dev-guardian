@@ -42,12 +42,14 @@ import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import {
   changedFiles,
   git,
+  gitlinksAmong,
   materialiseCommit,
   repoState,
   resolveCommit,
   showPrefix,
   type MaterialisedTree,
 } from '../runners/git.js';
+import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, withHonoured } from '../runners/trivyRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
@@ -160,7 +162,8 @@ const reviewPr = makeScanTool<ReviewPrInput>({
         if (changed.some(isManifest)) out.tools_run.push({ name: 'trivy', status: 'failed', reason: unavailable });
       } else {
         const present = changed.filter((f) => isFileOnDisk(join(scanRoot, f)));
-        await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where });
+        const submodules = await gitlinksAmong(ctx.projectPath, head, changed);
+        await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where, submodules });
         if (!out.cancelled) await runBandit(ctx, out, { scanRoot, reportDir, files: present.filter(isPython) });
         if (!out.cancelled && changed.some(isManifest)) await runTrivy(ctx, out, { scanRoot, reportDir });
       }
@@ -246,8 +249,28 @@ async function runSemgrep(
   ctx: InvokeContext,
   input: ReviewPrInput,
   out: Collected,
-  args: { scanRoot: string; reportDir: string; changed: readonly string[]; present: readonly string[]; where: string },
+  args: {
+    scanRoot: string;
+    reportDir: string;
+    changed: readonly string[];
+    present: readonly string[];
+    where: string;
+    /** The submodules the diff bumped (`git.ts#gitlinksAmong`): their new commits are read by nothing here. */
+    submodules: readonly string[];
+  },
 ): Promise<void> {
+  // The shared Semgrep coverage gaps (runners/semgrepCoverageGaps.ts): the
+  // changed files over the size limit, the submodules the diff bumped — on
+  // the entry just pushed, for a Semgrep that ran or was meant to.
+  const withGaps = async (scannedNothing: boolean): Promise<void> => {
+    const at = out.tools_run.length - 1;
+    const entry = out.tools_run[at];
+    if (entry === undefined || entry.name !== 'semgrep') return;
+    const gaps = await semgrepCoverageGaps(args.scanRoot, { files: args.present, submodules: args.submodules });
+    const applied = applySemgrepCoverageGaps(entry, gaps, { scannedNothing });
+    out.tools_run[at] = applied.toolRun;
+    if (applied.missing) markMissing(out.missing_tools, 'semgrep');
+  };
   const missing = args.changed.length - args.present.length;
   const gap = missing > 0 ? `${missing} changed file(s) not in ${args.where} were not scanned` : null;
   if (args.changed.length === 0) {
@@ -257,6 +280,7 @@ async function runSemgrep(
   if (args.present.length === 0) {
     out.tools_run.push({ name: 'semgrep', status: 'skipped', reason: gap ?? 'nothing to scan' });
     out.missing_tools.push('semgrep');
+    await withGaps(false);
     return;
   }
   if (!(await scannerAvailable('semgrep'))) {
@@ -307,6 +331,7 @@ async function runSemgrep(
   // The plugin's LLM pack missing from disk (runners/semgrepConfigs.ts) is a gap too.
   const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
   if (run.nothingScanned || gap !== null || partial) out.missing_tools.push('semgrep');
+  await withGaps(run.nothingScanned);
   out.cancelled ||= run.cancelled;
 }
 

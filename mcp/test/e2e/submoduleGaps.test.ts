@@ -29,6 +29,9 @@ afterAll(cleanupTempDirs);
 beforeAll(async () => {
   await import('../../src/tools/scanSast.js');
   await import('../../src/tools/scanSecrets.js');
+  await import('../../src/tools/bugHunt.js');
+  await import('../../src/tools/scanWordpress.js');
+  await import('../../src/tools/reviewPr.js');
   resetScannerCache();
 });
 
@@ -105,6 +108,60 @@ describe('initialised submodules are a named gap (real scanners)', () => {
     expect(r.missing_tools).toContain('gitleaks');
     expect(r.coverage).toBe('partial');
   });
+
+  // Round 2: every Semgrep and gitleaks caller, through one shared place
+  // (runners/semgrepCoverageGaps.ts; the gitleaks runner for secrets).
+  it.skipIf(!SEMGREP)('bug_hunt: partial, the submodule named', async () => {
+    const top = await superproject();
+    const r = await run('bug_hunt', top);
+    const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(semgrep?.reason).toMatch(/submodule contents not scanned: vendor\/lib/);
+    expect(r.missing_tools).toContain('semgrep');
+    expect(r.coverage).not.toBe('full');
+  });
+
+  it.skipIf(!SEMGREP)('scan_wordpress: semgrep-wp partial, the submodule named', async () => {
+    const lib = await repo('submodule-wplib-', { 'lib.php': '<?php\necho 1;\n' });
+    const top = await repo('submodule-wp-', { 'readme.txt': '=== Acme ===\n', 'acme.php': '<?php\n/* Plugin Name: Acme */\n' });
+    await git(top, 'submodule', 'add', '-q', `file://${lib.replace(/\\/g, '/')}`, 'lib');
+    await git(top, 'commit', '-q', '-m', 'add submodule');
+    const r = await run('scan_wordpress', top);
+    const semgrep = r.tools_run.find((t) => t.name === 'semgrep-wp');
+    expect(semgrep?.reason).toMatch(/submodule contents not scanned: lib/);
+    expect(r.missing_tools).toContain('semgrep-wp');
+  });
+
+  it.skipIf(!SEMGREP || !GITLEAKS)(
+    'review_pr: a diff that bumps a submodule names it for gitleaks; one that does not, does not',
+    async () => {
+      const top = await superproject();
+      await git(top, 'branch', '-q', '-M', 'main');
+      // A PR that only changes an ordinary file: no submodule gap.
+      await git(top, 'checkout', '-q', '-b', 'plain');
+      writeFileSync(join(top, 'app.py'), 'x = 2\n');
+      await git(top, 'commit', '-q', '-am', 'plain change');
+      const plain = await run('review_pr', top, { base_ref: 'main', local_only: true });
+      for (const t of plain.tools_run) expect(t.reason ?? '').not.toMatch(/submodule/);
+
+      // A PR that bumps the submodule: its contents changed and none was read.
+      await git(top, 'checkout', '-q', 'main');
+      await git(top, 'checkout', '-q', '-b', 'bump');
+      const sub = join(top, 'vendor', 'lib');
+      await git(sub, 'config', 'user.email', 'guardian-test@example.com');
+      await git(sub, 'config', 'user.name', 'Guardian Test');
+      await git(sub, 'config', 'commit.gpgsign', 'false');
+      writeFileSync(join(sub, 'more.py'), 'x = 3\n');
+      await git(sub, 'add', '-A');
+      await git(sub, 'commit', '-q', '-m', 'more');
+      await git(top, 'add', 'vendor/lib');
+      await git(top, 'commit', '-q', '-m', 'bump lib');
+      const bumped = await run('review_pr', top, { base_ref: 'main', local_only: true });
+      expect(bumped.tools_run.find((t) => t.name === 'gitleaks')?.reason).toMatch(/submodule contents not scanned: vendor\/lib/);
+      expect(bumped.tools_run.find((t) => t.name === 'semgrep')?.reason).toMatch(/submodule contents not scanned: vendor\/lib/);
+      expect(bumped.missing_tools).toContain('gitleaks');
+      expect(bumped.coverage).not.toBe('full');
+    },
+  );
 
   it.skipIf(!SEMGREP)('a submodule declared but not initialised (no content) is no gap', async () => {
     const top = await superproject();

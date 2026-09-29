@@ -34,7 +34,8 @@ import { z } from 'zod';
 import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
-import { changedFiles, git, materialiseCommit, repoState, resolveCommit, showPrefix, } from '../runners/git.js';
+import { changedFiles, git, gitlinksAmong, materialiseCommit, repoState, resolveCommit, showPrefix, } from '../runners/git.js';
+import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, withHonoured } from '../runners/trivyRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
@@ -130,7 +131,8 @@ const reviewPr = makeScanTool({
             }
             else {
                 const present = changed.filter((f) => isFileOnDisk(join(scanRoot, f)));
-                await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where });
+                const submodules = await gitlinksAmong(ctx.projectPath, head, changed);
+                await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where, submodules });
                 if (!out.cancelled)
                     await runBandit(ctx, out, { scanRoot, reportDir, files: present.filter(isPython) });
                 if (!out.cancelled && changed.some(isManifest))
@@ -203,6 +205,20 @@ const isManifest = (f) => MANIFEST_RE.test(basename(f));
  * scanned: that is a gap in coverage, never a note on a full run.
  */
 async function runSemgrep(ctx, input, out, args) {
+    // The shared Semgrep coverage gaps (runners/semgrepCoverageGaps.ts): the
+    // changed files over the size limit, the submodules the diff bumped — on
+    // the entry just pushed, for a Semgrep that ran or was meant to.
+    const withGaps = async (scannedNothing) => {
+        const at = out.tools_run.length - 1;
+        const entry = out.tools_run[at];
+        if (entry === undefined || entry.name !== 'semgrep')
+            return;
+        const gaps = await semgrepCoverageGaps(args.scanRoot, { files: args.present, submodules: args.submodules });
+        const applied = applySemgrepCoverageGaps(entry, gaps, { scannedNothing });
+        out.tools_run[at] = applied.toolRun;
+        if (applied.missing)
+            markMissing(out.missing_tools, 'semgrep');
+    };
     const missing = args.changed.length - args.present.length;
     const gap = missing > 0 ? `${missing} changed file(s) not in ${args.where} were not scanned` : null;
     if (args.changed.length === 0) {
@@ -212,6 +228,7 @@ async function runSemgrep(ctx, input, out, args) {
     if (args.present.length === 0) {
         out.tools_run.push({ name: 'semgrep', status: 'skipped', reason: gap ?? 'nothing to scan' });
         out.missing_tools.push('semgrep');
+        await withGaps(false);
         return;
     }
     if (!(await scannerAvailable('semgrep'))) {
@@ -262,6 +279,7 @@ async function runSemgrep(ctx, input, out, args) {
     const partial = run.toolRun.status === 'ok' && (run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing);
     if (run.nothingScanned || gap !== null || partial)
         out.missing_tools.push('semgrep');
+    await withGaps(run.nothingScanned);
     out.cancelled ||= run.cancelled;
 }
 /** Bandit over the changed `.py` files present in `scanRoot`. */
