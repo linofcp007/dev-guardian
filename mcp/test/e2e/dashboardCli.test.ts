@@ -789,7 +789,7 @@ describe('dev-guardian status — a project database git tracks is never read', 
       expect(r.status).toBe(0);
       expect(r.stdout).toMatch(/No scan yet|dev-guardian scan/);
       expect(r.stdout).not.toMatch(/1 crit/);
-      expect(r.stderr).toMatch(/tracked by git/);
+      expect(r.stderr).toMatch(/git tracks \.guardian\/guardian\.db/);
       expect(existsSync(fallbackPath)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });

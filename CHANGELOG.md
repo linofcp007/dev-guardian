@@ -24,13 +24,27 @@ version bump.
 
 ### Security
 
-- A `.guardian/guardian.db` git tracks is no longer opened. A committed database is the committer's
-  schema: `AFTER INSERT ON findings BEGIN DELETE FROM findings WHERE rowid = NEW.rowid; END` took a
-  project from risk 55 to 8 and from 7 open findings to 0, at coverage `full`, in risk_score, every
-  report, the open set and create_fix_pr. The check is `git ls-files` on the database and its
-  `-wal`/`-shm`/`-journal` files (a committed WAL delivers the same trigger), bounded to 3 s. When
-  git cannot answer, the repository's index is read: a v2/v3 index that does not list the database
-  lets it be used, with a warning; anything it cannot tell refuses it.
+- A project's `.guardian/guardian.db` is used only when it is the user's own. A database is its
+  writer's data: `AFTER INSERT ON findings BEGIN DELETE FROM findings WHERE rowid = NEW.rowid; END`
+  in a committed one took a project from risk 55 to 8 and from 7 open findings to 0 at coverage
+  `full`, in risk_score, every report, the open set and create_fix_pr — and seven suppressions
+  with no project (which match every project), in a database whose schema is exactly the
+  migrations', did the same with no schema object at all. A database dev-guardian creates now
+  carries a random 128-bit `db_id`, registered in a per-user registry (`registry/<db_id>.json`
+  under the data directory, 0700, owner-checked, written by temporary file and rename) before
+  it is written; on open, a registered id is trusted, whether or not the repository has moved.
+  A database from 3.0.0 or earlier (no id) is adopted once, with a one-line notice, only when the
+  project has its own `.git`, git tracks neither the database nor its `-wal`/`-shm`/`-journal`
+  under a case-insensitive pathspec (`.Guardian/guardian.db` committed is served as
+  `.guardian/guardian.db` on Windows and macOS), `.guardian` is not a submodule, neither
+  `.guardian` nor the files are links or junctions, the database's real path is inside the
+  project, and its schema is clean. Anything else — a repository downloaded as an archive, a
+  submodule, a link, an unregistered id, a registered database git tracks — is foreign: the
+  per-user fallback is used, the project file is left untouched (it is only read, read-only, for
+  its id), and the warning says why, that the scans made meanwhile stay in the fallback and are
+  not merged back, and how to recover (delete a database that came with the repository; `git rm
+  --cached` one committed by mistake; there is no way to mark a database as trusted). The CLI's
+  `status` / `dashboard` decide the same way.
 - A database whose schema holds anything the migrations never create — a trigger, a view, an unknown
   table or index, a known index redefined, or a CHECK / UNIQUE constraint added to a known table
   (every insert is `INSERT OR IGNORE`, which obeys them silently) — is refused too, before the
@@ -40,7 +54,15 @@ version bump.
   satisfies — is accepted. A trigger or a view (no migration creates either; a test holds every
   migration to it), a UNIQUE index or constraint on a table this build writes, and any changed
   definition are refused whatever the file records; a future migration that adds one costs an older
-  build a fallback, with a warning naming it.
+  build a fallback, with a warning naming it. Extra columns are judged on what SQLite recorded
+  (`pragma_table_xinfo`: NOT NULL only with a non-NULL literal default, no primary-key or
+  generated column) and every table's UNIQUE keys on `pragma_index_list`, with the text check as
+  a second layer — a quoted type name (`gate 'default 1' NOT NULL`) read like a default and hid
+  every finding.
+- `health_status` reports the active suppressions that apply to the project (`suppressions.active`,
+  `this_project`, `all_projects` — the last match every project), and `risk_score` how many
+  findings they take out (`suppressed_count`), so a mass suppression is visible.
+- The data directory is checked (owner, a real directory) before anything is created in it.
 - A refused database gives way to the per-user fallback, and the warning naming why reaches
   `health_status.storage_warning` and every scan's `warnings`. The CLI's `status` / `dashboard`
   decide the same way, print the warning on stderr, and still create no database.

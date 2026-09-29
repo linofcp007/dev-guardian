@@ -10,11 +10,12 @@
  * `duplicate column name: owner_pid` — a second process re-running 004.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { GuardianDatabase } from '../../src/storage/db.js';
+import { lookupDbId } from '../../src/storage/dbRegistry.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
@@ -52,6 +53,11 @@ function openInChild(projectPath: string, startAt: number): Promise<ChildOutcome
  * before they reach the migrations.)
  */
 function databaseAt2_0_0(project: string): void {
+  // In the project's own repository, untracked: adopted (and registered) as
+  // an earlier version's database by whichever opener gets there first — the
+  // other three find the id registered, or adopt it too; none falls back.
+  const init = spawnSync('git', ['init', '-q'], { cwd: project, encoding: 'utf8' });
+  if (init.status !== 0) throw new Error(`git init: ${init.stderr}`);
   mkdirSync(join(project, '.guardian'));
   const db = new GuardianDatabase(join(project, '.guardian', 'guardian.db'));
   db.pragma('journal_mode = WAL');
@@ -88,6 +94,11 @@ describe.each([
         .prepare<[], { value: string }>("SELECT value FROM schema_meta WHERE key = 'version'")
         .get();
       expect(version?.value).toBe(String(latest));
+      // Every opener used the project's database, and it ended up with ONE
+      // id that is registered (the creators' race registers before writing).
+      const id = db.prepare<[], { value: string }>("SELECT value FROM schema_meta WHERE key = 'db_id'").get()?.value;
+      expect(id).toMatch(/^[0-9a-f]{32}$/);
+      expect(lookupDbId(id ?? '')).not.toBeNull();
       db.close();
     }
 

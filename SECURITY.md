@@ -42,13 +42,20 @@ their respective projects.
 - **dev-guardian sends no telemetry of its own.** Results persist to
   `.guardian/guardian.db` in the scanned project and never leave it. Reports and
   the dashboard are self-contained and load no external assets.
-- **A project's database is not trusted blindly.** A `.guardian/guardian.db`
-  that git tracks, or whose schema holds anything dev-guardian's migrations
-  never create (a trigger, a view, an unknown table or index, a constraint
-  added to a known table), is not opened: SQL stored in a database runs on
-  every write, and a trigger in a committed one hid every finding. The
-  per-user fallback (`%LOCALAPPDATA%\dev-guardian`, `~/.local/share/dev-guardian`,
-  or `GUARDIAN_DATA_DIR`) is used instead, and `health_status` says why. Every
+- **A project's database is used only when it is yours.** A database is its
+  writer's data: a trigger in a committed `.guardian/guardian.db` hid every
+  finding, and so did suppressions with no project in one whose schema was
+  exactly dev-guardian's. A database dev-guardian creates carries a random id
+  registered in a per-user registry; one from 3.0.0 or earlier is adopted
+  once, only in the project's own git repository that does not track it (any
+  case), with no submodule, link or junction involved. Anything else — a
+  clone, an archive, a submodule, a link, a database git tracks, or a schema
+  holding what the migrations never create (a trigger, a view, an unknown
+  table or index, a constraint added to a known table) — is not opened and
+  not modified: the per-user fallback (`%LOCALAPPDATA%\dev-guardian`,
+  `~/.local/share/dev-guardian`, or `GUARDIAN_DATA_DIR`) is used instead, and
+  `health_status` says why and where the history goes. `health_status` and
+  `risk_score` also say how many findings suppressions take out. Every
   connection runs with `trusted_schema = OFF` and `cell_size_check = ON`.
 - **Secrets stay redacted.** gitleaks runs with `--redact`; a credential
   finding's snippet is cleared before it is stored, and cleared again before an

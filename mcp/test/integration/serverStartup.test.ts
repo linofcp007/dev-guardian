@@ -133,6 +133,9 @@ describe('server startup against a 3.0 development database', () => {
   // on `no such table: mcp_tool_pins`, and the server exited 1 at startup.
   it('applies the migrations the database never ran, and starts', async () => {
     const project = makeTempDir('guardian-server-devdb-');
+    // Its own repository, not tracking the database: adopted as an earlier
+    // version's (a database with no dev-guardian id elsewhere is foreign).
+    expect(spawnSync('git', ['init', '-q'], { cwd: project }).status).toBe(0);
     const dbPath = join(project, '.guardian', 'guardian.db');
     mkdirSync(join(project, '.guardian'));
     const raw = new GuardianDatabase(dbPath);
@@ -145,6 +148,8 @@ describe('server startup against a 3.0 development database', () => {
     const server = startServer(project);
     await server.waitFor(/listening on stdio/);
     expect(server.stderr()).not.toMatch(/fatal/);
+    expect(server.stderr()).toContain(`db opened: ${dbPath}`);
+    expect(server.stderr()).toMatch(/db notice: adopted/);
   }, 60_000);
 
   it('exits 1 with one line naming the file and the missing object when the schema cannot be repaired', async () => {
@@ -171,7 +176,7 @@ describe('server startup against a 3.0 development database', () => {
     await server.waitFor(/listening on stdio/);
     const err = server.stderr();
     expect(err).not.toContain(`db opened: ${path}`);
-    expect(err).toMatch(/db warning: .*is tracked by git/);
+    expect(err).toMatch(/db warning: .*git tracks \.guardian\/guardian\.db/);
   }, 60_000);
 
   it('exits 1 with one line naming a corrupt database file and saying to move it aside', async () => {

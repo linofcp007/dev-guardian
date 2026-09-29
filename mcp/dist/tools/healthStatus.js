@@ -107,6 +107,25 @@ async function handler(input, ctx) {
             resources: RESOURCES.length,
         },
         storage_warning: ctx.storageWarning ?? null,
+        suppressions: activeSuppressions(ctx, projectPath),
     };
+}
+/**
+ * The suppressions active now that apply to `projectPath`: its own, and
+ * those with no project, which match EVERY project (rows written before
+ * migration 011, and whatever an older build still inserts). A database a
+ * user trusts is theirs, so those are legitimate — but a mass suppression is
+ * how findings disappear without a trace, so how many apply is said here.
+ */
+function activeSuppressions(ctx, projectPath) {
+    let own = 0;
+    let global = 0;
+    for (const s of ctx.storage.suppressions.listActive()) {
+        if (s.project_path === undefined)
+            global += 1;
+        else if (s.project_path === projectPath)
+            own += 1;
+    }
+    return { active: own + global, this_project: own, all_projects: global };
 }
 //# sourceMappingURL=healthStatus.js.map

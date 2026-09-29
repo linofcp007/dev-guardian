@@ -17,7 +17,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -29,7 +30,9 @@ import {
   resolveFallbackDbPath,
   userDataDir,
 } from '../../../src/storage/db.js';
-import { gitTracksDatabase } from '../../../src/storage/dbTrust.js';
+import { openSetForProject } from '../../../src/history/openSet.js';
+import { gitIndexAt } from '../../../src/storage/dbProvenance.js';
+import { registerDbId, registryDir } from '../../../src/storage/dbRegistry.js';
 import { Storage } from '../../../src/storage/index.js';
 import { listMigrations } from '../../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir, rmDir } from '../../helpers/tempDir.js';
@@ -179,8 +182,11 @@ describe('a database holding objects the migrations never create', () => {
     // The definitions a legacy database holds were written by exec'ing each
     // file whole (comments inside CREATE TABLE included) and by ALTER TABLE
     // appending columns in whatever order the migrations ran.
+    // A database from 3.0.0 or earlier has no id: it is adopted, once, in a
+    // project with its own .git that does not track it.
     for (const upTo of [3, 14]) {
       const dir = project();
+      git(dir, 'init', '-q');
       const primary = primaryOf(dir);
       mkdirSync(dirname(primary), { recursive: true });
       const raw = new DatabaseSync(primary);
@@ -201,6 +207,7 @@ describe('a database holding objects the migrations never create', () => {
   it('trusts a 3.0 development database whose migrations ran out of order', () => {
     // 014 before 013: findings' columns were appended in the other order.
     const dir = project();
+    git(dir, 'init', '-q');
     const primary = primaryOf(dir);
     mkdirSync(dirname(primary), { recursive: true });
     const raw = new DatabaseSync(primary);
@@ -289,9 +296,13 @@ describe('a database a newer build migrated (downgrade)', () => {
   it.each([
     ['a UNIQUE table constraint', { constraint: 'UNIQUE (scan_id)' }, /table findings: unique\(scan_id\)/],
     ['a CHECK constraint', { constraint: "CHECK (severity <> 'critical')" }, /table findings: check\(severity <> 'critical'\)/],
-    ['a column NOT NULL with no default (INSERT OR IGNORE skips every row)', { column: 'gate TEXT NOT NULL' }, /table findings: gate text not null/],
-    ['a column NOT NULL DEFAULT NULL', { column: 'gate TEXT NOT NULL DEFAULT NULL' }, /table findings: gate text not null default null/],
+    ['a column NOT NULL with no default (INSERT OR IGNORE skips every row)', { column: 'gate TEXT NOT NULL' }, /column gate is NOT NULL with no non-NULL default/],
+    ['a column NOT NULL DEFAULT NULL', { column: 'gate TEXT NOT NULL DEFAULT NULL' }, /column gate is NOT NULL with no non-NULL default/],
+    ['a generated column', { column: 'shadow TEXT GENERATED ALWAYS AS (title) VIRTUAL' }, /table findings: shadow text generated/],
     ['a UNIQUE column', { column: 'token TEXT UNIQUE' }, /table findings: token text unique/],
+    // The re-review's bypass: a quoted TYPE name that reads like a default.
+    // SQLite records notnull=1 with no default; judged on pragma_table_xinfo.
+    ['a NOT NULL column whose quoted type name reads like a default', { column: "gate 'default 1' NOT NULL" }, /column gate is NOT NULL with no non-NULL default/],
     ['a changed known column', {}, /table findings: severity text not null check/],
   ])('is refused with %s on a known table', (what, add: { constraint?: string; column?: string }, expected) => {
     const { dir, primary } = futureDatabase();
@@ -345,7 +356,8 @@ describe('a database git tracks', () => {
     try {
       expect(opened.path).toBe(resolveFallbackDbPath(dir));
       expect(opened.warning).toContain(primary);
-      expect(opened.warning).toMatch(/tracked by git/);
+      expect(opened.warning).toMatch(/git tracks \.guardian\/guardian\.db/);
+      expect(opened.warning).toMatch(/git rm --cached/);
     } finally {
       opened.db.close();
     }
@@ -357,7 +369,7 @@ describe('a database git tracks', () => {
     existingDatabase(dir);
     writeFileSync(join(dir, '.guardian', 'guardian.db-wal'), '');
     git(dir, 'add', '-f', '.guardian/guardian.db-wal');
-    expect(gitTracksDatabase(dir).state).toBe('tracked');
+    expect(gitIndexAt(dir).tracked).toEqual(['.guardian/guardian.db-wal']);
   });
 
   it('an untracked database in a git repository is used as before, with no warning', () => {
@@ -374,18 +386,60 @@ describe('a database git tracks', () => {
   });
 });
 
-describe('when git cannot answer', () => {
-  const NO_GIT = { git: join(tmpdir(), 'no-such-git-binary-for-dev-guardian') };
+describe('provenance: only a database this user created (or adopted) is trusted', () => {
+  // The re-review of round 2 reproduced open_findings 7 -> 0 with
+  // storage_warning null through four routes the tracked check called
+  // untracked, and through DATA alone: seven suppressions with no project
+  // (NULL matches every project) in a database whose schema is exactly the
+  // migrations'. The rule now: trusted only when THIS user's dev-guardian
+  // created it (a registered db_id), or adopted it once as an earlier
+  // version's; anything else is foreign.
 
-  it('outside any repository: untracked, since nothing can be tracked — and nothing to warn about', () => {
+  /** A database as 3.0.0 wrote it — every migration, no db_id — plus `extra`. */
+  function legacyDatabase(dir: string, extra = ''): string {
+    const primary = primaryOf(dir);
+    mkdirSync(dirname(primary), { recursive: true });
+    const raw = new DatabaseSync(primary);
+    for (const m of listMigrations()) raw.exec(readFileSync(m.filePath, 'utf8'));
+    raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '${Math.max(...listMigrations().map((m) => m.version))}')`);
+    if (extra !== '') raw.exec(extra);
+    raw.close();
+    return primary;
+  }
+
+  function dbIdOf(path: string): string | undefined {
+    const raw = new DatabaseSync(path, { readOnly: true });
+    try {
+      return (raw.prepare(`SELECT value FROM schema_meta WHERE key = 'db_id'`).get() as { value: string } | undefined)?.value;
+    } finally {
+      raw.close();
+    }
+  }
+
+  function sha256(path: string): string {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  }
+
+  function expectForeign(dir: string, why: RegExp): string {
+    const opened = openDatabase({ projectPath: dir });
+    try {
+      expect(opened.path).toBe(resolveFallbackDbPath(dir));
+      expect(opened.warning).toMatch(why);
+      expect(opened.warning).toMatch(/is left as it is/);
+      expect(opened.warning).toMatch(/not merged back/);
+      expect(storeAndReadBack(new Storage(opened.db), dir)).toBe(1);
+      return opened.warning ?? '';
+    } finally {
+      opened.db.close();
+    }
+  }
+
+  it('a database this build creates carries a registered id and is trusted, with or without git', () => {
     const dir = project();
-    const verdict = gitTracksDatabase(dir, NO_GIT);
-    expect(verdict.state).toBe('untracked');
-    expect(verdict.inferred).toBe(true);
-
-    // A machine with no git and a project with no .git: there is nothing to
-    // ask, so no warning on every start.
     const primary = existingDatabase(dir);
+    const id = dbIdOf(primary) ?? '';
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
+    expect(existsSync(join(registryDir(), `${id}.json`))).toBe(true);
     vi.stubEnv('PATH', '');
     const opened = openDatabase({ projectPath: dir });
     try {
@@ -396,51 +450,175 @@ describe('when git cannot answer', () => {
     }
   });
 
-  it('reads the index: a database it lists is tracked', () => {
-    const dir = project();
-    git(dir, 'init', '-q');
-    existingDatabase(dir);
-    git(dir, 'add', '-f', '.guardian/guardian.db');
-    const verdict = gitTracksDatabase(dir, NO_GIT);
-    expect(verdict.state).toBe('tracked');
+  it('a project reached through an alias (a link or junction above it) creates and keeps its own database', () => {
+    // The first cut resolved the not-yet-created database lexically and the
+    // project really, and called every such new database "outside the
+    // project" — on every Windows 8.3 path and macOS /var path.
+    const base = makeTempDir('guardian-alias-');
+    mkdirSync(join(base, 'real', 'proj'), { recursive: true });
+    symlinkSync(join(base, 'real'), join(base, 'alias'), isWindows ? 'junction' : 'dir');
+    const viaAlias = join(base, 'alias', 'proj');
+    undo.push(() => rmDir(dirname(resolveFallbackDbPath(viaAlias))));
+    for (let i = 0; i < 2; i++) {
+      const opened = openDatabase({ projectPath: viaAlias });
+      try {
+        expect(opened.path).toBe(primaryOf(viaAlias));
+        expect(opened.warning).toBeUndefined();
+      } finally {
+        opened.db.close();
+      }
+    }
   });
 
-  it('reads the index: a database it does not list is untracked, inferred (used with a warning)', () => {
+  it('a registered database stays trusted after its repository is moved', () => {
     const dir = project();
-    git(dir, 'init', '-q');
-    writeFileSync(join(dir, 'a.txt'), 'a');
-    git(dir, 'add', 'a.txt');
     existingDatabase(dir);
-    const verdict = gitTracksDatabase(dir, NO_GIT);
-    expect(verdict.state).toBe('untracked');
-    expect(verdict.inferred).toBe(true);
-
-    // Through openDatabase, with no git on PATH at all.
-    vi.stubEnv('PATH', '');
-    const opened = openDatabase({ projectPath: dir });
+    const moved = `${dir}-moved`;
+    renameSync(dir, moved);
+    undo.push(() => rmDir(moved));
+    undo.push(() => rmDir(dirname(resolveFallbackDbPath(moved))));
+    const opened = openDatabase({ projectPath: moved });
     try {
-      expect(opened.path).toBe(primaryOf(dir));
-      expect(opened.warning).toMatch(/could not ask git/);
+      expect(opened.path).toBe(primaryOf(moved));
+      expect(opened.warning).toBeUndefined();
     } finally {
       opened.db.close();
     }
   });
 
-  it('an index it cannot read is "cannot tell", and the database is refused', () => {
+  it("a legacy database in the project's own, untracking repository is adopted once, and registered", () => {
     const dir = project();
-    mkdirSync(join(dir, '.git'));
-    writeFileSync(join(dir, '.git', 'index'), 'not an index');
-    existingDatabase(dir);
-    expect(gitTracksDatabase(dir, NO_GIT).state).toBe('unknown');
+    git(dir, 'init', '-q');
+    const primary = legacyDatabase(dir);
+    const first = openDatabase({ projectPath: dir });
+    try {
+      expect(first.path).toBe(primary);
+      expect(first.warning).toBeUndefined();
+      expect(first.notice).toMatch(/adopted/);
+    } finally {
+      first.db.close();
+    }
+    const id = dbIdOf(primary) ?? '';
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
+    expect(existsSync(join(registryDir(), `${id}.json`))).toBe(true);
+    const second = openDatabase({ projectPath: dir });
+    try {
+      expect(second.path).toBe(primary);
+      expect(second.notice).toBeUndefined();
+    } finally {
+      second.db.close();
+    }
+  });
 
-    vi.stubEnv('PATH', '');
+  it('a repository downloaded as an archive (no .git) brings a foreign database; the file is left untouched', () => {
+    const dir = project();
+    const primary = legacyDatabase(dir);
+    const before = sha256(primary);
+    const warning = expectForeign(dir, /no \.git of its own/);
+    expect(warning).toMatch(/delete it or move it aside/);
+    expect(sha256(primary)).toBe(before);
+    expect(dbIdOf(primary)).toBeUndefined();
+  });
+
+  it('data alone: suppressions with no project, in an exact-schema database, are not trusted', () => {
+    const dir = project();
+    const suppressions = Array.from(
+      { length: 7 },
+      (_, i) => `('fp-${i}', 'hidden', '2026-01-01T00:00:00.000Z', NULL)`,
+    ).join(', ');
+    legacyDatabase(
+      dir,
+      `INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path) VALUES ${suppressions};
+       INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path) VALUES ('fp-1', 'hidden', '2026-01-01T00:00:00.000Z', NULL);`,
+    );
     const opened = openDatabase({ projectPath: dir });
     try {
       expect(opened.path).toBe(resolveFallbackDbPath(dir));
-      expect(opened.warning).toMatch(/could not confirm/);
+      const storage = new Storage(opened.db);
+      storeAndReadBack(storage, dir);
+      expect(openSetForProject(storage, dir).findings.map((f) => f.fingerprint)).toEqual(['fp-1']);
     } finally {
       opened.db.close();
     }
+  });
+
+  it('an id this user never registered is foreign', () => {
+    const dir = project();
+    legacyDatabase(dir, `INSERT INTO schema_meta(key, value) VALUES('db_id', '${'ab'.repeat(16)}')`);
+    expectForeign(dir, /not one this user's dev-guardian registered/);
+  });
+
+  it('a committed database spelled .Guardian (case-insensitive index match) is tracked', () => {
+    // The index names `.Guardian/guardian.db`; the file system serves the
+    // database as `.guardian/guardian.db` on Windows and macOS. `git
+    // ls-files -- .guardian/guardian.db` prints nothing for it under
+    // core.ignorecase — the miss the re-review reproduced.
+    const dir = project();
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'core.ignorecase', 'true');
+    const primary = legacyDatabase(dir);
+    const blob = spawnSync('git', ['hash-object', '-w', primary], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+    git(dir, 'update-index', '--add', '--cacheinfo', `100644,${blob},.Guardian/guardian.db`);
+    expect(spawnSync('git', ['ls-files', '--', '.guardian/guardian.db'], { cwd: dir, encoding: 'utf8' }).stdout).toBe('');
+    expectForeign(dir, /git tracks \.Guardian\/guardian\.db/);
+  });
+
+  it.runIf(isWindows)('a committed .Guardian directory, served as .guardian by NTFS, is tracked', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    mkdirSync(join(dir, '.Guardian'));
+    const raw = new DatabaseSync(join(dir, '.Guardian', 'guardian.db'));
+    for (const m of listMigrations()) raw.exec(readFileSync(m.filePath, 'utf8'));
+    raw.close();
+    git(dir, 'add', '-f', '.Guardian/guardian.db');
+    expectForeign(dir, /git tracks \.Guardian\/guardian\.db/);
+  });
+
+  it('.guardian as a link (a junction on Windows) to a committed database elsewhere is foreign', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    mkdirSync(join(dir, 'data'));
+    const raw = new DatabaseSync(join(dir, 'data', 'guardian.db'));
+    for (const m of listMigrations()) raw.exec(readFileSync(m.filePath, 'utf8'));
+    raw.close();
+    git(dir, 'add', '-f', 'data/guardian.db');
+    symlinkSync(join(dir, 'data'), join(dir, '.guardian'), isWindows ? 'junction' : 'dir');
+    expectForeign(dir, /`\.guardian` is a link/);
+  });
+
+  it('.guardian as a submodule is foreign', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    legacyDatabase(dir);
+    const sub = join(dir, '.guardian');
+    git(sub, 'init', '-q');
+    git(sub, 'add', '-f', 'guardian.db');
+    git(sub, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'db');
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: sub, encoding: 'utf8' }).stdout.trim();
+    git(dir, 'update-index', '--add', '--cacheinfo', `160000,${head},.guardian`);
+    expectForeign(dir, /submodule/);
+  });
+
+  it('a legacy database cannot be adopted when git cannot be asked', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    legacyDatabase(dir);
+    vi.stubEnv('PATH', '');
+    expectForeign(dir, /git could not be asked/);
+  });
+
+  it("the ownership check runs before anything is created under GUARDIAN_DATA_DIR", () => {
+    const base = makeTempDir('guardian-userdata-');
+    const notADirectory = join(base, 'data-file');
+    writeFileSync(notADirectory, 'x');
+    vi.stubEnv('GUARDIAN_DATA_DIR', notADirectory);
+    const dir = project();
+    expect(() => registerDbId({ db_id: 'cd'.repeat(16), db_path: 'x', project_path: dir, created_at: 'now' })).toThrow(
+      GuardianDbError,
+    );
+    expect(() => registerDbId({ db_id: 'cd'.repeat(16), db_path: 'x', project_path: dir, created_at: 'now' })).toThrow(
+      /is not a directory/,
+    );
   });
 });
 

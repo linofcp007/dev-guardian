@@ -554,11 +554,22 @@ export function openSetForProject(storage, projectPath, opts = {}) {
             seen.add(f);
         }
     };
+    // The findings the sources hold that a suppression hides, once each — so
+    // a reader can say how much a suppression (a mass one included) takes out.
+    const suppressedSeen = indexFindings([]);
+    let suppressedCount = 0;
     for (const { slot, scan, coverage } of picked) {
         const batch = [];
         for (const f of rowsOf(scan)) {
-            if (!findingInSlot(scan, f, slot) || isSuppressed(f) || seen.has(f))
+            if (!findingInSlot(scan, f, slot) || seen.has(f))
                 continue;
+            if (isSuppressed(f)) {
+                if (!suppressedSeen.has(f)) {
+                    suppressedSeen.add(f);
+                    suppressedCount += 1;
+                }
+                continue;
+            }
             batch.push({ ...f, scan_id: scan.scan_id });
         }
         admit(batch);
@@ -644,6 +655,7 @@ export function openSetForProject(storage, projectPath, opts = {}) {
     return {
         project_path: projectPath,
         findings,
+        suppressed: suppressedCount,
         sources,
         skipped,
         coverage,

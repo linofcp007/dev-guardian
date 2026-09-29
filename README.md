@@ -90,7 +90,7 @@ Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacem
 | WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
 | C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
 
-Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed. History, suppressions and baselines are keyed by the project's path: moving or renaming the repository starts them afresh (the old rows stay under the old path). A committed `guardian.db` is never opened — see [SECURITY.md](SECURITY.md).
+Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed. History, suppressions and baselines are keyed by the project's path: moving or renaming the repository starts them afresh (the old rows stay under the old path). A `guardian.db` your dev-guardian did not create (one that came with a clone or an archive, or that git tracks) is never opened — see [SECURITY.md](SECURITY.md).
 
 ## What each stack gets
 

@@ -9,19 +9,26 @@
  * nesting-aware `transaction()`. This stays the only module that knows the
  * engine is node:sqlite; swapping it again only touches files in this folder.
  *
- * The DB lives at `<project_root>/.guardian/guardian.db`. It is REFUSED, and
- * the per-user fallback used instead with a warning the caller includes in
- * tool responses (`health_status`'s `storage_warning`, every scan's
- * `warnings`), when:
+ * The DB lives at `<project_root>/.guardian/guardian.db`, and is used only
+ * when it is THIS user's (`dbProvenance.ts`, `dbRegistry.ts`): one this
+ * build creates gets a random `db_id`, registered in the per-user registry
+ * before it is written; an existing one is trusted when its id is registered,
+ * or — a database from 3.0.0 or earlier, with no id — when it passes the
+ * one-time legacy adoption. It is REFUSED otherwise, and the per-user
+ * fallback used instead, with a warning the caller includes in tool
+ * responses (`health_status`'s `storage_warning`, every scan's `warnings`)
+ * saying why and where the history now goes. Refused, too, when:
  *   - the location is not writable (read-only mounts, missing permissions, a
  *     database left behind by a `sudo` or Docker run). Writability is PROBED
  *     — a file is created in `.guardian/` and the database takes a real
  *     write — not asked of `accessSync`, which on Windows ignores ACLs;
- *   - git tracks it (`dbTrust.ts`): a committed database is the committer's
- *     schema, and SQL inside it runs on every write the server makes;
+ *   - git tracks it (any case) or `.guardian` is a submodule, or `.guardian`
+ *     or the database is a link, whoever made it;
  *   - it holds a schema object, or a table or index definition, that the
  *     migrations never create (`schemaCheck.ts#untrustedObjects`) — a
  *     trigger that deletes every finding as it is inserted was reproduced.
+ * A refused project database is never written to: it is read through a
+ * read-only connection to learn its id, and left exactly as it was.
  *
  * The fallback is `<user data dir>/<sha1(project_root)>/guardian.db`
  * ({@link userDataDir}: `%LOCALAPPDATA%\dev-guardian` on Windows,
@@ -29,7 +36,8 @@
  * `GUARDIAN_DATA_DIR` when set). It used to be `os.tmpdir()/dev-guardian/…`:
  * a predictable path in a directory every user can write, which another user
  * could create first and fill, and which nothing checked the owner of. Its
- * directories are created 0700 and, on POSIX, must belong to this user.
+ * directories are created 0700 and, on POSIX, must belong to this user —
+ * checked before anything is created inside them (`userData.ts`).
  *
  * Every connection opens with `trusted_schema = OFF` (no function the schema
  * names runs unless SQLite marks it innocuous), `cell_size_check = ON`
@@ -42,12 +50,15 @@
  * `:memory:` when the caller asks for it, which the unit tests rely on.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { gitTracksDatabase } from './dbTrust.js';
+import { dirname, join, resolve } from 'node:path';
+import { canonicalPath } from '../platform/projectPath.js';
+import { GuardianDbError } from './dbError.js';
+import { adoptionProblem, gitIndexAt, gitProblem, locationProblem, probeDatabase, } from './dbProvenance.js';
+import { DB_ID_KEY, forgetDbId, lookupDbId, newDbId, registerDbId } from './dbRegistry.js';
 import { listMigrations, runMigrations } from './migrations/runner.js';
+import { assertOwnedRegularFileIfPresent, ensurePrivateSubdir, userDataDir } from './userData.js';
 import { missingIndexSql, missingObjects, readSchema, recordsNewerMigrations, untrustedObjects, } from './schemaCheck.js';
 let sqliteModule;
 function loadSqlite() {
@@ -212,27 +223,8 @@ export class GuardianDatabase {
         this.raw.close();
     }
 }
-/**
- * A database file dev-guardian cannot use, said in one line that names the
- * file and what to do about it — what the server prints (and exits 1 with)
- * instead of a stack trace from deep inside `new Storage()` or SQLite.
- *
- *   - `schema`: the migrations ran and an object the code needs is still
- *     missing (see `schemaCheck.ts#missingObjects`);
- *   - `corrupt`: SQLite cannot read the file (SQLITE_CORRUPT, SQLITE_NOTADB);
- *   - `untrusted`: the file holds objects the migrations never create, or its
- *     location is not private to this user — see {@link openDatabase}.
- */
-export class GuardianDbError extends Error {
-    kind;
-    dbPath;
-    constructor(kind, dbPath, message) {
-        super(message);
-        this.kind = kind;
-        this.dbPath = dbPath;
-        this.name = 'GuardianDbError';
-    }
-}
+export { GuardianDbError } from './dbError.js';
+export { userDataDir } from './userData.js';
 let referenceSchema;
 /**
  * The schema the shipped migrations build on an empty database, read once
@@ -311,9 +303,10 @@ function latestMigration() {
  * a handle usable. A file SQLite cannot read at all becomes one
  * {@link GuardianDbError} of kind `corrupt`.
  */
-function prepareForUse(db, dbPath) {
+function prepareForUse(db, dbPath, afterPragmas) {
     try {
         applyPragmas(db);
+        afterPragmas?.(db);
         assertTrustedSchema(db, dbPath);
         runMigrations(db);
         recreateMissingIndexes(db);
@@ -350,30 +343,19 @@ export function openDatabase(options) {
         refusal = `Project path '${projectPath}' is not writable (it is not an existing directory)`;
     }
     else if (!existingOnly || existsSync(preferredPath)) {
-        const verdict = existsSync(preferredPath) ? gitTracksDatabase(projectPath) : null;
-        if (verdict?.state === 'tracked') {
-            refusal =
-                `'${preferredPath}' is tracked by git (${verdict.detail}). A committed database is not trusted: ` +
-                    'SQL stored in it — a trigger, a constraint — runs on every write the server makes and can hide ' +
-                    'findings from every reader. Stop tracking it (git rm --cached .guardian/guardian.db); one that ' +
-                    'came with a clone is best deleted';
+        const verdict = judgeProjectDatabase(projectPath, preferredPath);
+        if (verdict.kind === 'foreign') {
+            refusal = foreignReason(preferredPath, verdict);
         }
-        else if (verdict?.state === 'unknown') {
-            refusal =
-                `could not confirm that '${preferredPath}' is not tracked by git (${verdict.detail}); ` +
-                    'a committed database is not trusted, so it is not used until git can answer';
-        }
-        else {
-            const note = verdict?.plausibleOnly === true
-                ? `could not ask git whether '${preferredPath}' is tracked (${verdict.detail}), so it is used; ` +
-                    'install git, or make it answer, to have that confirmed.'
-                : undefined;
+        else if (!(existingOnly && verdict.kind === 'create')) {
             try {
-                return { db: openWritable(preferredPath), path: preferredPath, ...(note !== undefined ? { warning: note } : {}) };
+                return openProjectDatabase(projectPath, preferredPath, verdict);
             }
             catch (error) {
                 if (error instanceof GuardianDbError && error.kind === 'untrusted') {
-                    refusal = error.message;
+                    refusal =
+                        `${error.message}. The file is left as it is; ` +
+                            'delete it or move it aside to have dev-guardian start a new one there';
                 }
                 else if (isNotWritableError(error)) {
                     const reason = error instanceof Error ? error.message : String(error);
@@ -389,16 +371,126 @@ export function openDatabase(options) {
     if (existingOnly && !existsSync(chosenPath)) {
         return { ...openInMemory(), ...(refusal !== undefined ? { warning: `${refusal}.` } : {}) };
     }
-    ensurePrivateFallbackDir(dirname(chosenPath));
+    ensurePrivateSubdir(shortHash(projectPath));
     const db = openFallback(chosenPath);
     if (refusal === undefined)
         return { db, path: chosenPath };
     return {
         db,
         path: chosenPath,
-        warning: `${refusal}; dev-guardian DB persisted to '${chosenPath}' instead. ` +
-            `Scans will not be visible alongside the project.`,
+        warning: `${refusal}. This project's scans are kept in '${chosenPath}' instead, and stay there: they are not ` +
+            'merged back into the project file later.',
     };
+}
+/**
+ * Whether `.guardian/guardian.db` is this user's — see the module comment and
+ * `dbProvenance.ts`. Reads it only through a read-only connection; asks git
+ * once when the file exists.
+ */
+function judgeProjectDatabase(projectPath, dbPath) {
+    const location = locationProblem(projectPath, dbPath);
+    if (location !== null)
+        return { kind: 'foreign', why: location, tracked: false };
+    if (!existsSync(dbPath))
+        return { kind: 'create' };
+    const probe = probeDatabase(dbPath);
+    const index = gitIndexAt(projectPath);
+    const fromGit = gitProblem(index);
+    if (fromGit !== null)
+        return { kind: 'foreign', why: fromGit, tracked: index.tracked.length > 0 };
+    // Nothing in it yet: another process is creating it this very moment (or
+    // the file is empty). Either way it holds nothing to trust or distrust.
+    if (probe.empty)
+        return { kind: 'create' };
+    if (probe.dbId !== null && lookupDbId(probe.dbId) !== null)
+        return { kind: 'trusted', dbId: probe.dbId };
+    const adoption = adoptionProblem(projectPath, dbPath, index);
+    if (adoption === null)
+        return { kind: 'adopt' };
+    return {
+        kind: 'foreign',
+        why: probe.dbId === null
+            ? `it carries no dev-guardian id (it was not created by this user's dev-guardian, and cannot be adopted as an earlier version's: ${adoption})`
+            : `its dev-guardian id is not one this user's dev-guardian registered (it was created elsewhere, and cannot be adopted: ${adoption})`,
+        tracked: false,
+    };
+}
+/** The refusal of a foreign database: why, that the file is untouched, and how to recover. */
+function foreignReason(dbPath, verdict) {
+    const recovery = verdict.tracked
+        ? 'One that came with the repository is not yours: delete it, and dev-guardian starts a new one there. ' +
+            'One you committed yourself: stop tracking it (git rm --cached .guardian/guardian.db)'
+        : 'If it is yours, delete it or move it aside, and dev-guardian starts a new one there — there is no way ' +
+            'to mark a database as trusted';
+    return (`'${dbPath}' is not used: ${verdict.why}. A database that is not this user's own is not trusted — SQL or ` +
+        'data stored in it (a trigger, a constraint, a suppression that matches every project) can hide findings ' +
+        `from every reader. The file is left as it is. ${recovery}`);
+}
+/**
+ * Opens the project's database on the verdict's terms: a new one gets its id
+ * registered and written before anything else, a legacy one is adopted (id
+ * registered and written) only after its schema passed.
+ */
+function openProjectDatabase(projectPath, dbPath, verdict) {
+    const entryFor = (id) => ({
+        db_id: id,
+        db_path: safeCanonical(dbPath),
+        project_path: safeCanonical(projectPath),
+        created_at: new Date().toISOString(),
+    });
+    if (verdict.kind === 'create') {
+        // Registered BEFORE it is written, so a process that reads the id from
+        // the file always finds it registered; written before the migrations, so
+        // no other process sees tables with no id.
+        const db = openWritable(dbPath, (raw) => claimDbId(raw, entryFor, 'keep'));
+        return { db, path: dbPath };
+    }
+    const db = openWritable(dbPath);
+    if (verdict.kind === 'adopt') {
+        try {
+            claimDbId(db, entryFor, 'replace');
+        }
+        catch (error) {
+            closeQuietly(db);
+            throw error;
+        }
+        return {
+            db,
+            path: dbPath,
+            notice: `adopted '${dbPath}', written by an earlier dev-guardian (untracked in this project's own repository, ` +
+                'not a link): registered as this user\'s database',
+        };
+    }
+    return { db, path: dbPath };
+}
+/**
+ * Writes a freshly registered id into `schema_meta` and returns the id the
+ * database ends up with. `keep`: an id another process wrote first wins (it
+ * registered it before writing) and ours is forgotten; `replace`: ours
+ * overwrites an unregistered one (adoption).
+ */
+function claimDbId(db, entryFor, mode) {
+    const mine = newDbId();
+    registerDbId(entryFor(mine));
+    const kept = db.transaction(() => {
+        db.exec('CREATE TABLE IF NOT EXISTS schema_meta (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n)');
+        const sql = mode === 'keep'
+            ? 'INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, ?)'
+            : 'INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
+        db.prepare(sql).run(DB_ID_KEY, mine);
+        return db.prepare('SELECT value FROM schema_meta WHERE key = ?').get(DB_ID_KEY)?.value ?? mine;
+    })();
+    if (kept !== mine)
+        forgetDbId(mine);
+    return kept;
+}
+function safeCanonical(path) {
+    try {
+        return canonicalPath(path);
+    }
+    catch {
+        return resolve(path);
+    }
 }
 function openInMemory() {
     const db = new GuardianDatabase(':memory:');
@@ -410,15 +502,16 @@ function openInMemory() {
  * Opens (and migrates) `dbPath` only if it can really be written: creates
  * its directory, creates and removes a probe file there, then makes the
  * database take a write. Throws otherwise — see {@link isNotWritableError}
- * for the failures that mean "use the fallback".
+ * for the failures that mean "use the fallback". `afterPragmas` runs on the
+ * connection before the schema is judged and migrated.
  */
-function openWritable(dbPath) {
+function openWritable(dbPath, afterPragmas) {
     const dir = dirname(dbPath);
     ensureDir(dir);
     probeDirectoryWritable(dir);
     const db = new GuardianDatabase(dbPath);
     try {
-        prepareForUse(db, dbPath);
+        prepareForUse(db, dbPath, afterPragmas);
         probeDatabaseWritable(db);
         return db;
     }
@@ -513,24 +606,6 @@ function isNotWritableError(error) {
     return sqlite === 8 || sqlite === 14;
 }
 /**
- * dev-guardian's per-user data directory: `GUARDIAN_DATA_DIR` when set;
- * otherwise `%LOCALAPPDATA%\dev-guardian` on Windows and
- * `$XDG_DATA_HOME/dev-guardian` (only an absolute XDG_DATA_HOME counts, as
- * the XDG spec says) or `~/.local/share/dev-guardian` elsewhere. Read at call
- * time. Pure path arithmetic, no I/O.
- */
-export function userDataDir() {
-    const override = process.env['GUARDIAN_DATA_DIR']?.trim();
-    if (override !== undefined && override !== '')
-        return resolve(override);
-    if (process.platform === 'win32') {
-        const local = process.env['LOCALAPPDATA']?.trim();
-        return join(local !== undefined && isAbsolute(local) ? local : join(homedir(), 'AppData', 'Local'), 'dev-guardian');
-    }
-    const xdg = process.env['XDG_DATA_HOME']?.trim();
-    return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), '.local', 'share'), 'dev-guardian');
-}
-/**
  * Where {@link openDatabase} redirects a project's database when
  * `<projectPath>/.guardian/guardian.db` is not writable or not trusted:
  * `<userDataDir()>/<sha1(project)>/guardian.db`, keyed by {@link shortHash}
@@ -546,56 +621,6 @@ export function userDataDir() {
  */
 export function resolveFallbackDbPath(projectPath) {
     return join(userDataDir(), shortHash(resolve(projectPath)), 'guardian.db');
-}
-/** A {@link GuardianDbError} for a fallback location this user does not own. */
-function notPrivate(path, why) {
-    return new GuardianDbError('untrusted', path, `'${path}' ${why}, so dev-guardian will not keep its per-user database there. Remove it, or set ` +
-        'GUARDIAN_DATA_DIR to a directory only you can write, and restart.');
-}
-/**
- * Creates the fallback's directories 0700 and, on POSIX, makes sure the data
- * directory and the project's directory in it belong to this user and are
- * not a symbolic link (the data directory itself may be one: the user chose
- * it). A directory another user could read is narrowed to 0700. Windows keeps
- * `%LOCALAPPDATA%` per-user by its ACL, and has no uid to compare.
- */
-function ensurePrivateFallbackDir(dir) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    if (process.platform === 'win32')
-        return;
-    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
-    const checks = [
-        [userDataDir(), true],
-        [dir, false],
-    ];
-    for (const [path, followLink] of checks) {
-        const st = followLink ? statSync(path) : lstatSync(path);
-        if (st.isSymbolicLink())
-            throw notPrivate(path, 'is a symbolic link');
-        if (!st.isDirectory())
-            throw notPrivate(path, 'is not a directory');
-        if (uid !== undefined && st.uid !== uid)
-            throw notPrivate(path, `belongs to uid ${st.uid}, not to this user (${uid})`);
-        if ((st.mode & 0o077) !== 0)
-            chmodSync(path, 0o700);
-    }
-}
-/** On POSIX, an existing fallback file must be a regular file of this user's. */
-function assertOwnedRegularFileIfPresent(path) {
-    if (process.platform === 'win32')
-        return;
-    let st;
-    try {
-        st = lstatSync(path);
-    }
-    catch {
-        return; // created by the open, 0600 under a 0700 directory
-    }
-    if (!st.isFile())
-        throw notPrivate(path, st.isSymbolicLink() ? 'is a symbolic link' : 'is not a regular file');
-    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
-    if (uid !== undefined && st.uid !== uid)
-        throw notPrivate(path, `belongs to uid ${st.uid}, not to this user (${uid})`);
 }
 /**
  * Open a database at an EXACT, already-known path — no writability probe, no

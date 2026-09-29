@@ -2309,15 +2309,18 @@ async function loadDashboardModules() {
 
 /**
  * The storage layer's `existingOnly` open makes every decision the server
- * makes — a project database git tracks, or one holding schema objects the
- * migrations never create, is refused; the per-user fallback (no longer the
- * shared temp directory) must belong to this user — and never creates a
- * file: an empty in-memory database when neither location has one. The
- * existence checks this function used to make itself opened a predictable
- * fallback path in the shared temp directory whenever it existed.
+ * makes — a project database that is not this user's own (no registered
+ * id, and not adoptable as an earlier version's), one git tracks or one
+ * holding schema objects the migrations never create is refused; the
+ * per-user fallback (no longer the shared temp directory) must belong to
+ * this user — and never creates a database: an empty in-memory one when
+ * neither location has one. The existence checks this function used to make
+ * itself opened a predictable fallback path in the shared temp directory
+ * whenever it existed.
  */
 function resolveDbHandle(mods, projectPath) {
   const opened = mods.openDatabase({ projectPath, existingOnly: true });
+  if (opened.notice) process.stderr.write(`dev-guardian: ${opened.notice}\n`);
   if (opened.warning) process.stderr.write(`dev-guardian: ${opened.warning}\n`);
   return opened.db;
 }

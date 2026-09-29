@@ -120,6 +120,9 @@ async function handler(input, ctx) {
         recommended_next_action: result.next_action,
         coverage_caveat: result.coverage_caveat,
         project_path: projectPath,
+        // Findings the scans hold that an active suppression takes out of the
+        // score — a mass suppression shows here, never as a clean project.
+        suppressed_count: open.suppressed,
         coverage: {
             level: open.coverage,
             sources: open.sources,

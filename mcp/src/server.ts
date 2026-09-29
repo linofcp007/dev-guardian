@@ -67,9 +67,10 @@ async function main(): Promise<void> {
 
   const projectPath = resolve(process.cwd());
 
-  const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
+  const { db, path: dbPath, warning: storageWarning, notice: storageNotice } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
+  if (storageNotice) logErr(`db notice: ${storageNotice}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
 
   // Reap dead processes' scans. Never fatal. (Retention runs after connect.)

@@ -90,7 +90,7 @@ La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo,
 | WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
 | C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
 
-Los recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) sirven los resultados guardados en JSON. Todo se guarda en `.guardian/guardian.db`; el servidor mantiene `.guardian/` fuera de git, salvo `.guardian/baseline.json`, que la CI necesita en el repositorio. El historial, las supresiones y las baselines van ligados a la ruta del proyecto: mover o renombrar el repositorio los empieza de cero (las filas antiguas quedan en la ruta antigua). Un `guardian.db` que esté en el repositorio nunca se abre — ver [SECURITY.md](SECURITY.md).
+Los recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) sirven los resultados guardados en JSON. Todo se guarda en `.guardian/guardian.db`; el servidor mantiene `.guardian/` fuera de git, salvo `.guardian/baseline.json`, que la CI necesita en el repositorio. El historial, las supresiones y las baselines van ligados a la ruta del proyecto: mover o renombrar el repositorio los empieza de cero (las filas antiguas quedan en la ruta antigua). Un `guardian.db` que su dev-guardian no creó (llegado con un clon o un archivo, o que esté en el repositorio) nunca se abre — ver [SECURITY.md](SECURITY.md).
 
 ## Qué recibe cada stack
 

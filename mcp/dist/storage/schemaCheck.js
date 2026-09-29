@@ -57,6 +57,7 @@ export function readSchema(db) {
     const columns = new Map();
     const indexTables = new Map();
     const sql = new Map();
+    const uniqueKeys = new Map();
     for (const row of masterRows(db)) {
         const type = asObjectType(row.type);
         if (type === null)
@@ -71,9 +72,80 @@ export function readSchema(db) {
                 .all(row.name)
                 .map((c) => c.name);
             columns.set(row.name, new Set(cols));
+            uniqueKeys.set(row.name, uniqueKeysOf(db, row.name));
         }
     }
-    return { objects, columns, indexTables, sql };
+    return { objects, columns, indexTables, sql, uniqueKeys };
+}
+/** `table`'s UNIQUE keys, as {@link SchemaSnapshot.uniqueKeys} spells them. */
+function uniqueKeysOf(db, table) {
+    const keys = new Set();
+    const indexes = db
+        .prepare('SELECT name, "unique" AS "unique", partial FROM pragma_index_list(?)')
+        .all(table);
+    for (const index of indexes) {
+        if (Number(index.unique) !== 1)
+            continue;
+        const cols = db
+            .prepare('SELECT name FROM pragma_index_info(?) ORDER BY seqno')
+            .all(index.name)
+            .map((c) => c.name ?? '<expr>');
+        keys.add(`(${cols.join(', ')})${Number(index.partial) === 1 ? ' where' : ''}`);
+    }
+    return keys;
+}
+/**
+ * Why a column this build does not know can make an insert fail — judged on
+ * what SQLite RECORDED (`pragma_table_xinfo`), not on the CREATE text: a
+ * quoted type name such as `gate 'default 1' NOT NULL` reads like a column
+ * with a default and is stored as NOT NULL with none. Null when an insert
+ * that does not name the column always satisfies it.
+ */
+function newColumnProblem(column) {
+    if (Number(column.pk) !== 0)
+        return 'part of the PRIMARY KEY';
+    if (Number(column.hidden) !== 0)
+        return 'a generated or hidden column';
+    if (Number(column.notnull) !== 0 && !isNonNullLiteral(column.dflt_value)) {
+        return 'NOT NULL with no non-NULL default (INSERT OR IGNORE would skip every row)';
+    }
+    return null;
+}
+/** A default SQLite stores as a plain non-NULL literal: a number, a string, a blob, TRUE or FALSE. */
+function isNonNullLiteral(dflt) {
+    if (dflt === null)
+        return false;
+    const v = dflt.trim();
+    return (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(v) ||
+        /^'(?:[^']|'')*'$/.test(v) ||
+        /^x'(?:[0-9a-f]{2})*'$/i.test(v) ||
+        /^(?:true|false)$/i.test(v));
+}
+/**
+ * The structural half of the check on a known table (`pragma_table_xinfo`,
+ * `pragma_index_list`): a column the reference does not have that an insert
+ * can violate, and a UNIQUE key the reference does not have. Each problem as
+ * `table findings: …`.
+ */
+function structuralProblems(db, table, reference) {
+    const out = [];
+    const known = new Set([...(reference.columns.get(table) ?? [])].map((c) => c.toLowerCase()));
+    const columns = db
+        .prepare('SELECT name, "notnull" AS "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?)')
+        .all(table);
+    for (const column of columns) {
+        if (known.has(column.name.toLowerCase()))
+            continue;
+        const problem = newColumnProblem(column);
+        if (problem !== null)
+            out.push(`table ${table}: column ${column.name} is ${problem}`);
+    }
+    const allowedKeys = reference.uniqueKeys.get(table) ?? new Set();
+    for (const key of uniqueKeysOf(db, table)) {
+        if (!allowedKeys.has(key))
+            out.push(`table ${table}: a UNIQUE key on ${key} (INSERT OR IGNORE would skip rows)`);
+    }
+    return out;
 }
 function asObjectType(type) {
     return type === 'table' || type === 'index' || type === 'view' || type === 'trigger' ? type : null;
@@ -158,6 +230,9 @@ export function untrustedObjects(db, reference, opts = {}) {
                     continue;
                 out.push(`table ${row.name}: ${shorten(part)}`);
             }
+            // What SQLite recorded, whatever the text says (a quoted type name hides
+            // a NOT NULL from a reading of the text).
+            out.push(...structuralProblems(db, row.name, reference));
         }
         else if (row.type === 'index') {
             if (normaliseSql(row.sql ?? '') !== normaliseSql(referenceSql ?? '')) {
@@ -185,10 +260,13 @@ function unknownObjectProblem(row, reference) {
 const TABLE_CONSTRAINT = /^(?:constraint|primary\s+key|unique|check|foreign\s+key)\b/;
 const COLUMN_CONSTRAINT = /\b(?:primary\s+key|unique|check|references|generated)\b|\bas\s*\(/;
 /**
- * Whether `part` (normalised) is a column a later build's `ALTER TABLE … ADD
- * COLUMN` could add, that no insert this build makes can violate: a name the
- * reference does not have, and none of the constraints `INSERT OR IGNORE`
- * would skip a row over.
+ * The TEXT half of judging a part of a known table's definition that the
+ * reference does not have, in a database a newer build migrated: a column
+ * (not a table constraint) of a name the reference does not have, with none
+ * of CHECK, UNIQUE, PRIMARY KEY, REFERENCES or GENERATED written anywhere in
+ * it — a keyword inside a quoted name only refuses more. NOT NULL, a default,
+ * PRIMARY KEY and generated columns are judged on what SQLite recorded
+ * ({@link structuralProblems}), never on this text.
  */
 function harmlessNewColumn(part, knownColumns) {
     if (TABLE_CONSTRAINT.test(part))
@@ -200,11 +278,7 @@ function harmlessNewColumn(part, knownColumns) {
     const known = [...knownColumns].some((c) => c.toLowerCase() === column.toLowerCase());
     if (known)
         return false;
-    if (COLUMN_CONSTRAINT.test(part))
-        return false;
-    if (/\bnot\s+null\b/.test(part) && !/\bdefault\s+(?!null\b)\S/.test(part))
-        return false;
-    return true;
+    return !COLUMN_CONSTRAINT.test(part);
 }
 /**
  * Whether `db` records a migration newer than `latestKnown` — in

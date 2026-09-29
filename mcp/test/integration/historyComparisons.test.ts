@@ -224,6 +224,35 @@ describe('explicit scan ids answer for one project and one scan type', () => {
   });
 });
 
+describe('how much suppressions take out is said, never silent', () => {
+  // A trusted database is the user's own, so suppressions with no project
+  // (matching every project) stay legitimate — but a mass suppression is how
+  // findings disappear without a trace, so risk_score and health_status say
+  // how many apply.
+  it('risk_score counts the suppressed findings; health_status the active suppressions, by scope', async () => {
+    const s = freshPlugin();
+    const p = projectDir('cmp-suppressed-');
+    seedScan(s, {
+      id: '00000000-0000-4000-8000-000000000030',
+      type: 'sast',
+      project: p,
+      findings: [
+        { fp: 'fp-a', severity: 'critical' },
+        { fp: 'fp-b', severity: 'high' },
+        { fp: 'fp-c', severity: 'low' },
+      ],
+    });
+    s.storage.suppressions.insert({ finding_fingerprint: 'fp-a', reason: 'mine', project_path: p });
+    s.storage.suppressions.insert({ finding_fingerprint: 'fp-b', reason: 'no project: matches every project' });
+    s.storage.suppressions.insert({ finding_fingerprint: 'fp-x', reason: 'another project', project_path: projectDir('cmp-other-') });
+
+    const risk = okResult<{ suppressed_count: number; components: unknown }>(await call('risk_score', s, { project_path: p }));
+    expect(risk.suppressed_count).toBe(2);
+    const health = okResult<{ suppressions: Record<string, number> }>(await call('health_status', s, { project_path: p }));
+    expect(health.suppressions).toEqual({ active: 2, this_project: 1, all_projects: 1 });
+  });
+});
+
 describe('dashboard coverage, by the rule risk_score uses', () => {
   it('reads none when every scan measured nothing, as risk_score does', async () => {
     const s = freshPlugin();
