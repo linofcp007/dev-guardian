@@ -55,6 +55,7 @@ import { compareSemver } from '../platform/semverCompare.js';
 import { extractVersion } from './toolProbe.js';
 import { runProcess } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
+import { honouredNote as configNote, REPO_CONFIG, withProjectConfig } from './repoConfig.js';
 import { assessManifestCoverage, trivyParser } from './scannerParsers/trivy.js';
 /** The project's own Trivy suppression file, honoured explicitly. */
 export const PROJECT_TRIVYIGNORE = '.trivyignore';
@@ -300,11 +301,16 @@ export async function runTrivy(inv) {
     }
     return { ...run, honoured, suppressed: repoSuppressionFrom(raw, inv.ignoreFrom) };
 }
-/** The words a `tools_run` reason carries for what a run honoured, or null. */
+/** Trivy's honoured files with what each decides, from the one table (`repoConfig.ts#REPO_CONFIG`). */
+function trivyFiles(honoured) {
+    return honoured.map((path) => ({
+        path,
+        decides: REPO_CONFIG.trivy.find((spec) => spec.file === path)?.decides ?? 'repository configuration',
+    }));
+}
+/** The words a `tools_run` reason carries for what a run honoured, or null — the shared wording. */
 export function honouredNote(honoured) {
-    if (honoured.length === 0)
-        return null;
-    return `honoured the project's ${honoured.join(', ')} (repository configuration: its entries are not reported)`;
+    return configNote(trivyFiles(honoured));
 }
 /**
  * `run` naming what it honoured: the note appended to its reason, and the
@@ -313,19 +319,17 @@ export function honouredNote(honoured) {
  * the reason too). Unchanged when nothing was honoured.
  */
 export function withHonoured(run, trivy) {
-    const note = honouredNote(trivy.honoured);
-    if (note === null)
+    const files = trivyFiles(trivy.honoured);
+    if (files.length === 0)
         return run;
+    const named = withProjectConfig(run, files);
     const s = trivy.suppressed;
     const shown = s !== undefined && s.count !== 0 ? s : undefined;
-    const notes = shown !== undefined ? `${note}; ${suppressionNote(shown)}` : note;
-    const reason = run.reason !== undefined && run.reason.length > 0 ? `${run.reason}; ${notes}` : notes;
-    return {
-        ...run,
-        reason,
-        honoured_config: [...trivy.honoured],
-        ...(shown !== undefined ? { suppressed_by_repo_config: shown } : {}),
-    };
+    if (shown === undefined)
+        return named;
+    const note = suppressionNote(shown);
+    const reason = named.reason !== undefined && named.reason.length > 0 ? `${named.reason}; ${note}` : note;
+    return { ...named, reason, suppressed_by_repo_config: shown };
 }
 // ---------------------------------------------------------------- the dependency pass, judged
 /** Listed missing when the manifest walk stopped early: see {@link judgeTrivyFs}. */

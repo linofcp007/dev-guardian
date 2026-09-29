@@ -187,12 +187,20 @@ their respective projects.
   directory, `-c` pointing at an empty file, no update check). `bandit -r`
   applied a `.bandit` found anywhere in the tree — a dependency's included —
   to every file; it now gets `--ini`: the project's own root `.bandit`, or an
-  empty one. The configs a project legitimately owns and a scanner reads on
-  its own are honoured and named on the run (`honoured_config` and its
-  reason): a root `.bandit`, `.gitleaks.toml` and `.gitleaksignore`,
-  `.hadolint.yaml` (hadolint now runs in the report directory and is given it
-  with `--config`), `.github/actionlint.yaml`, `zizmor.yml` /
-  `.github/zizmor.yml`.
+  empty one. The configs a project legitimately owns and a scanner reads are
+  honoured and named on the run that read them, one way for every runner
+  (`honoured_config` and its reason, "honoured the project's X (what it
+  decides)"; the table is `mcp/src/runners/repoConfig.ts`, and a test fails
+  on a scanner spawned without an entry): `.trivyignore`, a root `.bandit`,
+  `.gitleaks.toml` and `.gitleaksignore`, `.hadolint.yaml` (hadolint now runs
+  in the report directory and is given it with `--config`),
+  `.github/actionlint.yaml`, `zizmor.yml` / `.github/zizmor.yml`, every
+  `.semgrepignore` (root and nested, on a whole-project Semgrep run —
+  Semgrep ignores them for files named explicitly), `.npmrc` whenever npm
+  audit read one, `NuGet.config`, the .NET build's `.editorconfig`,
+  `.globalconfig` and `Directory.Build.props` / `.targets`, and quality_check's
+  ruff, jscpd, radon, staticcheck and ESLint configurations. `.guardianignore`
+  is named on every run of a scan it shapes.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).

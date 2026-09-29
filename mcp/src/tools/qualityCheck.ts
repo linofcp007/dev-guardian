@@ -40,6 +40,7 @@ import { ScanScopeInput } from '../platform/scope.js';
 import { batchArgs } from '../runners/argBatches.js';
 import { scanFileBatches } from '../runners/fileBatchScan.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { nameRepoConfig, type RepoConfigRunner } from '../runners/repoConfig.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { eslintFatalErrors, eslintParser } from '../runners/scannerParsers/eslint.js';
 import { asArray, getNumber, getProp, parseInputAsJson, type ScannerParser } from '../runners/scannerParsers/index.js';
@@ -78,6 +79,25 @@ const ESLINT_CONFIGS = [
   '.eslintrc.yaml',
   '.eslintrc.yml',
 ];
+
+/**
+ * The analysers here that read the project's own configuration — ruff
+ * `ruff.toml` / `[tool.ruff]` from each file upwards, jscpd `.jscpd.json`,
+ * radon `radon.cfg` / `[radon]`, staticcheck `staticcheck.conf`, ESLint its
+ * config — in whole-project and scoped runs alike. Each run that ran names
+ * them (`runners/repoConfig.ts`; round 5, item 2).
+ */
+const QUALITY_RUNNERS: readonly RepoConfigRunner[] = ['ruff', 'jscpd', 'radon', 'staticcheck', 'eslint'];
+
+async function nameQualityConfig(projectPath: string, out: Collected): Promise<void> {
+  const named: ToolRun[] = [];
+  for (const run of out.tools_run) {
+    const runner = QUALITY_RUNNERS.find((r) => r === run.name);
+    const ran = !(run.status === 'skipped');
+    named.push(runner !== undefined && ran ? await nameRepoConfig(run, projectPath, runner) : run);
+  }
+  out.tools_run = named;
+}
 
 /** Kept out of jscpd and radon, as they are out of every other walk of the project. */
 const IGNORED_DIRS = ['node_modules', '.git', '.guardian', 'vendor', 'dist', 'build', 'venv', '.venv', '__pycache__'];
@@ -127,6 +147,7 @@ registerToolModule(
 
       if (ctx.scope !== null) {
         await runOnScope(ctx, reportDir, out, ctx.scope.files);
+        await nameQualityConfig(ctx.projectPath, out);
         return {
           outcome: out.cancelled ? 'cancelled' : 'completed',
           tools_run: out.tools_run,
@@ -147,6 +168,7 @@ registerToolModule(
       // radon already wrote above (never re-runs a scanner), and is the only
       // part of this file that knows about .guardian/budgets.yml at all.
       if (!out.cancelled) runBudgets(ctx.projectPath, reportDir, out);
+      await nameQualityConfig(ctx.projectPath, out);
 
       return {
         outcome: out.cancelled ? 'cancelled' : 'completed',

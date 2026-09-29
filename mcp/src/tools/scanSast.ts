@@ -101,7 +101,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { withProjectConfig } from '../runners/repoConfig.js';
+import { nameRepoConfig } from '../runners/repoConfig.js';
 import { runSemgrep as spawnSemgrep } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
@@ -598,7 +598,8 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   // Exit 0 (clean) or 1 (issues) AND a report with no unanalysed files.
   const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
   const run: ToolRun = check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' };
-  tools_run.push(withProjectConfig(run, ini.honoured ? ['.bandit'] : [], 'its skips and tests decide what is reported'));
+  // The root .bandit only — the one passed with --ini (`runners/repoConfig.ts`).
+  tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.projectPath, 'bandit') : run);
 }
 
 /** An empty `[bandit]` section: Bandit reads it and nothing else. */
@@ -904,7 +905,9 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
       `${run.reason ?? ''}; reduced coverage: ${ownTargets.join(', ')} set CustomAfterMicrosoftCommonTargets, ` +
       "which this scan's build replaces — the project's own imported targets did not run";
   }
-  tools_run.push(run);
+  // The build's own configuration decides what the analyzers report: named
+  // (`runners/repoConfig.ts` — .editorconfig severities, Directory.Build.*).
+  tools_run.push(await nameRepoConfig(run, ctx.projectPath, 'dotnet-analyzers'));
   if (referencesScs) {
     // Security Code Scan is an analyzer of the same build: it reports through
     // the same SARIF, so it ran exactly as well as the build did.

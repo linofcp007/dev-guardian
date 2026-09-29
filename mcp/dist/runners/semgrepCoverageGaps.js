@@ -20,12 +20,20 @@
  *     the run cannot be called complete either.
  *
  * Every gap is named in the run's reason and makes the run partial (`ok`,
- * or `skipped`, AND listed missing). `test/unit/runners/semgrepCoverageGaps
+ * or `skipped`, AND listed missing).
+ *
+ * Not a gap, but named the same way on every run it shapes (round 5, item
+ * 2; `runners/repoConfig.ts`): the project's `.semgrepignore` files — the
+ * root one and any below it, each applying to its own subtree. Measured on
+ * 1.176.1, Semgrep honours them for a DIRECTORY target, whatever the working
+ * directory, and not for files named explicitly (a scope, a review's changed
+ * files), so only a whole-project run names them. `test/unit/runners/semgrepCoverageGaps
  * .test.ts` fails when a file in `src/` spawns Semgrep for a result without
  * calling {@link applySemgrepCoverageGaps}.
  */
 import { describeOversized, oversizedSourceFilesAsync } from '../frameworks/projectLanguages.js';
 import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
+import { honouredFiles, withProjectConfig } from './repoConfig.js';
 import { describeSubmodules, initialisedSubmodules } from './git.js';
 export const NO_SEMGREP_GAPS = { oversized: [], submodules: [] };
 /**
@@ -37,6 +45,9 @@ export const NO_SEMGREP_GAPS = { oversized: [], submodules: [] };
  */
 export async function semgrepCoverageGaps(projectPath, opts = {}) {
     const sized = await oversizedSourceFilesAsync(projectPath, opts.files !== undefined ? { only: opts.files } : {});
+    // A directory target reads them; explicit file targets do not.
+    const honoured = opts.files === undefined ? await honouredFiles(projectPath, 'semgrep') : [];
+    const withHonoured = (gaps) => honoured.length > 0 ? { ...gaps, honoured } : gaps;
     if (opts.submodules !== undefined) {
         const out = {
             oversized: sized.files,
@@ -44,7 +55,7 @@ export async function semgrepCoverageGaps(projectPath, opts = {}) {
         };
         if (sized.incomplete !== undefined)
             out.incomplete = sized.incomplete;
-        return out;
+        return withHonoured(out);
     }
     const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath));
     const among = opts.among ?? opts.files;
@@ -57,7 +68,7 @@ export async function semgrepCoverageGaps(projectPath, opts = {}) {
     const out = { oversized: sized.files, submodules };
     if (sized.incomplete !== undefined)
         out.incomplete = sized.incomplete;
-    return out;
+    return withHonoured(out);
 }
 /** Each gap in words, in a fixed order. Empty: none. */
 export function semgrepGapNotes(gaps) {
@@ -88,6 +99,14 @@ export function scannedNothingBecause(gaps) {
  * {@link scannedNothingBecause}.
  */
 export function applySemgrepCoverageGaps(run, gaps, opts = {}) {
+    const applied = applyGaps(run, gaps, opts);
+    // What the run honoured is named whatever its gaps — on a run that scanned
+    // nothing too: a .semgrepignore may be why. Not when Semgrep never ran.
+    const ran = !(run.status === 'skipped' && run.reason === 'not_installed');
+    const named = ran ? withProjectConfig(applied.toolRun, gaps.honoured ?? []) : applied.toolRun;
+    return { toolRun: named, missing: applied.missing };
+}
+function applyGaps(run, gaps, opts) {
     const notes = semgrepGapNotes(gaps);
     if (notes.length === 0)
         return { toolRun: run, missing: false };

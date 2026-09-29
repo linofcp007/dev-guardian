@@ -78,6 +78,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
+import { honouredRootFiles, withProjectConfig } from './repoConfig.js';
 import { openPrivateReportDir, sanitizeGitleaksReport } from '../secrets/verify/rawReport.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
 import { changedFiles, countCommits, describeSubmodules, git, gitlinksAmong, initialisedSubmodules, repoState, resolveCommit, shallowBoundary, uncommittedFiles, } from './git.js';
@@ -131,30 +132,15 @@ export async function runGitleaksScan(opts) {
     }
     return result;
 }
-/** The project's gitleaks files every pass reads, and what each decides. */
-const PROJECT_GITLEAKS_FILES = [
-    { file: '.gitleaks.toml', decides: 'its rules and allowlists decide what is reported' },
-    { file: '.gitleaksignore', decides: 'its fingerprints are not reported' },
-];
-/** Each pass that ran, naming the project's gitleaks files it honoured — see the module comment. */
+/**
+ * Each pass that ran, naming the project's gitleaks files it honoured — see
+ * the module comment; which files is `runners/repoConfig.ts#REPO_CONFIG`.
+ */
 function nameProjectConfig(projectPath, result) {
-    const present = PROJECT_GITLEAKS_FILES.filter(({ file }) => {
-        try {
-            return lstatSync(join(projectPath, file)).isFile();
-        }
-        catch {
-            return false;
-        }
-    });
-    if (present.length === 0)
+    const files = honouredRootFiles(projectPath, 'gitleaks');
+    if (files.length === 0)
         return;
-    const note = `honoured the project's ${present.map((p) => `${p.file} (${p.decides})`).join(', ')}`;
-    for (const run of result.tools_run) {
-        if (run.status === 'skipped')
-            continue;
-        run.reason = run.reason !== undefined && run.reason.length > 0 ? `${run.reason}; ${note}` : note;
-        run.honoured_config = [...new Set([...(run.honoured_config ?? []), ...present.map((p) => p.file)])];
-    }
+    result.tools_run = result.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, files)));
 }
 async function scan(opts, result) {
     if (!(await scannerAvailable('gitleaks'))) {

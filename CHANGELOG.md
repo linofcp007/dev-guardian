@@ -42,6 +42,17 @@ version bump.
   scan excludes — with `skips: B101,B602,B404` took a root `a.py` from 3 results to 0, and two such files made Bandit
   exit 2 (a failed pass). Bandit now gets `--ini`: the project's own root `.bandit`, named on the run, or an empty
   `[bandit]` file.
+- Every repository configuration a scanner honours is named on the run that read it, one way: `honoured_config`
+  and "honoured the project's X (what it decides)" in the reason, from one table (`runners/repoConfig.ts`); a test
+  fails on a scanner spawned in `src/` without an entry there, or whose spawning file does not name what it reads.
+  New in that table: every `.semgrepignore` — the root one and nested ones, each excluding its own subtree
+  (measured on Semgrep 1.176.1: a `sub/.semgrepignore` excluded `sub/deep/`), named on whole-project Semgrep runs
+  only, since Semgrep ignores them for files named explicitly (a scope, a review); `.guardianignore` on every run
+  of a scan it shapes; `.npmrc` whenever npm audit read one (`omit=dev` and `audit-level` decide what it reports,
+  not only its registry); `NuGet.config` for `dotnet list package --vulnerable`; `.editorconfig`, `.globalconfig`
+  and `Directory.Build.props` / `.targets` for scan_sast's .NET analyzers; and quality_check's ruff (`ruff.toml`,
+  `[tool.ruff]`), jscpd (`.jscpd.json`), radon, staticcheck and ESLint configurations. The `.trivyignore` note
+  now reads "(its entries are not reported)".
 - Repository configuration the scanners read on their own is named on the run that read it (`honoured_config` and
   the reason; still honoured — the project's call): `.gitleaks.toml` and `.gitleaksignore` on every gitleaks pass
   (gitleaks reads `<source>/.gitleaks.toml` itself: a committed allowlist over the one secret in history read 0

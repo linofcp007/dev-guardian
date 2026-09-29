@@ -442,7 +442,14 @@ describe('deps_audit', () => {
     };
     const npm = r.tools_run.find((t) => t.name === 'npm');
     expect(npm?.reason ?? '').not.toMatch(/answered by/);
-    expect(npm?.honoured_config).toBeUndefined();
+    // Round 5, item 2: a project .npmrc is named whenever npm audit read one
+    // (omit=dev or audit-level decide what it reports), whatever its registry.
+    if (npmrc === null) {
+      expect(npm?.honoured_config).toBeUndefined();
+    } else {
+      expect(npm?.honoured_config).toEqual(['.npmrc']);
+      expect(npm?.reason).toMatch(/honoured the project's \.npmrc \(its registry and settings decide what npm audit reads and reports\)/);
+    }
   });
 
   it('dedupes an npm-audit finding for a package Trivy already reported (no double count)', async () => {

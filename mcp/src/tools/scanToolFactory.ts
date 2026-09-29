@@ -126,6 +126,7 @@ import {
 } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
 import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
+import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
 /**
@@ -756,6 +757,18 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     limiter?.release();
   }
   report('recording results');
+
+  // The project's `.guardianignore` shapes every run of this scan — the
+  // native flags some scanners get, the result filter below for all — so
+  // each run that ran names it, as every runner names the project
+  // configuration it honours (`runners/repoConfig.ts`; round 5, item 2).
+  if (args.exclusions !== null) {
+    const ignore = honouredRootFiles(projectPath, 'guardian');
+    invocation = {
+      ...invocation,
+      tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),
+    };
+  }
 
   // Apply parsers.
   let findings: Finding[] = [];

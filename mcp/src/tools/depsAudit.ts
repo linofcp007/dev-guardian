@@ -51,6 +51,7 @@ import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/n
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { honouredRootFiles, nameRepoConfig, withProjectConfig } from '../runners/repoConfig.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -355,17 +356,22 @@ async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
     }
   }
 
-  // Whoever answered npm audit is named when the project chose it (see
-  // `projectNpmRegistry`): honoured, never silently.
+  // The project's .npmrc is named whenever npm audit read one (round 5, item
+  // 2: `runners/repoConfig.ts`) — its registry, `omit=dev`, `audit-level`
+  // decide what is audited — and whoever answered, when the project chose a
+  // registry other than npm's (see `projectNpmRegistry`).
   const registry = isNpmStdout ? projectNpmRegistry(opts.ctx.projectPath) : null;
-  const registryNote = (run: ToolRun): ToolRun =>
-    registry === null
-      ? run
-      : {
-          ...run,
-          reason: `${run.reason ?? ''}; npm audit answered by ${registry} (from the project's .npmrc)`,
-          honoured_config: ['.npmrc'],
-        };
+  const npmrc = isNpmStdout ? honouredRootFiles(opts.ctx.projectPath, 'npm') : [];
+  const registryNote = (run: ToolRun): ToolRun => {
+    const named = withProjectConfig(run, npmrc);
+    if (registry === null) return named;
+    const note = `npm audit answered by ${registry} (from the project's .npmrc)`;
+    return {
+      ...named,
+      reason: named.reason !== undefined && named.reason.length > 0 ? `${named.reason}; ${note}` : note,
+      honoured_config: [...new Set([...(named.honoured_config ?? []), '.npmrc'])],
+    };
+  };
   if (ok) {
     opts.tools_run.push(
       registryNote({
@@ -648,15 +654,24 @@ async function runDotnetSca(opts: {
   }
 
   const gapReason = failures.map((f) => `${f.target}: ${f.reason}`).join('; ');
+  // The project's NuGet.config files answer the lookup: named (`runners/repoConfig.ts`).
   if (anyOk) {
-    tools_run.push({
-      name: 'dotnet',
-      status: 'ok',
-      reason: failures.length > 0 ? `parsed into findings (gap — ${gapReason})` : 'parsed into findings',
-    });
+    tools_run.push(
+      await nameRepoConfig(
+        {
+          name: 'dotnet',
+          status: 'ok',
+          reason: failures.length > 0 ? `parsed into findings (gap — ${gapReason})` : 'parsed into findings',
+        },
+        ctx.projectPath,
+        'dotnet',
+      ),
+    );
     if (failures.length > 0) missing_tools.push('dotnet');
   } else {
-    tools_run.push({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' });
+    tools_run.push(
+      await nameRepoConfig({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' }, ctx.projectPath, 'dotnet'),
+    );
     missing_tools.push('dotnet');
   }
   return failures;
