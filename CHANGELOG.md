@@ -489,6 +489,16 @@ version bump.
   whatever a directory link pointed at (`detect_stack`, the EF Core and target-framework audits,
   `scan_dotnet_secrets`, `compliance_check`, `register_custom_rules`' globs, custom rule directories) no longer
   descend links.
+- **`create_fix_pr`'s dry run ran the project's code with every secret the server had.** To judge a fix it runs
+  the project's own test command — `npm test` (`scripts.test`), `pytest` (every `conftest.py`), `cargo test`
+  (`build.rs`), `go test` — in its worktrees, on a dry run too, and it inherited the server's whole environment:
+  a `scripts.test` that dumped `process.env` read `GITHUB_TOKEN`, `NPM_TOKEN`, `NODE_AUTH_TOKEN`, cloud
+  credentials, API keys and every `GUARDIAN_*` (measured: all 14 planted variables). It now runs with
+  `extendEnv: false` and an allowlist — `PATH`, the home and temp directories, the locale, `CI`, what every
+  Windows process expects, and the toolchains' own (`NODE_*`, `PYTHON*`, `CARGO_HOME`, `RUSTUP_HOME`, `GOPATH`,
+  `GOCACHE`, …) — with any credential-looking name, `GUARDIAN_*` and `npm_config_*` removed, in the worktree and
+  the base-commit tree alike. The tool description said a dry run "never leaves the machine"; it now says that a
+  dry run executes the project's test command, which is the project's code.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.

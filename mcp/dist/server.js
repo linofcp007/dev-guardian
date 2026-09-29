@@ -76076,6 +76076,65 @@ function scannerNotVerified(target, scan2) {
   }
 }
 
+// src/fixpr/testCommandEnv.ts
+var EXACT = new Set(
+  [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "TERM",
+    "CI",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "COMMONPROGRAMFILES",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "GOPATH",
+    "GOROOT",
+    "GOCACHE",
+    "GOMODCACHE",
+    "JAVA_HOME",
+    "DOTNET_ROOT"
+  ].map((n2) => n2.toUpperCase())
+);
+var PREFIXES = ["LC_", "NODE_", "PYTHON"];
+var CREDENTIAL = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|API_?KEY|PRIVATE_?KEY|SESSION|COOKIE/i;
+function testEnvAllows(name) {
+  const upper = name.toUpperCase();
+  if (upper.startsWith("GUARDIAN_") || upper.startsWith("NPM_CONFIG_")) return false;
+  if (CREDENTIAL.test(upper)) return false;
+  return EXACT.has(upper) || PREFIXES.some((p) => upper.startsWith(p));
+}
+function testCommandEnv(source = process.env) {
+  const out = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value !== void 0 && testEnvAllows(name)) out[name] = value;
+  }
+  return out;
+}
+
 // src/fixpr/verify.ts
 var OUTPUT_HEAD_LINES = 20;
 function judgeScan(targets, before, after2) {
@@ -76131,10 +76190,13 @@ async function judgeTests(opts) {
   }
   const run = opts.run ?? runProcess;
   const command = [derived.command, ...derived.args].join(" ");
+  const env = testCommandEnv();
   const worktreeResult = await run({
     command: derived.command,
     args: derived.args,
     cwd: worktreePath,
+    env,
+    extendEnv: false,
     timeoutMs
   });
   if (!hasFailed2(worktreeResult)) {
@@ -76157,6 +76219,8 @@ ${head2}` : ""}`
       command: derived.command,
       args: derived.args,
       cwd: baseTree.path,
+      env,
+      extendEnv: false,
       timeoutMs
     });
   } finally {
@@ -76352,7 +76416,7 @@ var KEEPS_BRANCH = /* @__PURE__ */ new Set([
 var tool45 = {
   name: "create_fix_pr",
   title: "Apply scanner-produced fixes and open a pull request",
-  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Every open finding that did NOT become a candidate is accounted for in `filtered` (below severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in `filtered_reason`. A cancelled call answers ok with cancelled: true and the groups it finished.",
+  description: "Apply fixes the scanners themselves already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, go test) in those worktrees \u2014 that is the project's code, run as you, with an allowlisted environment that carries no token or credential of this server. Every open finding that did NOT become a candidate is accounted for in `filtered` (below severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in `filtered_reason`. A cancelled call answers ok with cancelled: true and the groups it finished.",
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -76371,7 +76435,7 @@ var tool45 = {
       "Maximum number of groups (pull requests) to act on in one run, highest severity first, then CISA KEV-listed, then higher FIRST EPSS. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
     ),
     apply: external_exports.boolean().optional().describe(
-      "When true, commit, push and open a pull request for every group that verifies. Default: false \u2014 a dry run that still computes candidates, applies the fix in a worktree, and runs both differentials, but never leaves the machine."
+      "When true, commit, push and open a pull request for every group that verifies. Default: false \u2014 a dry run that still computes candidates, applies the fix in a worktree, and runs both differentials \u2014 the project's own test command included \u2014 but commits, pushes and opens nothing."
     )
   },
   handler: async (input, ctx, callMeta) => handler42(input, ctx, callMeta)

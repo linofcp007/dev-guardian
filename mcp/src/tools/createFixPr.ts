@@ -238,7 +238,10 @@ const tool: ToolModule = {
     'deps_audit or scan_deps) plus a lazy test differential against a pristine base-commit tree, ' +
     'and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works ' +
     'in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan ' +
-    'rows behind; only commit/push/gh pr create sit behind apply=true. Every open finding ' +
+    'rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the ' +
+    "project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, " +
+    "go test) in those worktrees — that is the project's code, run as you, with an allowlisted " +
+    'environment that carries no token or credential of this server. Every open finding ' +
     'that did NOT become a candidate is accounted for in `filtered` (below severity_min, no ' +
     'scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it) and in ' +
     '`filtered_reason`. ' +
@@ -277,7 +280,8 @@ const tool: ToolModule = {
       .describe(
         'When true, commit, push and open a pull request for every group that verifies. ' +
           'Default: false — a dry run that still computes candidates, applies the fix in a ' +
-          'worktree, and runs both differentials, but never leaves the machine.',
+          "worktree, and runs both differentials — the project's own test command included — but " +
+          'commits, pushes and opens nothing.',
       ),
   },
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
