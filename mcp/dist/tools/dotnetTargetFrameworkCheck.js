@@ -16,7 +16,7 @@
  *   .NET Framework 4.7-4.8 — supported (security-only) but legacy
  */
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -60,13 +60,11 @@ async function handler(input, ctx) {
     const projects = collectCsprojFiles(projectPath, 6);
     const rows = [];
     for (const file of projects) {
-        let xml;
-        try {
-            xml = readFileSync(file, 'utf8');
-        }
-        catch {
+        // The repository's file: bounded, regular files only, never through a
+        // link out of the project (`platform/projectFs.ts`).
+        const xml = readProjectTextOrUndefined(projectPath, file);
+        if (xml === undefined)
             continue;
-        }
         const tfms = extractTfms(xml);
         if (tfms.length === 0)
             continue;
@@ -145,27 +143,15 @@ function collectCsprojFiles(root, maxDepth) {
     function walk(dir, depth) {
         if (depth > maxDepth)
             return;
-        let entries;
-        try {
-            entries = readdirSync(dir);
-        }
-        catch {
-            return;
-        }
-        for (const name of entries) {
+        // A directory link is never descended (`platform/projectFs.ts`).
+        for (const { name, kind } of listProjectDir(root, dir)) {
             if (SKIP_DIRS.has(name))
                 continue;
             const abs = join(dir, name);
-            try {
-                const s = statSync(abs);
-                if (s.isDirectory())
-                    walk(abs, depth + 1);
-                else if (name.endsWith('.csproj') || name.endsWith('.fsproj'))
-                    out.push(abs);
-            }
-            catch {
-                /* skip */
-            }
+            if (kind === 'directory')
+                walk(abs, depth + 1);
+            else if (name.endsWith('.csproj') || name.endsWith('.fsproj'))
+                out.push(abs);
         }
     }
     walk(root, 0);

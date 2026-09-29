@@ -54,7 +54,8 @@
  * issuer form, and no control characters.
  */
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
@@ -373,7 +374,7 @@ const scanContainers = makeScanTool({
 
       const composeFile = findComposeFile(ctx.projectPath);
       if (composeFile) {
-        const text = readComposeFileSafe(composeFile);
+        const text = readComposeFileSafe(ctx.projectPath, composeFile);
         if (text !== null) {
           parser_inputs.push({
             parser: composeParser,
@@ -432,12 +433,9 @@ function findComposeFile(projectPath: string): string | null {
   return null;
 }
 
-function readComposeFileSafe(path: string): string | null {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
-  }
+/** The repository's compose file: bounded, regular files only, never through a link out of the project. */
+function readComposeFileSafe(projectPath: string, path: string): string | null {
+  return readProjectTextOrUndefined(projectPath, path) ?? null;
 }
 
 interface ContainersInput {

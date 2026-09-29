@@ -37,7 +37,8 @@
  *
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { listProjectDir, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
@@ -240,13 +241,10 @@ const NPM_PUBLIC_REGISTRY = /^https?:\/\/registry\.npmjs\.org\/?$/i;
  * not read here.
  */
 export function projectNpmRegistry(projectPath) {
-    let text;
-    try {
-        text = readFileSync(join(projectPath, '.npmrc'), 'utf8');
-    }
-    catch {
+    // The repository's file: bounded, never through a link out of the project.
+    const text = readProjectTextOrUndefined(projectPath, '.npmrc', 1024 * 1024);
+    if (text === undefined)
         return null;
-    }
     let registry = null;
     for (const raw of text.split(/\r?\n/)) {
         const line = raw.trim();
@@ -355,28 +353,17 @@ async function tryNativeAudit(opts) {
  */
 function findRequirementsFiles(projectPath) {
     const out = [];
-    let entries = [];
-    try {
-        entries = readdirSync(projectPath);
-    }
-    catch {
-        return out;
-    }
-    for (const name of entries) {
-        if (/^requirements.*\.txt$/i.test(name))
+    // `platform/projectFs.ts`: a `requirements/` that links out of the project
+    // is not listed, and a file that links out is not handed to pip-audit.
+    const inside = (abs) => projectPathKind(projectPath, abs) === 'file';
+    for (const { name } of listProjectDir(projectPath, projectPath)) {
+        if (/^requirements.*\.txt$/i.test(name) && inside(join(projectPath, name)))
             out.push(join(projectPath, name));
     }
     const reqDir = join(projectPath, 'requirements');
-    if (existsSync(reqDir)) {
-        try {
-            for (const name of readdirSync(reqDir)) {
-                if (name.toLowerCase().endsWith('.txt'))
-                    out.push(join(reqDir, name));
-            }
-        }
-        catch {
-            /* ignore — best-effort */
-        }
+    for (const { name } of listProjectDir(projectPath, reqDir)) {
+        if (name.toLowerCase().endsWith('.txt') && inside(join(reqDir, name)))
+            out.push(join(reqDir, name));
     }
     return out;
 }

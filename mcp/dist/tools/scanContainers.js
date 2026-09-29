@@ -53,7 +53,8 @@
  * nothing else; a signer needs an image, exactly one identity form and one
  * issuer form, and no control characters.
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
@@ -338,7 +339,7 @@ const scanContainers = makeScanTool({
         }
         const composeFile = findComposeFile(ctx.projectPath);
         if (composeFile) {
-            const text = readComposeFileSafe(composeFile);
+            const text = readComposeFileSafe(ctx.projectPath, composeFile);
             if (text !== null) {
                 parser_inputs.push({
                     parser: composeParser,
@@ -397,13 +398,9 @@ function findComposeFile(projectPath) {
     }
     return null;
 }
-function readComposeFileSafe(path) {
-    try {
-        return readFileSync(path, 'utf8');
-    }
-    catch {
-        return null;
-    }
+/** The repository's compose file: bounded, regular files only, never through a link out of the project. */
+function readComposeFileSafe(projectPath, path) {
+    return readProjectTextOrUndefined(projectPath, path) ?? null;
 }
 const SIGNER_FIELDS = ['signer_identity', 'signer_identity_regexp', 'signer_issuer', 'signer_issuer_regexp'];
 /** The signer `image` must be signed by, or null when none was named (existence check only). */

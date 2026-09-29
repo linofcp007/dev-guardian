@@ -24,7 +24,7 @@
  * {@link MAX_MANIFEST_BYTES}, or a lockfile that does not parse): a pin it
  * did not see may be the different one.
  */
-import { readFileSync, statSync } from 'node:fs';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { listProjectFiles } from '../runners/projectFiles.js';
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
@@ -51,7 +51,7 @@ export function makePypiPinResolver(projectPath) {
 function readAllPins(projectPath) {
     const byName = new Map();
     for (const manifest of listProjectFiles(projectPath).filter(isPypiPinFile)) {
-        const text = readText(join(projectPath, ...manifest.split('/')));
+        const text = readText(projectPath, join(projectPath, ...manifest.split('/')));
         if (text === null)
             return null;
         const pins = pinsOf(manifest, text);
@@ -120,16 +120,9 @@ function tomlPackagePins(text) {
     }
     return out;
 }
-function readText(path) {
-    try {
-        const stat = statSync(path);
-        if (!stat.isFile() || stat.size > MAX_MANIFEST_BYTES)
-            return null;
-        return readFileSync(path, 'utf8');
-    }
-    catch {
-        return null;
-    }
+/** The repository's manifest: bounded, regular files only, contained in the project (`platform/projectFs.ts`). */
+function readText(projectPath, path) {
+    return readProjectTextOrUndefined(projectPath, path, MAX_MANIFEST_BYTES) ?? null;
 }
 function record(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value)

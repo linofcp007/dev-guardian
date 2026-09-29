@@ -24,7 +24,7 @@
  * schema follows it. FID does not appear anywhere in this codebase; keep it
  * that way.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { makeFinding } from '../runners/scannerParsers/index.js';
@@ -41,15 +41,15 @@ const QUALITY_FIELDS = ['duplication_pct', 'complexity'];
  */
 export function loadBudgets(projectPath) {
     const path = join(projectPath, '.guardian', 'budgets.yml');
-    if (!existsSync(path))
+    // The repository's file: bounded, regular files only, never through a
+    // link out of the project (`platform/projectFs.ts`).
+    const read = readProjectText(projectPath, path, 1024 * 1024);
+    if (read.status === 'absent')
         return { kind: 'none' };
-    let text;
-    try {
-        text = readFileSync(path, 'utf8');
+    if (read.status === 'refused') {
+        return { kind: 'invalid', path, error: `the file was not read: ${describeReadRefusal(read.reason)}` };
     }
-    catch (e) {
-        return { kind: 'invalid', path, error: `could not read the file: ${message(e)}` };
-    }
+    const text = read.text;
     let doc;
     try {
         doc = parseYaml(text);

@@ -13,12 +13,12 @@
  * etc.) — actual install is left to the user / their package manager.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { describeWriteRefusal, writeProjectFile } from '../platform/projectFs.js';
+import { describeWriteRefusal, listProjectDir, writeProjectFile } from '../platform/projectFs.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -130,13 +130,8 @@ function inferStack(projectPath: string, ctx: PluginContext): Stack {
   if (existsSync(join(projectPath, 'pom.xml')) || existsSync(join(projectPath, 'build.gradle')))
     return 'java';
   if (existsSync(join(projectPath, 'Gemfile'))) return 'ruby';
-  try {
-    const entries = readdirSync(projectPath);
-    if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))
-      return 'dotnet';
-  } catch {
-    /* ignore */
-  }
+  const entries = listProjectDir(projectPath, projectPath).map((e) => e.name);
+  if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json')) return 'dotnet';
   return 'generic';
 }
 

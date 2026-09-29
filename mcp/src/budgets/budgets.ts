@@ -25,7 +25,7 @@
  * that way.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { Category, Finding } from '../types.js';
@@ -75,14 +75,14 @@ const QUALITY_FIELDS: readonly (keyof QualityBudgets)[] = ['duplication_pct', 'c
  */
 export function loadBudgets(projectPath: string): BudgetsLoadResult {
   const path = join(projectPath, '.guardian', 'budgets.yml');
-  if (!existsSync(path)) return { kind: 'none' };
-
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (e) {
-    return { kind: 'invalid', path, error: `could not read the file: ${message(e)}` };
+  // The repository's file: bounded, regular files only, never through a
+  // link out of the project (`platform/projectFs.ts`).
+  const read = readProjectText(projectPath, path, 1024 * 1024);
+  if (read.status === 'absent') return { kind: 'none' };
+  if (read.status === 'refused') {
+    return { kind: 'invalid', path, error: `the file was not read: ${describeReadRefusal(read.reason)}` };
   }
+  const text = read.text;
 
   let doc: unknown;
   try {

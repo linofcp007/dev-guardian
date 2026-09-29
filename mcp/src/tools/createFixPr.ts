@@ -121,7 +121,7 @@
  *     by its structured package, never by words in its advisory.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isAbsolute, join, relative } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -854,15 +854,13 @@ function prNote(pr: PrOutcome): string {
 function readManifests(worktreePath: string): Record<string, string> {
   const files: Record<string, string> = {};
   for (const name of TEST_MANIFESTS) {
-    const path = join(worktreePath, name);
-    if (!existsSync(path)) continue;
-    try {
-      files[name] = readFileSync(path, 'utf8');
-    } catch {
-      // Unreadable is treated as absent — deriveTestCommand cannot use
-      // content it cannot read, and this is not a failure worth aborting
-      // the group over: the other manifests are still tried.
-    }
+    // A checkout of the repository: read contained in the worktree, bounded,
+    // regular files only (`platform/projectFs.ts`). Unreadable or refused is
+    // treated as absent — deriveTestCommand cannot use content it cannot
+    // read, and this is not a failure worth aborting the group over: the
+    // other manifests are still tried.
+    const text = readProjectTextOrUndefined(worktreePath, name);
+    if (text !== undefined) files[name] = text;
   }
   return files;
 }

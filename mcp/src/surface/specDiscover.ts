@@ -17,8 +17,10 @@
  * exist, race with a concurrent delete) is simply absent from the result.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
+import { readSmallText } from '../hooks/configFile.js';
+import { readProjectText } from '../platform/projectFs.js';
 import { FS_EXCLUDE } from '../treeHash/computeTreeHash.js';
 
 export interface DiscoveredSpec {
@@ -47,8 +49,8 @@ const SPEC_EXTENSIONS = new Set(['.json', '.yaml', '.yml']);
 export function discoverSpecs(projectPath: string, explicit?: readonly string[]): DiscoveryOutcome {
   const root = resolve(projectPath);
 
-  const candidates =
-    explicit && explicit.length > 0 ? dedupeResolved(explicit) : walk(root, root).sort();
+  const isExplicit = explicit !== undefined && explicit.length > 0;
+  const candidates = isExplicit ? dedupeResolved(explicit) : walk(root, root).sort();
 
   // The file cap applies on both entry paths: discovery can find more than
   // MAX_SPEC_FILES candidates, and a caller can just as easily hand in an
@@ -56,7 +58,7 @@ export function discoverSpecs(projectPath: string, explicit?: readonly string[])
   const truncated = candidates.length > MAX_SPEC_FILES;
   const selected = candidates.slice(0, MAX_SPEC_FILES);
 
-  const outcome = readCandidates(selected);
+  const outcome = readCandidates(isExplicit ? null : root, selected);
   outcome.truncated = truncated;
   return outcome;
 }
@@ -96,32 +98,24 @@ export function dedupeResolved(paths: readonly string[]): string[] {
   return out;
 }
 
-function readCandidates(paths: readonly string[]): DiscoveryOutcome {
+/**
+ * Reads each candidate bounded and regular-files-only (the size used to be
+ * `stat`ed and the file then read whole, so a FIFO — size 0 — blocked the
+ * read and a `/dev/zero` link read without end), at most
+ * {@link MAX_SPEC_BYTES}. A DISCOVERED candidate (`root` given) is the
+ * repository's and is read contained in it (`platform/projectFs.ts`); an
+ * explicit `spec_paths` entry is the caller's choice and may lie anywhere
+ * (`hooks/configFile.ts`'s reader). Over the cap is `oversized`; absent,
+ * unreadable or refused is absent from the result, not an error.
+ */
+function readCandidates(root: string | null, paths: readonly string[]): DiscoveryOutcome {
   const specs: DiscoveredSpec[] = [];
   const oversized: string[] = [];
 
   for (const path of paths) {
-    let size: number;
-    try {
-      size = statSync(path).size;
-    } catch {
-      // Path doesn't exist, isn't readable, or a race removed it — absent
-      // from the result, not an error.
-      continue;
-    }
-
-    if (size > MAX_SPEC_BYTES) {
-      oversized.push(path);
-      continue;
-    }
-
-    try {
-      const text = readFileSync(path, 'utf8');
-      specs.push({ file: path, text });
-    } catch {
-      // Unreadable (permissions, race between stat and read) — absent.
-      continue;
-    }
+    const read = root === null ? readSmallText(path, MAX_SPEC_BYTES) : readProjectText(root, path, MAX_SPEC_BYTES);
+    if (read.status === 'ok') specs.push({ file: path, text: read.text });
+    else if (read.status === 'refused' && read.reason === 'too-large') oversized.push(path);
   }
 
   return { specs, oversized, truncated: false };

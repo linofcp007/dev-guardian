@@ -25,7 +25,7 @@
  * did not see may be the different one.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { listProjectFiles } from '../runners/projectFiles.js';
 import type { PypiPin, PypiPinResolver } from './dependencyProvider.js';
@@ -53,7 +53,7 @@ export function makePypiPinResolver(projectPath: string): PypiPinResolver {
 function readAllPins(projectPath: string): Map<string, PypiPin[]> | null {
   const byName = new Map<string, PypiPin[]>();
   for (const manifest of listProjectFiles(projectPath).filter(isPypiPinFile)) {
-    const text = readText(join(projectPath, ...manifest.split('/')));
+    const text = readText(projectPath, join(projectPath, ...manifest.split('/')));
     if (text === null) return null;
     const pins = pinsOf(manifest, text);
     if (pins === null) return null;
@@ -116,14 +116,9 @@ function tomlPackagePins(text: string): Array<[string, string]> {
   return out;
 }
 
-function readText(path: string): string | null {
-  try {
-    const stat = statSync(path);
-    if (!stat.isFile() || stat.size > MAX_MANIFEST_BYTES) return null;
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
-  }
+/** The repository's manifest: bounded, regular files only, contained in the project (`platform/projectFs.ts`). */
+function readText(projectPath: string, path: string): string | null {
+  return readProjectTextOrUndefined(projectPath, path, MAX_MANIFEST_BYTES) ?? null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {

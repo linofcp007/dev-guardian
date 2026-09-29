@@ -45,8 +45,15 @@
  * `lockfileOnly` says, and only on npm's `install` subcommand.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  describeReadRefusal,
+  describeWriteRefusal,
+  PROJECT_FILE_MAX_BYTES,
+  readProjectBytes,
+  writeProjectFile,
+} from '../platform/projectFs.js';
 import { batchArgs } from '../runners/argBatches.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { checkSemgrepReport } from '../runners/semgrepReport.js';
@@ -288,12 +295,16 @@ function editPipPin(
   if (isAbsolute(file) || rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
   }
-  let text: string;
-  try {
-    text = readFileSync(target, 'utf8');
-  } catch {
-    return { ok: false, label, reason: `'${file}' is not in the committed tree` };
+  // The worktree is a checkout of the repository, and a checkout creates the
+  // links the repository holds: read and write through `platform/projectFs.ts`,
+  // which refuses a link out of the worktree for the read and any link for
+  // the write. Bytes, so a byte-order mark survives the edit.
+  const read = readProjectBytes(worktreePath, file, PROJECT_FILE_MAX_BYTES);
+  if (read.status === 'absent') return { ok: false, label, reason: `'${file}' is not in the committed tree` };
+  if (read.status === 'refused') {
+    return { ok: false, label, reason: `'${file}' was not read: ${describeReadRefusal(read.reason)}` };
   }
+  const text = read.bytes.toString('utf8');
   const name = step.package_name.split(/[-_.]+/).map(escapeRegExp).join('[-_.]+');
   const pin = new RegExp(
     `(^|[\\s"'\\[,])(${name})(\\s*\\[[^\\]]*\\])?(\\s*==\\s*)${escapeRegExp(step.installed_version)}(?=$|[\\s;"',#\\]\\\\])`,
@@ -307,7 +318,10 @@ function editPipPin(
   if (count === 0) {
     return { ok: false, label, reason: `no '${step.package_name}==${step.installed_version}' pin in '${file}'` };
   }
-  writeFileSync(target, edited, 'utf8');
+  const written = writeProjectFile(worktreePath, file, edited, { mode: 'replace' });
+  if (!written.ok) {
+    return { ok: false, label, reason: `'${file}' was not written: ${describeWriteRefusal(written.reason, written.detail)}` };
+  }
   return { ok: true, label };
 }
 

@@ -44,10 +44,13 @@
  * subdirectories are not (gitignore's per-directory files are not supported).
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { git, splitNul } from '../runners/git.js';
 import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
+import { describeReadRefusal, readProjectText, readProjectTextOrUndefined } from './projectFs.js';
+/** The largest `.guardianignore` read; a real one is a few KB. */
+const MAX_GUARDIAN_IGNORE_BYTES = 1024 * 1024;
 export const GUARDIAN_IGNORE_FILE = '.guardianignore';
 /** Bandit's own default `-x` list — replaced, not extended, by passing `-x`. */
 const BANDIT_DEFAULT_EXCLUDES = ['.svn', 'CVS', '.bzr', '.hg', '.git', '__pycache__', '.tox', '.eggs', '*.egg'];
@@ -237,16 +240,15 @@ function escapeRegExp(text) {
  */
 export async function loadProjectExclusions(projectPath) {
     const file = join(projectPath, GUARDIAN_IGNORE_FILE);
-    let text;
-    try {
-        text = readFileSync(file, 'utf8');
-    }
-    catch (e) {
-        const code = typeof e === 'object' && e !== null && 'code' in e ? e.code : undefined;
-        if (code === 'ENOENT' || code === 'ENOTDIR')
-            return null;
-        return { file, error: e instanceof Error ? e.message : String(e) };
-    }
+    // The repository's file: bounded, regular files only, never through a
+    // link out of the project (`platform/projectFs.ts`). One that is there and
+    // refused is an error the caller reports, never "nothing excluded".
+    const read = readProjectText(projectPath, GUARDIAN_IGNORE_FILE, MAX_GUARDIAN_IGNORE_BYTES);
+    if (read.status === 'absent')
+        return null;
+    if (read.status === 'refused')
+        return { file, error: `not read: ${describeReadRefusal(read.reason)}` };
+    const text = read.text;
     const matcher = compileIgnore(text);
     const listed = await gitListFiles(projectPath);
     let semgrepAnchor;
@@ -283,13 +285,9 @@ const PROBE_CHILD = '.guardian-probe-7f3a';
 export function submodulesNotIgnored(projectPath, submodules) {
     if (submodules.length === 0)
         return [];
-    let text;
-    try {
-        text = readFileSync(join(projectPath, GUARDIAN_IGNORE_FILE), 'utf8');
-    }
-    catch {
+    const text = readProjectTextOrUndefined(projectPath, GUARDIAN_IGNORE_FILE, MAX_GUARDIAN_IGNORE_BYTES);
+    if (text === undefined)
         return [...submodules];
-    }
     const matcher = compileIgnore(text);
     return submodules.filter((sub) => !matcher.ignores(sub, true) && !matcher.ignores(`${sub}/${PROBE_CHILD}`, false));
 }

@@ -23,7 +23,7 @@
  * present.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { NpmResolver, ResolvedPackage } from './dependencyProvider.js';
 
@@ -92,7 +92,7 @@ export function makeNpmResolver(projectPath: string): NpmResolver {
 function readLock(projectPath: string, rootDir: string): LockState {
   for (const candidate of LOCKFILES) {
     const file = rootDir === '' ? candidate : `${rootDir}/${candidate}`;
-    const parsed = readJson(join(projectPath, rootDir, candidate), MAX_LOCKFILE_BYTES);
+    const parsed = readJson(projectPath, join(projectPath, rootDir, candidate), MAX_LOCKFILE_BYTES);
     if (parsed === undefined) continue;
     // Present but unreadable: never fall back to a lesser source.
     if (parsed === null) return { kind: 'unreadable', file };
@@ -124,24 +124,26 @@ function walkV1(deps: Record<string, unknown> | null, prefix: string, out: Map<s
 }
 
 function readInstalled(projectPath: string, dir: string, name: string): ResolvedPackage | null {
-  const parsed = readJson(join(projectPath, dir, 'node_modules', ...name.split('/'), 'package.json'), MAX_PACKAGE_JSON_BYTES);
+  const parsed = readJson(projectPath, join(projectPath, dir, 'node_modules', ...name.split('/'), 'package.json'), MAX_PACKAGE_JSON_BYTES);
   const version = parsed?.['version'];
   if (typeof version !== 'string') return null;
   return { version, source: `${dir === '' ? '' : `${dir}/`}node_modules/${name}/package.json` };
 }
 
 /**
- * `undefined`: no such regular file. `null`: present, but too large or not a
- * JSON object.
+ * `undefined`: no such regular file. `null`: present, but too large, not a
+ * JSON object, or refused. Read through `platform/projectFs.ts`: contained in
+ * the project (a package name with `..` in it, or a `node_modules` link out
+ * of the project, reads nothing), judged on the opened descriptor.
  */
-function readJson(path: string, maxBytes: number): Record<string, unknown> | null | undefined {
+function readJson(projectPath: string, path: string, maxBytes: number): Record<string, unknown> | null | undefined {
+  const r = readProjectText(projectPath, path, maxBytes);
+  if (r.status === 'absent') return undefined;
+  if (r.status === 'refused') return r.reason === 'not-a-regular-file' ? undefined : null;
   try {
-    const stat = statSync(path);
-    if (!stat.isFile()) return undefined;
-    if (stat.size > maxBytes) return null;
-    return record(JSON.parse(readFileSync(path, 'utf8')) as unknown);
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : null;
+    return record(JSON.parse(r.text) as unknown);
+  } catch {
+    return null;
   }
 }
 

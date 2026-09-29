@@ -31,7 +31,8 @@
  * `.guardian/budgets.yml` are project-level — a duplication percentage of the
  * whole project — so a scoped run skips them and says why.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { dirname, join, relative } from 'node:path';
 import { z } from 'zod';
 import { budgetViolationFindings, evaluateQualityBudgets, loadBudgets } from '../budgets/budgets.js';
@@ -560,7 +561,11 @@ function hasEslintConfig(projectPath) {
     if (ESLINT_CONFIGS.some((name) => existsSync(join(projectPath, name))))
         return true;
     try {
-        const pkg = parseInputAsJson(readFileSync(join(projectPath, 'package.json'), 'utf8'));
+        // The repository's file: bounded, never through a link out of the project.
+        const text = readProjectTextOrUndefined(projectPath, 'package.json');
+        if (text === undefined)
+            return false;
+        const pkg = parseInputAsJson(text);
         return typeof pkg === 'object' && pkg !== null && 'eslintConfig' in pkg;
     }
     catch {

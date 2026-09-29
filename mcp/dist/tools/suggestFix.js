@@ -22,9 +22,8 @@
  * are those of the same tool AND rule_id; it used to list any ten active
  * suppressions, whatever they were about.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { z } from 'zod';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -85,10 +84,13 @@ async function handler(input, ctx) {
     let source_start_line = 0;
     let source_end_line = 0;
     if (!credential && finding.file_path) {
-        const abs = join(projectPath, finding.file_path);
-        if (existsSync(abs)) {
+        // Echoed into the response, so read through `platform/projectFs.ts`: a
+        // finding path that climbs out of the project, or a file that links out
+        // of it, is never read — the lines around it would otherwise be quoted
+        // back from wherever the link pointed.
+        const raw = readProjectTextOrUndefined(projectPath, finding.file_path);
+        if (raw !== undefined) {
             try {
-                const raw = readFileSync(abs, 'utf8');
                 const lines = raw.split(/\r?\n/);
                 const start = Math.max(0, (finding.line_start ?? 1) - 1 - contextLines);
                 const end = Math.min(lines.length, (finding.line_end ?? finding.line_start ?? 1) + contextLines);

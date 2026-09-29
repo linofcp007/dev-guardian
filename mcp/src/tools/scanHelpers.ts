@@ -14,9 +14,12 @@
  *   when one scanner inside a composite run was skipped.
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readSmallTextFile } from '../hooks/configFile.js';
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
+import { makeProjectDir } from '../platform/projectFs.js';
 import { resetTrivyVersionCache } from '../runners/trivyRun.js';
 
 /**
@@ -53,18 +56,41 @@ export function resetScannerCache(): void {
   resetTrivyVersionCache();
 }
 
+/**
+ * `<project>/.guardian/reports/<prefix>-<short id>/`, created — or, when any
+ * directory on that path is a link (a junction included) or not a directory,
+ * a fresh directory under the OS temp directory instead.
+ *
+ * The scanners write their reports here and this server reads them back, so
+ * the directory must be the project's own: a repository (an archive, a
+ * checkout) can carry a `.guardian` or `.guardian/reports` link, and
+ * `mkdirSync(…, { recursive: true })` created the report directory at its
+ * end, outside the project, for every scanner to write into. Some names are
+ * predictable (`surface-<tree hash>`), so the leaf is checked too.
+ */
 export function ensureReportDir(projectPath: string, scanId: string, prefix: string): string {
   const short = scanId.slice(0, 8);
-  const dir = join(projectPath, '.guardian', 'reports', `${prefix}-${short}`);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return dir;
+  const made = makeProjectDir(projectPath, join('.guardian', 'reports', `${prefix}-${short}`));
+  if (made !== null) return made;
+  process.stderr.write(
+    `[dev-guardian] ${join(projectPath, '.guardian', 'reports')} is a link or not a directory; ` +
+      `this scan's reports go to the temp directory instead\n`,
+  );
+  return mkdtempSync(join(tmpdir(), `guardian-reports-${prefix}-`));
 }
 
+/**
+ * The largest report read back. A V8 string holds about 512 MiB; a report
+ * past that could not be parsed anyway.
+ */
+export const MAX_REPORT_BYTES = 512 * 1024 * 1024;
+
+/**
+ * A report file's text, or null when it does not exist, is not a regular
+ * file (judged on a descriptor opened non-blocking: a FIFO or a device is
+ * never waited on or read), is over {@link MAX_REPORT_BYTES}, or could not be
+ * read.
+ */
 export function readJsonSafe(path: string): string | null {
-  try {
-    if (!existsSync(path)) return null;
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
-  }
+  return readSmallTextFile(path, MAX_REPORT_BYTES) ?? null;
 }

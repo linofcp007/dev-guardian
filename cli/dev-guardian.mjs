@@ -124,6 +124,7 @@ import { decodeText } from '../mcp/dist/hooks/textEncoding.js';
 import {
   describeReadRefusal,
   describeWriteRefusal,
+  isWithinDir,
   PROJECT_LOCKFILE_MAX_BYTES,
   readProjectText,
   writeProjectFile,
@@ -2575,8 +2576,21 @@ async function cmdDashboard(argv) {
   // destination directory may not exist yet (a custom --out is not required
   // to sit under the project's own .guardian/, which openDatabase already
   // created).
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, html);
+  //
+  // A destination inside the project — the default `.guardian/dashboard.html`
+  // among them — is the repository's path, which a checkout can make a link:
+  // written through `platform/projectFs.ts` (a temp file renamed into place,
+  // never through a link or a directory that links out). An `--out` outside
+  // the project is the operator's own choice and written as given.
+  if (isWithinDir(projectPath, outPath)) {
+    const written = writeProjectFile(projectPath, outPath, html, { mode: 'replace' });
+    if (!written.ok) {
+      return usageError(`dashboard not written to ${outPath}: ${describeWriteRefusal(written.reason, written.detail)}`);
+    }
+  } else {
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, html);
+  }
 
   process.stdout.write(`${outPath}\n`);
 

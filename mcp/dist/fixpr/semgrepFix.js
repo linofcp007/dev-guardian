@@ -34,11 +34,14 @@
  * registry rule such as `javascript.lang.security.audit.eval-detected` from
  * matching a local rule that happens to be called `eval-detected`.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { readSmallTextFile } from '../hooks/configFile.js';
 import { yamlFilesUnder } from '../platform/customRules.js';
+/** The largest rule config read back; the plugin's own largest pack is a few hundred KB. */
+const MAX_RULE_CONFIG_BYTES = 16 * 1024 * 1024;
 /** Does Semgrep's check_id `checkId` name rule `id` of the file `ruleFile`? */
 export function checkIdMatches(checkId, ruleFile, id) {
     if (checkId === id)
@@ -123,9 +126,14 @@ function loadLocalRules(configs) {
             continue;
         }
         for (const file of isDir ? yamlFilesUnder(config) : [config]) {
+            // A config the originating scan loaded — the project's own Semgrep
+            // config among them — read bounded and regular-files-only.
+            const text = readSmallTextFile(file, MAX_RULE_CONFIG_BYTES);
+            if (text === undefined)
+                continue;
             let doc;
             try {
-                doc = parseYaml(readFileSync(file, 'utf8'));
+                doc = parseYaml(text);
             }
             catch {
                 continue;

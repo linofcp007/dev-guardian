@@ -70,7 +70,7 @@
  *     shares, and the file is never half-written.
  */
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, } from 'node:fs';
+import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, } from 'node:fs';
 import { open as openAsync, lstat as lstatAsync, readlink as readlinkAsync } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -286,6 +286,46 @@ export async function hashProjectFile(root, path) {
     }
 }
 /**
+ * The sha256 (hex) of a regular file's bytes, streamed — or `null` when the
+ * path is absent, not a regular file (judged on a non-blocking descriptor, so
+ * a FIFO is never waited on and a device never read), or unreadable. NOT
+ * contained: for a path that may legitimately lie anywhere (a rule pack the
+ * user registered), where the property wanted is that the read ends.
+ */
+export function hashRegularFileSync(path) {
+    let fd;
+    try {
+        fd = openSync(path, OPEN_FLAGS);
+    }
+    catch {
+        return null;
+    }
+    try {
+        if (!fstatSync(fd).isFile())
+            return null;
+        const hash = createHash('sha256');
+        const chunk = Buffer.allocUnsafe(1024 * 1024);
+        for (;;) {
+            const n = readSync(fd, chunk, 0, chunk.length, null);
+            if (n === 0)
+                break;
+            hash.update(chunk.subarray(0, n));
+        }
+        return hash.digest('hex');
+    }
+    catch {
+        return null;
+    }
+    finally {
+        try {
+            closeSync(fd);
+        }
+        catch {
+            /* nothing left to do with it */
+        }
+    }
+}
+/**
  * `lstat`'s answer for `path`: a link (a Windows junction included, which
  * `lstat` reports as one) is `link` and is never followed.
  */
@@ -330,6 +370,59 @@ export function realpathInProject(root, path) {
     if (real === null || !isWithinDir(realRoot(root), real))
         return null;
     return real;
+}
+/**
+ * `statSync(path)`'s answer for a project path, except that a link leading
+ * out of the project (or to a network or device path) is `outside` and is
+ * never followed there. For a caller that asks "is it a directory?" and
+ * would otherwise walk, list or read wherever a link pointed.
+ */
+export function projectPathKind(root, path) {
+    const abs = resolve(root, path);
+    if (!isWithinDir(root, abs))
+        return 'outside';
+    if (projectEntryKind(abs) === 'absent')
+        return 'absent';
+    const real = realpathInProject(root, abs);
+    if (real === null)
+        return realpathOrNull(abs) === null ? 'absent' : 'outside';
+    let st;
+    try {
+        st = lstatSync(real);
+    }
+    catch {
+        return 'absent';
+    }
+    if (st.isFile())
+        return 'file';
+    if (st.isDirectory())
+        return 'directory';
+    return 'other';
+}
+/**
+ * The entries of a directory inside the project — `[]` when it is absent,
+ * not a directory, cannot be listed, or is reached through a link out of the
+ * project. Entries are typed from the directory itself (`Dirent`), so a walk
+ * built on this never descends a directory link, in or out of the project:
+ * no loop, and no listing of anything outside. A `link` entry naming a file
+ * can still be read with {@link readProjectText}, which judges where it
+ * leads.
+ */
+export function listProjectDir(root, dir) {
+    const real = realpathInProject(root, dir);
+    if (real === null)
+        return [];
+    let entries;
+    try {
+        entries = readdirSync(real, { withFileTypes: true });
+    }
+    catch {
+        return [];
+    }
+    return entries.map((e) => ({
+        name: e.name,
+        kind: e.isSymbolicLink() ? 'link' : e.isFile() ? 'file' : e.isDirectory() ? 'directory' : 'other',
+    }));
 }
 /** A readable sentence for a refusal, for a tool's `reason` field. */
 export function describeWriteRefusal(reason, detail) {
@@ -414,6 +507,43 @@ function ensureDirsInside(root, dir) {
             return current;
     }
     return null;
+}
+/**
+ * `rel` below `root` as a real directory, every component of it created here
+ * or already a plain directory — or `null` when any component is a link (a
+ * junction included, even one that stays inside the project), is not a
+ * directory, or cannot be created. For dev-guardian's own output directories
+ * inside the project (`.guardian/reports/…`), which nothing in a repository
+ * has a reason to make a link, and which a scanner then writes into.
+ */
+export function makeProjectDir(root, rel) {
+    const rootAbs = resolve(root);
+    const target = resolve(rootAbs, rel);
+    if (!isWithinDir(rootAbs, target))
+        return null;
+    let current = rootAbs;
+    for (const part of relative(rootAbs, target).split(/[\\/]+/).filter((p) => p.length > 0)) {
+        current = join(current, part);
+        let st;
+        try {
+            st = lstatSync(current);
+        }
+        catch {
+            st = null;
+        }
+        if (st === null) {
+            try {
+                mkdirSync(current);
+                st = lstatSync(current);
+            }
+            catch {
+                return null;
+            }
+        }
+        if (st.isSymbolicLink() || !st.isDirectory())
+            return null;
+    }
+    return target;
 }
 function removeQuietly(path) {
     try {

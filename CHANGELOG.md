@@ -469,7 +469,26 @@ version bump.
   `scan` refuses a baseline that resolves outside the checkout, is a FIFO or a device, or is over 64 MiB, rather
   than reading it or reading it as "no baseline". `.guardian/ci.json` (the `start_command`, `accept_partial_parse`
   and `attest` refusals) and `check`'s `.guardian/hooks-allowlist.json` are read bounded: a FIFO at any of those
-  names blocked the CI job until its own timeout.
+  names blocked the CI job until its own timeout. `dashboard`'s default `.guardian/dashboard.html` is written the
+  same way.
+- **Every other read of a repository file was swept.** 193 raw `fs` read, list, `stat` and write calls in
+  `mcp/src` came down to 93, and a source-scan test (`rawRepoFsSites.test.ts`) now fails on any new one it does
+  not list, each listed one with its reason: dev-guardian's own files, a path the user named, a repository
+  listing that is safe as written (typed from `Dirent`s, never descending a link), or — named, not converted — a
+  repository read in `runners/` or `skillaudit/`, which another review owns. Measured before the sweep: the tree
+  hash every scan computes followed a committed link to a file outside the project (its content changed the
+  hash) and read a `/dev/zero` link without end; `ensureReportDir` created the report directory every scanner
+  writes into at the end of a `.guardian` link; `report_export` wrote through a planted link at its predictable
+  `.guardian/reports/report-<title>/` path; `.guardian/budgets.yml` was read through a link out of the project;
+  and a `.guardianignore` of any size was read whole. Now the tree hash hashes a link by its target text and never
+  opens anything but a regular file; a report directory with a link on its way is replaced by a fresh temp
+  directory; `report_export`, `suggest_fix`'s quoted source, the manifests and lockfiles `deps_update_plan` and
+  `license_compatibility` read, `.npmrc`, the Dockerfiles and compose files `map_attack_surface` reads,
+  discovered OpenAPI specs, the .NET project walks, `.guardianignore`, `.semgrepignore`, the project's Semgrep
+  configs and the fix worktree's manifests all go through `platform/projectFs.ts`; and the walks that listed
+  whatever a directory link pointed at (`detect_stack`, the EF Core and target-framework audits,
+  `scan_dotnet_secrets`, `compliance_check`, `register_custom_rules`' globs, custom rule directories) no longer
+  descend links.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.

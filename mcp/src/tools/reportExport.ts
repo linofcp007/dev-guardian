@@ -23,7 +23,7 @@
  * row itself lists sub-tools, not scanners.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { describeWriteRefusal, writeProjectFile } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -141,11 +141,10 @@ async function handler(
             sections: [markdownToSafeHtml(inp.content_markdown)],
             lang,
           });
-    const outDir = join(projectPath, '.guardian', 'reports', `report-${slugify(title)}`);
-    mkdirSync(outDir, { recursive: true });
     const fileName = narrativeFormat === 'markdown' ? 'report.md' : 'report.html';
-    const outFile = join(outDir, fileName);
-    writeFileSync(outFile, content, 'utf8');
+    const written = writeReport(projectPath, `report-${slugify(title)}`, fileName, content);
+    if (!written.ok) return failDomain('unsupported_target', written.reason);
+    const outFile = written.path;
     return {
       ok: true,
       kind: 'narrative',
@@ -192,10 +191,9 @@ async function handler(
     await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(ctx.storage.stack, scan.project_path)),
   );
   const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
-  const outDir = join(projectPath, '.guardian', 'reports', `export-${scanId.slice(0, 8)}`);
-  mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, fileName);
-  writeFileSync(outFile, content, 'utf8');
+  const written = writeReport(projectPath, `export-${scanId.slice(0, 8)}`, fileName, content);
+  if (!written.ok) return failDomain('unsupported_target', written.reason);
+  const outFile = written.path;
 
   return {
     ok: true,
@@ -208,6 +206,25 @@ async function handler(
     cves_count: cves.length,
     ...((latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
   };
+}
+
+/**
+ * Writes `.guardian/reports/<dirName>/<fileName>` through `platform/projectFs.ts`.
+ * Both names are predictable (`report-<title>`, `export-<scan id>`), so a
+ * repository can carry that path as a link; the report is written through a
+ * temp file renamed into place, never through a link or a directory that is
+ * one.
+ */
+function writeReport(
+  projectPath: string,
+  dirName: string,
+  fileName: string,
+  content: string,
+): { ok: true; path: string } | { ok: false; reason: string } {
+  const rel = join('.guardian', 'reports', dirName, fileName);
+  const w = writeProjectFile(projectPath, rel, content, { mode: 'replace' });
+  if (!w.ok) return { ok: false, reason: `the report was not written to ${rel}: ${describeWriteRefusal(w.reason, w.detail)}` };
+  return { ok: true, path: join(projectPath, rel) };
 }
 
 type ScanRecordT = NonNullable<ReturnType<PluginContext['storage']['scans']['getById']>>;
