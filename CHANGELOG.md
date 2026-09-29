@@ -112,6 +112,16 @@ version bump.
   budgets "ok". A `runtimeError` or a non-zero exit is now a failed check naming the code and message. A configured
   budget whose metric Lighthouse returned no value for is `budgets.status: "not_measured"` (listed in
   `not_measured`, with a warning), never `ok`; the measured ones are still evaluated.
+- `deps_update_plan`'s pnpm fix follows the project's pnpm. It always said `"pnpm": { "overrides" }` in
+  package.json, which pnpm 11 and later no longer read (measured with pnpm 12.8.1: `[WARN] The "pnpm" field in
+  package.json is no longer read by pnpm`, and the lock kept minimist@0.0.8); the e2e passed only because a cached
+  pnpm 10.33.2 answered. The version comes from `packageManager`, then `devEngines.packageManager` when its floor
+  decides, then a `lockfileVersion` below 9.0, then `pnpm --version` (corepack kept off the network): before 10.5
+  the fix is package.json's `"pnpm"` field; from 10.5 (#9121, when pnpm-workspace.yaml gained settings and lost
+  its required `packages`) it is `overrides:` in pnpm-workspace.yaml; unknown, both are named with where each
+  applies — a pnpm-workspace.yaml without `packages` fails before 10.5 (measured on 9.15.9 and 10.4.1), so no
+  single place works everywhere. The e2e runs pnpm 10.4.1 and 12.8.1 through corepack in a private cache,
+  applies each named fix and checks it works.
 
 ## [3.0.0] - 2026-09-29
 

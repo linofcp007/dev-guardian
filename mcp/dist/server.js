@@ -55073,7 +55073,7 @@ var inputSchema = {
 var tool4 = {
   name: "deps_update_plan",
   title: "Dependency upgrade plan",
-  description: "Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use each stack's own \"outdated\" command; for .NET that is preceded by `dotnet restore --locked-mode`, which EXECUTES the project's own MSBuild and contacts its NuGet feeds (it never creates or rewrites a packages.lock.json). pip reads this project's own requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn projects get no npm commands \u2014 their CVEs are listed with the pnpm.overrides / resolutions fix to apply by hand (workspace members included). Classifies each entry as security (an active CVE in the same project's latest deps scan \u2014 npm/pip target the MINIMUM fixed version, other stacks the latest available) / patch / minor / major, and returns a sortable, structured plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), `unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem command that failed, with its code \u2014 e.g. NU1004 lock out of sync vs NU1301 feed unreachable).",
+  description: "Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use each stack's own \"outdated\" command; for .NET that is preceded by `dotnet restore --locked-mode`, which EXECUTES the project's own MSBuild and contacts its NuGet feeds (it never creates or rewrites a packages.lock.json). pip reads this project's own requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn projects get no npm commands \u2014 their CVEs are listed with the pnpm overrides (where the project's pnpm version reads them) / resolutions fix to apply by hand (workspace members included). Classifies each entry as security (an active CVE in the same project's latest deps scan \u2014 npm/pip target the MINIMUM fixed version, other stacks the latest available) / patch / minor / major, and returns a sortable, structured plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), `unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem command that failed, with its code \u2014 e.g. NU1004 lock out of sync vs NU1301 feed unreachable).",
   inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta)
 };
@@ -55582,7 +55582,8 @@ function workspaceIncludes(root, projectPath) {
   }
   return patterns.length > 0 && matchesAny(rel2, patterns);
 }
-function planForNonNpmManager(projectPath, cves, manager) {
+async function planForNonNpmManager(projectPath, cves, manager) {
+  const pnpm = manager.name === "pnpm" ? await pnpmVersionOf(manager.root) : null;
   const directDeps = readNpmDirectDependencies(projectPath);
   const resolved = readNpmResolvedPackages(projectPath, manager.name, manager.root);
   const rootManifest = manager.root === projectPath ? "package.json" : `the workspace root package.json (${toPosix(relative14(projectPath, join38(manager.root, "package.json")))})`;
@@ -55600,10 +55601,74 @@ function planForNonNpmManager(projectPath, cves, manager) {
     }
     const target = cve.fixedVersion ?? "<a version that fixes " + cve.cveIds.join(", ") + ">";
     const bump2 = direct ? `raise the "${name}" range in package.json to ${target}, or ` : "";
-    const reason = manager.name === "pnpm" ? `pnpm project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json and rebuild node_modules while pnpm-lock.yaml stays vulnerable, and pnpm ignores npm's top-level "overrides". Fix manually: ${bump2}add "pnpm": { "overrides": { "${name}": "${target}" } } to ${rootManifest}, then run pnpm install --ignore-scripts${runAt}.` : `yarn project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json while yarn.lock stays vulnerable, and yarn reads "resolutions", not npm's "overrides". Fix manually: ${bump2}add "resolutions": { "${name}": "${target}" } to ${rootManifest}, then run yarn install${runAt} (--ignore-scripts on Yarn 1, --mode=skip-build on Yarn 2+).`;
+    const reason = manager.name === "pnpm" ? `pnpm project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json and rebuild node_modules while pnpm-lock.yaml stays vulnerable, and pnpm ignores npm's top-level "overrides". Fix manually: ${bump2}${pnpmOverrideAdvice(pnpm, name, target, {
+      manifest: rootManifest,
+      workspaceYaml: rootWorkspaceYaml(projectPath, manager.root)
+    })}, then run pnpm install --ignore-scripts${runAt}.` : `yarn project (${manager.evidence}): no npm command is emitted \u2014 npm would write a package-lock.json while yarn.lock stays vulnerable, and yarn reads "resolutions", not npm's "overrides". Fix manually: ${bump2}add "resolutions": { "${name}": "${target}" } to ${rootManifest}, then run yarn install${runAt} (--ignore-scripts on Yarn 1, --mode=skip-build on Yarn 2+).`;
     unplanned.push({ package_name: name, ecosystem: "npm", cve_ids: cve.cveIds, reason });
   }
   return { steps: [], unplanned, unsupported: [manager.name] };
+}
+var PNPM_WORKSPACE_SETTINGS_SINCE = "10.5.0";
+async function pnpmVersionOf(root) {
+  let manifest = {};
+  try {
+    const parsed = JSON.parse(readFileSync23(join38(root, "package.json"), "utf8"));
+    if (typeof parsed === "object" && parsed !== null) manifest = parsed;
+  } catch {
+  }
+  const pm = typeof manifest["packageManager"] === "string" ? manifest["packageManager"] : "";
+  const pinned = /^pnpm@(\d+\.\d+\.\d+)/.exec(pm)?.[1];
+  if (pinned !== void 0) return { version: pinned, evidence: `pnpm ${pinned} (package.json "packageManager")` };
+  const devEngines = manifest["devEngines"];
+  const declared = typeof devEngines === "object" && devEngines !== null ? devEngines["packageManager"] : void 0;
+  for (const entry of Array.isArray(declared) ? declared : [declared]) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const e = entry;
+    if (e["name"] !== "pnpm" || typeof e["version"] !== "string") continue;
+    const floor = /^\s*(?:\^|~|>=|=)?\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(e["version"]);
+    if (floor?.[1] === void 0) continue;
+    const version2 = `${floor[1]}.${floor[2] ?? "0"}.${floor[3] ?? "0"}`;
+    if ((compareSemver(version2, PNPM_WORKSPACE_SETTINGS_SINCE) ?? -1) >= 0) {
+      return { version: version2, evidence: `pnpm ${e["version"]} (package.json "devEngines.packageManager")` };
+    }
+  }
+  try {
+    const lock = readFileSync23(join38(root, "pnpm-lock.yaml"), "utf8");
+    const lv = /^lockfileVersion:\s*['"]?(\d+)(?:\.(\d+))?/m.exec(lock);
+    const major = lv?.[1] === void 0 ? NaN : Number(lv[1]);
+    if (Number.isInteger(major) && major < 9) {
+      return { version: "8.0.0", evidence: `pnpm 8 or older (pnpm-lock.yaml lockfileVersion ${lv?.[1] ?? "?"}.${lv?.[2] ?? "0"})` };
+    }
+  } catch {
+  }
+  try {
+    const r = await execa("pnpm", ["--version"], {
+      cwd: root,
+      reject: false,
+      timeout: 15e3,
+      env: { ...process.env, COREPACK_ENABLE_NETWORK: "0", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" }
+    });
+    const out = typeof r?.stdout === "string" ? r.stdout.trim() : "";
+    const v = r?.exitCode === 0 ? /^(\d+\.\d+\.\d+)/.exec(out)?.[1] : void 0;
+    if (v !== void 0) return { version: v, evidence: `pnpm ${v} (\`pnpm --version\`)` };
+  } catch {
+  }
+  return { version: null, evidence: "unknown" };
+}
+function rootWorkspaceYaml(projectPath, root) {
+  return root === projectPath ? "pnpm-workspace.yaml" : `the workspace root pnpm-workspace.yaml (${toPosix(relative14(projectPath, join38(root, "pnpm-workspace.yaml")))})`;
+}
+function pnpmOverrideAdvice(pnpm, name, target, where) {
+  const yaml = `add \`overrides: { "${name}": "${target}" }\` to ${where.workspaceYaml}`;
+  const json = `add "pnpm": { "overrides": { "${name}": "${target}" } } to ${where.manifest}`;
+  if (pnpm === null || pnpm.version === null) {
+    return `pnpm version unknown (no "packageManager" pin, a lock file every pnpm since 9 writes, and no pnpm answered --version) \u2014 with pnpm 10.5 or later, ${yaml} (the only place pnpm 11 and later read); before 10.5, ${json} (a pnpm-workspace.yaml without "packages" fails there)`;
+  }
+  if ((compareSemver(pnpm.version, PNPM_WORKSPACE_SETTINGS_SINCE) ?? -1) >= 0) {
+    return `for ${pnpm.evidence}, ${yaml} (pnpm 11 and later no longer read package.json's "pnpm" field)`;
+  }
+  return `for ${pnpm.evidence}, ${json} (pnpm before 10.5 reads no settings from pnpm-workspace.yaml)`;
 }
 function readNpmDirectDependencies(projectPath) {
   const out = /* @__PURE__ */ new Set();
