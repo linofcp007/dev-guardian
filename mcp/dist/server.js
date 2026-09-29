@@ -40988,20 +40988,19 @@ async function shallowBoundary(cwd) {
   }
 }
 async function initialisedSubmodules(cwd) {
-  const r = await git(cwd, ["submodule", "status", "--", "."]);
+  const r = await git(cwd, ["ls-files", "-z", "--stage", "--", "."]);
   if (r.exitCode !== 0) return [];
-  const out = [];
-  for (const line of r.stdout.split(/\r?\n/)) {
-    const m = /^([ +U-])[0-9a-f]+ (.+?)(?: \([^)]*\))?$/.exec(line);
-    const state = m?.[1];
-    const path8 = m?.[2];
-    if (state === void 0 || path8 === void 0 || state === "-") continue;
+  const out = /* @__PURE__ */ new Set();
+  for (const entry of splitNul(r.stdout)) {
+    const tab = entry.indexOf("	");
+    if (tab < 0 || !entry.startsWith("160000 ")) continue;
+    const path8 = entry.slice(tab + 1);
     try {
-      if (readdirSync4(join6(cwd, path8)).some((name) => name !== ".git")) out.push(path8.split("\\").join("/"));
+      if (readdirSync4(join6(cwd, path8)).some((name) => name !== ".git")) out.add(path8.split("\\").join("/"));
     } catch {
     }
   }
-  return out.sort();
+  return [...out].sort();
 }
 function describeSubmodules(paths) {
   const shown = paths.slice(0, 5).join(", ");

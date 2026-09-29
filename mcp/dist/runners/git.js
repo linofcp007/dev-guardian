@@ -92,32 +92,37 @@ export async function shallowBoundary(cwd) {
     }
 }
 /**
- * The submodules under `cwd` that are initialised and hold content —
- * `git submodule status` (which reads `.gitmodules`) minus the ones marked
- * `-` (not initialised), and minus an empty checkout — as `/`-separated
- * paths relative to `cwd`, sorted. Their files are in no listing a scanner
- * of the superproject uses (review M2). Empty outside a repository.
+ * The submodules under `cwd` that are initialised and hold content — the
+ * index's gitlinks (mode 160000, one per `.gitmodules` entry that was
+ * added) whose checkout directory is not empty (an uninitialised submodule
+ * is an empty directory) — as `/`-separated paths relative to `cwd`,
+ * sorted. Their files are in no listing a scanner of the superproject uses
+ * (review M2). Empty outside a repository.
+ *
+ * Read from `git ls-files --stage` (~30 ms) rather than `git submodule
+ * status`, which spawns a shell and took ~770 ms per call on Windows
+ * (git 2.52) — on every secrets and SAST scan.
  */
 export async function initialisedSubmodules(cwd) {
-    const r = await git(cwd, ['submodule', 'status', '--', '.']);
+    const r = await git(cwd, ['ls-files', '-z', '--stage', '--', '.']);
     if (r.exitCode !== 0)
         return [];
-    const out = [];
-    for (const line of r.stdout.split(/\r?\n/)) {
-        const m = /^([ +U-])[0-9a-f]+ (.+?)(?: \([^)]*\))?$/.exec(line);
-        const state = m?.[1];
-        const path = m?.[2];
-        if (state === undefined || path === undefined || state === '-')
+    const out = new Set();
+    for (const entry of splitNul(r.stdout)) {
+        // `<mode> <object> <stage>\t<path>`.
+        const tab = entry.indexOf('\t');
+        if (tab < 0 || !entry.startsWith('160000 '))
             continue;
+        const path = entry.slice(tab + 1);
         try {
             if (readdirSync(join(cwd, path)).some((name) => name !== '.git'))
-                out.push(path.split('\\').join('/'));
+                out.add(path.split('\\').join('/'));
         }
         catch {
             // Not there on disk: nothing a scan could have read.
         }
     }
-    return out.sort();
+    return [...out].sort();
 }
 /** `submodule contents not scanned: a, b` — the first few, then "and N more". */
 export function describeSubmodules(paths) {
