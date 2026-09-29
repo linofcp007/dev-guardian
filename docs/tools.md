@@ -9,7 +9,7 @@ The dev-guardian MCP server registers **59 tools** and **18 resources**. This pa
 | Tool | Title | Parameters |
 | --- | --- | --- |
 | [`audit_agent_config`](#audit_agent_config) | Audit the AI-agent workspace configuration (MCP servers, permissions, hooks) | `project_path`, `include_user_config`, `severity_min` |
-| [`audit_executive`](#audit_executive) | Executive audit (security + quality + deps + compliance) | `project_path`, `severity_min` |
+| [`audit_executive`](#audit_executive) | Executive audit (security + quality + deps + compliance) | `project_path`, `severity_min`, `local_only` |
 | [`audit_mcp_tools`](#audit_mcp_tools) | Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls) | `project_path`, `servers`, `include_user_config`, `allow_remote`, `timeout_ms` |
 | [`bug_hunt`](#bug_hunt) | Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, Java, C# and PHP bug rules, plus ONE Rust rule; optional language packs, off by default; other languages still registry-only) | `project_path`, `severity_min`, `auto_fix`, `allow_dirty`, `categories`, `include_language_packs`, `force`, `scope` |
 | [`bulk_audit_wordpress_sites`](#bulk_audit_wordpress_sites) | Bulk wp\_audit across many sites | `wp_install_paths`, `concurrency` |
@@ -82,12 +82,13 @@ Audit the AI-agent workspace configuration in this project (and, opt-in, the use
 
 ### `audit_executive`
 
-Run security\_scan\_full, quality\_check, deps\_audit, and compliance\_check in sequence, producing one aggregated report with severity counts, top-10 findings, and a delta vs the previous executive audit (when present).
+Executive roll-up: runs security\_scan\_full, quality\_check, deps\_audit and compliance\_check CONCURRENTLY, plus scan\_wordpress for a WordPress project and scan\_dotnet\_secrets + dotnet\_target\_framework\_check for .NET, per this project's latest detect\_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security\_scan\_full, scan\_wordpress); Trivy's vulnerability database; npm audit and PyPI (deps\_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality\_check runs the project's ESLint config. local\_only=true passes local\_only to security\_scan\_full (Semgrep: rules on disk, --metrics=off) and skips scan\_wordpress, which has no local-only mode; it does NOT stop Trivy's database download, deps\_audit's registry calls or a .NET restore — the result lists those in local\_only\_gaps.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
+| `local_only` | boolean | no | — | Passed to every child that takes it (security\_scan\_full: Semgrep rules on disk only, --metrics=off). scan\_wordpress, which has no local-only mode, is skipped. Trivy, deps\_audit and a .NET restore still reach the network; local\_only\_gaps in the result says what did. Default: false. |
 
 ### `audit_mcp_tools`
 

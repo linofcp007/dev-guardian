@@ -85,7 +85,7 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 
 **Features de AI / LLM dentro da app** (prompt injection, custo, evals): não há módulo dedicado. `/guardian-scan` apanha chaves expostas e sinks perigosos; o resto — input do utilizador a chegar ao prompt sem isolamento, output do modelo a causar efeitos (escritas na DB, chamadas externas), limites de tokens e de custo — revê-se à mão com a secção "Features de AI / LLM" da checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura.
 
-**Checkup completo** ("faz um checkup", "verifica tudo", "diagnóstico do projeto", "do a full checkup", "haz un chequeo"): `audit_executive { project_path: "<project>" }` (segurança, qualidade, dependências, compliance) mais `bug_hunt { project_path: "<project>" }`, num único relatório consolidado.
+**Checkup completo** ("faz um checkup", "verifica tudo", "diagnóstico do projeto", "do a full checkup", "haz un chequeo"): `audit_executive { project_path: "<project>" }` (segurança, qualidade, dependências, compliance) mais `bug_hunt { project_path: "<project>" }`, num único relatório consolidado. O `audit_executive` corre os sub-scans em paralelo, envia métricas ao registo do Semgrep, descarrega a base de dados do Trivy e, no `deps_audit`, instala os requirements do PyPI num virtualenv temporário. Se o utilizador não quiser nada disso, passa `local_only: true`: o Semgrep fica só com as regras em disco e o `scan_wordpress` é saltado, mas o Trivy, o `deps_audit` e um restore .NET continuam a sair para a rede — o resultado lista-os em `local_only_gaps`; di-lo ao utilizador.
 
 Se o pedido é ambíguo, pergunta de forma curta — não assumas em silêncio.
 

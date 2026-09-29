@@ -25,6 +25,19 @@ version bump.
 - `validate_finding` accepts `finding_fingerprint`, the name `suppress_finding`
   and `suggest_fix` use, as an alias of `fingerprint`; both with different
   values is an error.
+- **`audit_executive` says what it runs, and takes `local_only`.** Its
+  description said it ran its four scans "in sequence"; they run
+  concurrently, and nothing said that they reach the Semgrep registry with
+  usage metrics, Trivy's database, npm and PyPI (pip-audit builds sdists in a
+  temporary virtualenv) and a .NET project's NuGet feeds (`dotnet restore`
+  runs its MSBuild). SECURITY.md's per-tool egress table — "the complete
+  list" — did not name it either; it now does, in the four rows it belongs
+  in. `local_only: true` is passed to every child that takes it
+  (`security_scan_full`), skips `scan_wordpress`, which has no local-only mode
+  (reported `skipped` with the reason, coverage `partial`), is recorded on the
+  audit row, and the result's `local_only_gaps` names what it does not stop:
+  Trivy, `deps_audit`'s registry calls, a .NET restore, Semgrep's version
+  check.
 
 ### Fixed
 

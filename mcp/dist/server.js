@@ -59358,16 +59358,20 @@ var DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_ch
 var tool13 = {
   name: "audit_executive",
   title: "Executive audit (security + quality + deps + compliance)",
-  description: "Run security_scan_full, quality_check, deps_audit, and compliance_check in sequence, producing one aggregated report with severity counts, top-10 findings, and a delta vs the previous executive audit (when present).",
+  description: "Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security_scan_full, scan_wordpress); Trivy's vulnerability database; npm audit and PyPI (deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality_check runs the project's ESLint config. local_only=true passes local_only to security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no local-only mode; it does NOT stop Trivy's database download, deps_audit's registry calls or a .NET restore \u2014 the result lists those in local_only_gaps.",
   inputSchema: {
     project_path: ProjectPath,
-    severity_min: SeverityMin
+    severity_min: SeverityMin,
+    local_only: external_exports.boolean().optional().describe(
+      "Passed to every child that takes it (security_scan_full: Semgrep rules on disk only, --metrics=off). scan_wordpress, which has no local-only mode, is skipped. Trivy, deps_audit and a .NET restore still reach the network; local_only_gaps in the result says what did. Default: false."
+    )
   },
   handler: async (input, ctx, callMeta) => handler10(input, ctx, callMeta)
 };
 registerToolModule(tool13);
 async function handler10(input, ctx, callMeta) {
   const inp = input;
+  const localOnly = inp.local_only === true;
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -59390,6 +59394,10 @@ async function handler10(input, ctx, callMeta) {
   const subTools = buildSubToolsForStack(ctx, projectPath);
   const subResultsArr = await Promise.all(
     subTools.map(async (toolName) => {
+      const skipped2 = localOnly ? NO_LOCAL_ONLY_MODE[toolName] : void 0;
+      if (skipped2 !== void 0) {
+        return [toolName, { tool: toolName, ok: false, skipped: skipped2 }];
+      }
       const subTool = TOOLS.find((t) => t.name === toolName);
       if (!subTool) {
         return [
@@ -59401,7 +59409,8 @@ async function handler10(input, ctx, callMeta) {
           }
         ];
       }
-      const result = await subTool.handler(subInput, ctx, callMeta);
+      const childInput2 = localOnly && "local_only" in subTool.inputSchema ? { ...subInput, local_only: true } : subInput;
+      const result = await subTool.handler(childInput2, ctx, callMeta);
       if (result.ok) {
         const r = result;
         const summary2 = { tool: toolName, ok: true };
@@ -59433,7 +59442,7 @@ async function handler10(input, ctx, callMeta) {
       status: "cancelled",
       tools_run: subToolRuns(subTools, subResults),
       missing_tools: [],
-      meta: { sub_scan_ids: subScanIds }
+      meta: { sub_scan_ids: subScanIds, ...localOnly ? { local_only: true } : {} }
     });
     return failDomain11(
       "cancelled",
@@ -59475,6 +59484,11 @@ async function handler10(input, ctx, callMeta) {
   const coverageList = [];
   const coverage_warnings = [];
   for (const summary2 of Object.values(subResults)) {
+    if (summary2.skipped !== void 0) {
+      coverageList.push("partial");
+      coverage_warnings.push(`${summary2.tool}: skipped \u2014 ${summary2.skipped}`);
+      continue;
+    }
     if (!summary2.ok) {
       coverageList.push("none");
       coverage_warnings.push(
@@ -59490,6 +59504,7 @@ async function handler10(input, ctx, callMeta) {
     }
   }
   const overallCoverage = worstCoverage(coverageList);
+  const local_only_gaps = localOnly ? localOnlyGaps(subTools) : [];
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
     status: "completed",
@@ -59504,7 +59519,8 @@ async function handler10(input, ctx, callMeta) {
     // into it.
     meta: {
       sub_scan_ids: subScanIds,
-      ...inp.severity_min !== void 0 ? { severity_min: inp.severity_min } : {}
+      ...inp.severity_min !== void 0 ? { severity_min: inp.severity_min } : {},
+      ...localOnly ? { local_only: true } : {}
     }
   });
   return {
@@ -59515,13 +59531,36 @@ async function handler10(input, ctx, callMeta) {
     aggregate_counts,
     coverage: overallCoverage,
     ...coverage_warnings.length > 0 ? { coverage_warnings } : {},
+    ...localOnly ? { local_only_gaps } : {},
     top_findings,
     ...deltas ? { deltas } : {}
   };
 }
+var NO_LOCAL_ONLY_MODE = {
+  scan_wordpress: "it has no local-only mode: its Semgrep packs (p/php, p/wordpress) come from the Semgrep registry, with usage metrics. Run it without local_only to cover WordPress."
+};
+function localOnlyGaps(subTools) {
+  const gaps = [];
+  const ran = new Set(subTools);
+  if (ran.has("security_scan_full")) {
+    gaps.push(
+      "security_scan_full: its scan_deps and scan_iac run Trivy, which downloads its vulnerability database and checks bundle when its cache is stale; on a .NET project its scan_sast runs dotnet restore (the project's NuGet feeds) and dotnet build, which execute the project's MSBuild targets."
+    );
+  }
+  if (ran.has("deps_audit")) {
+    gaps.push(
+      "deps_audit: npm audit queries the npm registry; pip-audit installs the requirements from PyPI into a temporary virtualenv (an sdist's build step runs); for .NET, dotnet restore contacts the NuGet feeds and executes the project's MSBuild; Trivy may download its database."
+    );
+  }
+  gaps.push(
+    "Semgrep's own version check contacts Semgrep's servers on every run; SEMGREP_ENABLE_VERSION_CHECK=0 in the server's environment turns it off."
+  );
+  return gaps;
+}
 function subToolRuns(subTools, subResults) {
   return subTools.map((name) => {
     const sub = subResults[name];
+    if (sub?.skipped !== void 0) return { name, status: "skipped", reason: sub.skipped };
     const reason = sub?.error?.code;
     return {
       name,
