@@ -215,6 +215,30 @@ describe('wp_vuln_check — judged by WPScan’s report (review C1)', () => {
     expect(vi.mocked(runProcess).mock.calls).toHaveLength(2);
   });
 
+  /**
+   * Round 4, item 8: the reason quoted the first output line, which for a
+   * failed update is WPScan's progress line. Measured on WPScan 4.1.0
+   * (`wpscan --update` through a refusing proxy): exit 4, and this stdout.
+   */
+  it('a failed update quotes the line that says why, not the progress line before it', async () => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    const WPSCAN_UPDATE_ABORTED =
+      '[i] Updating the Database ...\n\n' +
+      'Update Aborted: Unable to get https://data.wpscan.org/metadata.json.sha512 (Could not connect to server)\n' +
+      'If this issue persists, you can:\n' +
+      '  - Check our status page at https://status.wpscan.com/\n';
+    vi.mocked(runProcess).mockImplementation(async (o) => {
+      if ((o.args ?? []).includes('--update')) return { ...done(4), stdout: WPSCAN_UPDATE_ABORTED };
+      return wpscanWrites(MISSING_DB, 4)(o);
+    });
+    const { out } = await check({ target_url: 'https://site.example/', api_token: 't' });
+    const reason = out.tools_run[0]?.reason ?? '';
+    expect(reason).toMatch(
+      /`wpscan --update` failed \(Update Aborted: Unable to get https:\/\/data\.wpscan\.org\/metadata\.json\.sha512 \(Could not connect to server\)\)/,
+    );
+    expect(reason).not.toMatch(/Updating the Database/);
+  });
+
   it('never writes into the server’s working directory: a URL-only report goes to the user cache', async () => {
     vi.mocked(runProcess).mockImplementation(async (o) => wpscanWrites(VULNERABLE, 5)(o));
     const reports = join(process.cwd(), '.guardian', 'reports');

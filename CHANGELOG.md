@@ -113,7 +113,8 @@ version bump.
   `{"scan_aborted": "Update required, …"}` and exits 4 — the tool answered `ok`, 0 findings, with only a "rate
   limit" warning and no status or coverage. Now: exits 0 and 5 (VULNERABLE, which used to be stored as failed)
   finish a scan, anything else or `scan_aborted` is `failed`; a missing database is downloaded once with
-  `wpscan --update` and the scan re-run (with `GUARDIAN_OFFLINE=1`, failed with that instruction instead); without
+  `wpscan --update` and the scan re-run (with `GUARDIAN_OFFLINE=1`, failed with that instruction instead; a failed
+  update quotes WPScan's own `Update Aborted: …` line, not its `[i] Updating the Database ...` progress line); without
   an API token WPScan returns no vulnerability data (`vuln_api.error`), so the pass is `skipped`, coverage `none`,
   `vulnerabilities_checked: false` — never a clean 0 — and an API error is `failed`. The response carries
   `status`, `tools_run`, `missing_tools` and `coverage`. Its report goes under the install, or the per-user cache

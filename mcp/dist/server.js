@@ -45304,8 +45304,8 @@ async function resolveBinary(name) {
   try {
     const result = await execa(finder, [name], { timeout: 2e3, reject: false });
     if (result.exitCode !== 0) return null;
-    const firstLine7 = result.stdout.split(/\r?\n/)[0]?.trim();
-    return firstLine7 && firstLine7.length > 0 ? firstLine7 : null;
+    const firstLine6 = result.stdout.split(/\r?\n/)[0]?.trim();
+    return firstLine6 && firstLine6.length > 0 ? firstLine6 : null;
   } catch {
     return null;
   }
@@ -46774,11 +46774,11 @@ function classifyRestoreFailure(stdout, stderr) {
   const lines = `${stderr}
 ${stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const errorLine = lines.find((l) => /\berror\s+[A-Z]+\d+\b/.test(l)) ?? lines.find((l) => /\berror\b/i.test(l));
-  const firstLine7 = errorLine ?? lines[0] ?? "(no output)";
-  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine7)?.[1] ?? "restore_failed";
+  const firstLine6 = errorLine ?? lines[0] ?? "(no output)";
+  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine6)?.[1] ?? "restore_failed";
   const kind = KIND_BY_CODE[code] ?? "other";
   const lead = kind === "lock_out_of_sync" ? "packages.lock.json is out of sync with the project (restore runs in --locked-mode and never rewrites it)" : kind === "package_not_found" ? "a package or version could not be found on the configured feeds" : kind === "feed_unreachable" ? "a package feed could not be reached" : "restore failed";
-  const stripped = firstLine7.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
+  const stripped = firstLine6.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
   const message3 = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
   return { code, kind, reason: `${lead} (${code}: ${message3})` };
 }
@@ -47374,8 +47374,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message3, checkId) {
   if (message3 && message3.length > 0) {
-    const firstLine7 = message3.split(/\r?\n/)[0] ?? message3;
-    return firstLine7.length > 140 ? firstLine7.slice(0, 137) + "\u2026" : firstLine7;
+    const firstLine6 = message3.split(/\r?\n/)[0] ?? message3;
+    return firstLine6.length > 140 ? firstLine6.slice(0, 137) + "\u2026" : firstLine6;
   }
   return checkId;
 }
@@ -63242,8 +63242,8 @@ async function handler19(input, _ctx) {
     if (r.outcome === "completed") {
       stagesInstalled.push(stage);
     } else {
-      const firstLine7 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
-      stagesFailed.push({ stage, error: firstLine7?.trim() ?? r.outcome });
+      const firstLine6 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine6?.trim() ?? r.outcome });
     }
   }
   return {
@@ -66037,7 +66037,7 @@ async function handler26(input, ctx) {
         timeoutMs: 10 * 6e4
       });
       if (update.outcome !== "completed") {
-        failure = `WPScan has no local database and \`wpscan --update\` failed (${firstLine6(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) \u2014 nothing was scanned; run \`wpscan --update\` by hand and re-run`;
+        failure = `WPScan has no local database and \`wpscan --update\` failed (${whyLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) \u2014 nothing was scanned; run \`wpscan --update\` by hand and re-run`;
       } else {
         dbNote = "database downloaded (wpscan --update)";
         attempt = await scan2();
@@ -66185,7 +66185,7 @@ function judgeWpscan(attempt, hasToken) {
   const exit = run.exitCode;
   const finished8 = (run.outcome === "completed" || run.outcome === "failed") && (exit === 0 || exit === 5);
   if (!finished8) {
-    const why = firstLine6(run);
+    const why = whyLine(run);
     return {
       status: "failed",
       reason: `wpscan did not finish (${run.outcome}, exit ${String(exit)})${why !== null ? `: ${why}` : ""}`,
@@ -66215,10 +66215,12 @@ function judgeWpscan(attempt, hasToken) {
     checked: false
   };
 }
-function firstLine6(r) {
-  const line = `${r.stderr}
-${r.stdout}`.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return line === void 0 ? null : line.trim().slice(0, 300);
+var WHY_LINE = [/\bAborted:/, /^\s*\[[!E]\]|\b(error|fail(ed|ure)?|unable|could ?not|cannot|denied|refused)\b/i];
+function whyLine(r) {
+  const lines = `${r.stderr}
+${r.stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const pick2 = WHY_LINE.map((re) => lines.find((l) => re.test(l))).find((l) => l !== void 0) ?? lines.find((l) => !l.startsWith("[i]")) ?? lines[0];
+  return pick2 === void 0 ? null : pick2.slice(0, 300);
 }
 function failDomain20(code, message3) {
   return { ok: false, error: { code, message: message3 } };
@@ -71031,8 +71033,8 @@ function buildToolRun(run, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine7 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine7 ?? "fallback failed"}` : firstLine7 ?? "unknown";
+  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine6 ?? "fallback failed"}` : firstLine6 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 var SEMGREP_DEFAULT_IGNORED_DIRS = [
@@ -72876,8 +72878,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run) {
   if (run.outcome === "completed") return { ok: true };
-  const firstLine7 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine7 ?? `nuclei ${run.outcome}` };
+  const firstLine6 = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine6 ?? `nuclei ${run.outcome}` };
 }
 
 // src/dast/normalizeNuclei.ts

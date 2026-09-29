@@ -166,7 +166,7 @@ async function handler(input, ctx) {
             });
             if (update.outcome !== 'completed') {
                 failure =
-                    `WPScan has no local database and \`wpscan --update\` failed (${firstLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) ` +
+                    `WPScan has no local database and \`wpscan --update\` failed (${whyLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) ` +
                         '— nothing was scanned; run `wpscan --update` by hand and re-run';
             }
             else {
@@ -359,7 +359,7 @@ function judgeWpscan(attempt, hasToken) {
     const exit = run.exitCode;
     const finished = (run.outcome === 'completed' || run.outcome === 'failed') && (exit === 0 || exit === 5);
     if (!finished) {
-        const why = firstLine(run);
+        const why = whyLine(run);
         return {
             status: 'failed',
             reason: `wpscan did not finish (${run.outcome}, exit ${String(exit)})${why !== null ? `: ${why}` : ''}`,
@@ -392,9 +392,26 @@ function judgeWpscan(attempt, hasToken) {
         checked: false,
     };
 }
-function firstLine(r) {
-    const line = `${r.stderr}\n${r.stdout}`.split(/\r?\n/).find((l) => l.trim().length > 0);
-    return line === undefined ? null : line.trim().slice(0, 300);
+/** A line that says why WPScan stopped: its own `… Aborted:` wording, then an error-shaped line. */
+const WHY_LINE = [/\bAborted:/, /^\s*\[[!E]\]|\b(error|fail(ed|ure)?|unable|could ?not|cannot|denied|refused)\b/i];
+/**
+ * The line of a WPScan run's output that says why it failed (round 4, item
+ * 8): not the first line, which for `wpscan --update` is its progress line
+ * — measured on 4.1.0, through a refusing proxy: `[i] Updating the Database
+ * ...`, a blank line, then `Update Aborted: Unable to get
+ * https://data.wpscan.org/metadata.json.sha512 (Could not connect to
+ * server)`. Its `Aborted:` line first, then an error-shaped one, then the
+ * first line that is not `[i]` progress, then the first line at all.
+ */
+function whyLine(r) {
+    const lines = `${r.stderr}\n${r.stdout}`
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+    const pick = WHY_LINE.map((re) => lines.find((l) => re.test(l))).find((l) => l !== undefined) ??
+        lines.find((l) => !l.startsWith('[i]')) ??
+        lines[0];
+    return pick === undefined ? null : pick.slice(0, 300);
 }
 function failDomain(code, message) {
     return { ok: false, error: { code, message } };
