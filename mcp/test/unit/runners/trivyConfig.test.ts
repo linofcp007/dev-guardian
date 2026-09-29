@@ -70,29 +70,61 @@ function tree(files: Record<string, string>): string {
 const POD = 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: {{ name }}\nspec:\n  containers: []\n';
 
 describe('iacLookingFiles', () => {
-  it('finds Terraform, Dockerfiles, Kubernetes manifests, Helm charts and CloudFormation', () => {
+  it('finds what Trivy detects: Terraform/OpenTofu, Dockerfiles by its names, Kubernetes manifests, CloudFormation', () => {
     const dir = tree({
       'infra/main.tf': 'resource "x" "y" {}\n',
       'infra/vars.tf.json': '{}',
+      'infra/main.tofu': 'resource "x" "y" {}\n',
       'Dockerfile': 'FROM alpine\n',
+      'Dockerfile.prod': 'FROM alpine\n',
       'svc/api.Dockerfile': 'FROM alpine\n',
       'svc/Containerfile': 'FROM alpine\n',
+      'svc/app.Containerfile': 'FROM alpine\n',
       'k8s/pod.yaml': POD,
-      'chart/Chart.yaml': 'apiVersion: v2\nname: x\n',
+      'k8s/widget.yaml': 'apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  name: {{ name }}\n',
+      'k8s/deploy.json': '{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"x"}}',
       'cfn/stack.json': '{"AWSTemplateFormatVersion":"2010-09-09","Resources":{}}',
       'cfn/stack.yml': 'Resources:\n  B:\n    Type: AWS::S3::Bucket\n',
     });
     expect(iacLookingFiles(dir, null).files).toEqual([
       'Dockerfile',
+      'Dockerfile.prod',
       'cfn/stack.json',
       'cfn/stack.yml',
-      'chart/Chart.yaml',
       'infra/main.tf',
+      'infra/main.tofu',
       'infra/vars.tf.json',
+      'k8s/deploy.json',
       'k8s/pod.yaml',
+      'k8s/widget.yaml',
       'svc/Containerfile',
       'svc/api.Dockerfile',
+      'svc/app.Containerfile',
     ]);
+  });
+
+  /**
+   * Round 2, item 3 — measured with Trivy 0.69.3 (`trivy config`): each of
+   * these alone is `Detected config files num=0` with no error, legitimately:
+   * Trivy's Kubernetes detection needs top-level apiVersion, kind AND
+   * metadata, so a kustomization.yaml / Component, skaffold.yaml or a kind
+   * cluster config is not a manifest to it; a Chart.yaml alone renders
+   * nothing (a chart that fails to render is Trivy's own ERROR line); a
+   * `.tfvars` alone and a lowercase `dockerfile` are not files it reads.
+   * Counted as IaC-looking, every Kustomize-only or skaffold project read
+   * partial on every scan, with nothing to fix.
+   */
+  it('does not count what Trivy never detects: Kustomize, skaffold, kind configs, a bare Chart.yaml, .tfvars', () => {
+    const dir = tree({
+      'base/kustomization.yaml': 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - https://example.com/base\n',
+      'components/x/kustomization.yaml': 'apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\npatches: []\n',
+      'skaffold.yaml': 'apiVersion: skaffold/v4beta6\nkind: Config\nbuild:\n  artifacts: []\n',
+      'kind.yaml': 'kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\nnodes: []\n',
+      'chart/Chart.yaml': 'apiVersion: v2\nname: x\nversion: 0.1.0\n',
+      'x.tfvars': 'a = 1\n',
+      'lower/dockerfile': 'FROM alpine\n',
+    });
+    expect(iacLookingFiles(dir, null).files).toEqual([]);
   });
 
   it('plain YAML and JSON that are not IaC do not count', () => {

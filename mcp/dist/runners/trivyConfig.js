@@ -27,12 +27,38 @@
  * a partial pass (`ok`, and its name in `missing_tools`, the reason naming
  * the files and Trivy's own error). A run that detected no config file at all
  * while files that look like IaC are there ({@link iacLookingFiles}) is
- * partial too — "no config file recognised" — naming them. What "looks like
- * IaC" is deliberately narrow, so plain YAML never trips it: Terraform
- * (`.tf`, `.tf.json`), Dockerfiles by Trivy's own names, a Helm `Chart.yaml`,
- * YAML/JSON with top-level `apiVersion` AND `kind` (Kubernetes), and
- * CloudFormation (`AWSTemplateFormatVersion`, or `Resources` with an
- * `AWS::` type).
+ * partial too — "no config file recognised" — naming them.
+ *
+ * ---- What "looks like IaC": what Trivy itself detects (round 2, item 3) ----
+ *
+ * The rule is Trivy's own detection (`pkg/iac/detection/detect.go`), never
+ * a looser guess, so a project Trivy legitimately reads nothing from is not
+ * partial forever. Measured with `trivy config` on 0.69.3, each case alone:
+ *
+ *   - Kubernetes: YAML/JSON with top-level `apiVersion`, `kind` AND
+ *     `metadata` in some document. A kustomization.yaml / Kustomize
+ *     Component (no `metadata`) was num=0; the same file with `metadata` was
+ *     num=1; a skaffold.yaml and a kind cluster config were num=0. The kind
+ *     does not matter: a CustomResourceDefinition, a custom resource
+ *     (`example.com/v1 Widget`) and a cert-manager Certificate were num=1
+ *     each — detection is not limited to core kinds. A base + overlay was
+ *     num=2 (the Deployment and the strategic-merge patch).
+ *   - Terraform / OpenTofu: `.tf`, `.tf.json`, `.tofu`, `.tofu.json` — not a
+ *     `.tfvars` alone (num=0).
+ *   - Dockerfiles by Trivy's names, case as it compares them: `Dockerfile` /
+ *     `Containerfile`, `Dockerfile.<x>`, `<x>.Dockerfile` / `.Containerfile`.
+ *     A lowercase `dockerfile` was num=0.
+ *   - CloudFormation (`AWSTemplateFormatVersion`, or `Resources` with an
+ *     `AWS::` type) and Azure ARM templates.
+ *   - Helm is NOT sniffed: a `Chart.yaml` alone, or a chart that renders no
+ *     manifest (a library chart), is num=0 legitimately, and a chart that
+ *     fails to render is reported by Trivy's own `ERROR [helm scanner]
+ *     Failed to render Chart files` line (measured), which the parse-error
+ *     path above names.
+ *
+ * What this keeps catching is the I3 case: a manifest Trivy could not parse
+ * — `name: {{ name }}` outside a chart, core kind or custom — has all three
+ * keys at column 0 and was num=0 with no error.
  */
 import { closeSync, openSync, readdirSync, readSync } from 'node:fs';
 import { join } from 'node:path';
@@ -90,9 +116,14 @@ const MAX_WALK_DIRS = 20_000;
 const MAX_SNIFFED = 2_000;
 /** Bytes read from the head of each. */
 const SNIFF_BYTES = 64 * 1024;
-function isDockerfileName(lower) {
-    return lower === 'dockerfile' || lower === 'containerfile' || lower.startsWith('dockerfile.') || lower.endsWith('.dockerfile');
+/** Trivy's Dockerfile names, compared as it compares them (case-sensitive). */
+function isDockerfileName(name) {
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    return stem === 'Dockerfile' || stem === 'Containerfile' || ext === '.Dockerfile' || ext === '.Containerfile';
 }
+const TERRAFORM = /\.(tf|tf\.json|tofu|tofu\.json)$/;
 function head(abs) {
     let fd = null;
     try {
@@ -123,10 +154,12 @@ function looksLikeIacText(lowerName, text) {
             return true;
         if (/"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json/i.test(text))
             return true;
-        return /^\s*\{[\s\S]*"apiVersion"\s*:/.test(text) && /"kind"\s*:/.test(text);
+        return /^\s*\{[\s\S]*"apiVersion"\s*:/.test(text) && /"kind"\s*:/.test(text) && /"metadata"\s*:/.test(text);
     }
-    // YAML: top-level keys only (column 0), so a nested `kind:` never counts.
-    if (/^apiVersion:\s*\S/m.test(text) && /^kind:\s*\S/m.test(text))
+    // YAML: top-level keys only (column 0), so a nested `kind:` never counts;
+    // all three of Trivy's keys in one document.
+    const documents = text.split(/^---[^\n]*$/m);
+    if (documents.some((d) => /^apiVersion:\s*\S/m.test(d) && /^kind:\s*\S/m.test(d) && /^metadata:/m.test(d)))
         return true;
     if (/^AWSTemplateFormatVersion:/m.test(text))
         return true;
@@ -176,7 +209,7 @@ export function iacLookingFiles(projectPath, exclusions) {
             if (exclusions !== null && exclusions.ignores(child, false))
                 continue;
             const lower = e.name.toLowerCase();
-            if (lower.endsWith('.tf') || lower.endsWith('.tf.json') || isDockerfileName(lower) || lower === 'chart.yaml') {
+            if (TERRAFORM.test(e.name) || isDockerfileName(e.name)) {
                 files.push(child);
                 continue;
             }

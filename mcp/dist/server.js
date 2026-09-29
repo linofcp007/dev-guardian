@@ -49665,9 +49665,13 @@ function parseTrivyConfigLog(stderr) {
 var MAX_WALK_DIRS = 2e4;
 var MAX_SNIFFED = 2e3;
 var SNIFF_BYTES = 64 * 1024;
-function isDockerfileName(lower) {
-  return lower === "dockerfile" || lower === "containerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile");
+function isDockerfileName(name) {
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  return stem === "Dockerfile" || stem === "Containerfile" || ext === ".Dockerfile" || ext === ".Containerfile";
 }
+var TERRAFORM = /\.(tf|tf\.json|tofu|tofu\.json)$/;
 function head(abs) {
   let fd = null;
   try {
@@ -49691,9 +49695,10 @@ function looksLikeIacText(lowerName, text2) {
     if (/"AWSTemplateFormatVersion"\s*:/.test(text2)) return true;
     if (/"Resources"\s*:/.test(text2) && /"Type"\s*:\s*"AWS::/.test(text2)) return true;
     if (/"\$schema"\s*:\s*"[^"]*deploymentTemplate\.json/i.test(text2)) return true;
-    return /^\s*\{[\s\S]*"apiVersion"\s*:/.test(text2) && /"kind"\s*:/.test(text2);
+    return /^\s*\{[\s\S]*"apiVersion"\s*:/.test(text2) && /"kind"\s*:/.test(text2) && /"metadata"\s*:/.test(text2);
   }
-  if (/^apiVersion:\s*\S/m.test(text2) && /^kind:\s*\S/m.test(text2)) return true;
+  const documents = text2.split(/^---[^\n]*$/m);
+  if (documents.some((d) => /^apiVersion:\s*\S/m.test(d) && /^kind:\s*\S/m.test(d) && /^metadata:/m.test(d))) return true;
   if (/^AWSTemplateFormatVersion:/m.test(text2)) return true;
   return /^Resources:\s*$/m.test(text2) && /^\s+Type:\s*['"]?AWS::/m.test(text2);
 }
@@ -49729,7 +49734,7 @@ function iacLookingFiles(projectPath, exclusions) {
       if (!e.isFile()) continue;
       if (exclusions !== null && exclusions.ignores(child, false)) continue;
       const lower = e.name.toLowerCase();
-      if (lower.endsWith(".tf") || lower.endsWith(".tf.json") || isDockerfileName(lower) || lower === "chart.yaml") {
+      if (TERRAFORM.test(e.name) || isDockerfileName(e.name)) {
         files.push(child);
         continue;
       }

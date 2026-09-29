@@ -56,10 +56,14 @@ version bump.
   read trivy-dockerfile ok. The passes run without `--quiet`; a parse error makes the pass partial (`ok`, and
   `trivy-config` / `trivy-dockerfile` in `missing_tools`), the file and Trivy's error named. A run that detected
   no config file (`num=0`, no error — a templated Kubernetes manifest) while files that look like IaC are present
-  is partial too, "no config file recognised", naming them. What looks like IaC is narrow on purpose (`.tf`,
-  `.tf.json`, Dockerfiles by Trivy's names, a Helm `Chart.yaml`, YAML/JSON with top-level `apiVersion` and `kind`,
-  CloudFormation): plain YAML never trips it. `scan_iac` passes `.guardianignore` to Trivy natively. cosign is
-  unchanged.
+  is partial too, "no config file recognised", naming them. What looks like IaC is what Trivy itself detects,
+  measured on 0.69.3, so a project Trivy legitimately reads nothing from is never partial for it: Kubernetes
+  YAML/JSON needs top-level `apiVersion`, `kind` AND `metadata` (a kustomization.yaml or Kustomize Component, a
+  skaffold.yaml and a kind cluster config have none and Trivy detects nothing; a CRD, a custom resource and a
+  cert-manager Certificate are detected like any core kind); Terraform / OpenTofu (`.tf`, `.tf.json`, `.tofu`, not
+  a lone `.tfvars`); Dockerfiles by Trivy's case-sensitive names; CloudFormation and ARM templates. Helm charts
+  are not sniffed: a chart that fails to render is Trivy's own ERROR line, and one that renders nothing is not a
+  gap. `scan_iac` passes `.guardianignore` to Trivy natively. cosign is unchanged.
 - `wp_vuln_check` is judged by WPScan's report. With no WPScan database (a fresh machine), WPScan writes
   `{"scan_aborted": "Update required, …"}` and exits 4 — the tool answered `ok`, 0 findings, with only a "rate
   limit" warning and no status or coverage. Now: exits 0 and 5 (VULNERABLE, which used to be stored as failed)

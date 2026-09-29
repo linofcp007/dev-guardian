@@ -123,6 +123,51 @@ describe('trivy config parse errors and unrecognised IaC (real Trivy)', () => {
     expect(plain.out.coverage).toBe('full');
   });
 
+  /**
+   * Round 2, item 3: projects Trivy reads nothing from, legitimately, must
+   * not be permanently partial. Measured on 0.69.3: a Kustomize base +
+   * overlay is num=2 (the Deployment and the patch); a kustomization.yaml
+   * alone (a remote base) is num=0 with no error — not a manifest to Trivy,
+   * which needs apiVersion, kind AND metadata; a CRD and a custom resource
+   * are num=1 each (Kubernetes detection is not limited to core kinds); a
+   * skaffold.yaml is num=0.
+   */
+  it.skipIf(!TRIVY_INSTALLED)('Kustomize, CRDs and custom resources: complete, never permanently partial', async () => {
+    const DEPLOY = POD.replace('kind: Pod', 'kind: Deployment').replace('apiVersion: v1', 'apiVersion: apps/v1');
+    const kustomize = await run(
+      'scan_iac',
+      project({
+        'base/kustomization.yaml': 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - deployment.yaml\n',
+        'base/deployment.yaml': DEPLOY,
+        'overlays/prod/kustomization.yaml':
+          'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - ../../base\npatches:\n  - path: replicas.yaml\n',
+        'overlays/prod/replicas.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: priv\nspec:\n  replicas: 3\n',
+      }),
+    );
+    expect(kustomize.out.coverage).toBe('full');
+
+    const remoteBase = await run(
+      'scan_iac',
+      project({
+        'kustomization.yaml':
+          'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - https://github.com/example/base?ref=v1\n',
+        'skaffold.yaml': 'apiVersion: skaffold/v4beta6\nkind: Config\nbuild:\n  artifacts: []\n',
+      }),
+    );
+    expect(remoteBase.out.tools_run.find((t) => t.name === 'trivy-config')).toEqual({ name: 'trivy-config', status: 'ok' });
+    expect(remoteBase.out.coverage).toBe('full');
+
+    const crd = await run(
+      'scan_iac',
+      project({
+        'crd.yaml':
+          'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: widgets.example.com\nspec:\n  group: example.com\n  names:\n    kind: Widget\n    plural: widgets\n  scope: Namespaced\n  versions: []\n',
+        'widget.yaml': 'apiVersion: example.com/v1\nkind: Widget\nmetadata:\n  name: my-widget\nspec:\n  size: 3\n',
+      }),
+    );
+    expect(crd.out.coverage).toBe('full');
+  });
+
   it.skipIf(!TRIVY_INSTALLED)('scan_containers: a Dockerfile Trivy could not parse is partial, named', async () => {
     const dir = project({ Dockerfile: 'FROM alpine:3.18\nHEALTHCHECK --interval=bogus CMD true\n' });
     const r = await run('scan_containers', dir);
