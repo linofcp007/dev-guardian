@@ -81,6 +81,13 @@ version bump.
   the skills, the commands, `README.pt-PT.md` and the Semgrep packs' messages
   and comments to a list of Brazilian markers (`usuário`, `arquivo`,
   `você`, `registrar`, `seção`, `equipe`, the `está fazendo` gerund, …).
+- `docs/hosts.md` told Claude Desktop users to paste `host-rules/AGENTS.md`
+  into a Project's instructions — a template that still holds the literal
+  `{{DEV_GUARDIAN_CLI}}`, which only `mcp-config --write` substitutes, and
+  `mcp-config` writes no rules file for Claude Desktop. It now says to
+  replace the placeholder, with a one-line `sed` and a PowerShell equivalent
+  that print the substituted text; a test holds every "paste / copy a
+  template" line to naming the placeholder.
 - **`wp_plugin_check` said it did two things it never did.** Its description
   promised the "latest known" version and, with `target_url`, "a fresh WPScan
   lookup"; the handler makes no network call at all, and `target_url` only
