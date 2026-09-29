@@ -277,6 +277,32 @@ version bump.
   applies — a pnpm-workspace.yaml without `packages` fails before 10.5 (measured on 9.15.9 and 10.4.1), so no
   single place works everywhere. The e2e runs pnpm 10.4.1 and 12.8.1 through corepack in a private cache,
   applies each named fix and checks it works.
+- **`scan_skill` read 32 of 162 legitimate installed skills as DO_NOT_INSTALL** — plugin-dev, superpowers,
+  skill-creator, dev-spec-driven, ui-ux-pro-max and dev-guardian 2.0.0's own scanskill, every verdict false on
+  reading. Measured rule by rule, and each narrowed to the attack it is for:
+  - `mp-persist-instruction` matched any `~/.claude/` path — where commands, skills, logs and channels live, named
+    by a skill to say so. It drove 21 of the 32. It now reads the persistence phrases only (and "append this line
+    to ~/.claude/CLAUDE.md"), and a new rule, `mp-write-agent-config` (high), reads a command that writes into
+    what the agent re-reads every session — CLAUDE.md, AGENTS.md, GEMINI.md, the Cursor / Windsurf / Cline /
+    Copilot rules, its memory, `settings.json` (where hooks live), its skills and agents directories — by
+    redirect, `tee`, a copy's destination, `Add-Content`, `sed -i`, `writeFile` or `open(…, 'a')`.
+  - The prompt-level phrases a skill about AI safety quotes — `pi-override-instructions`, `pi-roleplay-escape`,
+    `pi-conceal-from-user`, `spl-reveal-prompt`, `mp-persist-instruction`, `ta-overbroad-activation` — are
+    **cited** in a Markdown instruction file when they sit inside quotation marks or a code span on a prose line,
+    or in a code block whose introducing paragraph names it attack or test material: reported at info, scored 0.
+    A code block by itself is not a citation, nor is one introduced as a mere "Example", and in JSON or YAML a
+    quote is syntax. dev-spec-driven's threat catalogue had read DO_NOT_INSTALL 100 on its own examples. What
+    this cannot tell apart is an attacker who quotes the injection he wants obeyed; it is still listed, at info.
+  - "Jailbreak" as a noun ("jailbreak taxonomy") is no longer a role escape; "show the prompt and the output"
+    of a test case is no longer a system-prompt leak; "for every task" that names no skill is no longer trigger
+    abuse; `regex.exec(…)` is not dynamic execution; `generate_design_system(` and "design system (ignored …)"
+    are not `system(`; `nc` to a loopback or LAN host (`statsd.local`) is not covert egress; `"command": "rm -rf
+    /"` in a validator's JSON test input is not a destructive command; and an install from a URL needs the URL
+    among the install's own arguments, not three CSV columns further on.
+  On the same 162 skills, SAFE / REVIEW / CAUTION / DO_NOT_INSTALL went from 107 / 21 / 2 / 32 to 156 / 4 / 2 /
+  0, with recall on the positive set of attack shapes (see Security) unchanged. The two CAUTION are superpowers'
+  brainstorming server, which runs `cp.exec(process.env.BRAINSTORM_OPEN_CMD + …)`. dev-guardian's own `skills/`
+  and `commands/` are now held to SAFE by their test, not "SAFE or REVIEW".
 
 ### Security
 

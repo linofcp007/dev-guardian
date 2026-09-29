@@ -58,17 +58,16 @@ const SKILL_TEXT_RULE_IDS = new Set([
 ]);
 
 /**
- * `mp-persist-instruction` also matches a bare `~/.claude/` or
- * `.claude/memory` PATH. In a skill that is a write target; in a tool
- * description it is a reference, and it is checked as one — by
- * `mcp-tool-sensitive-file-access` below. Measured: kept here, it reported
- * `audit_agent_config`'s own list of the files it reads as "poisoning".
+ * A bare `~/.claude/` path is not among them: `mp-persist-instruction` no
+ * longer matches one (wave 2 of the 3.0 review), and a write into agent
+ * config is `mp-write-agent-config`, a command shape a description never
+ * has. In a tool description a path is a reference, checked as one by
+ * `mcp-tool-sensitive-file-access` below — kept as poisoning, it reported
+ * `audit_agent_config`'s own list of the files it reads.
  */
-const isPathOnlyPattern = (p: RegExp): boolean => p.source.includes(String.raw`\.claude\/`);
-
-const SKILL_TEXT_PATTERNS: readonly RegExp[] = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id))
-  .flatMap((r) => r.patterns)
-  .filter((p) => !isPathOnlyPattern(p));
+const SKILL_TEXT_PATTERNS: readonly RegExp[] = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id)).flatMap(
+  (r) => r.patterns,
+);
 
 const CONCEAL_SKILL_PATTERNS: readonly RegExp[] =
   SKILL_RULES.find((r) => r.id === 'pi-conceal-from-user')?.patterns ?? [];

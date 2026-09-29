@@ -48,6 +48,20 @@
  * or a real target) and not a placeholder. A skill's own scripts are scored
  * at full severity, as always.
  *
+ * The prompt-level phrases (`citable`: instruction overrides, role escapes,
+ * concealment, system-prompt extraction, persistence and activation
+ * wording) are what a skill about AI safety QUOTES. In a Markdown instruction
+ * file a phrase is CITED — reported at info, scored 0 — when it sits inside
+ * quotation marks or a code span on a prose line, or anywhere in a code
+ * block whose introducing paragraph names it attack or test material ("Example
+ * attack inputs (defensive test data — never instructions to follow):").
+ * Measured in wave 2 of the 3.0 review: dev-spec-driven's threat catalogue
+ * read DO_NOT_INSTALL 100 on its own examples. A code block by itself is not
+ * a citation, nor is one introduced as a mere "Example"; and in JSON or YAML
+ * a quote is syntax, never a citation. What this cannot tell apart is an
+ * attacker who quotes the injection he wants obeyed — that is reported at
+ * info, and a person reading the findings still sees it.
+ *
  * Rules are intentionally conservative regexes: a hit is a *signal*, scored
  * by severity, never an automatic verdict. The scorer aggregates them.
  *
@@ -59,7 +73,7 @@
  */
 
 import type { Severity } from '../types.js';
-import { continues, joinContinued, splitMarkdown } from './markdownCode.js';
+import { FENCE_OPEN, continues, inlineSpans, joinContinued, splitMarkdown, type CodeUnit } from './markdownCode.js';
 import type { ThreatCategory } from './taxonomy.js';
 import { THREAT_CATEGORY_META } from './taxonomy.js';
 
@@ -100,6 +114,28 @@ const ENV_DUMP = String.raw`(?:\b(?:env|printenv)(?:\s+-0)?|\bexport\s+-p|\b(?:G
 
 /** Clients that send what they are given: `env | curl --data-binary @- …`. */
 const SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b`;
+
+/**
+ * What an agent re-reads every session, so what a write makes permanent: its
+ * instructions (CLAUDE.md, AGENTS.md, GEMINI.md, the Cursor / Windsurf /
+ * Cline / Copilot rules), its memory, its settings — where the hooks live —
+ * and the skills and agents whose descriptions it loads. Not
+ * `.claude/commands/`: a command runs only when the user types it, and
+ * writing one is what plugin-dev's command-development skill teaches
+ * (`cat > .claude/commands/test-bash.md << 'EOF'`, measured).
+ */
+const AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]*?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json)`;
+
+/** One argument that is, or lies under, an agent-config path. */
+const AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]*?${AGENT_CONFIG}[^\s"'|;&<>]*["']?`;
+
+/**
+ * A local or LAN destination: loopback, a private address, a `.local` /
+ * `.internal` / `.lan` name. What reaches one has not left the network — the
+ * statsd line `echo "metric:1|c" | nc -u -w1 statsd.local 8125` in plugin-dev's
+ * hook guide is how a metric is sent, not a covert channel.
+ */
+const LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:local|localhost|internal|lan|home\.arpa))`;
 
 /**
  * `.env` read the way that exposes its content: printed or piped (`cat`,
@@ -180,6 +216,14 @@ export interface SkillRule {
    * fetch target at all. See the header.
    */
   fetchesOrSends?: boolean;
+  /**
+   * A prompt-level phrase that documentation quotes when it describes the
+   * attack. In a Markdown instruction file a CITED match — in quotation marks
+   * or a code span on a prose line, or anywhere in a code block introduced as
+   * attack or test material — is reported at info and scores nothing. See
+   * the header.
+   */
+  citable?: boolean;
 }
 
 /**
@@ -196,9 +240,11 @@ export interface RuleMatch {
   source: MatchSource;
   /**
    * The rule's severity, or one level lower for code in an instruction file
-   * that names no remote destination (see the header).
+   * that names no remote destination (see the header), or info when cited.
    */
   severity: Severity;
+  /** A `citable` phrase quoted as an example, not said (see the header): info. */
+  cited: boolean;
 }
 
 export const SKILL_RULES: SkillRule[] = [
@@ -211,6 +257,7 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'Text instructs the model to ignore/override prior or system instructions — classic prompt injection.',
     target: 'text',
+    citable: true,
     patterns: [
       /ignore\s+(all\s+)?(the\s+|any\s+)?(previous|prior|above|earlier|preceding)\s+(instructions|prompts?|rules|directions|guidelines)/i,
       // The "Developer Mode" prompt opens with it.
@@ -229,10 +276,15 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'Text tries to redefine the assistant or bypass its safety guidelines (jailbreak pattern).',
     target: 'text',
+    citable: true,
+    // Not the word "jailbreak" by itself: it is the noun of every threat
+    // taxonomy ("jailbreak patterns", "jailbreak taxonomy"), and measured in
+    // wave 2 of the 3.0 review it was the whole of dev-spec-driven's
+    // role-escape findings. The escape is the instruction to make one.
     patterns: [
       /you\s+are\s+now\s+(an?\s+)?(unrestricted|uncensored|unfiltered|developer\s+mode|dan|jailbroken)\b/i,
       /bypass\s+(your\s+)?(safety|guard\s?rails?|guidelines|content\s+policy)/i,
-      /\bjailbreak\b/i,
+      /\bjailbreak\s+(yourself|the\s+(model|assistant|ai)|your\s+(safety|guidelines|restrictions|filters))\b/i,
       /\b(act|respond|behave|answer)\s+as\s+[\w .'-]{0,40}?\bwith\s+(developer|dan|god|jailbreak)\s+mode\s+(enabled|on|activated)\b/i,
       /\b(enter|enable|activate|switch\s+to|turn\s+on)\s+(dan|jailbreak|god|unrestricted)\s+mode\b/i,
       /pretend\s+(that\s+)?you\s+(have\s+no|are\s+not\s+bound\s+by)\s+(rules|restrictions)/i,
@@ -248,6 +300,7 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'Text instructs the model to act without informing or asking the user — covert behaviour.',
     target: 'text',
+    citable: true,
     patterns: [
       /do\s+not\s+(tell|inform|notify|mention\s+to)\s+the\s+user/i,
       /without\s+(asking|informing|telling|notifying)\s+the\s+user/i,
@@ -270,8 +323,11 @@ export const SKILL_RULES: SkillRule[] = [
     title: 'Attempt to extract the system prompt',
     message: 'Text asks the model to reveal/repeat its system prompt or hidden instructions.',
     target: 'text',
+    citable: true,
     patterns: [
-      /(reveal|print|repeat|show|output|dump)\s+(me\s+)?(your|the)\s+(system\s+)?(prompt|instructions)/i,
+      // YOUR prompt or instructions, or THE system / hidden / initial ones:
+      // not "show the prompt and the output" of a test case (skill-creator).
+      /(reveal|print|repeat|show|output|dump|display|leak)\s+(me\s+)?(your\s+(system\s+)?(prompt|instructions)|the\s+system\s+prompt|(your|the)\s+(initial|original|hidden|secret|full|exact)\s+(system\s+)?(prompt|instructions))\b/i,
       /repeat\s+(the\s+)?(text|everything)\s+(above|before\s+this)/i,
       /what\s+(are|were)\s+your\s+(initial|original|exact)\s+instructions/i,
     ],
@@ -286,11 +342,42 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'Text tries to write attacker-controlled content into persistent memory, rules files or CLAUDE.md so it survives the session.',
     target: 'any',
+    citable: true,
+    // Not a bare `~/.claude/` path any more: that is where commands, skills,
+    // logs and channels live, and naming it is how a skill says so. Measured
+    // in wave 2 of the 3.0 review, it drove 21 of the 32 DO_NOT_INSTALL
+    // verdicts on 162 installed skills — every one a mention. A write into
+    // what the agent re-reads is `mp-write-agent-config`.
     patterns: [
       /(add|append|write|save)\s+(this|the\s+following)\s+to\s+(your\s+)?(memory|rules|claude\.md|agents\.md)/i,
+      /\b(add|append|write|save|insert|put|copy)\s+(this|these|it|the\s+following)(\s+(line|lines|text|block|note|rule|rules|instruction|instructions|section))?\s+(to|into|in)\s+(your\s+|the\s+)?(global\s+|user\s+|project\s+|persistent\s+)?[`'"]?(~|\$HOME|%USERPROFILE%)?[\w./\\-]*?(CLAUDE(\.local)?\.md|AGENTS\.md|GEMINI\.md|\.cursorrules|\.windsurfrules|copilot-instructions\.md|\.claude[\/\\]settings(\.local)?\.json|\.claude[\/\\]memory)\b/i,
       /remember\s+(this\s+)?(forever|permanently|across\s+sessions|in\s+all\s+future)/i,
-      /(\.claude\/(memory|CLAUDE\.md)|~\/\.claude\/)/i,
       /persist\s+this\s+(instruction|rule|behaviou?r)/i,
+    ],
+  },
+  {
+    id: 'mp-write-agent-config',
+    category: 'memory_poisoning',
+    severity: 'high',
+    title: 'Write into the agent’s persistent instructions or settings',
+    message:
+      'A command appends to or replaces a file the agent re-reads every session — CLAUDE.md, AGENTS.md, a rules ' +
+      'file, its memory, its settings (where hooks live), or its skills and agents directories. What lands there ' +
+      'outlives this skill and steers every later session.',
+    target: 'any',
+    patterns: [
+      // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
+      // after a word, a quote or a bracket — not a Markdown `> quote`, not
+      // `=>` or `->`.
+      new RegExp(String.raw`(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${AGENT_CONFIG_ARG}`, 'i'),
+      new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+)*\s+${AGENT_CONFIG_ARG}`, 'i'),
+      // As the destination — the last argument — of a copy, move or link.
+      new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]*\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, 'i'),
+      new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]*${AGENT_CONFIG}`, 'i'),
+      new RegExp(String.raw`\bsed\b[^|;&\n]*\s-i\S*[^|;&\n]*${AGENT_CONFIG}`, 'i'),
+      new RegExp(String.raw`\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${AGENT_CONFIG}`, 'i'),
+      new RegExp(String.raw`\bopen\s*\([^\n]{0,160}${AGENT_CONFIG}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, 'i'),
+      new RegExp(String.raw`${AGENT_CONFIG}[^\n]{0,80}\.write_text\s*\(`, 'i'),
     ],
   },
 
@@ -319,9 +406,14 @@ export const SKILL_RULES: SkillRule[] = [
     message:
       'The skill demands activation on essentially every request — designed to intercept unrelated work.',
     target: 'text',
+    citable: true,
     patterns: [
       /always\s+(use|invoke|run|load)\s+this\s+skill/i,
-      /for\s+(any|every|all)\s+(request|task|message|prompt|question)/i,
+      // "for every task" names nothing to activate: "one row for every task",
+      // "the system shall log it for all requests" (wave 2 of the 3.0 review).
+      // Activation language names the skill as what is used.
+      /\b(use|invoke|run|load|activate|trigger|apply|call)\s+(this\s+skill|this\s+tool|me)\b[^.\n]{0,60}?\b(for|on|before|with)\s+(any|every|all)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?|replies)\b/i,
+      /\bthis\s+skill\s+(must|should|shall|is\s+to)\s+(always\s+)?(be\s+)?(used|invoked|loaded|run|activated|triggered|applied)\b[^.\n]{0,40}?\b(for|on|before|with)\s+(any|every|all)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?)\b/i,
       /use\s+this\s+skill\s+for\s+everything/i,
       /regardless\s+of\s+(what\s+)?the\s+user\s+(asks|says|wants)/i,
     ],
@@ -434,7 +526,8 @@ export const SKILL_RULES: SkillRule[] = [
     message: 'Use of DNS lookups, raw sockets or netcat as a data channel.',
     target: 'code',
     patterns: [
-      /\b(nc|ncat|netcat)\b\s+[^\n]{0,60}\d{2,5}/i,
+      // Not to a local or LAN host (see LOCAL_HOST).
+      new RegExp(String.raw`\b(nc|ncat|netcat)\b(?![^\n|;&]*?\s${LOCAL_HOST}(?=[\s:]))\s+[^\n]{0,60}\d{2,5}`, 'i'),
       /\b(dig|nslookup|host)\b[^\n]{0,80}\$\(/i,
       /socket\.socket\([^\n]{0,40}SOCK_(STREAM|DGRAM)/i,
     ],
@@ -562,9 +655,13 @@ export const SKILL_RULES: SkillRule[] = [
     title: 'Install from untrusted / unpinned source',
     message: 'Installs packages directly from a URL, git HEAD, or with lifecycle scripts enabled.',
     target: 'any',
+    // The URL is one of the install's own arguments, not any URL further along
+    // the line: in a CSV of framework tips (ui-ux-pro-max) "pnpm i
+    // @iconify-json/lucide for reliable server rendering,…,https://ui.nuxt.com/…"
+    // is a registry package, then a docs link three columns on.
     patterns: [
-      /(pip|pip3)\s+install\s+[^\n]{0,200}(git\+http|https?:\/\/)/i,
-      /npm\s+(install|i)\s+[^\n]{0,200}(git\+|https?:\/\/|github:)/i,
+      /\b(pip3?|uv\s+pip)\s+install\s+([^\s,;&|]+\s+){0,8}?["']?(git\+https?|https?:\/\/)/i,
+      /\b(p?npm|yarn|bun)\s+(install|i|add)\s+([^\s,;&|]+\s+){0,8}?["']?(git\+|https?:\/\/|github:)/i,
       /"(preinstall|postinstall|install)"\s*:/i,
     ],
   },
@@ -578,7 +675,10 @@ export const SKILL_RULES: SkillRule[] = [
     message: 'Recursive delete of a home/root path, force-push, or DROP/TRUNCATE with no confirmation.',
     target: 'code',
     patterns: [
-      /rm\s+-rf?\s+(--no-preserve-root\s+)?(\$HOME|~|\/|\/\*|\.\*)/i,
+      // Not as the value of a JSON key: `echo '{"tool_input": {"command": "rm
+      // -rf /"}}' | bash validate-bash.sh` hands a validator the command it
+      // must refuse (plugin-dev's hook guide), and runs nothing.
+      /(?<!"[\w-]+"\s*:\s*")rm\s+-rf?\s+(--no-preserve-root\s+)?(\$HOME|~|\/|\/\*|\.\*)/i,
       /git\s+push\s+(-f|--force)\b/i,
       /(DROP|TRUNCATE)\s+(TABLE|DATABASE)\b/i,
     ],
@@ -623,7 +723,11 @@ export const SKILL_RULES: SkillRule[] = [
     target: 'code',
     patterns: [
       /\beval\s*\(/,
-      /\bexec\s*\(/,
+      // Not `RegExp#exec`: a regex literal (`/…/i.exec(hex)`) or a receiver
+      // named as one (`regex.exec(md)`, `LINE_RE.exec`, `lineRe.exec`).
+      // Measured: superpowers' render-graphs.js and ui-ux-pro-max's
+      // extract-colors.cjs, both high for a regular expression.
+      /(?<!(?:\/[dgimsuyv]*|\b(?:re|rx|regex|regexp|pattern|matcher)|[a-z0-9](?:Re|RE|Rx|Regex|RegExp|Regexp|Pattern)|_(?:re|RE|rx|RX|regex|REGEX|pattern|PATTERN))\.)\bexec\s*\(/,
       /\bnew\s+Function\s*\(/,
       /os\.system\s*\(/,
       /child_process\.(exec|execSync)\s*\(/,
@@ -673,8 +777,10 @@ export const SKILL_RULES: SkillRule[] = [
       'A skill that presents as read-only/formatting still reaches for shell or process-spawn primitives.',
     target: 'code',
     // Not after `::`: `thread::spawn(` / `tokio::spawn(` start a thread or a
-    // task, not a process.
-    patterns: [/(?<!::)(spawn|spawnSync|popen|system)\s*\(/i],
+    // task, not a process. And the name itself, not a word ending in it:
+    // `generate_design_system(` and "design system (ignored …)" in help text
+    // are not `system(` (ui-ux-pro-max, wave 2 of the 3.0 review).
+    patterns: [/(?<![\w:])(spawn|spawnSync|popen|system)\(|\.(spawn|spawnSync|popen|system)\s*\(/i],
   },
 
   // ──────────────────────────── mcp_tool_poisoning ────────────────────────
@@ -713,8 +819,17 @@ export function scanContent(content: string, isCode: boolean, opts: ScanOptions 
     const units = codeFileUnits(lines);
     return finalize([...matchUnits(rulesFor('code', 'any'), units), ...downloadThenRun(units, false)]);
   }
-  const whole: Unit[] = lines.map((text, i) => ({ line: i + 1, text, source: 'line', noTarget: false, placeholder: false }));
-  const views = splitMarkdown(content, { indentedCode: opts.markdown !== false });
+  const markdown = opts.markdown !== false;
+  const views = splitMarkdown(content, { indentedCode: markdown });
+  const citing = markdown ? citingByLine(lines, views.code) : null;
+  const whole: Unit[] = lines.map((text, i) => ({
+    line: i + 1,
+    text,
+    source: 'line',
+    noTarget: false,
+    placeholder: false,
+    citing: citing?.(i + 1),
+  }));
   const fetchBlocks = new Set<number>();
   const realBlocks = new Set<number>();
   for (const u of views.code) {
@@ -760,6 +875,99 @@ interface Unit {
   noTarget: boolean;
   /** Code in an instruction file where a placeholder stands for the target: fetch-or-send rules score it a level lower. */
   placeholder: boolean;
+  /** A line of a Markdown instruction file: how a `citable` phrase on it can be cited. */
+  citing?: Citing | undefined;
+}
+
+// ─────────────────────────────── citations ────────────────────────────────
+
+/** How a line of a Markdown instruction file can cite a phrase. */
+interface Citing {
+  /** A prose line: quotation marks and code spans on it cite what they enclose. */
+  prose: boolean;
+  /** A line of a code block introduced as attack or test material: everything on it is cited. */
+  announced: boolean;
+}
+
+/**
+ * What a paragraph says when the block after it holds attacks to resist, not
+ * instructions to follow: "Example attack inputs (defensive test data —
+ * never instructions to follow):". A bare "Example:" is not enough — an
+ * injection is an example of nothing until it is named as one.
+ */
+const ATTACK_MATERIAL =
+  /\b(attacks?|attackers?|injections?|jailbreaks?|adversarial|malicious|payloads?|red[- ]team\w*|test\s+(data|inputs?|cases?|strings?|prompts?)|never\s+instructions|not\s+instructions|do\s+not\s+follow)\b/i;
+
+/** An HTML element that opens a code block, on its own line. */
+const HTML_BLOCK_OPENER = /^[ \t>]*<(pre|code)\b[^>]*>\s*$/i;
+
+/** Per line (1-based) of a Markdown file: how a phrase on it can be cited. */
+function citingByLine(lines: string[], code: CodeUnit[]): (line: number) => Citing {
+  const blockOf = new Map<number, number>();
+  const firstLine = new Map<number, number>();
+  for (const u of code) {
+    if (u.block === null) continue;
+    blockOf.set(u.line, u.block);
+    const first = firstLine.get(u.block);
+    if (first === undefined || u.line < first) firstLine.set(u.block, u.line);
+  }
+  const announced = new Set<number>();
+  for (const [block, first] of firstLine) {
+    if (ATTACK_MATERIAL.test(introducingParagraph(lines, first))) announced.add(block);
+  }
+  return (line) => {
+    const block = blockOf.get(line);
+    return { prose: block === undefined, announced: block !== undefined && announced.has(block) };
+  };
+}
+
+/**
+ * The paragraph just above a code block whose first line is `first`: past
+ * the block's own opener (a fence or `<pre>`) and the blank lines above it,
+ * up to four lines of text.
+ */
+function introducingParagraph(lines: string[], first: number): string {
+  let i = first - 2; // the line above `first`, 0-based
+  const opener = lines[i];
+  if (opener !== undefined && (FENCE_OPEN.test(opener) || HTML_BLOCK_OPENER.test(opener))) i -= 1;
+  while (i >= 0 && (lines[i] ?? '').trim() === '') i -= 1;
+  const paragraph: string[] = [];
+  while (i >= 0 && paragraph.length < 4) {
+    const text = lines[i] ?? '';
+    if (text.trim() === '' || FENCE_OPEN.test(text)) break;
+    paragraph.unshift(text);
+    i -= 1;
+  }
+  return paragraph.join(' ');
+}
+
+/**
+ * `index` lies inside quotation marks — straight double quotes, “…”, «…» —
+ * or a code span, opened before it on the line. An unclosed quote runs to
+ * the end of the line: a quotation that wraps onto the next one.
+ */
+function isQuotedAt(text: string, index: number): boolean {
+  const before = text.slice(0, index);
+  if ((before.match(/"/g) ?? []).length % 2 === 1) return true;
+  if (before.lastIndexOf('“') > before.lastIndexOf('”')) return true;
+  if (before.lastIndexOf('«') > before.lastIndexOf('»')) return true;
+  return inlineSpans(text).some((s) => s.start < index && index < s.end);
+}
+
+/** Every match of `pattern` in the unit is cited (see the header); false when none is. */
+function isCited(pattern: RegExp, unit: Unit): boolean {
+  const c = unit.citing;
+  if (c === undefined) return false;
+  if (c.announced) return true;
+  if (!c.prose) return false;
+  const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  let seen = false;
+  for (const m of unit.text.matchAll(global)) {
+    if (m[0] === '') break;
+    seen = true;
+    if (!isQuotedAt(unit.text, m.index)) return false;
+  }
+  return seen;
 }
 
 /**
@@ -798,8 +1006,8 @@ const SEVERITY_RANK: Record<Severity, number> = { info: 0, low: 1, medium: 2, hi
 
 /**
  * One hit per (rule, pattern) is enough signal — but it is the most severe
- * one, not the first: a mention early in a file (scored a level lower) must
- * not hide the real command further down.
+ * one, not the first: a mention early in a file (scored a level lower, or
+ * cited) must not hide the real command further down.
  */
 function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
   const matches: RuleMatch[] = [];
@@ -810,10 +1018,11 @@ function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
       for (const unit of units) {
         pattern.lastIndex = 0;
         if (!pattern.test(unit.text)) continue;
+        const cited = rule.citable === true && isCited(pattern, unit);
         const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
-        const severity = lowered ? ONE_LEVEL_LOWER[full] : full;
+        const severity = cited ? 'info' : lowered ? ONE_LEVEL_LOWER[full] : full;
         if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
-          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity };
+          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity, cited };
         }
         if (severity === full) break; // nothing later can outrank it
       }
@@ -972,6 +1181,7 @@ function downloadThenRun(units: Unit[], instructionFile: boolean): RuleMatch[] {
         snippet: `${snippetOf(run)} (downloaded at line ${dl.unit.line})`.slice(0, 240),
         source: run.source,
         severity: lowered ? ONE_LEVEL_LOWER[full] : full,
+        cited: false,
       },
     ];
   }

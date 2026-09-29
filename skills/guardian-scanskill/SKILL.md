@@ -76,6 +76,17 @@ dinâmico) pontuam um nível abaixo quando nada à volta é um alvo de rede: uma
 skill que *documenta* um comando destrutivo ou um padrão de deteção não é uma
 skill que o executa.
 
+As frases de prompt injection, de fuga ao papel, de esconder ações do
+utilizador, de revelar o prompt de sistema, de persistência e de ativação
+coerciva são o que uma skill sobre segurança de IA *cita*. Num ficheiro
+Markdown, uma dessas frases entre aspas ou num trecho de código de uma linha de
+prosa, ou num bloco de código cujo parágrafo de introdução o apresenta como
+material de ataque ou de teste, fica **citada**: aparece como `info` e não
+pontua. Um bloco de código, por si só, não é uma citação, nem um bloco
+apresentado apenas como "Exemplo"; em JSON ou YAML as aspas são sintaxe. Um
+atacante que ponha entre aspas a injeção que quer ver obedecida também desce a
+`info` — numa skill que não é sobre segurança de IA, lê esses findings.
+
 ## Pontuação e veredicto
 
 A tool devolve uma **pontuação de risco de 0 a 100** (pesada pela severidade;

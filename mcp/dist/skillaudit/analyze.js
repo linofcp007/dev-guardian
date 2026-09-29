@@ -196,6 +196,11 @@ const CODE_SOURCE_TEXT = {
     inline: 'inline code',
 };
 function whereFound(m) {
+    if (m.cited) {
+        return (' Cited, not said: the phrase sits inside quotation marks or a code span, or in a code block introduced ' +
+            'as attack or test material — the shape of documentation that describes the attack. Reported at info ' +
+            'and scored 0; read it if the file is not about AI safety.');
+    }
     const kind = CODE_SOURCE_TEXT[m.source];
     if (kind === undefined)
         return '';

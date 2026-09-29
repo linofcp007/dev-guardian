@@ -69426,6 +69426,9 @@ var SENSITIVE_DIR = String.raw`(?<![\w.-])\.(?:ssh|aws|gnupg)(?=$|[\s"'|;&)\x60]
 var SENSITIVE_FILE = `(${SENSITIVE_FILE_STRONG}|${ENV_FILE}|${SENSITIVE_DIR})`;
 var ENV_DUMP = String.raw`(?:\b(?:env|printenv)(?:\s+-0)?|\bexport\s+-p|\b(?:Get-ChildItem|gci|dir|ls)\s+env:\\?)`;
 var SHELL_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|ftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b`;
+var AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]*?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json)`;
+var AGENT_CONFIG_ARG = String.raw`["']?[^\s"'|;&<>]*?${AGENT_CONFIG}[^\s"'|;&<>]*["']?`;
+var LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:local|localhost|internal|lan|home\.arpa))`;
 var ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 var NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
 var SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
@@ -69453,6 +69456,7 @@ var SKILL_RULES = [
     title: "Instruction-override phrasing",
     message: "Text instructs the model to ignore/override prior or system instructions \u2014 classic prompt injection.",
     target: "text",
+    citable: true,
     patterns: [
       /ignore\s+(all\s+)?(the\s+|any\s+)?(previous|prior|above|earlier|preceding)\s+(instructions|prompts?|rules|directions|guidelines)/i,
       // The "Developer Mode" prompt opens with it.
@@ -69470,10 +69474,15 @@ var SKILL_RULES = [
     title: "Role / guardrail escape phrasing",
     message: "Text tries to redefine the assistant or bypass its safety guidelines (jailbreak pattern).",
     target: "text",
+    citable: true,
+    // Not the word "jailbreak" by itself: it is the noun of every threat
+    // taxonomy ("jailbreak patterns", "jailbreak taxonomy"), and measured in
+    // wave 2 of the 3.0 review it was the whole of dev-spec-driven's
+    // role-escape findings. The escape is the instruction to make one.
     patterns: [
       /you\s+are\s+now\s+(an?\s+)?(unrestricted|uncensored|unfiltered|developer\s+mode|dan|jailbroken)\b/i,
       /bypass\s+(your\s+)?(safety|guard\s?rails?|guidelines|content\s+policy)/i,
-      /\bjailbreak\b/i,
+      /\bjailbreak\s+(yourself|the\s+(model|assistant|ai)|your\s+(safety|guidelines|restrictions|filters))\b/i,
       /\b(act|respond|behave|answer)\s+as\s+[\w .'-]{0,40}?\bwith\s+(developer|dan|god|jailbreak)\s+mode\s+(enabled|on|activated)\b/i,
       /\b(enter|enable|activate|switch\s+to|turn\s+on)\s+(dan|jailbreak|god|unrestricted)\s+mode\b/i,
       /pretend\s+(that\s+)?you\s+(have\s+no|are\s+not\s+bound\s+by)\s+(rules|restrictions)/i,
@@ -69488,6 +69497,7 @@ var SKILL_RULES = [
     title: "Instruction to hide actions from the user",
     message: "Text instructs the model to act without informing or asking the user \u2014 covert behaviour.",
     target: "text",
+    citable: true,
     patterns: [
       /do\s+not\s+(tell|inform|notify|mention\s+to)\s+the\s+user/i,
       /without\s+(asking|informing|telling|notifying)\s+the\s+user/i,
@@ -69509,8 +69519,11 @@ var SKILL_RULES = [
     title: "Attempt to extract the system prompt",
     message: "Text asks the model to reveal/repeat its system prompt or hidden instructions.",
     target: "text",
+    citable: true,
     patterns: [
-      /(reveal|print|repeat|show|output|dump)\s+(me\s+)?(your|the)\s+(system\s+)?(prompt|instructions)/i,
+      // YOUR prompt or instructions, or THE system / hidden / initial ones:
+      // not "show the prompt and the output" of a test case (skill-creator).
+      /(reveal|print|repeat|show|output|dump|display|leak)\s+(me\s+)?(your\s+(system\s+)?(prompt|instructions)|the\s+system\s+prompt|(your|the)\s+(initial|original|hidden|secret|full|exact)\s+(system\s+)?(prompt|instructions))\b/i,
       /repeat\s+(the\s+)?(text|everything)\s+(above|before\s+this)/i,
       /what\s+(are|were)\s+your\s+(initial|original|exact)\s+instructions/i
     ]
@@ -69523,11 +69536,39 @@ var SKILL_RULES = [
     title: "Durable memory / rules injection",
     message: "Text tries to write attacker-controlled content into persistent memory, rules files or CLAUDE.md so it survives the session.",
     target: "any",
+    citable: true,
+    // Not a bare `~/.claude/` path any more: that is where commands, skills,
+    // logs and channels live, and naming it is how a skill says so. Measured
+    // in wave 2 of the 3.0 review, it drove 21 of the 32 DO_NOT_INSTALL
+    // verdicts on 162 installed skills — every one a mention. A write into
+    // what the agent re-reads is `mp-write-agent-config`.
     patterns: [
       /(add|append|write|save)\s+(this|the\s+following)\s+to\s+(your\s+)?(memory|rules|claude\.md|agents\.md)/i,
+      /\b(add|append|write|save|insert|put|copy)\s+(this|these|it|the\s+following)(\s+(line|lines|text|block|note|rule|rules|instruction|instructions|section))?\s+(to|into|in)\s+(your\s+|the\s+)?(global\s+|user\s+|project\s+|persistent\s+)?[`'"]?(~|\$HOME|%USERPROFILE%)?[\w./\\-]*?(CLAUDE(\.local)?\.md|AGENTS\.md|GEMINI\.md|\.cursorrules|\.windsurfrules|copilot-instructions\.md|\.claude[\/\\]settings(\.local)?\.json|\.claude[\/\\]memory)\b/i,
       /remember\s+(this\s+)?(forever|permanently|across\s+sessions|in\s+all\s+future)/i,
-      /(\.claude\/(memory|CLAUDE\.md)|~\/\.claude\/)/i,
       /persist\s+this\s+(instruction|rule|behaviou?r)/i
+    ]
+  },
+  {
+    id: "mp-write-agent-config",
+    category: "memory_poisoning",
+    severity: "high",
+    title: "Write into the agent\u2019s persistent instructions or settings",
+    message: "A command appends to or replaces a file the agent re-reads every session \u2014 CLAUDE.md, AGENTS.md, a rules file, its memory, its settings (where hooks live), or its skills and agents directories. What lands there outlives this skill and steers every later session.",
+    target: "any",
+    patterns: [
+      // `echo … >> ~/.claude/CLAUDE.md`, `cat > AGENTS.md <<EOF`: a redirect
+      // after a word, a quote or a bracket — not a Markdown `> quote`, not
+      // `=>` or `->`.
+      new RegExp(String.raw`(?<=[\w"')\]}\x60][ \t]*)(?<![-=>])>>?[ \t]*${AGENT_CONFIG_ARG}`, "i"),
+      new RegExp(String.raw`\btee\b(?:\s+-{1,2}[\w-]+)*\s+${AGENT_CONFIG_ARG}`, "i"),
+      // As the destination — the last argument — of a copy, move or link.
+      new RegExp(String.raw`\b(?:cp|mv|install|rsync|ln|Copy-Item|Move-Item)\b[^|;&\n]*\s${AGENT_CONFIG_ARG}\s*(?:$|[|;&)#])`, "i"),
+      new RegExp(String.raw`\b(?:Add-Content|Set-Content|Out-File)\b[^|;\n]*${AGENT_CONFIG}`, "i"),
+      new RegExp(String.raw`\bsed\b[^|;&\n]*\s-i\S*[^|;&\n]*${AGENT_CONFIG}`, "i"),
+      new RegExp(String.raw`\b(?:appendFile|writeFile|createWriteStream|outputFile)(?:Sync)?\s*\([^)\n]{0,160}${AGENT_CONFIG}`, "i"),
+      new RegExp(String.raw`\bopen\s*\([^\n]{0,160}${AGENT_CONFIG}[^\n]{0,80}?["'][wa]\+?[bt]?["']`, "i"),
+      new RegExp(String.raw`${AGENT_CONFIG}[^\n]{0,80}\.write_text\s*\(`, "i")
     ]
   },
   // ─────────────────────────────── rogue_agent ────────────────────────────
@@ -69552,9 +69593,14 @@ var SKILL_RULES = [
     title: "Over-broad / coercive activation language",
     message: "The skill demands activation on essentially every request \u2014 designed to intercept unrelated work.",
     target: "text",
+    citable: true,
     patterns: [
       /always\s+(use|invoke|run|load)\s+this\s+skill/i,
-      /for\s+(any|every|all)\s+(request|task|message|prompt|question)/i,
+      // "for every task" names nothing to activate: "one row for every task",
+      // "the system shall log it for all requests" (wave 2 of the 3.0 review).
+      // Activation language names the skill as what is used.
+      /\b(use|invoke|run|load|activate|trigger|apply|call)\s+(this\s+skill|this\s+tool|me)\b[^.\n]{0,60}?\b(for|on|before|with)\s+(any|every|all)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?|replies)\b/i,
+      /\bthis\s+skill\s+(must|should|shall|is\s+to)\s+(always\s+)?(be\s+)?(used|invoked|loaded|run|activated|triggered|applied)\b[^.\n]{0,40}?\b(for|on|before|with)\s+(any|every|all)\s+(requests?|tasks?|messages?|prompts?|questions?|conversations?|responses?)\b/i,
       /use\s+this\s+skill\s+for\s+everything/i,
       /regardless\s+of\s+(what\s+)?the\s+user\s+(asks|says|wants)/i
     ]
@@ -69654,7 +69700,8 @@ var SKILL_RULES = [
     message: "Use of DNS lookups, raw sockets or netcat as a data channel.",
     target: "code",
     patterns: [
-      /\b(nc|ncat|netcat)\b\s+[^\n]{0,60}\d{2,5}/i,
+      // Not to a local or LAN host (see LOCAL_HOST).
+      new RegExp(String.raw`\b(nc|ncat|netcat)\b(?![^\n|;&]*?\s${LOCAL_HOST}(?=[\s:]))\s+[^\n]{0,60}\d{2,5}`, "i"),
       /\b(dig|nslookup|host)\b[^\n]{0,80}\$\(/i,
       /socket\.socket\([^\n]{0,40}SOCK_(STREAM|DGRAM)/i
     ]
@@ -69771,9 +69818,13 @@ var SKILL_RULES = [
     title: "Install from untrusted / unpinned source",
     message: "Installs packages directly from a URL, git HEAD, or with lifecycle scripts enabled.",
     target: "any",
+    // The URL is one of the install's own arguments, not any URL further along
+    // the line: in a CSV of framework tips (ui-ux-pro-max) "pnpm i
+    // @iconify-json/lucide for reliable server rendering,…,https://ui.nuxt.com/…"
+    // is a registry package, then a docs link three columns on.
     patterns: [
-      /(pip|pip3)\s+install\s+[^\n]{0,200}(git\+http|https?:\/\/)/i,
-      /npm\s+(install|i)\s+[^\n]{0,200}(git\+|https?:\/\/|github:)/i,
+      /\b(pip3?|uv\s+pip)\s+install\s+([^\s,;&|]+\s+){0,8}?["']?(git\+https?|https?:\/\/)/i,
+      /\b(p?npm|yarn|bun)\s+(install|i|add)\s+([^\s,;&|]+\s+){0,8}?["']?(git\+|https?:\/\/|github:)/i,
       /"(preinstall|postinstall|install)"\s*:/i
     ]
   },
@@ -69786,7 +69837,10 @@ var SKILL_RULES = [
     message: "Recursive delete of a home/root path, force-push, or DROP/TRUNCATE with no confirmation.",
     target: "code",
     patterns: [
-      /rm\s+-rf?\s+(--no-preserve-root\s+)?(\$HOME|~|\/|\/\*|\.\*)/i,
+      // Not as the value of a JSON key: `echo '{"tool_input": {"command": "rm
+      // -rf /"}}' | bash validate-bash.sh` hands a validator the command it
+      // must refuse (plugin-dev's hook guide), and runs nothing.
+      /(?<!"[\w-]+"\s*:\s*")rm\s+-rf?\s+(--no-preserve-root\s+)?(\$HOME|~|\/|\/\*|\.\*)/i,
       /git\s+push\s+(-f|--force)\b/i,
       /(DROP|TRUNCATE)\s+(TABLE|DATABASE)\b/i
     ]
@@ -69829,7 +69883,11 @@ var SKILL_RULES = [
     target: "code",
     patterns: [
       /\beval\s*\(/,
-      /\bexec\s*\(/,
+      // Not `RegExp#exec`: a regex literal (`/…/i.exec(hex)`) or a receiver
+      // named as one (`regex.exec(md)`, `LINE_RE.exec`, `lineRe.exec`).
+      // Measured: superpowers' render-graphs.js and ui-ux-pro-max's
+      // extract-colors.cjs, both high for a regular expression.
+      /(?<!(?:\/[dgimsuyv]*|\b(?:re|rx|regex|regexp|pattern|matcher)|[a-z0-9](?:Re|RE|Rx|Regex|RegExp|Regexp|Pattern)|_(?:re|RE|rx|RX|regex|REGEX|pattern|PATTERN))\.)\bexec\s*\(/,
       /\bnew\s+Function\s*\(/,
       /os\.system\s*\(/,
       /child_process\.(exec|execSync)\s*\(/,
@@ -69877,8 +69935,10 @@ var SKILL_RULES = [
     message: "A skill that presents as read-only/formatting still reaches for shell or process-spawn primitives.",
     target: "code",
     // Not after `::`: `thread::spawn(` / `tokio::spawn(` start a thread or a
-    // task, not a process.
-    patterns: [/(?<!::)(spawn|spawnSync|popen|system)\s*\(/i]
+    // task, not a process. And the name itself, not a word ending in it:
+    // `generate_design_system(` and "design system (ignored …)" in help text
+    // are not `system(` (ui-ux-pro-max, wave 2 of the 3.0 review).
+    patterns: [/(?<![\w:])(spawn|spawnSync|popen|system)\(|\.(spawn|spawnSync|popen|system)\s*\(/i]
   },
   // ──────────────────────────── mcp_tool_poisoning ────────────────────────
   {
@@ -69900,8 +69960,17 @@ function scanContent(content, isCode, opts = {}) {
     const units = codeFileUnits(lines);
     return finalize([...matchUnits(rulesFor("code", "any"), units), ...downloadThenRun(units, false)]);
   }
-  const whole2 = lines.map((text2, i2) => ({ line: i2 + 1, text: text2, source: "line", noTarget: false, placeholder: false }));
-  const views = splitMarkdown(content, { indentedCode: opts.markdown !== false });
+  const markdown = opts.markdown !== false;
+  const views = splitMarkdown(content, { indentedCode: markdown });
+  const citing = markdown ? citingByLine(lines, views.code) : null;
+  const whole2 = lines.map((text2, i2) => ({
+    line: i2 + 1,
+    text: text2,
+    source: "line",
+    noTarget: false,
+    placeholder: false,
+    citing: citing?.(i2 + 1)
+  }));
   const fetchBlocks = /* @__PURE__ */ new Set();
   const realBlocks = /* @__PURE__ */ new Set();
   for (const u2 of views.code) {
@@ -69931,6 +70000,61 @@ function scanContent(content, isCode, opts = {}) {
     ...matchUnits(rulesFor("code"), code),
     ...downloadThenRun([...code, ...prose].sort((a2, b) => a2.line - b.line), true)
   ]);
+}
+var ATTACK_MATERIAL = /\b(attacks?|attackers?|injections?|jailbreaks?|adversarial|malicious|payloads?|red[- ]team\w*|test\s+(data|inputs?|cases?|strings?|prompts?)|never\s+instructions|not\s+instructions|do\s+not\s+follow)\b/i;
+var HTML_BLOCK_OPENER = /^[ \t>]*<(pre|code)\b[^>]*>\s*$/i;
+function citingByLine(lines, code) {
+  const blockOf = /* @__PURE__ */ new Map();
+  const firstLine6 = /* @__PURE__ */ new Map();
+  for (const u2 of code) {
+    if (u2.block === null) continue;
+    blockOf.set(u2.line, u2.block);
+    const first = firstLine6.get(u2.block);
+    if (first === void 0 || u2.line < first) firstLine6.set(u2.block, u2.line);
+  }
+  const announced = /* @__PURE__ */ new Set();
+  for (const [block, first] of firstLine6) {
+    if (ATTACK_MATERIAL.test(introducingParagraph(lines, first))) announced.add(block);
+  }
+  return (line) => {
+    const block = blockOf.get(line);
+    return { prose: block === void 0, announced: block !== void 0 && announced.has(block) };
+  };
+}
+function introducingParagraph(lines, first) {
+  let i2 = first - 2;
+  const opener = lines[i2];
+  if (opener !== void 0 && (FENCE_OPEN.test(opener) || HTML_BLOCK_OPENER.test(opener))) i2 -= 1;
+  while (i2 >= 0 && (lines[i2] ?? "").trim() === "") i2 -= 1;
+  const paragraph = [];
+  while (i2 >= 0 && paragraph.length < 4) {
+    const text2 = lines[i2] ?? "";
+    if (text2.trim() === "" || FENCE_OPEN.test(text2)) break;
+    paragraph.unshift(text2);
+    i2 -= 1;
+  }
+  return paragraph.join(" ");
+}
+function isQuotedAt(text2, index) {
+  const before = text2.slice(0, index);
+  if ((before.match(/"/g) ?? []).length % 2 === 1) return true;
+  if (before.lastIndexOf("\u201C") > before.lastIndexOf("\u201D")) return true;
+  if (before.lastIndexOf("\xAB") > before.lastIndexOf("\xBB")) return true;
+  return inlineSpans(text2).some((s) => s.start < index && index < s.end);
+}
+function isCited(pattern, unit) {
+  const c3 = unit.citing;
+  if (c3 === void 0) return false;
+  if (c3.announced) return true;
+  if (!c3.prose) return false;
+  const global3 = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+  let seen = false;
+  for (const m of unit.text.matchAll(global3)) {
+    if (m[0] === "") break;
+    seen = true;
+    if (!isQuotedAt(unit.text, m.index)) return false;
+  }
+  return seen;
 }
 function codeFileUnits(lines) {
   const units = [];
@@ -69967,10 +70091,11 @@ function matchUnits(rules2, units) {
       for (const unit of units) {
         pattern.lastIndex = 0;
         if (!pattern.test(unit.text)) continue;
+        const cited = rule.citable === true && isCited(pattern, unit);
         const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
-        const severity = lowered ? ONE_LEVEL_LOWER[full] : full;
+        const severity = cited ? "info" : lowered ? ONE_LEVEL_LOWER[full] : full;
         if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
-          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity };
+          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity, cited };
         }
         if (severity === full) break;
       }
@@ -70059,7 +70184,8 @@ function downloadThenRun(units, instructionFile) {
         line: run.line,
         snippet: `${snippetOf(run)} (downloaded at line ${dl.unit.line})`.slice(0, 240),
         source: run.source,
-        severity: lowered ? ONE_LEVEL_LOWER[full] : full
+        severity: lowered ? ONE_LEVEL_LOWER[full] : full,
+        cited: false
       }
     ];
   }
@@ -70437,6 +70563,9 @@ var CODE_SOURCE_TEXT = {
   inline: "inline code"
 };
 function whereFound(m) {
+  if (m.cited) {
+    return " Cited, not said: the phrase sits inside quotation marks or a code span, or in a code block introduced as attack or test material \u2014 the shape of documentation that describes the attack. Reported at info and scored 0; read it if the file is not about AI safety.";
+  }
   const kind = CODE_SOURCE_TEXT[m.source];
   if (kind === void 0) return "";
   const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
@@ -70987,7 +71116,7 @@ var RECOMMENDATION_RANK = {
 var tool41 = {
   name: "scan_skill",
   title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. An injection or persistence phrase quoted in Markdown, or in a code block introduced as attack or test data, is cited, not said: reported at info, scored 0. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
   inputSchema: inputSchema25,
   handler: (input, ctx, callMeta) => handler38(input, ctx, callMeta)
 };
@@ -78143,8 +78272,9 @@ var SKILL_TEXT_RULE_IDS = /* @__PURE__ */ new Set([
   "ta-overbroad-activation",
   "mtp-instructions-in-description"
 ]);
-var isPathOnlyPattern = (p) => p.source.includes(String.raw`\.claude\/`);
-var SKILL_TEXT_PATTERNS = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id)).flatMap((r) => r.patterns).filter((p) => !isPathOnlyPattern(p));
+var SKILL_TEXT_PATTERNS = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id)).flatMap(
+  (r) => r.patterns
+);
 var CONCEAL_SKILL_PATTERNS = SKILL_RULES.find((r) => r.id === "pi-conceal-from-user")?.patterns ?? [];
 var READ_VERB = String.raw`(?:read|open|cat|load|include|pass|send|provide|attach|upload|extract|collect|copy|fetch|retrieve|dump|print|forward|grab|gather|get)\s+`;
 var DIRECTIVE = String.raw`(?:^|[.!?:;,(]\s*|\b(?:you\s+(?:must|should|need\s+to|have\s+to)|please|first|then|and|also|always|now)\s+)`;

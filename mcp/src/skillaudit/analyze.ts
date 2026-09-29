@@ -262,6 +262,13 @@ const CODE_SOURCE_TEXT: Partial<Record<RuleMatch['source'], string>> = {
 };
 
 function whereFound(m: RuleMatch): string {
+  if (m.cited) {
+    return (
+      ' Cited, not said: the phrase sits inside quotation marks or a code span, or in a code block introduced ' +
+      'as attack or test material — the shape of documentation that describes the attack. Reported at info ' +
+      'and scored 0; read it if the file is not about AI safety.'
+    );
+  }
   const kind = CODE_SOURCE_TEXT[m.source];
   if (kind === undefined) return '';
   const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
