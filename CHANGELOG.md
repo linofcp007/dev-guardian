@@ -891,6 +891,26 @@ them again. Scans made on the fallback meanwhile are not merged back.
   whatever a directory link pointed at (`detect_stack`, the EF Core and target-framework audits,
   `scan_dotnet_secrets`, `compliance_check`, `register_custom_rules`' globs, custom rule directories) no longer
   descend links.
+- **The repository reads that sweep left named are converted too, and none is left.** Measured in `node:22`
+  with 768 MB before the change: `detect_stack` on a project whose `package.json` is a link to `/dev/zero` was
+  OOM-killed in 10 s, taking the whole MCP server with it, and a FIFO at that name hung it; Trivy's
+  manifest-coverage check on a `yarn.lock` linked to `/dev/zero`, the Semgrep rule-id reader on such a
+  `.semgrep.yml`, and `wp_vuln_check_source`'s inventory on such a `wp-includes/version.php` were each
+  OOM-killed, and a `.semgrep.yml` FIFO hung the rule-id reader. `detect_stack`'s manifests and headers, the
+  Trivy manifests, lock files and workspace declarations, the scanner-configuration files `tools_run` names
+  (`repoConfig.ts`, which `stat`ed a file for its size and then read it — a FIFO swapped in between blocked the
+  read), `scan_iac`'s IaC-looking walk, the WordPress inventory, the uncommitted files gitleaks scans, the git
+  shallow file, the submodule listing and `scan_skill`'s files now all go through `platform/projectFs.ts` (a rule
+  file or git's shallow file, which may lie outside the project, through the same bounded, non-blocking reader),
+  each with its own cap: 8 MiB for a manifest, 64 MiB for a lock file, the first 8 KiB of a plugin or theme
+  header and 64 KiB of a YAML head. What a refusal would have hidden is named: `detect_stack`'s snapshot gains
+  `unread_files` (path and why — a `package.json` it could not read still says JavaScript), a WordPress file the
+  inventory could not read is a warning, a configuration file too large to check is still named in
+  `honoured_config` with why it was not checked, a candidate `scan_iac` could not read is named in the
+  `trivy-config` reason, as is a walk that stopped early (that reason was computed and dropped), a file
+  gitleaks' working-tree pass could not read is a named gap, and a file `scan_skill` could not read is a
+  warning. A refused Trivy manifest or lock file reads as "may declare something", so its gap stays. The
+  source-scan test's `repo-deferred` kind is gone.
 - **Repository text reached the model and the terminal with its invisible characters intact.** A rule message, a
   snippet, a file name, a reason or a title from the scanned repository can carry a right-to-left override
   (`invoice<U+202E>sj.exe` reads as `invoiceexe.js`), a zero-width space or ESC; JSON escapes the C0 controls and

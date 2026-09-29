@@ -277,11 +277,13 @@ registerToolModule(makeScanTool({
             const raw = readJsonSafe(outFile);
             if (raw)
                 parser_inputs.push({ parser: trivyParser, input: raw });
+            const iac = result.outcome === 'completed' ? iacLookingFiles(ctx.projectPath, ctx.exclusions) : null;
             const judged = judgeTrivyConfig({
                 name: 'trivy-config',
                 run: result,
                 raw,
-                iacFiles: result.outcome === 'completed' ? iacLookingFiles(ctx.projectPath, ctx.exclusions).files : [],
+                iacFiles: iac?.files ?? [],
+                ...(iac?.incomplete !== undefined ? { iacIncomplete: iac.incomplete } : {}),
             });
             tools_run.push(judged.toolRun);
             missing_tools.push(...judged.missing);

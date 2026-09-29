@@ -26,7 +26,6 @@ import {
   existsSync,
   lstatSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
@@ -35,7 +34,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { describeReadRefusal, readProjectBytes } from '../platform/projectFs.js';
 
 export interface IngestedFile {
   relPath: string;
@@ -150,10 +150,15 @@ export async function ingestTarget(targetRaw: string): Promise<IngestResult> {
   }
   if (st.isFile()) {
     if (extOf(target) === '.zip') return ingestZip(target, false);
-    const file = readOne(target, basename(target));
-    if (!file) {
-      return { ok: false, code: 'unsupported_target', message: 'File is binary or too large to review.' };
+    // The file the user named, wherever a link they named leads: read from
+    // its own directory, bounded and on a non-blocking descriptor.
+    const real = safeRealpath(target) ?? target;
+    const read = readOne(dirname(real), real, basename(target));
+    if (read.kind !== 'ok') {
+      const why = read.kind === 'refused' ? describeReadRefusal(read.reason) : 'it is binary';
+      return { ok: false, code: 'unsupported_target', message: `File not reviewed: ${why}.` };
     }
+    const file = read.file;
     return {
       ok: true,
       root: target,
@@ -229,8 +234,8 @@ async function ingestUrl(url: string): Promise<IngestResult> {
     const res = await ingestZip(dest, true, dir);
     return res;
   }
-  const file = readOne(dest, fileName);
-  if (!file) {
+  const read = readOne(dir, dest, fileName);
+  if (read.kind !== 'ok') {
     safeRm(dir);
     return { ok: false, code: 'unsupported_target', message: 'Downloaded file is binary or too large.' };
   }
@@ -238,7 +243,7 @@ async function ingestUrl(url: string): Promise<IngestResult> {
     ok: true,
     root: dir,
     kind: 'url',
-    files: [file],
+    files: [read.file],
     skipped: 0,
     truncated: false,
     warnings: [],
@@ -399,13 +404,18 @@ function collectDir(root: string): {
         warnings.push(`skipped large file: ${rel(root, abs)} (${Math.round(s.size / 1024)} KB)`);
         continue;
       }
-      const file = readOne(abs, rel(root, abs));
-      if (!file) {
+      // Read through `platform/projectFs.ts` against the ingestion root: a
+      // file swapped for a FIFO, a device or a link since the lstat above is
+      // refused on its descriptor, never waited on or read without end, and
+      // named (review of 3.0, W2E).
+      const read = readOne(root, abs, rel(root, abs));
+      if (read.kind !== 'ok') {
         skipped += 1;
+        if (read.kind === 'refused') warnings.push(`not read: ${rel(root, abs)} (${describeReadRefusal(read.reason)})`);
         continue;
       }
-      files.push(file);
-      totalBytes += file.bytes;
+      files.push(read.file);
+      totalBytes += read.file.bytes;
     }
     if (truncated) break;
   }
@@ -441,14 +451,20 @@ function rel(root: string, abs: string): string {
   return r || basename(abs);
 }
 
-function readOne(abs: string, relPath: string): IngestedFile | null {
-  let raw: Buffer;
-  try {
-    raw = readFileSync(abs);
-  } catch {
-    return null;
-  }
-  if (looksBinary(raw)) return null;
+type ReadOne =
+  | { kind: 'ok'; file: IngestedFile }
+  | { kind: 'binary' }
+  | { kind: 'refused'; reason: Parameters<typeof describeReadRefusal>[0] };
+
+/** `abs` (inside `root`), as an ingested text file — or why not. */
+function readOne(root: string, abs: string, relPath: string): ReadOne {
+  // Resolved first: a relative `abs` (a relative target) is already joined
+  // onto `root`, and must not be resolved against it a second time.
+  const read = readProjectBytes(root, resolve(abs), MAX_FILE_BYTES);
+  if (read.status === 'absent') return { kind: 'refused', reason: 'unreadable' };
+  if (read.status === 'refused') return { kind: 'refused', reason: read.reason };
+  const raw = read.bytes;
+  if (looksBinary(raw)) return { kind: 'binary' };
   const content = raw.toString('utf8');
   const name = basename(abs);
   const ext = extOf(name);
@@ -458,12 +474,15 @@ function readOne(abs: string, relPath: string): IngestedFile | null {
   // config files: not "code" (run text/any rules), not executable.
   const finalIsCode = CONFIG_EXT.has(ext) ? false : isCode;
   return {
-    relPath,
-    absPath: abs,
-    content,
-    isCode: finalIsCode,
-    isExecutable,
-    bytes: raw.length,
+    kind: 'ok',
+    file: {
+      relPath,
+      absPath: abs,
+      content,
+      isCode: finalIsCode,
+      isExecutable,
+      bytes: raw.length,
+    },
   };
 }
 

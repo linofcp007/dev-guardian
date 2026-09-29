@@ -23,9 +23,15 @@
  * excluded `sub/deep/`): every one the scanner would read is found — git's
  * own listing in a work tree (tracked, and untracked files `.gitignore` does
  * not exclude), else a bounded walk — and named.
+ *
+ * Every listing and read goes through `platform/projectFs.ts` (review of
+ * 3.0, W2E): a `when` file used to be `stat`ed for its size and then read,
+ * and a FIFO swapped in between blocked the read. A `when` file that is
+ * there and could not be read is named all the same — the scanner may still
+ * read it — with why it was not checked.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { describeReadRefusal, listProjectDir, listProjectDirOrNull, readProjectText, } from '../platform/projectFs.js';
 import { git, splitNul } from './git.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 const NUGET_CONFIGS = ['NuGet.config', 'nuget.config', 'NuGet.Config'];
@@ -151,26 +157,30 @@ function existsExactly(projectPath, rel) {
     const name = parts.pop();
     if (name === undefined)
         return false;
-    try {
-        return readdirSync(join(projectPath, ...parts), { withFileTypes: true }).some((e) => e.name === name && e.isFile());
-    }
-    catch {
-        return false;
-    }
+    return listProjectDir(projectPath, join(projectPath, ...parts)).some((e) => e.name === name && e.kind === 'file');
 }
+/** `when` matches the file's text (or there is no `when`); false when it does not; the refusal when the file could not be read. */
 function matchesWhen(projectPath, rel, when) {
     if (when === undefined)
         return true;
-    try {
-        const abs = join(projectPath, ...rel.split('/'));
-        const st = statSync(abs);
-        if (!st.isFile() || st.size > MAX_WHEN_BYTES)
-            return false;
-        return when.test(readFileSync(abs, 'utf8'));
-    }
-    catch {
+    const r = readProjectText(projectPath, join(projectPath, ...rel.split('/')), MAX_WHEN_BYTES);
+    if (r.status === 'absent')
         return false;
-    }
+    if (r.status === 'refused')
+        return r.reason;
+    return when.test(r.text);
+}
+/**
+ * `spec`'s entry for `path` when the file applies: `decides` as is when its
+ * `when` matched; with why when the file could not be read to check — the
+ * scanner may still read it, so it is named rather than dropped.
+ */
+function honouredEntry(path, decides, verdict) {
+    if (verdict === false)
+        return null;
+    if (verdict === true)
+        return { path, decides };
+    return { path, decides: `${decides}, if it applies: ${describeReadRefusal(verdict)}, so it was not checked` };
 }
 /** Every file named `names` below the project: git's listing in a work tree, else a bounded walk. */
 async function nestedFiles(projectPath, names) {
@@ -194,20 +204,16 @@ async function nestedFiles(projectPath, names) {
         if (rel === undefined)
             break;
         visited += 1;
-        let entries;
-        try {
-            entries = readdirSync(rel === '' ? projectPath : join(projectPath, ...rel.split('/')), { withFileTypes: true });
-        }
-        catch {
+        const entries = listProjectDirOrNull(projectPath, rel === '' ? projectPath : join(projectPath, ...rel.split('/')));
+        if (entries === null)
             continue;
-        }
         for (const e of entries) {
             const child = rel === '' ? e.name : `${rel}/${e.name}`;
-            if (e.isDirectory()) {
+            if (e.kind === 'directory') {
                 if (!PROJECT_WALK_EXCLUDE.has(e.name) && !SCANNER_WALK_EXCLUDE.has(e.name))
                     stack.push(child);
             }
-            else if (e.isFile() && names.includes(e.name)) {
+            else if (e.kind === 'file' && names.includes(e.name)) {
                 out.push(child);
             }
         }
@@ -231,8 +237,9 @@ export async function honouredFiles(projectPath, runner) {
                 ? [spec.file]
                 : [];
         for (const path of paths) {
-            if (matchesWhen(projectPath, path, spec.when))
-                out.push({ path, decides: spec.decides });
+            const entry = honouredEntry(path, spec.decides, matchesWhen(projectPath, path, spec.when));
+            if (entry !== null)
+                out.push(entry);
         }
     }
     return out.sort(byPath);
@@ -243,9 +250,8 @@ function byPath(a, b) {
 /** The files at the root only (sync): for a runner none of whose files is `nested`. */
 export function honouredRootFiles(projectPath, runner) {
     return REPO_CONFIG[runner]
-        .filter((spec) => spec.handed !== true)
-        .filter((spec) => existsExactly(projectPath, spec.file) && matchesWhen(projectPath, spec.file, spec.when))
-        .map((spec) => ({ path: spec.file, decides: spec.decides }));
+        .filter((spec) => spec.handed !== true && existsExactly(projectPath, spec.file))
+        .flatMap((spec) => honouredEntry(spec.file, spec.decides, matchesWhen(projectPath, spec.file, spec.when)) ?? []);
 }
 /**
  * Of the project files the caller `handed` to `runner` (project-relative,
@@ -256,9 +262,13 @@ export function honouredHandedFiles(projectPath, runner, handed) {
     const specs = REPO_CONFIG[runner].filter((s) => s.handed === true);
     const out = [];
     for (const path of new Set(handed)) {
-        const spec = specs.find((s) => matchesWhen(projectPath, path, s.when));
-        if (spec !== undefined)
-            out.push({ path, decides: spec.decides });
+        for (const spec of specs) {
+            const entry = honouredEntry(path, spec.decides, matchesWhen(projectPath, path, spec.when));
+            if (entry === null)
+                continue;
+            out.push(entry);
+            break;
+        }
     }
     return out.sort(byPath);
 }

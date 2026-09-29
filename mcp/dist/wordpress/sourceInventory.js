@@ -21,8 +21,15 @@
  *   3. Themes: `wp-content/themes/<slug>/style.css`'s `Theme Name:` /
  *      `Version:` header — always at that exact path, parent and child
  *      themes alike.
+ *
+ * Every read stays inside the install and goes through
+ * `platform/projectFs.ts` (review of 3.0, W2E): a `version.php` linked to
+ * `/dev/zero` OOM-killed the MCP server. A file that is there and was not
+ * read is a warning naming it and why — a component whose version was never
+ * read must not read as one with no known vulnerability.
  */
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { describeReadRefusal } from '../platform/projectFs.js';
 import { readDirSafe, readTextSafe } from '../runners/stackDetect.js';
 /** A plugin's or theme's main file header is always near the top; bounding
  *  the read keeps a pathologically large file from being read in full. */
@@ -30,17 +37,37 @@ const MAX_HEADER_BYTES = 8192;
 /** `readme.txt` files can run long (changelog, FAQ); `Stable tag:` is always
  *  in the header block near the top. */
 const MAX_README_BYTES = 16384;
+/** `wp-includes/version.php` is a few KB; `$wp_version` sits near its top. */
+const MAX_VERSION_PHP_BYTES = 64 * 1024;
+/** `path`'s text (its first `maxBytes` bytes when given), or null — through {@link readTextSafe}. */
+function read(src, path, maxBytes) {
+    return readTextSafe(src.root, path, { ...(maxBytes !== undefined ? { maxBytes } : {}), onRefused: src.onRefused });
+}
 export function inventoryWordPressSource(wpPath) {
     const warnings = [];
-    const coreVersion = readCoreVersion(wpPath);
+    const unread = new Map();
+    const src = {
+        root: wpPath,
+        onRefused: (path, reason) => {
+            const rel = relative(wpPath, path).split(sep).join('/');
+            if (!unread.has(rel))
+                unread.set(rel, describeReadRefusal(reason));
+        },
+    };
+    const coreVersion = readCoreVersion(src);
     if (coreVersion === null) {
         warnings.push('wp-includes/version.php not found or unparsable under the given path — core version unknown.');
     }
+    const plugins = inventoryPlugins(src, warnings);
+    const themes = inventoryThemes(src, warnings);
+    const muPlugins = inventoryMuPlugins(src, warnings);
+    for (const [rel, why] of unread)
+        warnings.push(`${rel}: not read — ${why}.`);
     return {
         core: { version: coreVersion },
-        plugins: inventoryPlugins(wpPath, warnings),
-        themes: inventoryThemes(wpPath, warnings),
-        mu_plugins: inventoryMuPlugins(wpPath, warnings),
+        plugins,
+        themes,
+        mu_plugins: muPlugins,
         warnings,
     };
 }
@@ -55,26 +82,26 @@ function warnUnversioned(warnings, label, stableTag) {
             : ` (readme.txt's Stable tag is "${stableTag}", not a usable version)`;
     warnings.push(`${label}: version unknown — no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
 }
-function readCoreVersion(wpPath) {
-    const text = readTextSafe(join(wpPath, 'wp-includes', 'version.php'));
+function readCoreVersion(src) {
+    const text = read(src, join(src.root, 'wp-includes', 'version.php'), MAX_VERSION_PHP_BYTES);
     if (text === null)
         return null;
     const m = /\$wp_version\s*=\s*'([^']+)'/.exec(text);
     return m?.[1] ?? null;
 }
-function inventoryPlugins(wpPath, warnings) {
-    const pluginsDir = join(wpPath, 'wp-content', 'plugins');
+function inventoryPlugins(src, warnings) {
+    const pluginsDir = join(src.root, 'wp-content', 'plugins');
     const out = [];
-    for (const entry of readDirSafe(pluginsDir)) {
-        if (entry.isDirectory()) {
+    for (const entry of readDirSafe(src.root, pluginsDir)) {
+        if (entry.kind === 'directory') {
             const dir = join(pluginsDir, entry.name);
-            const main = findMainFile(dir, entry.name, 'Plugin Name');
+            const main = findMainFile(src, dir, entry.name, 'Plugin Name');
             if (main === null) {
                 warnings.push(`wp-content/plugins/${entry.name}: no file with a "Plugin Name:" header — skipped.`);
                 continue;
             }
-            const text = readTextSafe(main, MAX_HEADER_BYTES) ?? '';
-            const stableTag = readStableTag(join(dir, 'readme.txt'));
+            const text = read(src, main, MAX_HEADER_BYTES) ?? '';
+            const stableTag = readStableTag(src, join(dir, 'readme.txt'));
             const headerVersion = extractHeader(text, 'Version');
             const version = headerVersion ?? usableVersion(stableTag);
             const component = {
@@ -89,9 +116,9 @@ function inventoryPlugins(wpPath, warnings) {
                 warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, stableTag);
             out.push(component);
         }
-        else if (entry.isFile() && entry.name.toLowerCase().endsWith('.php')) {
+        else if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.php')) {
             const filePath = join(pluginsDir, entry.name);
-            const text = readTextSafe(filePath, MAX_HEADER_BYTES);
+            const text = read(src, filePath, MAX_HEADER_BYTES);
             if (text === null || !hasHeader(text, 'Plugin Name'))
                 continue;
             const version = extractHeader(text, 'Version');
@@ -107,14 +134,14 @@ function inventoryPlugins(wpPath, warnings) {
     }
     return out;
 }
-function inventoryThemes(wpPath, warnings) {
-    const themesDir = join(wpPath, 'wp-content', 'themes');
+function inventoryThemes(src, warnings) {
+    const themesDir = join(src.root, 'wp-content', 'themes');
     const out = [];
-    for (const entry of readDirSafe(themesDir)) {
-        if (!entry.isDirectory())
+    for (const entry of readDirSafe(src.root, themesDir)) {
+        if (entry.kind !== 'directory')
             continue;
         const styleCssPath = join(themesDir, entry.name, 'style.css');
-        const text = readTextSafe(styleCssPath, MAX_HEADER_BYTES);
+        const text = read(src, styleCssPath, MAX_HEADER_BYTES);
         if (text === null || !hasHeader(text, 'Theme Name')) {
             warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header — skipped.`);
             continue;
@@ -152,14 +179,14 @@ const MU_PLUGIN_LOADER_RE = /(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__|di
  * contributes nothing (never throws) — the file may be a helper, or the
  * subfolder simply is not there yet.
  */
-function inventoryMuPlugins(wpPath, warnings) {
-    const muDir = join(wpPath, 'wp-content', 'mu-plugins');
+function inventoryMuPlugins(src, warnings) {
+    const muDir = join(src.root, 'wp-content', 'mu-plugins');
     const out = [];
-    for (const entry of readDirSafe(muDir)) {
-        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.php'))
+    for (const entry of readDirSafe(src.root, muDir)) {
+        if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.php'))
             continue;
         const filePath = join(muDir, entry.name);
-        const text = readTextSafe(filePath, MAX_HEADER_BYTES);
+        const text = read(src, filePath, MAX_HEADER_BYTES);
         if (text === null)
             continue;
         if (hasHeader(text, 'Plugin Name')) {
@@ -181,7 +208,7 @@ function inventoryMuPlugins(wpPath, warnings) {
             if (subDir === undefined || subFile === undefined)
                 continue;
             const targetPath = join(muDir, subDir, subFile);
-            const targetText = readTextSafe(targetPath, MAX_HEADER_BYTES);
+            const targetText = read(src, targetPath, MAX_HEADER_BYTES);
             if (targetText === null || !hasHeader(targetText, 'Plugin Name'))
                 continue;
             const version = extractHeader(targetText, 'Version');
@@ -204,21 +231,21 @@ function inventoryMuPlugins(wpPath, warnings) {
  * never wins by accident; every other top-level `*.php` file is tried next,
  * in directory order. Returns null when none carries the header.
  */
-function findMainFile(dir, dirName, nameHeader) {
-    const candidates = readDirSafe(dir).filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.php'));
+function findMainFile(src, dir, dirName, nameHeader) {
+    const candidates = readDirSafe(src.root, dir).filter((e) => e.kind === 'file' && e.name.toLowerCase().endsWith('.php'));
     const preferredName = `${dirName.toLowerCase()}.php`;
     const preferred = candidates.find((e) => e.name.toLowerCase() === preferredName);
     const ordered = preferred ? [preferred, ...candidates.filter((e) => e !== preferred)] : candidates;
     for (const entry of ordered) {
         const path = join(dir, entry.name);
-        const text = readTextSafe(path, MAX_HEADER_BYTES);
+        const text = read(src, path, MAX_HEADER_BYTES);
         if (text !== null && hasHeader(text, nameHeader))
             return path;
     }
     return null;
 }
-function readStableTag(readmePath) {
-    const text = readTextSafe(readmePath, MAX_README_BYTES);
+function readStableTag(src, readmePath) {
+    const text = read(src, readmePath, MAX_README_BYTES);
     if (text === null)
         return null;
     const value = extractHeader(text, 'Stable tag');

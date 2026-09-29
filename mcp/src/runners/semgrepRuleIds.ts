@@ -42,10 +42,29 @@
  * are left alone. `fixpr/semgrepFix.ts#checkIdMatches` reads every spelling.
  */
 
-import { readdirSync, readFileSync, type Dirent } from 'node:fs';
+import { readdirSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { readSmallText } from '../hooks/configFile.js';
 import { resolveConfigsDir } from '../platform/configsDir.js';
+
+/**
+ * The largest rule file read for its ids or its taint tokens: the plugin's
+ * own packs are under 100 KB. A rule file may be the project's own
+ * (`.semgrep.yml`) or one the user registered anywhere, so it is read with
+ * `hooks/configFile.ts#readSmallText` — a regular file only, judged on a
+ * non-blocking descriptor, at most this many bytes (review of 3.0, W2E: a
+ * `.semgrep.yml` FIFO hung the server, one linked to `/dev/zero` OOM-killed
+ * it). One that is refused reads as "cannot be told": no ids, and "may hold
+ * a taint rule".
+ */
+const RULE_FILE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** A rule file's text, or null when it is absent or was refused. */
+function readRuleFile(file: string): string | null {
+  const r = readSmallText(file, RULE_FILE_MAX_BYTES);
+  return r.status === 'ok' ? r.text : null;
+}
 
 /** Python's `Path(p).parts` for the strings a `--config` holds: the anchor (drive, UNC share, `/`) is one part. */
 function pathParts(p: string): string[] {
@@ -242,12 +261,8 @@ const TAINT_TOKENS = /taint|pattern-sources|pattern-sinks/i;
 
 /** Whether a rule file may hold a taint rule: true unless it reads, parses and names none of {@link TAINT_TOKENS}. */
 function fileMayHoldTaintRule(file: string): boolean {
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    return true;
-  }
+  const text = readRuleFile(file);
+  if (text === null) return true;
   if (TAINT_TOKENS.test(text)) return true;
   try {
     parseYaml(text);
@@ -336,9 +351,11 @@ export function ruleIdsInDir(dir: string): Set<string> {
 
 /** Every rule id a YAML rule file declares (`rules[].id`); none when it cannot be read or parsed. */
 export function ruleIdsInFile(file: string): string[] {
+  const text = readRuleFile(file);
+  if (text === null) return [];
   let doc: unknown;
   try {
-    doc = parseYaml(readFileSync(file, 'utf8'));
+    doc = parseYaml(text);
   } catch {
     return [];
   }

@@ -20,9 +20,18 @@
  *     the top-level arrays are the union across all of them.
  *   - `build.gradle.kts` (a Kotlin Gradle *build script*) was folded into
  *     `java`. Fixed: it now reports `kotlin`.
+ *
+ * Every file and directory it reads is the scanned repository's, and goes
+ * through `platform/projectFs.ts` (review of 3.0, W2E): a `package.json`
+ * that is a link to `/dev/zero` OOM-killed the whole MCP server, and a FIFO
+ * at that name hung it (measured in `node:22`, 768 MB). A file that is there
+ * and was not read is named in the snapshot's `unread_files`, never taken for
+ * "no such manifest".
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { readSmallText } from '../hooks/configFile.js';
+import { describeReadRefusal, listProjectDir, PROJECT_FILE_MAX_BYTES, readProjectHead, readProjectText, } from '../platform/projectFs.js';
 import { hasFileWithExtension, PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 /** How many directories below the project root the manifest walk descends. */
 const MAX_MANIFEST_DEPTH = 3;
@@ -30,11 +39,26 @@ const MAX_MANIFEST_DEPTH = 3;
  *  pathological tree (thousands of tiny directories, none excluded) cannot
  *  make `detect_stack` hang. Never reached by an ordinary project. */
 const MAX_DIRS_VISITED = 20_000;
+/** A manifest (`package.json`, `pyproject.toml`, `composer.json`, a requirements file) is read whole up to this size. */
+const MANIFEST_MAX_BYTES = PROJECT_FILE_MAX_BYTES;
+/** A plugin's or theme's header is always near the top of its main file. */
+const HEADER_BYTES = 8192;
+/** A YAML file's head, read to tell a Kubernetes manifest. */
+const YAML_SNIFF_BYTES = 64 * 1024;
 export function detectStack(projectPath) {
+    const unread = new Map();
+    const io = {
+        root: projectPath,
+        onRefused: (path, reason) => {
+            const rel = relative(projectPath, path).split(sep).join('/');
+            if (!unread.has(rel))
+                unread.set(rel, describeReadRefusal(reason));
+        },
+    };
     const manifestDirs = walkManifestDirs(projectPath);
     const projects = [];
-    const rootDetected = detectManifestsIn(projectPath);
-    const rootWp = detectWordPress(projectPath);
+    const rootDetected = detectManifestsIn(io, projectPath);
+    const rootWp = detectWordPress(io, projectPath);
     const rootPhpByGlob = hasFileWithExtension(projectPath, ['.php']);
     const root = {
         path: '.',
@@ -50,7 +74,7 @@ export function detectStack(projectPath) {
     for (const dir of manifestDirs) {
         if (dir.rel === '')
             continue; // the root is handled above, with the WP/PHP-glob signals folded in.
-        const detected = detectManifestsIn(dir.abs);
+        const detected = detectManifestsIn(io, dir.abs);
         if (detected.languages.length === 0)
             continue;
         projects.push({
@@ -64,15 +88,16 @@ export function detectStack(projectPath) {
     const packageManagers = unique(projects.flatMap((p) => p.package_managers)).sort();
     const frameworks = unique(projects.flatMap((p) => p.frameworks)).sort();
     const hasTerraform = hasGlob(projectPath, /\.tf$/i);
-    const hasKubernetes = detectKubernetes(projectPath);
+    const hasKubernetes = detectKubernetes(io, projectPath);
     const hasAnsible = existsSync(join(projectPath, 'roles')) || existsSync(join(projectPath, 'ansible.cfg'));
-    return {
+    const existingTools = detectExistingTools(io, projectPath).sort();
+    const snapshot = {
         os: detectStackOs(),
         arch: detectStackArch(),
         languages,
         package_managers: packageManagers,
         frameworks,
-        existing_tools: detectExistingTools(projectPath).sort(),
+        existing_tools: existingTools,
         has_docker: existsSync(join(projectPath, 'Dockerfile')),
         has_compose: hasComposeFile(projectPath),
         has_terraform: hasTerraform,
@@ -83,6 +108,12 @@ export function detectStack(projectPath) {
         has_iac: hasTerraform || hasKubernetes || hasAnsible,
         projects,
     };
+    if (unread.size > 0) {
+        snapshot.unread_files = [...unread]
+            .map(([path, reason]) => ({ path, reason }))
+            .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    }
+    return snapshot;
 }
 // ---------------------------------------------------------------------- OS / arch
 function detectStackOs() {
@@ -106,12 +137,9 @@ function detectStackOs() {
     }
 }
 function isWsl() {
-    try {
-        return /microsoft/i.test(readFileSync('/proc/version', 'utf8'));
-    }
-    catch {
-        return false;
-    }
+    // The system's own file, read the bounded way all the same.
+    const r = readSmallText('/proc/version', 64 * 1024);
+    return r.status === 'ok' && /microsoft/i.test(r.text);
 }
 /**
  * `arch`, in the same spelling the bash script's `uname -m` used — which is
@@ -169,14 +197,14 @@ function walkManifestDirs(root) {
         if (visited >= MAX_DIRS_VISITED)
             break;
         visited += 1;
-        const entries = readDirSafe(cur.abs);
-        if (entries.some((e) => e.isFile() && MANIFEST_FILES.includes(e.name))) {
+        const entries = readDirSafe(root, cur.abs);
+        if (entries.some((e) => e.kind === 'file' && MANIFEST_FILES.includes(e.name))) {
             found.push({ rel: cur.rel, abs: cur.abs });
         }
         if (cur.depth >= MAX_MANIFEST_DEPTH)
             continue;
         for (const e of entries) {
-            if (!e.isDirectory())
+            if (e.kind !== 'directory')
                 continue;
             if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith('.'))
                 continue;
@@ -194,28 +222,26 @@ function walkManifestDirs(root) {
  * source-vulnerability inventory reads the same directories this module's
  * own WordPress detection does (`wp-content/plugins/*`,
  * `wp-content/themes/*`), so it reuses this bounded, exception-safe walk
- * rather than re-implementing it.
+ * rather than re-implementing it. `platform/projectFs.ts#listProjectDir`:
+ * each entry typed without following it (a link is `link`), and nothing
+ * listed through a link out of `root`.
  */
-export function readDirSafe(dir) {
-    try {
-        return readdirSync(dir, { withFileTypes: true });
-    }
-    catch {
-        return [];
-    }
+export function readDirSafe(root, dir) {
+    return listProjectDir(root, dir);
 }
 /** Manifest-driven detection, scoped to one directory (root or a nested one). */
-function detectManifestsIn(dir) {
+function detectManifestsIn(io, dir) {
     const languages = [];
     const packageManagers = [];
     const frameworks = [];
     const has = (rel) => existsSync(join(dir, rel));
-    const read = (rel) => readTextSafe(join(dir, rel));
-    // JS/TS
+    const read = (rel) => readTextSafe(io.root, join(dir, rel), { onRefused: io.onRefused });
+    // JS/TS. A package.json that is there and was not read still says
+    // JavaScript; only its frameworks go unknown (and it is named).
     const pkgJsonText = read('package.json');
-    if (pkgJsonText !== null) {
+    if (pkgJsonText !== null || has('package.json')) {
         languages.push('javascript');
-        if (has('tsconfig.json') || hasTopLevelExtension(dir, '.ts'))
+        if (has('tsconfig.json') || hasTopLevelExtension(io.root, dir, '.ts'))
             languages.push('typescript');
         if (has('pnpm-lock.yaml'))
             packageManagers.push('pnpm');
@@ -226,7 +252,7 @@ function detectManifestsIn(dir) {
         else
             packageManagers.push('npm');
         for (const [needle, framework] of JS_FRAMEWORK_MARKERS) {
-            if (pkgJsonText.includes(needle))
+            if (pkgJsonText?.includes(needle) === true)
                 frameworks.push(framework);
         }
     }
@@ -242,7 +268,7 @@ function detectManifestsIn(dir) {
             packageManagers.push('pipenv');
         else
             packageManagers.push('pip');
-        const reqTexts = readRequirementsTxts(dir);
+        const reqTexts = readRequirementsTxts(io, dir);
         const haystack = `${pyprojectText ?? ''}\n${reqTexts}`;
         if (/django/i.test(haystack))
             frameworks.push('django');
@@ -254,12 +280,12 @@ function detectManifestsIn(dir) {
     // PHP (composer-driven part; `*.php`-only and WordPress signals are layered
     // on at the root by the caller, since they are whole-project concerns).
     const composerText = read('composer.json');
-    if (composerText !== null) {
+    if (composerText !== null || has('composer.json')) {
         languages.push('php');
         packageManagers.push('composer');
-        if (composerText.includes('laravel/framework'))
+        if (composerText?.includes('laravel/framework') === true)
             frameworks.push('laravel');
-        if (composerText.includes('symfony/'))
+        if (composerText?.includes('symfony/') === true)
             frameworks.push('symfony');
     }
     // Go
@@ -290,7 +316,7 @@ function detectManifestsIn(dir) {
         languages.push('kotlin');
         packageManagers.push('gradle');
     }
-    if (hasTopLevelExtension(dir, '.kt'))
+    if (hasTopLevelExtension(io.root, dir, '.kt'))
         languages.push('kotlin');
     return {
         languages: unique(languages),
@@ -310,12 +336,12 @@ const JS_FRAMEWORK_MARKERS = [
     ['"astro"', 'astro'],
 ];
 /** `requirements*.txt` at this directory's top level, concatenated. */
-function readRequirementsTxts(dir) {
-    const entries = readDirSafe(dir);
+function readRequirementsTxts(io, dir) {
+    const entries = readDirSafe(io.root, dir);
     const texts = [];
     for (const e of entries) {
-        if (e.isFile() && /^requirements.*\.txt$/i.test(e.name)) {
-            const text = readTextSafe(join(dir, e.name));
+        if (e.kind === 'file' && /^requirements.*\.txt$/i.test(e.name)) {
+            const text = readTextSafe(io.root, join(dir, e.name), { onRefused: io.onRefused });
             if (text !== null)
                 texts.push(text);
         }
@@ -323,8 +349,8 @@ function readRequirementsTxts(dir) {
     return texts.join('\n');
 }
 /** Whether `dir` (top level only, no recursion) has a file ending in `ext`. */
-function hasTopLevelExtension(dir, ext) {
-    return readDirSafe(dir).some((e) => e.isFile() && e.name.toLowerCase().endsWith(ext));
+function hasTopLevelExtension(root, dir, ext) {
+    return readDirSafe(root, dir).some((e) => e.kind === 'file' && e.name.toLowerCase().endsWith(ext));
 }
 /**
  * WordPress/WooCommerce/Kadence detection, scoped to `dir` — deliberately a
@@ -332,18 +358,20 @@ function hasTopLevelExtension(dir, ext) {
  * walk above: `wp-content/themes/*` conventionally lives at the site root,
  * not at an arbitrary nesting depth.
  */
-function detectWordPress(dir) {
+function detectWordPress(io, dir) {
     const has = (rel) => existsSync(join(dir, rel));
     let isWordPress = has('wp-config.php') || has('wp-config-sample.php') || has('wp-content');
-    const styleCss = readTextSafe(join(dir, 'style.css'));
+    // A theme's header is at the top of its style.css, which may run long.
+    const styleCss = readTextSafe(io.root, join(dir, 'style.css'), { maxBytes: HEADER_BYTES, onRefused: io.onRefused });
     if (styleCss !== null && /^\s*(?:\*\s*)?Theme Name:/im.test(styleCss))
         isWordPress = true;
-    if (hasTopLevelPluginHeader(dir))
+    const pluginHeader = firstTopLevelPluginHeaderText(io, dir);
+    if (pluginHeader !== null)
         isWordPress = true;
     const isKadence = has(join('wp-content', 'themes', 'kadence')) || has(join('wp-content', 'plugins', 'kadence-blocks'));
     const isWooCommerce = has(join('wp-content', 'plugins', 'woocommerce')) ||
-        (readTextSafe(join(dir, 'composer.json'))?.includes('woocommerce/woocommerce') ?? false) ||
-        /requires plugins:.*woocommerce|wc requires at least/i.test(`${styleCss ?? ''}\n${firstTopLevelPluginHeaderText(dir) ?? ''}`);
+        (readTextSafe(io.root, join(dir, 'composer.json'), { onRefused: io.onRefused })?.includes('woocommerce/woocommerce') ?? false) ||
+        /requires plugins:.*woocommerce|wc requires at least/i.test(`${styleCss ?? ''}\n${pluginHeader ?? ''}`);
     const frameworks = [];
     if (isWordPress || isWooCommerce)
         frameworks.push('wordpress');
@@ -353,18 +381,14 @@ function detectWordPress(dir) {
         frameworks.push('kadence');
     return { isWordPress: isWordPress || isWooCommerce, frameworks: unique(frameworks) };
 }
-/** Whether any top-level `*.php` file's docblock has a "Plugin Name:" header. */
-function hasTopLevelPluginHeader(dir) {
-    return firstTopLevelPluginHeaderText(dir) !== null;
-}
 /** The text of the first top-level `*.php` file whose header names a plugin,
  *  or null when none does. Bounded to top-level files and the first 8 KB of
  *  each — a plugin header is always near the top of the main file. */
-function firstTopLevelPluginHeaderText(dir) {
-    for (const e of readDirSafe(dir)) {
-        if (!e.isFile() || !e.name.toLowerCase().endsWith('.php'))
+function firstTopLevelPluginHeaderText(io, dir) {
+    for (const e of readDirSafe(io.root, dir)) {
+        if (e.kind !== 'file' || !e.name.toLowerCase().endsWith('.php'))
             continue;
-        const text = readTextSafe(join(dir, e.name), 8192);
+        const text = readTextSafe(io.root, join(dir, e.name), { maxBytes: HEADER_BYTES, onRefused: io.onRefused });
         if (text !== null && /^\s*(?:\*|\/\/)?\s*Plugin Name:/im.test(text))
             return text;
     }
@@ -378,23 +402,23 @@ function hasComposeFile(dir) {
 }
 /** Top-level files only (mirrors the bash script's `compgen -G`, which never recursed). */
 function hasGlob(dir, pattern) {
-    return readDirSafe(dir).some((e) => e.isFile() && pattern.test(e.name));
+    return readDirSafe(dir, dir).some((e) => e.kind === 'file' && pattern.test(e.name));
 }
-function detectKubernetes(dir) {
+function detectKubernetes(io, dir) {
     if (existsSync(join(dir, 'k8s')) || existsSync(join(dir, 'kubernetes')))
         return true;
-    for (const e of readDirSafe(dir)) {
-        if (!e.isFile() || !/\.ya?ml$/i.test(e.name))
+    for (const e of readDirSafe(io.root, dir)) {
+        if (e.kind !== 'file' || !/\.ya?ml$/i.test(e.name))
             continue;
-        const text = readTextSafe(join(dir, e.name));
+        const text = readTextSafe(io.root, join(dir, e.name), { maxBytes: YAML_SNIFF_BYTES, onRefused: io.onRefused });
         if (text !== null && /apiVersion:\s/.test(text))
             return true;
     }
     return false;
 }
-function detectExistingTools(dir) {
+function detectExistingTools(io, dir) {
     const has = (rel) => existsSync(join(dir, rel));
-    const contains = (rel, needle) => (readTextSafe(join(dir, rel)) ?? '').includes(needle);
+    const contains = (rel, needle) => (readTextSafe(io.root, join(dir, rel), { onRefused: io.onRefused }) ?? '').includes(needle);
     const tools = [];
     if (has('.semgrep.yml') || has(join('.semgrep', 'semgrep.yml')))
         tools.push('semgrep');
@@ -425,15 +449,22 @@ function detectExistingTools(dir) {
     return tools;
 }
 // ---------------------------------------------------------------------- shared helpers
-/** Exported for the same reason as {@link readDirSafe} above. */
-export function readTextSafe(path, maxBytes) {
-    try {
-        const text = readFileSync(path, 'utf8');
-        return maxBytes !== undefined && text.length > maxBytes ? text.slice(0, maxBytes) : text;
-    }
-    catch {
-        return null;
-    }
+/**
+ * A text file inside `root`, through `platform/projectFs.ts` — or null when
+ * it is absent or was refused (a link out of `root` or to a network or
+ * device path, a FIFO, a device, a directory, a file over the cap), and
+ * `onRefused` hears of every refusal. With `maxBytes`: the first `maxBytes`
+ * bytes of a file of any size (a header). Without: the whole file, up to
+ * {@link MANIFEST_MAX_BYTES}. Exported for the same reason as
+ * {@link readDirSafe} above.
+ */
+export function readTextSafe(root, path, opts = {}) {
+    const r = opts.maxBytes !== undefined ? readProjectHead(root, path, opts.maxBytes) : readProjectText(root, path, MANIFEST_MAX_BYTES);
+    if (r.status === 'ok')
+        return r.text;
+    if (r.status === 'refused')
+        opts.onRefused?.(path, r.reason);
+    return null;
 }
 function unique(values) {
     return [...new Set(values)];

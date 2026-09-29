@@ -288,11 +288,15 @@ their respective projects.
   way is replaced by a fresh temp directory; `precommit_install` refuses a
   `.git`, hooks directory or hook file that would send pre-commit's writes
   elsewhere. A source-scan test lists every raw `fs` call left in `mcp/src`
-  with the reason it is not the repository's. **Not yet converted**, and
-  named there: the repository reads in `runners/` (the Trivy and repository
-  scanner configs, `yarn.lock` and Python manifests read for Trivy's gaps, the
-  stack detector's manifests, the project's Semgrep rule files) and
-  `skillaudit/`, and the `.guardian/guardian.db` the storage layer opens.
+  with the reason it is not the repository's. The last repository reads it
+  named as not yet converted — in `runners/` (the scanner configs, the
+  manifests and lock files read for Trivy's gaps, the stack detector's
+  manifests, the project's Semgrep rule files) and `skillaudit/` — go through
+  it too now: a `package.json` linked to `/dev/zero` had OOM-killed the server
+  through `detect_stack`. Where a refused file would have changed what a tool
+  reports, the result names it (`detect_stack`'s `unread_files`, a warning, a
+  coverage gap). **Not converted**: the `.guardian/guardian.db` the storage
+  layer opens.
 - **Repository text is escaped before it is shown.** A rule message, a
   snippet, a file name, a reason or a title can carry characters that render
   as nothing or reorder what does (a right-to-left override, a zero-width

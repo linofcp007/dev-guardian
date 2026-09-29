@@ -443,6 +443,13 @@ export interface StackSnapshot {
   has_iac: boolean;
   /** Per-directory detail behind the top-level union — see {@link SubProjectStack}. */
   projects: SubProjectStack[];
+  /**
+   * Project files detection found and did not read — a link out of the
+   * project or to a device, a FIFO, a file over the size cap — each with why.
+   * What they would have said (a framework, a tool) is missing from the
+   * arrays above. Absent when every file it looked at was read.
+   */
+  unread_files?: Array<{ path: string; reason: string }>;
 }
 
 export const HTTP_METHODS = [

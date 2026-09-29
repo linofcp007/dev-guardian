@@ -14,7 +14,7 @@
  *     in 21 s, before it ever listened.
  *
  * Every read of a project file goes through {@link readProjectText} (or
- * {@link readProjectBytes} / {@link hashProjectFile}), and every write
+ * {@link readProjectBytes} / {@link readProjectHead} / {@link hashProjectFile}), and every write
  * through {@link writeProjectFile}. `test/unit/platform/rawRepoFsSites.test.ts`
  * fails when a raw `fs` read or write appears anywhere in `src/` that is not
  * on its list, and says why each listed one is not the project's.
@@ -35,6 +35,9 @@
  *     non-blocking, so a FIFO does not wait for a writer;
  *   - is larger than the caller's cap — `too-large`, and at most cap + 1
  *     bytes are ever read, so a file that grows during the read is refused too.
+ *
+ * {@link readProjectHead} judges a file the same way but is never
+ * `too-large`: it reads the first N bytes and leaves the rest.
  *
  * A path that does not exist, or a dangling link, is `absent`. Text reads
  * are `hooks/configFile.ts`'s own `readSmallText` after the containment check
@@ -251,6 +254,52 @@ export function readProjectBytes(root: string, path: string, maxBytes: number = 
 }
 
 /**
+ * The first `maxBytes` bytes of a project file, as text — judged as
+ * {@link readProjectText} judges a file (contained, a regular file on a
+ * non-blocking descriptor), except that a longer file is never refused: at
+ * most `maxBytes` bytes are read, and the rest is left unread. For a caller
+ * that decides from a file's head (a plugin header, a manifest's first
+ * document), where the file itself may be of any size. A leading
+ * byte-order mark is stripped; a multi-byte character cut at the end is
+ * replaced, as `Buffer#toString` replaces it.
+ */
+export function readProjectHead(root: string, path: string, maxBytes: number): ProjectTextRead {
+  const where = locate(root, path);
+  if (!where.ok) return where.read;
+  let fd: number;
+  try {
+    fd = openSync(where.real, OPEN_FLAGS);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { status: 'absent' };
+    if (code === 'EISDIR') return { status: 'refused', reason: 'not-a-regular-file' };
+    return { status: 'refused', reason: 'unreadable' };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { status: 'refused', reason: 'not-a-regular-file' };
+    const buf = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
+    let total = 0;
+    while (total < buf.length) {
+      const n = readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+    }
+    let text = buf.subarray(0, total).toString('utf8');
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    return { status: 'ok', text };
+  } catch {
+    return { status: 'refused', reason: 'unreadable' };
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      /* nothing left to do with it */
+    }
+  }
+}
+
+/**
  * The sha256 of a project file's CONTENT for a tree hash, streamed so no size
  * cap applies — or a stable stand-in that never follows the path anywhere:
  *
@@ -424,13 +473,23 @@ export interface ProjectDirEntry {
  * leads.
  */
 export function listProjectDir(root: string, dir: string): ProjectDirEntry[] {
+  return listProjectDirOrNull(root, dir) ?? [];
+}
+
+/**
+ * {@link listProjectDir}, except that a directory that could not be listed
+ * — absent, not a directory, unreadable, or reached through a link out of
+ * the project — is `null` rather than `[]`: for a walk that must tell an
+ * empty directory from one it never read, and say so.
+ */
+export function listProjectDirOrNull(root: string, dir: string): ProjectDirEntry[] | null {
   const real = realpathInProject(root, dir);
-  if (real === null) return [];
+  if (real === null) return null;
   let entries;
   try {
     entries = readdirSync(real, { withFileTypes: true });
   } catch {
-    return [];
+    return null;
   }
   return entries.map((e) => ({
     name: e.name,

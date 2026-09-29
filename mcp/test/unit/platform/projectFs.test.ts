@@ -21,7 +21,10 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   hashProjectFile,
+  listProjectDir,
+  listProjectDirOrNull,
   readProjectBytes,
+  readProjectHead,
   readProjectJson,
   readProjectText,
   realpathInProject,
@@ -144,6 +147,62 @@ describe('readProjectBytes', () => {
     const root = makeTempDir('pfs-');
     writeFileSync(join(root, 'b'), Buffer.alloc(11));
     expect(readProjectBytes(root, 'b', 10)).toEqual({ status: 'refused', reason: 'too-large' });
+  });
+});
+
+describe('readProjectHead', () => {
+  it('reads the first N bytes of a file of any size, and a short file whole, stripping a byte-order mark', () => {
+    const root = makeTempDir('pfs-');
+    writeFileSync(join(root, 'big'), `﻿Plugin Name: x\n${'a'.repeat(100_000)}`);
+    writeFileSync(join(root, 'small'), 'tiny');
+    // 18 bytes: the 3-byte mark, then the 15-byte header line.
+    const head = readProjectHead(root, 'big', 18);
+    expect(head).toEqual({ status: 'ok', text: 'Plugin Name: x\n' });
+    expect(readProjectHead(root, 'small', 1024)).toEqual({ status: 'ok', text: 'tiny' });
+    expect(readProjectHead(root, 'missing', 1024)).toEqual({ status: 'absent' });
+  });
+
+  it('refuses a directory and a path outside the project', () => {
+    const root = makeTempDir('pfs-');
+    mkdirSync(join(root, 'd'));
+    expect(readProjectHead(root, 'd', 10)).toEqual({ status: 'refused', reason: 'not-a-regular-file' });
+    expect(readProjectHead(root, '../x', 10)).toEqual({ status: 'refused', reason: 'outside-project' });
+  });
+
+  it.skipIf(!CAN_SYMLINK)('refuses a link out of the project', () => {
+    const root = makeTempDir('pfs-');
+    const outside = makeTempDir('pfs-out-');
+    writeFileSync(join(outside, 'secret'), 'SECRET');
+    symlinkSync(join(outside, 'secret'), join(root, 'l'), 'file');
+    expect(readProjectHead(root, 'l', 10)).toEqual({ status: 'refused', reason: 'outside-project' });
+  });
+
+  it.skipIf(!POSIX)('refuses a FIFO without waiting for a writer, and a link to /dev/zero (POSIX)', () => {
+    const root = makeTempDir('pfs-');
+    expect(spawnSync('mkfifo', [join(root, 'pipe')]).status).toBe(0);
+    symlinkSync('/dev/zero', join(root, 'zero'));
+    expect(fast(() => readProjectHead(root, 'pipe', 64))).toEqual({ status: 'refused', reason: 'not-a-regular-file' });
+    expect(fast(() => readProjectHead(root, 'zero', 64))).toEqual({ status: 'refused', reason: 'outside-project' });
+  });
+});
+
+describe('listProjectDirOrNull', () => {
+  it('tells an empty directory from one it never listed', () => {
+    const root = makeTempDir('pfs-');
+    mkdirSync(join(root, 'empty'));
+    writeFileSync(join(root, 'f'), 'x');
+    expect(listProjectDirOrNull(root, join(root, 'empty'))).toEqual([]);
+    expect(listProjectDirOrNull(root, join(root, 'missing'))).toBeNull();
+    expect(listProjectDirOrNull(root, join(root, 'f'))).toBeNull();
+    expect(listProjectDir(root, join(root, 'missing'))).toEqual([]);
+  });
+
+  it.skipIf(!CAN_SYMLINK)('is null for a directory reached through a link out of the project', () => {
+    const root = makeTempDir('pfs-');
+    const outside = makeTempDir('pfs-out-');
+    writeFileSync(join(outside, 'secret'), 'x');
+    symlinkSync(outside, join(root, 'out'), POSIX ? 'dir' : 'junction');
+    expect(listProjectDirOrNull(root, join(root, 'out'))).toBeNull();
   });
 });
 

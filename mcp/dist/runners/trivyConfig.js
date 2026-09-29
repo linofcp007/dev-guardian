@@ -72,8 +72,8 @@
  * — `name: {{ name }}` outside a chart, core kind or custom — has all three
  * keys at column 0 and was num=0 with no error.
  */
-import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { describeReadRefusal, listProjectDirOrNull, readProjectHead, readProjectText } from '../platform/projectFs.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { withHonoured } from './trivyRun.js';
@@ -136,28 +136,6 @@ function isDockerfileName(name) {
     return stem === 'Dockerfile' || stem === 'Containerfile' || ext === '.Dockerfile' || ext === '.Containerfile';
 }
 const TERRAFORM = /\.(tf|tf\.json|tofu|tofu\.json)$/;
-function head(abs) {
-    let fd = null;
-    try {
-        fd = openSync(abs, 'r');
-        const buf = Buffer.alloc(SNIFF_BYTES);
-        const n = readSync(fd, buf, 0, SNIFF_BYTES, 0);
-        return buf.subarray(0, n).toString('utf8');
-    }
-    catch {
-        return null;
-    }
-    finally {
-        if (fd !== null) {
-            try {
-                closeSync(fd);
-            }
-            catch {
-                /* closing a read-only descriptor: nothing to lose */
-            }
-        }
-    }
-}
 /** JSON files larger than this are not parsed to decide (and not counted as IaC-looking). */
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 /**
@@ -193,17 +171,6 @@ function looksLikeIacJson(text) {
     }
     return false;
 }
-/** The whole file when it is at most `max` bytes; null otherwise, or unreadable. */
-function whole(abs, max) {
-    try {
-        if (statSync(abs).size > max)
-            return null;
-        return readFileSync(abs, 'utf8');
-    }
-    catch {
-        return null;
-    }
-}
 function looksLikeIacText(text) {
     // YAML: top-level keys only (column 0), so a nested `kind:` never counts;
     // all three of Trivy's keys in one document.
@@ -222,10 +189,14 @@ function looksLikeIacText(text) {
  * enters them), a chart's `templates/` and `.guardianignore` entries are not
  * entered, symbolic links not followed; a JSON file is parsed only up to
  * 2 MB. A GitHub workflow is walked and never IaC-looking: it has no
- * top-level `apiVersion`/`kind`/`metadata`.
+ * top-level `apiVersion`/`kind`/`metadata`. Every listing and read goes
+ * through `platform/projectFs.ts`; a candidate that could not be read (it
+ * was swapped for a FIFO or a link after the listing, or cannot be opened)
+ * makes the walk `incomplete`, naming it.
  */
 export function iacLookingFiles(projectPath, exclusions) {
     const files = [];
+    const unread = [];
     const stack = [''];
     let visited = 0;
     let sniffed = 0;
@@ -240,19 +211,15 @@ export function iacLookingFiles(projectPath, exclusions) {
         }
         visited += 1;
         const abs = rel === '' ? projectPath : join(projectPath, ...rel.split('/'));
-        let entries;
-        try {
-            entries = readdirSync(abs, { withFileTypes: true });
-        }
-        catch {
+        const entries = listProjectDirOrNull(projectPath, abs);
+        if (entries === null)
             continue;
-        }
         // A chart's templates are Helm's to render (module comment): one disabled
         // by its values renders nothing and is absent from the report legitimately.
-        const isChart = entries.some((e) => e.isFile() && e.name === 'Chart.yaml');
+        const isChart = entries.some((e) => e.kind === 'file' && e.name === 'Chart.yaml');
         for (const e of entries) {
             const child = rel === '' ? e.name : `${rel}/${e.name}`;
-            if (e.isDirectory()) {
+            if (e.kind === 'directory') {
                 // Hidden directories too (round 5, item 1): Trivy reads `.devcontainer/`, `.k8s/`.
                 if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name))
                     continue;
@@ -263,7 +230,7 @@ export function iacLookingFiles(projectPath, exclusions) {
                 stack.push(child);
                 continue;
             }
-            if (!e.isFile())
+            if (e.kind !== 'file')
                 continue;
             if (exclusions !== null && exclusions.ignores(child, false))
                 continue;
@@ -279,18 +246,28 @@ export function iacLookingFiles(projectPath, exclusions) {
                 continue;
             }
             sniffed += 1;
-            if (lower.endsWith('.json')) {
-                const text = whole(join(abs, e.name), MAX_JSON_BYTES);
-                if (text !== null && looksLikeIacJson(text))
-                    files.push(child);
+            // Too large to parse is by design (not IaC-looking); anything else refused is named.
+            const read = lower.endsWith('.json')
+                ? readProjectText(projectPath, join(abs, e.name), MAX_JSON_BYTES)
+                : readProjectHead(projectPath, join(abs, e.name), SNIFF_BYTES);
+            if (read.status === 'refused') {
+                if (read.reason !== 'too-large')
+                    unread.push(`${child} (${describeReadRefusal(read.reason)})`);
                 continue;
             }
-            const text = head(join(abs, e.name));
-            if (text !== null && looksLikeIacText(text))
+            if (read.status !== 'ok')
+                continue;
+            if (lower.endsWith('.json') ? looksLikeIacJson(read.text) : looksLikeIacText(read.text))
                 files.push(child);
         }
     }
     files.sort();
+    if (unread.length > 0) {
+        const shown = unread.slice(0, 3).join('; ');
+        const more = unread.length > 3 ? ` and ${unread.length - 3} more` : '';
+        const note = `could not read ${unread.length} YAML/JSON file${unread.length === 1 ? '' : 's'} to tell whether it is IaC: ${shown}${more}`;
+        incomplete = incomplete !== undefined ? `${incomplete}; ${note}` : note;
+    }
     return incomplete !== undefined ? { files, incomplete } : { files };
 }
 const MAX_NAMED = 5;
@@ -375,8 +352,11 @@ export function judgeTrivyConfig(args) {
             : `Trivy read nothing from ${unrecognised.length} IaC-looking file${unrecognised.length === 1 ? '' : 's'}: ` +
                 `${named(unrecognised)} (a templated manifest or a layout Trivy does not read) — not checked`);
     }
-    if (gaps.length === 0)
-        return { toolRun: withHonoured({ name, status: 'ok' }, run), missing: [] };
-    return { toolRun: withHonoured({ name, status: 'ok', reason: gaps.join('; ') }, run), missing: [name] };
+    const note = args.iacIncomplete !== undefined ? [`the check for IaC-looking files Trivy did not read is incomplete: ${args.iacIncomplete}`] : [];
+    if (gaps.length === 0) {
+        const reason = note.length > 0 ? { reason: note.join('; ') } : {};
+        return { toolRun: withHonoured({ name, status: 'ok', ...reason }, run), missing: [] };
+    }
+    return { toolRun: withHonoured({ name, status: 'ok', reason: [...gaps, ...note].join('; ') }, run), missing: [name] };
 }
 //# sourceMappingURL=trivyConfig.js.map

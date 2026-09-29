@@ -20,9 +20,12 @@
  *   - `repo-safe` — the repository's, and safe as written: a listing typed
  *     from `Dirent`s that never descends a link, a `stat` that opens nothing,
  *     or a walk already judged link by link.
- *   - `repo-deferred` — the repository's and NOT yet converted, because the
- *     directory is another reviewer's this wave (`runners/`, `skillaudit/`,
- *     `hooks/`). Named so the gap is visible, with what it risks.
+ *
+ * There used to be a fourth, `repo-deferred`: the repository's and not yet
+ * converted. Its last ten sites (`runners/` and `skillaudit/`) went through
+ * `platform/projectFs.ts` in review 3.0's W2E — a `package.json` linked to
+ * `/dev/zero` had OOM-killed the server through `detect_stack`, and a FIFO
+ * hung it — so nothing may be added under it again.
  *
  * Counted per file and per `fs` function (`readFileSync`, `statSync`, …), not
  * per line, so an unrelated edit does not move it.
@@ -38,7 +41,7 @@ afterAll(cleanupTempDirs);
 
 const MCP = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-type Kind = 'own' | 'user' | 'repo-safe' | 'repo-deferred';
+type Kind = 'own' | 'user' | 'repo-safe';
 
 interface Allowed {
   apis: Record<string, number>;
@@ -122,38 +125,17 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'is-it-a-directory of the project_path argument itself',
   },
   'src/platform/version.ts': { apis: { readFileSync: 1 }, kind: 'own', reason: "the plugin's own plugin.json / package.json" },
-  'src/runners/git.ts': {
-    apis: { readFileSync: 1, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): reads git's shallow file at the path git names, and lists a submodule " +
-      'directory by name; unbounded read of a path inside the git directory',
-  },
   'src/runners/gitleaksScan.ts': {
-    apis: { copyFileSync: 1, writeFileSync: 2 },
-    kind: 'repo-deferred',
+    apis: { writeFileSync: 3 },
+    kind: 'own',
     reason:
-      "runners/ (another reviewer's): copies uncommitted project files (lstat-checked regular files, size-capped) " +
-      'into a temp dir; the two writes are its own temp config and report',
+      'writes into its own mkdtemp directory the uncommitted project files it read through readProjectBytes, ' +
+      'and its own gitleaks config and sanitized report',
   },
   'src/runners/projectFiles.ts': {
     apis: { readdirSync: 1 },
     kind: 'repo-safe',
     reason: "runners/ (another reviewer's): Dirent-typed walk, names only, never descends a link",
-  },
-  'src/runners/repoConfig.ts': {
-    apis: { readdirSync: 2, statSync: 1, readFileSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): stat-size check then readFileSync of a repository config — a FIFO " +
-      '(size 0) at that name blocks the read; listings are Dirent-typed',
-  },
-  'src/runners/scannerParsers/trivy.ts': {
-    apis: { readFileSync: 4, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): Trivy's own report (own) and the repository's yarn.lock, Python manifest " +
-      'and workspace manifests, read unbounded',
   },
   'src/runners/semgrepConfigs.ts': {
     apis: { readdirSync: 1 },
@@ -161,27 +143,14 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "runners/ (another reviewer's): names at the project root only",
   },
   'src/runners/semgrepRuleIds.ts': {
-    apis: { readFileSync: 2, readdirSync: 2 },
-    kind: 'repo-deferred',
+    apis: { readdirSync: 2 },
+    kind: 'repo-safe',
     reason:
-      "runners/ (another reviewer's): rule files of the packs a scan loads — the plugin's own and the " +
-      "project's Semgrep config — read unbounded",
-  },
-  'src/runners/stackDetect.ts': {
-    apis: { readFileSync: 2, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): /proc/version (system) and readTextSafe of repository manifests, read " +
-      'whole before being cut to maxBytes',
+      "names only, of a rule directory a scan loads (the plugin's own, the project's, or one the user " +
+      'registered): Dirent-typed, never descends a link; each rule file is read with readSmallText (bounded, ' +
+      'non-blocking, regular files only)',
   },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
-  'src/runners/trivyConfig.ts': {
-    apis: { statSync: 1, readFileSync: 1, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): stat-size check then readFileSync of the repository's Trivy config — a " +
-      'FIFO (size 0) at that name blocks the read',
-  },
   'src/runners/trivyRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },
     kind: 'own',
@@ -193,11 +162,12 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'sweeps its own guardian-verify-* directories in the OS temp directory (lstat-checked)',
   },
   'src/skillaudit/ingest.ts': {
-    apis: { statSync: 1, writeFileSync: 1, readdirSync: 1, readFileSync: 1 },
-    kind: 'repo-deferred',
+    apis: { statSync: 1, writeFileSync: 1, readdirSync: 1 },
+    kind: 'repo-safe',
     reason:
-      "skillaudit/ (another reviewer's): the skill under review is untrusted by design and ingest has its own " +
-      'lstat/realpath containment and size cap; the write is a download into its own temp directory',
+      'the skill under review is untrusted by design: its walk lists names and lstat-checks every entry before ' +
+      'use, and each file is read through readProjectBytes against the ingestion root; the stat is of the ' +
+      'target the user named, the write a download into its own temp directory',
   },
   'src/storage/db.ts': {
     apis: { writeFileSync: 1, statSync: 1 },

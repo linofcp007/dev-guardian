@@ -75,10 +75,11 @@
  * `REDACTED`. The directory is removed when the passes are done.
  */
 
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
+import { describeReadRefusal, readProjectBytes } from '../platform/projectFs.js';
 import { honouredRootFiles, withProjectConfig } from './repoConfig.js';
 import { openPrivateReportDir, sanitizeGitleaksReport, type PrivateReportDir } from '../secrets/verify/rawReport.js';
 import type { Finding, ToolRun } from '../types.js';
@@ -557,12 +558,22 @@ async function filesPass(
         overTotal += 1;
         continue;
       }
+      // `platform/projectFs.ts`: judged on the descriptor it reads, so a
+      // file swapped for a FIFO or a link since the lstat above is refused,
+      // never waited on or followed out of the project (review of 3.0, W2E).
+      const read = readProjectBytes(opts.projectPath, rel, maxFile);
+      if (read.status === 'absent') continue; // deleted since git listed it
+      if (read.status === 'refused') {
+        if (read.reason === 'too-large') oversized += 1;
+        else unreadable.push(`${rel} (${describeReadRefusal(read.reason)})`);
+        continue;
+      }
       try {
         const to = join(tmp, rel);
         mkdirSync(dirname(to), { recursive: true });
-        copyFileSync(from, to);
+        writeFileSync(to, read.bytes);
         copied += 1;
-        total += size;
+        total += read.bytes.length;
       } catch (e) {
         unreadable.push(`${rel} (${errorCode(e)})`);
       }

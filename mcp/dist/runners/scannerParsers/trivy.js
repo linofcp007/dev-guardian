@@ -10,10 +10,18 @@
  * Vulnerabilities additionally feed the `cves` table so the
  * `guardian://cves/active` resource can serve dedicated CVE queries
  * without re-deriving them from `findings`.
+ *
+ * The manifest-coverage check reads the scanned repository's manifests,
+ * lock files and workspace declarations, every one through
+ * `platform/projectFs.ts` (review of 3.0, W2E): a `yarn.lock` linked to
+ * `/dev/zero` OOM-killed the MCP server. A file that is refused reads as
+ * "may declare something" — the conservative answer — so a manifest it
+ * belongs to stays a gap, named.
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { listProjectDirOrNull, PROJECT_FILE_MAX_BYTES, PROJECT_LOCKFILE_MAX_BYTES, readProjectText, } from '../../platform/projectFs.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from '../projectFiles.js';
 import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, SECRET_CWE, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
 export const TRIVY_TOOL_NAME = 'trivy';
@@ -306,10 +314,18 @@ function isEmptyField(v) {
         return v.length === 0;
     return typeof v === 'object' && v !== null && Object.keys(v).length === 0;
 }
-/** Parsed JSON, BOM tolerated, or `undefined` when the file does not parse. */
-function readJsonFile(path) {
+/** A project file's text through `platform/projectFs.ts`, or null when it is absent or was refused. */
+function readText(root, path, maxBytes = PROJECT_FILE_MAX_BYTES) {
+    const r = readProjectText(root, path, maxBytes);
+    return r.status === 'ok' ? r.text : null;
+}
+/** Parsed JSON, BOM tolerated, or `undefined` when the file is absent, refused or does not parse. */
+function readJsonFile(root, path, maxBytes = PROJECT_FILE_MAX_BYTES) {
+    const text = readText(root, path, maxBytes);
+    if (text === null)
+        return undefined;
     try {
-        return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
+        return JSON.parse(text);
     }
     catch {
         return undefined;
@@ -324,7 +340,7 @@ const NPM_UNREAD_LOCKFILES = ['pnpm-lock.yaml', 'bun.lock', 'bun.lockb'];
  * nothing. A lock file that does not parse, or one this code does not read,
  * may lock something: see the module comment on this exclusion's boundary.
  */
-function npmLockFilesLockNothing(dir) {
+function npmLockFilesLockNothing(root, dir) {
     for (const name of NPM_UNREAD_LOCKFILES)
         if (existsSync(join(dir, name)))
             return false;
@@ -332,7 +348,8 @@ function npmLockFilesLockNothing(dir) {
         const path = join(dir, name);
         if (!existsSync(path))
             continue;
-        const lock = readJsonFile(path);
+        // Refused (a link out, a FIFO, over the cap) reads as `undefined`: it may lock something.
+        const lock = readJsonFile(root, path, PROJECT_LOCKFILE_MAX_BYTES);
         if (typeof lock !== 'object' || lock === null || Array.isArray(lock))
             return false;
         const { packages, dependencies } = lock;
@@ -347,13 +364,9 @@ function npmLockFilesLockNothing(dir) {
     }
     const yarnLock = join(dir, 'yarn.lock');
     if (existsSync(yarnLock)) {
-        let text;
-        try {
-            text = readFileSync(yarnLock, 'utf8');
-        }
-        catch {
+        const text = readText(root, yarnLock, PROJECT_LOCKFILE_MAX_BYTES);
+        if (text === null)
             return false;
-        }
         // Only the `# ...` header and blank lines: what yarn writes with nothing to lock.
         if (text.split(/\r?\n/).some((line) => line.trim() !== '' && !line.trimStart().startsWith('#')))
             return false;
@@ -367,12 +380,12 @@ function npmLockFilesLockNothing(dir) {
  * `bundleDependencies: true`, a manifest that does not parse, a stale lock
  * file still locking packages) may declare something, and stays a gap.
  */
-function npmManifestDeclaresNothing(path) {
-    const manifest = readJsonFile(path);
+function npmManifestDeclaresNothing(root, path) {
+    const manifest = readJsonFile(root, path);
     if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest))
         return false;
     const fields = manifest;
-    return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname(path));
+    return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(root, dirname(path));
 }
 /**
  * A `package.json` that parses to an object with no production dependency
@@ -382,8 +395,8 @@ function npmManifestDeclaresNothing(path) {
  * own is one whose members lock nothing else either: a member's production
  * dependency is in the root's lock file, and Trivy reports that file.
  */
-function npmManifestDeclaresOnlyDev(path) {
-    const manifest = readJsonFile(path);
+function npmManifestDeclaresOnlyDev(root, path) {
+    const manifest = readJsonFile(root, path);
     if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest))
         return false;
     const fields = manifest;
@@ -409,14 +422,11 @@ const PY_DEPENDENCY_TABLES = /^(project\.optional-dependencies(\..+)?|dependency
  * cannot parse, or a file it cannot read — each may declare something, and
  * stays a gap.
  */
-function pythonManifestDeclaresNothing(path) {
-    let text;
-    try {
-        text = readFileSync(path, 'utf8').replace(/^﻿/, '');
-    }
-    catch {
+function pythonManifestDeclaresNothing(root, path) {
+    // Refused (a link out, a FIFO, over the cap): it may declare something.
+    const text = readText(root, path);
+    if (text === null)
         return false;
-    }
     const lines = text
         .split(/\r?\n/)
         .map((l) => l.trim())
@@ -495,11 +505,8 @@ function walkManifests(projectPath, opts) {
         }
         visited += 1;
         const abs = rel === '' ? projectPath : join(projectPath, ...rel.split('/'));
-        let entries;
-        try {
-            entries = readdirSync(abs, { withFileTypes: true });
-        }
-        catch {
+        const entries = listProjectDirOrNull(projectPath, abs);
+        if (entries === null) {
             if (rel === '')
                 return null;
             unreadable.push(`${rel}/`);
@@ -509,14 +516,14 @@ function walkManifests(projectPath, opts) {
             rootRead = true;
         for (const e of entries) {
             const child = rel === '' ? e.name : `${rel}/${e.name}`;
-            if (e.isDirectory()) {
+            if (e.kind === 'directory') {
                 if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name))
                     continue;
                 if (ignores !== null && ignores(child, true))
                     continue;
                 stack.push(child);
             }
-            else if (e.isFile()) {
+            else if (e.kind === 'file') {
                 const eco = ECOSYSTEM_MANIFESTS.find((m) => m.matches(e.name));
                 if (eco === undefined)
                     continue;
@@ -604,15 +611,13 @@ function tomlArrayIn(text, table, key) {
     }
     return null;
 }
-function workspaceOf(rootAbs, ecosystem) {
-    const read = (name) => {
-        try {
-            return readFileSync(join(rootAbs, name), 'utf8').replace(/^﻿/, '');
-        }
-        catch {
-            return null;
-        }
-    };
+/**
+ * The workspace `rootAbs` (inside the project `projectPath`) declares for
+ * `ecosystem`, or null. A declaration file that is refused declares no
+ * member — the conservative answer: the member stays a gap.
+ */
+function workspaceOf(projectPath, rootAbs, ecosystem) {
+    const read = (name) => readText(projectPath, join(rootAbs, name));
     if (ecosystem === 'npm') {
         const include = [];
         const exclude = [];
@@ -622,7 +627,7 @@ function workspaceOf(rootAbs, ecosystem) {
             else
                 include.push(p);
         };
-        const manifest = readJsonFile(join(rootAbs, 'package.json'));
+        const manifest = readJsonFile(projectPath, join(rootAbs, 'package.json'));
         if (typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)) {
             const ws = manifest['workspaces'];
             const list = Array.isArray(ws)
@@ -711,7 +716,7 @@ export function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
             const ancestor = segments.slice(0, n).join('/');
             if (!dirs.has(ancestor))
                 continue;
-            const decl = workspaceOf(ancestor === '' ? projectPath : join(projectPath, ...ancestor.split('/')), eco.ecosystem);
+            const decl = workspaceOf(projectPath, ancestor === '' ? projectPath : join(projectPath, ...ancestor.split('/')), eco.ecosystem);
             if (decl !== null && declaredMember(decl, segments.slice(n).join('/')))
                 return true;
         }
@@ -726,7 +731,7 @@ export function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
         const segments = dir === '' ? [] : dir.split('/');
         for (let n = segments.length - 1; n >= 0; n--) {
             const ancestor = segments.slice(0, n).join('/');
-            const decl = workspaceOf(abs(ancestor), eco.ecosystem);
+            const decl = workspaceOf(projectPath, abs(ancestor), eco.ecosystem);
             if (decl !== null && declaredMember(decl, segments.slice(n).join('/')) && lockIn(ancestor))
                 return true;
         }
@@ -736,7 +741,7 @@ export function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
     const devOnlyFiles = new Map();
     const dirsOf = new Map();
     for (const m of walked.found) {
-        if (m.eco.declaresNothing?.(m.abs) ?? false)
+        if (m.eco.declaresNothing?.(projectPath, m.abs) ?? false)
             continue;
         let dirs = dirsOf.get(m.eco.ecosystem);
         if (dirs === undefined) {
@@ -746,7 +751,7 @@ export function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
         if (covered(m.eco, m.dir, dirs))
             continue;
         gapFiles.set(m.eco.ecosystem, [...(gapFiles.get(m.eco.ecosystem) ?? []), m.rel]);
-        if ((m.eco.declaresOnlyDev?.(m.abs) ?? false) && hasLockFile(m.eco, m.dir)) {
+        if ((m.eco.declaresOnlyDev?.(projectPath, m.abs) ?? false) && hasLockFile(m.eco, m.dir)) {
             devOnlyFiles.set(m.eco.ecosystem, [...(devOnlyFiles.get(m.eco.ecosystem) ?? []), m.rel]);
         }
     }

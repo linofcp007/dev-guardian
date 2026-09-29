@@ -24,9 +24,11 @@
 
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { readSmallText } from '../hooks/configFile.js';
+import { listProjectDir } from '../platform/projectFs.js';
 
 const GIT_TIMEOUT_MS = 60_000;
 /** A checkout writes the whole tree: a large repository needs longer than a query. */
@@ -95,16 +97,20 @@ export async function shallowBoundary(cwd: string): Promise<string[] | null> {
   const where = await git(cwd, ['rev-parse', '--git-path', 'shallow']);
   const rel = where.stdout.trim();
   if (where.exitCode !== 0 || rel === '') return ['(unknown)'];
-  try {
-    const shas = readFileSync(isAbsolute(rel) ? rel : join(cwd, rel), 'utf8')
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => /^[0-9a-f]{40,64}$/.test(l));
-    return shas.length > 0 ? shas : ['(unknown)'];
-  } catch {
-    return ['(unknown)'];
-  }
+  // The path git names (a linked worktree's lies in the main repository's
+  // git directory, outside the project): read bounded, a regular file only,
+  // on a non-blocking descriptor — never a FIFO or `/dev/zero` (W2E).
+  const read = readSmallText(isAbsolute(rel) ? rel : join(cwd, rel), SHALLOW_FILE_MAX_BYTES);
+  if (read.status !== 'ok') return ['(unknown)'];
+  const shas = read.text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => /^[0-9a-f]{40,64}$/.test(l));
+  return shas.length > 0 ? shas : ['(unknown)'];
 }
+
+/** A shallow file lists one commit per line: 16 MiB is some 250 000 boundary commits. */
+const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * The submodules under `cwd` that are initialised and hold content — the
@@ -127,11 +133,9 @@ export async function initialisedSubmodules(cwd: string): Promise<string[]> {
     const tab = entry.indexOf('\t');
     if (tab < 0 || !entry.startsWith('160000 ')) continue;
     const path = entry.slice(tab + 1);
-    try {
-      if (readdirSync(join(cwd, path)).some((name) => name !== '.git')) out.add(path.split('\\').join('/'));
-    } catch {
-      // Not there on disk: nothing a scan could have read.
-    }
+    // Names only, never through a link out of the project; not there on
+    // disk (or reached through such a link) is nothing a scan could have read.
+    if (listProjectDir(cwd, join(cwd, path)).some(({ name }) => name !== '.git')) out.add(path.split('\\').join('/'));
   }
   return [...out].sort();
 }
