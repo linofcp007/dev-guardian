@@ -41,6 +41,17 @@ version bump.
 
 ### Fixed
 
+- **Nothing told a model to vet a package before installing it, outside
+  Claude Code.** `vet_packages` was named by no skill, command or host rules
+  file, and `guardian-deps` said "no tool detects typosquatting; that is your
+  check" — false since `vet_packages` checks typosquatting, OSV `MAL-`
+  advisories, publish age and npm install scripts. The rules file is all a
+  Cursor, Gemini, Windsurf, Copilot or Codex user gets, and there is no
+  install hook there. The rules template now has intents for `vet_packages`
+  (before the install), `audit_agent_config` and `audit_mcp_tools`, and an
+  "adding a dependency" sequence; `guardian-deps` has a "before installing"
+  section and the router a row for it. A test holds every registered tool to
+  being named in the rules template and in at least one skill or command.
 - **`wp_plugin_check` said it did two things it never did.** Its description
   promised the "latest known" version and, with `target_url`, "a fresh WPScan
   lookup"; the handler makes no network call at all, and `target_url` only

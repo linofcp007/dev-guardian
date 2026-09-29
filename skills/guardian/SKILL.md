@@ -64,6 +64,7 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 | "puxei a main" / "merged a PR" | `/guardian-scan --incoming` |
 | "verifica este ficheiro" | `/guardian-scan <ficheiro>` |
 | "antes do PR / merge" | `guardian-review` e, para as decisões de domínio, `guardian-grill` |
+| "posso instalar o X?" / "vou adicionar esta dependência" | `vet_packages { ecosystem: "npm", packages: ["X"] }` antes do install (`guardian-deps`, secção 3) |
 | "acabei de instalar deps" | `guardian-deps` (secção pós-install) |
 | "já corrigi, confirma" | `/guardian-fix --verify` |
 | "antes do deploy" | `/guardian-release predeploy` |

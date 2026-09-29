@@ -27,6 +27,16 @@ cache that avoids re-running unchanged scans.
   excessive agency, tool poisoning, MCP least-privilege, plus OSV CVEs on
   declared deps - returns 0-100 risk and SAFE / REVIEW / CAUTION /
   DO_NOT_INSTALL. Run it BEFORE installing, not after)
+- about to add a package (npm/pnpm/yarn/bun, pip/uv/poetry, composer, dotnet) →
+  `vet_packages` BEFORE running the install: does the name exist (a hallucinated
+  name is a squatting target), OSV malware (MAL-) and known vulns, publish age,
+  npm install scripts, typosquatting. `unknown` means a check could not run —
+  never read it as ok. Only Claude Code's plugin hook does this on its own
+- "is our AI agent config safe?" (`.mcp.json`, `.claude/settings.json`,
+  `.cursor/mcp.json`, …) → `audit_agent_config` (reads, runs nothing)
+- "are the tools MCP server X serves safe / did they change?" →
+  `audit_mcp_tools` with `servers: ["X"]` — it STARTS that server (only the
+  names given), lists its tools and never calls them
 - "what routes/endpoints does this app expose?" → `map_attack_surface`
 - "active DAST / pen-test the running app" → `map_attack_surface` first for the
   route inventory, then `scan_dast` against the already-running app (loopback
@@ -136,6 +146,8 @@ cache that avoids re-running unchanged scans.
   `security_scan_full` (or `scan_wordpress`) → `set_baseline`
 - **Before PR**: `review_pr` → `triage_findings` → `prioritize_findings` →
   `suggest_fix`
+- **Adding a dependency**: `vet_packages` → the install → `scan_deps` with
+  `packages` for what it pulled in
 - **Audit**: `audit_executive` (stack-aware) → `risk_score` →
   `compliance_evidence framework=…`
 - **WP-specific**: `scan_wordpress` + `wp_audit` + `wp_cron_audit` +
