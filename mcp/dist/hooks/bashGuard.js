@@ -2866,12 +2866,20 @@ function hereStringFetchIntoShell(words, at) {
 /** A download in PowerShell program text: a web cmdlet, or a `WebClient` / `HttpClient` fetch. */
 const PS_DOWNLOAD = /(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|start-bitstransfer)(?![\w-])|\.\s*(?:downloadstring|downloaddata|downloadfile|openread|getstringasync|getbytearrayasync|getstreamasync)\s*\(/i;
 /**
- * The tokens {@link powershellDownloadExecution} reads: `iex`, a download,
- * parentheses, pipes and statement separators. `iex` is a command only as a
- * word of its own — never a file's name or extension (`x.iex`, `out\run.iex`:
- * review round 2).
+ * The tokens {@link powershellDownloadExecution} reads, one named group each:
+ *
+ *   - `run` — what runs its argument as PowerShell: `iex` / `Invoke-Expression`
+ *     (a command only as a word of its own — never a file's name or extension,
+ *     `x.iex`: review round 2), and the script-block builders and runners
+ *     `[scriptblock]::Create(…)`, `$ExecutionContext.InvokeCommand.InvokeScript(…)`
+ *     / `.NewScriptBlock(…)` and `-ScriptBlock (…)` (review round 3: Microsoft's
+ *     dotnet-install one-liner is `&([scriptblock]::Create((iwr …)))`);
+ *   - `dl` — a download;
+ *   - `assign` / `ref` — a variable assigned, and a variable read, so that
+ *     `$s = irm …; iex $s` is seen;
+ *   - parentheses, pipes and statement separators.
  */
-const PS_EXEC_TOKENS = /(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b|&&|\|\||[()|;\n]/gi;
+const PS_EXEC_TOKENS = /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:system\s*\.\s*management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$[\w:]+\s*=(?!=))|(?<ref>\$[\w:]+)|&&|\|\||[()|;\n]/gi;
 /**
  * `Invoke-Expression` over a download, on the masked command text (review I1):
  * `iex ((New-Object Net.WebClient).DownloadString(…))` (Chocolatey's official
@@ -2883,16 +2891,45 @@ const PS_EXEC_TOKENS = /(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|(?<![
  * the next `|` for an `iex` after it.
  */
 function powershellDownloadExecution(text) {
-    if (!/iex|invoke-expression/i.test(text))
+    if (!/iex|invoke-expression|scriptblock|invokescript/i.test(text))
         return false;
     const opens = [];
     let inIex = 0;
     let pendingIex = false;
     let downloaded = false;
     let piped = false;
+    /** The variable being assigned in this `;`/newline segment, and the variables that hold a download. */
+    let assigning;
+    const tainted = new Set();
+    /** A download (or a variable holding one): run when it is `iex`'s argument, else armed for a pipe. */
+    const download = () => {
+        if (inIex > 0 || pendingIex)
+            return true;
+        downloaded = true;
+        if (assigning !== undefined)
+            tainted.add(assigning);
+        return false;
+    };
     for (const m of text.matchAll(PS_EXEC_TOKENS)) {
         const t = m[0].toLowerCase();
-        if (t === '(') {
+        const g = m.groups ?? {};
+        if (g['run'] !== undefined) {
+            if (piped)
+                return true;
+            pendingIex = true;
+        }
+        else if (g['dl'] !== undefined) {
+            if (download())
+                return true;
+        }
+        else if (g['assign'] !== undefined) {
+            assigning = t.replace(/\s*=$/, '');
+        }
+        else if (g['ref'] !== undefined) {
+            if (tainted.has(t) && download())
+                return true;
+        }
+        else if (t === '(') {
             opens.push(pendingIex);
             if (pendingIex)
                 inIex += 1;
@@ -2908,20 +2945,12 @@ function powershellDownloadExecution(text) {
                 piped = true;
             pendingIex = false;
         }
-        else if (t === ';' || t === '\n' || t === '&&' || t === '||') {
+        else {
+            // `;`, a newline, `&&`, `||`.
             downloaded = false;
             piped = false;
             pendingIex = false;
-        }
-        else if (t === 'iex' || t === 'invoke-expression') {
-            if (piped)
-                return true;
-            pendingIex = true;
-        }
-        else {
-            if (inIex > 0 || pendingIex)
-                return true;
-            downloaded = true;
+            assigning = undefined;
         }
     }
     return false;
