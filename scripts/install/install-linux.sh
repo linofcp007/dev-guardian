@@ -57,6 +57,34 @@ ensure_local_bin() {
   esac
 }
 
+# Instala uma ferramenta a partir do arquivo de uma release FIXADA, com o seu
+# sha256 verificado ANTES de desempacotar — nunca "a mais recente": foi por
+# esse caminho (a última release do GitHub, o repositório apt, um install.sh
+# do ramo principal) que chegou o Trivy v0.69.4 malicioso a 2026-03-19. As versões,
+# os arquivos e as somas são os de PINNED_RELEASES em
+# mcp/src/runners/installCatalog.ts (um teste mantém-nos iguais).
+# Cada passo falha por si: quem chama faz "instala_fixado … || r …", e dentro
+# de uma função chamada assim o bash ignora o set -e.
+# Uso: instala_fixado <nome> <url base> <arquivo amd64> <sha256 amd64> <arquivo arm64> <sha256 arm64>
+instala_fixado() {
+  local nome="$1" base="$2" asset sum tmp
+  case "$(uname -m)" in
+    x86_64|amd64) asset="$3"; sum="$4" ;;
+    aarch64|arm64) asset="$5"; sum="$6" ;;
+    *) echo "$nome: sem arquivo fixado para este CPU ($(uname -m))" >&2; return 1 ;;
+  esac
+  tmp="$(mktemp -d)" || return 1
+  if curl -sSfL -o "$tmp/arquivo.tar.gz" "$base/$asset" \
+    && echo "$sum  $tmp/arquivo.tar.gz" | sha256sum -c - \
+    && tar -xzf "$tmp/arquivo.tar.gz" -C "$tmp" "$nome" \
+    && install -m 0755 "$tmp/$nome" "$HOME/.local/bin/$nome"; then
+    rm -rf "$tmp"
+    return 0
+  fi
+  rm -rf "$tmp"
+  return 1
+}
+
 # Dependências básicas
 b "=== Verificar dependências básicas ==="
 for dep in curl git python3; do
@@ -86,32 +114,26 @@ b "=== Semgrep ==="
 if ! has semgrep; then
   if has pipx; then pipx install semgrep; else python3 -m pip install --user semgrep --break-system-packages 2>/dev/null || python3 -m pip install --user semgrep; fi
 fi
-has semgrep && g "✓ Semgrep $(semgrep --version 2>/dev/null)"
+has semgrep && g "✓ Semgrep $(SEMGREP_ENABLE_VERSION_CHECK=0 semgrep --version 2>/dev/null)"
 
-# Trivy
+# Trivy — a release fixada (TRIVY_INSTALL_TAG), com ou sem sudo: o
+# repositório apt da Aqua serve sempre a mais recente.
 b "=== Trivy ==="
 if ! has trivy; then
-  if [ "$PKG" = "apt" ] && [ "$NO_SUDO" -eq 0 ]; then
-    $SUDO apt-get install -y wget apt-transport-https gnupg lsb-release
-    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | $SUDO gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-    echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | $SUDO tee /etc/apt/sources.list.d/trivy.list
-    $SUDO apt-get update -qq && $SUDO apt-get install -y trivy
-  else
-    # Binário portátil
-    TRIVY_VERSION=$(curl -s https://api.github.com/repos/aquasecurity/trivy/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d 'v')
-    ARCH_TAG=$(uname -m | sed 's/x86_64/64bit/;s/aarch64/ARM64/')
-    curl -sL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${ARCH_TAG}.tar.gz" | tar -xz -C "$HOME/.local/bin" trivy
-  fi
+  instala_fixado trivy "https://github.com/aquasecurity/trivy/releases/download/v0.74.0" \
+    trivy_0.74.0_Linux-64bit.tar.gz 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a \
+    trivy_0.74.0_Linux-ARM64.tar.gz b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5 \
+    || r "Falhou Trivy — instala a v0.74.0 à mão (https://github.com/aquasecurity/trivy/releases/tag/v0.74.0)"
 fi
-has trivy && g "✓ Trivy $(trivy --version 2>/dev/null | head -1)"
+has trivy && g "✓ Trivy $(TRIVY_SKIP_VERSION_CHECK=true TRIVY_DISABLE_TELEMETRY=true trivy --version 2>/dev/null | head -1)"
 
 # gitleaks
 b "=== gitleaks ==="
 if ! has gitleaks; then
-  GL_VERSION=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d 'v')
-  ARCH_TAG=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
-  curl -sL "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VERSION}/gitleaks_${GL_VERSION}_linux_${ARCH_TAG}.tar.gz" | tar -xz -C "$HOME/.local/bin" gitleaks
-  chmod +x "$HOME/.local/bin/gitleaks"
+  instala_fixado gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1" \
+    gitleaks_8.30.1_linux_x64.tar.gz 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb \
+    gitleaks_8.30.1_linux_arm64.tar.gz e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 \
+    || r "Falhou gitleaks — instala a v8.30.1 à mão (https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1)"
 fi
 has gitleaks && g "✓ gitleaks $(gitleaks version 2>/dev/null)"
 
@@ -135,29 +157,13 @@ if ! has bandit; then
 fi
 has bandit && g "✓ bandit"
 
-# Syft (SBOM)
-# A release fixada e o seu sha256, verificado ANTES de desempacotar — nunca o
-# script de instalação do ramo principal, que instalava a versão do momento.
-# Os mesmos valores de SYFT_VERSION / SYFT_RELEASE_SHA256 em
-# mcp/src/runners/installCatalog.ts (um teste mantém-nos iguais).
-# Cada passo sai por si ("|| exit 1"): dentro de "( … ) || r" o bash ignora o
-# set -e, e uma soma errada seguiria para o tar.
+# Syft (SBOM) — a release fixada, nunca o install.sh do ramo principal.
 b "=== Syft (SBOM) ==="
 if ! has syft; then
-  (
-    SYFT_VERSION=1.52.0
-    case "$(uname -m)" in
-      x86_64|amd64) arch=amd64; sum=caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d ;;
-      aarch64|arm64) arch=arm64; sum=c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706 ;;
-      *) echo "syft: sem arquivo fixado para este CPU ($(uname -m))" >&2; exit 1 ;;
-    esac
-    tmp="$(mktemp -d)" || exit 1
-    trap 'rm -rf "$tmp"' EXIT
-    curl -sSfL -o "$tmp/syft.tar.gz" "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${arch}.tar.gz" || exit 1
-    echo "$sum  $tmp/syft.tar.gz" | sha256sum -c - || exit 1
-    tar -xzf "$tmp/syft.tar.gz" -C "$tmp" syft || exit 1
-    install -m 0755 "$tmp/syft" "$HOME/.local/bin/syft" || exit 1
-  ) || r "Falhou Syft — instala a v1.52.0 à mão (https://github.com/anchore/syft/releases/tag/v1.52.0)"
+  instala_fixado syft "https://github.com/anchore/syft/releases/download/v1.52.0" \
+    syft_1.52.0_linux_amd64.tar.gz caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d \
+    syft_1.52.0_linux_arm64.tar.gz c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706 \
+    || r "Falhou Syft — instala a v1.52.0 à mão (https://github.com/anchore/syft/releases/tag/v1.52.0)"
 fi
 has syft && g "✓ Syft"
 

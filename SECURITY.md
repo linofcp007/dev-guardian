@@ -206,6 +206,25 @@ their respective projects.
   `.globalconfig` and `Directory.Build.props` / `.targets`, and quality_check's
   ruff, jscpd, radon, staticcheck and ESLint configurations. `.guardianignore`
   is named on every run of a scan it shapes.
+- **What `install_toolchain` installs is pinned, and checked before it
+  runs.** Syft, Trivy and gitleaks came from routes that follow upstream —
+  Syft's `install.sh` piped from its `main` branch, Trivy from its apt
+  repository or `releases/latest`, gitleaks from `releases/latest` (in
+  `scripts/install/install-linux.sh`, which runs for the Linux defaults and
+  the Windows WSL fallback), scoop and choco on Windows — the route the
+  credential-stealing Trivy v0.69.4 took on 2026-03-19. Every install of
+  them now fetches one release (Syft 1.52.0, Trivy 0.74.0, gitleaks 8.30.1)
+  and checks the archive against a sha256 dev-guardian pins
+  (`PINNED_RELEASES` in `mcp/src/runners/installCatalog.ts`, each checked
+  against the release's checksums file, GitHub's asset digest and an
+  independent download) before unpacking it: `sha256sum` / `shasum` into
+  `~/.local/bin` on Linux and macOS, `Get-FileHash` in PowerShell into
+  `%USERPROFILE%\.local\bin` on Windows (not added to PATH; a warning says
+  so). A CPU with no pinned archive is refused. On Windows, winget, scoop
+  and choco are a fallback that asks for that same version; on macOS,
+  Homebrew stays first (its bottles are its own) and the pinned archive is
+  the fallback. cosign's installer was already pinned this way. A test
+  holds the Linux script to the catalogue's versions and sums.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
@@ -256,7 +275,7 @@ project's own build and test commands.
 | `api.wordpress.org` | `wp_audit`, `bulk_audit_wordpress_sites` (WP-CLI `verify-checksums`) | per call |
 | The target you name | `perf_check` (Lighthouse URL, k6 script) | per call |
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
-| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, curl from GitHub releases) | `install_toolchain` | only when asked; `dry_run` prints the commands |
+| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture") |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
 | Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
 | Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |

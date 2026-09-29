@@ -286,7 +286,7 @@ Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempoten
 
 ### `install_toolchain`
 
-Install missing scanners. Defaults to the standard set; pass `tools=[...]` to limit. Linux/macOS delegate to scripts/install/install-{linux,macos}.sh. Windows uses winget/scoop/choco/WSL. dry\_run prints commands without executing.
+Install missing scanners. Defaults to the standard set; pass `tools=[...]` to limit. Linux/macOS delegate to scripts/install/install-{linux,macos}.sh. Windows uses winget/scoop/choco/WSL. Syft, Trivy and gitleaks are always a pinned release checked against its sha256 (on Windows a ZIP fetched with PowerShell into %USERPROFILE%\\.local\\bin), or a package manager asked for that same version — never "latest". dry\_run prints commands without executing.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
