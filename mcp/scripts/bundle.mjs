@@ -17,26 +17,12 @@
 import { build } from 'esbuild';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bundleOptions } from './bundleOptions.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-await build({
-  entryPoints: [resolve(root, 'src', 'server.ts')],
-  outfile: resolve(root, 'dist', 'server.js'),
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  target: 'node22',
-  // node:sqlite (and every other `node:` builtin) stays external; everything
-  // from node_modules gets inlined.
-  external: ['node:sqlite'],
-  // Some bundled deps call `require()` at runtime (e.g. `require('node:fs')`);
-  // ESM output has no `require`, so provide one via createRequire.
-  banner: {
-    js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
-  },
-  legalComments: 'none',
-  logLevel: 'info',
-});
+// The options live in bundleOptions.mjs, shared with the test that rebuilds
+// the bundle in memory and compares it with the committed dist/server.js.
+await build({ ...bundleOptions(root), logLevel: 'info' });
 
 console.log('bundled dist/server.js (self-contained, no runtime node_modules)');
