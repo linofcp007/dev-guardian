@@ -139,6 +139,26 @@ describe('scan --baseline-ref / --rules-ref — usage (no scanner reached)', () 
     expect(r.stdout).toBe('');
   });
 
+  // Review M-1: help used to be looked for in every argument, so a flag whose
+  // VALUE read like help printed the usage and exited 0 — no scan, a pass.
+  it.each([
+    [['--baseline-ref', '--help'], /--baseline-ref takes a git ref, not an option/],
+    [['--baseline-ref', 'help'], /--baseline-ref help: names no commit/],
+    [['--fail-on', '-h'], /--fail-on must be one of/],
+    [['--project', '--help'], /--project does not exist or is not a directory/],
+  ])('a flag whose value reads like help is that flag\'s value, never a help request: %j → exit 3', (args, message) => {
+    const r = runCli(['scan', ...args], FAST_TIMEOUT_MS);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(message);
+    expect(r.stdout).not.toMatch(/--fail-on <severity>/);
+  });
+
+  it('help is still help anywhere a flag value is not expected', () => {
+    const r = runCli(['scan', '--local-only', '--help'], FAST_TIMEOUT_MS);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/--baseline-ref <ref>/);
+  });
+
   it('a project outside git cannot take a ref: exit 3', () => {
     const plain = makeTempDir('ciref-plain-');
     const r = runCli(['scan', '--project', plain, '--rules-ref', 'HEAD'], FAST_TIMEOUT_MS);

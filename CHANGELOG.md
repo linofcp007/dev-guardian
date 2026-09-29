@@ -416,6 +416,10 @@ them again. Scans made on the fallback meanwhile are not merged back.
   names the file and what to do. A `GuardianDbError` that reaches it is now printed alone, with
   exit 3: what `status` and `dashboard` exit with when they refuse an unusable database
   themselves. `db adopt` already printed its own the same way (exit 1, as documented).
+- The CLI looked for `--help` in every argument, so a flag whose value read like help —
+  `scan --baseline-ref --help`, `--baseline-ref help`, `--fail-on -h`, `--project --help` —
+  printed the usage and exited 0 without scanning: a pass, to a pipeline. A value-taking flag's
+  operand is now its value; the command's own parser reads it, and a missing or bad one is exit 3.
 - **The response fields this release added were in no tool description**, so a model never read
   them: `regression_alert` said `regressed: false` without a word about the criticals a
   suppression had taken out of its score. Each description now names what a model needs to use

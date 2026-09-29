@@ -2950,12 +2950,39 @@ const HELP_FLAGS = new Set(['-h', '--help', 'help']);
  * for help, not us, and swallowing it would silently skip the scan.
  */
 function asksForHelp(rest) {
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
     if (a === '--start-command') return false;
+    // A value-taking flag's operand is its value, never a help request:
+    // `scan --baseline-ref --help` used to print the usage and exit 0 without
+    // scanning. The command's own parser then reads it (and a missing or
+    // bad value is exit 3, as for any flag).
+    if (VALUE_FLAGS.has(a)) {
+      i += 1;
+      continue;
+    }
     if (HELP_FLAGS.has(a)) return true;
   }
   return false;
 }
+
+/** Every flag, of every subcommand, that takes its value as the next argument. */
+const VALUE_FLAGS = new Set([
+  '--project',
+  '--fail-on',
+  '--format',
+  '--sarif',
+  '--base-url',
+  '--accept-partial-parse',
+  '--baseline-ref',
+  '--rules-ref',
+  '--scope',
+  '--file',
+  '--bash',
+  '--min',
+  '--branch',
+  '--out',
+]);
 
 function main() {
   const argv = process.argv.slice(2);
