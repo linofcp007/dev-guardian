@@ -31,20 +31,87 @@ const ROUNDS = 5;
 interface ChildOutcome {
   code: number | null;
   stderr: string;
+  /** When the open began and ended (epoch ms), and how late the child reached the shared instant; null if it did not say. */
+  timing: { late: number; start: number; end: number } | null;
 }
 
-function openInChild(projectPath: string, startAt: number): Promise<ChildOutcome> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [...TSX_NODE_ARGS, CHILD, projectPath, String(startAt)], {
+/**
+ * Starts `PROCESSES` children that open `projectPath`, and — once every one
+ * has said `ready` — tells them all the same instant to open at, 200 ms
+ * ahead (see `openDbChild.ts` for why a handshake and not a fixed lead).
+ */
+function openInChildren(projectPath: string): Promise<ChildOutcome[]> {
+  const now = (): number => performance.timeOrigin + performance.now();
+  const children = Array.from({ length: PROCESSES }, () =>
+    spawn(process.execPath, [...TSX_NODE_ARGS, CHILD, projectPath], {
       cwd: MCP_ROOT,
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }),
+  );
+  let ready = 0;
+  const outcomes = children.map(
+    (child) =>
+      new Promise<ChildOutcome>((resolve) => {
+        let stdout = '';
+        let stderr = '';
+        let saidReady = false;
+        child.stdout.on('data', (d: Buffer) => {
+          stdout += d.toString();
+          if (!saidReady && /^ready$/m.test(stdout)) {
+            saidReady = true;
+            ready += 1;
+            if (ready === PROCESSES) {
+              const startAt = now() + 200;
+              for (const c of children) c.stdin.end(`go ${String(startAt)}\n`);
+            }
+          }
+        });
+        child.stderr.on('data', (d: Buffer) => {
+          stderr += d.toString();
+        });
+        // 'close', not 'exit': at 'exit' the output streams may still hold
+        // data, and a failing child's stack trace was lost that way.
+        child.on('close', (code) => {
+          let timing: ChildOutcome['timing'] = null;
+          const json = stdout.split(/\r?\n/).find((l) => l.startsWith('{'));
+          try {
+            timing = json === undefined ? null : (JSON.parse(json) as ChildOutcome['timing']);
+          } catch {
+            /* reported through the assertions */
+          }
+          resolve({ code, stderr, timing });
+        });
+      }),
+  );
+  // A child that dies before `ready` would leave the others waiting for ever.
+  for (const child of children) {
+    child.on('close', () => {
+      if (ready < PROCESSES) for (const c of children) c.stdin.end();
     });
-    let stderr = '';
-    child.stderr.on('data', (d: Buffer) => {
-      stderr += d.toString();
-    });
-    child.on('exit', (code) => resolve({ code, stderr }));
-  });
+  }
+  return Promise.all(outcomes);
+}
+
+/**
+ * The most opens in progress at one instant. Below 2, the round opened the
+ * database one process at a time and tested no concurrency at all — which a
+ * slow start-up (a child reaching `startAt` after another had finished)
+ * produced silently before the children reported their timing.
+ */
+function maxOverlap(intervals: ReadonlyArray<{ start: number; end: number }>): number {
+  const events = intervals.flatMap((i) => [
+    { t: i.start, d: 1 },
+    { t: i.end, d: -1 },
+  ]);
+  // Ends before starts at the same instant: touching is not overlapping.
+  events.sort((a, b) => a.t - b.t || a.d - b.d);
+  let open = 0;
+  let most = 0;
+  for (const e of events) {
+    open += e.d;
+    most = Math.max(most, open);
+  }
+  return most;
 }
 
 /**
@@ -96,14 +163,18 @@ describe.each([
     for (let round = 0; round < ROUNDS; round++) {
       const project = makeTempDir('guardian-concurrent-');
       prepare(project);
-      // Far enough ahead that every child has finished starting up.
-      const startAt = Date.now() + 3000;
-      const outcomes = await Promise.all(
-        Array.from({ length: PROCESSES }, () => openInChild(project, startAt)),
-      );
+      const outcomes = await openInChildren(project);
       outcomes.forEach((o, i) => {
         if (o.code !== 0) failures.push(`round ${round} child ${i}: exit ${o.code}: ${o.stderr.trim()}`);
       });
+      // The opens really overlapped: every child reported when it opened, none
+      // reached the shared instant late, and at least two were in progress at
+      // once. Without this the round could pass with no concurrency at all.
+      const timings = outcomes.map((o) => o.timing).filter((t) => t !== null);
+      expect(timings, `round ${round}: a child did not report its timing — ${JSON.stringify(outcomes)}`).toHaveLength(PROCESSES);
+      const late = timings.filter((t) => t.late > 50);
+      expect(late, `round ${round}: a child reached the shared instant more than 50 ms late`).toEqual([]);
+      expect(maxOverlap(timings), `round ${round}: the opens did not overlap: ${JSON.stringify(timings)}`).toBeGreaterThanOrEqual(2);
 
       const db = new GuardianDatabase(join(project, '.guardian', 'guardian.db'));
       const version = db
