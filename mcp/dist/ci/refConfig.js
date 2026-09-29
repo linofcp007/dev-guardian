@@ -30,7 +30,9 @@
  *   | ------------------------------------------- | ----------------------- | --------------------------------------------------- |
  *   | `.semgrep.yml`, `.semgrep.yaml`, manifest's | Semgrep (`scan_sast`)   | `--config=<copy>` (`InvokeContext.rulesProjectPath`: |
  *   | `semgrep/` targets                          |                         | rule ids as from the project root, baselines match) |
- *   | `.guardianignore`                           | every scan              | `loadProjectExclusions(project, <copy dir>)`        |
+ *   | `.guardianignore`                           | every scan              | `loadProjectExclusions(project, <copy dir>)`; the   |
+ *   |                                             |                         | submodule and size gaps and the language report     |
+ *   |                                             |                         | read it too (`guardianIgnoreFrom`)                  |
  *   | `.trivyignore`                              | Trivy (deps, IaC)       | `--ignorefile <copy>`                               |
  *   | `.bandit`                                   | Bandit (`scan_sast`)    | `--ini <copy>` (the neutral one when the ref has none) |
  *
@@ -69,7 +71,7 @@
  * as not applied.
  */
 import { execa } from 'execa';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { MANIFEST_RELATIVE_PATH, readManifest } from '../configdrift/manifest.js';
 import { CONVENTIONAL_TARGETS, SEMGREP_SOURCE_PREFIX } from '../platform/projectSemgrepConfig.js';
@@ -359,6 +361,12 @@ export async function configDifferences(projectPath, at, fromRef) {
         specs.push({ file, nested: false, applied: 'ref', reader: file === MANIFEST_RELATIVE_PATH ? 'semgrep (rule files it records)' : 'semgrep' });
     }
     const changed = await changedAgainst(projectPath, at, [...new Set(specs.flatMap((s) => pathspecsOf(s.file, s.nested)))]);
+    // A file the tree's scanners read by its path whether git ignores it or not
+    // — gitleaks reads `<source>/.gitleaksignore` — is named when it is there
+    // and gitignored too: neither `git diff` nor the untracked listing shows it.
+    const byPath = specs.filter((spec) => spec.applied === 'tree' && !spec.nested).map((spec) => spec.file);
+    for (const [path, change] of await ignoredButPresent(projectPath, at, byPath))
+        changed.set(path, change);
     const out = [];
     for (const [path, change] of changed) {
         const base = path.split('/').pop() ?? path;
@@ -371,6 +379,34 @@ export async function configDifferences(projectPath, at, fromRef) {
         out.push({ path, change, applied, read_by: [...new Set(matching.map((s) => s.reader))].sort() });
     }
     return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+/**
+ * Root files among `files` that git ignores but the working tree holds, and
+ * how each differs from the ref: `added` when the ref has none, `modified`
+ * when its bytes differ. One the same as the ref's is not named.
+ */
+async function ignoredButPresent(projectPath, at, files) {
+    const out = new Map();
+    if (files.length === 0)
+        return out;
+    const r = await git(projectPath, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...files.map(literal)]);
+    if (r.exitCode !== 0)
+        throw new CiRefError(`git ls-files --ignored failed: ${firstLine(r.stderr)}`);
+    for (const path of splitNul(r.stdout)) {
+        let tree;
+        try {
+            tree = readFileSync(join(projectPath, ...path.split('/')));
+        }
+        catch {
+            continue;
+        }
+        const atRef = await readAtRef(projectPath, at, path, CONFIG_MAX_BYTES).catch(() => null);
+        if (atRef === null)
+            out.set(path, 'added');
+        else if (!atRef.equals(tree))
+            out.set(path, 'modified');
+    }
+    return out;
 }
 function firstLine(text) {
     return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? '';

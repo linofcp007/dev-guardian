@@ -365,7 +365,10 @@ async function handler(
   // The shared Semgrep coverage gaps (runners/semgrepCoverageGaps.ts): a
   // route in a file over Semgrep's size limit, or in an initialised
   // submodule, was never read — named, and the surface is partial.
-  const gapped = applySemgrepCoverageGaps(judged.toolRun, await semgrepCoverageGaps(projectPath), {
+  // The CI gate's --rules-ref: the ref's .guardianignore decides what is no gap.
+  const fromRef = ctx.repoConfigFromRef?.root;
+  const gaps = await semgrepCoverageGaps(projectPath, fromRef !== undefined ? { guardianIgnoreFrom: fromRef } : {});
+  const gapped = applySemgrepCoverageGaps(judged.toolRun, gaps, {
     scannedNothing: judged.verdict === 'scanned_nothing',
   });
   const semgrepRun = gapped.toolRun;

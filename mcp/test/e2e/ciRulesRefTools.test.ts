@@ -9,6 +9,7 @@
  * Gated on Bandit and Semgrep being on PATH, each test on the one it needs.
  */
 
+import { execa } from 'execa';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -28,10 +29,12 @@ vi.setConfig({ testTimeout: 300_000 });
 afterAll(cleanupTempDirs);
 beforeAll(async () => {
   await import('../../src/tools/scanSast.js');
+  await import('../../src/tools/scanSecrets.js');
   resetScannerCache();
 });
 
 const BANDIT_INSTALLED = await isInstalled('bandit');
+const GITLEAKS_INSTALLED = await isInstalled('gitleaks');
 const SEMGREP_INSTALLED = await isInstalled('semgrep');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
@@ -64,9 +67,10 @@ function tree(prefix: string, files: Record<string, string>): string {
 async function sast(
   project: string,
   fromRef: string | null,
-): Promise<{ findings: Finding[]; toolsRun: ToolRun[] }> {
-  const tool = TOOLS.find((t) => t.name === 'scan_sast');
-  if (!tool) throw new Error('scan_sast not registered');
+  name = 'scan_sast',
+): Promise<{ findings: Finding[]; toolsRun: ToolRun[]; missing: string[] }> {
+  const tool = TOOLS.find((t) => t.name === name);
+  if (!tool) throw new Error(`${name} not registered`);
   const db = new Database(':memory:');
   runMigrations(db);
   const p: PluginContext = {
@@ -76,11 +80,45 @@ async function sast(
     progressNotifier: { send: () => {} },
     ...(fromRef !== null ? { repoConfigFromRef: { root: fromRef, ref: 'origin/main', commit: 'a'.repeat(40) } } : {}),
   };
-  const r = await tool.handler({ project_path: project, force: true, local_only: true }, p);
+  const input = name === 'scan_sast' ? { project_path: project, force: true, local_only: true } : { project_path: project, force: true };
+  const r = await tool.handler(input, p);
   if (!r.ok) throw new Error(JSON.stringify(r.error));
-  const out = r as unknown as { scan_id: string; tools_run: ToolRun[] };
-  return { findings: p.storage.findings.listByScan(out.scan_id), toolsRun: out.tools_run };
+  const out = r as unknown as { scan_id: string; tools_run: ToolRun[]; missing_tools: string[] };
+  return { findings: p.storage.findings.listByScan(out.scan_id), toolsRun: out.tools_run, missing: out.missing_tools };
 }
+
+async function git(cwd: string, ...args: string[]): Promise<void> {
+  await execa('git', ['-c', 'protocol.file.allow=always', ...args], { cwd });
+}
+
+async function repo(prefix: string, files: Record<string, string>): Promise<string> {
+  const dir = tree(prefix, files);
+  await git(dir, 'init', '-q');
+  await git(dir, 'config', 'user.email', 'guardian-test@example.com');
+  await git(dir, 'config', 'user.name', 'Guardian Test');
+  await git(dir, 'config', 'commit.gpgsign', 'false');
+  await git(dir, 'add', '-A');
+  await git(dir, 'commit', '-q', '-m', 'initial');
+  return dir;
+}
+
+/**
+ * A superproject whose `libs/core` is an initialised submodule, and a pull
+ * request that adds `libs/` to its own .guardianignore — which silences the
+ * "submodule contents not scanned" gap when the tree's copy is read.
+ */
+async function hiddenSubmodule(): Promise<string> {
+  const lib = await repo('rulesref-sub-lib-', { 'core.js': 'module.exports = 1;\n' });
+  const top = await repo('rulesref-sub-top-', { '.semgrep.yml': NO_EVAL, 'index.js': 'module.exports = 2;\n' });
+  await git(top, 'submodule', 'add', '-q', `file://${lib.replace(/\\/g, '/')}`, 'libs/core');
+  await git(top, 'commit', '-q', '-m', 'add submodule');
+  writeFileSync(join(top, '.guardianignore'), 'libs/\n');
+  await git(top, 'add', '.guardianignore');
+  await git(top, 'commit', '-q', '-m', 'pr: hide libs/');
+  return top;
+}
+
+const SUBMODULE_GAP = /submodule contents not scanned: libs\/core/;
 
 const banditIds = (findings: Finding[], file?: string): string[] =>
   findings
@@ -141,6 +179,38 @@ describe("--rules-ref: scan_sast reads the ref's copy of the project's configura
       const treeRun = (await sast(same, null)).findings.filter((f) => f.tool === 'semgrep');
       expect(treeRun.map((f) => f.rule_id)).toEqual(['guardian-test-no-eval']);
       expect(treeRun[0]?.identity).toBe(semgrep[0]?.identity);
+    },
+  );
+
+  it.skipIf(!SEMGREP_INSTALLED && !REQUIRE_SEMGREP)(
+    "a pull request's .guardianignore cannot hide an initialised submodule from Semgrep's coverage gap",
+    async () => {
+      const top = await hiddenSubmodule();
+      // Control: the tree's copy hides the gap.
+      const own = (await sast(top, null)).toolsRun.find((t) => t.name === 'semgrep');
+      expect(own?.status).toBe('ok');
+      expect(own?.reason ?? '').not.toMatch(SUBMODULE_GAP);
+      // The ref has the same rules and no .guardianignore: the gap is named, and the scan is partial.
+      const fromRef = await sast(top, tree('rulesref-sub-ref-', { '.semgrep.yml': NO_EVAL }));
+      expect(fromRef.toolsRun.find((t) => t.name === 'semgrep')?.reason).toMatch(SUBMODULE_GAP);
+      expect(fromRef.missing).toContain('semgrep');
+      // The ref's own .guardianignore still decides: excluded there, no gap.
+      const refExcludes = await sast(top, tree('rulesref-sub-ref2-', { '.semgrep.yml': NO_EVAL, '.guardianignore': 'libs/\n' }));
+      const excluded = refExcludes.toolsRun.find((t) => t.name === 'semgrep');
+      expect(excluded?.status).toBe('ok');
+      expect(excluded?.reason ?? '').not.toMatch(SUBMODULE_GAP);
+    },
+  );
+
+  it.skipIf(!GITLEAKS_INSTALLED)(
+    "a pull request's .guardianignore cannot hide an initialised submodule from gitleaks' coverage gap",
+    async () => {
+      const top = await hiddenSubmodule();
+      const own = (await sast(top, null, 'scan_secrets')).toolsRun.find((t) => t.name === 'gitleaks');
+      expect(own?.reason ?? '').not.toMatch(SUBMODULE_GAP);
+      const fromRef = await sast(top, tree('rulesref-sub-ref-', {}), 'scan_secrets');
+      expect(fromRef.toolsRun.find((t) => t.name === 'gitleaks')?.reason).toMatch(SUBMODULE_GAP);
+      expect(fromRef.missing).toContain('gitleaks');
     },
   );
 });

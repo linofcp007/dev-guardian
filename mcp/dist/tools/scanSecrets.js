@@ -130,6 +130,8 @@ const scanSecrets = makeScanTool({
             signal: ctx.signal,
             onLog: ctx.onLog,
             ...(verify && !offline ? { captureSecrets: isVerifiableRule } : {}),
+            // The CI gate's --rules-ref: the ref's .guardianignore decides the submodule gap too.
+            ...(ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {}),
         });
         const invocation = {
             outcome: scan.cancelled ? 'cancelled' : 'completed',

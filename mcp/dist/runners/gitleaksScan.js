@@ -174,7 +174,7 @@ async function scan(opts, result) {
         }
         if (opts.scope.workingTree === true && !result.cancelled)
             await workingTreePass(opts, result, true);
-        await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head });
+        await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head }, opts.guardianIgnoreFrom);
         return;
     }
     const state = await repoState(opts.projectPath);
@@ -183,7 +183,7 @@ async function scan(opts, result) {
             await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
             if (!result.cancelled)
                 await workingTreePass(opts, result, true);
-            await noteSubmodules(opts.projectPath, result);
+            await noteSubmodules(opts.projectPath, result, undefined, opts.guardianIgnoreFrom);
             return;
         case 'no_commits':
             result.tools_run.push({
@@ -192,7 +192,7 @@ async function scan(opts, result) {
                 reason: 'the repository has no commits yet — no history to scan',
             });
             await workingTreePass(opts, result, false);
-            await noteSubmodules(opts.projectPath, result);
+            await noteSubmodules(opts.projectPath, result, undefined, opts.guardianIgnoreFrom);
             return;
         case 'error':
             result.tools_run.push({
@@ -216,7 +216,7 @@ async function scan(opts, result) {
  */
 async function noteSubmodules(projectPath, result, 
 /** A range: only the submodules it bumped — their new commits are in no range of this repository. */
-range) {
+range, guardianIgnoreFrom) {
     let submodules;
     if (range === undefined) {
         submodules = await initialisedSubmodules(projectPath);
@@ -232,7 +232,7 @@ range) {
         submodules = await gitlinksAmong(projectPath, range.head, changed);
     }
     // One the project's .guardianignore excludes is not its to scan (round 4, item 6).
-    submodules = submodulesNotIgnored(projectPath, submodules);
+    submodules = submodulesNotIgnored(projectPath, submodules, guardianIgnoreFrom);
     if (submodules.length === 0)
         return;
     const note = describeSubmodules(submodules);
@@ -272,7 +272,7 @@ async function scopedScan(opts, result, scope) {
             await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
             // A diff scope's range bumps a submodule: its new commits are read by nothing here.
             if ('base' in history)
-                await noteSubmodules(opts.projectPath, result, history);
+                await noteSubmodules(opts.projectPath, result, history, opts.guardianIgnoreFrom);
         }
     }
     if (result.cancelled)

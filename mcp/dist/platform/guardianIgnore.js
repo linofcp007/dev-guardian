@@ -282,14 +282,15 @@ const PROBE_CHILD = '.guardian-probe-7f3a';
  * (`libs/core/**`) — is not the project's to scan, so its unscanned
  * contents are no gap; one it excludes only part of (`libs/core/*.js`) still
  * is. A `.guardianignore` that cannot be read excludes nothing here: the gap
- * stays named.
+ * stays named. `configRoot` is where it is read — the CI gate's `--rules-ref`
+ * copy (`ci/refConfig.ts`) instead of the project, like `loadProjectExclusions`.
  */
-export function submodulesNotIgnored(projectPath, submodules) {
+export function submodulesNotIgnored(projectPath, submodules, configRoot = projectPath) {
     if (submodules.length === 0)
         return [];
     let text;
     try {
-        text = readFileSync(join(projectPath, GUARDIAN_IGNORE_FILE), 'utf8');
+        text = readFileSync(join(configRoot, GUARDIAN_IGNORE_FILE), 'utf8');
     }
     catch {
         return [...submodules];

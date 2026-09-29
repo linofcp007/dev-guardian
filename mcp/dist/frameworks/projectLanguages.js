@@ -164,13 +164,13 @@ async function readTextAsync(path) {
         return null;
     }
 }
-function ignoreTextsSync(root) {
-    return { semgrep: readTextSync(join(root, '.semgrepignore')), guardian: readTextSync(join(root, GUARDIAN_IGNORE_FILE)) };
+function ignoreTextsSync(root, guardianFrom = root) {
+    return { semgrep: readTextSync(join(root, '.semgrepignore')), guardian: readTextSync(join(guardianFrom, GUARDIAN_IGNORE_FILE)) };
 }
-async function ignoreTextsAsync(root) {
+async function ignoreTextsAsync(root, guardianFrom = root) {
     const [semgrep, guardian] = await Promise.all([
         readTextAsync(join(root, '.semgrepignore')),
-        readTextAsync(join(root, GUARDIAN_IGNORE_FILE)),
+        readTextAsync(join(guardianFrom, GUARDIAN_IGNORE_FILE)),
     ]);
     return { semgrep, guardian };
 }
@@ -443,7 +443,7 @@ function fromFiles(listing, files, exclusions, incomplete) {
 }
 /** The source languages among the files the scanners would read — synchronous (the CLI dashboard). */
 export function languagesFromFiles(root, opts = {}) {
-    const exclusions = scannerExclusions(ignoreTextsSync(root));
+    const exclusions = scannerExclusions(ignoreTextsSync(root, opts.guardianIgnoreFrom));
     const listed = opts.useGit === false ? null : gitListSync(root);
     if (listed !== null)
         return fromFiles('git', listed, exclusions);
@@ -452,7 +452,7 @@ export function languagesFromFiles(root, opts = {}) {
 }
 /** {@link languagesFromFiles} without blocking the event loop — scan time and the MCP readers. */
 export async function languagesFromFilesAsync(root, opts = {}) {
-    const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+    const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
     const listed = opts.useGit === false ? null : await gitListAsync(root);
     if (listed !== null)
         return fromFiles('git', listed, exclusions);
@@ -505,7 +505,7 @@ async function sizesOver(root, rels, limit) {
  */
 export async function oversizedSourceFilesAsync(root, opts = {}) {
     const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
-    const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+    const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
     if (opts.only !== undefined) {
         const rels = opts.only.map((p) => p.split('\\').join('/')).filter((rel) => isScannedSource(rel, exclusions));
         return { files: await sizesOver(root, rels, limit) };

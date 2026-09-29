@@ -108,7 +108,7 @@ node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$
   | File | Read by | From the ref as |
   | --- | --- | --- |
   | `.semgrep.yml`, `.semgrep.yaml`, and the rule files the ref's `.dev-guardian/configs.json` records | Semgrep (`scan_sast`) | `--config=<copy>`; findings keep the rule id a scan of the checkout stores, so the baseline still matches |
-  | `.guardianignore` | every scan | the ref's patterns, applied to the checkout's files |
+  | `.guardianignore` | every scan | the ref's patterns, applied to the checkout's files — also for which submodules and oversized files are named as gaps, and which languages the project counts |
   | `.trivyignore` | Trivy (`scan_deps`, `scan_iac`) | `--ignorefile <copy>` |
   | `.bandit` | Bandit (`scan_sast`) | `--ini <copy>` (an empty one when the ref has none) |
 
@@ -120,7 +120,7 @@ node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$
   - actionlint's and zizmor's configuration — the workflows they audit are the pull request's own anyway.
   - the .NET build's `.editorconfig`, `.globalconfig`, `Directory.Build.props`/`.targets` and NuGet configuration — the build reads them from the tree it compiles.
 
-  Every one of those the pull request adds, changes or deletes against `<ref>` is listed under `read from the scanned tree although it differs from <ref>`, and every file of the table above it changes under `changed in the scanned tree, not applied`. Neither changes the exit code: a pull request may legitimately edit its `.editorconfig`, and a reviewer decides.
+  Every one of those the pull request adds, changes or deletes against `<ref>` — a `.gitleaksignore` git ignores included, since gitleaks reads it anyway — is listed under `read from the scanned tree although it differs from <ref>`, and every file of the table above it changes under `changed in the scanned tree, not applied`. Neither changes the exit code: a pull request may legitimately edit its `.editorconfig`, and a reviewer decides.
 
 The report always says where both came from — `baseline:` and `rules and configuration:` lines in the human output, `baseline_source` and `rules_source` in the JSON (with `tree_differences`: path, change, which copy was applied, and which scanners read it). A pull-request run that says `in the scanned tree (no --baseline-ref)` is gating the pull request against itself.
 

@@ -309,7 +309,7 @@ async function runSemgrep(args: Collect & {
     });
     recordSemgrepRun({
       ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
-      packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath), tools_run, missing_tools, parser_inputs,
+      packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx)), tools_run, missing_tools, parser_inputs,
     });
     return;
   }
@@ -620,6 +620,11 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, 'bandit') : run);
 }
 
+/** The CI gate's `--rules-ref` copy of `.guardianignore`, for the shared coverage gaps; none otherwise. */
+function ignoreFrom(ctx: InvokeContext): { guardianIgnoreFrom?: string } {
+  return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
+}
+
 /** An empty `[bandit]` section: Bandit reads it and nothing else. */
 export const NEUTRAL_BANDIT_INI = 'bandit-neutral.ini';
 
@@ -728,7 +733,7 @@ async function runSemgrepOnScope(args: Collect & {
   if (run.nothingScanned || (entry.status === 'ok' && narrower)) missing_tools.push('semgrep');
   // The scope's files over Semgrep's size limit, and submodules they reach
   // (runners/semgrepCoverageGaps.ts): named, a gap.
-  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files }), {
+  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files, ...ignoreFrom(ctx) }), {
     scannedNothing: run.nothingScanned,
   });
   tools_run[tools_run.length - 1] = gapped.toolRun;

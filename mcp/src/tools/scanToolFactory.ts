@@ -956,7 +956,12 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // holds by then (`frameworks/projectLanguages.ts`). A tool that scanned
   // another tree (review_pr's head) records its own.
   if (OWASP_SCAN_TYPES.has(config.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === undefined) {
-    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
+    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(
+      plugin.storage.stack,
+      projectPath,
+      // The CI gate's --rules-ref: the ref's .guardianignore (`ci/refConfig.ts`).
+      args.configRoot !== projectPath ? { walk: { guardianIgnoreFrom: args.configRoot } } : {},
+    );
   }
   if (Object.keys(meta).length > 0) finalize.meta = meta;
   const finishedAt = plugin.storage.scans.finalize(finalize);

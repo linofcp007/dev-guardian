@@ -131,6 +131,12 @@ export interface WalkOptions {
   readDir?: (abs: string) => Dirent[];
   /** Test seam: how a directory is read (async walk). */
   readDirAsync?: (abs: string) => Promise<Dirent[]>;
+  /**
+   * Where `.guardianignore` is read, when not in the walked tree: the CI gate's
+   * `--rules-ref` copy (`ci/refConfig.ts`). `.semgrepignore` stays the tree's —
+   * Semgrep reads the tree's.
+   */
+  guardianIgnoreFrom?: string;
 }
 
 /** Directories the walk visits at most — the ceiling detect_stack's manifest walk uses. */
@@ -223,14 +229,14 @@ async function readTextAsync(path: string): Promise<string | null> {
   }
 }
 
-function ignoreTextsSync(root: string): IgnoreTexts {
-  return { semgrep: readTextSync(join(root, '.semgrepignore')), guardian: readTextSync(join(root, GUARDIAN_IGNORE_FILE)) };
+function ignoreTextsSync(root: string, guardianFrom: string = root): IgnoreTexts {
+  return { semgrep: readTextSync(join(root, '.semgrepignore')), guardian: readTextSync(join(guardianFrom, GUARDIAN_IGNORE_FILE)) };
 }
 
-async function ignoreTextsAsync(root: string): Promise<IgnoreTexts> {
+async function ignoreTextsAsync(root: string, guardianFrom: string = root): Promise<IgnoreTexts> {
   const [semgrep, guardian] = await Promise.all([
     readTextAsync(join(root, '.semgrepignore')),
-    readTextAsync(join(root, GUARDIAN_IGNORE_FILE)),
+    readTextAsync(join(guardianFrom, GUARDIAN_IGNORE_FILE)),
   ]);
   return { semgrep, guardian };
 }
@@ -511,7 +517,7 @@ function fromFiles(listing: 'git' | 'walk', files: string[] | null, exclusions: 
 
 /** The source languages among the files the scanners would read — synchronous (the CLI dashboard). */
 export function languagesFromFiles(root: string, opts: WalkOptions = {}): FileLanguages {
-  const exclusions = scannerExclusions(ignoreTextsSync(root));
+  const exclusions = scannerExclusions(ignoreTextsSync(root, opts.guardianIgnoreFrom));
   const listed = opts.useGit === false ? null : gitListSync(root);
   if (listed !== null) return fromFiles('git', listed, exclusions);
   const walked = walkSync(root, exclusions, opts);
@@ -520,7 +526,7 @@ export function languagesFromFiles(root: string, opts: WalkOptions = {}): FileLa
 
 /** {@link languagesFromFiles} without blocking the event loop — scan time and the MCP readers. */
 export async function languagesFromFilesAsync(root: string, opts: WalkOptions = {}): Promise<FileLanguages> {
-  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
   const listed = opts.useGit === false ? null : await gitListAsync(root);
   if (listed !== null) return fromFiles('git', listed, exclusions);
   const walked = await walkAsync(root, exclusions, opts);
@@ -587,10 +593,10 @@ async function sizesOver(root: string, rels: readonly string[], limit: number): 
  */
 export async function oversizedSourceFilesAsync(
   root: string,
-  opts: { limit?: number; only?: readonly string[] } = {},
+  opts: { limit?: number; only?: readonly string[]; guardianIgnoreFrom?: string } = {},
 ): Promise<OversizedFiles> {
   const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
-  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
   if (opts.only !== undefined) {
     const rels = opts.only.map((p) => p.split('\\').join('/')).filter((rel) => isScannedSource(rel, exclusions));
     return { files: await sizesOver(root, rels, limit) };

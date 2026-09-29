@@ -20,6 +20,7 @@ import {
   readBaselineAtRef,
   resolveCiRef,
 } from '../../../src/ci/refConfig.js';
+import { languagesFromFilesAsync } from '../../../src/frameworks/projectLanguages.js';
 import { REPO_CONFIG, type RepoConfigRunner } from '../../../src/runners/repoConfig.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
@@ -248,6 +249,20 @@ describe('configDifferences', () => {
     ]);
   });
 
+  it('a .gitleaksignore git ignores is still read by gitleaks, so it is still named', async () => {
+    const repo = await newRepo('refcfg-ignored-');
+    write(repo, '.gitignore', '.gitleaksignore\n');
+    write(repo, 'README.md', '# x\n');
+    const base = await commitAll(repo, 'base');
+    // Present, untracked and ignored: neither `git diff` nor the untracked listing shows it.
+    write(repo, '.gitleaksignore', 'abc:leak.txt:aws-access-token:1\n');
+    const at = await resolveCiRef(repo, base, '--rules-ref');
+    const copy = await copyConfigFromRef(repo, at, join(makeTempDir('refcfg-into-'), 'copy'));
+    expect(await configDifferences(repo, at, copy)).toEqual([
+      { path: '.gitleaksignore', change: 'added', applied: 'tree', read_by: ['gitleaks'] },
+    ]);
+  });
+
   it('nothing changed: nothing named', async () => {
     const repo = await newRepo('refcfg-nodiff-');
     write(repo, '.semgrep.yml', 'rules: []\n');
@@ -255,6 +270,21 @@ describe('configDifferences', () => {
     const at = await resolveCiRef(repo, base, '--rules-ref');
     const copy = await copyConfigFromRef(repo, at, join(makeTempDir('refcfg-into-'), 'copy'));
     expect(await configDifferences(repo, at, copy)).toEqual([]);
+  });
+});
+
+describe("the language report reads the ref's .guardianignore under --rules-ref", () => {
+  it("a language only an excluded tree holds counts again when the ref's copy does not exclude it", async () => {
+    const tree = makeTempDir('refcfg-langs-');
+    write(tree, 'app/main.py', 'print(1)\n');
+    write(tree, 'web/index.js', 'module.exports = 1;\n');
+    // The pull request's own .guardianignore hides its Python.
+    write(tree, '.guardianignore', 'app/\n');
+    const own = await languagesFromFilesAsync(tree, { useGit: false });
+    expect(own.languages).not.toContain('python');
+    const fromRef = await languagesFromFilesAsync(tree, { useGit: false, guardianIgnoreFrom: makeTempDir('refcfg-langs-ref-') });
+    expect(fromRef.languages).toContain('python');
+    expect(fromRef.languages).toContain('javascript');
   });
 });
 

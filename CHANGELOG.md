@@ -452,8 +452,11 @@ them again. Scans made on the fallback meanwhile are not merged back.
     flags for it), `.gitleaks.toml` and `.gitleaksignore` (gitleaks 8.30.1 reads the source's
     `.gitleaksignore` whatever `--gitleaks-ignore-path` says — measured — so taking only the
     config from the ref would protect nothing), actionlint's and zizmor's configuration, and the
-    .NET build's files. Each one the pull request adds, changes or deletes is listed in the report,
-    without changing the exit code.
+    .NET build's files. Each one the pull request adds, changes or deletes is listed in the report
+    (a gitignored `.gitleaksignore` too: gitleaks reads it anyway), without changing the exit code.
+    The ref's `.guardianignore` also decides which initialised submodules and oversized files are
+    named as coverage gaps and which languages the project counts, so the pull request's copy cannot
+    hide a submodule's gap.
   - The human and JSON reports now say where the baseline and the rules came from
     (`baseline_source`, `rules_source` with `tree_differences`) on every run.
   - The `ci-init` pipelines pass both on pull-request pipelines — GitHub

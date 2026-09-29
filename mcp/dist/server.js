@@ -47268,11 +47268,11 @@ async function loadProjectExclusions(projectPath, configRoot = projectPath) {
   };
 }
 var PROBE_CHILD = ".guardian-probe-7f3a";
-function submodulesNotIgnored(projectPath, submodules) {
+function submodulesNotIgnored(projectPath, submodules, configRoot = projectPath) {
   if (submodules.length === 0) return [];
   let text2;
   try {
-    text2 = readFileSync15(join22(projectPath, GUARDIAN_IGNORE_FILE), "utf8");
+    text2 = readFileSync15(join22(configRoot, GUARDIAN_IGNORE_FILE), "utf8");
   } catch {
     return [...submodules];
   }
@@ -47495,10 +47495,10 @@ async function readTextAsync(path8) {
     return null;
   }
 }
-async function ignoreTextsAsync(root) {
+async function ignoreTextsAsync(root, guardianFrom = root) {
   const [semgrep, guardian] = await Promise.all([
     readTextAsync(join23(root, ".semgrepignore")),
-    readTextAsync(join23(root, GUARDIAN_IGNORE_FILE))
+    readTextAsync(join23(guardianFrom, GUARDIAN_IGNORE_FILE))
   ]);
   return { semgrep, guardian };
 }
@@ -47694,7 +47694,7 @@ function fromFiles(listing, files, exclusions, incomplete) {
   return out;
 }
 async function languagesFromFilesAsync(root, opts = {}) {
-  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
   const listed = opts.useGit === false ? null : await gitListAsync(root);
   if (listed !== null) return fromFiles("git", listed, exclusions);
   const walked = await walkAsync(root, exclusions, opts);
@@ -47733,7 +47733,7 @@ async function sizesOver(root, rels, limit) {
 }
 async function oversizedSourceFilesAsync(root, opts = {}) {
   const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
-  const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+  const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
   if (opts.only !== void 0) {
     const rels = opts.only.map((p) => p.split("\\").join("/")).filter((rel2) => isScannedSource(rel2, exclusions));
     return { files: await sizesOver(root, rels, limit) };
@@ -49220,7 +49220,12 @@ async function runScanBody(args) {
   if (exclusionReport !== null) meta["exclusions"] = exclusionReport;
   if (invocation.warnings !== void 0 && invocation.warnings.length > 0) meta["run_warnings"] = invocation.warnings;
   if (OWASP_SCAN_TYPES.has(config2.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === void 0) {
-    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
+    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(
+      plugin.storage.stack,
+      projectPath,
+      // The CI gate's --rules-ref: the ref's .guardianignore (`ci/refConfig.ts`).
+      args.configRoot !== projectPath ? { walk: { guardianIgnoreFrom: args.configRoot } } : {}
+    );
   }
   if (Object.keys(meta).length > 0) finalize2.meta = meta;
   const finishedAt = plugin.storage.scans.finalize(finalize2);
@@ -50187,18 +50192,22 @@ function shortenTitle(message3, checkId) {
 
 // src/runners/semgrepCoverageGaps.ts
 async function semgrepCoverageGaps(projectPath, opts = {}) {
-  const sized = await oversizedSourceFilesAsync(projectPath, opts.files !== void 0 ? { only: opts.files } : {});
+  const from = opts.guardianIgnoreFrom;
+  const sized = await oversizedSourceFilesAsync(projectPath, {
+    ...opts.files !== void 0 ? { only: opts.files } : {},
+    ...from !== void 0 ? { guardianIgnoreFrom: from } : {}
+  });
   const honoured = opts.files === void 0 ? await honouredFiles(projectPath, "semgrep") : [];
   const withHonoured2 = (gaps) => honoured.length > 0 ? { ...gaps, honoured } : gaps;
   if (opts.submodules !== void 0) {
     const out2 = {
       oversized: sized.files,
-      submodules: submodulesNotIgnored(projectPath, opts.submodules).sort()
+      submodules: submodulesNotIgnored(projectPath, opts.submodules, from).sort()
     };
     if (sized.incomplete !== void 0) out2.incomplete = sized.incomplete;
     return withHonoured2(out2);
   }
-  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath));
+  const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath), from);
   const among = opts.among ?? opts.files;
   const submodules = among === void 0 ? all : all.filter((sub) => among.some((p) => {
     const posix2 = p.split("\\").join("/");
@@ -50335,7 +50344,7 @@ async function runSemgrep2(args) {
       configs: plan.rulePacks,
       loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing,
-      gaps: await semgrepCoverageGaps(ctx.projectPath),
+      gaps: await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx)),
       tools_run,
       missing_tools,
       parser_inputs
@@ -50574,6 +50583,9 @@ async function runBandit(args) {
   const run = check2.ok ? { name: "bandit", status: "ok" } : { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" };
   tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, "bandit") : run);
 }
+function ignoreFrom(ctx) {
+  return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
+}
 var NEUTRAL_BANDIT_INI = "bandit-neutral.ini";
 function banditIni(projectPath, reportDir) {
   const own = join32(projectPath, ".bandit");
@@ -50644,7 +50656,7 @@ async function runSemgrepOnScope(args) {
   tools_run.push(entry);
   const narrower = run.partial.length > 0 || run.failedRules.length > 0 || plan.packMissing;
   if (run.nothingScanned || entry.status === "ok" && narrower) missing_tools.push("semgrep");
-  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files }), {
+  const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files, ...ignoreFrom(ctx) }), {
     scannedNothing: run.nothingScanned
   });
   tools_run[tools_run.length - 1] = gapped.toolRun;
@@ -51269,7 +51281,7 @@ async function scan(opts, result) {
       await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
     }
     if (opts.scope.workingTree === true && !result.cancelled) await workingTreePass(opts, result, true);
-    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head });
+    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head }, opts.guardianIgnoreFrom);
     return;
   }
   const state = await repoState(opts.projectPath);
@@ -51277,7 +51289,7 @@ async function scan(opts, result) {
     case "has_commits":
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
       if (!result.cancelled) await workingTreePass(opts, result, true);
-      await noteSubmodules(opts.projectPath, result);
+      await noteSubmodules(opts.projectPath, result, void 0, opts.guardianIgnoreFrom);
       return;
     case "no_commits":
       result.tools_run.push({
@@ -51286,7 +51298,7 @@ async function scan(opts, result) {
         reason: "the repository has no commits yet \u2014 no history to scan"
       });
       await workingTreePass(opts, result, false);
-      await noteSubmodules(opts.projectPath, result);
+      await noteSubmodules(opts.projectPath, result, void 0, opts.guardianIgnoreFrom);
       return;
     case "error":
       result.tools_run.push({
@@ -51301,7 +51313,7 @@ async function scan(opts, result) {
       return;
   }
 }
-async function noteSubmodules(projectPath, result, range) {
+async function noteSubmodules(projectPath, result, range, guardianIgnoreFrom) {
   let submodules;
   if (range === void 0) {
     submodules = await initialisedSubmodules(projectPath);
@@ -51314,7 +51326,7 @@ async function noteSubmodules(projectPath, result, range) {
     }
     submodules = await gitlinksAmong(projectPath, range.head, changed);
   }
-  submodules = submodulesNotIgnored(projectPath, submodules);
+  submodules = submodulesNotIgnored(projectPath, submodules, guardianIgnoreFrom);
   if (submodules.length === 0) return;
   const note = describeSubmodules(submodules);
   const entry = result.tools_run.find((t) => t.name === GITLEAKS_HISTORY && t.status === "ok") ?? result.tools_run.find((t) => t.status === "ok") ?? result.tools_run[0];
@@ -51337,7 +51349,7 @@ async function scopedScan(opts, result, scope) {
       result.tools_run.push({ name: GITLEAKS_HISTORY, status: "skipped", reason: `no commits in ${label}` });
     } else if (commits !== null) {
       await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
-      if ("base" in history) await noteSubmodules(opts.projectPath, result, history);
+      if ("base" in history) await noteSubmodules(opts.projectPath, result, history, opts.guardianIgnoreFrom);
     }
   }
   if (result.cancelled) return;
@@ -52349,7 +52361,9 @@ var scanSecrets = makeScanTool({
       env: ctx.scriptEnv,
       signal: ctx.signal,
       onLog: ctx.onLog,
-      ...verify && !offline ? { captureSecrets: isVerifiableRule } : {}
+      ...verify && !offline ? { captureSecrets: isVerifiableRule } : {},
+      // The CI gate's --rules-ref: the ref's .guardianignore decides the submodule gap too.
+      ...ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {}
     });
     const invocation = {
       outcome: scan2.cancelled ? "cancelled" : "completed",
@@ -73924,7 +73938,9 @@ async function handler39(input, ctx) {
     );
   }
   const judged = judgeSurfaceReport({ run, raw, via, targets, projectPath });
-  const gapped = applySemgrepCoverageGaps(judged.toolRun, await semgrepCoverageGaps(projectPath), {
+  const fromRef = ctx.repoConfigFromRef?.root;
+  const gaps = await semgrepCoverageGaps(projectPath, fromRef !== void 0 ? { guardianIgnoreFrom: fromRef } : {});
+  const gapped = applySemgrepCoverageGaps(judged.toolRun, gaps, {
     scannedNothing: judged.verdict === "scanned_nothing"
   });
   const semgrepRun = gapped.toolRun;

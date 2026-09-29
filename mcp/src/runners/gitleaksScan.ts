@@ -130,6 +130,8 @@ export interface GitleaksScanOptions {
   onLog?: (line: string) => void;
   /** Size limits of the uncommitted-files copy; defaults below (tests override). */
   limits?: { maxFileBytes?: number; maxTotalBytes?: number };
+  /** Where `.guardianignore` is read for the submodule gap: the CI gate's `--rules-ref` copy, not the project. */
+  guardianIgnoreFrom?: string;
   /**
    * `scan_secrets verify_live` only: run WITHOUT `--redact`, into a private
    * temporary directory, and keep the raw value of every finding whose rule
@@ -246,7 +248,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
       await historyPass(opts, result, range, commits, await repoPrefix(opts.projectPath));
     }
     if (opts.scope.workingTree === true && !result.cancelled) await workingTreePass(opts, result, true);
-    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head });
+    await noteSubmodules(opts.projectPath, result, { base: opts.scope.base, head: opts.scope.head }, opts.guardianIgnoreFrom);
     return;
   }
 
@@ -255,7 +257,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
     case 'has_commits':
       await historyPass(opts, result, opts.scope.logOpts, null, posixRelative(state.toplevel, opts.projectPath));
       if (!result.cancelled) await workingTreePass(opts, result, true);
-      await noteSubmodules(opts.projectPath, result);
+      await noteSubmodules(opts.projectPath, result, undefined, opts.guardianIgnoreFrom);
       return;
     case 'no_commits':
       result.tools_run.push({
@@ -264,7 +266,7 @@ async function scan(opts: ScanRun, result: GitleaksScanResult): Promise<void> {
         reason: 'the repository has no commits yet — no history to scan',
       });
       await workingTreePass(opts, result, false);
-      await noteSubmodules(opts.projectPath, result);
+      await noteSubmodules(opts.projectPath, result, undefined, opts.guardianIgnoreFrom);
       return;
     case 'error':
       result.tools_run.push({
@@ -292,6 +294,7 @@ async function noteSubmodules(
   result: GitleaksScanResult,
   /** A range: only the submodules it bumped — their new commits are in no range of this repository. */
   range?: { base: string; head: string },
+  guardianIgnoreFrom?: string,
 ): Promise<void> {
   let submodules: string[];
   if (range === undefined) {
@@ -306,7 +309,7 @@ async function noteSubmodules(
     submodules = await gitlinksAmong(projectPath, range.head, changed);
   }
   // One the project's .guardianignore excludes is not its to scan (round 4, item 6).
-  submodules = submodulesNotIgnored(projectPath, submodules);
+  submodules = submodulesNotIgnored(projectPath, submodules, guardianIgnoreFrom);
   if (submodules.length === 0) return;
   const note = describeSubmodules(submodules);
   const entry =
@@ -346,7 +349,7 @@ async function scopedScan(
     } else if (commits !== null) {
       await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
       // A diff scope's range bumps a submodule: its new commits are read by nothing here.
-      if ('base' in history) await noteSubmodules(opts.projectPath, result, history);
+      if ('base' in history) await noteSubmodules(opts.projectPath, result, history, opts.guardianIgnoreFrom);
     }
   }
   if (result.cancelled) return;
