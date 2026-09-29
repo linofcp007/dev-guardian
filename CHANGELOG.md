@@ -99,6 +99,10 @@ version bump.
   replace the placeholder, with a one-line `sed` and a PowerShell equivalent
   that print the substituted text; a test holds every "paste / copy a
   template" line to naming the placeholder.
+- SECURITY.md's "Supported versions" table still named 2.0.x after 3.0.0.
+  It now reads 3.0.x supported and everything older not — security fixes
+  land in 3.0.x — and a test holds it to the version `.claude-plugin/plugin.json`
+  reports.
 - **`wp_plugin_check` said it did two things it never did.** Its description
   promised the "latest known" version and, with `target_url`, "a fresh WPScan
   lookup"; the handler makes no network call at all, and `target_url` only
