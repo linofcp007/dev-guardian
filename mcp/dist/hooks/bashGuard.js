@@ -4000,6 +4000,91 @@ function integrityCheckOf(statement, heads, cwd) {
     return { names, lists, implied };
 }
 /**
+ * What an archive extraction reads and where it writes: `tar` / `bsdtar`
+ * extracting (`x` in its first-word cluster or a `-…x…` one, `--extract`,
+ * `--get`) from `-f FILE` / `--file` — stdin when none or `-` — into `-C DIR` /
+ * `--directory` (the working directory when none); `unzip FILE -d DIR`. The
+ * valued letters of a cluster take the following words in order, as tar's own
+ * old style does (`tar xzfC t.tgz /usr/local/bin`). None for anything else.
+ */
+function archiveExtraction(name, words, at) {
+    const args = withoutRedirections(words.slice(at + 1));
+    const out = {};
+    if (name === 'unzip') {
+        for (let i = 0; i < args.length; i += 1) {
+            const a = args[i] ?? '';
+            if (a === '-d')
+                out.dir = args[(i += 1)];
+            else if (a.startsWith('-d') && a.length > 2)
+                out.dir = a.slice(2);
+            else if (!a.startsWith('-') && out.archive === undefined)
+                out.archive = a;
+        }
+        return out.archive === undefined ? undefined : out;
+    }
+    if (name !== 'tar' && name !== 'bsdtar' && name !== 'gtar')
+        return undefined;
+    let extract = false;
+    const pending = [];
+    const take = (letter, value) => {
+        if (letter === 'f')
+            out.archive = value;
+        else
+            out.dir = value;
+    };
+    for (let i = 0; i < args.length; i += 1) {
+        const a = args[i] ?? '';
+        if (a === '--extract' || a === '--get') {
+            extract = true;
+            continue;
+        }
+        const long = /^--(directory|file)(?:=(.*))?$/.exec(a);
+        if (long !== null) {
+            take(long[1] === 'file' ? 'f' : 'C', long[2] ?? args[(i += 1)]);
+            continue;
+        }
+        if (a.startsWith('--'))
+            continue;
+        const option = a.startsWith('-') && a !== '-';
+        if (!option && i > 0) {
+            const letter = pending.shift();
+            if (letter !== undefined)
+                take(letter, a);
+            continue;
+        }
+        const cluster = option ? a.slice(1) : a;
+        for (let c = 0; c < cluster.length; c += 1) {
+            const letter = cluster.charAt(c);
+            if (letter === 'x')
+                extract = true;
+            if (letter !== 'f' && letter !== 'C')
+                continue;
+            const rest = cluster.slice(c + 1);
+            if (option && rest !== '') {
+                take(letter, rest);
+                break;
+            }
+            pending.push(letter);
+            if (option)
+                break;
+        }
+    }
+    return extract ? out : undefined;
+}
+/**
+ * Commands that do not run an extracted archive's files: shell builtins and the
+ * file tools an install runs around one (`chmod +x`, `ls -l`, `which`, a
+ * checksum). After an archive of unknown names is extracted into a PATH
+ * directory, any other bare command may be one of its files.
+ */
+const NOT_FROM_ARCHIVE = new Set([
+    'echo', 'printf', 'cd', 'pwd', 'export', 'unset', 'set', 'true', 'false', 'test', '[', '[[', 'command', 'type', 'hash',
+    'which', 'whereis', 'ls', 'chmod', 'chown', 'chgrp', 'rm', 'rmdir', 'mv', 'cp', 'ln', 'mkdir', 'touch', 'cat', 'head',
+    'tail', 'grep', 'sed', 'awk', 'sort', 'wc', 'file', 'stat', 'du', 'df', 'tar', 'bsdtar', 'gzip', 'gunzip', 'xz', 'unzip',
+    'curl', 'wget', 'install', 'sleep', 'date', 'uname', 'id', 'whoami', 'exit', 'sha256sum', 'sha512sum', 'shasum', 'gpg',
+    'readlink', 'realpath', 'basename', 'dirname', 'tee', 'find', 'source', '.', 'popd', 'pushd',
+]);
+/**
  * A file downloaded and run by the same command line (review I1, PowerShell's
  * `DownloadFile` / `-OutFile` then run; round 2, ruling 1, POSIX `curl -o f
  * && sh f` and the like). Paths are compared after the `cd`s before them, and
@@ -4033,6 +4118,12 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
     const verified = new Map();
     let listAt = -2;
     let cwd = '';
+    /**
+     * PATH directories a download was extracted into (round 2), each with its
+     * first extraction: what the archive held is unknown, so a later bare name
+     * may be any of it. One entry per directory, so a lookup is constant time.
+     */
+    const extracted = new Map();
     for (let k = 0; k < statements.length; k += 1) {
         const statement = statements[k];
         if (statement === undefined)
@@ -4041,10 +4132,20 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
         const ran = [];
         const saved = [];
         // Nothing downloaded yet: nothing a run could match, so runs are not read.
-        const reading = downloads.size > 0;
+        const reading = downloads.size > 0 || extracted.size > 0;
         const piped = reading ? pipedIntoRunners(statement, heads) : [];
         /** A download earlier in this pipeline writes to its stdout: what a later member saves is the download. */
         let streaming;
+        /** A bare name run after an extraction into a PATH directory, and what downloaded the archive. */
+        let fromArchive;
+        /** Whether `archive` (a file, or stdin for `-` / none) is a download no check has cleared: what downloaded it. */
+        const downloadedArchive = (archive) => {
+            if (archive === undefined || archive === '-')
+                return streaming;
+            const key = runKey(resolveFrom(cwd, archive));
+            const d = downloads.get(key);
+            return d !== undefined && !((verified.get(key) ?? -3) > d.at) && !(listAt > d.at) ? d.kind : undefined;
+        };
         statement.commands.forEach((words, c) => {
             const at = heads[c] ?? 0;
             const head = words[at]?.value ?? '';
@@ -4062,6 +4163,15 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
                 for (const dest of pipedSaves(name, words, at))
                     saved.push({ key: runKey(resolveFrom(cwd, dest)), kind });
             }
+            // `curl … | tar xz -C /usr/local/bin`, `tar xzf t.tgz -C ~/.local/bin`
+            // after `curl -o t.tgz`, `unzip t.zip -d /usr/local/bin` (round 2).
+            const extraction = archiveExtraction(name, words, at);
+            if (extraction !== undefined) {
+                const dir = runKey(resolveFrom(cwd, extraction.dir ?? '.')).replace(/\/+$/, '');
+                const kind = downloadedArchive(extraction.archive);
+                if (kind !== undefined && PATH_DIRS.test(dir) && !extracted.has(dir))
+                    extracted.set(dir, { at: k, kind });
+            }
             if (DOWNLOADERS.has(name) && posix.length === 0 && ps.length === 0) {
                 streaming = name === 'curl' || name === 'wget' ? 'posix' : 'powershell';
             }
@@ -4077,6 +4187,11 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
                     const onPath = pathBins.get(head.toLowerCase());
                     if (onPath !== undefined)
                         ran.push(onPath);
+                    if (!NOT_FROM_ARCHIVE.has(head.toLowerCase())) {
+                        for (const e of extracted.values())
+                            if (e.at < k)
+                                fromArchive ??= e.kind;
+                    }
                     if (bareRunsCwd) {
                         for (const ext of /\.[A-Za-z0-9]+$/.test(head) ? [''] : ['', '.exe', '.cmd', '.bat', '.com']) {
                             ran.push(runKey(resolveFrom(cwd, `${head}${ext}`)));
@@ -4117,7 +4232,13 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
             // Run after its download, and not behind a check of it made after that download.
             if (d !== undefined && d.at < k && !((verified.get(file) ?? -3) > d.at) && !(listAt > d.at))
                 return d.kind;
+            // A file of an archive extracted into a PATH directory, run by its path.
+            const e = extracted.get(dirOf(file));
+            if (e !== undefined && e.at < k)
+                return e.kind;
         }
+        if (fromArchive !== undefined)
+            return fromArchive;
         for (const { key, kind } of saved) {
             downloads.set(key, { at: k, kind });
             verified.delete(key);

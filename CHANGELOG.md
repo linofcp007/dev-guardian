@@ -497,6 +497,13 @@ version bump.
   download that writes to its stdout is piped into now saves the download — `tee` / `Tee-Object`, `sponge`,
   `dd of=`, `Out-File`, `Set-Content`, a redirection of the reader (`| gunzip > tool`) — and running that file (by
   path, by interpreter, or by its bare name in a PATH directory) is denied like `curl -o` then run.
+- **An archive downloaded and extracted into a PATH directory ran unseen.** `curl URL | tar xz -C /usr/local/bin &&
+  tool` was `ok`. An extraction (`tar` / `bsdtar` with `x`, `--extract`; `unzip -d`) of a download — piped in, or
+  saved earlier and not checked — into a PATH directory, the working directory after a `cd` there included, now
+  makes a later run of a file there a download run: by its path, or by any bare name but a builtin or a file tool
+  (`chmod`, `ls`, `which`, `echo`, …), since the archive's names are unknown. Extracting into another directory,
+  listing (`tar tz`), or extracting a checked archive stays allowed. An archive extracted into the working directory
+  and run from there (`./configure`) is still not judged.
 
 ## [3.0.0] - 2026-09-29
 
