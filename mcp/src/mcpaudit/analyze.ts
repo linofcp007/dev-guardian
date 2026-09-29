@@ -204,8 +204,14 @@ export const ANALYSIS_BOUNDS: AnalysisBounds = {
   maxMentions: 20_000,
 };
 
-/** Strings analysed between two yields to the event loop, inside one item. */
-const YIELD_EVERY_STRINGS = 1000;
+/**
+ * Inside one item, a yield to the event loop after this much text analysed
+ * or this much time, whichever comes first (fix round 5, minor 4). By string
+ * count (every 1000) one item of 31 strings of 64 KiB, ~62 ms each, stalled
+ * 1.6 s; now the longest stall is one string's analysis.
+ */
+const YIELD_EVERY_CHARS = 256 * 1024;
+const YIELD_EVERY_MS = 16;
 
 /**
  * Depth bound of one walk (fix round 3, M2): every string and every key is
@@ -813,13 +819,21 @@ function formatChars(n: number): string {
 }
 
 /**
- * The analysis, one item at a time: yields after every item and every
- * {@link YIELD_EVERY_STRINGS} strings, so a driver can give the event loop a
- * turn — and stop — between them.
+ * The analysis, one item at a time: yields after every item and, inside
+ * one, after every {@link YIELD_EVERY_CHARS} characters analysed or
+ * {@link YIELD_EVERY_MS} ms, so a driver can give the event loop a turn —
+ * and stop — between them.
  */
 function* analysisSteps(run: AnalysisRun): Generator<void> {
   const { listing, bounds } = run;
   let overlong = false;
+  let charsSinceYield = 0;
+  let lastYield = Date.now();
+  const yieldDue = (): boolean => charsSinceYield >= YIELD_EVERY_CHARS || Date.now() - lastYield >= YIELD_EVERY_MS;
+  const resumed = (): void => {
+    charsSinceYield = 0;
+    lastYield = Date.now();
+  };
   // Nesting past the bound is a finding and a cut (fix round 5, I-1): a real
   // schema is a few levels deep; thousands is a value built to break things.
   const onTooDeep: OnTooDeep = (item, root) => {
@@ -869,9 +883,14 @@ function* analysisSteps(run: AnalysisRun): Generator<void> {
       if (shadow !== null) run.mentions.reported.add(field.item);
       addHit(run, shadow);
       indexMentions(analysed, run.mentions, bounds.maxMentions);
-      if (run.strings % YIELD_EVERY_STRINGS === 0) yield;
+      charsSinceYield += text.length;
+      if (yieldDue()) {
+        yield;
+        resumed();
+      }
     }
     yield;
+    resumed();
   }
 }
 
@@ -958,8 +977,8 @@ export interface AsyncAnalysisOptions {
 
 /**
  * The analysis as the tool runs it: a turn of the event loop between items
- * (and every {@link YIELD_EVERY_STRINGS} strings), so no listing stalls the
- * server, and a stop — cancel, the audit budget — honoured between them.
+ * (and, inside one, every ~256 KiB of text or ~16 ms), so no listing stalls
+ * the server, and a stop — cancel, the audit budget — honoured between them.
  */
 export async function analyzeServerListingAsync(
   listing: ServerListing,

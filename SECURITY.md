@@ -133,7 +133,8 @@ their respective projects.
   inbound budget (4 MiB, 10 000 messages, 2 MiB per message — 40 times the
   largest real listing measured) and a 1000-item cap per list; its listing
   is analysed right after it answers, up to 2 MiB of text, 64 KiB per
-  string and 50 000 strings, with a turn of the event loop between items,
+  string and 50 000 strings, with a turn of the event loop between items
+  and every 256 KiB of text or 16 ms inside one,
   then dropped. The whole audit has a budget (`GUARDIAN_MCP_AUDIT_BUDGET_MS`);
   cancelling the call, or the budget running out, stops launching and stops
   the analysis. Whatever a bound leaves unread makes that server partial.

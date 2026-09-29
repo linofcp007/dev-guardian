@@ -45,7 +45,9 @@ version bump.
   of them kept to the end: one server of 4 pages x a 7 MiB description stalled the event loop 24 s
   and reported ok. Each server is now pinned and analysed right after its probe and its listing
   dropped; the analysis reads at most 2 MiB of text, 64 KiB per string and 50 000 strings, yields
-  between items, and stops on cancel or the audit budget. A bound reached makes the server partial;
+  between items and, inside one, every 256 KiB of text or 16 ms (by string count, one item of 31
+  strings of 64 KiB stalled 1.6 s; the worst gap is now one string, 37–82 ms measured), and stops on
+  cancel or the audit budget. A bound reached makes the server partial;
   a string over 64 KiB is itself a finding (`mcp-tool-string-over-bound`). Pins still hash the full
   content.
 - `allow_remote` gate, widened (reproduced: `cmd /c "… type \\host\share\x"` started, wrote a

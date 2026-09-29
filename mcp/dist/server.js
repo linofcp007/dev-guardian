@@ -71387,7 +71387,8 @@ var ANALYSIS_BOUNDS = {
   maxStrings: 5e4,
   maxMentions: 2e4
 };
-var YIELD_EVERY_STRINGS = 1e3;
+var YIELD_EVERY_CHARS = 256 * 1024;
+var YIELD_EVERY_MS = 16;
 var MAX_DEPTH = 128;
 var KEY_SUFFIX = " (key)";
 function* walkStrings(value, root, item, onTooDeep) {
@@ -71802,6 +71803,13 @@ function formatChars(n2) {
 function* analysisSteps(run) {
   const { listing, bounds } = run;
   let overlong = false;
+  let charsSinceYield = 0;
+  let lastYield = Date.now();
+  const yieldDue = () => charsSinceYield >= YIELD_EVERY_CHARS || Date.now() - lastYield >= YIELD_EVERY_MS;
+  const resumed = () => {
+    charsSinceYield = 0;
+    lastYield = Date.now();
+  };
   const onTooDeep = (item, root) => {
     run.cuts.push(`${item} ${root}: nesting deeper than ${MAX_DEPTH} levels was not analysed`);
     addHit(run, {
@@ -71849,9 +71857,14 @@ function* analysisSteps(run) {
       if (shadow !== null) run.mentions.reported.add(field2.item);
       addHit(run, shadow);
       indexMentions(analysed, run.mentions, bounds.maxMentions);
-      if (run.strings % YIELD_EVERY_STRINGS === 0) yield;
+      charsSinceYield += text.length;
+      if (yieldDue()) {
+        yield;
+        resumed();
+      }
     }
     yield;
+    resumed();
   }
 }
 function finishRun(run, others) {

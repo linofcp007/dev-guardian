@@ -489,6 +489,23 @@ describe('fix round 4: the analysis is bounded, and says where it stopped', () =
     });
     expect(r.cuts).toContain('analysis stopped: cancelled');
   });
+
+  // Fix round 5, minor 4 (measured by the review): 31 strings of 64 KiB in
+  // one item took ~62 ms each, and the yield came every 1000 strings — a
+  // 1.6 s stall. It yields by work now: every ~256 KiB of text, or ~16 ms.
+  it('yields inside one item by the amount of text analysed, not by string count', async () => {
+    const block = 'Formats a paragraph of text. '.repeat(2260).slice(0, 64 * 1024);
+    const properties = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`p${i}`, { type: 'string', description: block }]));
+    let steps = 0;
+    await analyzeServerListingAsync(listing([{ name: 't', description: 'd', inputSchema: { type: 'object', properties } }]), [], {
+      shouldStop: () => {
+        steps += 1;
+        return null;
+      },
+    });
+    // 31 x 64 KiB is 7.75 x 256 KiB: at least 7 yields inside the item.
+    expect(steps).toBeGreaterThanOrEqual(8);
+  });
 });
 
 /**
