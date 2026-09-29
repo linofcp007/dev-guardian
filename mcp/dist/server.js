@@ -46407,6 +46407,15 @@ function signalGroup(pid, signal) {
   }
 }
 
+// src/runners/semgrepRun.ts
+var SEMGREP_COMMAND = "semgrep";
+function semgrepSpawn(env) {
+  return { command: SEMGREP_COMMAND, env: pythonUtf8Env(env) };
+}
+function runSemgrep(opts, run = runProcess) {
+  return run({ ...opts, ...semgrepSpawn(opts.env) });
+}
+
 // src/runners/fileBatchScan.ts
 async function scanFileBatches(opts) {
   const probeReport = join23(opts.reportDir, `${opts.reportPrefix}-000.json`);
@@ -46535,14 +46544,14 @@ function semgrepOnFiles(args) {
   };
   return scanFileBatches({
     name: "semgrep",
-    command: "semgrep",
+    // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
+    ...semgrepSpawn(args.env),
     args: [...args.configArgs, "--json", "--quiet"],
     reportArgs: (f) => ["--output", f],
     files: args.files,
     cwd: args.cwd,
     reportDir: args.reportDir,
     reportPrefix: "sast",
-    env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...args.onLog ? { onLog: args.onLog } : {},
     // The shared judge's `partial` verdict is no failure of the batch, and
@@ -46962,7 +46971,7 @@ registerToolModule(
         await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
         dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
       } else {
-        await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
+        await runSemgrep2({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
         await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
         await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
       }
@@ -46980,7 +46989,7 @@ registerToolModule(
     }
   })
 );
-async function runSemgrep(args) {
+async function runSemgrep2(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
   const outFile = join25(reportDir, "sast.json");
   const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
@@ -46998,13 +47007,10 @@ async function runSemgrep(args) {
     const argv = [...plan.args, ...semgrepExcludeArgs(ctx.exclusions), "--json", "--quiet", "--output", outFile];
     if (autoFix) argv.push("--autofix");
     argv.push(ctx.projectPath);
-    const result2 = await runProcess({
-      command: "semgrep",
+    const result2 = await runSemgrep({
       args: argv,
       cwd: ctx.projectPath,
-      // UTF-8 mode: a non-ASCII file name otherwise makes Semgrep fail to
-      // write its report on Windows (see runners/semgrepReport.ts).
-      env: pythonUtf8Env(ctx.scriptEnv),
+      env: ctx.scriptEnv,
       signal: ctx.signal,
       onLog: ctx.onLog
     });
@@ -51528,8 +51534,7 @@ async function invokeBugHunt(input, ctx) {
     args.push("--json", "--quiet", "--output", outFile);
     if (input.auto_fix === true) args.push("--autofix");
     args.push(ctx.projectPath);
-    return runProcess({
-      command: "semgrep",
+    return runSemgrep({
       args,
       cwd: ctx.projectPath,
       env: ctx.scriptEnv,
@@ -52690,7 +52695,7 @@ var reviewPr = makeScanTool({
         if (changed.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
       } else {
         const present2 = changed.filter((f) => isFileOnDisk(join36(scanRoot, f)));
-        await runSemgrep2(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where });
+        await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where });
         if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present2.filter(isPython2) });
         if (!out.cancelled && changed.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir });
       }
@@ -52743,7 +52748,7 @@ var reviewPr = makeScanTool({
 });
 var isPython2 = (f) => f.toLowerCase().endsWith(".py");
 var isManifest = (f) => MANIFEST_RE.test(basename5(f));
-async function runSemgrep2(ctx, input, out, args) {
+async function runSemgrep3(ctx, input, out, args) {
   const missing = args.changed.length - args.present.length;
   const gap = missing > 0 ? `${missing} changed file(s) not in ${args.where} were not scanned` : null;
   if (args.changed.length === 0) {
@@ -56198,8 +56203,7 @@ async function runRgpdPack(ctx, reportDir, out) {
     return;
   }
   const outFile = join39(reportDir, "rgpd.json");
-  const result = await runProcess({
-    command: "semgrep",
+  const result = await runSemgrep({
     args: [
       `--config=${pack}`,
       "--metrics=off",
@@ -56214,8 +56218,8 @@ async function runRgpdPack(ctx, reportDir, out) {
       ctx.projectPath
     ],
     cwd: ctx.projectPath,
-    // UTF-8 mode: see runners/semgrepReport.ts.
-    env: pythonUtf8Env(ctx.scriptEnv),
+    // UTF-8 mode comes with the helper (runners/semgrepRun.ts).
+    env: ctx.scriptEnv,
     signal: ctx.signal,
     onLog: ctx.onLog
   });
@@ -62530,11 +62534,10 @@ ${stdout}`.replace(ANSI3, "").split(/\r?\n/).map((l) => l.trim()).filter((l) => 
   return text2.length > MAX_MESSAGE2 ? `${text2.slice(0, MAX_MESSAGE2 - 1)}\u2026` : text2;
 }
 async function validateOnce(files, cwd) {
-  const run = await runProcess({
-    command: "semgrep",
+  const run = await runSemgrep({
     args: ["--validate", "--metrics=off", "--disable-version-check", ...files.flatMap((f) => ["--config", f])],
     cwd,
-    env: pythonUtf8Env(process.env),
+    env: process.env,
     timeoutMs: SEMGREP_VALIDATE_TIMEOUT_MS
   });
   if (run.outcome === "timed_out" || run.outcome === "cancelled" || run.outcome === "output_too_large" || run.exitCode === null) {
@@ -64314,8 +64317,7 @@ registerToolModule(
             ];
             if (inp.auto_fix === true) args.push("--autofix");
             args.push(ctx.projectPath);
-            const r = await runProcess({
-              command: "semgrep",
+            const r = await runSemgrep({
               args,
               cwd: ctx.projectPath,
               env: ctx.scriptEnv,
@@ -70168,14 +70170,10 @@ async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
   const semgrepBin = await scannerAvailable("semgrep");
   if (semgrepBin !== null) {
-    const run2 = await runProcess({
-      command: "semgrep",
+    const run2 = await runSemgrep({
       args: ["--config", rulesPath, "--json", "--output", outFile, "--quiet", projectPath],
       cwd: projectPath,
-      // UTF-8 mode, like every other Semgrep call site: otherwise the locale
-      // codec reads the rule pack and writes `--output`
-      // (runners/semgrepReport.ts#pythonUtf8Env).
-      env: pythonUtf8Env(process.env)
+      env: process.env
     });
     return { toolRun: buildToolRun(run2), run: run2, via: null };
   }
@@ -73363,7 +73361,7 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
   }
   const fixed = ["--metrics=off", ...plan.configs.map((c3) => `--config=${c3}`), "--autofix", "--json", "--quiet"];
   const batches = batchArgs(plan.files, {
-    command: "semgrep",
+    command: SEMGREP_COMMAND,
     fixedArgs: [...fixed, "--output", join74(plan.dir, "fix-000.json"), "--"]
   });
   const commands = [];
@@ -73371,13 +73369,14 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
     const batch = batches[i2] ?? [];
     const report = join74(plan.dir, `fix-${String(i2).padStart(3, "0")}.json`);
     rmSync9(report, { force: true });
-    const result = await run({
-      command: "semgrep",
-      args: [...fixed, "--output", report, "--", ...batch],
-      cwd: worktreePath,
-      env: pythonUtf8Env(void 0),
-      timeoutMs
-    });
+    const result = await runSemgrep(
+      {
+        args: [...fixed, "--output", report, "--", ...batch],
+        cwd: worktreePath,
+        timeoutMs
+      },
+      run
+    );
     const invoked = `${label} -- ${batch.join(" ")}`;
     commands.push(invoked);
     const check2 = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });

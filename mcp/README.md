@@ -119,5 +119,5 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 2. Create `src/tools/<myTool>.ts` with `makeScanTool({...})` from `scanToolFactory.ts` — caching, persistence, identities, coverage, progress, scopes, `.guardianignore` and cancellation come with it.
 3. Import it in `src/registerAll.ts` and add it to `test/integration/toolSurface.test.ts`: the surface is snapshotted on purpose.
 4. Place every bookkeeping name it writes to `tools_run` / `missing_tools` in `src/history/runNames.ts`; the exhaustiveness test fails otherwise.
-   Spawn Trivy only through `src/runners/trivyRun.ts` (never in the project, never its `trivy.yaml`); a test fails on any other Trivy spawn.
+   Spawn Trivy only through `src/runners/trivyRun.ts` (never in the project, never its `trivy.yaml`) and Semgrep only through `src/runners/semgrepRun.ts` (Python's UTF-8 mode); a test fails on any other spawn of either.
 5. Keep the description under 1500 characters, add an integration test, run `npm run build`, and commit `dist/` and the regenerated `docs/` with the change.

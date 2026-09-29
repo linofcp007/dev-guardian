@@ -94,6 +94,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess } from '../runners/processRunner.js';
+import { runSemgrep as spawnSemgrep } from '../runners/semgrepRun.js';
 import { localRuleIdNormalizer, mayHoldTaintRules, noRuleLoaded, pluginPackCheckIds, ruleIdsInFile, } from '../runners/semgrepRuleIds.js';
 import { buildSemgrepDockerArgs, CONTAINER_PROJECT_ROOT, DEFAULT_SEMGREP_IMAGE, fromContainerPath, toContainerPath, } from '../runners/dockerScanner.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
@@ -214,13 +215,12 @@ async function runSemgrep(args) {
         if (autoFix)
             argv.push('--autofix');
         argv.push(ctx.projectPath);
-        const result = await runProcess({
-            command: 'semgrep',
+        // UTF-8 mode comes with the helper: a non-ASCII file name otherwise makes
+        // Semgrep fail to write its report on Windows (runners/semgrepRun.ts).
+        const result = await spawnSemgrep({
             args: argv,
             cwd: ctx.projectPath,
-            // UTF-8 mode: a non-ASCII file name otherwise makes Semgrep fail to
-            // write its report on Windows (see runners/semgrepReport.ts).
-            env: pythonUtf8Env(ctx.scriptEnv),
+            env: ctx.scriptEnv,
             signal: ctx.signal,
             onLog: ctx.onLog,
         });

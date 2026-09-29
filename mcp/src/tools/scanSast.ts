@@ -101,6 +101,7 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { runSemgrep as spawnSemgrep } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
   mayHoldTaintRules,
@@ -287,13 +288,12 @@ async function runSemgrep(args: Collect & {
     const argv = [...plan.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
     if (autoFix) argv.push('--autofix');
     argv.push(ctx.projectPath);
-    const result = await runProcess({
-      command: 'semgrep',
+    // UTF-8 mode comes with the helper: a non-ASCII file name otherwise makes
+    // Semgrep fail to write its report on Windows (runners/semgrepRun.ts).
+    const result = await spawnSemgrep({
       args: argv,
       cwd: ctx.projectPath,
-      // UTF-8 mode: a non-ASCII file name otherwise makes Semgrep fail to
-      // write its report on Windows (see runners/semgrepReport.ts).
-      env: pythonUtf8Env(ctx.scriptEnv),
+      env: ctx.scriptEnv,
       signal: ctx.signal,
       onLog: ctx.onLog,
     });

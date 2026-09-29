@@ -123,7 +123,8 @@ import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded } from '../runners/semgrepReport.js';
 import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
-import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import type { ProcessRunResult } from '../runners/processRunner.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
 import {
   AllowDirty,
   AutoFix,
@@ -679,8 +680,9 @@ async function invokeBugHunt(input: BugHuntInput, ctx: InvokeContext): Promise<S
     args.push('--json', '--quiet', '--output', outFile);
     if (input.auto_fix === true) args.push('--autofix');
     args.push(ctx.projectPath);
-    return runProcess({
-      command: 'semgrep',
+    // UTF-8 mode (runners/semgrepRun.ts): without it a file named 日本.py
+    // made Semgrep exit 2 without a report on Windows (review M3).
+    return runSemgrep({
       args,
       cwd: ctx.projectPath,
       env: ctx.scriptEnv,

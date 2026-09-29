@@ -49,7 +49,8 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { batchArgs } from '../runners/argBatches.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport } from '../runners/semgrepReport.js';
+import { runSemgrep, SEMGREP_COMMAND } from '../runners/semgrepRun.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
 import type { SemgrepFixPlan } from './semgrepFix.js';
 import type { FixCandidate, FixGroup, UpgradeStep } from './types.js';
@@ -113,7 +114,7 @@ async function applySemgrepPass(
   }
   const fixed = ['--metrics=off', ...plan.configs.map((c) => `--config=${c}`), '--autofix', '--json', '--quiet'];
   const batches = batchArgs(plan.files, {
-    command: 'semgrep',
+    command: SEMGREP_COMMAND,
     fixedArgs: [...fixed, '--output', join(plan.dir, 'fix-000.json'), '--'],
   });
   const commands: string[] = [];
@@ -121,13 +122,15 @@ async function applySemgrepPass(
     const batch = batches[i] ?? [];
     const report = join(plan.dir, `fix-${String(i).padStart(3, '0')}.json`);
     rmSync(report, { force: true });
-    const result = await run({
-      command: 'semgrep',
-      args: [...fixed, '--output', report, '--', ...batch],
-      cwd: worktreePath,
-      env: pythonUtf8Env(undefined),
-      timeoutMs,
-    });
+    // UTF-8 mode comes with the helper (runners/semgrepRun.ts).
+    const result = await runSemgrep(
+      {
+        args: [...fixed, '--output', report, '--', ...batch],
+        cwd: worktreePath,
+        timeoutMs,
+      },
+      run,
+    );
     const invoked = `${label} -- ${batch.join(' ')}`;
     commands.push(invoked);
     const check = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });

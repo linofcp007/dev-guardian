@@ -20,6 +20,7 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
@@ -115,8 +116,8 @@ registerToolModule(
             ];
             if (inp.auto_fix === true) args.push('--autofix');
             args.push(ctx.projectPath);
-            const r = await runProcess({
-              command: 'semgrep',
+            // UTF-8 mode (runners/semgrepRun.ts, review M3).
+            const r = await runSemgrep({
               args,
               cwd: ctx.projectPath,
               env: ctx.scriptEnv,

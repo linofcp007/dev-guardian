@@ -8,7 +8,8 @@ import {
 import { git, splitNul } from '../runners/git.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
-import { checkSemgrepReport, describePartialParse, pythonUtf8Env, type SemgrepVerdict } from '../runners/semgrepReport.js';
+import { checkSemgrepReport, describePartialParse, type SemgrepVerdict } from '../runners/semgrepReport.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
 import type { PartialParse, ToolRun } from '../types.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
@@ -47,14 +48,12 @@ export async function invokeSemgrep(options: SemgrepRunOptions): Promise<Semgrep
   const { projectPath, rulesPath, outFile, reportDir } = options;
   const semgrepBin = await scannerAvailable('semgrep');
   if (semgrepBin !== null) {
-    const run = await runProcess({
-      command: 'semgrep',
+    // UTF-8 mode, like every other Semgrep call site: otherwise the locale
+    // codec reads the rule pack and writes `--output` (runners/semgrepRun.ts).
+    const run = await runSemgrep({
       args: ['--config', rulesPath, '--json', '--output', outFile, '--quiet', projectPath],
       cwd: projectPath,
-      // UTF-8 mode, like every other Semgrep call site: otherwise the locale
-      // codec reads the rule pack and writes `--output`
-      // (runners/semgrepReport.ts#pythonUtf8Env).
-      env: pythonUtf8Env(process.env),
+      env: process.env,
     });
     return { toolRun: buildToolRun(run), run, via: null };
   }

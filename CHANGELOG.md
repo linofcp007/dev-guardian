@@ -78,6 +78,10 @@ version bump.
   always empty, is removed. A subsection that did not answer (or a skipped plugin) is a named gap: `wp-cli` in
   `missing_tools`, coverage partial, returned with `tools_run` and `coverage`; the description no longer claims
   theme checksums.
+- `bug_hunt` and `scan_wordpress` run Semgrep in Python's UTF-8 mode, like every other Semgrep call: with
+  `PYTHONUTF8` unset, a file named `日本.py` made Semgrep exit 2 without a report on Windows, and `bug_hunt` read
+  "semgrep report is not valid JSON (exit 2)" (reproduced with Semgrep 1.176.1). Every Semgrep spawn now goes
+  through one helper (`runners/semgrepRun.ts`), and a test fails on any that bypasses it.
 
 ## [3.0.0] - 2026-09-29
 

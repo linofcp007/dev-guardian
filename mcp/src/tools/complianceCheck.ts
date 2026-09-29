@@ -48,10 +48,10 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
-import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport } from '../runners/semgrepReport.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { runProcess } from '../runners/processRunner.js';
 import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath } from '../schemas.js';
 import {
@@ -145,8 +145,7 @@ async function runRgpdPack(
     return;
   }
   const outFile = join(reportDir, 'rgpd.json');
-  const result = await runProcess({
-    command: 'semgrep',
+  const result = await runSemgrep({
     args: [
       `--config=${pack}`,
       '--metrics=off',
@@ -161,8 +160,8 @@ async function runRgpdPack(
       ctx.projectPath,
     ],
     cwd: ctx.projectPath,
-    // UTF-8 mode: see runners/semgrepReport.ts.
-    env: pythonUtf8Env(ctx.scriptEnv),
+    // UTF-8 mode comes with the helper (runners/semgrepRun.ts).
+    env: ctx.scriptEnv,
     signal: ctx.signal,
     onLog: ctx.onLog,
   });
