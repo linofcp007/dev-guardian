@@ -220,6 +220,17 @@ def interpreters_and_wrappers(resp):
     subprocess.run(["pythonw", "-c", t])  # BUG: the windowless Python
 
 
+def container_and_find_wrappers(resp):
+    # Review of the pack, round 3: programs that run a command they are handed —
+    # in a container, a pod, another namespace, or per file found.
+    t = resp.choices[0].message.content
+    subprocess.run(["docker", "run", "--rm", "alpine", "sh", "-c", t])  # BUG: docker run … sh -c
+    subprocess.run(["podman", "exec", "db", t])  # BUG: podman exec runs its argument
+    subprocess.run(["kubectl", "exec", "web-0", "--", "sh", "-c", t])  # BUG: kubectl exec … sh -c
+    subprocess.run(["find", ".", "-name", "*.log", "-exec", t, ";"])  # BUG: find -exec runs its argument
+    subprocess.run(["nsenter", "-t", "1", "-m", t])  # BUG: nsenter runs its argument in another namespace
+
+
 def fixed_program_with_a_shell(resp, usar_shell):
     t = resp.choices[0].message.content
     subprocess.run(["git", "commit", "-m", t], shell=True)  # BUG: with a shell the list is a command line

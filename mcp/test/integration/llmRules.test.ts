@@ -124,7 +124,7 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // Review round 2 (I-B): the model's text anywhere in the argv of an
   // interpreter, shell or wrapper, or of any program with a shell; os.exec*,
   // os.spawn*, create_subprocess_exec of bash.
-  'output_to_interpreter.py': { [INTERPRETER_PY]: 69 },
+  'output_to_interpreter.py': { [INTERPRETER_PY]: 74 },
   // Four spellings of a model-chosen name, five lookups; and (review, I-1)
   // seven guards that are not allowlists: a warning, `pass`, dir(), a string,
   // a class __dict__, vars(), and the ELSE arm of a real one.
@@ -140,7 +140,7 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   'no_max_tokens.py': { [NO_MAX_PY]: 6 },
   // Fifteen sources into eval (one each), thirteen sinks (one each).
   // Review round 2 (I-B): eleven argv shapes of interpreters, wrappers and shells.
-  'outputToInterpreter.ts': { [INTERPRETER_JS]: 41 },
+  'outputToInterpreter.ts': { [INTERPRETER_JS]: 48 },
   // Four request sources; four sink shapes — the message object (one pattern
   // covers both key orders: Semgrep's object pattern ignores order, which the
   // ablation measured), a top-level `system`, `instructions`, a SystemMessage —

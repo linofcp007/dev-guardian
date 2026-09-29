@@ -169,3 +169,18 @@ export async function interpretersAndWrappers(completion: OpenAI.Chat.ChatComple
   spawn('osascript', ['-e', t]); // BUG: AppleScript runs its -e argument
   spawn('/usr/bin/gawk', [t]); // BUG: an awk program, by path
 }
+
+// Review of the pack, round 3: programs that run a command they are handed,
+// and an argv array held in a variable before the call.
+export async function containerWrappersAndArgvInAVariable(completion: OpenAI.Chat.ChatCompletion) {
+  const t = completion.choices[0].message.content ?? '';
+  spawn('docker', ['exec', 'web', 'sh', '-c', t]); // BUG: docker exec … sh -c
+  spawn('nerdctl', ['run', 'alpine', t]); // BUG: nerdctl run runs its argument
+  spawn('oc', ['exec', 'web-0', '--', t]); // BUG: oc exec runs its argument
+  spawn('find', ['.', '-execdir', t, ';']); // BUG: find -execdir runs its argument
+  const args = ['-c', t];
+  spawn('bash', args); // BUG: bash -c with the argv in a variable
+  const nodeArgs = ['-e', t];
+  await execFileAsync('node', nodeArgs); // BUG: a promisified execFile of node, the argv in a variable
+  require('child_process').execFile('sh', args); // BUG: an inline require of sh, the argv in a variable
+}

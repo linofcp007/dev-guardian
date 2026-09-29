@@ -71,6 +71,16 @@ export function programNamedLikeAnInterpreter(completion: OpenAI.Chat.ChatComple
   return spawn('perltidy', ['-st', completion.choices[0].message.content ?? '']);
 }
 
+// A fixed program with its argv in a variable is the same call as with the
+// array written in it (review of the pack, round 3).
+export async function commitMessageArgvInAVariable(completion: OpenAI.Chat.ChatCompletion) {
+  const t = completion.choices[0].message.content ?? '';
+  const gitArgs = ['log', '--grep', t];
+  spawn('git', gitArgs);
+  await execFileAsync('git', gitArgs);
+  require('child_process').execFile('git', gitArgs, { shell: false });
+}
+
 // A function called `exec` from any module but child_process runs nothing.
 export async function databaseExec(completion: OpenAI.Chat.ChatCompletion) {
   return dbExec(completion.choices[0].message.content ?? '');
