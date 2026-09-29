@@ -250,10 +250,16 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          health-check URL when --start-command is given —
                          they are the same origin, so one flag names both.
   --authorized-target   Confirm you are authorized to DAST-test that target
-  --local-only          Semgrep runs only the rules on disk (the project's
-                         .semgrep.yml and registered custom rules) with
-                         --metrics=off: no registry download, no telemetry.
-                         Fewer rules than the default registry ruleset.
+  --local-only          Keeps Semgrep local: only rules on disk — the
+                         project's .semgrep.yml and registered custom rules,
+                         plus the plugin's own packs (the LLM-application
+                         pack still runs) — with --metrics=off and no
+                         registry download. Fewer rules than the default
+                         registry ruleset. It is NOT "nothing leaves the
+                         machine": Trivy still fetches its vulnerability
+                         database, a .NET project is still restored from its
+                         NuGet feeds, and Semgrep still checks for a newer
+                         version (SECURITY.md, network egress).
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan

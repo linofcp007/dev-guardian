@@ -70,6 +70,30 @@ describe('check — arguments (review M3)', () => {
   });
 });
 
+// `--local-only` keeps Semgrep local — project rules plus the plugin's own
+// packs, no registry — and nothing more: Trivy's database fetch, a .NET
+// restore and Semgrep's version check still go out. The help text said "no
+// registry download, no telemetry" and nothing about either half, which read
+// as "nothing leaves the machine" (the same wording the tool descriptions and
+// SECURITY.md now use).
+describe('scan --help: what --local-only does and does not keep local', () => {
+  it('names the plugin packs that still run and the traffic that still goes out', () => {
+    const r = spawnSync(process.execPath, [CLI, 'scan', '--help'], { cwd: dir, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status).toBe(0);
+    const out = r.stdout ?? '';
+    const start = out.indexOf('  --local-only');
+    expect(start).toBeGreaterThan(0);
+    const para = out.slice(start, out.indexOf('  --start-command', start)).replace(/\s+/g, ' ');
+    expect(para).toMatch(/Keeps Semgrep local/);
+    expect(para).toMatch(/plus the plugin's own packs \(the LLM-application pack still runs\)/);
+    expect(para).toMatch(/no registry download/);
+    expect(para).toMatch(/It is NOT "nothing leaves the machine"/);
+    expect(para).toMatch(/Trivy still fetches its vulnerability database/);
+    expect(para).toMatch(/restored from its NuGet feeds/);
+    expect(para).toMatch(/SECURITY\.md, network egress/);
+  });
+});
+
 describe('check --file — UTF-16 (review M3)', () => {
   const utf16be = (text: string): Buffer => {
     const le = Buffer.from(text, 'utf16le');
