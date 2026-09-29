@@ -516,7 +516,9 @@ them again. Scans made on the fallback meanwhile are not merged back.
   repository on this machine `git -c … receive-pack` with that destination's overrides (git
   strips `GIT_CONFIG_COUNT` from a local receive-pack). Checkouts are `worktree add
   --no-checkout` then `reset --hard` inside the new worktree, so an `includeIf` matching it is
-  neutralised too. A configuration that cannot be read safely — or a git older than 2.31, which
+  neutralised too. One reading serves every git started in the same directory and environment
+  for up to 2 s (measured: a `review_pr` made 5 readings for 26 git calls, instead of one per
+  call). A configuration that cannot be read safely — or a git older than 2.31, which
   ignores `GIT_CONFIG_COUNT` — is refused and named, never run on hope; what a run did not apply
   is named in `review_pr`'s warnings, the gitleaks history reason and `create_fix_pr`'s
   `git_config_not_applied`. `precommit_install` keeps everything but the hooks redirect (its
