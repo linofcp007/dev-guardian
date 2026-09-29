@@ -52,7 +52,7 @@ interface HookResult {
 
 function runHook(
   payload: Record<string, unknown>,
-  opts: { cwd: string; env?: Record<string, string>; homeDir?: string } = { cwd: process.cwd() },
+  opts: { cwd: string; env?: Record<string, string>; homeDir?: string; projectDir?: string } = { cwd: process.cwd() },
 ): HookResult {
   const home = opts.homeDir ?? opts.cwd;
   const r = spawnSync(process.execPath, [HOOK], {
@@ -66,8 +66,12 @@ function runHook(
       // from whatever the machine actually running this suite has.
       HOME: home,
       USERPROFILE: home,
+      CLAUDE_CONFIG_DIR: '',
       GUARDIAN_HOOKS_BASH_BLOCK: '',
       GUARDIAN_HOOKS: '',
+      // Claude Code sets it for every hook: the project the session opened.
+      // `''` leaves it unset, and the hook finds the root from the cwd.
+      CLAUDE_PROJECT_DIR: opts.projectDir ?? opts.cwd,
       ...opts.env,
     },
   });
@@ -964,6 +968,56 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       });
       expect(r.stdout).toMatch(/GitHub token/);
       expect(r.status).toBe(1);
+    });
+  });
+
+  // Review of 3.0.0, I5: the guard on the hook configuration and a
+  // project-enabled secret block read the project from the session's cwd —
+  // `Write <proj>/.guardian/hooks-allowlist.json` was denied from <proj> and
+  // allowed from <proj>/packages/api.
+  describe('the project root, wherever the session has cd-ed to (review I5)', () => {
+    let sub: string;
+    const decision = (r: HookResult): unknown =>
+      (r.stdout as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+        ?.permissionDecision;
+    beforeEach(() => {
+      sub = join(projectDir, 'packages', 'api');
+      mkdirSync(sub, { recursive: true });
+    });
+    const write = (filePath: string, content: string, projectEnv: string): HookResult =>
+      runHook(preToolUse('Write', { file_path: filePath, content }, sub), { cwd: sub, homeDir, projectDir: projectEnv });
+
+    describe.each([
+      ['CLAUDE_PROJECT_DIR set', (): string => projectDir, (): void => undefined],
+      ['CLAUDE_PROJECT_DIR unset, the root found by its .git', (): string => '', (): void => mkdirSync(join(projectDir, '.git'))],
+      [
+        'CLAUDE_PROJECT_DIR unset, the root found by its .guardian',
+        (): string => '',
+        (): void => mkdirSync(join(projectDir, '.guardian'), { recursive: true }),
+      ],
+    ])('%s', (_label, projectEnv, mark) => {
+      beforeEach(() => mark());
+
+      it.each([
+        (): string => join(projectDir, '.guardian', 'hooks-allowlist.json'),
+        (): string => join(projectDir, '.guardian', 'hooks.config.json'),
+        (): string => join('..', '..', '.guardian', 'hooks.config.json'),
+        (): string => join(sub, '.guardian', 'hooks.config.json'),
+        (): string => join(projectDir, 'tools', 'x', '.guardian', 'hooks-allowlist.json'),
+      ])('a Write of the hook configuration from a subdirectory is denied (%#)', (target) => {
+        expect(decision(write(target(), '{}', projectEnv()))).toBe('deny');
+      });
+
+      it("the project's secrets.block applies from a subdirectory", () => {
+        mkdirSync(join(projectDir, '.guardian'), { recursive: true });
+        writeFileSync(join(projectDir, '.guardian', 'hooks.config.json'), JSON.stringify({ secrets: { block: true } }));
+        const r = write(join(sub, 'src', 'config.ts'), 'const k = "AKIAIOSFODNN7EXAMPLE";', projectEnv());
+        expect(decision(r)).toBe('deny');
+      });
+
+      it('an ordinary file in the subdirectory is not denied', () => {
+        expect(decision(write(join(sub, 'src', 'index.ts'), 'export {};', projectEnv()))).toBeUndefined();
+      });
     });
   });
 

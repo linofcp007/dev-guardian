@@ -64,6 +64,8 @@ The network hosts involved are listed in [SECURITY.md](../SECURITY.md).
 
 ## Configuration
 
+The project is the directory Claude Code names in `CLAUDE_PROJECT_DIR`; without it, the nearest ancestor of the session's working directory that holds `.guardian` or `.git`; failing both, the working directory itself. The project files below are read from there, and paths are made relative to it, wherever the session has `cd`-ed to — from `<project>/packages/api` the project's configuration applies, and a `Write` of `<project>/.guardian/hooks-allowlist.json` is denied as it is from `<project>`. A `.guardian/hooks*.json` at any depth under the project (or under the working directory) is guarded the same way.
+
 | Where | Who may write it | What it can do |
 | --- | --- | --- |
 | `.guardian/hooks.config.json` (project) | the user — an assistant's `Write` / `Edit` / `MultiEdit` is denied, and so is a shell write the guard can see (below) | only what makes the guard stricter or is advisory: `enabled: true`, `bash.block: true`, `bash.warn: true`, `secrets.block`, `secrets.warn`, `sessionStart`, `ignorePaths`. `"enabled": false`, `"bash": { "block": false }` and `"bash": { "warn": false }` here are **ignored**, and SessionStart says so; there is no project-level switch for package vetting. |

@@ -29,7 +29,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -259,12 +259,12 @@ function userEnablesSecretBlock(userFile) {
   return isPlainObject(userFile.secrets) && userFile.secrets.block === true;
 }
 
-function loadConfig(cwd, unread) {
+function loadConfig(root, unread) {
   const projectRaw = readJsonFile(
-    join(cwd, '.guardian', 'hooks.config.json'),
+    join(root, '.guardian', 'hooks.config.json'),
     '.guardian/hooks.config.json',
     unread,
-    cwd,
+    root,
   );
   const userRaw = readJsonFile(userConfigPath(), '~/.config/dev-guardian/hooks.json', unread, homedir());
   const projectFile = isPlainObject(projectRaw) ? projectRaw : {};
@@ -304,12 +304,12 @@ function loadConfig(cwd, unread) {
   return merged;
 }
 
-function loadAllowlist(cwd, unread) {
+function loadAllowlist(root, unread) {
   const data = readJsonFile(
-    join(cwd, '.guardian', 'hooks-allowlist.json'),
+    join(root, '.guardian', 'hooks-allowlist.json'),
     '.guardian/hooks-allowlist.json',
     unread,
-    cwd,
+    root,
   );
   if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
   if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
@@ -388,9 +388,9 @@ function extractFilePath(toolName, input) {
  * matters for the plugin's own files, and those are covered separately by
  * `isPluginOwnFile`, not by this function.
  */
-function isIgnoredPath(absolutePath, cwd, ignorePaths) {
+function isIgnoredPath(absolutePath, root, ignorePaths) {
   if (!absolutePath) return false;
-  const rel = normalizePath(relative(cwd, absolutePath));
+  const rel = normalizePath(relative(root, absolutePath));
   const withLeadingSlash = rel.startsWith('..') ? normalizePath(absolutePath) : `/${rel}`;
   return ignorePaths.some((frag) => withLeadingSlash.includes(frag));
 }
@@ -429,13 +429,56 @@ function samePath(a, b) {
  * writing to either is exactly the loophole item 6 exists to close: closing
  * the wording of the deny message (see `handlePreToolUseBash`) does nothing
  * if the model can just edit the file directly instead of being told how.
+ *
+ * A project file matches by its absolute path, at any depth under the project
+ * root or the cwd (review I5) — not only as `.guardian/hooks*.json` relative
+ * to the cwd, which a session in a subdirectory stepped around.
  */
-function isGuardianOwnConfigFile(filePath, cwd) {
+function isGuardianOwnConfigFile(filePath, cwd, root) {
   if (!filePath) return false;
   const abs = resolve(cwd, filePath);
-  const rel = normalizePath(relative(cwd, abs));
-  if (!rel.startsWith('..') && /^\.guardian\/hooks[^/]*\.json$/i.test(rel)) return true;
-  return samePath(abs, userConfigPath());
+  if (samePath(abs, userConfigPath())) return true;
+  if (!/(?:^|\/)\.guardian\/hooks[^/]*\.json$/i.test(normalizePath(abs))) return false;
+  return isBelow(root, abs) || isBelow(cwd, abs);
+}
+
+/** `path` lies strictly below `dir`. */
+function isBelow(dir, path) {
+  const rel = relative(dir, path);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/** Whether `path` exists, without following a link at it (`.git` linked to a share must not be opened). */
+function presentNoFollow(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The project this hook call belongs to (review I5): `CLAUDE_PROJECT_DIR`,
+ * which Claude Code sets for every hook, when it names a directory; else the
+ * nearest ancestor of `cwd` holding `.guardian` or `.git`; else `cwd`. The
+ * payload's `cwd` is wherever the session has `cd`-ed to — reading the
+ * project's configuration from there, and guarding its hook configuration
+ * relative to it, let `Write <proj>/.guardian/hooks-allowlist.json` through
+ * from `<proj>/packages/api`, and switched a project-enabled `secrets.block`
+ * off there.
+ */
+function projectRootOf(cwd) {
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  if (fromEnv && existsSync(fromEnv)) return resolve(fromEnv);
+  let dir = resolve(cwd);
+  for (let i = 0; i < 256; i += 1) {
+    if (presentNoFollow(join(dir, '.guardian')) || presentNoFollow(join(dir, '.git'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return resolve(cwd);
 }
 
 async function loadDetectors() {
@@ -472,7 +515,7 @@ function ignoredSettingsNotice(cfg) {
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
-function handleSessionStart(cwd, cfg) {
+function handleSessionStart(root, cfg) {
   const notice = ignoredSettingsNotice(cfg);
   if (!cfg.sessionStart) {
     // The briefing is advisory and a project may turn it off — but not the
@@ -481,15 +524,15 @@ function handleSessionStart(cwd, cfg) {
     noop();
   }
   const lines = [];
-  const guardianDir = join(cwd, '.guardian');
+  const guardianDir = join(root, '.guardian');
   const dbPath = join(guardianDir, 'guardian.db');
   // `existsSync`/`statSync` FOLLOW a link: `.guardian` linked to an
   // unreachable `\\host\share` would hold SessionStart past its timeout the
   // way it once held the config read. Walked first, with lstat + readlink only.
-  const reachable = walkLinksUnder(cwd, dbPath).ok;
+  const reachable = walkLinksUnder(root, dbPath).ok;
   const initialized = reachable ? existsSync(guardianDir) : true;
-  const branch = git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const status = git(cwd, ['status', '--porcelain']);
+  const branch = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const status = git(root, ['status', '--porcelain']);
   const changed = status ? status.split('\n').filter(Boolean).length : 0;
 
   const head = `🛡️ dev-guardian active (v${pluginVersion()})` + (branch ? ` · branch \`${branch}\`` : '');
@@ -515,14 +558,14 @@ function handleSessionStart(cwd, cfg) {
   emit('SessionStart', { additionalContext: lines.join('\n') });
 }
 
-async function handlePostToolUse(toolName, input, cwd, cfg, allowlist) {
+async function handlePostToolUse(toolName, input, cwd, root, cfg, allowlist) {
   if (!cfg.secrets.warn) noop();
   const text = extractInsertedText(toolName, input);
   if (!text) noop();
 
   const rawPath = extractFilePath(toolName, input);
   const absPath = rawPath ? resolve(cwd, rawPath) : '';
-  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, cwd, cfg.ignorePaths))) noop();
+  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, root, cfg.ignorePaths))) noop();
 
   const { scanForSecrets } = await loadDetectors();
   const hits = scanForSecrets(text, { allowlist, minConfidence: 'medium' });
@@ -629,9 +672,9 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist, toolName) {
  * exits (via `emit`) when it applies; returns normally (so the caller
  * proceeds to the ordinary write handling) when it does not.
  */
-function guardianConfigWriteGuard(toolName, input, cwd) {
+function guardianConfigWriteGuard(toolName, input, cwd, root) {
   const rawPath = extractFilePath(toolName, input);
-  if (!rawPath || !isGuardianOwnConfigFile(rawPath, cwd)) return;
+  if (!rawPath || !isGuardianOwnConfigFile(rawPath, cwd, root)) return;
   emit('PreToolUse', {
     permissionDecision: 'deny',
     permissionDecisionReason:
@@ -644,10 +687,10 @@ function guardianConfigWriteGuard(toolName, input, cwd) {
 const SETTINGS_MAX_BYTES = 1024 * 1024;
 
 /** The directory whose components are walked before reading `abs` (see `readSmallJsonFile`). */
-function walkRootFor(abs, cwd) {
-  for (const root of [cwd, homedir()]) {
-    const rel = relative(root, abs);
-    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return root;
+function walkRootFor(abs, cwd, root) {
+  for (const base of [root, cwd, homedir()]) {
+    const rel = relative(base, abs);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return base;
   }
   return undefined;
 }
@@ -665,7 +708,7 @@ function walkRootFor(abs, cwd) {
  * cannot be reproduced, the edit's own strings are compared instead. Emits and
  * exits when it applies; any failure lets the call through (fail-open).
  */
-async function claudeSettingsWriteGuard(toolName, input, cwd) {
+async function claudeSettingsWriteGuard(toolName, input, cwd, root) {
   const rawPath = extractFilePath(toolName, input);
   // Cheap pre-check, so an ordinary edit never pays for the module import.
   if (!rawPath || !/settings(?:\.local)?\.json$/i.test(rawPath)) return;
@@ -674,7 +717,7 @@ async function claudeSettingsWriteGuard(toolName, input, cwd) {
     const guard = await import(pathToFileURL(join(DIST_HOOKS, 'settingsGuard.js')).href);
     const abs = resolve(cwd, rawPath);
     if (!guard.isClaudeSettingsPath(abs)) return;
-    const before = readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRootFor(abs, cwd));
+    const before = readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRootFor(abs, cwd, root));
     if (toolName === 'Write') {
       if (typeof input.content !== 'string') return;
       added = guard.newlyLoosened(before, input.content);
@@ -708,7 +751,7 @@ async function claudeSettingsWriteGuard(toolName, input, cwd) {
   });
 }
 
-async function handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist) {
+async function handlePreToolUseWrite(toolName, input, cwd, root, cfg, allowlist) {
   // Blocking on write is opt-in (secrets.block). Default path does nothing here
   // — PostToolUse already warns.
   if (!cfg.secrets.block) noop();
@@ -718,7 +761,7 @@ async function handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist) {
   const rawPath = extractFilePath(toolName, input);
   const absPath = rawPath ? resolve(cwd, rawPath) : '';
   // `blockIgnorePaths`, not `ignorePaths`: see `loadConfig`.
-  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, cwd, cfg.blockIgnorePaths))) noop();
+  if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, root, cfg.blockIgnorePaths))) noop();
 
   const { scanForSecrets } = await loadDetectors();
   // Block only on unambiguous, high-confidence provider tokens. The project
@@ -757,19 +800,21 @@ async function main() {
 
   await loadConfigReader();
   const unread = [];
-  const cfg = loadConfig(cwd, unread);
+  // The project is its root, not wherever the session has cd-ed to (review I5).
+  const root = projectRootOf(cwd);
+  const cfg = loadConfig(root, unread);
   if (!cfg.enabled) noop();
-  const allowlist = loadAllowlist(cwd, unread);
+  const allowlist = loadAllowlist(root, unread);
   cfg.unreadConfigFiles = unread;
 
-  debug(`event=${event} tool=${toolName} cwd=${cwd}`);
+  debug(`event=${event} tool=${toolName} cwd=${cwd} root=${root}`);
 
   switch (event) {
     case 'SessionStart':
-      return handleSessionStart(cwd, cfg);
+      return handleSessionStart(root, cfg);
     case 'PostToolUse':
       if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
-        return handlePostToolUse(toolName, input, cwd, cfg, allowlist);
+        return handlePostToolUse(toolName, input, cwd, root, cfg, allowlist);
       }
       return noop();
     case 'PreToolUse':
@@ -777,11 +822,11 @@ async function main() {
         return handlePreToolUseBash(input, cfg, cwd, allowlist, toolName);
       }
       if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
-        guardianConfigWriteGuard(toolName, input, cwd); // exits via emit() if it applies
-        await claudeSettingsWriteGuard(toolName, input, cwd); // likewise
+        guardianConfigWriteGuard(toolName, input, cwd, root); // exits via emit() if it applies
+        await claudeSettingsWriteGuard(toolName, input, cwd, root); // likewise
       }
       if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
-        return handlePreToolUseWrite(toolName, input, cwd, cfg, allowlist);
+        return handlePreToolUseWrite(toolName, input, cwd, root, cfg, allowlist);
       }
       return noop();
     default:

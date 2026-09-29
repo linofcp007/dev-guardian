@@ -99,6 +99,9 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       GUARDIAN_OFFLINE: '0',
       GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(routes),
       GUARDIAN_TEST_FETCH_LOG: logFile,
+      // As Claude Code sets it for every hook; and no real config directory.
+      CLAUDE_PROJECT_DIR: project,
+      CLAUDE_CONFIG_DIR: '',
       ...opts.env,
     },
   });
