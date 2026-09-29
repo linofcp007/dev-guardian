@@ -64,6 +64,12 @@ version bump.
   plus a description draft-07 ignores beside a `$ref`: one zod instance was
   reused for four parameters. Each now has its own, and a test holds every
   tool's schema to containing no `$ref`.
+- The router, `guardian-scanskill` and `guardian-review` said AI / LLM
+  features inside an app had no dedicated coverage and were a manual review;
+  `scan_sast`, `security_scan_full` and `review_pr` have run the plugin's LLM
+  pack (`configs/semgrep/llm.yml`) on every run since 3.0.0. All three now
+  say what the pack catches, point at `guardian-security` for the full list,
+  and keep the manual checklist for what it cannot see.
 - **`wp_plugin_check` said it did two things it never did.** Its description
   promised the "latest known" version and, with `target_url`, "a fresh WPScan
   lookup"; the handler makes no network call at all, and `target_url` only

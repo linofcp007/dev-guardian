@@ -89,6 +89,9 @@ const DEAD_REFERENCES: readonly [RegExp, string][] = [
     /Nenhuma tool deteta typosquatting/,
     'vet_packages checks typosquatting, OSV MAL- advisories, publish age and install scripts (review 3.0 I4)',
   ],
+  // Review 3.0 M3: scan_sast, security_scan_full and review_pr run the
+  // plugin's LLM-application pack (configs/semgrep/llm.yml) on every run.
+  [/não há módulo dedicado|there is no dedicated module|Nenhuma tool verifica isto/, 'the LLM pack covers part of it'],
 ];
 
 let toolByName: Map<string, (typeof TOOLS)[number]>;

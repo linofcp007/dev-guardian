@@ -110,10 +110,15 @@ The tool returns a **0-100 risk score** (severity-weighted; findings in
 - For auditing the user's **own application code** → the `guardian-security`
   skill or `/guardian-scan`.
 - For AI features *inside* the user's app (the prompt-injection surface of their
-  own RAG or chatbot) → there is no dedicated module: `/guardian-scan` finds
-  exposed keys and dangerous sinks, and the rest is a manual review with the
-  "Features de AI / LLM" section of the `guardian-review` checklist. Say so
-  rather than running `scan_skill` on it.
+  own RAG or chatbot) → `/guardian-scan`: `scan_sast` (and so
+  `security_scan_full` and `review_pr`) always runs the plugin's
+  LLM-application Semgrep pack on Python and JS/TS — model output reaching
+  eval/exec, a shell or SQL, a model-chosen tool name with no allowlist,
+  remote code trusted without a pinned revision, unsafe `torch.load`, HTTP
+  request data in the system prompt, OpenAI calls with no token limit (the
+  full list is in `guardian-security`). What the pack cannot see is a manual
+  review with the "Features de AI / LLM" section of the `guardian-review`
+  checklist. Say so rather than running `scan_skill` on it.
 - For the AI-agent **workspace configuration** of this project (`.mcp.json`,
   `.claude/settings.json`: unpinned MCP servers, inline secrets, wildcard Bash
   permissions) → `audit_agent_config { project_path: "<project>" }`; for the
