@@ -483,6 +483,9 @@ version bump.
   denied. A quoted name where a name goes (`-OutVariable`, `-ov`, `Tee-Object -Variable`, `-Name`, right after
   `Set-` / `New-` / `Get-Variable`) now names that variable only, as the unquoted one does; a name computed at run
   time (`-OutVariable $n`) still stands for any.
+- **The xargs deny names the safe form.** A download written into xargs's program through its replacement string
+  (`… | jq -r … | xargs -I{} sh -c 'git clone …/{}'`) is denied under its own rule, `xargs-download-program`, whose
+  message shows how to hand each line over as data instead: `xargs -I{} sh -c '… "$1"' _ {}` — which passes.
 
 ## [3.0.0] - 2026-09-29
 

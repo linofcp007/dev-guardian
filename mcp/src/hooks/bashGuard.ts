@@ -3353,21 +3353,31 @@ function runWrapperReadsStdin(words: readonly ShellWord[]): boolean {
  * not.
  */
 function xargsRunsStdin(words: readonly ShellWord[], at: number): boolean {
+  return xargsProgram(words, at) !== undefined;
+}
+
+/**
+ * How xargs makes its input a program, for {@link xargsRunsStdin}: `appended`
+ * as the `-c` script or program text itself, `replaced` into it through the
+ * replacement string — which has a safe form the deny can name (review 3.0
+ * wave 2, round 2: the line as an argument, `sh -c '… "$1"' _ {}`).
+ */
+function xargsProgram(words: readonly ShellWord[], at: number): 'appended' | 'replaced' | undefined {
   const rest = withoutRedirectWords(words.slice(at));
   const i = resolveCommand(rest).index;
   const name = commandName(rest[i]?.value ?? '');
   const last = rest[rest.length - 1]?.value ?? '';
-  if (i >= rest.length - 1) return false;
+  if (i >= rest.length - 1) return undefined;
   const replace = xargsReplacement(rest.slice(1, i).map((w) => w.value));
   if (SCRIPT_SHELLS.has(name) || name === 'su') {
-    if (DASH_C.test(last)) return true;
+    if (DASH_C.test(last)) return 'appended';
     const c = rest.findIndex((w, k) => k > i && !w.quoted && DASH_C.test(w.value));
     const script = c < 0 ? undefined : rest[c + 1]?.value;
-    return replace !== undefined && script !== undefined && script.includes(replace);
+    return replace !== undefined && script !== undefined && script.includes(replace) ? 'replaced' : undefined;
   }
-  if (!isInterpreter(name)) return false;
-  if (/^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last)) return true;
-  return replace !== undefined && inlineCode(rest, i).some((code) => code.includes(replace));
+  if (!isInterpreter(name)) return undefined;
+  if (/^(?:-[A-Za-z]*[ceE]|-r|--eval|--print|-p)$/.test(last)) return 'appended';
+  return replace !== undefined && inlineCode(rest, i).some((code) => code.includes(replace)) ? 'replaced' : undefined;
 }
 
 /**
@@ -3451,16 +3461,31 @@ const RULE_PROCESS_FETCH: MatchedRule = {
  * quotes and an absolute path — is a shell. The text rule only knew a bare
  * shell name right after the `|` (and `sudo`), so `| /bin/bash`, `| env
  * PNPM_VERSION=10 sh -`, `| "bash"` and `| command bash` all ran unassessed.
+ * xargs writing the download into its program through the replacement string
+ * gets a reason of its own, which names the safe form.
  */
-function pipesDownloadIntoShell(statement: ShellStatement): boolean {
+function pipesDownloadIntoShell(statement: ShellStatement): MatchedRule | null {
   let downloaded = false;
   for (const words of statement.commands) {
     const at = resolveCommand(words, PIPE_RUNNERS).index;
-    if (downloaded && readsStdinAsScript(words, at)) return true;
+    if (downloaded && readsStdinAsScript(words, at)) {
+      const xargs = commandName(words[at]?.value ?? '') === 'xargs' ? xargsProgram(words, at) : undefined;
+      return xargs === 'replaced' ? RULE_XARGS_REPLACED : RULE_PIPE_TO_SHELL;
+    }
     if (DOWNLOADERS.has(commandName(words[at]?.value ?? ''))) downloaded = true;
   }
-  return false;
+  return null;
 }
+
+/** A download written into xargs's program through its replacement string — and how to hand it over as data. */
+const RULE_XARGS_REPLACED: MatchedRule = {
+  id: 'xargs-download-program',
+  level: 'block',
+  reason:
+    "Writes downloaded text into a program through xargs's replacement string (xargs -I{} sh -c '… {} …'), " +
+    `where it runs as code; hand each line over as an argument instead: xargs -I{} sh -c '… "$1"' _ {} ` +
+    '(sys.argv / process.argv for an interpreter)',
+};
 
 /** `bash <<< "$(curl …)"`, `source /dev/stdin <<< "$(wget …)"`: a download handed to a shell as a here-string. */
 function hereStringFetchIntoShell(words: readonly ShellWord[], at: number): boolean {
@@ -4216,7 +4241,8 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         out.push({ id: rule.id, level: rule.level, reason: rule.reason });
       }
     }
-    if (pipesDownloadIntoShell(statement)) out.push(RULE_PIPE_TO_SHELL);
+    const piped = pipesDownloadIntoShell(statement);
+    if (piped !== null) out.push(piped);
     for (const words of statement.commands) {
       // The budget is checked per command too: one statement can hold a
       // pipeline of thousands of commands (fix round 3, I-2).

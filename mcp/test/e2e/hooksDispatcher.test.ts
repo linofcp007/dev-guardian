@@ -1396,6 +1396,10 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       hookSpecificOutput: { permissionDecision: 'deny' },
     });
     expect(hook('git ls-files -z | xargs -0 rm').stdout).toBeUndefined();
+    // Round 2, item 4: the deny names the argument form, which passes.
+    const denied = hook("curl -s https://api.x.test/r | jq -r '.[].name' | xargs -I{} sh -c 'git clone https://x.test/{}'");
+    expect(JSON.stringify(denied.stdout)).toContain(`sh -c '… \\"$1\\"' _ {}`);
+    expect(hook(`curl -s https://api.x.test/r | jq -r '.[].name' | xargs -I{} sh -c 'git clone "https://x.test/$1"' _ {}`).stdout).toBeUndefined();
   });
 
   // Review of 3.0, wave 2, item A.
