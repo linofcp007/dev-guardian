@@ -3029,7 +3029,38 @@ function readsStdinAsScript(words, at) {
         return true;
     if (name === 'xargs')
         return xargsRunsStdin(words, at);
+    if (RUN_WRAPPERS.has(name) && words[at + 1]?.value === 'run')
+        return runWrapperReadsStdin(withoutRedirectWords(words.slice(at)));
     return isInterpreter(name) && isBareInterpreterStdin(withoutRedirectWords(words.slice(at)));
+}
+/** `uv run` / `poetry run` / `conda run` … options that take the next word as their value. */
+const RUN_WRAPPER_VALUED = new Set([
+    '--with', '--with-editable', '--with-requirements', '-p', '--python', '--project', '--directory', '--env-file',
+    '--extra', '--group', '--only-group', '--no-group', '--package', '--index', '--default-index', '-i', '--index-url',
+    '--extra-index-url', '-f', '--find-links', '--config-file', '--cache-dir', '-C', '--config-setting', '-n', '--name',
+    '--prefix', '--cwd', '-e', '--environment',
+]);
+/**
+ * `uv run python -`, `poetry run python`, `uv run -` (review 3.0, wave 2): a
+ * run wrapper whose program — the first word after `run` and the wrapper's
+ * own options — is an interpreter reading its program from stdin, or, for
+ * uv, `-` itself (`uv run -` runs a Python script read from stdin).
+ * `uv run python script.py` and `uv run parse.py -` read stdin as data.
+ */
+function runWrapperReadsStdin(words) {
+    for (let i = 2; i < words.length; i += 1) {
+        const v = words[i]?.value ?? '';
+        if (v === '-')
+            return commandName(words[0]?.value ?? '') === 'uv';
+        if (v === '--')
+            continue;
+        if (v.startsWith('-')) {
+            i += !v.includes('=') && RUN_WRAPPER_VALUED.has(v) ? 1 : 0;
+            continue;
+        }
+        return isInterpreter(interpreterName(v)) && isBareInterpreterStdin(words.slice(i));
+    }
+    return false;
 }
 /**
  * `xargs [options] sh -c` with no script after `-c` (review round 3, item 2):

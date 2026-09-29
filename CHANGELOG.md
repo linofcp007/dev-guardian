@@ -452,6 +452,10 @@ version bump.
   `.asc` / `.sig` now implies the file it is named after only when gpg (`gpg --verify`, `gpgv`) is handed it alone;
   cosign, minisign, signify and openssl count for the file they name. A checksum file (`sha256sum -c i.sh.sha256`)
   still implies its file.
+- **`curl … | uv run python -` ran the download.** `| python3 -` was denied; behind `uv run` (and `poetry`,
+  `pipenv`, `pdm`, `rye`, `hatch`, `conda run`) the interpreter was never looked for. A run wrapper whose program is
+  an interpreter reading stdin — or `uv run -` — now reads it as a shell does; `uv run python script.py`, `-m` and
+  `-c` read stdin as data, as before.
 
 ## [3.0.0] - 2026-09-29
 
