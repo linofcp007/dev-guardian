@@ -74,17 +74,19 @@
 #      `dev-guardian baseline update`, every existing finding reads as
 #      "new" and this job will very likely fail on its first run — do that
 #      once locally and commit the result before relying on this gate.
-#   9. Uploads the SARIF report to GitHub code scanning — only when step 8
-#      exited 0 (gate passed) or 1 (gate failed): step 8 records its own exit
-#      code as the `exit-code` output for this. Exit 2 is an INCOMPLETE scan
-#      (a scanner did not run), and code scanning closes as "fixed" every
-#      open alert of a scanner an upload does not contain — the SARIF's
-#      `executionSuccessful: false` does not stop it — so uploading it would
-#      report the missing scanner's findings as resolved. Exit 3 (usage or
-#      configuration error) wrote no report worth uploading. The upload still
-#      runs when the gate fails (the SARIF file was still written —
-#      dev-guardian's own `scan` command never skips writing it just because
-#      the gate failed); `continue-on-error: true`
+#   9. Uploads the SARIF report to GitHub code scanning — only for a COMPLETE
+#      run: step 8 exited 0 (gate passed), or exited 1 (gate failed) with
+#      every SARIF run's `executionSuccessful` true (coverage full). Step 8
+#      decides and records it as the `upload-sarif` output (and its exit code
+#      as `exit-code`). Exit 2 is an INCOMPLETE scan (a scanner did not run),
+#      and so can an exit 1 be — a blocking finding outranks a missing
+#      scanner — and code scanning closes as "fixed" every open alert of a
+#      scanner an upload does not contain, `executionSuccessful: false`
+#      notwithstanding, so uploading it would report the missing scanner's
+#      findings as resolved. Exit 3 (usage or configuration error) wrote no
+#      report worth uploading. A complete run's SARIF is uploaded even when
+#      the gate fails (dev-guardian's own `scan` command never skips writing
+#      it just because the gate failed); `continue-on-error: true`
 #      because a repository without GitHub Advanced Security enabled must
 #      not fail the whole job over the upload alone — step 8's own gate is
 #      what decides pass/fail here, not this step. `actions: read` is in
@@ -256,15 +258,33 @@ jobs:
             | tee dev-guardian-report.json
           status=$?
           # {{/ATTEST}}
+          # Upload only a complete run's SARIF: exit 0, or exit 1 (the gate
+          # failed) when every SARIF run says executionSuccessful: true
+          # (coverage full). The gate's exit 1 outranks an incomplete scan, so
+          # exit 1 alone does not mean every scanner ran.
+          complete=false
+          if [ "$status" -eq 1 ] && node -e '
+            const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const runs = Array.isArray(s.runs) ? s.runs : [];
+            const ok = runs.length > 0 && runs.every((r) => Array.isArray(r.invocations) && r.invocations.length > 0 &&
+              r.invocations.every((i) => i.executionSuccessful === true));
+            process.exit(ok ? 0 : 1);
+          ' dev-guardian-results.sarif; then
+            complete=true
+          fi
+          upload=false
+          if [ "$status" -eq 0 ] || [ "$complete" = true ]; then upload=true; fi
           echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+          echo "upload-sarif=$upload" >> "$GITHUB_OUTPUT"
           exit "$status"
 
-      # Only the SARIF of a scan that finished: exit 0 (gate passed) or 1 (gate
-      # failed). Exit 2 is an incomplete scan — a scanner did not run — and
-      # code scanning closes as "fixed" every alert of a scanner that is
-      # absent from an upload, whatever `executionSuccessful: false` says.
+      # Only the SARIF of a complete run (the scan step decides: exit 0, or exit
+      # 1 with coverage full). Exit 2 is an incomplete scan, and an exit 1 can
+      # be one too; code scanning closes as "fixed" every alert of a scanner
+      # that is absent from an upload, whatever `executionSuccessful: false`
+      # says.
       - name: Upload SARIF to code scanning
-        if: ${{ always() && (steps.scan.outputs.exit-code == '0' || steps.scan.outputs.exit-code == '1') }}
+        if: ${{ always() && steps.scan.outputs.upload-sarif == 'true' }}
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@{{UPLOAD_SARIF_SHA}} # {{UPLOAD_SARIF_VERSION}}
         with:
