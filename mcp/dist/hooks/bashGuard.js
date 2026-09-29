@@ -96,6 +96,7 @@
  *
  * Pure functions. No I/O. No dependencies.
  */
+import { homedir } from 'node:os';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 /**
  * The pattern-matched rules.
@@ -912,10 +913,21 @@ function isCatastrophicTarget(raw) {
     const t = stripQuotes(raw);
     if (t === '/' || /^\/\*+$/.test(t))
         return true; // root, or everything under root
-    if (t === '~' || t === '~/' || t === '~/*')
-        return true; // home root, incl. everything under it
-    if (/^\$\{?HOME\}?(?:\/\*?)?$/.test(t))
-        return true; // $HOME, $HOME/, $HOME/*, ${HOME}, …
+    // PowerShell's `\` and `\*` are the current drive's root; in bash the `\`
+    // is an escape, so `rm -rf \*` arrives here as `*` and is not this.
+    if (/^\\\*?$/.test(t))
+        return true;
+    // Home, and everything under it — with either separator, since PowerShell
+    // and Git Bash take both (review I2: `Remove-Item ~\* -Recurse -Force` and
+    // `$HOME\*` only warned). PowerShell's `$HOME` is `$home` too.
+    if (/^~(?:[\\/]\*?)?$/.test(t))
+        return true;
+    if (/^\$\{?HOME\}?(?:[\\/]\*?)?$/i.test(t))
+        return true; // $HOME, $HOME/, $HOME\*, ${HOME}, …
+    // Git Bash sees the Windows environment: `$USERPROFILE`, `$HOMEDRIVE$HOMEPATH`.
+    if (/^(?:\$\{?USERPROFILE\}?|\$\{?HOMEDRIVE\}?\$\{?HOMEPATH\}?|\$\{?env:HOMEDRIVE\}?\$\{?env:HOMEPATH\}?)(?:[\\/]\*?)?$/i.test(t)) {
+        return true;
+    }
     // Git Bash / WSL drive-root spellings: /c, /c/, /c/*, /mnt/c, /mnt/c/*.
     if (/^\/[a-z](?:\/\*?)?$/i.test(t))
         return true;
@@ -929,7 +941,7 @@ function isCatastrophicTarget(raw) {
     // directories named outright (fix round 2: `rmdir /s /q %USERPROFILE%`).
     // The POSIX tokenizer drops an unquoted `\`, so `C:\Windows` may arrive
     // as `C:Windows`.
-    if (/^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)) {
+    if (/^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)) {
         return true;
     }
     if (/^[A-Za-z]:[\\/]?(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]\*?)?$/i.test(t))
@@ -940,6 +952,34 @@ function isCatastrophicTarget(raw) {
         return true;
     }
     return false;
+}
+/**
+ * A delete target as a comparable path: quotes and a trailing `/`, `\`, `/*`
+ * or `\*` gone, `\` read as `/`, and — where paths fold case (Windows) — Git
+ * Bash's `/c/…` and WSL's `/mnt/c/…` read as `c:/…`, lower-cased.
+ */
+function targetKey(raw, fold) {
+    const t = stripQuotes(raw.trim())
+        .replace(/\\/g, '/')
+        .replace(/\/{2,}/g, '/')
+        .replace(/\/+\*?$/, '');
+    return fold ? t.replace(/^(?:\/mnt)?\/([a-z])(?=\/|$)/i, '$1:').toLowerCase() : t;
+}
+/** `home` for {@link isHomeTarget}; none for an empty home or one that is a root. */
+function homeDirFor(home, platform) {
+    if (home === undefined)
+        return undefined;
+    const fold = platform === 'win32';
+    const key = targetKey(home, fold);
+    return key === '' || /^[a-z]:$/i.test(key) ? undefined : { key, fold };
+}
+/**
+ * The home directory named outright — `C:\Users\alice`, `/c/Users/alice/`,
+ * `/home/alice/*` — compared with `os.homedir()`, case-insensitively on
+ * Windows (review I2). A path below it is not the home directory.
+ */
+function isHomeTarget(raw, home) {
+    return home !== undefined && targetKey(raw, home.fold) === home.key;
 }
 /** Remove-Item's path parameters and their abbreviations: `-Path`, `-LiteralPath`, `-LP`, `-PSPath`. */
 const PS_PATH_PARAM = /^(?:pa(?:t|th)?|l(?:i(?:t(?:e(?:r(?:a(?:l(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)?)?)?|lp|pspath)$/;
@@ -956,7 +996,7 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
  * aliases in PowerShell, its dash flags too).
  */
-function assessRecursiveDelete(words, start) {
+function assessRecursiveDelete(words, start, home) {
     const head = words[start];
     if (head === undefined)
         return null;
@@ -1035,7 +1075,7 @@ function assessRecursiveDelete(words, start) {
     }
     if (!((recursive && force) || noPreserve))
         return null;
-    if (noPreserve || targets.some(isCatastrophicTarget)) {
+    if (noPreserve || targets.some((t) => isCatastrophicTarget(t) || isHomeTarget(t, home))) {
         return {
             id: 'rm-rf-root',
             level: 'block',
@@ -2996,7 +3036,7 @@ function collect(command, depth, out, scope) {
             const resolved = resolveCommand(words);
             if (resolved.elevated)
                 out.push({ ...SUDO_RULE });
-            const del = assessRecursiveDelete(words, resolved.index);
+            const del = assessRecursiveDelete(words, resolved.index, scope.home);
             if (del !== null)
                 out.push(del);
             const find = assessFind(words, resolved.index);
@@ -3077,6 +3117,15 @@ const MAX_COMMAND_LENGTH = 512 * 1024;
  * only backs the caps up on a machine far slower or busier than expected.
  */
 const DEFAULT_BUDGET_MS = 2500;
+/** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
+function safeHomedir() {
+    try {
+        return homedir();
+    }
+    catch {
+        return undefined;
+    }
+}
 /** The warning for what a cap or the budget dropped — never a silent `ok` — naming which one. */
 function partialRule(notes) {
     const causes = [
@@ -3116,22 +3165,23 @@ export function assessBashCommand(command, opts = {}) {
     // respelled `'` is four characters (fix round 4).
     const cut = whole.length > MAX_COMMAND_LENGTH;
     const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
+    const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
     if (opts.shell !== 'powershell')
-        return assessReadings([text], cut, now, deadline);
+        return assessReadings([text], cut, now, deadline, home);
     // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
     // closing quote and swallows the rest of the command, with no warning.
     // PowerShell's own reading goes first, so the one budget is never spent on
     // the POSIX reading before the reading that matches what will run; a block
     // needs no second reading. The POSIX reading sees here-strings and block
     // comments for what they are: nothing else can be meant by them.
-    return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline);
+    return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, home);
 }
 /**
  * The readings of one command, assessed into one verdict: every rule any
  * reading matched, and one partial note for all of them — so on a tie no
  * reading's reasons are dropped. A reading after one that blocked is skipped.
  */
-function assessReadings(readings, cut, now, deadline) {
+function assessReadings(readings, cut, now, deadline, home) {
     const notes = {
         statement: false,
         command: cut,
@@ -3153,7 +3203,7 @@ function assessReadings(readings, cut, now, deadline) {
         // 125 000 operands overflowed the stack). Whatever throws now, the answer
         // is at least a warning, and a block found before it still blocks.
         try {
-            collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
+            collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, home });
         }
         catch {
             notes.failed = true;

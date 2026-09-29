@@ -900,6 +900,30 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
   });
 
+  // Review of 3.0.0, I2: the Windows spellings of the home directory and the
+  // drive root only warned.
+  describe('the home directory and the drive root in their Windows spellings (review I2)', () => {
+    it.each([
+      ['PowerShell', 'Remove-Item ~\\* -Recurse -Force'],
+      ['PowerShell', 'Remove-Item "$HOME\\*" -Recurse -Force'],
+      ['PowerShell', 'Remove-Item \\* -Recurse -Force'],
+      ['Bash', 'rm -rf "$USERPROFILE"'],
+      ['Bash', 'rm -rf "$HOMEDRIVE$HOMEPATH"'],
+    ])('%s: %s is denied', (tool, command) => {
+      const r = runHook(preToolUse(tool, { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
+      expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    });
+
+    it('the home directory named by its own path is denied; a directory below it is not', () => {
+      const hook = (command: string): HookResult =>
+        runHook(preToolUse('Bash', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
+      expect(hook(`rm -rf "${homeDir}"`).stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+      expect(hook(`rm -rf "${join(homeDir, 'project', 'build')}"`).stdout).not.toMatchObject({
+        hookSpecificOutput: { permissionDecision: 'deny' },
+      });
+    });
+  });
+
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
     const r = spawnSync(process.execPath, [HOOK], {
       cwd: projectDir,

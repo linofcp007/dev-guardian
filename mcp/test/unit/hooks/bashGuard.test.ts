@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { BASH_RULES, assessBashCommand, splitShell } from '../../../src/hooks/bashGuard.js';
 
@@ -2152,4 +2153,89 @@ describe('assessBashCommand — every download-and-run shape is denied (review I
     'sudo -u root -- rm -rf /',
     'xargs -i rm -rf /',
   ])('a runner option never hides the command after it: %j', (command) => expectDenied(command));
+});
+
+// Review of 3.0.0, I2: on Windows the home directory and the drive root were
+// blocked only in their POSIX and cmd spellings (`~/*`, `$HOME/*`,
+// `%USERPROFILE%`, `$env:USERPROFILE\*`); the native ones only warned as a
+// broad delete.
+describe('assessBashCommand — the home directory and the drive root in every spelling (review I2)', () => {
+  const blocked = (command: string, opts: Parameters<typeof assessBashCommand>[1] = {}): void => {
+    const a = assessBashCommand(command, opts);
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('rm-rf-root');
+  };
+  const warned = (command: string, opts: Parameters<typeof assessBashCommand>[1] = {}): void => {
+    const a = assessBashCommand(command, opts);
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'warn', rules: ['rm-rf-broad'] });
+  };
+
+  it.each([
+    'Remove-Item ~\\* -Recurse -Force',
+    'Remove-Item ~\\ -Recurse -Force',
+    'Remove-Item $HOME\\* -Recurse -Force',
+    'Remove-Item "$HOME\\*" -Recurse -Force',
+    'Remove-Item $home -Recurse -Force',
+    'Remove-Item \\ -Recurse -Force',
+    'Remove-Item \\* -Recurse -Force',
+    'Remove-Item -Path "\\" -Recurse -Force',
+    'Remove-Item "$env:HOMEDRIVE$env:HOMEPATH" -Recurse -Force',
+    'cmd /c rd /s /q %HOMEDRIVE%\\',
+  ])('PowerShell: %j', (command) => blocked(command, { shell: 'powershell' }));
+
+  it.each([
+    'rm -rf "$USERPROFILE"',
+    'rm -rf $USERPROFILE/*',
+    'rm -rf ${USERPROFILE}',
+    'rm -rf "${USERPROFILE}/"',
+    'rm -rf "$HOMEDRIVE$HOMEPATH"',
+    'rm -rf "${HOMEDRIVE}${HOMEPATH}"/*',
+  ])('Git Bash: %j', (command) => blocked(command));
+
+  describe('the home directory named outright', () => {
+    const win = { homeDir: 'C:\\Users\\alice', platform: 'win32' as const };
+    it.each([
+      'rm -rf /c/Users/alice',
+      'rm -rf /c/Users/alice/',
+      'rm -rf /c/users/ALICE/*',
+      'rm -rf "C:\\Users\\alice"',
+      'rm -rf C:/Users/alice/*',
+      'rm -rf /mnt/c/Users/alice',
+    ])('Git Bash on Windows: %j', (command) => blocked(command, win));
+
+    it.each(['Remove-Item C:\\Users\\alice -Recurse -Force', 'Remove-Item c:\\users\\ALICE\\* -Recurse -Force'])(
+      'PowerShell on Windows: %j',
+      (command) => blocked(command, { ...win, shell: 'powershell' }),
+    );
+
+    const linux = { homeDir: '/home/alice', platform: 'linux' as const };
+    it.each(['rm -rf /home/alice', 'rm -rf /home/alice/', 'rm -rf "/home/alice"/*', 'sudo rm -rf /home/alice'])(
+      'POSIX: %j',
+      (command) => blocked(command, linux),
+    );
+
+    it('POSIX paths compare case-sensitively', () => warned('rm -rf /home/Alice', linux));
+
+    it('the real home directory is the default', () => {
+      blocked(`rm -rf "${homedir()}"`);
+    });
+  });
+
+  describe('a path below home stays what it was', () => {
+    const win = { homeDir: 'C:\\Users\\alice', platform: 'win32' as const };
+    it.each([
+      ['Remove-Item ~\\project\\build -Recurse -Force', { shell: 'powershell' as const }],
+      ['Remove-Item $HOME\\project\\node_modules -Recurse -Force', { shell: 'powershell' as const }],
+      ['rm -rf ~/project/build', {}],
+      ['rm -rf $USERPROFILE/project/node_modules', {}],
+      ['rm -rf /c/Users/alice/project', win],
+      ['rm -rf "C:\\Users\\alice\\AppData\\Local\\Temp\\x"', win],
+      ['Remove-Item C:\\Users\\alice\\project -Recurse -Force', { ...win, shell: 'powershell' as const }],
+      ['rm -rf /home/alice/project', { homeDir: '/home/alice', platform: 'linux' as const }],
+    ])('%j', (command, opts) => warned(command, opts));
+
+    it('a file named \\* in bash is `*` — a broad delete, not the drive root', () => {
+      warned('rm -rf \\*');
+    });
+  });
 });

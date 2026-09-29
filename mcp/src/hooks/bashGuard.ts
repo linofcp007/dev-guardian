@@ -97,6 +97,7 @@
  * Pure functions. No I/O. No dependencies.
  */
 
+import { homedir } from 'node:os';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 
 export type BashRiskLevel = 'ok' | 'warn' | 'block';
@@ -1026,8 +1027,20 @@ function stripQuotes(token: string): string {
 function isCatastrophicTarget(raw: string): boolean {
   const t = stripQuotes(raw);
   if (t === '/' || /^\/\*+$/.test(t)) return true; // root, or everything under root
-  if (t === '~' || t === '~/' || t === '~/*') return true; // home root, incl. everything under it
-  if (/^\$\{?HOME\}?(?:\/\*?)?$/.test(t)) return true; // $HOME, $HOME/, $HOME/*, ${HOME}, …
+  // PowerShell's `\` and `\*` are the current drive's root; in bash the `\`
+  // is an escape, so `rm -rf \*` arrives here as `*` and is not this.
+  if (/^\\\*?$/.test(t)) return true;
+  // Home, and everything under it — with either separator, since PowerShell
+  // and Git Bash take both (review I2: `Remove-Item ~\* -Recurse -Force` and
+  // `$HOME\*` only warned). PowerShell's `$HOME` is `$home` too.
+  if (/^~(?:[\\/]\*?)?$/.test(t)) return true;
+  if (/^\$\{?HOME\}?(?:[\\/]\*?)?$/i.test(t)) return true; // $HOME, $HOME/, $HOME\*, ${HOME}, …
+  // Git Bash sees the Windows environment: `$USERPROFILE`, `$HOMEDRIVE$HOMEPATH`.
+  if (
+    /^(?:\$\{?USERPROFILE\}?|\$\{?HOMEDRIVE\}?\$\{?HOMEPATH\}?|\$\{?env:HOMEDRIVE\}?\$\{?env:HOMEPATH\}?)(?:[\\/]\*?)?$/i.test(t)
+  ) {
+    return true;
+  }
   // Git Bash / WSL drive-root spellings: /c, /c/, /c/*, /mnt/c, /mnt/c/*.
   if (/^\/[a-z](?:\/\*?)?$/i.test(t)) return true;
   if (/^\/mnt\/[a-z](?:\/\*?)?$/i.test(t)) return true;
@@ -1039,7 +1052,7 @@ function isCatastrophicTarget(raw: string): boolean {
   // The POSIX tokenizer drops an unquoted `\`, so `C:\Windows` may arrive
   // as `C:Windows`.
   if (
-    /^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)
+    /^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)
   ) {
     return true;
   }
@@ -1050,6 +1063,42 @@ function isCatastrophicTarget(raw: string): boolean {
     return true;
   }
   return false;
+}
+
+/** The home directory as {@link targetKey} spells it, and whether paths compare case-insensitively (Windows). */
+interface HomeDir {
+  key: string;
+  fold: boolean;
+}
+
+/**
+ * A delete target as a comparable path: quotes and a trailing `/`, `\`, `/*`
+ * or `\*` gone, `\` read as `/`, and — where paths fold case (Windows) — Git
+ * Bash's `/c/…` and WSL's `/mnt/c/…` read as `c:/…`, lower-cased.
+ */
+function targetKey(raw: string, fold: boolean): string {
+  const t = stripQuotes(raw.trim())
+    .replace(/\\/g, '/')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/+\*?$/, '');
+  return fold ? t.replace(/^(?:\/mnt)?\/([a-z])(?=\/|$)/i, '$1:').toLowerCase() : t;
+}
+
+/** `home` for {@link isHomeTarget}; none for an empty home or one that is a root. */
+function homeDirFor(home: string | undefined, platform: string): HomeDir | undefined {
+  if (home === undefined) return undefined;
+  const fold = platform === 'win32';
+  const key = targetKey(home, fold);
+  return key === '' || /^[a-z]:$/i.test(key) ? undefined : { key, fold };
+}
+
+/**
+ * The home directory named outright — `C:\Users\alice`, `/c/Users/alice/`,
+ * `/home/alice/*` — compared with `os.homedir()`, case-insensitively on
+ * Windows (review I2). A path below it is not the home directory.
+ */
+function isHomeTarget(raw: string, home: HomeDir | undefined): boolean {
+  return home !== undefined && targetKey(raw, home.fold) === home.key;
 }
 
 /** Remove-Item's path parameters and their abbreviations: `-Path`, `-LiteralPath`, `-LP`, `-PSPath`. */
@@ -1069,7 +1118,7 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
  * aliases in PowerShell, its dash flags too).
  */
-function assessRecursiveDelete(words: ShellWord[], start: number): MatchedRule | null {
+function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir): MatchedRule | null {
   const head = words[start];
   if (head === undefined) return null;
   const name = basename(head.value).toLowerCase();
@@ -1136,7 +1185,7 @@ function assessRecursiveDelete(words: ShellWord[], start: number): MatchedRule |
 
   if (!((recursive && force) || noPreserve)) return null;
 
-  if (noPreserve || targets.some(isCatastrophicTarget)) {
+  if (noPreserve || targets.some((t) => isCatastrophicTarget(t) || isHomeTarget(t, home))) {
     return {
       id: 'rm-rf-root',
       level: 'block',
@@ -2593,6 +2642,8 @@ interface Scope {
   cwd: string;
   /** Shared by every nested scope: what a cap or the budget dropped, and the clock. */
   notes: Notes;
+  /** The home directory, to recognise it named outright as a delete target. */
+  home?: HomeDir | undefined;
 }
 
 /**
@@ -3097,7 +3148,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const del = assessRecursiveDelete(words, resolved.index);
+      const del = assessRecursiveDelete(words, resolved.index, scope.home);
       if (del !== null) out.push(del);
       const find = assessFind(words, resolved.index);
       if (find !== null) out.push(find);
@@ -3182,6 +3233,19 @@ export interface AssessOptions {
    * readings wins (fix round 3, I-3, controller ruling).
    */
   shell?: 'bash' | 'powershell';
+  /** The home directory a delete must not name outright (default `os.homedir()`; tests). */
+  homeDir?: string;
+  /** Decides whether paths compare case-insensitively (default `process.platform`; tests). */
+  platform?: NodeJS.Platform;
+}
+
+/** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
+function safeHomedir(): string | undefined {
+  try {
+    return homedir();
+  } catch {
+    return undefined;
+  }
 }
 
 /** The warning for what a cap or the budget dropped — never a silent `ok` — naming which one. */
@@ -3241,14 +3305,15 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   // respelled `'` is four characters (fix round 4).
   const cut = whole.length > MAX_COMMAND_LENGTH;
   const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
-  if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline);
+  const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
+  if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, home);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
   // closing quote and swallows the rest of the command, with no warning.
   // PowerShell's own reading goes first, so the one budget is never spent on
   // the POSIX reading before the reading that matches what will run; a block
   // needs no second reading. The POSIX reading sees here-strings and block
   // comments for what they are: nothing else can be meant by them.
-  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline);
+  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, home);
 }
 
 /**
@@ -3256,7 +3321,13 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
  * reading matched, and one partial note for all of them — so on a tie no
  * reading's reasons are dropped. A reading after one that blocked is skipped.
  */
-function assessReadings(readings: readonly string[], cut: boolean, now: () => number, deadline: number): BashAssessment {
+function assessReadings(
+  readings: readonly string[],
+  cut: boolean,
+  now: () => number,
+  deadline: number,
+  home: HomeDir | undefined,
+): BashAssessment {
   const notes: Notes = {
     statement: false,
     command: cut,
@@ -3278,7 +3349,7 @@ function assessReadings(readings: readonly string[], cut: boolean, now: () => nu
     // 125 000 operands overflowed the stack). Whatever throws now, the answer
     // is at least a warning, and a block found before it still blocks.
     try {
-      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes });
+      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, home });
     } catch {
       notes.failed = true;
     }
