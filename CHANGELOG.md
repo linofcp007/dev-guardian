@@ -48,6 +48,15 @@ version bump.
   directory and differ only in spelling; a path through a link or junction, which may point at
   another project by now, is left alone. Moving or renaming a repository still starts its history,
   suppressions and baselines afresh; the READMEs say so.
+- The LLM pack's own taint timeouts (`Fixpoint timeout (plugin pack)` in the Semgrep run's
+  `partially_parsed`) are the pack's gap, not the scan's, for every reader — only the CI gate
+  treated them so. Hit on essentially every `scan_sast` of a TypeScript codebase (19 in 18 files
+  on this repo's `mcp/src`): OWASP coverage dropped every category the registry reached from
+  tested to partial ("some files were only partly parsed") in `report_export`, the dashboard's
+  `coverage.owasp` and `compliance_evidence`; and history read a registry finding fixed in one of
+  those files as not re-measured, keeping it open. History now leaves a file under that type
+  unmeasured only for findings of the pack's own rules (named `semgrep (LLM pack partly measured:
+  …)`); every other reader ignores it.
 - `regression_alert` and `diff_scans` honour suppressions the way the open set does (per project,
   unexpired, by fingerprint or identity). After `suppress_finding`, `regression_alert` still said
   `regressed: true, score_delta: 10` for the suppressed critical while the dashboard and

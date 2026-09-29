@@ -18,6 +18,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChainIndex, chainScope, MAX_ADMIT_PAIRS, meetAdmit, openGapFor, scopeAdmits, type Admit, type Bookkeeping } from '../../../src/history/runCompare.js';
 import { findingKey, toolsOfKey } from '../../../src/history/runNames.js';
+import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../../../src/runners/semgrepReport.js';
 import type { Finding, ToolRun } from '../../../src/types.js';
 
 /** mulberry32: a small seeded PRNG, so a failure reproduces. */
@@ -34,7 +35,10 @@ function prng(seed: number): () => number {
 
 const NAMES = ['semgrep', 'bandit', 'trivy', 'trivy-image', 'trivy-dockerfile', 'nuclei', 'guardian-dast', 'gitleaks', 'mystery-tool'];
 const FILES = ['wp/a.php', 'src/b.js', 'app.py', 'registry/app:1 (alpine)'];
-const RULES = ['r1', 'r2', 'r3'];
+// The last is one of the plugin's LLM pack rules: a file under the pack's own
+// fixpoint type is a gap for it alone (`runCompare.ts#isPluginPackGap`).
+const RULES = ['r1', 'r2', 'r3', 'llm-output-to-interpreter-js'];
+const PARTIAL_TYPES = ['PartialParsing', FIXPOINT_TIMEOUT_PACK_TYPE];
 const IMAGES = ['nginx', 'nginx:latest', 'docker.io/library/nginx:latest', 'registry/app:1', 'registry/app:2', 'ghcr.io/o/x@sha256:ab'];
 
 function pick<T>(r: () => number, xs: readonly T[]): T {
@@ -57,7 +61,7 @@ function randomBook(r: () => number): Bookkeeping {
     }
     // One or two of each, so a chain's meets are sometimes empty, sometimes not.
     if (status === 'ok' && r() < 0.3) {
-      run.partially_parsed = Array.from({ length: 1 + Math.floor(r() * 2) }, () => ({ file: pick(r, FILES), type: 'PartialParsing', message: 'x' }));
+      run.partially_parsed = Array.from({ length: 1 + Math.floor(r() * 2) }, () => ({ file: pick(r, FILES), type: pick(r, PARTIAL_TYPES), message: 'x' }));
     }
     if (status === 'ok' && r() < 0.2) {
       run.failed_rules = Array.from({ length: 1 + Math.floor(r() * 2) }, () => ({ rule_id: pick(r, RULES), message: 'x' }));
