@@ -283,6 +283,13 @@ version bump.
   root `.bandit` skipping B101, the same `a.py` read B404 and B602 whole-project and B101, B404 and B602 scoped.
   A scoped run now gets the whole-project run's `--ini` (the root `.bandit`, or the empty `[bandit]` file), and
   `honoured_config: [".bandit"]` with the same reason. `review_pr` still passes none.
+- A `package.json` with only devDependencies beside a committed lock file no longer reads "NOTHING was scanned …
+  no dependency manifest here has a lock file it can read: … commit the lock file". Trivy skips dev dependencies by
+  default — measured on 0.69.3, a lock holding only `dev: true` packages gets no Result, and `--include-dev-deps`
+  brings it back — so the lock was read and there was nothing to report. Still a gap (coverage stays `none` or
+  `partial`), but the manifest is listed in the gap's new `dev_only` and the advice reads "npm (package.json): only
+  devDependencies, which Trivy skips by default". A workspace member whose root holds the lock file counts, and so
+  does that root. A manifest with no lock file keeps the old advice.
 
 ### Security
 

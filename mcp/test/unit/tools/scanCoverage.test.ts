@@ -201,6 +201,47 @@ describe('assessCoverage: rules that did not load are not "install"', () => {
  * fixture) is still a gap Trivy did not read — the advice names the way to
  * say so, `.guardianignore`, rather than excluding such directories blindly.
  */
+/**
+ * Review 3.0, wave 2 (c): a package.json with only devDependencies beside a
+ * committed lock read "NOTHING was scanned … commit the lock file" — the
+ * lock is there; Trivy skips dev dependencies by default.
+ */
+describe('assessCoverage: a manifest with only devDependencies beside its lock file', () => {
+  const noManifest = skipped('trivy', 'no_supported_manifest');
+
+  it('coverage none: says why (only devDependencies, which Trivy skips), never "commit the lock file"', () => {
+    const { coverage, warning } = assessCoverage('deps', [noManifest], ['trivy'], {
+      manifestGaps: [{ ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] }],
+    });
+    expect(coverage).toBe('none');
+    expect(warning).toContain('npm (package.json): only devDependencies, which Trivy skips by default');
+    expect(warning).not.toMatch(/commit the lock file/);
+    expect(warning).not.toMatch(/has a lock file it can read/);
+    expect(warning).toMatch(/not a clean bill of health/i);
+  });
+
+  it('the old advice still stands for a manifest with no lock file', () => {
+    const { warning } = assessCoverage('deps', [noManifest], ['trivy'], {
+      manifestGaps: [{ ecosystem: 'npm', files: ['package.json'] }],
+    });
+    expect(warning).toMatch(/no dependency manifest here has a lock file it can read/);
+    expect(warning).toContain('npm (package.json): commit the lock file your package manager writes');
+    expect(warning).not.toMatch(/devDependencies/);
+  });
+
+  it('both in one ecosystem: each manifest gets its own advice (none and partial)', () => {
+    const gaps = [{ ecosystem: 'npm', files: ['a/package.json', 'b/package.json'], dev_only: ['b/package.json'] }];
+    for (const [runs, missing] of [
+      [[noManifest], ['trivy']],
+      [[ok('trivy')], ['trivy:npm']],
+    ] as const) {
+      const warning = assessCoverage('deps', runs, missing, { manifestGaps: gaps }).warning ?? '';
+      expect(warning).toContain('npm (a/package.json): commit the lock file your package manager writes');
+      expect(warning).toContain('npm (b/package.json): only devDependencies, which Trivy skips by default');
+    }
+  });
+});
+
 describe('assessCoverage: manifest advice names .guardianignore', () => {
   it('partial and none both say a manifest that is not shipped can be listed in .guardianignore', () => {
     const gaps = [{ ecosystem: 'npm', files: ['examples/demo/package.json'] }];

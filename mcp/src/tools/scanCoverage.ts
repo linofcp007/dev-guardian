@@ -10,7 +10,7 @@
  * silent "0 findings" never reads as "all clear".
  */
 
-import { lockFileAdvice } from '../runners/scannerParsers/trivy.js';
+import { DEV_ONLY_ADVICE, lockFileAdvice } from '../runners/scannerParsers/trivy.js';
 import { suppressionNote } from '../runners/trivyRun.js';
 import type { ScanCoverage, ToolRun } from '../types.js';
 
@@ -87,21 +87,26 @@ function isNoSupportedManifest(reason: string | undefined): boolean {
 interface ManifestGap {
   ecosystem: string;
   files: string[];
+  /** Those of `files` with only devDependencies beside their lock file (`trivy.ts#ManifestCoverageGap`). */
+  dev_only: string[];
 }
 
 function parseManifestGaps(value: unknown): ManifestGap[] {
   if (!Array.isArray(value)) return [];
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((f): f is string => typeof f === 'string') : []);
   const out: ManifestGap[] = [];
   for (const entry of value as unknown[]) {
     if (entry === null || typeof entry !== 'object') continue;
-    const { ecosystem, files } = entry as { ecosystem?: unknown; files?: unknown };
+    const { ecosystem, files, dev_only } = entry as { ecosystem?: unknown; files?: unknown; dev_only?: unknown };
     if (typeof ecosystem !== 'string') continue;
-    out.push({
-      ecosystem,
-      files: Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string') : [],
-    });
+    out.push({ ecosystem, files: strings(files), dev_only: strings(dev_only) });
   }
   return out;
+}
+
+/** Whether any gap is a manifest whose lock file was there, all of it skipped by default. */
+function anyDevOnly(gaps: readonly ManifestGap[]): boolean {
+  return gaps.some((g) => g.dev_only.length > 0);
 }
 
 /** `gradle (build.gradle)`, or the bare ecosystem when no file is known. */
@@ -116,13 +121,26 @@ function nameOf(gap: ManifestGap): string {
  */
 const NOT_SHIPPED_ADVICE = "a manifest that is not shipped (an example, docs, a fixture) can be listed in .guardianignore instead";
 
-/** Each gap's manifest and the lock file that closes it (`trivy.ts#lockFileAdvice`). */
+/**
+ * Each gap's manifest and the lock file that closes it (`trivy.ts#lockFileAdvice`)
+ * — or, for a manifest with only devDependencies beside its lock file, why
+ * there was nothing to report (`trivy.ts#DEV_ONLY_ADVICE`): the lock is there.
+ */
 function manifestAdvice(gaps: readonly ManifestGap[]): string {
   if (gaps.length === 0) {
     return `generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run; ${NOT_SHIPPED_ADVICE}`;
   }
   const each = gaps
-    .map((g) => `${nameOf(g)}: ${lockFileAdvice(g.ecosystem) ?? 'generate the lock file Trivy reads for it'}`)
+    .flatMap((g) => {
+      const lockless = g.files.filter((f) => !g.dev_only.includes(f));
+      const devOnly = g.files.filter((f) => g.dev_only.includes(f));
+      const lockAdvice = lockFileAdvice(g.ecosystem) ?? 'generate the lock file Trivy reads for it';
+      if (devOnly.length === 0) return [`${nameOf(g)}: ${lockAdvice}`];
+      return [
+        ...(lockless.length > 0 ? [`${nameOf({ ...g, files: lockless })}: ${lockAdvice}`] : []),
+        `${nameOf({ ...g, files: devOnly })}: ${DEV_ONLY_ADVICE}`,
+      ];
+    })
     .join('; ');
   return `${each}; ${NOT_SHIPPED_ADVICE}`;
 }
@@ -211,8 +229,11 @@ export function assessCoverage(
     return {
       coverage,
       warning:
-        `⚠️ ${scanType}: NOTHING was scanned — ${unreadable.join(', ')} is installed and ran, but no ` +
-        `dependency manifest here has a lock file it can read: ${manifestAdvice(manifestGaps)}. ` +
+        `⚠️ ${scanType}: NOTHING was scanned — ${unreadable.join(', ')} is installed and ran, but ` +
+        (anyDevOnly(manifestGaps)
+          ? 'reported on no dependency manifest here'
+          : 'no dependency manifest here has a lock file it can read') +
+        `: ${manifestAdvice(manifestGaps)}. ` +
         `A "0 findings" result is NOT a clean bill of health.` +
         (others.length > 0 ? ` Install ${others.join(', ')} (or use the Docker fallback).` : '') +
         ' Then re-run before trusting this scan.',
@@ -251,7 +272,8 @@ export function assessCoverage(
   if (notRun.length > 0) clauses.push(`${notRun.join(', ')} did not run`);
   if (unreadable.length > 0) {
     clauses.push(
-      `${unreadable.join(', ')} ran but read no dependency manifest — ${manifestAdvice(manifestGaps)}`,
+      `${unreadable.join(', ')} ran but ${anyDevOnly(manifestGaps) ? 'reported on' : 'read'} no dependency manifest — ` +
+        manifestAdvice(manifestGaps),
     );
   }
   for (const [base, allParts] of partsOf) {

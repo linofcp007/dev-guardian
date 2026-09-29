@@ -156,6 +156,46 @@ describe('scan_deps', () => {
     expect(r.coverage).not.toBe('full');
   });
 
+  // Review 3.0, wave 2 (c): Trivy skips devDependencies by default, so a
+  // package.json with only those, beside a committed lock, gets no Result —
+  // and the warning told the user to commit the lock file they had.
+  it.each([
+    ['only devDependencies beside a committed lock', true],
+    ['dependencies and no lock file at all', false],
+  ])('a package.json with %s: the advice fits the case', async (_label, devOnly) => {
+    const project = tempProject();
+    if (devOnly) {
+      writeFileSync(join(project, 'package.json'), '{"name":"x","devDependencies":{"lodash":"4.17.4"}}', 'utf8');
+      writeFileSync(join(project, 'package-lock.json'), '{"lockfileVersion":3}', 'utf8');
+    } else {
+      writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.4"}}', 'utf8');
+    }
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('scan_deps').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      warnings: string[];
+      manifest_coverage_gaps: Array<{ ecosystem: string; files: string[]; dev_only?: string[] }>;
+    };
+    expect(r.coverage).toBe('none');
+    const warning = r.warnings.find((w) => w.includes('NOTHING was scanned')) ?? '';
+    if (devOnly) {
+      expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] }]);
+      expect(warning).toContain('npm (package.json): only devDependencies, which Trivy skips by default');
+      expect(warning).not.toMatch(/commit the lock file/);
+    } else {
+      expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'] }]);
+      expect(warning).toContain('npm (package.json): commit the lock file your package manager writes');
+      expect(warning).not.toMatch(/devDependencies/);
+    }
+  });
+
   it('item 4: a PARTIAL manifest gap (npm covered, dotnet not) never puts the bare "trivy" name in missing_tools', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');

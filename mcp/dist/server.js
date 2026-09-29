@@ -44891,6 +44891,7 @@ var ECOSYSTEM_MANIFESTS = [
     trivyTypes: ["npm", "yarn", "pnpm", "bun"],
     lockfiles: ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock"],
     declaresNothing: npmManifestDeclaresNothing,
+    declaresOnlyDev: npmManifestDeclaresOnlyDev,
     fix: "commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)"
   },
   {
@@ -44957,6 +44958,7 @@ var MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
 function lockFileAdvice(ecosystem) {
   return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
 }
+var DEV_ONLY_ADVICE = "only devDependencies, which Trivy skips by default";
 var MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
 function manifestEcosystemOfTarget(target) {
   const base = target.slice(Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\")) + 1).toLowerCase();
@@ -45017,6 +45019,12 @@ function npmManifestDeclaresNothing(path8) {
   if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
   const fields = manifest;
   return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname9(path8));
+}
+function npmManifestDeclaresOnlyDev(path8) {
+  const manifest = readJsonFile(path8);
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
+  const fields = manifest;
+  return NPM_DECLARING_FIELDS.every((k) => k === "devDependencies" || k === "workspaces" || isEmptyField(fields[k])) && (!isEmptyField(fields["devDependencies"]) || !isEmptyField(fields["workspaces"]));
 }
 var EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
 var PY_DEPENDENCY_KEYS = /* @__PURE__ */ new Set(["dependencies", "optional-dependencies", "dev-dependencies"]);
@@ -45235,7 +45243,20 @@ function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
     }
     return false;
   };
+  const hasLockFile = (eco, dir) => {
+    const abs = (rel2) => rel2 === "" ? projectPath : join19(projectPath, ...rel2.split("/"));
+    const lockIn = (rel2) => eco.lockfiles.some((name) => existsSync13(join19(abs(rel2), name)));
+    if (lockIn(dir)) return true;
+    const segments = dir === "" ? [] : dir.split("/");
+    for (let n2 = segments.length - 1; n2 >= 0; n2--) {
+      const ancestor = segments.slice(0, n2).join("/");
+      const decl = workspaceOf(abs(ancestor), eco.ecosystem);
+      if (decl !== null && declaredMember(decl, segments.slice(n2).join("/")) && lockIn(ancestor)) return true;
+    }
+    return false;
+  };
   const gapFiles = /* @__PURE__ */ new Map();
+  const devOnlyFiles = /* @__PURE__ */ new Map();
   const dirsOf = /* @__PURE__ */ new Map();
   for (const m of walked.found) {
     if (m.eco.declaresNothing?.(m.abs) ?? false) continue;
@@ -45246,11 +45267,16 @@ function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
     }
     if (covered(m.eco, m.dir, dirs)) continue;
     gapFiles.set(m.eco.ecosystem, [...gapFiles.get(m.eco.ecosystem) ?? [], m.rel]);
+    if ((m.eco.declaresOnlyDev?.(m.abs) ?? false) && hasLockFile(m.eco, m.dir)) {
+      devOnlyFiles.set(m.eco.ecosystem, [...devOnlyFiles.get(m.eco.ecosystem) ?? [], m.rel]);
+    }
   }
   const gaps = [];
   for (const eco of ECOSYSTEM_MANIFESTS) {
     const files = gapFiles.get(eco.ecosystem);
-    if (files !== void 0) gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort() });
+    if (files === void 0) continue;
+    const devOnly = devOnlyFiles.get(eco.ecosystem);
+    gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort(), ...devOnly !== void 0 ? { dev_only: [...devOnly].sort() } : {} });
   }
   const out = { gaps, sawAnyResults: results.length > 0 };
   if (walked.incomplete !== void 0) out.walkIncomplete = walked.incomplete;
@@ -46129,17 +46155,18 @@ function isNoSupportedManifest(reason) {
 }
 function parseManifestGaps(value) {
   if (!Array.isArray(value)) return [];
+  const strings = (v) => Array.isArray(v) ? v.filter((f) => typeof f === "string") : [];
   const out = [];
   for (const entry of value) {
     if (entry === null || typeof entry !== "object") continue;
-    const { ecosystem, files } = entry;
+    const { ecosystem, files, dev_only } = entry;
     if (typeof ecosystem !== "string") continue;
-    out.push({
-      ecosystem,
-      files: Array.isArray(files) ? files.filter((f) => typeof f === "string") : []
-    });
+    out.push({ ecosystem, files: strings(files), dev_only: strings(dev_only) });
   }
   return out;
+}
+function anyDevOnly(gaps) {
+  return gaps.some((g) => g.dev_only.length > 0);
 }
 function nameOf(gap) {
   return gap.files.length > 0 ? `${gap.ecosystem} (${gap.files.join(", ")})` : gap.ecosystem;
@@ -46149,7 +46176,16 @@ function manifestAdvice(gaps) {
   if (gaps.length === 0) {
     return `generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run; ${NOT_SHIPPED_ADVICE}`;
   }
-  const each = gaps.map((g) => `${nameOf(g)}: ${lockFileAdvice(g.ecosystem) ?? "generate the lock file Trivy reads for it"}`).join("; ");
+  const each = gaps.flatMap((g) => {
+    const lockless = g.files.filter((f) => !g.dev_only.includes(f));
+    const devOnly = g.files.filter((f) => g.dev_only.includes(f));
+    const lockAdvice = lockFileAdvice(g.ecosystem) ?? "generate the lock file Trivy reads for it";
+    if (devOnly.length === 0) return [`${nameOf(g)}: ${lockAdvice}`];
+    return [
+      ...lockless.length > 0 ? [`${nameOf({ ...g, files: lockless })}: ${lockAdvice}`] : [],
+      `${nameOf({ ...g, files: devOnly })}: ${DEV_ONLY_ADVICE}`
+    ];
+  }).join("; ");
   return `${each}; ${NOT_SHIPPED_ADVICE}`;
 }
 function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
@@ -46191,7 +46227,7 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     const others = gaps.filter((name) => !unreadable.includes(name));
     return {
       coverage,
-      warning: `\u26A0\uFE0F ${scanType}: NOTHING was scanned \u2014 ${unreadable.join(", ")} is installed and ran, but no dependency manifest here has a lock file it can read: ${manifestAdvice(manifestGaps)}. A "0 findings" result is NOT a clean bill of health.` + (others.length > 0 ? ` Install ${others.join(", ")} (or use the Docker fallback).` : "") + " Then re-run before trusting this scan."
+      warning: `\u26A0\uFE0F ${scanType}: NOTHING was scanned \u2014 ${unreadable.join(", ")} is installed and ran, but ` + (anyDevOnly(manifestGaps) ? "reported on no dependency manifest here" : "no dependency manifest here has a lock file it can read") + `: ${manifestAdvice(manifestGaps)}. A "0 findings" result is NOT a clean bill of health.` + (others.length > 0 ? ` Install ${others.join(", ")} (or use the Docker fallback).` : "") + " Then re-run before trusting this scan."
     };
   }
   const ranOkNames = new Set(toolsRun.filter((t) => t.status === "ok").map((t) => t.name));
@@ -46214,7 +46250,7 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
   if (notRun.length > 0) clauses.push(`${notRun.join(", ")} did not run`);
   if (unreadable.length > 0) {
     clauses.push(
-      `${unreadable.join(", ")} ran but read no dependency manifest \u2014 ${manifestAdvice(manifestGaps)}`
+      `${unreadable.join(", ")} ran but ${anyDevOnly(manifestGaps) ? "reported on" : "read"} no dependency manifest \u2014 ` + manifestAdvice(manifestGaps)
     );
   }
   for (const [base, allParts] of partsOf) {

@@ -194,6 +194,7 @@ const ECOSYSTEM_MANIFESTS = [
         trivyTypes: ['npm', 'yarn', 'pnpm', 'bun'],
         lockfiles: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'],
         declaresNothing: npmManifestDeclaresNothing,
+        declaresOnlyDev: npmManifestDeclaresOnlyDev,
         fix: 'commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)',
     },
     {
@@ -268,6 +269,13 @@ export const MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
 export function lockFileAdvice(ecosystem) {
     return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
 }
+/**
+ * Why a `ManifestCoverageGap.dev_only` manifest has no Result: its lock file
+ * was there, and Trivy skips dev dependencies by default (measured on 0.69.3:
+ * a lock holding only `dev: true` packages gets no Result; `--include-dev-deps`
+ * brings it back, and dev-guardian does not pass it).
+ */
+export const DEV_ONLY_ADVICE = 'only devDependencies, which Trivy skips by default';
 /** Each ecosystem with the lock file names Trivy reports its Results under. */
 export const MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
 /**
@@ -365,6 +373,22 @@ function npmManifestDeclaresNothing(path) {
         return false;
     const fields = manifest;
     return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname(path));
+}
+/**
+ * A `package.json` that parses to an object with no production dependency
+ * (every field but `devDependencies` and `workspaces` absent, `{}` or `[]`)
+ * and `devDependencies` or `workspaces` with entries — all it locks itself
+ * is what Trivy skips by default. A workspace root with no Result of its
+ * own is one whose members lock nothing else either: a member's production
+ * dependency is in the root's lock file, and Trivy reports that file.
+ */
+function npmManifestDeclaresOnlyDev(path) {
+    const manifest = readJsonFile(path);
+    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest))
+        return false;
+    const fields = manifest;
+    return (NPM_DECLARING_FIELDS.every((k) => k === 'devDependencies' || k === 'workspaces' || isEmptyField(fields[k])) &&
+        (!isEmptyField(fields['devDependencies']) || !isEmptyField(fields['workspaces'])));
 }
 /** A TOML value that is literally empty: `[]` or `{}`, an optional trailing comment. */
 const EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
@@ -693,7 +717,23 @@ export function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
         }
         return false;
     };
+    /** A lock file of `eco` in `dir`, or at an ancestor whose workspace declares `dir` a member. */
+    const hasLockFile = (eco, dir) => {
+        const abs = (rel) => (rel === '' ? projectPath : join(projectPath, ...rel.split('/')));
+        const lockIn = (rel) => eco.lockfiles.some((name) => existsSync(join(abs(rel), name)));
+        if (lockIn(dir))
+            return true;
+        const segments = dir === '' ? [] : dir.split('/');
+        for (let n = segments.length - 1; n >= 0; n--) {
+            const ancestor = segments.slice(0, n).join('/');
+            const decl = workspaceOf(abs(ancestor), eco.ecosystem);
+            if (decl !== null && declaredMember(decl, segments.slice(n).join('/')) && lockIn(ancestor))
+                return true;
+        }
+        return false;
+    };
     const gapFiles = new Map();
+    const devOnlyFiles = new Map();
     const dirsOf = new Map();
     for (const m of walked.found) {
         if (m.eco.declaresNothing?.(m.abs) ?? false)
@@ -706,12 +746,17 @@ export function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
         if (covered(m.eco, m.dir, dirs))
             continue;
         gapFiles.set(m.eco.ecosystem, [...(gapFiles.get(m.eco.ecosystem) ?? []), m.rel]);
+        if ((m.eco.declaresOnlyDev?.(m.abs) ?? false) && hasLockFile(m.eco, m.dir)) {
+            devOnlyFiles.set(m.eco.ecosystem, [...(devOnlyFiles.get(m.eco.ecosystem) ?? []), m.rel]);
+        }
     }
     const gaps = [];
     for (const eco of ECOSYSTEM_MANIFESTS) {
         const files = gapFiles.get(eco.ecosystem);
-        if (files !== undefined)
-            gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort() });
+        if (files === undefined)
+            continue;
+        const devOnly = devOnlyFiles.get(eco.ecosystem);
+        gaps.push({ ecosystem: eco.ecosystem, files: [...files].sort(), ...(devOnly !== undefined ? { dev_only: [...devOnly].sort() } : {}) });
     }
     const out = { gaps, sawAnyResults: results.length > 0 };
     if (walked.incomplete !== undefined)

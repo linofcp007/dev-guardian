@@ -101,6 +101,35 @@ describe('assessManifestCoverage on a real Trivy report (npm "declares nothing")
     TRIVY_TIMEOUT_MS,
   );
 
+  // Review 3.0, wave 2 (c): Trivy skips devDependencies by default, so a
+  // lock holding only dev packages gets no Result — measured on 0.69.3, and
+  // `--include-dev-deps` (which dev-guardian does not pass) brings it back.
+  // Still a gap, but the lock file is there: marked dev_only, so the advice
+  // is not "commit the lock file".
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a package.json with only devDependencies beside its lock: no Results, a gap marked dev_only',
+    () => {
+      const manifest = { name: 'x', version: '1.0.0', devDependencies: { lodash: '4.17.4' } };
+      const dir = project({
+        'package.json': manifest,
+        'package-lock.json': {
+          name: 'x',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          requires: true,
+          packages: { '': manifest, 'node_modules/lodash': { ...LODASH, dev: true } },
+        },
+      });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw)).toBeUndefined();
+      expect(assessManifestCoverage(dir, raw)).toEqual({
+        gaps: [{ ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] }],
+        sawAnyResults: false,
+      });
+    },
+    TRIVY_TIMEOUT_MS,
+  );
+
   it.runIf(REQUIRE_TOOLCHAIN)('GUARDIAN_REQUIRE_SEMGREP=1 — Trivy must be on PATH for this file to mean anything', () => {
     expect(TRIVY_INSTALLED, 'GUARDIAN_REQUIRE_SEMGREP=1 but trivy is not on PATH.').toBe(true);
   });
