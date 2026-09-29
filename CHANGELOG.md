@@ -71,6 +71,13 @@ version bump.
   uv `[tool.uv.workspace]`, their exclusions honoured) is covered by its root's lock file. A `.sln` is no
   longer a manifest of its own: each project it lists is judged in its own directory. `security_scan_full` and
   the CI gate inherit this.
+- The dependency-manifest walk enters hidden directories, as Trivy does: a GitHub composite action's
+  `.github/actions/notify/package.json` with no lock read full because the walk skipped every hidden directory. Only
+  version control (`.git`, `.hg`, `.svn`, `.bzr`, `_darcs`, `CVS`) and the package managers' caches (`.yarn`,
+  `.pnpm-store`, `.npm`, `.gradle`, `.m2`, `.terraform`, besides the ones every walk skips) are left out, with
+  `bower_components` and `jspm_packages`. Examples, docs and fixtures are still walked — whether a manifest ships is
+  the project's to say — and the coverage warning now says a manifest that is not shipped can be listed in
+  `.guardianignore`.
 - Go joins the manifest table (`trivy:go`): a `go.mod` Trivy cannot parse gets no Result, logs `num=0` and exits
   0, and read full.
 - `scan_wordpress`'s Trivy pass runs the same manifest check as `scan_deps` (one shared judgement,

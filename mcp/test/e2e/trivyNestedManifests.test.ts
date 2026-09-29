@@ -118,6 +118,14 @@ describe('Trivy manifest coverage over the whole tree (real Trivy)', () => {
     expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['web/package.json'] }]);
   });
 
+  // Round 4, item 4: Trivy reads hidden directories; the walk skipped them.
+  it.skipIf(!TRIVY_INSTALLED)("a composite action's unlocked manifest under .github is named", async () => {
+    const dir = project({ '.github/actions/notify/package.json': WEB_PKG, '.github/actions/notify/action.yml': 'runs:\n  using: node20\n  main: index.js\n' });
+    const r = await run('scan_deps', dir);
+    expect(r.coverage).not.toBe('full');
+    expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['.github/actions/notify/package.json'] }]);
+  });
+
   it.skipIf(!TRIVY_INSTALLED)('a go.mod Trivy could not parse is a go gap; one it read is covered', async () => {
     const broken = await run('scan_deps', project({ 'go.mod': 'module example.com/x\n\ngo 1.21\n\nrequire golang.org/x/text v0.3.0 (\n' }));
     expect(broken.coverage).not.toBe('full');

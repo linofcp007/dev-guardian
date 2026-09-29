@@ -197,6 +197,22 @@ describe('assessCoverage: rules that did not load are not "install"', () => {
 });
 
 /**
+ * Round 4, item 5: a manifest nobody ships (an example, the docs, a test
+ * fixture) is still a gap Trivy did not read — the advice names the way to
+ * say so, `.guardianignore`, rather than excluding such directories blindly.
+ */
+describe('assessCoverage: manifest advice names .guardianignore', () => {
+  it('partial and none both say a manifest that is not shipped can be listed in .guardianignore', () => {
+    const gaps = [{ ecosystem: 'npm', files: ['examples/demo/package.json'] }];
+    const partial = assessCoverage('deps', [ok('trivy')], ['trivy:npm'], { manifestGaps: gaps }).warning ?? '';
+    expect(partial).toMatch(/examples\/demo\/package\.json/);
+    expect(partial).toMatch(/\.guardianignore/);
+    const none = assessCoverage('deps', [skipped('trivy', 'no_supported_manifest')], ['trivy'], { manifestGaps: gaps }).warning ?? '';
+    expect(none).toMatch(/\.guardianignore/);
+  });
+});
+
+/**
  * Round 4, item 2: findings the repository's own `.trivyignore` suppressed
  * are named in the scan's warnings — counted, never a coverage gap.
  */

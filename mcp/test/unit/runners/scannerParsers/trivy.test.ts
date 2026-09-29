@@ -478,18 +478,43 @@ describe('assessManifestCoverage — the whole tree', () => {
     expect(assessManifestCoverage(project, output).gaps).toEqual([{ ecosystem: 'cargo', files: ['crates/old/Cargo.toml'] }]);
   });
 
-  it('never walks into dependency, build, hidden or .guardianignore directories', () => {
+  it('never walks into dependency, build, version-control, cache or .guardianignore directories', () => {
     const project = tree({
       'node_modules/lodash/package.json': LODASH_PKG,
       'vendor/x/composer.json': '{"require":{"a/b":"1.0"}}',
+      // Round 4, item 5: bower's and jspm's dependency directories.
+      'bower_components/x/package.json': LODASH_PKG,
+      'jspm_packages/npm/x@1.0.0/package.json': LODASH_PKG,
       'dist/package.json': LODASH_PKG,
       '.cache/package.json': LODASH_PKG,
+      '.hg/store/package.json': LODASH_PKG,
+      '.svn/pristine/package.json': LODASH_PKG,
+      '.yarn/cache/package.json': LODASH_PKG,
+      '.pnpm-store/v3/package.json': LODASH_PKG,
+      '.npm/_cacache/package.json': LODASH_PKG,
       'fixtures/vuln/package.json': LODASH_PKG,
       'app/package.json': LODASH_PKG,
     });
     const ignores = (rel: string): boolean => rel === 'fixtures' || rel.startsWith('fixtures/');
     expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT, { ignores }).gaps).toEqual([
       { ecosystem: 'npm', files: ['app/package.json'] },
+    ]);
+  });
+
+  /**
+   * Round 4, item 4: the walk skipped every hidden directory, but Trivy reads
+   * them — a GitHub composite action's `.github/actions/notify/package.json`
+   * with no lock read full. Hidden directories are walked now, all but
+   * version control and tool caches.
+   */
+  it('walks hidden directories Trivy reads: a composite action\'s manifest is named', () => {
+    const project = tree({
+      'package.json': '{"name":"root","dependencies":{"express":"4.0.0"}}',
+      'package-lock.json': '{}',
+      '.github/actions/notify/package.json': LODASH_PKG,
+    });
+    expect(assessManifestCoverage(project, results(['package-lock.json', 'npm'])).gaps).toEqual([
+      { ecosystem: 'npm', files: ['.github/actions/notify/package.json'] },
     ]);
   });
 

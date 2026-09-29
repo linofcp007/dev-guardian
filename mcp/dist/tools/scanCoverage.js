@@ -80,14 +80,21 @@ function parseManifestGaps(value) {
 function nameOf(gap) {
     return gap.files.length > 0 ? `${gap.ecosystem} (${gap.files.join(', ')})` : gap.ecosystem;
 }
+/**
+ * A manifest nobody ships — an example, the docs, a test fixture — is still
+ * one Trivy did not read; whether it ships is the project's to say (round 4,
+ * item 5), never a directory name this plugin guesses from.
+ */
+const NOT_SHIPPED_ADVICE = "a manifest that is not shipped (an example, docs, a fixture) can be listed in .guardianignore instead";
 /** Each gap's manifest and the lock file that closes it (`trivy.ts#lockFileAdvice`). */
 function manifestAdvice(gaps) {
     if (gaps.length === 0) {
-        return 'generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run';
+        return `generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run; ${NOT_SHIPPED_ADVICE}`;
     }
-    return gaps
+    const each = gaps
         .map((g) => `${nameOf(g)}: ${lockFileAdvice(g.ecosystem) ?? 'generate the lock file Trivy reads for it'}`)
         .join('; ');
+    return `${each}; ${NOT_SHIPPED_ADVICE}`;
 }
 /**
  * Compute coverage and, when it is not 'full', a loud warning naming the
