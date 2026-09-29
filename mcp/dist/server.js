@@ -38720,7 +38720,7 @@ function pidIsAlive(pid) {
   }
 }
 function rowToRecord(row) {
-  const record7 = {
+  const record8 = {
     scan_id: row.id,
     scan_type: row.scan_type,
     project_path: row.project_path,
@@ -38732,14 +38732,14 @@ function rowToRecord(row) {
     missing_tools: parseJsonArray(row.missing_tools),
     report_paths: row.report_dir ? [row.report_dir] : []
   };
-  if (row.cached_from) record7.cached_from = row.cached_from;
+  if (row.cached_from) record8.cached_from = row.cached_from;
   if (row.meta && row.meta !== "{}") {
     try {
-      record7.meta = JSON.parse(row.meta);
+      record8.meta = JSON.parse(row.meta);
     } catch {
     }
   }
-  return record7;
+  return record8;
 }
 
 // src/storage/localRuleIds.ts
@@ -38880,11 +38880,14 @@ function resolveMigrationsDir() {
 }
 var MIGRATION_FILE = /^(\d+)_(.+)\.sql$/;
 var MIGRATIONS_DIR = resolveMigrationsDir();
+var PROBED_ON_BACKFILL = /* @__PURE__ */ new Set([12, 13, 14]);
 function runMigrations(db) {
   const migrations = listMigrations();
-  ensureSchemaMetaTable(db);
+  ensureBookkeeping(db);
+  backfillFromHighWaterMark(db, migrations);
+  const applied = appliedVersions(db);
   for (const migration of migrations) {
-    if (migration.version <= getCurrentVersion(db)) continue;
+    if (applied.has(migration.version)) continue;
     applyMigration(db, migration);
   }
   try {
@@ -38892,25 +38895,170 @@ function runMigrations(db) {
   } catch {
   }
 }
-function ensureSchemaMetaTable(db) {
+function ensureBookkeeping(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_meta (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version    INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    )
+  `);
 }
-function getCurrentVersion(db) {
+function storedHighWaterMark(db) {
   const row = db.prepare("SELECT value FROM schema_meta WHERE key = 'version'").get();
   if (!row) return 0;
   const n2 = Number.parseInt(row.value, 10);
   return Number.isFinite(n2) ? n2 : 0;
 }
-function setVersion(db, version2) {
+function raiseHighWaterMark(db, version2) {
+  if (storedHighWaterMark(db) >= version2) return;
   db.prepare(
     `INSERT INTO schema_meta(key, value) VALUES('version', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
   ).run(String(version2));
+}
+function appliedVersions(db) {
+  return new Set(
+    db.prepare("SELECT version FROM schema_migrations").all().map((r) => Number(r.version))
+  );
+}
+function isRecorded(db, version2) {
+  return db.prepare("SELECT 1 AS one FROM schema_migrations WHERE version = ?").get(version2) !== void 0;
+}
+function hasAnyRecorded(db) {
+  return db.prepare("SELECT 1 AS one FROM schema_migrations LIMIT 1").get() !== void 0;
+}
+function record2(db, migration, appliedAt) {
+  db.prepare(
+    "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)"
+  ).run(migration.version, migration.name, appliedAt);
+}
+function backfillFromHighWaterMark(db, migrations) {
+  if (storedHighWaterMark(db) === 0 || hasAnyRecorded(db)) return;
+  db.transaction(() => {
+    const stored = storedHighWaterMark(db);
+    if (stored === 0 || hasAnyRecorded(db)) return;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    for (const migration of migrations) {
+      if (migration.version > stored) continue;
+      if (PROBED_ON_BACKFILL.has(migration.version) && !objectsPresent(db, migration)) continue;
+      record2(db, migration, now);
+    }
+  })();
+}
+function applyMigration(db, migration) {
+  const statements = splitStatements(readFileSync7(migration.filePath, "utf8"), migration.filePath);
+  db.transaction(() => {
+    if (isRecorded(db, migration.version)) return;
+    for (const statement of statements) runIdempotent(db, statement);
+    record2(db, migration, (/* @__PURE__ */ new Date()).toISOString());
+    raiseHighWaterMark(db, migration.version);
+  })();
+}
+var ADD_COLUMN = /^ALTER\s+TABLE\s+["`[]?(\w+)["`\]]?\s+ADD\s+(?:COLUMN\s+)?["`[]?(\w+)["`\]]?/i;
+var CREATE_TABLE = /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`[]?(\w+)["`\]]?/i;
+var CREATE_INDEX = /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["`[]?(\w+)["`\]]?/i;
+function runIdempotent(db, statement) {
+  const add = ADD_COLUMN.exec(statement);
+  if (add !== null) {
+    const [, table, column] = add;
+    if (table !== void 0 && column !== void 0 && columnExists(db, table, column)) return;
+  }
+  db.exec(statement);
+}
+function columnExists(db, table, column) {
+  return db.prepare("SELECT 1 AS one FROM pragma_table_info(?) WHERE name = ?").get(table, column) !== void 0;
+}
+function objectExists(db, type, name) {
+  return db.prepare("SELECT 1 AS one FROM sqlite_master WHERE type = ? AND name = ?").get(type, name) !== void 0;
+}
+function objectsOf(migration) {
+  const out = { tables: [], indexes: [], columns: [] };
+  for (const statement of splitStatements(readFileSync7(migration.filePath, "utf8"), migration.filePath)) {
+    const table = CREATE_TABLE.exec(statement)?.[1];
+    if (table !== void 0) {
+      out.tables.push(table);
+      continue;
+    }
+    const index = CREATE_INDEX.exec(statement)?.[1];
+    if (index !== void 0) {
+      out.indexes.push(index);
+      continue;
+    }
+    const add = ADD_COLUMN.exec(statement);
+    if (add?.[1] !== void 0 && add[2] !== void 0) out.columns.push({ table: add[1], column: add[2] });
+  }
+  return out;
+}
+function objectsPresent(db, migration) {
+  const objects = objectsOf(migration);
+  return objects.tables.every((t) => objectExists(db, "table", t)) && objects.indexes.every((i2) => objectExists(db, "index", i2)) && objects.columns.every((c3) => columnExists(db, c3.table, c3.column));
+}
+function splitStatements(sql, source = "migration") {
+  const statements = [];
+  let current = "";
+  let i2 = 0;
+  const push = () => {
+    const text2 = current.trim();
+    current = "";
+    if (text2 === "") return;
+    if (/^CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?TRIGGER\b/i.test(text2)) {
+      throw new Error(`${source}: CREATE TRIGGER is not supported in a migration (see migrations/runner.ts)`);
+    }
+    statements.push(text2);
+  };
+  const closers = { "'": "'", '"': '"', "`": "`", "[": "]" };
+  while (i2 < sql.length) {
+    const ch = sql[i2] ?? "";
+    const next = sql[i2 + 1] ?? "";
+    if (ch === "-" && next === "-") {
+      const end = sql.indexOf("\n", i2);
+      i2 = end < 0 ? sql.length : end + 1;
+      current += " ";
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const end = sql.indexOf("*/", i2 + 2);
+      i2 = end < 0 ? sql.length : end + 2;
+      current += " ";
+      continue;
+    }
+    const closer = closers[ch];
+    if (closer !== void 0) {
+      let j = i2 + 1;
+      for (; ; ) {
+        const end = sql.indexOf(closer, j);
+        if (end < 0) {
+          j = sql.length;
+          break;
+        }
+        if (closer !== "]" && sql[end + 1] === closer) {
+          j = end + 2;
+          continue;
+        }
+        j = end + 1;
+        break;
+      }
+      current += sql.slice(i2, j);
+      i2 = j;
+      continue;
+    }
+    if (ch === ";") {
+      push();
+      i2 += 1;
+      continue;
+    }
+    current += ch;
+    i2 += 1;
+  }
+  push();
+  return statements;
 }
 function listMigrations(dir = MIGRATIONS_DIR) {
   const migrations = [];
@@ -38938,13 +39086,52 @@ function listMigrations(dir = MIGRATIONS_DIR) {
   }
   return migrations;
 }
-function applyMigration(db, migration) {
-  const sql = readFileSync7(migration.filePath, "utf8");
-  db.transaction(() => {
-    if (migration.version <= getCurrentVersion(db)) return;
-    db.exec(sql);
-    setVersion(db, migration.version);
-  })();
+
+// src/storage/schemaCheck.ts
+function readSchema(db) {
+  const objects = /* @__PURE__ */ new Map();
+  const columns = /* @__PURE__ */ new Map();
+  const indexTables = /* @__PURE__ */ new Map();
+  const rows = db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master").all();
+  for (const row of rows) {
+    const type = asObjectType(row.type);
+    if (type === null) continue;
+    objects.set(row.name, type);
+    if (type === "index") indexTables.set(row.name, row.tbl_name);
+    if (type === "table") {
+      const cols = db.prepare("SELECT name FROM pragma_table_info(?)").all(row.name).map((c3) => c3.name);
+      columns.set(row.name, new Set(cols));
+    }
+  }
+  return { objects, columns, indexTables };
+}
+function asObjectType(type) {
+  return type === "table" || type === "index" || type === "view" || type === "trigger" ? type : null;
+}
+function missingObjects(db, reference) {
+  const actual = readSchema(db);
+  const tables = [];
+  const columns = [];
+  const indexes = [];
+  for (const [name, type] of reference.objects) {
+    if (name.startsWith("sqlite_")) continue;
+    if (type === "index") {
+      const table = reference.indexTables.get(name);
+      const tableMissing = table !== void 0 && actual.objects.get(table) !== "table";
+      if (!tableMissing && actual.objects.get(name) !== "index") indexes.push(`index ${name}`);
+      continue;
+    }
+    if (actual.objects.get(name) !== type) {
+      tables.push(`${type} ${name}`);
+      continue;
+    }
+    if (type !== "table") continue;
+    const have = actual.columns.get(name) ?? /* @__PURE__ */ new Set();
+    for (const column of reference.columns.get(name) ?? []) {
+      if (!have.has(column)) columns.push(`column ${name}.${column}`);
+    }
+  }
+  return [...tables.sort(), ...columns.sort(), ...indexes.sort()];
 }
 
 // src/storage/db.ts
@@ -39071,6 +39258,43 @@ var GuardianDatabase = class {
     this.raw.close();
   }
 };
+var GuardianDbError = class extends Error {
+  constructor(kind, dbPath, message3) {
+    super(message3);
+    this.kind = kind;
+    this.dbPath = dbPath;
+    this.name = "GuardianDbError";
+  }
+  kind;
+  dbPath;
+};
+var referenceSchema;
+function expectedSchema() {
+  if (referenceSchema !== void 0) return referenceSchema;
+  const db = new GuardianDatabase(":memory:");
+  try {
+    runMigrations(db);
+    referenceSchema = readSchema(db);
+  } finally {
+    db.close();
+  }
+  return referenceSchema;
+}
+function assertSchemaComplete(db, dbPath) {
+  const missing = missingObjects(db, expectedSchema());
+  if (missing.length === 0) return;
+  const shown = missing.slice(0, 8).join(", ") + (missing.length > 8 ? `, and ${missing.length - 8} more` : "");
+  throw new GuardianDbError(
+    "schema",
+    dbPath,
+    `the database '${dbPath}' is missing ${shown} after its migrations ran \u2014 it was changed outside dev-guardian, or copied from an incomplete file. Move it aside (rename it) and restart: a new database is created in its place, and the old file stays readable for recovery.`
+  );
+}
+function prepareForUse(db, dbPath) {
+  applyPragmas(db);
+  runMigrations(db);
+  assertSchemaComplete(db, dbPath);
+}
 function openDatabase(options) {
   if (options.inMemory) {
     const db2 = new GuardianDatabase(":memory:");
@@ -39093,9 +39317,7 @@ function openDatabase(options) {
   }
   const chosenPath = resolveFallbackDbPath(projectPath);
   ensureDir(dirname5(chosenPath));
-  const db = new GuardianDatabase(chosenPath);
-  applyPragmas(db);
-  runMigrations(db);
+  const db = openPrepared(chosenPath);
   return {
     db,
     path: chosenPath,
@@ -39108,16 +39330,28 @@ function openWritable(dbPath) {
   probeDirectoryWritable(dir);
   const db = new GuardianDatabase(dbPath);
   try {
-    applyPragmas(db);
-    runMigrations(db);
+    prepareForUse(db, dbPath);
     probeDatabaseWritable(db);
     return db;
   } catch (error2) {
-    try {
-      db.close();
-    } catch {
-    }
+    closeQuietly(db);
     throw error2;
+  }
+}
+function openPrepared(dbPath) {
+  const db = new GuardianDatabase(dbPath);
+  try {
+    prepareForUse(db, dbPath);
+    return db;
+  } catch (error2) {
+    closeQuietly(db);
+    throw error2;
+  }
+}
+function closeQuietly(db) {
+  try {
+    db.close();
+  } catch {
   }
 }
 function probeDirectoryWritable(dir) {
@@ -40333,9 +40567,9 @@ function rowToSnapshot2(row) {
 }
 function readExternalImports(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  const record7 = value;
-  const rawFiles = record7["files"];
-  const rawPackages = record7["packages"];
+  const record8 = value;
+  const rawFiles = record8["files"];
+  const rawPackages = record8["packages"];
   if (!Array.isArray(rawFiles) || !Array.isArray(rawPackages)) return void 0;
   const files = rawFiles.filter((f) => typeof f === "string");
   if (files.length !== rawFiles.length) return void 0;
@@ -45546,8 +45780,8 @@ function configDriftAdvisory(plugin, projectPath) {
   }
 }
 function cachedResult(config2, input, plugin, scanId, warnings) {
-  const record7 = plugin.storage.scans.getById(scanId);
-  if (!record7) {
+  const record8 = plugin.storage.scans.getById(scanId);
+  if (!record8) {
     return failDomain("unknown_scan_id", `Cached scan ${scanId} could not be loaded.`);
   }
   const stored = plugin.storage.findings.listByScan(scanId);
@@ -45557,13 +45791,13 @@ function cachedResult(config2, input, plugin, scanId, warnings) {
   const top = topFindings(visible, 10);
   const floor = severityFloorNotice(view.visible, input.severity_min, scanId);
   const { coverage, warning: coverageWarning } = assessCoverage(
-    record7.scan_type,
-    record7.tools_run,
-    record7.missing_tools,
-    { manifestGaps: record7.meta?.["manifest_coverage_gaps"] }
+    record8.scan_type,
+    record8.tools_run,
+    record8.missing_tools,
+    { manifestGaps: record8.meta?.["manifest_coverage_gaps"] }
   );
   const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
-  const { meta, ...row } = record7;
+  const { meta, ...row } = record8;
   allWarnings.push(...scopeWarnings(meta?.["scope"]));
   const excludedNote = exclusionWarning(meta?.["exclusions"]);
   if (excludedNote !== null) allWarnings.push(excludedNote);
@@ -45576,7 +45810,7 @@ function cachedResult(config2, input, plugin, scanId, warnings) {
   }
   const result = {
     ...row,
-    duration_ms: durationMs(record7.started_at, record7.finished_at),
+    duration_ms: durationMs(record8.started_at, record8.finished_at),
     cached: true,
     cached_from: scanId,
     findings_count_by_severity: counts,
@@ -48598,7 +48832,7 @@ function summarize(checked) {
   const records = [];
   for (const { finding: finding4, check: check2 } of checked) {
     if (check2.verdict === "skipped") continue;
-    const record7 = {
+    const record8 = {
       fingerprint: finding4.fingerprint,
       rule_id: finding4.rule_id ?? "",
       provider: check2.provider,
@@ -48606,9 +48840,9 @@ function summarize(checked) {
       verified: check2.verdict,
       reason: check2.reason
     };
-    if (finding4.file_path !== void 0) record7.file_path = finding4.file_path;
-    if (finding4.line_start !== void 0) record7.line_start = finding4.line_start;
-    records.push(record7);
+    if (finding4.file_path !== void 0) record8.file_path = finding4.file_path;
+    if (finding4.line_start !== void 0) record8.line_start = finding4.line_start;
+    records.push(record8);
   }
   const summary2 = {
     verified: sent.length,
@@ -49642,8 +49876,8 @@ function parseRegistryTrace(stderr) {
     const m = starts[i2];
     if (m === void 0) continue;
     const next = starts[i2 + 1];
-    const record7 = stderr.slice(m.index + m[0].length, next === void 0 ? stderr.length : next.index);
-    const line = record7.split(/\r?\n/, 1)[0] ?? "";
+    const record8 = stderr.slice(m.index + m[0].length, next === void 0 ? stderr.length : next.index);
+    const line = record8.split(/\r?\n/, 1)[0] ?? "";
     const owner = dumpFor;
     dumpFor = null;
     const status = TRACE_STATUS.exec(line);
@@ -49663,7 +49897,7 @@ function parseRegistryTrace(stderr) {
       answers.push({ url: dumpFailed[1], status: null, detail: `the body could not be read: ${dumpFailed[2] ?? ""} (${dumpFailed[1]})`, body: null });
       continue;
     }
-    if (owner !== null && line.startsWith("HTTP/")) owner.body = dumpedBody(record7);
+    if (owner !== null && line.startsWith("HTTP/")) owner.body = dumpedBody(record8);
   }
   const manifests = /* @__PURE__ */ new Map();
   const blobs = /* @__PURE__ */ new Map();
@@ -49768,11 +50002,11 @@ function layersOf(body) {
   if (!isRecord5(manifest) || !Array.isArray(manifest["layers"])) return [];
   return manifest["layers"].flatMap((l) => isRecord5(l) && typeof l["digest"] === "string" ? [l["digest"]] : []);
 }
-function dumpedBody(record7) {
-  const gap = /\r?\n\r?\n/.exec(record7);
+function dumpedBody(record8) {
+  const gap = /\r?\n\r?\n/.exec(record8);
   if (gap === null) return null;
-  const head = record7.slice(0, gap.index);
-  const rest = record7.slice(gap.index + gap[0].length);
+  const head = record8.slice(0, gap.index);
+  const rest = record8.slice(gap.index + gap[0].length);
   return /^transfer-encoding:[ \t]*chunked[ \t]*\r?$/im.test(head) ? dechunk(rest) ?? rest : rest;
 }
 function dechunk(text2) {
@@ -51833,7 +52067,7 @@ function notInstalled(out, name, reason = "not_installed") {
   out.tools_run.push({ name, status: "skipped", reason });
   out.missing_tools.push(name);
 }
-function record2(out, name, run, okExitCodes, report, reportOk, parser, gaps = []) {
+function record3(out, name, run, okExitCodes, report, reportOk, parser, gaps = []) {
   if (run.outcome === "cancelled") out.cancelled = true;
   const problems = [];
   if (run.outcome === "cancelled" || run.outcome === "timed_out" || run.outcome === "output_too_large") {
@@ -51876,7 +52110,7 @@ async function runJscpd(ctx, reportDir, out) {
     signal: ctx.signal,
     onLog: ctx.onLog
   });
-  record2(out, "jscpd", run, [0, 1], readJsonSafe(join33(dupDir, "jscpd-report.json")), isObject3, jscpdParser);
+  record3(out, "jscpd", run, [0, 1], readJsonSafe(join33(dupDir, "jscpd-report.json")), isObject3, jscpdParser);
 }
 async function runRuff(ctx, reportDir, out) {
   if (!await scannerAvailable("ruff")) return notInstalled(out, "ruff");
@@ -51890,7 +52124,7 @@ async function runRuff(ctx, reportDir, out) {
     signal: ctx.signal,
     onLog: ctx.onLog
   });
-  record2(out, "ruff", run, [0], readJsonSafe(file), Array.isArray, ruffParser);
+  record3(out, "ruff", run, [0], readJsonSafe(file), Array.isArray, ruffParser);
 }
 async function runRadon(ctx, reportDir, out) {
   if (!await scannerAvailable("radon")) return notInstalled(out, "radon");
@@ -51905,7 +52139,7 @@ async function runRadon(ctx, reportDir, out) {
   });
   const report = readJsonSafe(file);
   const errors = report === null ? [] : radonErrors(report);
-  record2(out, "radon", run, [0], report, isObject3, radonParser, couldNotAnalyse(errors));
+  record3(out, "radon", run, [0], report, isObject3, radonParser, couldNotAnalyse(errors));
 }
 async function runEslint(ctx, reportDir, out) {
   const eslint = localEslint(ctx.projectPath);
@@ -51927,7 +52161,7 @@ async function runEslint(ctx, reportDir, out) {
   });
   const report = readJsonSafe(file);
   const fatal = report === null ? [] : eslintFatalErrors(report);
-  record2(out, "eslint", run, [0, 1], report, Array.isArray, eslintParser, couldNotAnalyse(fatal));
+  record3(out, "eslint", run, [0, 1], report, Array.isArray, eslintParser, couldNotAnalyse(fatal));
 }
 async function runStaticcheck(ctx, out, packages = ["./..."]) {
   if (!await scannerAvailable("staticcheck")) return notInstalled(out, "staticcheck");
@@ -51960,7 +52194,7 @@ async function runStaticcheck(ctx, out, packages = ["./..."]) {
     });
     return;
   }
-  record2(out, "staticcheck", run, [0, 1], run.stdout, () => true, staticcheckParser, couldNotAnalyse(errors));
+  record3(out, "staticcheck", run, [0, 1], run.stdout, () => true, staticcheckParser, couldNotAnalyse(errors));
 }
 var JS_TS = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i;
 async function runOnScope(ctx, reportDir, out, files) {
@@ -55339,8 +55573,8 @@ async function runComposerOutdated(projectPath, cves) {
     };
   }
   const parsed = parseRunnerJson("composer", "composer outdated --locked --format=json", result.stdout, failures);
-  const record7 = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : void 0;
-  const installed = record7?.["locked"] ?? record7?.["installed"];
+  const record8 = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : void 0;
+  const installed = record8?.["locked"] ?? record8?.["installed"];
   if (!Array.isArray(installed)) {
     if (failures.length === 0) {
       failures.push({ ecosystem: "composer", code: "unparseable_output", reason: 'composer outdated --locked printed no "locked" list' });
@@ -56555,7 +56789,7 @@ function refreshConfigs(input) {
       if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
         manifest = upsertManifestEntry(
           manifest,
-          record3(file, input.currentVersion, srcHash, srcHash, "copied")
+          record4(file, input.currentVersion, srcHash, srcHash, "copied")
         );
         manifestTouched = true;
       }
@@ -56580,7 +56814,7 @@ function refreshConfigs(input) {
         if (!input.apply) continue;
         manifest = upsertManifestEntry(
           manifest,
-          record3(file, input.currentVersion, srcHash, dstHash, "adopted")
+          record4(file, input.currentVersion, srcHash, dstHash, "adopted")
         );
         manifestTouched = true;
         continue;
@@ -56630,7 +56864,7 @@ function refreshConfigs(input) {
       if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
         manifest = upsertManifestEntry(
           manifest,
-          record3(file, input.currentVersion, srcHash, srcHash, entry.provenance)
+          record4(file, input.currentVersion, srcHash, srcHash, entry.provenance)
         );
         manifestTouched = true;
       }
@@ -56664,7 +56898,7 @@ function adoptIdenticalConfigs(input) {
     if (srcHash === null || dstHash === null || srcHash !== dstHash) continue;
     manifest = upsertManifestEntry(
       manifest,
-      record3(file, input.currentVersion, srcHash, dstHash, "adopted")
+      record4(file, input.currentVersion, srcHash, dstHash, "adopted")
     );
     adopted.push(file.target);
   }
@@ -56693,7 +56927,7 @@ function installFile(input) {
 function ids(file) {
   return { target: file.target, source: file.source };
 }
-function record3(file, version2, sourceHash, targetHash, provenance) {
+function record4(file, version2, sourceHash, targetHash, provenance) {
   return {
     target: file.target,
     source: file.source,
@@ -56737,7 +56971,7 @@ function deliverAlongside(args) {
   });
   if (!written) return { item, manifest: null };
   const entry = {
-    ...record3(file, input.currentVersion, args.srcHash, args.dstHash, existing?.provenance ?? "adopted"),
+    ...record4(file, input.currentVersion, args.srcHash, args.dstHash, existing?.provenance ?? "adopted"),
     delivered_as: relativeNew,
     delivered_at: (/* @__PURE__ */ new Date()).toISOString()
   };
@@ -58062,19 +58296,19 @@ function buildImportGraph(records) {
   const files = /* @__PURE__ */ new Set();
   let edgeCount2 = 0;
   let truncated = false;
-  for (const record7 of records) {
-    files.add(record7.file);
-    files.add(record7.module_file);
-    const existing = edges.get(record7.file);
-    if (existing !== void 0 && existing.has(record7.module_file)) continue;
+  for (const record8 of records) {
+    files.add(record8.file);
+    files.add(record8.module_file);
+    const existing = edges.get(record8.file);
+    if (existing !== void 0 && existing.has(record8.module_file)) continue;
     if (edgeCount2 >= MAX_GRAPH_EDGES) {
       truncated = true;
       continue;
     }
     if (existing === void 0) {
-      edges.set(record7.file, /* @__PURE__ */ new Set([record7.module_file]));
+      edges.set(record8.file, /* @__PURE__ */ new Set([record8.module_file]));
     } else {
-      existing.add(record7.module_file);
+      existing.add(record8.module_file);
     }
     edgeCount2 += 1;
   }
@@ -58725,9 +58959,9 @@ function parseSbomInventory(raw) {
   return null;
 }
 function fromCycloneDx(doc) {
-  const product = record4(record4(doc["metadata"])?.["component"]);
+  const product = record5(record5(doc["metadata"])?.["component"]);
   const components = (Array.isArray(doc["components"]) ? doc["components"] : []).flatMap((c3) => {
-    const component = record4(c3);
+    const component = record5(c3);
     const name = text(component?.["name"]);
     if (component === null || name === null) return [];
     return [withOptional({ name }, text(component["version"]), text(component["purl"]))];
@@ -58747,7 +58981,7 @@ function fromSpdx(doc) {
   let product = null;
   const components = [];
   for (const p of Array.isArray(doc["packages"]) ? doc["packages"] : []) {
-    const pkg = record4(p);
+    const pkg = record5(p);
     const name = text(pkg?.["name"]);
     if (pkg === null || name === null) continue;
     const purl = spdxPurl(pkg["externalRefs"]);
@@ -58763,7 +58997,7 @@ function fromSpdx(doc) {
 function spdxPurl(refs) {
   if (!Array.isArray(refs)) return null;
   for (const ref of refs) {
-    const r = record4(ref);
+    const r = record5(ref);
     if (r?.["referenceType"] === "purl") return text(r["referenceLocator"]);
   }
   return null;
@@ -58815,7 +59049,7 @@ function buildPurl(ecosystem, name, version2) {
 function purlType(purl) {
   return /^pkg:([^/]+)\//.exec(purl)?.[1]?.toLowerCase() ?? null;
 }
-function record4(value) {
+function record5(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function text(value) {
@@ -66785,15 +67019,15 @@ function readLock(projectPath, rootDir) {
     if (parsed === void 0) continue;
     if (parsed === null) return { kind: "unreadable", file };
     const versions = /* @__PURE__ */ new Map();
-    const packages = record5(parsed["packages"]);
+    const packages = record6(parsed["packages"]);
     if (packages !== null) {
       for (const [key, value] of Object.entries(packages)) {
-        const entry = record5(value);
+        const entry = record6(value);
         if (key === "" || entry === null || entry["link"] === true) continue;
         if (typeof entry["version"] === "string") versions.set(key, entry["version"]);
       }
     } else {
-      walkV1(record5(parsed["dependencies"]), "", versions);
+      walkV1(record6(parsed["dependencies"]), "", versions);
     }
     return { kind: "lock", file, versions };
   }
@@ -66802,11 +67036,11 @@ function readLock(projectPath, rootDir) {
 function walkV1(deps, prefix, out) {
   if (deps === null) return;
   for (const [name, value] of Object.entries(deps)) {
-    const entry = record5(value);
+    const entry = record6(value);
     if (entry === null) continue;
     const key = `${prefix}node_modules/${name}`;
     if (typeof entry["version"] === "string") out.set(key, entry["version"]);
-    walkV1(record5(entry["dependencies"]), `${key}/`, out);
+    walkV1(record6(entry["dependencies"]), `${key}/`, out);
   }
 }
 function readInstalled(projectPath, dir, name) {
@@ -66820,12 +67054,12 @@ function readJson(path8, maxBytes) {
     const stat3 = statSync17(path8);
     if (!stat3.isFile()) return void 0;
     if (stat3.size > maxBytes) return null;
-    return record5(JSON.parse(readFileSync33(path8, "utf8")));
+    return record6(JSON.parse(readFileSync33(path8, "utf8")));
   } catch (e) {
     return e.code === "ENOENT" ? void 0 : null;
   }
 }
-function record5(value) {
+function record6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function relativeTo(rootDir, dir) {
@@ -66899,9 +67133,9 @@ function pipfileLockPins(text2) {
   }
   const out = [];
   for (const section of ["default", "develop"]) {
-    const packages = record6(record6(parsed)?.[section]);
+    const packages = record7(record7(parsed)?.[section]);
     for (const [name, value] of Object.entries(packages ?? {})) {
-      const version2 = record6(value)?.["version"];
+      const version2 = record7(value)?.["version"];
       if (typeof version2 === "string") out.push([normalize(name), version2.replace(/^===?/, "")]);
     }
   }
@@ -66925,7 +67159,7 @@ function readText2(path8) {
     return null;
   }
 }
-function record6(value) {
+function record7(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function normalize(name) {
@@ -70475,11 +70709,11 @@ function extractImports(parsed, knownFiles) {
   if (!Array.isArray(results)) return [];
   const out = [];
   for (const raw of results) {
-    const record7 = raw;
-    if (record7.extra?.metadata?.guardian_kind !== "import") continue;
-    const symbol = stripQuotes4(record7.extra.metavars?.["$SYMBOL"]?.abstract_content);
-    const modulePath = stripQuotes4(record7.extra.metavars?.["$MODULE"]?.abstract_content);
-    const file = record7.path;
+    const record8 = raw;
+    if (record8.extra?.metadata?.guardian_kind !== "import") continue;
+    const symbol = stripQuotes4(record8.extra.metavars?.["$SYMBOL"]?.abstract_content);
+    const modulePath = stripQuotes4(record8.extra.metavars?.["$MODULE"]?.abstract_content);
+    const file = record8.path;
     if (symbol === void 0 || modulePath === void 0 || file === void 0) continue;
     out.push({ symbol, module_file: resolveModuleFile(file, modulePath, knownFiles), file });
   }
@@ -71248,30 +71482,30 @@ function responsePart(result) {
 }
 function buildEvidence(finding4, origin, results) {
   const primary = results.find((r) => r.request.id === finding4.evidence_id);
-  const record7 = {
+  const record8 = {
     fingerprint: finding4.fingerprint,
     check: finding4.check,
     evidence_id: finding4.evidence_id,
     origin,
     exchanges: []
   };
-  if (finding4.rule_id !== void 0) record7.rule_id = finding4.rule_id;
+  if (finding4.rule_id !== void 0) record8.rule_id = finding4.rule_id;
   if (primary === void 0) {
-    record7.note = "No probe exchange recorded for this finding; it was reported by an external engine. See nuclei.jsonl in this directory for the raw output.";
-    return record7;
+    record8.note = "No probe exchange recorded for this finding; it was reported by an external engine. See nuclei.jsonl in this directory for the raw output.";
+    return record8;
   }
-  record7.exchanges.push(toExchange(primary));
+  record8.exchanges.push(toExchange(primary));
   for (const other of results) {
     if (other === primary) continue;
     if (other.request.method !== primary.request.method) continue;
     if (other.request.path !== primary.request.path) continue;
-    record7.exchanges.push(toExchange(other));
+    record8.exchanges.push(toExchange(other));
   }
-  return record7;
+  return record8;
 }
 function buildBurstEvidence(finding4, origin, burst, planned, observed) {
   const first = burst[0];
-  const record7 = {
+  const record8 = {
     fingerprint: finding4.fingerprint,
     check: finding4.check,
     evidence_id: finding4.evidence_id,
@@ -71284,24 +71518,24 @@ function buildBurstEvidence(finding4, origin, burst, planned, observed) {
       observed
     }
   };
-  if (finding4.rule_id !== void 0) record7.rule_id = finding4.rule_id;
-  if (first === void 0) record7.note = "The burst produced no results at all.";
-  return record7;
+  if (finding4.rule_id !== void 0) record8.rule_id = finding4.rule_id;
+  if (first === void 0) record8.note = "The burst produced no results at all.";
+  return record8;
 }
 function writeEvidenceFiles(dir, records, redact2) {
   const outcome = { written: /* @__PURE__ */ new Set(), capped: 0, failed: 0 };
-  for (const [index, record7] of records.entries()) {
+  for (const [index, record8] of records.entries()) {
     if (index >= MAX_EVIDENCE_FILES) {
       outcome.capped += 1;
       continue;
     }
     try {
       writeFileSync17(
-        join69(dir, `${record7.fingerprint}.json`),
-        redact2(JSON.stringify(record7, null, 2)),
+        join69(dir, `${record8.fingerprint}.json`),
+        redact2(JSON.stringify(record8, null, 2)),
         "utf8"
       );
-      outcome.written.add(record7.fingerprint);
+      outcome.written.add(record8.fingerprint);
     } catch {
       outcome.failed += 1;
     }
@@ -72261,14 +72495,14 @@ async function handler40(input, ctx, callMeta) {
     report_dir: evidenceDir,
     meta: redactObject(meta, redact2)
   });
-  const record7 = ctx.storage.scans.getById(scanId);
+  const record8 = ctx.storage.scans.getById(scanId);
   const payload = {
     scan_id: scanId,
     scan_type: "dast",
     project_path: projectPath,
     tree_hash: treeHash,
-    started_at: record7?.started_at ?? (/* @__PURE__ */ new Date()).toISOString(),
-    finished_at: record7?.finished_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    started_at: record8?.started_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    finished_at: record8?.finished_at ?? (/* @__PURE__ */ new Date()).toISOString(),
     status: "completed",
     tools_run: toolsRun,
     missing_tools: missingTools,
@@ -74384,13 +74618,13 @@ function stableStringify2(value) {
       continue;
     }
     if (item !== null && typeof item === "object") {
-      const record7 = item;
-      const keys = Object.keys(record7).sort().filter((k) => !omitted(record7[k]));
+      const record8 = item;
+      const keys = Object.keys(record8).sort().filter((k) => !omitted(record8[k]));
       parts.push("{");
       stack.push(new Literal("}"));
       for (let i2 = keys.length - 1; i2 >= 0; i2 -= 1) {
         const key = keys[i2] ?? "";
-        stack.push(record7[key]);
+        stack.push(record8[key]);
         stack.push(new Literal(`${JSON.stringify(key)}:`));
         if (i2 > 0) stack.push(new Literal(","));
       }
@@ -83494,21 +83728,21 @@ registerResourceModule({
     if (!scanId) {
       throw mcpInvalidParams("scan_id is required");
     }
-    const record7 = ctx.storage.scans.getById(scanId);
-    if (!record7) {
+    const record8 = ctx.storage.scans.getById(scanId);
+    if (!record8) {
       throw mcpInvalidParams(`unknown scan_id '${scanId}'`);
     }
     return { json: enrich(scanId, ctx) };
   }
 });
 function enrich(scanId, ctx) {
-  const record7 = ctx.storage.scans.getById(scanId);
-  if (!record7) return { last_run: null };
+  const record8 = ctx.storage.scans.getById(scanId);
+  if (!record8) return { last_run: null };
   const findings = ctx.storage.findings.listByScan(scanId);
   const counts = countBySeverity7(findings);
   const top = topFindings4(findings, 10);
   return {
-    ...record7,
+    ...record8,
     findings_count_by_severity: counts,
     top_findings: top.map(boundFinding)
   };
@@ -83977,6 +84211,10 @@ function logErr(line) {
 `);
 }
 main().catch((err) => {
+  if (err instanceof GuardianDbError) {
+    logErr(`fatal: ${err.message}`);
+    process.exit(1);
+  }
   logErr(`fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
   process.exit(1);
 });

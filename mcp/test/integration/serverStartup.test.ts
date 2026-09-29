@@ -6,11 +6,12 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import { openDatabase } from '../../src/storage/db.js';
+import { GuardianDatabase, openDatabase } from '../../src/storage/db.js';
+import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
 import { holdWriteLock } from '../helpers/writeLockHolder.js';
@@ -123,6 +124,40 @@ describe('server startup with a retention backlog', () => {
     const log = server.stderr();
     expect(log.indexOf('listening on stdio')).toBeGreaterThan(-1);
     expect(log.indexOf('listening on stdio')).toBeLessThan(log.indexOf('pruned 2 scan(s)'));
+  }, 60_000);
+});
+
+describe('server startup against a 3.0 development database', () => {
+  // A database a 3.0 development branch left at schema version 14 without
+  // 012's tables: 3.0.0's runner skipped 012 for good, `new Storage()` died
+  // on `no such table: mcp_tool_pins`, and the server exited 1 at startup.
+  it('applies the migrations the database never ran, and starts', async () => {
+    const project = makeTempDir('guardian-server-devdb-');
+    const dbPath = join(project, '.guardian', 'guardian.db');
+    mkdirSync(join(project, '.guardian'));
+    const raw = new GuardianDatabase(dbPath);
+    for (const m of listMigrations().filter((x) => x.version <= 14 && x.version !== 12 && x.version !== 13)) {
+      raw.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    raw.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '14')`);
+    raw.close();
+
+    const server = startServer(project);
+    await server.waitFor(/listening on stdio/);
+    expect(server.stderr()).not.toMatch(/fatal/);
+  }, 60_000);
+
+  it('exits 1 with one line naming the file and the missing object when the schema cannot be repaired', async () => {
+    const project = makeTempDir('guardian-server-badschema-');
+    const { db, path } = openDatabase({ projectPath: project });
+    db.exec('ALTER TABLE findings DROP COLUMN cwe');
+    db.close();
+
+    const server = startServer(project);
+    expect(await server.exited).toBe(1);
+    const err = server.stderr();
+    expect(err).toContain(`the database '${path}' is missing column findings.cwe`);
+    expect(err).not.toMatch(/\n\s+at /);
   }, 60_000);
 });
 

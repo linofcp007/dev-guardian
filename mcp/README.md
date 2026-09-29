@@ -65,7 +65,7 @@ npm run dev            # tsx src/server.ts, no build
 
 1. Refuse to start, with one line on stderr, on a Node without `node:sqlite`.
 2. Open `<project>/.guardian/guardian.db`, the project being the server's working directory. The database gets a busy timeout, WAL and a real write probe; if `.guardian/` is not writable (a file left by `sudo` or Docker, an ACL), it falls back to a user-level location and says so.
-3. Apply the SQL migrations in `src/storage/migrations/`, each under the write lock.
+3. Apply every SQL migration in `src/storage/migrations/` the database has not recorded in `schema_migrations`, each under the write lock, then check that every table, column and index the code needs is there. A database it cannot use stops the server with one line naming the file and what is missing.
 4. Reap scans left `running` by a process that is gone.
 5. Probe a bash — Git Bash, then WSL, then `bash` on `PATH` on Windows; `/bin/bash`, then `PATH` elsewhere — and cache the choice. Nothing but `install_toolchain`'s bundled install scripts and `init_project`'s first-pass status report uses it; without one those report `no_bash_shell` (or skip) and everything else works.
 6. Keep `.guardian/` out of git in the project's `.gitignore` (`**/.guardian/*` plus `!**/.guardian/baseline.json`, so the CI baseline can be committed and a sub-project's `.guardian/` stays out too).
@@ -89,9 +89,10 @@ One SQLite file per project, `.guardian/guardian.db`, shared by every process th
 | `finding_validations` | `validate_finding` verdicts |
 | `agent_config_hashes` | `audit_agent_config`'s per-server hashes, to flag a changed MCP entry |
 | `mcp_tool_pins`, `mcp_server_pins` | `audit_mcp_tools`'s per-tool definition hashes, to flag a tool that changed under the same name |
-| `runtime_meta`, `schema_meta` | the cached shell choice and other server state; the migration version |
+| `runtime_meta`, `schema_meta` | the cached shell choice and other server state; the highest migration applied |
+| `schema_migrations` | every migration applied, by number, name and time |
 
-Migrations are numbered, additive and idempotent; a database written by 2.0.0 keeps working.
+Migrations are numbered, additive and idempotent; a database written by 2.0.0 keeps working. What decides whether one runs is the set in `schema_migrations`, not the highest number: migrations written on parallel branches can land in any order.
 
 ## Behaviour every tool shares
 

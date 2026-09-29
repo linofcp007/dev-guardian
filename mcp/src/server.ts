@@ -38,7 +38,7 @@ import { probeShell } from './platform/shellProbe.js';
 import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
-import { openDatabase, Storage } from './storage/index.js';
+import { GuardianDbError, openDatabase, Storage } from './storage/index.js';
 import { reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, TOOLS } from './tools/index.js';
@@ -170,6 +170,13 @@ function logErr(line: string): void {
 }
 
 main().catch((err) => {
+  // A database the server cannot use (corrupt, incomplete, untrusted) is said
+  // in its own one line, which names the file and what to do — a stack trace
+  // from inside SQLite says neither.
+  if (err instanceof GuardianDbError) {
+    logErr(`fatal: ${err.message}`);
+    process.exit(1);
+  }
   logErr(`fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
   process.exit(1);
 });

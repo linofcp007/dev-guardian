@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { StatementSync, SQLInputValue } from 'node:sqlite';
 import { runMigrations } from './migrations/runner.js';
+import { missingObjects, readSchema, type SchemaSnapshot } from './schemaCheck.js';
 
 // `node:sqlite` is pulled in via createRequire rather than a static value
 // import on purpose: the production bundler (esbuild) and the test runner
@@ -225,6 +226,70 @@ export class GuardianDatabase {
 /** The handle type the repos and the Storage facade pass around. */
 export type DB = GuardianDatabase;
 
+/**
+ * A database file dev-guardian cannot use, said in one line that names the
+ * file and what to do about it — what the server prints (and exits 1 with)
+ * instead of a stack trace from deep inside `new Storage()` or SQLite.
+ *
+ *   - `schema`: the migrations ran and an object the code needs is still
+ *     missing (see `schemaCheck.ts#missingObjects`);
+ *   - `corrupt`: SQLite cannot read the file (SQLITE_CORRUPT, SQLITE_NOTADB);
+ *   - `untrusted`: the file holds objects the migrations never create, or its
+ *     location is not private to this user — see {@link openDatabase}.
+ */
+export class GuardianDbError extends Error {
+  constructor(
+    readonly kind: 'schema' | 'corrupt' | 'untrusted',
+    readonly dbPath: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'GuardianDbError';
+  }
+}
+
+let referenceSchema: SchemaSnapshot | undefined;
+
+/**
+ * The schema the shipped migrations build on an empty database, read once
+ * per process. Every database, whatever its age, holds a subset of it —
+ * migrations only ever add — so it is both what a database may hold and
+ * what it must hold once migrated.
+ */
+export function expectedSchema(): SchemaSnapshot {
+  if (referenceSchema !== undefined) return referenceSchema;
+  const db = new GuardianDatabase(':memory:');
+  try {
+    runMigrations(db);
+    referenceSchema = readSchema(db);
+  } finally {
+    db.close();
+  }
+  return referenceSchema;
+}
+
+/** Throws a {@link GuardianDbError} naming what the migrated `db` still lacks. */
+function assertSchemaComplete(db: GuardianDatabase, dbPath: string): void {
+  const missing = missingObjects(db, expectedSchema());
+  if (missing.length === 0) return;
+  const shown = missing.slice(0, 8).join(', ') + (missing.length > 8 ? `, and ${missing.length - 8} more` : '');
+  throw new GuardianDbError(
+    'schema',
+    dbPath,
+    `the database '${dbPath}' is missing ${shown} after its migrations ran — ` +
+      'it was changed outside dev-guardian, or copied from an incomplete file. ' +
+      'Move it aside (rename it) and restart: a new database is created in its place, ' +
+      'and the old file stays readable for recovery.',
+  );
+}
+
+/** Pragmas, migrations and the completeness check: what makes a handle usable. */
+function prepareForUse(db: GuardianDatabase, dbPath: string): void {
+  applyPragmas(db);
+  runMigrations(db);
+  assertSchemaComplete(db, dbPath);
+}
+
 export interface OpenOptions {
   /**
    * Project root used to resolve `.guardian/guardian.db`. Ignored when
@@ -280,9 +345,7 @@ export function openDatabase(options: OpenOptions): OpenedDatabase {
 
   const chosenPath = resolveFallbackDbPath(projectPath);
   ensureDir(dirname(chosenPath));
-  const db = new GuardianDatabase(chosenPath);
-  applyPragmas(db);
-  runMigrations(db);
+  const db = openPrepared(chosenPath);
   return {
     db,
     path: chosenPath,
@@ -305,17 +368,32 @@ function openWritable(dbPath: string): GuardianDatabase {
   probeDirectoryWritable(dir);
   const db = new GuardianDatabase(dbPath);
   try {
-    applyPragmas(db);
-    runMigrations(db);
+    prepareForUse(db, dbPath);
     probeDatabaseWritable(db);
     return db;
   } catch (error) {
-    try {
-      db.close();
-    } catch {
-      /* the open failure is the one worth reporting */
-    }
+    closeQuietly(db);
     throw error;
+  }
+}
+
+/** Opens `dbPath` and makes it usable ({@link prepareForUse}); closes it again on failure. */
+function openPrepared(dbPath: string): GuardianDatabase {
+  const db = new GuardianDatabase(dbPath);
+  try {
+    prepareForUse(db, dbPath);
+    return db;
+  } catch (error) {
+    closeQuietly(db);
+    throw error;
+  }
+}
+
+function closeQuietly(db: GuardianDatabase): void {
+  try {
+    db.close();
+  } catch {
+    /* the open failure is the one worth reporting */
   }
 }
 
@@ -408,10 +486,7 @@ export function resolveFallbackDbPath(projectPath: string): string {
  * before use — this is a genuine open, not a bypass of either.
  */
 export function openDatabaseAtPath(path: string): DB {
-  const db = new GuardianDatabase(path);
-  applyPragmas(db);
-  runMigrations(db);
-  return db;
+  return openPrepared(path);
 }
 
 function applyPragmas(db: GuardianDatabase): void {

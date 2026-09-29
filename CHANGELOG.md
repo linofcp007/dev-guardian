@@ -8,6 +8,21 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- A database a 3.0 development build left at schema version 14 no longer stops the server, and the
+  CLI's `status` / `dashboard`, at startup (`no such table: mcp_tool_pins`, `table findings has no
+  column named cwe`, `… vuln_aliases`). 012, 013 and 014 were written on parallel branches, and the
+  runner applied only the numbers above the stored version. Applied migrations are now recorded as
+  a set (`schema_migrations`: version, name, applied_at). An older database is converted once:
+  migrations up to its stored version count as applied, except 012–014, whose tables, indexes and
+  columns are looked for instead. Every missing migration is then applied, statement by statement:
+  a column that already exists is skipped, so a half-applied 014 completes. A 2.0.0 database
+  (version 3) and a new one upgrade as before.
+- A database whose schema is still incomplete after its migrations ran stops the server with one
+  line naming the file and the missing object (`is missing column findings.cwe`), not a stack
+  trace from inside `new Storage()`.
+
 ## [3.0.0] - 2026-09-29
 
 A full review of 2.0.0. Its one theme: **a scanner that did not run, failed, or

@@ -521,7 +521,10 @@ describe('dev-guardian status — a migrated-but-missing-table database is refus
 
       expect(r.status).toBe(3);
       expect(r.stdout).toBe('');
-      expect(r.stderr).toMatch(/no such table/i);
+      // Since the migration set (Unreleased): the storage layer names the
+      // file and the missing table itself, before `new Storage(db)` runs.
+      expect(r.stderr).toMatch(/is missing table scans/i);
+      expect(r.stderr).toContain(join(dir, '.guardian', 'guardian.db'));
 
       const dbPath = join(dir, '.guardian', 'guardian.db');
       expect(existsSync(dbPath)).toBe(true);
