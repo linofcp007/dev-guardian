@@ -423,6 +423,14 @@ export type StatementEnd = '&&' | '||' | ';' | '&' | '\n' | '(' | ')' | '`';
 export interface ShellSplit {
   /** The whole command, masked, with separators intact and heredocs removed. */
   maskedCommand: string;
+  /**
+   * `maskedCommand` with, after the mask of each double-quoted span, the
+   * variables that span interpolates ({@link interpolatedVariables}): `$b =
+   * "$a"` reads `$b =  $a `. A copy through a string is still a copy — the
+   * one thing {@link powershellDownloadExecution} reads this for; every other
+   * rule reads `maskedCommand`, where a quoted span is data.
+   */
+  interpolatedCommand: string;
   statements: ShellStatement[];
 }
 
@@ -466,6 +474,50 @@ function scanQuote(source: string, start: number): { inner: string; next: number
   }
   // Unterminated quote: treat the rest of the input as quoted.
   return { inner, next: source.length };
+}
+
+/**
+ * A variable a double-quoted string interpolates (`$a`, `${a}`, `$script:a`),
+ * a subexpression opening, or a parenthesis — the tokens
+ * {@link interpolatedVariables} reads. `${…}` is capped, so a run of unclosed
+ * `${` cannot make each one rescan the rest.
+ */
+const INTERPOLATION = /\$\{[^}\n]{0,256}\}|\$[\w:]+|\$\(|[()]/g;
+
+/**
+ * The variables a double-quoted string's text interpolates, as written: `$a`
+ * and `${a}` in the string itself — its whole value, whatever follows
+ * (`"$a.txt"` is `$a` and then `.txt`) — and, inside a `$( … )` subexpression,
+ * one that is not read for a member or an index: `"$($items.Count)"` holds a
+ * count, not `$items`.
+ */
+function interpolatedVariables(inner: string): string[] {
+  if (!inner.includes('$')) return [];
+  const out: string[] = [];
+  let depth = 0;
+  for (const m of inner.matchAll(INTERPOLATION)) {
+    const t = m[0];
+    if (t === '$(') depth += 1;
+    else if (t === '(') depth += depth > 0 ? 1 : 0;
+    else if (t === ')') depth -= depth > 0 ? 1 : 0;
+    else {
+      const next = inner.charAt(m.index + t.length);
+      if (depth === 0 || (next !== '.' && next !== '[')) out.push(t);
+    }
+  }
+  return out;
+}
+
+/** `masked` with each interpolation's variables written back after the mask that ends at its offset. */
+function withInterpolations(masked: string, interpolations: ReadonlyArray<{ at: number; vars: string }>): string {
+  if (interpolations.length === 0) return masked;
+  let out = '';
+  let from = 0;
+  for (const { at, vars } of interpolations) {
+    out += `${masked.slice(from, at)}${vars} `;
+    from = at;
+  }
+  return out + masked.slice(from);
 }
 
 const HEREDOC_WORD = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -587,6 +639,8 @@ const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 
 export function splitShell(command: string): ShellSplit {
   const statements: ShellStatement[] = [];
   let maskedCommand = '';
+  /** Where in `maskedCommand` a double-quoted span's mask ends, and the variables it interpolates. */
+  const interpolations: Array<{ at: number; vars: string }> = [];
 
   let masked = '';
   let commands: ShellWord[][] = [];
@@ -738,6 +792,10 @@ export function splitShell(command: string): ShellSplit {
       hasWord = true;
       masked += MASK;
       maskedCommand += MASK;
+      if (ch === '"') {
+        const vars = interpolatedVariables(scanned.inner);
+        if (vars.length > 0) interpolations.push({ at: maskedCommand.length, vars: vars.join(' ') });
+      }
       lastCode = MASK;
       i = scanned.next;
       continue;
@@ -864,7 +922,7 @@ export function splitShell(command: string): ShellSplit {
   }
   endStatement();
 
-  return { maskedCommand, statements };
+  return { maskedCommand, interpolatedCommand: withInterpolations(maskedCommand, interpolations), statements };
 }
 
 // ────────────────────────────────────────────────────── tokenised rules
@@ -3224,11 +3282,96 @@ const PS_DOWNLOAD =
  *     dotnet-install one-liner is `&([scriptblock]::Create((iwr …)))`);
  *   - `dl` — a download;
  *   - `assign` / `ref` — a variable assigned, and a variable read, so that
- *     `$s = irm …; iex $s` is seen;
+ *     `$s = irm …; iex $s` is seen — as `$s`, `${s}` or `$script:s`, one
+ *     variable ({@link psVariable});
+ *   - the other ways a command puts a value in a variable, or reads one back
+ *     (review 3.0, wave 2): `setvar` — `Set-Variable` / `New-Variable` (`sv`,
+ *     `nv`), whose name {@link variableNamed} reads; `outvar` — the common
+ *     `-OutVariable` (`-ov`) of any cmdlet, with its name; `tee` and `teevar`
+ *     — `Tee-Object` (`tee`) and its `-Variable`; `getvar` — `Get-Variable`
+ *     (`gv`), a read of the variable it names;
  *   - parentheses, pipes and statement separators.
  */
 const PS_EXEC_TOKENS =
-  /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$[\w:]+\s*=(?!=))|(?<ref>\$[\w:]+)|&&|\|\||[()|;\n]/gi;
+  /(?<run>(?<![\w$.\\/-])(?:iex|invoke-expression)(?![\w.-])|\[\s*(?:(?:system\s*\.\s*)?management\s*\.\s*automation\s*\.\s*)?scriptblock\s*\]\s*::\s*create\b|\.\s*(?:invokescript|newscriptblock)\b|(?<![\w-])-scriptblock\b)|(?<dl>(?<![\w$-])(?:irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget)(?![\w-])|\.\s*(?:downloadstring|downloaddata|openread|getstringasync|getbytearrayasync|getstreamasync)\b)|(?<assign>\$(?:\{[^}\n]{0,256}\}|[\w:]+)\s*\+?=(?!=))|(?<ref>\$(?:\{[^}\n]{0,256}\}|[\w:]+))|(?<setvar>(?<![\w$.\\/-])(?:set-variable|new-variable|sv|nv)(?![\w.-]))|(?<getvar>(?<![\w$.\\/-])(?:get-variable|gv)(?![\w.-]))|(?<tee>(?<![\w$.\\/-])(?:tee-object|tee)(?![\w.-]))|(?<outvar>(?<![\w-])-(?:ov|outv(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?)(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)\+?(?<outname>[A-Za-z_]\w*))?)|(?<teevar>(?<![\w-])-v(?:a(?:r(?:i(?:a(?:b(?:le?)?)?)?)?)?)?(?![\w-])(?:(?:[ \t]*:[ \t]*|[ \t]+)(?<teename>[A-Za-z_]\w*))?)|&&|\|\||[()|;\n]/gi;
+
+/**
+ * A variable as one name: `$` and the name, lower-cased, without braces or a
+ * scope — `${Script:S}`, `$script:s` and `$s` are all `$s` (`$env:x` stays
+ * itself: an environment variable is another variable).
+ */
+function psVariable(spelled: string): string {
+  let v = spelled.toLowerCase();
+  if (v.startsWith('$')) v = v.slice(1);
+  if (v.startsWith('{') && v.endsWith('}')) v = v.slice(1, -1);
+  return `$${v.replace(/^(?:global|script|local|private|using|variable):/, '')}`;
+}
+
+/** `Set-`, `New-` and `Get-Variable` parameters that take a value, other than `-Name`. */
+const VARIABLE_VALUED = ['value', 'scope', 'option', 'description', 'include', 'exclude', 'visibility'];
+
+/** How far {@link variableNamed} reads for a name, and how many names one assessment reads. */
+const VARIABLE_NAME_WINDOW = 256;
+const MAX_VARIABLE_NAMES = 256;
+
+/**
+ * The variable a `Set-Variable` / `New-Variable` / `Get-Variable` whose name
+ * ends at `from` names, as {@link psVariable} spells it: `-Name x`, `-Name:x`,
+ * `-n x`, or else its first positional argument (a named `-Name` binds first,
+ * wherever it stands). `*` — any variable — when the name cannot be read: a
+ * quoted one (masked in this text), one computed by an expression, or none
+ * within the next {@link VARIABLE_NAME_WINDOW} characters.
+ */
+function variableNamed(text: string, from: number): string {
+  const end = Math.min(text.length, from + VARIABLE_NAME_WINDOW);
+  let named: string | undefined;
+  let positional: string | undefined;
+  let wantName = false;
+  let skipValue = false;
+  let i = from;
+  while (i < end) {
+    const c = text.charAt(i);
+    if (c === ' ' || c === '\t') {
+      i += 1;
+      continue;
+    }
+    if (c === ';' || c === '|' || c === '\n' || c === '&' || c === ')') break;
+    // One word: to a blank or a separator — a parenthesised value whole.
+    let j = i + 1;
+    if (c === '(') {
+      for (let depth = 1; j < end && depth > 0; j += 1) {
+        const d = text.charAt(j);
+        if (d === '(') depth += 1;
+        else if (d === ')') depth -= 1;
+      }
+    } else {
+      while (j < end && !' \t;|&()\n'.includes(text.charAt(j))) j += 1;
+    }
+    const word = text.slice(i, j);
+    i = j;
+    if (wantName) {
+      wantName = false;
+      named = /^[$\w{}:]+$/.test(word) ? psVariable(word) : '*';
+      continue;
+    }
+    if (skipValue) {
+      skipValue = false;
+      continue;
+    }
+    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(word);
+    if (param !== null) {
+      const p = (param[1] ?? '').toLowerCase();
+      const inline = param[2];
+      if ('name'.startsWith(p)) {
+        if (inline === undefined) wantName = true;
+        else named = /^[$\w{}:]+$/.test(inline) ? psVariable(inline) : '*';
+      } else if (inline === undefined && p.length >= 2 && VARIABLE_VALUED.some((v) => v.startsWith(p))) skipValue = true;
+      continue;
+    }
+    positional ??= /^[\w{}:]+$/.test(word) ? psVariable(word) : '*';
+  }
+  return named ?? positional ?? '*';
+}
 
 /**
  * `Invoke-Expression` over a download, on the masked command text (review I1):
@@ -3239,6 +3382,10 @@ const PS_EXEC_TOKENS =
  * tokens, so linear: a stack says which open parentheses hold `iex`'s
  * argument, and a download seen in the current `;`/newline segment is armed by
  * the next `|` for an `iex` after it.
+ *
+ * `text` is the command's {@link ShellSplit.interpolatedCommand}: a quoted
+ * span is masked, except for the variables a double-quoted one interpolates —
+ * `$b = "$a"` copies `$a`, and `iex "$s"` runs `$s`.
  */
 function powershellDownloadExecution(text: string): boolean {
   if (!/iex|invoke-expression|scriptblock|invokescript/i.test(text)) return false;
@@ -3247,16 +3394,28 @@ function powershellDownloadExecution(text: string): boolean {
   let pendingIex = false;
   let downloaded = false;
   let piped = false;
-  /** The variable being assigned in this `;`/newline segment, and the variables that hold a download. */
-  let assigning: string | undefined;
+  /** The variables being assigned in this `;`/newline segment, and the variables that hold a download. */
+  let assigning: string[] = [];
   const tainted = new Set<string>();
+  /** In a `Tee-Object` command, whose `-Variable` receives what it is piped. */
+  let inTee = false;
+  let names = 0;
+  /** `*`, a variable whose name could not be read, holds whatever any name may. */
+  const holdsDownload = (v: string): boolean => tainted.has(v) || tainted.has('*') || (v === '*' && tainted.size > 0);
   /** A download (or a variable holding one): run when it is `iex`'s argument, else armed for a pipe. */
   const download = (): boolean => {
     if (inIex > 0 || pendingIex) return true;
     downloaded = true;
-    if (assigning !== undefined) tainted.add(assigning);
+    for (const v of assigning) tainted.add(v);
     return false;
   };
+  /** A variable this command fills — from what it is piped, or from a download later in the segment. */
+  const fills = (v: string): void => {
+    assigning.push(v);
+    if (downloaded) tainted.add(v);
+  };
+  /** The name a `Set-` / `New-` / `Get-Variable` gives, read at most {@link MAX_VARIABLE_NAMES} times. */
+  const nameAfter = (at: number): string => (++names > MAX_VARIABLE_NAMES ? '*' : variableNamed(text, at));
   for (const m of text.matchAll(PS_EXEC_TOKENS)) {
     const t = m[0].toLowerCase();
     const g = m.groups ?? {};
@@ -3266,9 +3425,19 @@ function powershellDownloadExecution(text: string): boolean {
     } else if (g['dl'] !== undefined) {
       if (download()) return true;
     } else if (g['assign'] !== undefined) {
-      assigning = t.replace(/\s*=$/, '');
+      assigning = [psVariable(t.replace(/\s*\+?=$/, ''))];
     } else if (g['ref'] !== undefined) {
-      if (tainted.has(t) && download()) return true;
+      if (holdsDownload(psVariable(t)) && download()) return true;
+    } else if (g['setvar'] !== undefined) {
+      fills(nameAfter(m.index + m[0].length));
+    } else if (g['getvar'] !== undefined) {
+      if (holdsDownload(nameAfter(m.index + m[0].length)) && download()) return true;
+    } else if (g['tee'] !== undefined) {
+      inTee = true;
+    } else if (g['outvar'] !== undefined) {
+      fills(g['outname'] === undefined ? '*' : psVariable(g['outname']));
+    } else if (g['teevar'] !== undefined) {
+      if (inTee) fills(g['teename'] === undefined ? '*' : psVariable(g['teename']));
     } else if (t === '(') {
       opens.push(pendingIex);
       if (pendingIex) inIex += 1;
@@ -3279,12 +3448,14 @@ function powershellDownloadExecution(text: string): boolean {
     } else if (t === '|') {
       if (downloaded) piped = true;
       pendingIex = false;
+      inTee = false;
     } else {
       // `;`, a newline, `&&`, `||`.
       downloaded = false;
       piped = false;
       pendingIex = false;
-      assigning = undefined;
+      assigning = [];
+      inTee = false;
     }
   }
   return false;
@@ -3753,7 +3924,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     return;
   }
 
-  const { maskedCommand, statements } = splitShell(cmd);
+  const { maskedCommand, interpolatedCommand, statements } = splitShell(cmd);
 
   // The whole-command rules are local signatures, or have a linear `test`
   // (see `BashRule.test`), so they read the whole command uncapped: a long
@@ -3768,8 +3939,10 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   // statement boundary to `splitShell`, so it is judged on the command text.
   pushAll(out, judgeEffects(dotNetEffects(cmd, scope.cwd, scope.notes), scope));
   // PowerShell running a download (review I1): through `iex` across the `(`
-  // that splits statements, and a file downloaded then run.
-  if (powershellDownloadExecution(commandText)) out.push(RULE_IEX_DOWNLOAD);
+  // that splits statements, and a file downloaded then run. A variable copied
+  // through a double-quoted string is still the download (review 3.0, wave 2).
+  const flowText = interpolatedCommand === maskedCommand ? commandText : collapseBlanks(interpolatedCommand);
+  if (powershellDownloadExecution(flowText)) out.push(RULE_IEX_DOWNLOAD);
   const ranDownload = downloadsThenRuns(cmd, statements, scope.cmdLine === true);
   if (ranDownload !== null) out.push(ranDownload === 'posix' ? RULE_POSIX_DOWNLOAD_RUN : RULE_DOWNLOAD_RUN);
   // `python3 <(curl …)`: an interpreter's script is a download (round 2, ruling 2).

@@ -438,6 +438,11 @@ version bump.
   --disable-telemetry`, whatever `GUARDIAN_OFFLINE` says. `init_project`'s status script sets the variables, runs
   Trivy with an empty `--config` (never the project's `trivy.yaml`), names an honoured `.trivyignore`, and runs
   Semgrep with `PYTHONUTF8=1`.
+- **A download held in a PowerShell variable reached `iex` in every spelling but one.** `$s = irm …; iex $s` was
+  denied; `Set-Variable -Name s -Value (irm …)`, `New-Variable s (irm …)`, `$script:s = …`, `${s} = …`, a copy
+  through a string (`$b = "$a"`), `irm … -OutVariable s`, `| Tee-Object -Variable s` and a read back through
+  `iex (Get-Variable s -ValueOnly)` were all `ok` through the dispatcher. Each is denied now; a variable holding
+  anything else (`Set-Variable -Name s -Value 5; iex $s`) is not.
 
 ## [3.0.0] - 2026-09-29
 
