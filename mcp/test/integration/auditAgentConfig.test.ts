@@ -79,6 +79,48 @@ describe('audit_agent_config', () => {
   // Fixed): `.mcp.json` used `${CLAUDE_PROJECT_DIR}` in `args`, which Claude
   // Code does not expand for a project-scoped server entry, and the server
   // failed to start with a literal-placeholder MODULE_NOT_FOUND.
+  it('names a config that exists and could not be read, and does not call the audit complete', async () => {
+    const dir = makeTempDir('agent-audit-');
+    mkdirSync(join(dir, '.mcp.json'));
+    writeJson(dir, '.cursor/mcp.json', { mcpServers: { x: { command: 'node', args: ['a.js'] } } });
+    const plugin = makePlugin();
+    const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult & {
+      sources_unreadable: Array<{ source: string; reason: string }>;
+      coverage: string;
+    };
+    expect(r.sources_read).toEqual(['.cursor/mcp.json']);
+    expect(r.sources_missing).not.toContain('.mcp.json');
+    expect(r.sources_unreadable).toEqual([{ source: '.mcp.json', reason: expect.stringContaining('not a regular file') }]);
+    expect(r.warnings.some((w) => w.startsWith('.mcp.json:'))).toBe(true);
+    expect(r.coverage).toBe('partial');
+    const scan = plugin.storage.scans.getById(r.scan_id);
+    expect(scan?.missing_tools).toContain('agent-audit:.mcp.json');
+    expect(scan?.tools_run).toContainEqual(expect.objectContaining({ name: 'agent-audit:.mcp.json', status: 'failed' }));
+  });
+
+  it('calls coverage partial when a plugin.json declares its mcpServers as a path it does not follow (M8)', async () => {
+    const dir = makeTempDir('agent-audit-');
+    writeJson(dir, '.claude-plugin/plugin.json', { name: 'p', mcpServers: './servers.json' });
+    const plugin = makePlugin();
+    const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult & {
+      coverage: string;
+    };
+    expect(r.coverage).toBe('partial');
+  });
+
+  it("reads a plugin's .claude-plugin/plugin.json mcpServers", async () => {
+    const dir = makeTempDir('agent-audit-');
+    writeJson(dir, '.claude-plugin/plugin.json', {
+      name: 'p',
+      mcpServers: { risky: { command: 'npx', args: ['-y', 'some-random-package'] } },
+    });
+    const plugin = makePlugin();
+    const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult;
+    expect(r.sources_read).toContain('.claude-plugin/plugin.json');
+    expect(r.mcp_servers_found).toBe(1);
+    expect(r.findings.some((f) => f.rule_id === 'agent-audit-unpinned-launcher')).toBe(true);
+  });
+
   it('flags ${CLAUDE_PROJECT_DIR} in a project .mcp.json as the unexpanded-var defect', async () => {
     const dir = makeTempDir('agent-audit-');
     writeJson(dir, '.mcp.json', {
@@ -172,15 +214,15 @@ describe('audit_agent_config', () => {
 
     it('surfaces a real unreadable .mcp.json (a directory in its place) as a warning, not a crash', async () => {
       const dir = makeTempDir('agent-audit-');
-      // A directory where the file is expected makes readFileSync throw
-      // EISDIR on every platform — chmod-based unreadability is unreliable
-      // for the file's own owner on POSIX and near-meaningless on Windows
-      // (doubly so running as Administrator, as this suite does).
+      // A directory where the file is expected is refused by the hardened
+      // reader as not a regular file on every platform — chmod-based
+      // unreadability is unreliable for the file's own owner on POSIX and
+      // near-meaningless on Windows (doubly so running as Administrator).
       mkdirSync(join(dir, '.mcp.json'), { recursive: true });
       const plugin = makePlugin();
       const r = (await getTool('audit_agent_config').handler({ project_path: dir }, plugin)) as unknown as AuditResult;
       expect(r.ok).toBe(true);
-      expect(r.warnings.some((w) => w.includes('.mcp.json') && w.includes('could not read'))).toBe(true);
+      expect(r.warnings.some((w) => w.includes('.mcp.json') && w.includes('not a regular file'))).toBe(true);
       expect(r.sources_read).not.toContain('.mcp.json');
     });
 
@@ -283,17 +325,21 @@ describe('audit_agent_config', () => {
   describe('include_user_config', () => {
     const originalHome = process.env['HOME'];
     const originalUserProfile = process.env['USERPROFILE'];
+    const originalConfigDir = process.env['CLAUDE_CONFIG_DIR'];
 
     afterEach(() => {
       if (originalHome === undefined) delete process.env['HOME'];
       else process.env['HOME'] = originalHome;
       if (originalUserProfile === undefined) delete process.env['USERPROFILE'];
       else process.env['USERPROFILE'] = originalUserProfile;
+      if (originalConfigDir === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
+      else process.env['CLAUDE_CONFIG_DIR'] = originalConfigDir;
     });
 
     function pointHomeAt(dir: string): void {
       process.env['HOME'] = dir;
       process.env['USERPROFILE'] = dir;
+      delete process.env['CLAUDE_CONFIG_DIR'];
     }
 
     it('does NOT read ~/.claude.json by default, even when it contains something dangerous', async () => {

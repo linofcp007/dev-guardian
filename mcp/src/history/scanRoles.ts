@@ -19,6 +19,8 @@
  *   - `audit` — `audit_executive`'s roll-up re-files the findings of the
  *     scans it ran, which are already counted under their own types;
  *   - `skill_audit` — the target is a third-party skill, not this project;
+ *   - `mcp_tool_audit` — the target is what third-party MCP servers serve,
+ *     not the project's code;
  *   - `agent_audit` — the target is the AI-agent workspace config (MCP
  *     servers, permissions, hooks), not the project's code;
  *   - `review_pr` — scoped to a diff: its silence about a file says nothing
@@ -68,6 +70,7 @@ export const SCAN_TYPE_ROLE = {
   audit: 'never',
   skill_audit: 'never',
   agent_audit: 'never',
+  mcp_tool_audit: 'never',
   review_pr: 'never',
   wp_audit: 'never',
   wp_cron_audit: 'never',

@@ -18,6 +18,7 @@ beforeAll(async () => {
 const EXPECTED_TOOLS = [
   'audit_agent_config',
   'audit_executive',
+  'audit_mcp_tools',
   'bug_hunt',
   'bulk_audit_wordpress_sites',
   'check_toolchain',

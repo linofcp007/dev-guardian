@@ -200,6 +200,10 @@ export const RUN_NAMES = {
     'osv.dev': scanner(SKILL_OSV),
     // audit_agent_config: its own static checks of the agent workspace config.
     'agent-audit': scanner('agent-audit'),
+    // audit_mcp_tools: one `mcp-tool-audit:<source>::<server>` entry per server
+    // it started (`runNameEntry` reads each as a pass of this base); a server
+    // that failed or was skipped leaves the audit's findings unmeasured.
+    'mcp-tool-audit': scanner('mcp-tool-audit'),
     // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
     // sub-scan's own bookkeeping instead whenever the row still exists; these
     // speak for a sub-tool that failed before it wrote one.

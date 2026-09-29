@@ -19,6 +19,7 @@ import {
   MAX_HOOK_CONFIG_BYTES,
   isRemoteOrDeviceTarget,
   readSmallJsonFile,
+  readSmallText,
   readSmallTextFile,
   walkLinksUnder,
 } from '../../../src/hooks/configFile.js';
@@ -162,6 +163,18 @@ describe('readSmallJsonFile', () => {
     const over = join(dir, 'over.json');
     writeFileSync(over, body + ' ');
     expect(readSmallJsonFile(over)).toMatchObject({ status: 'refused', reason: 'too-large' });
+  });
+
+  // Fix round 3 (Part A, I9): a caller with a large cap (16 MiB for
+  // ~/.claude.json) must not pay for the cap on every small file — the
+  // reader allocated cap + 1 bytes per read. It now sizes the buffer from
+  // the descriptor, and still refuses a file that grew past the cap.
+  it('sizes its buffer from the file, not from a large cap', () => {
+    const p = join(dir, 'small.json');
+    writeFileSync(p, '{"a":1}');
+    const t0 = Date.now();
+    for (let i = 0; i < 300; i++) expect(readSmallText(p, 64 * 1024 * 1024).status).toBe('ok');
+    expect(Date.now() - t0).toBeLessThan(2000);
   });
 
   it('a directory is refused, not read', () => {

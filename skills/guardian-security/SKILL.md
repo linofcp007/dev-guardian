@@ -250,6 +250,61 @@ Limites a respeitar sempre que apresentares um `unreachable`:
 - **Granularidade de ficheiro, não de função.** Um finding dentro de um
   helper nunca chamado, mas cujo ficheiro É importado, lê `reachable`.
 
+## Servidores MCP — `audit_agent_config` e `audit_mcp_tools`
+
+Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
+
+1. `audit_agent_config { project_path: "<project>" }` primeiro. Lê as
+   configurações (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
+   `.gemini/settings.json`, `.claude-plugin/plugin.json`; com
+   `include_user_config: true` também as do utilizador — Claude Code, Claude
+   Desktop, Cursor, Windsurf, Gemini) **sem executar nada**, e diz que
+   servidores estão declarados.
+2. `audit_mcp_tools { project_path: "<project>", servers: ["<nome>"] }` só
+   para os servidores que o utilizador pediu para auditar — os nomes são
+   dele, nunca os escolhas nem passes a lista inteira sem perguntar. **Esta
+   tool executa código de terceiros**: arranca o comando de cada servidor
+   nomeado com um ambiente mínimo (mais o `env` da própria entrada), envia
+   `initialize` e os pedidos de listagem de tools, prompts e resources,
+   **nunca chama `tools/call`**, e mata a árvore de processos no fim.
+   Servidores remotos só com `allow_remote: true`, que o utilizador tem de
+   pedir — remoto é uma entrada com URL, um comando num caminho de rede, um
+   URL na linha de comando ou num valor de `env` (`mcp-remote` e outros
+   proxies, um URL de base de dados), `ssh` ou `kubectl` em qualquer ponto
+   da linha de comando, ou `docker`/`podman` apontado a outro motor. Um URL
+   cujo host é exatamente `localhost`, `127.x.x.x` ou `[::1]` é local
+   (`postgres://localhost/app` não pede `allow_remote`), mas pode ser um
+   túnel (`ssh -L`, um proxy local) que a configuração não mostra.
+   Se vários ficheiros declaram o mesmo nome com comandos diferentes, a tool
+   recusa e lista os nomes qualificados (`.mcp.json::github`): pergunta ao
+   utilizador qual quer e passa esse.
+3. Lê `coverage` e `servers[].status` antes dos findings: um servidor
+   `skipped` (não declarado, ambíguo, remoto sem `allow_remote`, cancelado,
+   sem orçamento), `failed` (não arrancou, não respondeu em `timeout_ms`) ou
+   `partial` (uma listagem cortada por um limite) não foi auditado por
+   inteiro — não é um resultado limpo. E mesmo um resultado limpo cobre só o
+   que o servidor quis mostrar a esta auditoria: ela identifica-se como
+   `dev-guardian-audit`, e um servidor pode reconhecê-la e mostrar outra
+   coisa ao anfitrião. Diz isso ao utilizador.
+4. Os findings dizem em que tool e em que campo (descrição, `inputSchema`,
+   …) está o problema: instruções ao modelo, Unicode escondido, pedidos para
+   ler chaves ou configurações, para esconder algo do utilizador, para enviar
+   dados para um URL ou num parâmetro, instruções sobre outras tools
+   (*shadowing*). `mcp-tool-definition-changed` (high) é um *rug pull*: a
+   mesma tool com outra definição (título, descrição, esquemas de entrada ou
+   de saída, anotações) desde a auditoria anterior — reportado uma vez, e a
+   nova definição passa a ser a referência; uma tool que desaparece e volta
+   diferente também conta. As `instructions` do servidor (que vão para o
+   system prompt) contam como uma tool (`mcp-server-instructions-changed`,
+   high). Prompts, resources e templates também ficam registados
+   (`mcp-prompt-definition-changed` e afins, medium). Duas tools com o
+   mesmo nome são `mcp-tool-duplicate-name` (high): o cliente escolhe uma
+   delas de forma ambígua. `mcp-tool-sensitive-file-access` em medium
+   significa que a tool manda o modelo ler um ficheiro de credenciais ou de
+   configuração: confirma com o utilizador se esse é o propósito da tool
+   (um cliente SSH ou de registry pode precisar disso); em high, manda
+   também passá-lo a outro sítio ou escondê-lo — isso nenhuma tool precisa.
+
 ## Quando não correr scans completos
 
 - Em commits triviais (1-2 linhas): só hooks pre-commit chegam

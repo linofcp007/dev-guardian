@@ -108,6 +108,9 @@ The tool returns a **0-100 risk score** (severity-weighted; findings in
   rather than running `scan_skill` on it.
 - For the AI-agent **workspace configuration** of this project (`.mcp.json`,
   `.claude/settings.json`: unpinned MCP servers, inline secrets, wildcard Bash
-  permissions) → `audit_agent_config { project_path: "<project>" }`.
+  permissions) → `audit_agent_config { project_path: "<project>" }`; for the
+  tool definitions an already-configured server actually serves (poisoning,
+  shadowing, a definition changed since the last audit) →
+  `audit_mcp_tools { servers: ["<name>"] }`, which starts that server.
 - This module is specifically for **third-party agent artifacts you're deciding
   whether to trust**.

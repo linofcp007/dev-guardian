@@ -503,4 +503,26 @@ describe('migrations runner', () => {
     expect(finding?.rule_id).toBe('PYSEC-2021-142');
     expect(finding?.vuln_aliases).toBeUndefined();
   });
+
+  it('upgrades a version-11 database in place: audit_mcp_tools gets its pin table, old rows untouched (012)', () => {
+    const db = new Database(':memory:');
+    for (const m of listMigrations().filter((x) => x.version <= 11)) {
+      db.exec(readFileSync(m.filePath, 'utf8'));
+    }
+    db.exec(`INSERT INTO schema_meta(key, value) VALUES('version', '11')`);
+    db.exec(
+      `INSERT INTO agent_config_hashes (project_path, entry_key, hash, updated_at)
+       VALUES ('/p', '.mcp.json::x', 'h', '2026-01-01T00:00:00.000Z')`,
+    );
+
+    runMigrations(db);
+
+    const columns = (db.prepare(`PRAGMA table_info(mcp_tool_pins)`).all() as { name: string }[]).map((c) => c.name);
+    expect(columns).toEqual(expect.arrayContaining(['project_path', 'server_key', 'tool_name', 'hash', 'updated_at']));
+    const storage = new Storage(db);
+    expect(storage.agentAudit.getHashes('/p').get('.mcp.json::x')).toBe('h');
+    expect(storage.mcpToolPins.getServerPins('/p', '.mcp.json::x')).toEqual(new Map());
+    const version = db.prepare(`SELECT value FROM schema_meta WHERE key = 'version'`).get() as { value: string };
+    expect(version.value).toBe(LATEST);
+  });
 });

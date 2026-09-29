@@ -10,6 +10,7 @@ import { BaselinesRepo } from './baselinesRepo.js';
 import { CveIntelRepo } from './cveIntelRepo.js';
 import { CvesRepo } from './cvesRepo.js';
 import { FindingsRepo } from './findingsRepo.js';
+import { McpToolPinsRepo } from './mcpToolPinsRepo.js';
 import { RuntimeMetaRepo } from './runtimeMetaRepo.js';
 import { ScansRepo } from './scansRepo.js';
 import { StackRepo } from './stackRepo.js';
@@ -29,6 +30,7 @@ export class Storage {
     surface;
     validations;
     agentAudit;
+    mcpToolPins;
     constructor(db) {
         this.db = db;
         this.scans = new ScansRepo(db);
@@ -42,6 +44,7 @@ export class Storage {
         this.surface = new SurfaceRepo(db);
         this.validations = new ValidationsRepo(db);
         this.agentAudit = new AgentAuditRepo(db);
+        this.mcpToolPins = new McpToolPinsRepo(db);
     }
     close() {
         this.db.close();
