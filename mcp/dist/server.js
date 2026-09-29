@@ -49226,7 +49226,7 @@ registerToolModule(
   makeScanTool({
     name: "security_scan_full",
     title: "Full security scan",
-    description: "Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules on disk with --metrics=off.",
+    description: "Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
     scan_type: "security_full",
     category: "security",
     orchestrator: true,
@@ -49240,7 +49240,7 @@ registerToolModule(
       auto_fix: AutoFix,
       allow_dirty: AllowDirty,
       local_only: external_exports.boolean().optional().describe(
-        "Semgrep runs only rules already on disk (the project's .semgrep.yml and registered custom rules) with --metrics=off; no registry, no telemetry. Default: false."
+        "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the plugin's LLM-application pack) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet feeds. Default: false."
       ),
       force: Force
     },
@@ -52168,7 +52168,7 @@ var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\
 var reviewPr = makeScanTool({
   name: "review_pr",
   title: "Pre-PR diff review",
-  description: 'Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base_ref defaults to origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry).',
+  description: 'Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base_ref defaults to origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it runs, may still download its database.',
   scan_type: "review_pr",
   category: "security",
   supportsAutoFix: false,
@@ -52178,7 +52178,7 @@ var reviewPr = makeScanTool({
     base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
     head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
     local_only: external_exports.boolean().optional().describe(
-      "Semgrep runs only the project's own rules and registered custom rules, with --metrics=off. Default: false."
+      "Semgrep runs only rules on disk \u2014 the project's own, registered custom rules and the plugin's LLM-application pack \u2014 with --metrics=off. Trivy (run when a manifest changed) may still download its database. Default: false."
     ),
     severity_min: SeverityMin,
     force: Force

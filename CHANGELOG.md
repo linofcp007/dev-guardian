@@ -70,6 +70,12 @@ version bump.
   pack (`configs/semgrep/llm.yml`) on every run since 3.0.0. All three now
   say what the pack catches, point at `guardian-security` for the full list,
   and keep the manual checklist for what it cannot see.
+- `local_only` was described as keeping more on the machine than it does.
+  `/guardian-scan` offered it "when nothing may leave the machine", but it
+  keeps only Semgrep there — Trivy still downloads its database and a .NET
+  restore still contacts NuGet, as SECURITY.md says; and the
+  `security_scan_full` and `review_pr` descriptions left the plugin's LLM
+  pack out of the rules on disk it still runs. All three now say so.
 - **`wp_plugin_check` said it did two things it never did.** Its description
   promised the "latest known" version and, with `target_url`, "a fresh WPScan
   lookup"; the handler makes no network call at all, and `target_url` only

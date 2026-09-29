@@ -78,7 +78,8 @@ registerToolModule(
       'lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is ' +
       'partial/none, never full. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the ' +
       'Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules ' +
-      'on disk with --metrics=off.',
+      "on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on " +
+      "a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
     scan_type: 'security_full',
     category: 'security',
     orchestrator: true,
@@ -96,8 +97,10 @@ registerToolModule(
         .boolean()
         .optional()
         .describe(
-          "Semgrep runs only rules already on disk (the project's .semgrep.yml and registered custom rules) " +
-            'with --metrics=off; no registry, no telemetry. Default: false.',
+          "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the " +
+            "plugin's LLM-application pack) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, " +
+            "scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet " +
+            'feeds. Default: false.',
         ),
       force: Force,
     },

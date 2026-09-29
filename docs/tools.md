@@ -405,14 +405,14 @@ Write a report in one of four formats: markdown (default — handover doc), html
 
 ### `review_pr`
 
-Scan what a pull request changes: Semgrep (same rules as scan\_sast) over every added/modified/renamed file between base\_ref and head\_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base\_ref defaults to origin/HEAD, then main, then master; head\_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local\_only=true to skip the Semgrep registry (no telemetry).
+Scan what a pull request changes: Semgrep (same rules as scan\_sast) over every added/modified/renamed file between base\_ref and head\_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base\_ref defaults to origin/HEAD, then main, then master; head\_ref to HEAD. An unresolvable ref is an error, never "no files changed". Pass local\_only=true to skip the Semgrep registry (no telemetry); Trivy, when it runs, may still download its database.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `base_ref` | string | no | — | Base ref for the diff. Defaults to origin/HEAD, then main, then master. |
 | `head_ref` | string | no | — | Head ref. Defaults to HEAD. |
-| `local_only` | boolean | no | — | Semgrep runs only the project's own rules and registered custom rules, with --metrics=off. Default: false. |
+| `local_only` | boolean | no | — | Semgrep runs only rules on disk — the project's own, registered custom rules and the plugin's LLM-application pack — with --metrics=off. Trivy (run when a manifest changed) may still download its database. Default: false. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache and force a fresh scan. |
 
@@ -566,7 +566,7 @@ Aggregated source-side scan for a WordPress plugin / theme / site project: Semgr
 
 ### `security_scan_full`
 
-Run every security scan as one: scan\_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan\_secrets (gitleaks over git history AND uncommitted files), scan\_deps (Trivy vuln + license) and scan\_iac (Trivy config). Each runs as its own scan (meta.parent\_scan\_id); this scan holds the merged, de-duplicated findings and lists them in child\_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto\_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local\_only=true uses only rules on disk with --metrics=off.
+Run every security scan as one: scan\_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan\_secrets (gitleaks over git history AND uncommitted files), scan\_deps (Trivy vuln + license) and scan\_iac (Trivy config). Each runs as its own scan (meta.parent\_scan\_id); this scan holds the merged, de-duplicated findings and lists them in child\_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. auto\_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local\_only=true uses only rules on disk with --metrics=off. It does not stop Trivy's database download (scan\_deps, scan\_iac) nor, on a .NET project, scan\_sast's dotnet restore (the NuGet feeds).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -574,7 +574,7 @@ Run every security scan as one: scan\_sast (Semgrep with the registry ruleset, t
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff\_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out. |
 | `auto_fix` | boolean | no | `false` | Apply scanner auto-fixes where supported (Semgrep --autofix, Trivy where applicable). |
 | `allow_dirty` | boolean | no | `false` | Allow auto-fix to run even when the working tree has uncommitted changes. |
-| `local_only` | boolean | no | — | Semgrep runs only rules already on disk (the project's .semgrep.yml and registered custom rules) with --metrics=off; no registry, no telemetry. Default: false. |
+| `local_only` | boolean | no | — | Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the plugin's LLM-application pack) with --metrics=off; no registry, no telemetry. Trivy (scan\_deps, scan\_iac) may still download its database, and a .NET project's restore still contacts its NuGet feeds. Default: false. |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache and force a fresh scan. |
 
 ### `set_baseline`
