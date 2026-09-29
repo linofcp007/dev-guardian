@@ -1,3 +1,15 @@
+/**
+ * `hooks/secretScan.ts`.
+ *
+ * Timing (review round 3, item 8). Linearity is asserted as a RATIO of best-of-5
+ * times — four times the input must cost well under twelve times as much
+ * (linear is ~4×, quadratic ~16×) — which a loaded machine skews far less than
+ * a clock. The absolute bounds are tight only with `GUARDIAN_PERF_STRICT=1` (a
+ * quiet machine); by default each is a loose ceiling, at least ten times the
+ * typical time measured on an idle one, so a slow container or a busy runner
+ * does not fail a correct build and a quadratic shape still does.
+ */
+
 import { describe, expect, it } from 'vitest';
 import {
   SECRET_RULES,
@@ -5,6 +17,22 @@ import {
   scanForSecrets,
   shannonEntropy,
 } from '../../../src/hooks/secretScan.js';
+
+const PERF_STRICT = process.env['GUARDIAN_PERF_STRICT'] === '1';
+/** An absolute bound: `strict` under `GUARDIAN_PERF_STRICT=1`, else the loose ceiling. */
+const ceiling = (strict: number, loose: number): number => (PERF_STRICT ? strict : loose);
+
+/** The best of five runs, after a warm-up: a quadratic shape is slow every time, a busy scheduler once. */
+function bestOf5(run: () => void): number {
+  run();
+  let best = Number.POSITIVE_INFINITY;
+  for (let k = 0; k < 5; k += 1) {
+    const t0 = performance.now();
+    run();
+    best = Math.min(best, performance.now() - t0);
+  }
+  return best;
+}
 
 describe('scanForSecrets — high-confidence provider tokens', () => {
   it('detects an AWS access key id', () => {
@@ -179,13 +207,13 @@ describe('scanForSecrets — task-1: no double-report of an Anthropic key (findi
   });
 });
 
-/** task-1, finding 9: ReDoS caps — both inputs must resolve in well under 500ms. */
+/** task-1, finding 9: ReDoS caps — both inputs must resolve in bounded time (see the header on timing). */
 describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
-  it('a pathological JWT-shaped repeat resolves in well under 500ms', () => {
+  it('a pathological JWT-shaped repeat resolves in bounded time (typical: under 20 ms)', () => {
     const text = 'eyJ-'.repeat(50_000);
     const start = performance.now();
     scanForSecrets(text);
-    expect(performance.now() - start).toBeLessThan(500);
+    expect(performance.now() - start).toBeLessThan(ceiling(500, 1000));
   });
 
   it('a real JWT is still detected after the pattern was bounded', () => {
@@ -196,11 +224,11 @@ describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
     expect(hits.map((h) => h.ruleId)).toContain('jwt');
   });
 
-  it('a single 100 KB unquoted line resolves in well under 500ms', () => {
+  it('a single 100 KB unquoted line resolves in bounded time (typical: under 5 ms)', () => {
     const text = `password = "${'a'.repeat(100_000)}"`;
     const start = performance.now();
     scanForSecrets(text);
-    expect(performance.now() - start).toBeLessThan(500);
+    expect(performance.now() - start).toBeLessThan(ceiling(500, 1000));
   });
 });
 
@@ -313,27 +341,19 @@ describe('scanForSecrets — a long line is read to its end (review I3)', () => 
       ['password=" … (unclosed)', (n) => `password="${'q'.repeat(n)}`],
       ['one minified line', (n) => 'var a=function(b){return b+1};'.repeat(n / 30)],
     ];
-    const best = (text: string): number => {
-      scanForSecrets(text);
-      let t = Number.POSITIVE_INFINITY;
-      for (let k = 0; k < 3; k += 1) {
-        const t0 = performance.now();
-        scanForSecrets(text);
-        t = Math.min(t, performance.now() - t0);
-      }
-      return t;
-    };
+    const best = (text: string): number => bestOf5(() => scanForSecrets(text));
 
-    it.each(shapes)('a 1 MB line of %s is scanned in well under 1.5 s', (_label, make) => {
-      expect(best(make(1_000_000))).toBeLessThan(1500);
-    });
+    // Typical, idle: 30-140 ms.
+    it.each(shapes)('a 1 MB line of %s is scanned in bounded time', (_label, make) => {
+      expect(best(make(1_000_000))).toBeLessThan(ceiling(1500, 3000));
+    }, 60_000);
 
-    it.each(shapes)('%s: four times the length costs well under eight times as much', (_label, make) => {
+    it.each(shapes)('%s: four times the length costs well under twelve times as much', (_label, make) => {
       const small = best(make(250_000));
       const large = best(make(1_000_000));
       // Linear is ~4x; quadratic 16x. The floor absorbs timer noise on tiny values.
-      expect(large).toBeLessThan(8 * Math.max(small, 5));
-    });
+      expect(large).toBeLessThan(12 * Math.max(small, 5));
+    }, 60_000);
   });
 });
 
