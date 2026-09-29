@@ -41512,872 +41512,12 @@ var Storage = class {
 };
 
 // src/storage/maintenance.ts
-import { lstatSync as lstatSync3, statSync as statSync6 } from "node:fs";
-import { isAbsolute as isAbsolute4, join as join9, parse as parse4, resolve as resolve6, sep as sep2 } from "node:path";
-var DEFAULT_RETENTION_SCANS = 50;
-var PRUNE_BATCH = 50;
-var RETENTION_BUDGET_MS = 1e3;
-var RETENTION_START_DELAY_MS = 2e3;
-var RETENTION_BATCH_GAP_MS = 20;
-function resolveRetentionLimit(raw) {
-  const value = raw?.trim() ?? "";
-  if (value === "") return { keep: DEFAULT_RETENTION_SCANS };
-  if (/^\d+$/.test(value)) return { keep: Number.parseInt(value, 10) };
-  return {
-    keep: DEFAULT_RETENTION_SCANS,
-    warning: `GUARDIAN_RETENTION_SCANS='${raw}' is not a non-negative integer; keeping the newest ${DEFAULT_RETENTION_SCANS} scans per project and scan type.`
-  };
-}
-var SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
-    json_extract(meta, '$.scope') IS NOT NULL
-    OR (scan_type = 'wp_vuln_check' AND json_type(meta, '$.slug') IS NOT NULL)
-  ELSE 0 END)`;
-var jsonArrayOr = (column) => `(CASE WHEN json_valid(${column}) AND json_type(${column}) = 'array' THEN ${column} ELSE '[]' END)`;
-var USABLE_SQL = `(CASE
-    WHEN status <> 'completed' THEN 0
-    WHEN (
-      json_array_length(${jsonArrayOr("missing_tools")}) > 0
-      OR EXISTS (SELECT 1 FROM json_each(${jsonArrayOr("tools_run")}) AS t
-                  WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'failed')
-    ) AND NOT EXISTS (SELECT 1 FROM json_each(${jsonArrayOr("tools_run")}) AS t
-                       WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'ok')
-    THEN 0
-    ELSE 1
-  END)`;
-var BASELINED_RUN_MEMBERS_SQL = `
-  SELECT member FROM (
-    SELECT CASE WHEN c.type = 'object' THEN json_extract(c.value, '$.scan_id') END AS member
-      FROM baselines b
-      JOIN scans p ON p.id = b.scan_id,
-           json_each(CASE WHEN json_valid(p.meta) THEN p.meta ELSE '{}' END, '$.child_scans') AS c
-    UNION
-    SELECT CASE WHEN json_valid(s.meta) THEN json_extract(s.meta, '$.parent_scan_id') END
-      FROM baselines b
-      JOIN scans s ON s.id = b.scan_id
-    UNION
-    SELECT u.value
-      FROM baselines b
-      JOIN scans a ON a.id = b.scan_id,
-           json_each(
-             CASE WHEN a.scan_type = 'audit' AND json_valid(a.meta)
-                       AND json_type(a.meta, '$.sub_scan_ids') = 'object'
-                  THEN json_extract(a.meta, '$.sub_scan_ids') ELSE '{}' END
-           ) AS u
-  )
-  WHERE typeof(member) = 'text'
-`;
-var PROTECTED_SQL = `(
-  status = 'running'
-  OR id IN (SELECT scan_id FROM baselines)
-  OR EXISTS (
-    SELECT 1 FROM baselines b
-     WHERE b.scan_id = (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.parent_scan_id') END)
-  )
-  OR id IN (${BASELINED_RUN_MEMBERS_SQL})
-)`;
-function prunableSql(candidates2) {
-  const only = candidates2 > 0 ? (() => {
-    const list2 = Array.from({ length: candidates2 }, () => "?").join(", ");
-    return {
-      partitions: `WHERE (project_path, scan_type) IN
-                           (SELECT project_path, scan_type FROM scans WHERE id IN (${list2}))`,
-      ids: `AND id IN (${list2})`
-    };
-  })() : { partitions: "", ids: "" };
-  return `
-    SELECT id FROM (
-      SELECT id, status, meta, started_at, rowid AS rid,
-             ROW_NUMBER() OVER (
-               PARTITION BY project_path, scan_type, ${SCOPED_SQL}, ${USABLE_SQL}
-               ORDER BY started_at DESC, rowid DESC
-             ) AS rn
-      FROM scans
-      ${only.partitions}
-    )
-    WHERE rn > ?
-      ${only.ids}
-      AND NOT ${PROTECTED_SQL}
-    ORDER BY started_at ASC, rid ASC
-  `;
-}
-var PRUNABLE_SQL = prunableSql(0);
-function listPrunableScans(db, keep) {
-  if (!(keep > 0)) return [];
-  return db.prepare(PRUNABLE_SQL).all(keep).map((r) => r.id);
-}
-function deletePrunableScans(db, ids2, keep) {
-  if (ids2.length === 0 || !(keep > 0)) return 0;
-  return db.transaction(() => {
-    const eligible = db.prepare(prunableSql(ids2.length)).all(...ids2, keep, ...ids2).map((r) => r.id);
-    return deleteRows(db, eligible);
-  })();
-}
-function deleteScans(db, ids2) {
-  if (ids2.length === 0) return 0;
-  return db.transaction(() => {
-    const list2 = ids2.map(() => "?").join(", ");
-    const eligible = db.prepare(`SELECT id FROM scans WHERE id IN (${list2}) AND NOT ${PROTECTED_SQL}`).all(...ids2).map((r) => r.id);
-    return deleteRows(db, eligible);
-  })();
-}
-function deleteRows(db, eligible) {
-  if (eligible.length === 0) return 0;
-  const del = eligible.map(() => "?").join(", ");
-  db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
-  db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
-  db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
-  db.prepare(
-    `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`
-  ).run(...eligible, ...eligible);
-  return db.prepare(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
-}
-var STACK_PRUNE_BATCH = 500;
-function pruneStackSnapshots(db, limit = STACK_PRUNE_BATCH) {
-  return db.transaction(() => {
-    const excess = db.prepare(
-      `SELECT id FROM (
-           SELECT id, ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY captured_at DESC, id DESC) AS rn
-           FROM stack_snapshots
-         ) WHERE rn > ? ORDER BY id`
-    ).all(STACK_SNAPSHOTS_KEPT).map((r) => r.id);
-    const batch = excess.slice(0, Math.max(0, limit));
-    let deleted = 0;
-    for (let i2 = 0; i2 < batch.length; i2 += 400) {
-      const chunk = batch.slice(i2, i2 + 400);
-      deleted += db.prepare(`DELETE FROM stack_snapshots WHERE id IN (${chunk.map(() => "?").join(", ")})`).run(...chunk).changes;
-    }
-    return { deleted, remaining: excess.length - deleted };
-  })();
-}
-function reapOrphanedScans(storage, log) {
-  try {
-    const reaped = storage.scans.reapRunning();
-    if (reaped > 0) log(`reaped ${reaped} orphaned scan(s)`);
-  } catch (error2) {
-    log(`reaper failed (continuing): ${describe(error2)}`);
-  }
-}
-var defaultDefer = (fn, ms) => {
-  const timer = setTimeout(fn, ms);
-  timer.unref();
-  return () => clearTimeout(timer);
-};
-function scheduleRetention(storage, log, options = {}) {
-  const limit = resolveRetentionLimit((options.env ?? process.env)["GUARDIAN_RETENTION_SCANS"]);
-  if (limit.warning !== void 0) log(limit.warning);
-  if (limit.keep === 0) return () => {
-  };
-  const defer = options.defer ?? defaultDefer;
-  const now = options.now ?? (() => performance.now());
-  const budgetMs = options.budgetMs ?? RETENTION_BUDGET_MS;
-  const batchSize = options.batchSize ?? PRUNE_BATCH;
-  let cancelled = false;
-  let cancelNext = () => {
-  };
-  let pending;
-  let spent = 0;
-  let deleted = 0;
-  const finish = (left) => {
-    if (deleted === 0 && left === 0) return;
-    log(
-      `pruned ${deleted} scan(s) beyond the newest ${limit.keep} per project and scan type` + (left > 0 ? `; ${left} left for the next start (retention budget ${budgetMs} ms)` : "")
-    );
-  };
-  const tick = () => {
-    if (cancelled) return;
-    const t0 = now();
-    let left;
-    try {
-      const db = storage.rawHandle();
-      if (pending === void 0) {
-        const stack = pruneStackSnapshots(db);
-        if (stack.deleted > 0) {
-          log(
-            `pruned ${stack.deleted} stack snapshot(s) beyond the newest ${STACK_SNAPSHOTS_KEPT} per project` + (stack.remaining > 0 ? `; ${stack.remaining} left for the next start` : "")
-          );
-        }
-      }
-      pending ??= listPrunableScans(db, limit.keep);
-      deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep);
-      left = pending.length;
-    } catch (error2) {
-      log(`retention failed (continuing): ${describe(error2)}`);
-      return;
-    }
-    spent += now() - t0;
-    if (left === 0 || spent >= budgetMs) {
-      finish(left);
-      return;
-    }
-    cancelNext = defer(tick, RETENTION_BATCH_GAP_MS);
-  };
-  cancelNext = defer(tick, options.startDelayMs ?? RETENTION_START_DELAY_MS);
-  return () => {
-    cancelled = true;
-    cancelNext();
-  };
-}
-function describe(error2) {
-  return error2 instanceof Error ? error2.message : String(error2);
-}
-function canonicalizeStoredProjectPaths(db) {
-  const stored = db.prepare(
-    `SELECT project_path AS p FROM suppressions WHERE project_path IS NOT NULL
-       UNION
-       SELECT project_path AS p FROM baselines WHERE project_path IS NOT NULL`
-  ).all().map((r) => r.p);
-  const renames = [];
-  for (const path8 of stored) {
-    const canonical2 = spellingOnlyCanonical(path8);
-    if (canonical2 !== null) renames.push([path8, canonical2]);
-  }
-  if (renames.length === 0) return 0;
-  return db.transaction(() => {
-    let changed = 0;
-    for (const [from, to] of renames) {
-      changed += db.prepare("UPDATE suppressions SET project_path = ? WHERE project_path = ?").run(to, from).changes;
-      changed += db.prepare("UPDATE baselines SET project_path = ? WHERE project_path = ?").run(to, from).changes;
-    }
-    return changed;
-  })();
-}
-function spellingOnlyCanonical(path8) {
-  if (!isAbsolute4(path8)) return null;
-  try {
-    if (!statSync6(path8).isDirectory()) return null;
-  } catch {
-    return null;
-  }
-  const canonical2 = canonicalPath(path8);
-  if (canonical2 === path8) return null;
-  const resolved = resolve6(path8);
-  const root = parse4(resolved).root;
-  let current = root;
-  for (const part of resolved.slice(root.length).split(sep2).filter((s) => s !== "")) {
-    current = join9(current, part);
-    try {
-      if (lstatSync3(current).isSymbolicLink()) return null;
-    } catch {
-      return null;
-    }
-  }
-  return canonical2;
-}
-function canonicalizeProjectPathsAtStartup(storage, log) {
-  try {
-    const changed = canonicalizeStoredProjectPaths(storage.rawHandle());
-    if (changed > 0) log(`rewrote ${changed} suppression/baseline row(s) to the canonical project path spelling`);
-  } catch (error2) {
-    log(`project path spelling step failed (continuing): ${describe(error2)}`);
-  }
-}
+import { lstatSync as lstatSync3, statSync as statSync7 } from "node:fs";
+import { isAbsolute as isAbsolute5, join as join15, parse as parse4, resolve as resolve6, sep as sep3 } from "node:path";
 
-// src/resources/paging.ts
-var DEFAULT_PAGE_SIZE = 50;
-var MAX_PAGE_SIZE = 100;
-var MESSAGE_MAX_CHARS = 500;
-function serverProjectPath() {
-  return canonicalPath(process.cwd());
-}
-var QueryTolerantUriTemplate = class extends UriTemplate {
-  base;
-  queryNames;
-  constructor(template) {
-    super(template);
-    const m = /\{\?([^}]*)\}$/.exec(template);
-    const baseTemplate = m ? template.slice(0, m.index) : template;
-    this.base = new UriTemplate(baseTemplate);
-    this.queryNames = m?.[1] ? m[1].split(",").map((n2) => n2.trim()).filter((n2) => n2.length > 0) : [];
-  }
-  match(uri) {
-    const q = uri.indexOf("?");
-    const path8 = q === -1 ? uri : uri.slice(0, q);
-    const vars = this.base.match(path8);
-    if (vars === null) return null;
-    if (q === -1) return vars;
-    const params = new URLSearchParams(uri.slice(q + 1));
-    const out = { ...vars };
-    for (const name of this.queryNames) {
-      const value = params.get(name);
-      if (value !== null) out[name] = value;
-    }
-    return out;
-  }
-};
-function paginate(uri, all) {
-  const total = all.length;
-  const pageRaw = Number(uri.searchParams.get("page") ?? "1");
-  const sizeRaw = Number(uri.searchParams.get("page_size") ?? String(DEFAULT_PAGE_SIZE));
-  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
-  const page_size = Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(Math.floor(sizeRaw), MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
-  const start = (page - 1) * page_size;
-  return { items: all.slice(start, start + page_size), total, page, page_size };
-}
-function boundFinding(f) {
-  if (f.message === void 0 || f.message.length <= MESSAGE_MAX_CHARS) return f;
-  return { ...f, message: `${f.message.slice(0, MESSAGE_MAX_CHARS - 1)}\u2026` };
-}
-
-// src/resources/index.ts
-var RESOURCES = [];
-function registerResourceModule(resource) {
-  if (RESOURCES.some((r) => r.name === resource.name)) {
-    throw new Error(`Resource '${resource.name}' is already registered`);
-  }
-  RESOURCES.push(resource);
-}
-function attachAllResources(server, ctx) {
-  for (const resource of RESOURCES) {
-    const mimeType = resource.mimeType ?? "application/json";
-    if (resource.isTemplate) {
-      const listAs = resource.listAs;
-      const template = new ResourceTemplate(new QueryTolerantUriTemplate(resource.uri), {
-        list: listAs === void 0 ? void 0 : () => ({ resources: [{ uri: listAs, name: resource.name, description: resource.description, mimeType }] })
-      });
-      server.registerResource(
-        resource.name,
-        template,
-        { description: resource.description, mimeType },
-        async (uri, params) => {
-          const { json } = await resource.handler(uri, params, ctx);
-          return {
-            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
-          };
-        }
-      );
-    } else {
-      server.registerResource(
-        resource.name,
-        resource.uri,
-        { description: resource.description, mimeType },
-        async (uri) => {
-          const { json } = await resource.handler(uri, {}, ctx);
-          return {
-            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
-          };
-        }
-      );
-    }
-  }
-}
-
-// src/tools/responseBounds.ts
-var RESPONSE_PARTIAL_ENTRIES = 20;
-function bound(list2) {
-  if (list2.length <= RESPONSE_PARTIAL_ENTRIES) return null;
-  const byType = {};
-  for (const p of list2) byType[p.type] = (byType[p.type] ?? 0) + 1;
-  return {
-    partially_parsed: list2.slice(0, RESPONSE_PARTIAL_ENTRIES),
-    partially_parsed_total: list2.length,
-    partially_parsed_by_type: byType
-  };
-}
-function isPartialList(value) {
-  return Array.isArray(value) && value.every((p) => p !== null && typeof p === "object" && typeof p.file === "string");
-}
-function boundResponsePayload(payload) {
-  let out = payload;
-  const runs = payload["tools_run"];
-  if (Array.isArray(runs)) {
-    let changed = false;
-    const bounded = runs.map((run) => {
-      if (run === null || typeof run !== "object") return run;
-      const list2 = run.partially_parsed;
-      const cut = list2 === void 0 ? null : bound(list2);
-      if (cut === null) return run;
-      changed = true;
-      return { ...run, ...cut };
-    });
-    if (changed) out = { ...out, tools_run: bounded };
-  }
-  const top = payload["partially_parsed"];
-  if (isPartialList(top)) {
-    const cut = bound(top);
-    if (cut !== null) out = { ...out, ...cut };
-  }
-  return out;
-}
-
-// src/tools/index.ts
-var TOOLS = [];
-function registerToolModule(tool50) {
-  if (TOOLS.some((t) => t.name === tool50.name)) {
-    throw new Error(`Tool '${tool50.name}' is already registered`);
-  }
-  TOOLS.push(tool50);
-}
-function attachAllTools(server, ctx) {
-  for (const tool50 of TOOLS) {
-    server.registerTool(
-      tool50.name,
-      {
-        ...tool50.title ? { title: tool50.title } : {},
-        description: tool50.description,
-        inputSchema: tool50.inputSchema
-      },
-      async (input, extra) => {
-        const callMeta = {};
-        const typedExtra = extra;
-        const tokenRaw = typedExtra?._meta?.progressToken;
-        if (typeof tokenRaw === "string" || typeof tokenRaw === "number") {
-          callMeta.progressToken = tokenRaw;
-        }
-        if (typedExtra?.signal instanceof AbortSignal) {
-          callMeta.signal = typedExtra.signal;
-        }
-        const result = await tool50.handler(input, ctx, callMeta);
-        return toCallToolResult(result, tool50.contentOnlyKeys ?? []);
-      }
-    );
-  }
-}
-function toCallToolResult(result, contentOnlyKeys) {
-  if (result.ok) {
-    const { ok: _ok, ...rest } = result;
-    const payload = boundResponsePayload({ ok: true, ...rest });
-    const structured = { ...payload };
-    for (const key of contentOnlyKeys) delete structured[key];
-    const indent = contentOnlyKeys.length > 0 ? void 0 : 2;
-    return {
-      content: [{ type: "text", text: JSON.stringify(payload, null, indent) }],
-      structuredContent: structured
-    };
-  }
-  const errorPayload = { ok: false, error: result.error };
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text",
-        text: `Error (${result.error.code}): ${result.error.message}`
-      }
-    ],
-    structuredContent: errorPayload
-  };
-}
-
-// src/runners/findingMerge.ts
-function findingMergeKey(f) {
-  return f.fingerprint;
-}
-function dedupeFindings(findings) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const f of findings) {
-    const key = findingMergeKey(f);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(f);
-  }
-  return out;
-}
-
-// src/runners/git.ts
-init_execa();
-import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync8, mkdtempSync, rmSync as rmSync3 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join as join10 } from "node:path";
-var GIT_TIMEOUT_MS2 = 6e4;
-var CHECKOUT_TIMEOUT_MS = 10 * 6e4;
-async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS2) {
-  try {
-    const r = await execa("git", ["-C", cwd, ...args], {
-      reject: false,
-      timeout: timeoutMs,
-      encoding: "utf8",
-      stripFinalNewline: false
-    });
-    if (r.exitCode === void 0) return { exitCode: 127, stdout: "", stderr: "git could not be run" };
-    return {
-      exitCode: r.exitCode,
-      stdout: typeof r.stdout === "string" ? r.stdout : "",
-      stderr: typeof r.stderr === "string" ? r.stderr : ""
-    };
-  } catch (e) {
-    return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
-  }
-}
-function splitNul(text2) {
-  return text2.split("\0").filter((s) => s.length > 0);
-}
-async function repoState(cwd) {
-  const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
-  if (top.exitCode !== 0) {
-    if (/not a git repository/i.test(top.stderr) || top.exitCode === 127) return { kind: "not_git" };
-    return { kind: "error", message: firstLine(top.stderr) || `git exited ${top.exitCode}` };
-  }
-  const toplevel = top.stdout.trim();
-  const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
-  return head.exitCode === 0 ? { kind: "has_commits", toplevel } : { kind: "no_commits", toplevel };
-}
-async function resolveCommit(cwd, ref) {
-  const r = await git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
-  if (r.exitCode !== 0) return null;
-  const sha = r.stdout.trim();
-  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
-}
-async function changedFiles(cwd, base, head) {
-  const r = await git(cwd, [
-    "diff",
-    "-z",
-    "--name-only",
-    "--relative",
-    "--diff-filter=ACMR",
-    "--no-renames",
-    `${base}...${head}`,
-    "--"
-  ]);
-  if (r.exitCode !== 0) {
-    throw new Error(`git diff ${base}...${head} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return splitNul(r.stdout);
-}
-async function countCommits(cwd, range) {
-  const r = await git(cwd, ["rev-list", "--count", range, "--"]);
-  const n2 = Number(r.stdout.trim());
-  if (r.exitCode !== 0 || !Number.isInteger(n2)) {
-    throw new Error(`git rev-list --count ${range} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return n2;
-}
-async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
-  const excludes = excludeDirs.map((d) => `--exclude=${d}/`);
-  const untracked2 = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard", ...excludes]);
-  if (untracked2.exitCode !== 0) {
-    throw new Error(`git ls-files failed: ${firstLine(untracked2.stderr) || `exit ${untracked2.exitCode}`}`);
-  }
-  const tracked = hasCommits ? await git(cwd, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "HEAD", "--"]) : await git(cwd, ["ls-files", "-z", "--cached"]);
-  if (tracked.exitCode !== 0) {
-    throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
-  }
-  return [.../* @__PURE__ */ new Set([...splitNul(tracked.stdout), ...splitNul(untracked2.stdout)])];
-}
-async function historyState(cwd) {
-  const head = await resolveCommit(cwd, "HEAD");
-  if (head === null) return {};
-  const refs = await git(cwd, ["for-each-ref", "--format=%(objectname) %(refname)"]);
-  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine(refs.stderr)}`);
-  return { head, refs: createHash4("sha256").update(refs.stdout).digest("hex") };
-}
-async function showPrefix(cwd) {
-  const r = await git(cwd, ["rev-parse", "--show-prefix"]);
-  if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine(r.stderr)}`);
-  return r.stdout.trim();
-}
-async function materialiseCommit(cwd, sha) {
-  const holder = mkdtempSync(join10(tmpdir(), "guardian-review-"));
-  const root = join10(holder, "head");
-  const noHooks = join10(holder, "no-hooks");
-  const r = await git(cwd, ["-c", `core.hooksPath=${noHooks}`, "worktree", "add", "--detach", "--quiet", root, sha], CHECKOUT_TIMEOUT_MS);
-  const remove = async () => {
-    const problems = [];
-    const rm = await git(cwd, ["worktree", "remove", "--force", root]);
-    if (rm.exitCode !== 0 && existsSync8(root)) problems.push(firstLine(rm.stderr) || `git worktree remove exited ${rm.exitCode}`);
-    try {
-      rmSync3(holder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    } catch (e) {
-      problems.push(e instanceof Error ? e.message : String(e));
-    }
-    await git(cwd, ["worktree", "prune"]);
-    return problems.length > 0 ? `temporary checkout ${root} not fully removed: ${problems.join("; ")}` : null;
-  };
-  if (r.exitCode !== 0) {
-    await remove();
-    throw new Error(`git worktree add ${sha.slice(0, 12)} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return { root, remove };
-}
-function firstLine(text2) {
-  return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
-}
-
-// src/runners/semgrepConfigs.ts
-import { existsSync as existsSync10, readdirSync as readdirSync5 } from "node:fs";
-import { join as join14 } from "node:path";
-
-// src/platform/customRules.ts
-var import_yaml2 = __toESM(require_dist2(), 1);
-import { readdirSync as readdirSync4, readFileSync as readFileSync8, statSync as statSync7 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join11, relative as relative3, sep as sep3 } from "node:path";
-var CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
-function customRulesMetaKey(projectPath) {
-  return `${CUSTOM_RULES_META_KEY}:${projectPath}`;
-}
-var PATTERN_KEYS = [
-  "pattern",
-  "patterns",
-  "pattern-either",
-  "pattern-regex",
-  "pattern-sources",
-  "match",
-  "taint",
-  "join"
-];
-function validateSemgrepRulesFile(path8) {
-  let text2;
-  try {
-    text2 = readFileSync8(path8, "utf8");
-  } catch {
-    return { ok: false, reason: "unreadable" };
-  }
-  let doc;
-  try {
-    doc = (0, import_yaml2.parse)(text2);
-  } catch {
-    return { ok: false, reason: "not valid YAML" };
-  }
-  if (!isRecord(doc)) return { ok: false, reason: "no `rules:` list" };
-  const rules2 = doc["rules"];
-  if (!Array.isArray(rules2)) return { ok: false, reason: "no `rules:` list" };
-  if (rules2.length === 0) return { ok: false, reason: "empty `rules:` list" };
-  for (let i2 = 0; i2 < rules2.length; i2++) {
-    const rule = rules2[i2];
-    if (!isRecord(rule)) return { ok: false, reason: `rule #${i2 + 1} is not a mapping` };
-    const id = rule["id"];
-    if (typeof id !== "string" || id.length === 0) return { ok: false, reason: `rule #${i2 + 1} has no \`id\`` };
-    const message3 = rule["message"];
-    if (typeof message3 !== "string" || message3.length === 0) {
-      return { ok: false, reason: `rule '${id}' has no \`message\`` };
-    }
-    const languages = rule["languages"];
-    if (!Array.isArray(languages) || languages.length === 0) {
-      return { ok: false, reason: `rule '${id}' has no \`languages\`` };
-    }
-    if (!PATTERN_KEYS.some((k) => rule[k] !== void 0)) {
-      return { ok: false, reason: `rule '${id}' has no pattern key` };
-    }
-    const severity = rule["severity"];
-    if (severity === void 0 || severity === null) return { ok: false, reason: `rule '${id}' has no \`severity\`` };
-    if (typeof severity !== "string" || !SEMGREP_SEVERITIES.includes(severity)) {
-      return {
-        ok: false,
-        reason: `rule '${id}' has severity '${String(severity)}', which Semgrep rejects (expected one of ${SEMGREP_SEVERITIES.join(", ")})`
-      };
-    }
-  }
-  return { ok: true, rules: rules2.length };
-}
-var SEMGREP_SEVERITIES = [
-  "INFO",
-  "WARNING",
-  "ERROR",
-  "LOW",
-  "MEDIUM",
-  "HIGH",
-  "CRITICAL",
-  "EXPERIMENT",
-  "INVENTORY"
-];
-function yamlFilesUnder2(dir) {
-  const out = [];
-  const walk4 = (d, depth) => {
-    if (depth > 8) return;
-    let names;
-    try {
-      names = readdirSync4(d).sort();
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      if (name === ".git" || name === "node_modules") continue;
-      const abs = join11(d, name);
-      let isDir;
-      try {
-        isDir = statSync7(abs).isDirectory();
-      } catch {
-        continue;
-      }
-      if (isDir) walk4(abs, depth + 1);
-      else if (/\.ya?ml$/i.test(name)) out.push(abs);
-    }
-  };
-  walk4(dir, 0);
-  return out;
-}
-function registeredEntries(ctx, projectPath) {
-  const own = readList(ctx, customRulesMetaKey(projectPath));
-  const legacy = readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => isInside2(projectPath, p));
-  return [.../* @__PURE__ */ new Set([...own, ...legacy])];
-}
-function inspectCustomSemgrepConfigs(ctx, projectPath) {
-  const usable = [];
-  const unusable = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const entry of registeredEntries(ctx, projectPath)) {
-    let isDir;
-    try {
-      isDir = statSync7(entry).isDirectory();
-    } catch {
-      continue;
-    }
-    for (const file of isDir ? yamlFilesUnder2(entry) : [entry]) {
-      if (seen.has(file)) continue;
-      seen.add(file);
-      const verdict = validateSemgrepRulesFile(file);
-      if (verdict.ok) usable.push(file);
-      else unusable.push({ path: file, reason: verdict.reason });
-    }
-  }
-  return { usable, unusable };
-}
-function legacyRegistrationsNotApplied(ctx, projectPath) {
-  return readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => !isInside2(projectPath, p) && pathExists(p));
-}
-function legacyRegistrationNote(paths) {
-  if (paths.length === 0) return null;
-  return `custom Semgrep rules registered before registrations became per-project (dev-guardian 2.0.x) are no longer applied here because they lie outside this project: ${paths.join(", ")}. They still run for the projects that contain them. Re-register the ones this project needs with register_custom_rules (paths: [...]). Note that register_custom_rules clear=true removes the old registration for every project \u2014 including those that contain these paths \u2014 along with this notice.`;
-}
-function pathExists(p) {
-  try {
-    statSync7(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function resolveCustomSemgrepConfigs(ctx, projectPath) {
-  return inspectCustomSemgrepConfigs(ctx, projectPath).usable;
-}
-function readList(ctx, key) {
-  let raw;
-  try {
-    raw = ctx.storage.runtimeMeta.getJson(key);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((p) => typeof p === "string" && p.length > 0);
-}
-function isInside2(root, path8) {
-  const norm = (p) => process.platform === "win32" ? p.toLowerCase() : p;
-  const rel2 = relative3(norm(root), norm(path8));
-  return rel2 === "" || rel2 !== ".." && !rel2.startsWith(`..${sep3}`) && !isAbsolute5(rel2);
-}
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// src/platform/projectSemgrepConfig.ts
-var import_yaml3 = __toESM(require_dist2(), 1);
-import { existsSync as existsSync9, readFileSync as readFileSync10 } from "node:fs";
-import { join as join13 } from "node:path";
-
-// src/configdrift/manifest.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync9, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname6, join as join12 } from "node:path";
-var MANIFEST_RELATIVE_PATH = ".dev-guardian/configs.json";
-var MANIFEST_SCHEMA_VERSION = 1;
-function manifestPath(projectPath) {
-  return join12(projectPath, MANIFEST_RELATIVE_PATH);
-}
-function emptyManifest() {
-  return { schema_version: MANIFEST_SCHEMA_VERSION, entries: [] };
-}
-function readManifest(projectPath) {
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync9(manifestPath(projectPath), "utf8"));
-  } catch {
-    return null;
-  }
-  if (typeof raw !== "object" || raw === null) return null;
-  const obj = raw;
-  if (!Array.isArray(obj.entries)) return null;
-  const entries2 = obj.entries.filter(isEntry);
-  const schema_version = typeof obj.schema_version === "number" ? obj.schema_version : MANIFEST_SCHEMA_VERSION;
-  return { schema_version, entries: entries2 };
-}
-function isEntry(value) {
-  if (typeof value !== "object" || value === null) return false;
-  const e = value;
-  return typeof e["target"] === "string" && typeof e["source"] === "string" && typeof e["plugin_version"] === "string" && typeof e["source_sha256"] === "string" && typeof e["target_sha256"] === "string" && (e["provenance"] === "copied" || e["provenance"] === "adopted");
-}
-function writeManifest(projectPath, manifest) {
-  const sorted = {
-    schema_version: manifest.schema_version,
-    entries: [...manifest.entries].sort((a2, b) => a2.target.localeCompare(b.target))
-  };
-  try {
-    const path8 = manifestPath(projectPath);
-    mkdirSync3(dirname6(path8), { recursive: true });
-    writeFileSync5(path8, `${JSON.stringify(sorted, null, 2)}
-`, "utf8");
-    return true;
-  } catch {
-    return false;
-  }
-}
-function upsertManifestEntry(manifest, entry) {
-  const base = manifest ?? emptyManifest();
-  return {
-    schema_version: MANIFEST_SCHEMA_VERSION,
-    entries: [...base.entries.filter((e) => e.target !== entry.target), entry]
-  };
-}
-function findManifestEntry(manifest, target) {
-  return manifest?.entries.find((e) => e.target === target) ?? null;
-}
-
-// src/platform/projectSemgrepConfig.ts
-var CONVENTIONAL_TARGETS = [".semgrep.yml", ".semgrep.yaml"];
-var SEMGREP_SOURCE_PREFIX = "semgrep/";
-function inspectProjectSemgrepConfigs(projectPath) {
-  const usable = [];
-  const unusable = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const candidate of candidates(projectPath)) {
-    const absolute = join13(projectPath, candidate.target);
-    const key = absolute.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (!existsSync9(absolute)) continue;
-    const verdict = classify(absolute);
-    if (verdict.ok) {
-      usable.push({ path: absolute, target: candidate.target, via: candidate.via });
-    } else {
-      unusable.push({ target: candidate.target, reason: verdict.reason });
-    }
-  }
-  return { usable, unusable };
-}
-function classify(path8) {
-  let text2;
-  try {
-    text2 = readFileSync10(path8, "utf8");
-  } catch {
-    return { ok: false, reason: "unreadable" };
-  }
-  let doc;
-  try {
-    doc = (0, import_yaml3.parse)(text2);
-  } catch {
-    return { ok: false, reason: "not valid YAML" };
-  }
-  if (typeof doc !== "object" || doc === null) {
-    return { ok: false, reason: "no `rules:` list" };
-  }
-  const rules2 = doc["rules"];
-  if (!Array.isArray(rules2)) return { ok: false, reason: "no `rules:` list" };
-  if (rules2.length === 0) {
-    return { ok: false, reason: "empty `rules:` list" };
-  }
-  return { ok: true };
-}
-function candidates(projectPath) {
-  const out = [];
-  const manifest = readManifest(projectPath);
-  for (const entry of manifest?.entries ?? []) {
-    if (entry.source.startsWith(SEMGREP_SOURCE_PREFIX)) {
-      out.push({ target: entry.target, via: "manifest" });
-    }
-  }
-  for (const target of CONVENTIONAL_TARGETS) {
-    out.push({ target, via: "convention" });
-  }
-  return out;
-}
+// src/runners/scannerParsers/trivy.ts
+import { existsSync as existsSync8, readdirSync as readdirSync4, readFileSync as readFileSync8 } from "node:fs";
+import { dirname as dirname6, join as join9 } from "node:path";
 
 // src/frameworks/owaspTop10_2025.ts
 var OWASP_2025_IDS = [
@@ -42916,6 +42056,731 @@ function parseInputAsJson(input) {
   }
 }
 
+// src/runners/scannerParsers/trivy.ts
+var TRIVY_TOOL_NAME = "trivy";
+var trivyParser = {
+  name: TRIVY_TOOL_NAME,
+  parse(input, ctx = {}) {
+    const root = parseInputAsJson(input);
+    const findings = [];
+    const cves = [];
+    for (const result of asArray(getProp(root, "Results"))) {
+      const target = getString(result, "Target") ?? "";
+      for (const v of asArray(getProp(result, "Vulnerabilities"))) {
+        const finding4 = mapVulnerability(v, target, ctx);
+        if (finding4) findings.push(finding4);
+        const cve = mapVulnerabilityCve(v);
+        if (cve) cves.push(cve);
+      }
+      for (const l of asArray(getProp(result, "Licenses"))) {
+        const finding4 = mapLicense(l, target, ctx);
+        if (finding4) findings.push(finding4);
+      }
+      for (const m of asArray(getProp(result, "Misconfigurations"))) {
+        const finding4 = mapMisconfiguration(m, target, ctx);
+        if (finding4) findings.push(finding4);
+      }
+      for (const s of asArray(getProp(result, "Secrets"))) {
+        const finding4 = mapSecret(s, target, ctx);
+        if (finding4) findings.push(finding4);
+      }
+    }
+    return { findings, cves };
+  }
+};
+function mapVulnerability(raw, target, ctx) {
+  const cveId = getString(raw, "VulnerabilityID");
+  const pkg = getString(raw, "PkgName");
+  if (!cveId || !pkg) return null;
+  const severity = normalizeSeverity(getString(raw, "Severity"));
+  const title = getString(raw, "Title") ?? `${cveId} in ${pkg}`;
+  const installed = getString(raw, "InstalledVersion");
+  const fixed = getString(raw, "FixedVersion");
+  const description = getString(raw, "Description");
+  const input = {
+    tool: TRIVY_TOOL_NAME,
+    rule_id: cveId,
+    severity,
+    category: "security",
+    subcategory: "cve",
+    title,
+    fix_available: fixed !== void 0 && fixed.length > 0,
+    file_path: toRelativeIfPossible(target, ctx.project_path),
+    // A vulnerable dependency is CWE-1395 and A03 whatever the flaw inside
+    // it; the advisory's own CweIDs name that flaw, in `cwe` only.
+    taxonomy: dependencyTaxonomy(asArray(getProp(raw, "CweIDs")))
+  };
+  if (description !== void 0) input.message = description;
+  input.vuln_aliases = asArray(getProp(raw, "VendorIDs"));
+  input.snippet = `${pkg}@${installed ?? ""}->${fixed ?? ""}`;
+  return makeFinding(input);
+}
+function mapVulnerabilityCve(raw) {
+  const cveId = getString(raw, "VulnerabilityID");
+  const pkg = getString(raw, "PkgName");
+  if (!cveId || !pkg) return null;
+  const cve = {
+    cve_id: cveId,
+    package_name: pkg,
+    severity: normalizeSeverity(getString(raw, "Severity"))
+  };
+  const installed = getString(raw, "InstalledVersion");
+  if (installed !== void 0) cve.installed_version = installed;
+  const fixed = getString(raw, "FixedVersion");
+  if (fixed !== void 0) cve.fixed_version = fixed;
+  return cve;
+}
+function mapLicense(raw, target, ctx) {
+  const pkg = getString(raw, "PkgName");
+  const license = getString(raw, "Name");
+  if (!license) return null;
+  const severity = normalizeSeverity(getString(raw, "Severity"));
+  const title = `License '${license}' on ${pkg ?? target}`;
+  const input = {
+    tool: TRIVY_TOOL_NAME,
+    rule_id: `license:${license}`,
+    severity,
+    category: "license",
+    subcategory: license.toLowerCase(),
+    title,
+    file_path: toRelativeIfPossible(target, ctx.project_path),
+    snippet: pkg ? `pkg:${pkg}` : `license:${license}`
+  };
+  return makeFinding(input);
+}
+function mapMisconfiguration(raw, target, ctx) {
+  const id = getString(raw, "ID") ?? getString(raw, "AVDID");
+  if (!id) return null;
+  const severity = normalizeSeverity(getString(raw, "Severity"));
+  const title = getString(raw, "Title") ?? id;
+  const message3 = getString(raw, "Description");
+  const cause = getProp(raw, "CauseMetadata");
+  const lineStart = getNumber(cause, "StartLine");
+  const lineEnd = getNumber(cause, "EndLine") ?? lineStart;
+  const type = getString(raw, "Type")?.toLowerCase();
+  const category = "security";
+  const subcategory = type ?? "misconfiguration";
+  const input = {
+    tool: TRIVY_TOOL_NAME,
+    rule_id: id,
+    severity,
+    category,
+    subcategory,
+    title,
+    file_path: toRelativeIfPossible(target, ctx.project_path)
+  };
+  if (message3 !== void 0) input.message = message3;
+  if (lineStart !== void 0) input.line_start = lineStart;
+  if (lineEnd !== void 0) input.line_end = lineEnd;
+  const fixHint = getString(raw, "Resolution");
+  if (fixHint !== void 0) input.snippet = fixHint;
+  return makeFinding(input);
+}
+function mapSecret(raw, target, ctx) {
+  const ruleId = getString(raw, "RuleID") ?? getString(raw, "Rule");
+  if (!ruleId) return null;
+  const severity = normalizeSeverity(getString(raw, "Severity") ?? "HIGH");
+  const lineStart = getNumber(raw, "StartLine");
+  const lineEnd = getNumber(raw, "EndLine") ?? lineStart;
+  const input = {
+    tool: TRIVY_TOOL_NAME,
+    rule_id: ruleId,
+    severity,
+    category: "security",
+    subcategory: "secret",
+    title: getString(raw, "Title") ?? ruleId,
+    file_path: toRelativeIfPossible(target, ctx.project_path),
+    taxonomy: { cwe: [SECRET_CWE] }
+  };
+  if (lineStart !== void 0) input.line_start = lineStart;
+  if (lineEnd !== void 0) input.line_end = lineEnd;
+  return makeFinding(input);
+}
+var ECOSYSTEM_MANIFESTS = [
+  {
+    ecosystem: "npm",
+    matches: (n2) => n2 === "package.json",
+    trivyTypes: ["npm", "yarn", "pnpm", "bun"],
+    lockfiles: ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock"],
+    declaresNothing: npmManifestDeclaresNothing,
+    fix: "commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)"
+  },
+  {
+    ecosystem: "composer",
+    matches: (n2) => n2 === "composer.json",
+    trivyTypes: ["composer"],
+    lockfiles: ["composer.lock"],
+    fix: "commit composer.lock (composer update writes it)"
+  },
+  {
+    ecosystem: "dotnet",
+    matches: (n2) => /\.(csproj|sln)$/i.test(n2),
+    trivyTypes: ["nuget"],
+    lockfiles: ["packages.lock.json", "packages.config"],
+    fix: "set RestorePackagesWithLockFile to true, run dotnet restore and commit packages.lock.json"
+  },
+  {
+    ecosystem: "rubygems",
+    matches: (n2) => n2 === "Gemfile",
+    trivyTypes: ["bundler"],
+    lockfiles: ["Gemfile.lock"],
+    fix: "commit Gemfile.lock (bundle lock writes it)"
+  },
+  {
+    ecosystem: "cargo",
+    matches: (n2) => n2 === "Cargo.toml",
+    trivyTypes: ["cargo"],
+    lockfiles: ["Cargo.lock"],
+    fix: "commit Cargo.lock (cargo generate-lockfile writes it)"
+  },
+  {
+    ecosystem: "gradle",
+    matches: (n2) => n2 === "build.gradle" || n2 === "build.gradle.kts",
+    trivyTypes: ["gradle"],
+    lockfiles: ["gradle.lockfile"],
+    // `--write-locks` writes nothing until locking is switched on in the build.
+    fix: "enable dependencyLocking { lockAllConfigurations() } in the build, then run gradle dependencies --write-locks and commit gradle.lockfile"
+  },
+  {
+    ecosystem: "python",
+    matches: (n2) => n2 === "pyproject.toml" || n2 === "Pipfile" || n2 === "setup.py" || n2 === "setup.cfg" || /^requirements.*\.txt$/i.test(n2),
+    trivyTypes: ["pip", "pipenv", "poetry", "uv"],
+    lockfiles: ["requirements.txt", "Pipfile.lock", "poetry.lock", "uv.lock"],
+    declaresNothing: pythonManifestDeclaresNothing,
+    fix: "commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), or pin every dependency (==) in requirements.txt"
+  }
+];
+var MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
+function lockFileAdvice(ecosystem) {
+  return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
+}
+var MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
+function manifestEcosystemOfTarget(target) {
+  const base = target.slice(Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\")) + 1).toLowerCase();
+  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base));
+  return eco?.ecosystem ?? null;
+}
+var NPM_DECLARING_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "bundleDependencies",
+  "bundledDependencies",
+  "workspaces"
+];
+function isEmptyField(v) {
+  if (v === void 0) return true;
+  if (Array.isArray(v)) return v.length === 0;
+  return typeof v === "object" && v !== null && Object.keys(v).length === 0;
+}
+function readJsonFile(path8) {
+  try {
+    return JSON.parse(readFileSync8(path8, "utf8").replace(/^\uFEFF/, ""));
+  } catch {
+    return void 0;
+  }
+}
+var NPM_JSON_LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json"];
+var NPM_UNREAD_LOCKFILES = ["pnpm-lock.yaml", "bun.lock", "bun.lockb"];
+function npmLockFilesLockNothing(dir) {
+  for (const name of NPM_UNREAD_LOCKFILES) if (existsSync8(join9(dir, name))) return false;
+  for (const name of NPM_JSON_LOCKFILES) {
+    const path8 = join9(dir, name);
+    if (!existsSync8(path8)) continue;
+    const lock = readJsonFile(path8);
+    if (typeof lock !== "object" || lock === null || Array.isArray(lock)) return false;
+    const { packages, dependencies } = lock;
+    if (packages !== void 0) {
+      if (typeof packages !== "object" || packages === null || Array.isArray(packages)) return false;
+      if (Object.keys(packages).some((k) => k !== "")) return false;
+    }
+    if (!isEmptyField(dependencies)) return false;
+  }
+  const yarnLock = join9(dir, "yarn.lock");
+  if (existsSync8(yarnLock)) {
+    let text2;
+    try {
+      text2 = readFileSync8(yarnLock, "utf8");
+    } catch {
+      return false;
+    }
+    if (text2.split(/\r?\n/).some((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))) return false;
+  }
+  return true;
+}
+function npmManifestDeclaresNothing(path8) {
+  const manifest = readJsonFile(path8);
+  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
+  const fields = manifest;
+  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname6(path8));
+}
+var EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
+var PY_DEPENDENCY_KEYS = /* @__PURE__ */ new Set(["dependencies", "optional-dependencies", "dev-dependencies"]);
+var PY_DEPENDENCY_TABLES = /^(project\.optional-dependencies(\..+)?|dependency-groups|tool\.poetry\.(dependencies|dev-dependencies|group\.[^.]+\.dependencies)|tool\.pdm\.dev-dependencies|packages|dev-packages)$/;
+function pythonManifestDeclaresNothing(path8) {
+  let text2;
+  try {
+    text2 = readFileSync8(path8, "utf8").replace(/^﻿/, "");
+  } catch {
+    return false;
+  }
+  const lines = text2.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
+  if (/\.txt$/i.test(path8)) return lines.length === 0;
+  if (/(^|[\\/])setup\.py$/i.test(path8)) return !/\b(install_requires|extras_require)\b/.test(text2);
+  if (/(^|[\\/])setup\.cfg$/i.test(path8)) {
+    return !/^\s*(install_requires|extras_require)\s*=/m.test(text2) && !/^\s*\[options\.extras_require\]/m.test(text2);
+  }
+  let table = "";
+  for (const line of lines) {
+    if (line.startsWith("[")) {
+      const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
+      if (header?.[1] === void 0) return false;
+      table = header[1].replace(/["'\s]/g, "");
+      continue;
+    }
+    const kv = /^["']?([A-Za-z0-9_.-]+)["']?\s*=\s*(.*)$/.exec(line);
+    if (kv?.[1] === void 0 || kv[2] === void 0) continue;
+    const key = kv[1];
+    const empty = EMPTY_TOML_VALUE.test(kv[2]);
+    const lastSegment = key.slice(key.lastIndexOf(".") + 1);
+    if (PY_DEPENDENCY_KEYS.has(lastSegment) && !empty) return false;
+    if (PY_DEPENDENCY_TABLES.test(table) && !empty && !(table.startsWith("tool.poetry.") && key === "python")) {
+      return false;
+    }
+  }
+  return true;
+}
+function assessManifestCoverage(projectPath, rawTrivyOutput) {
+  let entries2;
+  try {
+    entries2 = readdirSync4(projectPath);
+  } catch {
+    return { gaps: [], sawAnyResults: false };
+  }
+  const root = parseInputAsJson(rawTrivyOutput);
+  const results = asArray(getProp(root, "Results"));
+  const coveredTypes = /* @__PURE__ */ new Set();
+  for (const result of results) {
+    const type = getString(result, "Type");
+    if (type) coveredTypes.add(type);
+  }
+  const gaps = [];
+  for (const eco of ECOSYSTEM_MANIFESTS) {
+    const files = entries2.filter((n2) => eco.matches(n2) && !(eco.declaresNothing?.(join9(projectPath, n2)) ?? false));
+    if (files.length === 0) continue;
+    const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
+    if (!covered) gaps.push({ ecosystem: eco.ecosystem, files });
+  }
+  return { gaps, sawAnyResults: results.length > 0 };
+}
+
+// src/tools/scanCoverage.ts
+function computeCoverage(toolsRun, missingTools) {
+  const ranOk = toolsRun.some((t) => t.status === "ok");
+  const failed = toolsRun.some((t) => t.status === "failed");
+  const hasGaps = missingTools.length > 0 || failed;
+  if (!hasGaps) return "full";
+  return ranOk ? "partial" : "none";
+}
+var NO_SUPPORTED_MANIFEST = "no_supported_manifest";
+function parseManifestGaps(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object") continue;
+    const { ecosystem, files } = entry;
+    if (typeof ecosystem !== "string") continue;
+    out.push({
+      ecosystem,
+      files: Array.isArray(files) ? files.filter((f) => typeof f === "string") : []
+    });
+  }
+  return out;
+}
+function nameOf(gap) {
+  return gap.files.length > 0 ? `${gap.ecosystem} (${gap.files.join(", ")})` : gap.ecosystem;
+}
+function manifestAdvice(gaps) {
+  if (gaps.length === 0) {
+    return "generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run";
+  }
+  return gaps.map((g) => `${nameOf(g)}: ${lockFileAdvice(g.ecosystem) ?? "generate the lock file Trivy reads for it"}`).join("; ");
+}
+function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
+  const coverage = computeCoverage(toolsRun, missingTools);
+  if (coverage === "full") return { coverage, warning: null };
+  const failedTools = toolsRun.filter((t) => t.status === "failed").map((t) => t.name);
+  const ruleErrors = [
+    ...new Set(toolsRun.filter((t) => t.status === "failed" && t.rule_config_error === true).map((t) => t.name))
+  ].filter((name) => !toolsRun.some((t) => t.name === name && t.status === "ok"));
+  const ruleClause = ruleErrors.length > 0 ? `${ruleErrors.join(", ")} ran, but its rules did not load (a rule configuration error \u2014 see its tools_run reason); fix or remove the rule and re-run` : null;
+  const gaps = [.../* @__PURE__ */ new Set([...missingTools, ...failedTools])].filter((name) => !ruleErrors.includes(name));
+  const list2 = gaps.length > 0 ? gaps.join(", ") : "one or more scanners";
+  const manifestGaps = parseManifestGaps(context.manifestGaps);
+  const unreadable = gaps.filter(
+    (name) => toolsRun.some((t) => t.name === name && t.status === "skipped" && t.reason === NO_SUPPORTED_MANIFEST)
+  );
+  if (coverage === "none") {
+    const packOnly = ruleErrors.filter(
+      (name) => toolsRun.some((t) => t.name === name && t.status === "failed" && t.plugin_pack_only === true)
+    );
+    if (packOnly.length > 0 && packOnly.length === ruleErrors.length) {
+      return {
+        coverage,
+        warning: `\u26A0\uFE0F ${scanType}: ${packOnly.join(", ")} ran, but no registry or project rule loaded; only the plugin's LLM pack ran \u2014 its findings are reported, and nothing else looked at this code (a rule configuration error \u2014 see its tools_run reason); fix or remove the rules and re-run.` + (gaps.length > 0 ? ` Also unavailable or failed: ${list2} \u2014 install or fix it (or use the Docker fallback).` : "") + " A result without them is NOT a clean bill of health."
+      };
+    }
+    if (ruleClause !== null) {
+      return {
+        coverage,
+        warning: `\u26A0\uFE0F ${scanType}: NOTHING was scanned \u2014 ${ruleClause}.` + (gaps.length > 0 ? ` Also unavailable or failed: ${list2} \u2014 install or fix it (or use the Docker fallback).` : "") + ' A "0 findings" result is NOT a clean bill of health.'
+      };
+    }
+    if (unreadable.length === 0) {
+      return {
+        coverage,
+        warning: `\u26A0\uFE0F ${scanType}: NO scanner ran (unavailable/failed: ${list2}). A "0 findings" result is NOT a clean bill of health \u2014 nothing was actually scanned. Install ${list2} (or use the Docker fallback) and re-run before trusting this scan.`
+      };
+    }
+    const others = gaps.filter((name) => !unreadable.includes(name));
+    return {
+      coverage,
+      warning: `\u26A0\uFE0F ${scanType}: NOTHING was scanned \u2014 ${unreadable.join(", ")} is installed and ran, but no dependency manifest here has a lock file it can read: ${manifestAdvice(manifestGaps)}. A "0 findings" result is NOT a clean bill of health.` + (others.length > 0 ? ` Install ${others.join(", ")} (or use the Docker fallback).` : "") + " Then re-run before trusting this scan."
+    };
+  }
+  const ranOkNames = new Set(toolsRun.filter((t) => t.status === "ok").map((t) => t.name));
+  const hasOwnRun = (name) => toolsRun.some((t) => t.name === name);
+  const partsOf = /* @__PURE__ */ new Map();
+  for (const name of gaps) {
+    const colon = name.indexOf(":");
+    if (colon <= 0 || hasOwnRun(name) || !ranOkNames.has(name.slice(0, colon))) continue;
+    const base = name.slice(0, colon);
+    partsOf.set(base, [...partsOf.get(base) ?? [], name.slice(colon + 1)]);
+  }
+  const isPart = (name) => {
+    const colon = name.indexOf(":");
+    return colon > 0 && (partsOf.get(name.slice(0, colon))?.includes(name.slice(colon + 1)) ?? false);
+  };
+  const notRun = gaps.filter((name) => !ranOkNames.has(name) && !isPart(name) && !unreadable.includes(name));
+  const ranWithGaps = gaps.filter((name) => ranOkNames.has(name));
+  const clauses = [];
+  if (ruleClause !== null) clauses.push(ruleClause);
+  if (notRun.length > 0) clauses.push(`${notRun.join(", ")} did not run`);
+  if (unreadable.length > 0) {
+    clauses.push(
+      `${unreadable.join(", ")} ran but read no dependency manifest \u2014 ${manifestAdvice(manifestGaps)}`
+    );
+  }
+  for (const [base, parts] of partsOf) {
+    const named = parts.map((part) => {
+      const gap = manifestGaps.find((g) => g.ecosystem === part);
+      return gap === void 0 ? part : nameOf(gap);
+    });
+    const covered = manifestGaps.filter((g) => parts.includes(g.ecosystem));
+    clauses.push(
+      `${base} ran, but ${named.join(", ")} was not covered` + (covered.length > 0 ? ` \u2014 ${manifestAdvice(covered)}` : "")
+    );
+  }
+  if (ranWithGaps.length > 0) {
+    clauses.push(`${ranWithGaps.join(", ")} ran with reduced coverage (see its tools_run reason)`);
+  }
+  const clause = clauses.length > 0 ? clauses.join("; ") : `${list2} did not run`;
+  return {
+    coverage,
+    warning: `\u26A0\uFE0F ${scanType}: partial coverage \u2014 ${clause}; findings may be incomplete.`
+  };
+}
+
+// src/history/runCompare.ts
+import { join as join14 } from "node:path";
+
+// src/runners/semgrepConfigs.ts
+import { existsSync as existsSync10, readdirSync as readdirSync6 } from "node:fs";
+import { join as join13 } from "node:path";
+
+// src/platform/customRules.ts
+var import_yaml2 = __toESM(require_dist2(), 1);
+import { readdirSync as readdirSync5, readFileSync as readFileSync9, statSync as statSync6 } from "node:fs";
+import { isAbsolute as isAbsolute4, join as join10, relative as relative3, sep as sep2 } from "node:path";
+var CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
+function customRulesMetaKey(projectPath) {
+  return `${CUSTOM_RULES_META_KEY}:${projectPath}`;
+}
+var PATTERN_KEYS = [
+  "pattern",
+  "patterns",
+  "pattern-either",
+  "pattern-regex",
+  "pattern-sources",
+  "match",
+  "taint",
+  "join"
+];
+function validateSemgrepRulesFile(path8) {
+  let text2;
+  try {
+    text2 = readFileSync9(path8, "utf8");
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  let doc;
+  try {
+    doc = (0, import_yaml2.parse)(text2);
+  } catch {
+    return { ok: false, reason: "not valid YAML" };
+  }
+  if (!isRecord(doc)) return { ok: false, reason: "no `rules:` list" };
+  const rules2 = doc["rules"];
+  if (!Array.isArray(rules2)) return { ok: false, reason: "no `rules:` list" };
+  if (rules2.length === 0) return { ok: false, reason: "empty `rules:` list" };
+  for (let i2 = 0; i2 < rules2.length; i2++) {
+    const rule = rules2[i2];
+    if (!isRecord(rule)) return { ok: false, reason: `rule #${i2 + 1} is not a mapping` };
+    const id = rule["id"];
+    if (typeof id !== "string" || id.length === 0) return { ok: false, reason: `rule #${i2 + 1} has no \`id\`` };
+    const message3 = rule["message"];
+    if (typeof message3 !== "string" || message3.length === 0) {
+      return { ok: false, reason: `rule '${id}' has no \`message\`` };
+    }
+    const languages = rule["languages"];
+    if (!Array.isArray(languages) || languages.length === 0) {
+      return { ok: false, reason: `rule '${id}' has no \`languages\`` };
+    }
+    if (!PATTERN_KEYS.some((k) => rule[k] !== void 0)) {
+      return { ok: false, reason: `rule '${id}' has no pattern key` };
+    }
+    const severity = rule["severity"];
+    if (severity === void 0 || severity === null) return { ok: false, reason: `rule '${id}' has no \`severity\`` };
+    if (typeof severity !== "string" || !SEMGREP_SEVERITIES.includes(severity)) {
+      return {
+        ok: false,
+        reason: `rule '${id}' has severity '${String(severity)}', which Semgrep rejects (expected one of ${SEMGREP_SEVERITIES.join(", ")})`
+      };
+    }
+  }
+  return { ok: true, rules: rules2.length };
+}
+var SEMGREP_SEVERITIES = [
+  "INFO",
+  "WARNING",
+  "ERROR",
+  "LOW",
+  "MEDIUM",
+  "HIGH",
+  "CRITICAL",
+  "EXPERIMENT",
+  "INVENTORY"
+];
+function yamlFilesUnder2(dir) {
+  const out = [];
+  const walk4 = (d, depth) => {
+    if (depth > 8) return;
+    let names;
+    try {
+      names = readdirSync5(d).sort();
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (name === ".git" || name === "node_modules") continue;
+      const abs = join10(d, name);
+      let isDir;
+      try {
+        isDir = statSync6(abs).isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir) walk4(abs, depth + 1);
+      else if (/\.ya?ml$/i.test(name)) out.push(abs);
+    }
+  };
+  walk4(dir, 0);
+  return out;
+}
+function registeredEntries(ctx, projectPath) {
+  const own = readList(ctx, customRulesMetaKey(projectPath));
+  const legacy = readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => isInside2(projectPath, p));
+  return [.../* @__PURE__ */ new Set([...own, ...legacy])];
+}
+function inspectCustomSemgrepConfigs(ctx, projectPath) {
+  const usable = [];
+  const unusable = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const entry of registeredEntries(ctx, projectPath)) {
+    let isDir;
+    try {
+      isDir = statSync6(entry).isDirectory();
+    } catch {
+      continue;
+    }
+    for (const file of isDir ? yamlFilesUnder2(entry) : [entry]) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const verdict = validateSemgrepRulesFile(file);
+      if (verdict.ok) usable.push(file);
+      else unusable.push({ path: file, reason: verdict.reason });
+    }
+  }
+  return { usable, unusable };
+}
+function legacyRegistrationsNotApplied(ctx, projectPath) {
+  return readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => !isInside2(projectPath, p) && pathExists(p));
+}
+function legacyRegistrationNote(paths) {
+  if (paths.length === 0) return null;
+  return `custom Semgrep rules registered before registrations became per-project (dev-guardian 2.0.x) are no longer applied here because they lie outside this project: ${paths.join(", ")}. They still run for the projects that contain them. Re-register the ones this project needs with register_custom_rules (paths: [...]). Note that register_custom_rules clear=true removes the old registration for every project \u2014 including those that contain these paths \u2014 along with this notice.`;
+}
+function pathExists(p) {
+  try {
+    statSync6(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveCustomSemgrepConfigs(ctx, projectPath) {
+  return inspectCustomSemgrepConfigs(ctx, projectPath).usable;
+}
+function readList(ctx, key) {
+  let raw;
+  try {
+    raw = ctx.storage.runtimeMeta.getJson(key);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((p) => typeof p === "string" && p.length > 0);
+}
+function isInside2(root, path8) {
+  const norm = (p) => process.platform === "win32" ? p.toLowerCase() : p;
+  const rel2 = relative3(norm(root), norm(path8));
+  return rel2 === "" || rel2 !== ".." && !rel2.startsWith(`..${sep2}`) && !isAbsolute4(rel2);
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// src/platform/projectSemgrepConfig.ts
+var import_yaml3 = __toESM(require_dist2(), 1);
+import { existsSync as existsSync9, readFileSync as readFileSync11 } from "node:fs";
+import { join as join12 } from "node:path";
+
+// src/configdrift/manifest.ts
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync10, writeFileSync as writeFileSync5 } from "node:fs";
+import { dirname as dirname7, join as join11 } from "node:path";
+var MANIFEST_RELATIVE_PATH = ".dev-guardian/configs.json";
+var MANIFEST_SCHEMA_VERSION = 1;
+function manifestPath(projectPath) {
+  return join11(projectPath, MANIFEST_RELATIVE_PATH);
+}
+function emptyManifest() {
+  return { schema_version: MANIFEST_SCHEMA_VERSION, entries: [] };
+}
+function readManifest(projectPath) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync10(manifestPath(projectPath), "utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  const obj = raw;
+  if (!Array.isArray(obj.entries)) return null;
+  const entries2 = obj.entries.filter(isEntry);
+  const schema_version = typeof obj.schema_version === "number" ? obj.schema_version : MANIFEST_SCHEMA_VERSION;
+  return { schema_version, entries: entries2 };
+}
+function isEntry(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const e = value;
+  return typeof e["target"] === "string" && typeof e["source"] === "string" && typeof e["plugin_version"] === "string" && typeof e["source_sha256"] === "string" && typeof e["target_sha256"] === "string" && (e["provenance"] === "copied" || e["provenance"] === "adopted");
+}
+function writeManifest(projectPath, manifest) {
+  const sorted = {
+    schema_version: manifest.schema_version,
+    entries: [...manifest.entries].sort((a2, b) => a2.target.localeCompare(b.target))
+  };
+  try {
+    const path8 = manifestPath(projectPath);
+    mkdirSync3(dirname7(path8), { recursive: true });
+    writeFileSync5(path8, `${JSON.stringify(sorted, null, 2)}
+`, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+function upsertManifestEntry(manifest, entry) {
+  const base = manifest ?? emptyManifest();
+  return {
+    schema_version: MANIFEST_SCHEMA_VERSION,
+    entries: [...base.entries.filter((e) => e.target !== entry.target), entry]
+  };
+}
+function findManifestEntry(manifest, target) {
+  return manifest?.entries.find((e) => e.target === target) ?? null;
+}
+
+// src/platform/projectSemgrepConfig.ts
+var CONVENTIONAL_TARGETS = [".semgrep.yml", ".semgrep.yaml"];
+var SEMGREP_SOURCE_PREFIX = "semgrep/";
+function inspectProjectSemgrepConfigs(projectPath) {
+  const usable = [];
+  const unusable = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of candidates(projectPath)) {
+    const absolute = join12(projectPath, candidate.target);
+    const key = absolute.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!existsSync9(absolute)) continue;
+    const verdict = classify(absolute);
+    if (verdict.ok) {
+      usable.push({ path: absolute, target: candidate.target, via: candidate.via });
+    } else {
+      unusable.push({ target: candidate.target, reason: verdict.reason });
+    }
+  }
+  return { usable, unusable };
+}
+function classify(path8) {
+  let text2;
+  try {
+    text2 = readFileSync11(path8, "utf8");
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  let doc;
+  try {
+    doc = (0, import_yaml3.parse)(text2);
+  } catch {
+    return { ok: false, reason: "not valid YAML" };
+  }
+  if (typeof doc !== "object" || doc === null) {
+    return { ok: false, reason: "no `rules:` list" };
+  }
+  const rules2 = doc["rules"];
+  if (!Array.isArray(rules2)) return { ok: false, reason: "no `rules:` list" };
+  if (rules2.length === 0) {
+    return { ok: false, reason: "empty `rules:` list" };
+  }
+  return { ok: true };
+}
+function candidates(projectPath) {
+  const out = [];
+  const manifest = readManifest(projectPath);
+  for (const entry of manifest?.entries ?? []) {
+    if (entry.source.startsWith(SEMGREP_SOURCE_PREFIX)) {
+      out.push({ target: entry.target, via: "manifest" });
+    }
+  }
+  for (const target of CONVENTIONAL_TARGETS) {
+    out.push({ target, via: "convention" });
+  }
+  return out;
+}
+
 // src/runners/semgrepReport.ts
 var MAX_ERROR_TEXT = 300;
 var FIXPOINT_TIMEOUT_TYPE = "Fixpoint timeout";
@@ -43182,7 +43047,7 @@ function pythonUtf8Env(env) {
 // src/runners/semgrepConfigs.ts
 var LLM_RULES_FILE = "llm.yml";
 function llmRulesPath() {
-  return join14(pluginPacksDir(), LLM_RULES_FILE);
+  return join13(pluginPacksDir(), LLM_RULES_FILE);
 }
 var CONTAINER_PACKS_ROOT = "/guardian-packs";
 var LLM_PACK_MEASURED_SEMGREP = "1.176.1";
@@ -43246,10 +43111,1972 @@ function planSemgrepConfigs(projectPath, plugin, localOnly) {
 }
 function hasDotnetProject(projectPath) {
   try {
-    return readdirSync5(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".fsproj"));
+    return readdirSync6(projectPath).some((n2) => n2.endsWith(".csproj") || n2.endsWith(".fsproj"));
   } catch {
     return false;
   }
+}
+
+// src/history/runNames.ts
+var TRIVY_FS = "trivy:fs";
+var TRIVY_CONFIG = "trivy:config";
+var SKILL_OSV = "guardian-scanskill:osv";
+function trivyFsKey(ecosystem) {
+  return `${TRIVY_FS}:${ecosystem}`;
+}
+var TRIVY_FS_KEYS = [TRIVY_FS, ...MANIFEST_ECOSYSTEMS.map(trivyFsKey)];
+var SKILL_TOOL = "guardian-scanskill";
+var SKILL_OSV_RULE = "osv-vulnerable-dependency";
+function findingKey(f) {
+  if (f.tool === "trivy") {
+    if (f.subcategory === "secret") return TRIVY_FS;
+    if (f.category !== "license" && f.subcategory !== "cve") return TRIVY_CONFIG;
+    const eco = f.file_path === void 0 ? null : manifestEcosystemOfTarget(f.file_path);
+    return eco === null ? TRIVY_FS : trivyFsKey(eco);
+  }
+  if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
+  return f.tool;
+}
+function toolsOfKey(key) {
+  if (key.startsWith("trivy:")) return ["trivy"];
+  if (key === SKILL_OSV) return [SKILL_TOOL];
+  return [key];
+}
+var scanner = (...measures) => ({ measures });
+var RUN_NAMES = {
+  // SAST — scan_sast, bug_hunt, review_pr, map_attack_surface, security_scan_full.
+  semgrep: scanner("semgrep"),
+  "semgrep-wp": scanner("semgrep"),
+  bandit: scanner("bandit"),
+  "security-code-scan": scanner("security-code-scan"),
+  // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
+  "dotnet-analyzers": scanner("dotnet-analyzers"),
+  // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
+  "dotnet-sdk": scanner("security-code-scan", "dotnet-analyzers"),
+  // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
+  gitleaks: scanner("gitleaks"),
+  "gitleaks-working-tree": scanner("gitleaks"),
+  // Trivy, by pass.
+  trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
+  // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
+  // the image's own misconfigurations.
+  "trivy-image": { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true, onRequest: true },
+  "trivy-config": scanner(TRIVY_CONFIG),
+  "trivy-dockerfile": scanner(TRIVY_CONFIG),
+  // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
+  // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
+  // missing, never ok, so each is a gap in exactly its own ecosystem's
+  // dependency findings: an older scan's NuGet CVE is not re-measured when
+  // packages.lock.json has gone, and an npm CVE beside it still resolves.
+  // (Unlisted, the name would fall back to `trivy`'s not-ok keys — every
+  // Trivy finding, IaC misconfigurations included.) One per
+  // MANIFEST_ECOSYSTEMS entry: the exhaustiveness test holds the two equal.
+  "trivy:npm": scanner(trivyFsKey("npm")),
+  "trivy:composer": scanner(trivyFsKey("composer")),
+  "trivy:dotnet": scanner(trivyFsKey("dotnet")),
+  "trivy:rubygems": scanner(trivyFsKey("rubygems")),
+  "trivy:cargo": scanner(trivyFsKey("cargo")),
+  "trivy:gradle": scanner(trivyFsKey("gradle")),
+  "trivy:python": scanner(trivyFsKey("python")),
+  // deps_audit's native auditors, recorded by command: `npm audit`,
+  // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
+  // `dotnet list package --vulnerable`, whose findings say
+  // `dotnet-list-package`.
+  npm: scanner("npm-audit"),
+  "pip-audit": scanner("pip-audit"),
+  dotnet: scanner("dotnet-list-package"),
+  // quality_check. Its read of `.guardian/budgets.yml` measures the quality
+  // budgets against jscpd's and radon's own reports, so either one not
+  // running ok leaves the budget findings unmeasured too.
+  eslint: scanner("eslint"),
+  ruff: scanner("ruff"),
+  radon: { measures: ["radon"], whenNotOk: ["radon", "budgets"] },
+  jscpd: { measures: ["jscpd"], whenNotOk: ["jscpd", "budgets"] },
+  staticcheck: scanner("staticcheck"),
+  budgets: scanner("budgets"),
+  // scan_containers, beside its Trivy passes: the Dockerfile linter and the
+  // compose-file hardening checks.
+  hadolint: scanner("hadolint"),
+  "docker-compose": scanner("docker-compose"),
+  // scan_containers' cosign check of the image it was given
+  // (runners/cosignCheck.ts). Two passes, two keys: an existence check that
+  // finds a signature must never resolve a verification's "signed by the
+  // wrong identity". Each looks at its image only, and only on request (it
+  // needs an image). `cosign` is only ever skipped — not installed, or
+  // GUARDIAN_OFFLINE=1 — so neither pass ran.
+  "cosign-verify": { measures: ["cosign-verify"], ownTarget: true, onRequest: true },
+  "cosign-referrers": { measures: ["cosign-referrers"], ownTarget: true, onRequest: true },
+  cosign: scanner("cosign-verify", "cosign-referrers"),
+  // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
+  // existing — independent of Trivy and of each other.
+  zizmor: scanner("zizmor"),
+  actionlint: scanner("actionlint"),
+  // scan_wordpress's PHPCS pass, and its missing_tools name.
+  "phpcs-wpcs": scanner("phpcs"),
+  phpcs: scanner("phpcs"),
+  // scan_dast: the own engine, its partial-run markers, and nuclei.
+  "guardian-dast": scanner("dast"),
+  "guardian-dast:unanswered": scanner("dast"),
+  "guardian-dast:wall-clock": scanner("dast"),
+  // The surface it probed was partial (a file Semgrep only partly parsed):
+  // routes the map could not read were never probed.
+  "guardian-dast:partial-surface": scanner("dast"),
+  nuclei: { measures: ["nuclei"], onRequest: true },
+  // only with use_nuclei
+  // WordPress.
+  wpscan: scanner("wpscan"),
+  wp_plugin_check: scanner(),
+  // a findings-less lookup
+  "wp-cli": scanner(),
+  // wp_audit, wp_cron_audit: report through meta
+  "http-probe": scanner(),
+  // wp_rest_audit: reports through meta
+  // wp_vuln_check_source: source-based WP vuln matching, no live URL.
+  "wordfence-feed": scanner("wordfence"),
+  "wp-plugin-api": scanner("wp-plugin-api"),
+  // Named, partial sub-gaps (fix round 1) — the pass itself stayed 'ok'
+  // (real matching/checking happened), but some installed components
+  // could not be covered. Same pattern as `trivy:<ecosystem>` below: an
+  // unlisted `base:suffix` would inherit `base`'s measures via
+  // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
+  // requires an exact literal key, so both get their own entry.
+  "wordfence-feed:unmatched-version": scanner("wordfence"),
+  "wp-plugin-api:deadline": scanner("wp-plugin-api"),
+  // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
+  // also audit_executive's entries for those sub-tools.
+  scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
+  dotnet_efcore_audit: scanner("dotnet_efcore_audit"),
+  dotnet_target_framework_check: scanner(),
+  // compliance_check: its policy-document walk, and the RGPD Semgrep pack
+  // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
+  "policy-docs": scanner(),
+  "semgrep-rgpd": scanner("semgrep"),
+  // scan_skill.
+  "guardian-scanskill:patterns": scanner(SKILL_TOOL),
+  "guardian-scanskill:yara": scanner(SKILL_TOOL),
+  "guardian-scanskill:taint": scanner(SKILL_TOOL),
+  "osv.dev": scanner(SKILL_OSV),
+  // audit_agent_config: its own static checks of the agent workspace config.
+  "agent-audit": scanner("agent-audit"),
+  // audit_mcp_tools: one `mcp-tool-audit:<source>::<server>` entry per server
+  // it started (`runNameEntry` reads each as a pass of this base); a server
+  // that failed or was skipped leaves the audit's findings unmeasured.
+  "mcp-tool-audit": scanner("mcp-tool-audit"),
+  // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
+  // sub-scan's own bookkeeping instead whenever the row still exists; these
+  // speak for a sub-tool that failed before it wrote one.
+  security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers", "gitleaks", ...TRIVY_FS_KEYS, TRIVY_CONFIG),
+  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
+  deps_audit: scanner(...TRIVY_FS_KEYS, "npm-audit", "pip-audit", "dotnet-list-package"),
+  compliance_check: scanner(...TRIVY_FS_KEYS, "semgrep"),
+  scan_wordpress: scanner("semgrep", "gitleaks", ...TRIVY_FS_KEYS, "phpcs"),
+  // security_scan_full: its own entry for a child that threw, answered an
+  // error, or is not registered — the child wrote no bookkeeping of its own.
+  // (An audit reads these through the security_scan_full sub-scan.)
+  scan_sast: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers"),
+  scan_secrets: scanner("gitleaks"),
+  scan_deps: scanner(...TRIVY_FS_KEYS),
+  scan_iac: scanner(TRIVY_CONFIG, "zizmor", "actionlint"),
+  // generate_sbom: the producer of an SBOM row, which holds no findings.
+  syft: scanner()
+};
+var BY_NAME = new Map(Object.entries(RUN_NAMES));
+function runNameEntry(name) {
+  const listed = BY_NAME.get(name);
+  if (listed !== void 0) return listed;
+  const colon = name.indexOf(":");
+  return colon > 0 ? BY_NAME.get(name.slice(0, colon)) ?? null : null;
+}
+function keysOfRun(name, ok) {
+  const entry = runNameEntry(name);
+  if (entry === null) return null;
+  return ok ? entry.measures : entry.whenNotOk ?? entry.measures;
+}
+var KNOWN_FINDING_KEYS = new Set(
+  [...BY_NAME.values()].flatMap((e) => [...e.measures, ...e.whenNotOk ?? []])
+);
+
+// src/history/scanRoles.ts
+var SCAN_TYPE_ROLE = {
+  // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
+  // children (sast/secrets/deps/iac) are the sources, never the row itself;
+  // a script-era row is split across sast/secrets/deps/containers, so rows
+  // written before child scans existed do not vanish from the open set.
+  security_full: "state",
+  sast: "state",
+  secrets: "state",
+  deps: "state",
+  deps_audit: "state",
+  containers: "state",
+  iac: "state",
+  bugs: "state",
+  quality: "state",
+  dast: "state",
+  compliance: "state",
+  perf: "state",
+  wordpress: "state",
+  wp_vuln_check: "state",
+  wp_vuln_check_source: "state",
+  dotnet_secrets: "state",
+  dotnet_efcore_audit: "state",
+  sbom: "never",
+  detect_stack: "never",
+  init: "never",
+  observability: "never",
+  audit: "never",
+  skill_audit: "never",
+  agent_audit: "never",
+  mcp_tool_audit: "never",
+  review_pr: "never",
+  wp_audit: "never",
+  wp_cron_audit: "never",
+  wp_rest_audit: "never",
+  dotnet_target_framework: "never"
+};
+var STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === "state");
+var TARGET_SCAN_TYPES = /* @__PURE__ */ new Set(["skill_audit", "wp_rest_audit"]);
+function isOrchestratedFullScan(scan2) {
+  return scan2.scan_type === "security_full" && Array.isArray(scan2.meta?.["child_scans"]);
+}
+function isScriptEraFullScan(scan2) {
+  return scan2.scan_type === "security_full" && !isOrchestratedFullScan(scan2);
+}
+var SCRIPT_ERA_RUN_SLOTS = {
+  semgrep: "sast",
+  bandit: "sast",
+  gitleaks: "secrets",
+  trivy: "deps",
+  "trivy-dockerfile": "containers"
+};
+function scriptEraSlotOfFinding(f) {
+  switch (f.tool) {
+    case "semgrep":
+    case "bandit":
+      return "sast";
+    case "gitleaks":
+      return "secrets";
+    case "trivy":
+      if (f.category === "license" || f.subcategory === "cve") return "deps";
+      if (f.subcategory === "secret") return "secrets";
+      return "containers";
+    default:
+      return "security_full";
+  }
+}
+function sourceTypesOf(slot) {
+  if (slot === "security_full") return ["security_full"];
+  const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
+  return coveredByFull ? [slot, "security_full"] : [slot];
+}
+function runSlotOf(tool50) {
+  return SCRIPT_ERA_RUN_SLOTS[tool50] ?? "security_full";
+}
+function findingInSlot(scan2, finding4, slot) {
+  if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
+  return scriptEraSlotOfFinding(finding4) === slot;
+}
+function slotView(scan2, slot) {
+  if (scan2.scan_type !== "security_full") {
+    return { tools_run: scan2.tools_run, missing_tools: scan2.missing_tools };
+  }
+  return {
+    tools_run: scan2.tools_run.filter((t) => runSlotOf(t.name) === slot),
+    missing_tools: scan2.missing_tools.filter((t) => runSlotOf(t) === slot)
+  };
+}
+function isScopedScan(scan2) {
+  const meta = scan2.meta;
+  if (meta === void 0) return false;
+  if (meta["scope"] !== void 0 && meta["scope"] !== null) return true;
+  return scan2.scan_type === "wp_vuln_check" && meta["slug"] !== void 0;
+}
+
+// src/history/runCompare.ts
+var COMPLETE_COMPARISON = {
+  isNotRemeasured: () => false,
+  isNotPreviouslyMeasured: () => false,
+  notRunByTo: () => null,
+  notRunByFrom: () => null,
+  notMeasuredByTo: [],
+  gapsByTo: [],
+  notMeasuredByFrom: []
+};
+function childrenOf(storage, parent) {
+  const listed = parent.meta?.["child_scans"];
+  if (!Array.isArray(listed)) return [];
+  const out = [];
+  for (const entry of listed) {
+    if (entry === null || typeof entry !== "object") continue;
+    const e = entry;
+    const row = typeof e.scan_id === "string" ? storage.scans.getById(e.scan_id) : null;
+    const type = row?.scan_type ?? (typeof e.tool === "string" ? e.tool.replace(/^scan_/, "") : null);
+    if (type !== null) out.push({ type, row });
+  }
+  return out;
+}
+function usableChild(c3) {
+  return c3.row !== null && c3.row.status === "completed";
+}
+function auditBookkeeping(storage, audit) {
+  const ids2 = audit.meta?.["sub_scan_ids"];
+  if (ids2 === null || typeof ids2 !== "object" || Array.isArray(ids2)) return audit;
+  const byTool = ids2;
+  const tools_run = [];
+  const missing_tools = [...audit.missing_tools];
+  for (const entry of audit.tools_run) {
+    const id = Object.hasOwn(byTool, entry.name) ? byTool[entry.name] : void 0;
+    const sub = entry.status === "ok" && typeof id === "string" ? storage.scans.getById(id) : null;
+    if (sub === null || sub.tools_run.length === 0 && sub.missing_tools.length === 0) {
+      tools_run.push(entry);
+      continue;
+    }
+    tools_run.push(...sub.tools_run);
+    missing_tools.push(...sub.missing_tools);
+  }
+  return { tools_run, missing_tools };
+}
+function bookkeepingOf(storage, scan2) {
+  return scan2.scan_type === "audit" ? auditBookkeeping(storage, scan2) : scan2;
+}
+function keyVerdict(book, key) {
+  let named = false;
+  let anyOk = false;
+  let anyFailed = false;
+  const okNames = /* @__PURE__ */ new Set();
+  for (const run of book.tools_run) {
+    const ok = run.status === "ok";
+    if (!(keysOfRun(run.name, ok)?.includes(key) ?? false)) continue;
+    named = true;
+    if (ok) {
+      anyOk = true;
+      okNames.add(run.name);
+    } else if (run.status === "failed") {
+      anyFailed = true;
+    }
+  }
+  let missing = false;
+  for (const name of book.missing_tools) {
+    if (!(keysOfRun(name, false)?.includes(key) ?? false)) continue;
+    named = true;
+    if (!okNames.has(name)) missing = true;
+  }
+  if (named) {
+    if (anyFailed || missing) return "unmeasured";
+    return anyOk ? "measured" : "not_run";
+  }
+  if (KNOWN_FINDING_KEYS.has(key)) return "not_run";
+  return computeCoverage(book.tools_run, book.missing_tools) === "full" ? "measured" : "unmeasured";
+}
+function isEmptyBook(book) {
+  return book.tools_run.length === 0 && book.missing_tools.length === 0;
+}
+function fileOf(f) {
+  return f.file_path === void 0 ? void 0 : f.file_path.replace(/\\/g, "/");
+}
+function measuresKeyOk(run, key) {
+  return run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
+}
+function isPluginPackGap(pp) {
+  return pp.type === FIXPOINT_TIMEOUT_PACK_TYPE;
+}
+var packRuleIds;
+function pluginPackRuleIds() {
+  packRuleIds ??= new Set(ruleIdsInFile(join14(pluginPacksDir(), LLM_RULES_FILE)));
+  return packRuleIds;
+}
+function isPluginPackRule(ruleId) {
+  return ruleId !== void 0 && pluginPackRuleIds().has(ruleId);
+}
+function narrowGapsOf(book, key) {
+  const files = /* @__PURE__ */ new Set();
+  const rules2 = /* @__PURE__ */ new Set();
+  const pairs = /* @__PURE__ */ new Map();
+  for (const run of book.tools_run) {
+    if (!measuresKeyOk(run, key)) continue;
+    for (const pp of run.partially_parsed ?? []) {
+      if (isPluginPackGap(pp)) pairs.set(pp.file, pluginPackRuleIds());
+      else files.add(pp.file);
+    }
+    for (const fr of run.failed_rules ?? []) rules2.add(fr.rule_id);
+  }
+  for (const f of files) pairs.delete(f);
+  return { files, rules: rules2, pairs };
+}
+function narrowGapOf(book, f) {
+  const key = findingKey(f);
+  const file = fileOf(f);
+  for (const run of book.tools_run) {
+    if (!measuresKeyOk(run, key)) continue;
+    const entries2 = file === void 0 ? [] : (run.partially_parsed ?? []).filter((pp) => pp.file === file);
+    if (entries2.some((pp) => !isPluginPackGap(pp))) {
+      return { run, label: `${run.name} (partly parsed: ${file})` };
+    }
+    if (entries2.length > 0 && isPluginPackRule(f.rule_id)) {
+      return { run, label: `${run.name} (LLM pack partly measured: ${file})` };
+    }
+    if (f.rule_id !== void 0 && (run.failed_rules ?? []).some((fr) => fr.rule_id === f.rule_id)) {
+      return { run, label: `${run.name} (rule not loaded: ${f.rule_id})` };
+    }
+  }
+  return null;
+}
+function bookkeepingVerdict(book, f) {
+  if (isEmptyBook(book)) return "measured";
+  const verdict = keyVerdict(book, findingKey(f));
+  return verdict === "measured" && narrowGapOf(book, f) !== null ? "unmeasured" : verdict;
+}
+function gapNamesFor(book, key) {
+  const okNames = new Set(book.tools_run.filter((r) => r.status === "ok").map((r) => r.name));
+  const names = [];
+  const add = (name) => {
+    if (!names.includes(name)) names.push(name);
+  };
+  for (const run of book.tools_run) {
+    if (run.status === "failed" && (keysOfRun(run.name, false)?.includes(key) ?? false)) add(run.name);
+  }
+  for (const name of book.missing_tools) {
+    if (!okNames.has(name) && (keysOfRun(name, false)?.includes(key) ?? false)) add(name);
+  }
+  return names;
+}
+function onRequestPassOf(holder, key) {
+  const run = holder.tools_run.find((r) => measuresKeyOk(r, key) && runNameEntry(r.name)?.onRequest === true);
+  return run === void 0 ? null : passLabel(run, targetOf(run));
+}
+function openGapFor(holder, asked, f) {
+  const answer = answerFor(holder, asked, f);
+  if (answer.verdict === "measured") return null;
+  if (answer.verdict === "unmeasured") {
+    const narrow = narrowGapOf(asked, f);
+    if (narrow !== null) return narrow.label;
+    const key = findingKey(f);
+    const names = gapNamesFor(asked, key);
+    return names.length > 0 ? names.join(", ") : key;
+  }
+  if (answer.byTarget) return answer.notRun;
+  return onRequestPassOf(holder, findingKey(f));
+}
+var NO_PAIRS = /* @__PURE__ */ new Map();
+var ADMIT_ALL = { all: true };
+var NEVER_SCOPE = { kind: "never" };
+var MAX_ADMIT_PAIRS = 1e4;
+function onlyConstraint(c3) {
+  const pairs = /* @__PURE__ */ new Map();
+  for (const [f, rs] of c3.pairs ?? NO_PAIRS) if (!c3.files.has(f)) pairs.set(f, new Set(rs));
+  return { all: false, files: new Set(c3.files), rules: new Set(c3.rules), pairs };
+}
+function meetAdmit(s, c3) {
+  if (s.all) return onlyConstraint(c3);
+  const cPairs = c3.pairs ?? NO_PAIRS;
+  const files = new Set([...s.files].filter((f) => c3.files.has(f)));
+  const rules2 = new Set([...s.rules].filter((r) => c3.rules.has(r)));
+  let bound2 = 0;
+  for (const rs of s.pairs.values()) bound2 += rs.size;
+  let filesLeaving = 0;
+  for (const f of s.files) {
+    if (c3.files.has(f)) continue;
+    filesLeaving += 1;
+    bound2 += cPairs.get(f)?.size ?? 0;
+  }
+  let rulesLeaving = 0;
+  for (const r of s.rules) if (!c3.rules.has(r)) rulesLeaving += 1;
+  let cPairCount = 0;
+  if (rulesLeaving > 0) for (const rs of cPairs.values()) cPairCount += rs.size;
+  bound2 += filesLeaving * c3.rules.size + rulesLeaving * c3.files.size + cPairCount;
+  if (bound2 > MAX_ADMIT_PAIRS) return onlyConstraint(c3);
+  const pairs = /* @__PURE__ */ new Map();
+  const add = (f, r) => {
+    if (files.has(f) || rules2.has(r)) return;
+    let set2 = pairs.get(f);
+    if (set2 === void 0) {
+      set2 = /* @__PURE__ */ new Set();
+      pairs.set(f, set2);
+    }
+    set2.add(r);
+  };
+  const inCPairs = (f, r) => cPairs.get(f)?.has(r) ?? false;
+  for (const [f, rs] of s.pairs) for (const r of rs) if (c3.files.has(f) || c3.rules.has(r) || inCPairs(f, r)) add(f, r);
+  for (const f of s.files) {
+    if (c3.files.has(f)) continue;
+    for (const r of c3.rules) add(f, r);
+    for (const r of cPairs.get(f) ?? []) add(f, r);
+  }
+  for (const r of s.rules) {
+    if (c3.rules.has(r)) continue;
+    for (const f of c3.files) add(f, r);
+    for (const [f, rs] of cPairs) if (rs.has(r)) add(f, r);
+  }
+  return { all: false, files, rules: rules2, pairs };
+}
+function admitsNothing(s) {
+  return !s.all && s.files.size === 0 && s.rules.size === 0 && s.pairs.size === 0;
+}
+function scopeAdmits(scope, file, rule) {
+  if (scope.kind === "never") return false;
+  const a2 = scope.admit;
+  if (a2.all) return true;
+  if (file !== void 0 && a2.files.has(file)) return true;
+  if (rule !== void 0 && a2.rules.has(rule)) return true;
+  return file !== void 0 && rule !== void 0 && (a2.pairs.get(file)?.has(rule) ?? false);
+}
+function admitLookup(admit) {
+  const files = new Set(admit.files);
+  const rules2 = new Set(admit.rules);
+  for (const [f, rs] of admit.pairs) {
+    files.add(f);
+    for (const r of rs) rules2.add(r);
+  }
+  return { files: [...files], rules: [...rules2] };
+}
+var NO_INDEXES = [];
+function pushTo(map, key, i2) {
+  const list2 = map.get(key);
+  if (list2 === void 0) map.set(key, [i2]);
+  else list2.push(i2);
+}
+function coversTarget(c3, t) {
+  if (t.pass === PROJECT_FILES) return c3.project;
+  if (t.ref === void 0) return c3.any.has(t.pass);
+  return c3.legacy.has(t.pass) || c3.images.has(`${t.pass}\0${t.ref}`);
+}
+var ChainIndex = class {
+  chain = [];
+  byKey = /* @__PURE__ */ new Map();
+  push(book) {
+    this.chain.push(book);
+  }
+  get length() {
+    return this.chain.length;
+  }
+  /** The chain's `i`-th scan, newest first. */
+  bookAt(i2) {
+    return this.chain[i2];
+  }
+  /** `holder` for one key, as {@link scopeOfClass} takes it. */
+  classOf(holder, key) {
+    const onRequest = onRequestPassOf(holder, key) !== null;
+    const seen = /* @__PURE__ */ new Map();
+    for (const run of holder.tools_run) {
+      if (!measuresKeyOk(run, key)) continue;
+      const t = targetOf(run);
+      seen.set(`${t.pass}\0${t.ref ?? ""}\0${t.ref === void 0 ? "legacy" : "ref"}`, t);
+    }
+    const targets = [...seen.values()];
+    const signature = JSON.stringify([onRequest, [...seen.keys()].sort()]);
+    return { signature, onRequest, targets };
+  }
+  /** {@link ChainScope} of `holder`'s findings under `key`, over the chain as it is now. */
+  scope(holder, key) {
+    return this.scopeOfClass(this.classOf(holder, key), key);
+  }
+  scopeOfClass(cls, key) {
+    const idx = this.indexed(key);
+    const L = this.chain.length;
+    if (idx.firstEmpty < L || !cls.onRequest && idx.firstNotRun < L) return NEVER_SCOPE;
+    let state = idx.classes.get(cls.signature);
+    if (state === void 0) {
+      state = { admit: ADMIT_ALL, met: /* @__PURE__ */ new Set(), closed: false, a: 0, b: 0, snapshot: null };
+      idx.classes.set(cls.signature, state);
+    }
+    this.advance(idx, cls, state, L);
+    if (state.closed) return NEVER_SCOPE;
+    if (state.snapshot === null) state.snapshot = { kind: "open", admit: state.admit };
+    return state.snapshot;
+  }
+  /** The class's driver: one or two ascending lists that hold every scan able to look at all its targets. */
+  driverOf(idx, cls) {
+    const image = cls.targets.find((t) => t.pass !== PROJECT_FILES && t.ref !== void 0);
+    if (image !== void 0) {
+      return [idx.byImage.get(`${image.pass}\0${image.ref ?? ""}`) ?? NO_INDEXES, idx.legacy.get(image.pass) ?? NO_INDEXES];
+    }
+    const legacyImage = cls.targets.find((t) => t.pass !== PROJECT_FILES);
+    if (legacyImage !== void 0) return [idx.anyOf.get(legacyImage.pass) ?? NO_INDEXES, NO_INDEXES];
+    if (cls.targets.length > 0) return [idx.project, NO_INDEXES];
+    return [idx.measured, NO_INDEXES];
+  }
+  advance(idx, cls, state, L) {
+    while (!state.closed) {
+      const [listA, listB] = this.driverOf(idx, cls);
+      const ia = listA[state.a];
+      const ib = listB[state.b];
+      const na2 = ia !== void 0 && ia < L ? ia : void 0;
+      const nb = ib !== void 0 && ib < L ? ib : void 0;
+      if (na2 === void 0 && nb === void 0) return;
+      const i2 = na2 === void 0 ? nb ?? 0 : nb === void 0 ? na2 : Math.min(na2, nb);
+      if (na2 === i2) state.a += 1;
+      if (nb === i2) state.b += 1;
+      const c3 = idx.at.get(i2);
+      if (c3 === void 0 || !cls.targets.every((t) => coversTarget(c3, t))) continue;
+      state.snapshot = null;
+      if (c3.narrow === null) {
+        state.closed = true;
+        return;
+      }
+      if (state.met.has(c3.narrowSig)) continue;
+      state.met.add(c3.narrowSig);
+      state.admit = meetAdmit(state.admit, c3.narrow);
+      if (admitsNothing(state.admit)) state.closed = true;
+    }
+  }
+  /** The key's index, caught up with the chain. */
+  indexed(key) {
+    let idx = this.byKey.get(key);
+    if (idx === void 0) {
+      idx = {
+        len: 0,
+        firstEmpty: Infinity,
+        firstNotRun: Infinity,
+        at: /* @__PURE__ */ new Map(),
+        measured: [],
+        project: [],
+        byImage: /* @__PURE__ */ new Map(),
+        legacy: /* @__PURE__ */ new Map(),
+        anyOf: /* @__PURE__ */ new Map(),
+        classes: /* @__PURE__ */ new Map()
+      };
+      this.byKey.set(key, idx);
+    }
+    for (; idx.len < this.chain.length; idx.len += 1) {
+      const i2 = idx.len;
+      const asked = this.chain[i2];
+      if (asked === void 0) break;
+      if (isEmptyBook(asked)) {
+        idx.firstEmpty = Math.min(idx.firstEmpty, i2);
+        continue;
+      }
+      const verdict = keyVerdict(asked, key);
+      if (verdict === "unmeasured") continue;
+      if (verdict === "not_run") {
+        idx.firstNotRun = Math.min(idx.firstNotRun, i2);
+        continue;
+      }
+      const c3 = { project: false, images: /* @__PURE__ */ new Set(), legacy: /* @__PURE__ */ new Set(), any: /* @__PURE__ */ new Set(), narrow: null, narrowSig: "" };
+      for (const run of asked.tools_run) {
+        if (!measuresKeyOk(run, key)) continue;
+        const t = targetOf(run);
+        if (t.pass === PROJECT_FILES) {
+          c3.project = true;
+          continue;
+        }
+        c3.any.add(t.pass);
+        if (t.ref === void 0) c3.legacy.add(t.pass);
+        else c3.images.add(`${t.pass}\0${t.ref}`);
+      }
+      const narrow = narrowGapsOf(asked, key);
+      if (narrow.files.size > 0 || narrow.rules.size > 0 || narrow.pairs.size > 0) {
+        c3.narrow = narrow;
+        c3.narrowSig = JSON.stringify([[...narrow.files].sort(), [...narrow.rules].sort(), [...narrow.pairs.keys()].sort()]);
+      }
+      idx.at.set(i2, c3);
+      idx.measured.push(i2);
+      if (c3.project) idx.project.push(i2);
+      for (const img of c3.images) pushTo(idx.byImage, img, i2);
+      for (const pass2 of c3.legacy) pushTo(idx.legacy, pass2, i2);
+      for (const pass2 of c3.any) pushTo(idx.anyOf, pass2, i2);
+    }
+    return idx;
+  }
+};
+var UNKNOWN_FINDING_KEY = "\0unknown";
+function producedKeys(holder) {
+  const keys = /* @__PURE__ */ new Set();
+  if (isEmptyBook(holder)) {
+    for (const key of KNOWN_FINDING_KEYS) keys.add(key);
+    keys.add(UNKNOWN_FINDING_KEY);
+  }
+  for (const run of holder.tools_run) {
+    if (run.status === "skipped") continue;
+    const k = keysOfRun(run.name, run.status === "ok");
+    if (k === null) keys.add(UNKNOWN_FINDING_KEY);
+    else for (const key of k) keys.add(key);
+  }
+  return [...keys];
+}
+var StillCarry = class {
+  constructor(index, names, anyEmpty) {
+    this.index = index;
+    const widest = {
+      tools_run: names.map((name) => ({ name, status: "ok", target: "\0any image no scan recorded" })),
+      missing_tools: []
+    };
+    const keys = new Set(producedKeys(widest));
+    if (anyEmpty) {
+      for (const key of KNOWN_FINDING_KEYS) keys.add(key);
+      keys.add(UNKNOWN_FINDING_KEY);
+    }
+    this.classes = [...keys].map((key) => ({ key, cls: index.classOf(widest, key) }));
+  }
+  index;
+  classes;
+  /** How much of the chain `check` has looked at for an empty book. */
+  seen = 0;
+  sawEmpty = false;
+  check() {
+    if (this.index.length === 0) return true;
+    for (; this.seen < this.index.length && !this.sawEmpty; this.seen += 1) {
+      const book = this.index.bookAt(this.seen);
+      if (book !== void 0 && isEmptyBook(book)) this.sawEmpty = true;
+    }
+    if (this.sawEmpty) return false;
+    return this.classes.some(({ key, cls }) => this.index.scopeOfClass(cls, key).kind !== "never");
+  }
+};
+function isNarrowGapName(name) {
+  return / \((partly parsed|rules not loaded|LLM pack partly measured): /.test(name);
+}
+var NARROW_GAP_FILES_NAMED = 5;
+function narrowGapNames(book) {
+  const names = [];
+  const named = (files) => {
+    const more = files.length - NARROW_GAP_FILES_NAMED;
+    return [...files.slice(0, NARROW_GAP_FILES_NAMED), ...more > 0 ? [`+${more} more`] : []].join(", ");
+  };
+  for (const run of book.tools_run) {
+    if (run.status !== "ok") continue;
+    const entries2 = run.partially_parsed ?? [];
+    const parsed = [...new Set(entries2.filter((pp) => !isPluginPackGap(pp)).map((pp) => pp.file))];
+    const byPack = [...new Set(entries2.filter(isPluginPackGap).map((pp) => pp.file))].filter((f) => !parsed.includes(f));
+    const failed = run.failed_rules ?? [];
+    if (parsed.length > 0) names.push(`${run.name} (partly parsed: ${named(parsed)})`);
+    if (byPack.length > 0) names.push(`${run.name} (LLM pack partly measured: ${named(byPack)})`);
+    if (failed.length > 0) names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(", ")})`);
+  }
+  return names;
+}
+function typeResolver(storage, scan2) {
+  if (isOrchestratedFullScan(scan2)) {
+    const indexed = childrenOf(storage, scan2).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
+    return (f) => indexed.find((c3) => c3.index.has(f))?.type ?? null;
+  }
+  if (isScriptEraFullScan(scan2)) {
+    return (f) => {
+      const slot = scriptEraSlotOfFinding(f);
+      if (slot === "containers") return "iac";
+      return slot === "security_full" ? null : slot;
+    };
+  }
+  return () => scan2.scan_type;
+}
+function booksOf(storage, scan2) {
+  if (!isOrchestratedFullScan(scan2)) {
+    const book = bookkeepingOf(storage, scan2);
+    return () => book;
+  }
+  const children = childrenOf(storage, scan2);
+  return (fType) => {
+    if (fType === null) return scan2;
+    const child = children.find((c3) => c3.type === fType);
+    return child !== void 0 && usableChild(child) ? child.row : null;
+  };
+}
+var PROJECT_FILES = "project files";
+function targetOf(run) {
+  if (runNameEntry(run.name)?.ownTarget !== true) return { pass: PROJECT_FILES };
+  if (run.target === void 0 || run.target === "") return { pass: run.name };
+  const signer = run.signer !== void 0 ? `\0signer\0${run.signer}` : "";
+  return { pass: run.name, ref: `${normalizeImageRef(run.target)}${signer}` };
+}
+function normalizeImageRef(ref) {
+  let name = ref.trim();
+  let digest = "";
+  const at = name.indexOf("@");
+  if (at >= 0) {
+    digest = name.slice(at);
+    name = name.slice(0, at);
+  }
+  let tag = "";
+  const colon = name.lastIndexOf(":");
+  if (colon > name.lastIndexOf("/")) {
+    tag = name.slice(colon);
+    name = name.slice(0, colon);
+  }
+  const slash = name.indexOf("/");
+  const first = slash >= 0 ? name.slice(0, slash) : "";
+  const hasRegistry = slash >= 0 && (first.includes(".") || first.includes(":") || first === "localhost");
+  let registry2 = hasRegistry ? first : "docker.io";
+  let path8 = hasRegistry ? name.slice(slash + 1) : name;
+  if (registry2 === "index.docker.io" || registry2 === "registry-1.docker.io") registry2 = "docker.io";
+  if (registry2 === "docker.io" && !path8.includes("/")) path8 = `library/${path8}`;
+  if (tag === "" && digest === "") tag = ":latest";
+  return `${registry2}/${path8}${tag}${digest}`;
+}
+function sameTarget(a2, b) {
+  if (a2.pass !== b.pass) return false;
+  return a2.ref === void 0 || b.ref === void 0 || a2.ref === b.ref;
+}
+function passLabel(run, target) {
+  if (target.ref === void 0) return run.name;
+  const signer = run.signer !== void 0 ? `, signer ${run.signer}` : "";
+  return `${run.name} (${run.target ?? target.ref}${signer})`;
+}
+function targetNotRun(holder, asked, f) {
+  return holder === null ? null : targetNotRunForKey(holder, asked, findingKey(f));
+}
+function targetNotRunForKey(holder, asked, key) {
+  if (isEmptyBook(asked)) return null;
+  for (const run of holder.tools_run) {
+    if (!measuresKeyOk(run, key)) continue;
+    const target = targetOf(run);
+    if (!asked.tools_run.some((r) => measuresKeyOk(r, key) && sameTarget(targetOf(r), target))) return passLabel(run, target);
+  }
+  return null;
+}
+function answerFor(holder, asked, f) {
+  if (asked === null) return { verdict: "unmeasured", notRun: null, byTarget: false };
+  const verdict = bookkeepingVerdict(asked, f);
+  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null, byTarget: false };
+  const pass2 = targetNotRun(holder, asked, f);
+  return pass2 === null ? { verdict, notRun: null, byTarget: false } : { verdict: "not_run", notRun: pass2, byTarget: true };
+}
+function notMeasured(storage, scan2, scope = "any") {
+  const out = [];
+  const add = (x) => {
+    if (!out.includes(x)) out.push(x);
+  };
+  const gapsOf = (book, wholeType) => {
+    if (computeCoverage(book.tools_run, book.missing_tools) === "none") {
+      add(wholeType);
+      return;
+    }
+    const names = [...book.tools_run.filter((t) => t.status !== "ok").map((t) => t.name), ...book.missing_tools];
+    for (const name of names) {
+      if (scope === "gaps") {
+        if (isGap(book, name)) add(name);
+        continue;
+      }
+      const keys = keysOfRun(name, false);
+      if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
+    }
+    for (const name of narrowGapNames(book)) add(name);
+  };
+  if (!isOrchestratedFullScan(scan2)) {
+    gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
+    return out;
+  }
+  for (const child of childrenOf(storage, scan2)) {
+    if (!usableChild(child)) add(child.type);
+    else gapsOf(child.row, child.type);
+  }
+  return out;
+}
+function isGap(book, name) {
+  const as = (status) => book.tools_run.some((t) => t.name === name && t.status === status);
+  return as("failed") || book.missing_tools.includes(name) && !as("ok");
+}
+function compareScansFor(storage, from, to) {
+  const typeOfFrom = typeResolver(storage, from);
+  const typeOfTo = typeResolver(storage, to);
+  const fromBooks = booksOf(storage, from);
+  const toBooks = booksOf(storage, to);
+  const inTo = (f) => {
+    const t = typeOfFrom(f);
+    return answerFor(fromBooks(t), toBooks(t), f);
+  };
+  const inFrom = (f) => {
+    const t = typeOfTo(f);
+    return answerFor(toBooks(t), fromBooks(t), f);
+  };
+  return {
+    // Anything short of measured: the newer scan cannot resolve what it did
+    // not look for, whether the scanner failed or did not run.
+    isNotRemeasured: (f) => inTo(f).verdict !== "measured",
+    // Only a gap: a reference that did not run the scanner at all looked at
+    // everything it had to, and the finding is new.
+    isNotPreviouslyMeasured: (f) => inFrom(f).verdict === "unmeasured",
+    notRunByTo: (f) => inTo(f).notRun,
+    notRunByFrom: (f) => inFrom(f).notRun,
+    notMeasuredByTo: notMeasured(storage, to, "any"),
+    gapsByTo: notMeasured(storage, to, "gaps"),
+    notMeasuredByFrom: notMeasured(storage, from, "gaps")
+  };
+}
+function classifyDiff(check2, fromFindings, toFindings) {
+  const fromIndex = indexFindings(fromFindings);
+  const toIndex = indexFindings(toFindings);
+  const out = {
+    new: [],
+    resolved: [],
+    unchanged: [],
+    notRemeasured: [],
+    notPreviouslyMeasured: [],
+    notRunByTo: [],
+    notRunByFrom: []
+  };
+  const note = (list2, name) => {
+    if (name !== null && !list2.includes(name)) list2.push(name);
+  };
+  for (const f of toFindings) {
+    if (fromIndex.has(f)) out.unchanged.push(f);
+    else if (check2.isNotPreviouslyMeasured(f)) out.notPreviouslyMeasured.push(f);
+    else {
+      out.new.push(f);
+      note(out.notRunByFrom, check2.notRunByFrom(f));
+    }
+  }
+  for (const f of fromFindings) {
+    if (toIndex.has(f)) continue;
+    if (check2.isNotRemeasured(f)) {
+      out.notRemeasured.push(f);
+      note(out.notRunByTo, check2.notRunByTo(f));
+    } else out.resolved.push(f);
+  }
+  return out;
+}
+function measurementGaps(check2, d) {
+  const byTo = [...check2.notMeasuredByTo, ...d.notRunByTo.filter((x) => !check2.notMeasuredByTo.includes(x))];
+  return {
+    byTo,
+    notRunByTo: byTo.filter((x) => !check2.gapsByTo.includes(x)),
+    byFrom: check2.notMeasuredByFrom,
+    notRunByFrom: d.notRunByFrom.filter((x) => !check2.notMeasuredByFrom.includes(x))
+  };
+}
+function describeMeasurementGaps(from, to, gaps) {
+  const parts = [];
+  const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
+  const narrowByTo = failedByTo.filter(isNarrowGapName);
+  const brokenByTo = failedByTo.filter((x) => !isNarrowGapName(x));
+  if (brokenByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} did not measure ${brokenByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
+    );
+  }
+  if (narrowByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} only partly measured ${narrowByTo.join(", ")}: earlier findings in those files, or of those rules, are reported as not re-measured, never as resolved \u2014 they are measured again once a run reads the whole file (Semgrep's parser cannot always, even on valid code) and loads the rule.`
+    );
+  }
+  if (gaps.notRunByTo.length > 0) {
+    parts.push(
+      `Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(", ")} (not requested, or nothing for it to scan): earlier findings from it are reported as not re-measured, never as resolved \u2014 run it again to re-measure them.`
+    );
+  }
+  const narrowByFrom = gaps.byFrom.filter(isNarrowGapName);
+  const brokenByFrom = gaps.byFrom.filter((x) => !isNarrowGapName(x));
+  if (brokenByFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} did not measure ${brokenByFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
+    );
+  }
+  if (narrowByFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} only partly measured ${narrowByFrom.join(", ")}: findings in those files, or of those rules, are reported as not previously measured, never as new.`
+    );
+  }
+  if (gaps.notRunByFrom.length > 0) {
+    parts.push(
+      `The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(", ")} (not applicable, or not requested, then): findings from it are new.`
+    );
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+// src/history/openSet.ts
+var PAGE2 = 25;
+var SKIPPED_SAMPLE = 5;
+function findLatestUsable(storage, projectPath, types, opts = {}) {
+  const r = search(storage, projectPath, types, opts);
+  return { scan: r.scan, coverage: r.coverage, skipped: summarizeSkipped(r.hits), hits: r.hits };
+}
+function search(storage, projectPath, types, opts) {
+  const skipCoverageNone = opts.skipCoverageNone ?? true;
+  const hits = [];
+  for (let offset = 0; ; offset += PAGE2) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, types, {
+      limit: PAGE2,
+      offset,
+      ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {},
+      ...opts.afterScanId !== void 0 ? { afterScanId: opts.afterScanId } : {},
+      ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
+    });
+    for (const scan2 of page) {
+      if (isScopedScan(scan2)) continue;
+      if (opts.predicate !== void 0 && !opts.predicate(scan2)) continue;
+      const judged = judge(scan2, opts.slot);
+      if (judged === null) continue;
+      if (skipCoverageNone && judged === "none") {
+        hits.push({ slot: opts.slot ?? scan2.scan_type, scan: scan2, reason: "coverage_none" });
+        continue;
+      }
+      return { scan: scan2, coverage: judged, hits };
+    }
+    if (page.length < PAGE2) return { scan: null, coverage: null, hits };
+  }
+}
+function latestStateScan(storage, projectPath, scanType, opts = {}) {
+  const types = scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES;
+  const found = findLatestUsable(storage, projectPath, types, opts);
+  if (scanType !== void 0 || found.scan === null) return found;
+  const hits = [...found.hits];
+  const rejected = /* @__PURE__ */ new Set();
+  let current = found;
+  for (; ; ) {
+    const child = current.scan;
+    if (child === null) return { ...current, hits, skipped: summarizeSkipped(hits) };
+    const run = runOf(storage, projectPath, child);
+    if (run === child) return { ...current, hits, skipped: summarizeSkipped(hits) };
+    if (!rejected.has(run.scan_id)) {
+      const coverage = judge(run, void 0);
+      if (coverage !== "none") return { ...current, scan: run, coverage, hits, skipped: summarizeSkipped(hits) };
+      rejected.add(run.scan_id);
+      hits.push({ slot: run.scan_type, scan: run, reason: "coverage_none" });
+    }
+    current = findLatestUsable(storage, projectPath, types, { beforeScanId: child.scan_id });
+    hits.push(...current.hits);
+  }
+}
+function mapRun(storage, projectPath, scan2) {
+  return scan2 === void 0 ? null : runOf(storage, projectPath, scan2);
+}
+function runOf(storage, projectPath, scan2) {
+  const parentId = scan2.meta?.["parent_scan_id"];
+  if (typeof parentId !== "string") return scan2;
+  const parent = storage.scans.getById(parentId);
+  if (parent === null || parent.status !== "completed" || parent.project_path !== projectPath || !isOrchestratedFullScan(parent)) {
+    return scan2;
+  }
+  return parent;
+}
+function judge(scan2, slot) {
+  if (slot === void 0 || scan2.scan_type !== "security_full") {
+    return computeCoverage(scan2.tools_run, scan2.missing_tools);
+  }
+  if (scan2.tools_run.length === 0 && scan2.missing_tools.length === 0) return "full";
+  const view = slotView(scan2, slot);
+  if (view.tools_run.length === 0 && view.missing_tools.length === 0) return null;
+  return computeCoverage(view.tools_run, view.missing_tools);
+}
+function summarizeSkipped(hits) {
+  const byScan = /* @__PURE__ */ new Map();
+  for (const h2 of hits) {
+    const seen = byScan.get(h2.scan.scan_id);
+    if (seen !== void 0) {
+      if (!seen.slots.includes(h2.slot)) seen.slots.push(h2.slot);
+      continue;
+    }
+    byScan.set(h2.scan.scan_id, {
+      scan_id: h2.scan.scan_id,
+      scan_type: h2.scan.scan_type,
+      started_at: h2.scan.started_at,
+      reason: h2.reason,
+      slots: [h2.slot]
+    });
+  }
+  const all = [...byScan.values()].sort(
+    (a2, b) => a2.started_at === b.started_at ? 0 : a2.started_at < b.started_at ? 1 : -1
+  );
+  const by_reason = { coverage_none: 0 };
+  const newest = [];
+  for (const s of all) {
+    by_reason[s.reason] += 1;
+    if (by_reason[s.reason] <= SKIPPED_SAMPLE) newest.push(s);
+  }
+  return { count: all.length, by_reason, newest };
+}
+function suppressionMatcher(suppressions, now, projectPath) {
+  const fingerprints = /* @__PURE__ */ new Set();
+  const identities = /* @__PURE__ */ new Set();
+  for (const s of suppressions) {
+    if (s.expires_at !== void 0 && !(Date.parse(s.expires_at) > now)) continue;
+    if (s.project_path !== void 0 && s.project_path !== projectPath) continue;
+    fingerprints.add(s.finding_fingerprint);
+    if (s.finding_identity !== void 0) identities.add(s.finding_identity);
+  }
+  return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
+}
+function partitionSuppressed(storage, projectPath, findings, now = Date.now()) {
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), now, projectPath);
+  const visible = [];
+  const suppressed = [];
+  for (const f of findings) (isSuppressed(f) ? suppressed : visible).push(f);
+  return { visible, suppressed };
+}
+function suppressedOfEither(current, reference) {
+  const key = (f) => f.identity !== void 0 ? `i:${f.identity}` : `f:${f.fingerprint}`;
+  const seen = new Set(current.map(key));
+  return [...current, ...reference.filter((f) => !seen.has(key(f)))];
+}
+function slotSources(storage, projectPath, slot) {
+  const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
+  const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
+  if (slot === "security_full") {
+    const r = search(storage, projectPath, ["security_full"], { slot, ...scriptEra });
+    return { picks: pick2(r), hits: r.hits };
+  }
+  const dedicated = search(storage, projectPath, [slot], { slot });
+  if (!sourceTypesOf(slot).includes("security_full")) {
+    return { picks: pick2(dedicated), hits: dedicated.hits };
+  }
+  const legacy = search(storage, projectPath, ["security_full"], {
+    slot,
+    ...scriptEra,
+    ...dedicated.scan !== null ? { afterScanId: dedicated.scan.scan_id } : {}
+  });
+  const picks = pick2(dedicated);
+  if (legacy.scan !== null && legacy.coverage !== null) {
+    picks.push({ scan: legacy.scan, coverage: legacy.coverage });
+  }
+  return { picks, hits: [...dedicated.hits, ...legacy.hits] };
+}
+var CARRY_WALK_LIMIT = 5e3;
+function carryForward(storage, projectPath, slot, source, sourceRows, isSuppressed) {
+  const index = new ChainIndex();
+  index.push(slotView(source, slot));
+  const history = storage.scans.runNamesOfType(projectPath, slot);
+  const stillCarry = new StillCarry(index, history.names, history.anyEmpty);
+  const known = new KnownFindings();
+  for (const f of sourceRows) if (findingInSlot(source, f, slot) && !isSuppressed(f)) known.add(f);
+  const out = [];
+  if (!stillCarry.check()) return out;
+  let walked = 0;
+  let before = source.scan_id;
+  while (walked < CARRY_WALK_LIMIT) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], { limit: PAGE2, beforeScanId: before });
+    const last = page[page.length - 1];
+    if (last !== void 0) before = last.scan_id;
+    for (const scan2 of page) {
+      if (walked >= CARRY_WALK_LIMIT) break;
+      if (isScopedScan(scan2)) continue;
+      const coverage = judge(scan2, slot);
+      if (coverage === null || coverage === "none") continue;
+      walked += 1;
+      const holder = slotView(scan2, slot);
+      const carried = carriedFrom({ storage, scan: scan2, slot, holder, index, isSuppressed, known });
+      if (carried.length > 0) {
+        out.push({ slot, scan: scan2, coverage, findings: carried });
+        for (const { finding: finding4 } of carried) known.add(finding4);
+      }
+      index.push(holder);
+      if (!stillCarry.check()) return out;
+    }
+    if (page.length < PAGE2) break;
+  }
+  return out;
+}
+var KnownFindings = class {
+  identities = /* @__PURE__ */ new Set();
+  bare = /* @__PURE__ */ new Set();
+  add(f) {
+    if (f.identity !== void 0) this.identities.add(f.identity);
+    else this.bare.add(f.fingerprint);
+  }
+  /** A row with these keys would lose to a finding already held. */
+  holds(keys) {
+    return keys.identity !== null && keys.identity !== void 0 ? this.identities.has(keys.identity) : this.bare.has(keys.fingerprint);
+  }
+};
+function carriedFrom(args) {
+  const { storage, scan: scan2, slot, holder, index, isSuppressed, known } = args;
+  const scopes = /* @__PURE__ */ new Map();
+  const scopeOf = (key) => {
+    let scope = scopes.get(key);
+    if (scope === void 0) {
+      scope = index.scope(holder, key);
+      scopes.set(key, scope);
+    }
+    return scope;
+  };
+  let everything = false;
+  const tools = /* @__PURE__ */ new Set();
+  const files = /* @__PURE__ */ new Set();
+  const rules2 = /* @__PURE__ */ new Set();
+  let anyOpen = false;
+  for (const key of producedKeys(holder)) {
+    const scope = scopeOf(key);
+    if (scope.kind === "never") continue;
+    anyOpen = true;
+    if (scope.admit.all) {
+      if (key === UNKNOWN_FINDING_KEY) {
+        everything = true;
+        break;
+      }
+      for (const tool50 of toolsOfKey(key)) tools.add(tool50);
+      continue;
+    }
+    const lookup = admitLookup(scope.admit);
+    for (const f of lookup.files) files.add(f);
+    for (const r of lookup.rules) rules2.add(r);
+  }
+  if (!anyOpen) return [];
+  const rows = everything ? storage.findings.listByScan(scan2.scan_id).filter((f) => !known.holds(f)) : storage.findings.listByScanMatching(
+    scan2.scan_id,
+    { tools: [...tools], files: [...files], rules: [...rules2] },
+    (keys) => known.holds(keys)
+  );
+  const newest = index.bookAt(0);
+  const labels = /* @__PURE__ */ new Map();
+  const carried = [];
+  for (const finding4 of rows) {
+    if (!findingInSlot(scan2, finding4, slot) || isSuppressed(finding4)) continue;
+    const key = findingKey(finding4);
+    const file = finding4.file_path === void 0 ? void 0 : finding4.file_path.replace(/\\/g, "/");
+    if (!scopeAdmits(scopeOf(key), file, finding4.rule_id)) continue;
+    const memo = JSON.stringify([key, file ?? null, finding4.rule_id ?? null]);
+    let gap = labels.get(memo);
+    if (gap === void 0) {
+      gap = newest === void 0 ? null : openGapFor(holder, newest, finding4);
+      labels.set(memo, gap);
+    }
+    if (gap === null) continue;
+    carried.push({ finding: finding4, gap });
+  }
+  return carried;
+}
+function scannersOfGap(gap) {
+  const head = gap.split(" (")[0] ?? gap;
+  return head.split(", ").filter((name) => name.length > 0);
+}
+function openSetForProject(storage, projectPath, opts = {}) {
+  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
+  const picked = [];
+  const hits = [];
+  const considered2 = /* @__PURE__ */ new Map();
+  for (const slot of STATE_SCAN_TYPES) {
+    const found = slotSources(storage, projectPath, slot);
+    for (const h2 of found.hits) {
+      hits.push(h2);
+      considered2.set(h2.scan.scan_id, h2.scan);
+    }
+    for (const p of found.picks) {
+      picked.push({ slot, ...p });
+      considered2.set(p.scan.scan_id, p.scan);
+    }
+  }
+  const byScan = /* @__PURE__ */ new Map();
+  const rowsOf = (scan2) => {
+    let rows = byScan.get(scan2.scan_id);
+    if (rows === void 0) {
+      rows = storage.findings.listByScan(scan2.scan_id);
+      byScan.set(scan2.scan_id, rows);
+    }
+    return rows;
+  };
+  const carried = [];
+  for (const p of picked) {
+    if (p.slot === "security_full" || p.scan.scan_type !== p.slot) continue;
+    for (const c3 of carryForward(storage, projectPath, p.slot, p.scan, rowsOf(p.scan), isSuppressed)) {
+      carried.push(c3);
+      considered2.set(c3.scan.scan_id, c3.scan);
+    }
+  }
+  const order = storage.scans.sortNewestFirst([...considered2.keys()]);
+  const rank2 = new Map(order.map((id, i2) => [id, i2]));
+  const rankOf = (scanId) => rank2.get(scanId) ?? order.length;
+  picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
+  carried.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
+  const findings = [];
+  const sources = [];
+  const seen = indexFindings([]);
+  const admit = (batch) => {
+    for (const f of batch) {
+      findings.push(f);
+      seen.add(f);
+    }
+  };
+  const suppressedSeen = indexFindings([]);
+  let suppressedCount = 0;
+  for (const { slot, scan: scan2, coverage: coverage2 } of picked) {
+    const batch = [];
+    for (const f of rowsOf(scan2)) {
+      if (!findingInSlot(scan2, f, slot) || seen.has(f)) continue;
+      if (isSuppressed(f)) {
+        if (!suppressedSeen.has(f)) {
+          suppressedSeen.add(f);
+          suppressedCount += 1;
+        }
+        continue;
+      }
+      batch.push({ ...f, scan_id: scan2.scan_id });
+    }
+    admit(batch);
+    const contributed = batch.length;
+    sources.push({
+      slot,
+      scan_id: scan2.scan_id,
+      scan_type: scan2.scan_type,
+      started_at: scan2.started_at,
+      finished_at: scan2.finished_at,
+      coverage: coverage2,
+      findings: contributed
+    });
+  }
+  for (const { slot, scan: scan2, coverage: coverage2, findings: rows } of carried) {
+    const gaps = /* @__PURE__ */ new Set();
+    const batch = [];
+    for (const { finding: finding4, gap } of rows) {
+      if (seen.has(finding4)) continue;
+      batch.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true });
+      gaps.add(gap);
+    }
+    admit(batch);
+    const contributed = batch.length;
+    if (contributed === 0) continue;
+    sources.push({
+      slot,
+      scan_id: scan2.scan_id,
+      scan_type: scan2.scan_type,
+      started_at: scan2.started_at,
+      finished_at: scan2.finished_at,
+      coverage: coverage2,
+      findings: contributed,
+      carried_for: [...gaps]
+    });
+  }
+  findings.sort(
+    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
+  );
+  sources.sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
+  const skipped2 = summarizeSkipped(hits);
+  const scans = [...considered2.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
+  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full" || s.carried_for !== void 0) || skipped2.count > 0 ? "partial" : "full";
+  const okInSlot = /* @__PURE__ */ new Map();
+  for (const p of picked) {
+    const names = okInSlot.get(p.slot) ?? /* @__PURE__ */ new Set();
+    for (const t of slotView(p.scan, p.slot).tools_run) if (t.status === "ok") names.add(t.name);
+    okInSlot.set(p.slot, names);
+  }
+  const bookkeeping = [
+    ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
+    ...sources.filter((src) => src.carried_for !== void 0).map((src) => {
+      const scanners = [...new Set((src.carried_for ?? []).flatMap(scannersOfGap))];
+      const ran = okInSlot.get(src.slot) ?? /* @__PURE__ */ new Set();
+      return {
+        scan_id: src.scan_id,
+        slot: src.slot,
+        tools_run: scanners.filter((name) => ran.has(name)).map((name) => ({ name, status: "ok" })),
+        missing_tools: scanners
+      };
+    }),
+    ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
+  ];
+  return {
+    project_path: projectPath,
+    findings,
+    suppressed: suppressedCount,
+    sources,
+    skipped: skipped2,
+    coverage,
+    scans,
+    bookkeeping,
+    // Named as a run: a child of an orchestrated security_full stands for
+    // its parent (see `latestStateScan`). `picked` is newest first.
+    newest: mapRun(storage, projectPath, scans[0]),
+    newestSource: mapRun(storage, projectPath, picked[0]?.scan)
+  };
+}
+function describeOpenSet(set2) {
+  return {
+    project_path: set2.project_path,
+    coverage: set2.coverage,
+    sources: set2.sources,
+    skipped: set2.skipped
+  };
+}
+
+// src/storage/maintenance.ts
+var DEFAULT_RETENTION_SCANS = 50;
+var PRUNE_BATCH = 50;
+var RETENTION_BUDGET_MS = 1e3;
+var RETENTION_START_DELAY_MS = 2e3;
+var RETENTION_BATCH_GAP_MS = 20;
+function resolveRetentionLimit(raw) {
+  const value = raw?.trim() ?? "";
+  if (value === "") return { keep: DEFAULT_RETENTION_SCANS };
+  if (/^\d+$/.test(value)) return { keep: Number.parseInt(value, 10) };
+  return {
+    keep: DEFAULT_RETENTION_SCANS,
+    warning: `GUARDIAN_RETENTION_SCANS='${raw}' is not a non-negative integer; keeping the newest ${DEFAULT_RETENTION_SCANS} scans per project and scan type.`
+  };
+}
+var SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
+    json_extract(meta, '$.scope') IS NOT NULL
+    OR (scan_type = 'wp_vuln_check' AND json_type(meta, '$.slug') IS NOT NULL)
+  ELSE 0 END)`;
+var jsonArrayOr = (column) => `(CASE WHEN json_valid(${column}) AND json_type(${column}) = 'array' THEN ${column} ELSE '[]' END)`;
+var USABLE_SQL = `(CASE
+    WHEN status <> 'completed' THEN 0
+    WHEN (
+      json_array_length(${jsonArrayOr("missing_tools")}) > 0
+      OR EXISTS (SELECT 1 FROM json_each(${jsonArrayOr("tools_run")}) AS t
+                  WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'failed')
+    ) AND NOT EXISTS (SELECT 1 FROM json_each(${jsonArrayOr("tools_run")}) AS t
+                       WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'ok')
+    THEN 0
+    ELSE 1
+  END)`;
+var BASELINED_RUN_MEMBERS_SQL = `
+  SELECT member FROM (
+    SELECT CASE WHEN c.type = 'object' THEN json_extract(c.value, '$.scan_id') END AS member
+      FROM baselines b
+      JOIN scans p ON p.id = b.scan_id,
+           json_each(CASE WHEN json_valid(p.meta) THEN p.meta ELSE '{}' END, '$.child_scans') AS c
+    UNION
+    SELECT CASE WHEN json_valid(s.meta) THEN json_extract(s.meta, '$.parent_scan_id') END
+      FROM baselines b
+      JOIN scans s ON s.id = b.scan_id
+    UNION
+    SELECT u.value
+      FROM baselines b
+      JOIN scans a ON a.id = b.scan_id,
+           json_each(
+             CASE WHEN a.scan_type = 'audit' AND json_valid(a.meta)
+                       AND json_type(a.meta, '$.sub_scan_ids') = 'object'
+                  THEN json_extract(a.meta, '$.sub_scan_ids') ELSE '{}' END
+           ) AS u
+  )
+  WHERE typeof(member) = 'text'
+`;
+var PROTECTED_SQL = `(
+  status = 'running'
+  OR id IN (SELECT scan_id FROM baselines)
+  OR EXISTS (
+    SELECT 1 FROM baselines b
+     WHERE b.scan_id = (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.parent_scan_id') END)
+  )
+  OR id IN (${BASELINED_RUN_MEMBERS_SQL})
+)`;
+function prunableSql(candidates2) {
+  const only = candidates2 > 0 ? (() => {
+    const list2 = Array.from({ length: candidates2 }, () => "?").join(", ");
+    return {
+      partitions: `WHERE (project_path, scan_type) IN
+                           (SELECT project_path, scan_type FROM scans WHERE id IN (${list2}))`,
+      ids: `AND id IN (${list2})`
+    };
+  })() : { partitions: "", ids: "" };
+  return `
+    SELECT id FROM (
+      SELECT id, status, meta, started_at, rowid AS rid,
+             ROW_NUMBER() OVER (
+               PARTITION BY project_path, scan_type, ${SCOPED_SQL}, ${USABLE_SQL}
+               ORDER BY started_at DESC, rowid DESC
+             ) AS rn
+      FROM scans
+      ${only.partitions}
+    )
+    WHERE rn > ?
+      ${only.ids}
+      AND NOT ${PROTECTED_SQL}
+    ORDER BY started_at ASC, rid ASC
+  `;
+}
+var PRUNABLE_SQL = prunableSql(0);
+function listPrunableScans(db, keep) {
+  if (!(keep > 0)) return [];
+  return db.prepare(PRUNABLE_SQL).all(keep).map((r) => r.id);
+}
+function deletePrunableScans(db, ids2, keep, protect = NOTHING_PROTECTED) {
+  if (ids2.length === 0 || !(keep > 0)) return 0;
+  return db.transaction(() => {
+    const eligible = db.prepare(prunableSql(ids2.length)).all(...ids2, keep, ...ids2).map((r) => r.id).filter((id) => !protect.has(id));
+    return deleteRows(db, eligible);
+  })();
+}
+var NOTHING_PROTECTED = /* @__PURE__ */ new Set();
+function deleteScans(db, ids2) {
+  if (ids2.length === 0) return 0;
+  return db.transaction(() => {
+    const list2 = ids2.map(() => "?").join(", ");
+    const eligible = db.prepare(`SELECT id FROM scans WHERE id IN (${list2}) AND NOT ${PROTECTED_SQL}`).all(...ids2).map((r) => r.id);
+    return deleteRows(db, eligible);
+  })();
+}
+function deleteRows(db, eligible) {
+  if (eligible.length === 0) return 0;
+  const del = eligible.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
+  db.prepare(
+    `DELETE FROM cves WHERE first_seen_scan_id IN (${del}) OR last_seen_scan_id IN (${del})`
+  ).run(...eligible, ...eligible);
+  return db.prepare(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
+}
+var STACK_PRUNE_BATCH = 500;
+function pruneStackSnapshots(db, limit = STACK_PRUNE_BATCH) {
+  return db.transaction(() => {
+    const excess = db.prepare(
+      `SELECT id FROM (
+           SELECT id, ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY captured_at DESC, id DESC) AS rn
+           FROM stack_snapshots
+         ) WHERE rn > ? ORDER BY id`
+    ).all(STACK_SNAPSHOTS_KEPT).map((r) => r.id);
+    const batch = excess.slice(0, Math.max(0, limit));
+    let deleted = 0;
+    for (let i2 = 0; i2 < batch.length; i2 += 400) {
+      const chunk = batch.slice(i2, i2 + 400);
+      deleted += db.prepare(`DELETE FROM stack_snapshots WHERE id IN (${chunk.map(() => "?").join(", ")})`).run(...chunk).changes;
+    }
+    return { deleted, remaining: excess.length - deleted };
+  })();
+}
+function openSetSourceIds(storage, candidates2) {
+  const protect = /* @__PURE__ */ new Set();
+  if (candidates2.length === 0) return protect;
+  const db = storage.rawHandle();
+  const projects = /* @__PURE__ */ new Set();
+  for (let i2 = 0; i2 < candidates2.length; i2 += 400) {
+    const chunk = candidates2.slice(i2, i2 + 400);
+    for (const row of db.prepare(`SELECT DISTINCT project_path AS p FROM scans WHERE id IN (${chunk.map(() => "?").join(", ")})`).all(...chunk)) {
+      projects.add(row.p);
+    }
+  }
+  for (const project of projects) {
+    for (const source of openSetForProject(storage, project).sources) {
+      protect.add(source.scan_id);
+      const parent = storage.scans.getById(source.scan_id)?.meta?.["parent_scan_id"];
+      if (typeof parent === "string") protect.add(parent);
+    }
+  }
+  return protect;
+}
+function reapOrphanedScans(storage, log) {
+  try {
+    const reaped = storage.scans.reapRunning();
+    if (reaped > 0) log(`reaped ${reaped} orphaned scan(s)`);
+  } catch (error2) {
+    log(`reaper failed (continuing): ${describe(error2)}`);
+  }
+}
+var defaultDefer = (fn, ms) => {
+  const timer = setTimeout(fn, ms);
+  timer.unref();
+  return () => clearTimeout(timer);
+};
+function scheduleRetention(storage, log, options = {}) {
+  const limit = resolveRetentionLimit((options.env ?? process.env)["GUARDIAN_RETENTION_SCANS"]);
+  if (limit.warning !== void 0) log(limit.warning);
+  if (limit.keep === 0) return () => {
+  };
+  const defer = options.defer ?? defaultDefer;
+  const now = options.now ?? (() => performance.now());
+  const budgetMs = options.budgetMs ?? RETENTION_BUDGET_MS;
+  const batchSize = options.batchSize ?? PRUNE_BATCH;
+  let cancelled = false;
+  let cancelNext = () => {
+  };
+  let pending;
+  let protect = NOTHING_PROTECTED;
+  let spent = 0;
+  let deleted = 0;
+  const finish = (left) => {
+    if (deleted === 0 && left === 0) return;
+    log(
+      `pruned ${deleted} scan(s) beyond the newest ${limit.keep} per project and scan type` + (left > 0 ? `; ${left} left for the next start (retention budget ${budgetMs} ms)` : "")
+    );
+  };
+  const tick = () => {
+    if (cancelled) return;
+    const t0 = now();
+    let left;
+    try {
+      const db = storage.rawHandle();
+      if (pending === void 0) {
+        const stack = pruneStackSnapshots(db);
+        if (stack.deleted > 0) {
+          log(
+            `pruned ${stack.deleted} stack snapshot(s) beyond the newest ${STACK_SNAPSHOTS_KEPT} per project` + (stack.remaining > 0 ? `; ${stack.remaining} left for the next start` : "")
+          );
+        }
+      }
+      if (pending === void 0) {
+        const listed = listPrunableScans(db, limit.keep);
+        protect = openSetSourceIds(storage, listed);
+        pending = listed.filter((id) => !protect.has(id));
+      }
+      deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep, protect);
+      left = pending.length;
+    } catch (error2) {
+      log(`retention failed (continuing): ${describe(error2)}`);
+      return;
+    }
+    spent += now() - t0;
+    if (left === 0 || spent >= budgetMs) {
+      finish(left);
+      return;
+    }
+    cancelNext = defer(tick, RETENTION_BATCH_GAP_MS);
+  };
+  cancelNext = defer(tick, options.startDelayMs ?? RETENTION_START_DELAY_MS);
+  return () => {
+    cancelled = true;
+    cancelNext();
+  };
+}
+function describe(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+function canonicalizeStoredProjectPaths(db) {
+  const stored = db.prepare(
+    `SELECT project_path AS p FROM suppressions WHERE project_path IS NOT NULL
+       UNION
+       SELECT project_path AS p FROM baselines WHERE project_path IS NOT NULL`
+  ).all().map((r) => r.p);
+  const renames = [];
+  for (const path8 of stored) {
+    const canonical2 = spellingOnlyCanonical(path8);
+    if (canonical2 !== null) renames.push([path8, canonical2]);
+  }
+  if (renames.length === 0) return 0;
+  return db.transaction(() => {
+    let changed = 0;
+    for (const [from, to] of renames) {
+      changed += db.prepare("UPDATE suppressions SET project_path = ? WHERE project_path = ?").run(to, from).changes;
+      changed += db.prepare("UPDATE baselines SET project_path = ? WHERE project_path = ?").run(to, from).changes;
+    }
+    return changed;
+  })();
+}
+function spellingOnlyCanonical(path8) {
+  if (!isAbsolute5(path8)) return null;
+  try {
+    if (!statSync7(path8).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const canonical2 = canonicalPath(path8);
+  if (canonical2 === path8) return null;
+  const resolved = resolve6(path8);
+  const root = parse4(resolved).root;
+  let current = root;
+  for (const part of resolved.slice(root.length).split(sep3).filter((s) => s !== "")) {
+    current = join15(current, part);
+    try {
+      if (lstatSync3(current).isSymbolicLink()) return null;
+    } catch {
+      return null;
+    }
+  }
+  return canonical2;
+}
+function canonicalizeProjectPathsAtStartup(storage, log) {
+  try {
+    const changed = canonicalizeStoredProjectPaths(storage.rawHandle());
+    if (changed > 0) log(`rewrote ${changed} suppression/baseline row(s) to the canonical project path spelling`);
+  } catch (error2) {
+    log(`project path spelling step failed (continuing): ${describe(error2)}`);
+  }
+}
+
+// src/resources/paging.ts
+var DEFAULT_PAGE_SIZE = 50;
+var MAX_PAGE_SIZE = 100;
+var MESSAGE_MAX_CHARS = 500;
+function serverProjectPath() {
+  return canonicalPath(process.cwd());
+}
+var QueryTolerantUriTemplate = class extends UriTemplate {
+  base;
+  queryNames;
+  constructor(template) {
+    super(template);
+    const m = /\{\?([^}]*)\}$/.exec(template);
+    const baseTemplate = m ? template.slice(0, m.index) : template;
+    this.base = new UriTemplate(baseTemplate);
+    this.queryNames = m?.[1] ? m[1].split(",").map((n2) => n2.trim()).filter((n2) => n2.length > 0) : [];
+  }
+  match(uri) {
+    const q = uri.indexOf("?");
+    const path8 = q === -1 ? uri : uri.slice(0, q);
+    const vars = this.base.match(path8);
+    if (vars === null) return null;
+    if (q === -1) return vars;
+    const params = new URLSearchParams(uri.slice(q + 1));
+    const out = { ...vars };
+    for (const name of this.queryNames) {
+      const value = params.get(name);
+      if (value !== null) out[name] = value;
+    }
+    return out;
+  }
+};
+function paginate(uri, all) {
+  const total = all.length;
+  const pageRaw = Number(uri.searchParams.get("page") ?? "1");
+  const sizeRaw = Number(uri.searchParams.get("page_size") ?? String(DEFAULT_PAGE_SIZE));
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
+  const page_size = Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(Math.floor(sizeRaw), MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+  const start = (page - 1) * page_size;
+  return { items: all.slice(start, start + page_size), total, page, page_size };
+}
+function boundFinding(f) {
+  if (f.message === void 0 || f.message.length <= MESSAGE_MAX_CHARS) return f;
+  return { ...f, message: `${f.message.slice(0, MESSAGE_MAX_CHARS - 1)}\u2026` };
+}
+
+// src/resources/index.ts
+var RESOURCES = [];
+function registerResourceModule(resource) {
+  if (RESOURCES.some((r) => r.name === resource.name)) {
+    throw new Error(`Resource '${resource.name}' is already registered`);
+  }
+  RESOURCES.push(resource);
+}
+function attachAllResources(server, ctx) {
+  for (const resource of RESOURCES) {
+    const mimeType = resource.mimeType ?? "application/json";
+    if (resource.isTemplate) {
+      const listAs = resource.listAs;
+      const template = new ResourceTemplate(new QueryTolerantUriTemplate(resource.uri), {
+        list: listAs === void 0 ? void 0 : () => ({ resources: [{ uri: listAs, name: resource.name, description: resource.description, mimeType }] })
+      });
+      server.registerResource(
+        resource.name,
+        template,
+        { description: resource.description, mimeType },
+        async (uri, params) => {
+          const { json } = await resource.handler(uri, params, ctx);
+          return {
+            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
+          };
+        }
+      );
+    } else {
+      server.registerResource(
+        resource.name,
+        resource.uri,
+        { description: resource.description, mimeType },
+        async (uri) => {
+          const { json } = await resource.handler(uri, {}, ctx);
+          return {
+            contents: [{ uri: uri.href, mimeType, text: JSON.stringify(json) }]
+          };
+        }
+      );
+    }
+  }
+}
+
+// src/tools/responseBounds.ts
+var RESPONSE_PARTIAL_ENTRIES = 20;
+function bound(list2) {
+  if (list2.length <= RESPONSE_PARTIAL_ENTRIES) return null;
+  const byType = {};
+  for (const p of list2) byType[p.type] = (byType[p.type] ?? 0) + 1;
+  return {
+    partially_parsed: list2.slice(0, RESPONSE_PARTIAL_ENTRIES),
+    partially_parsed_total: list2.length,
+    partially_parsed_by_type: byType
+  };
+}
+function isPartialList(value) {
+  return Array.isArray(value) && value.every((p) => p !== null && typeof p === "object" && typeof p.file === "string");
+}
+function boundResponsePayload(payload) {
+  let out = payload;
+  const runs = payload["tools_run"];
+  if (Array.isArray(runs)) {
+    let changed = false;
+    const bounded = runs.map((run) => {
+      if (run === null || typeof run !== "object") return run;
+      const list2 = run.partially_parsed;
+      const cut = list2 === void 0 ? null : bound(list2);
+      if (cut === null) return run;
+      changed = true;
+      return { ...run, ...cut };
+    });
+    if (changed) out = { ...out, tools_run: bounded };
+  }
+  const top = payload["partially_parsed"];
+  if (isPartialList(top)) {
+    const cut = bound(top);
+    if (cut !== null) out = { ...out, ...cut };
+  }
+  return out;
+}
+
+// src/tools/index.ts
+var TOOLS = [];
+function registerToolModule(tool50) {
+  if (TOOLS.some((t) => t.name === tool50.name)) {
+    throw new Error(`Tool '${tool50.name}' is already registered`);
+  }
+  TOOLS.push(tool50);
+}
+function attachAllTools(server, ctx) {
+  for (const tool50 of TOOLS) {
+    server.registerTool(
+      tool50.name,
+      {
+        ...tool50.title ? { title: tool50.title } : {},
+        description: tool50.description,
+        inputSchema: tool50.inputSchema
+      },
+      async (input, extra) => {
+        const callMeta = {};
+        const typedExtra = extra;
+        const tokenRaw = typedExtra?._meta?.progressToken;
+        if (typeof tokenRaw === "string" || typeof tokenRaw === "number") {
+          callMeta.progressToken = tokenRaw;
+        }
+        if (typedExtra?.signal instanceof AbortSignal) {
+          callMeta.signal = typedExtra.signal;
+        }
+        const result = await tool50.handler(input, ctx, callMeta);
+        return toCallToolResult(result, tool50.contentOnlyKeys ?? []);
+      }
+    );
+  }
+}
+function toCallToolResult(result, contentOnlyKeys) {
+  if (result.ok) {
+    const { ok: _ok, ...rest } = result;
+    const payload = boundResponsePayload({ ok: true, ...rest });
+    const structured = { ...payload };
+    for (const key of contentOnlyKeys) delete structured[key];
+    const indent = contentOnlyKeys.length > 0 ? void 0 : 2;
+    return {
+      content: [{ type: "text", text: JSON.stringify(payload, null, indent) }],
+      structuredContent: structured
+    };
+  }
+  const errorPayload = { ok: false, error: result.error };
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text: `Error (${result.error.code}): ${result.error.message}`
+      }
+    ],
+    structuredContent: errorPayload
+  };
+}
+
+// src/runners/findingMerge.ts
+function findingMergeKey(f) {
+  return f.fingerprint;
+}
+function dedupeFindings(findings) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const f of findings) {
+    const key = findingMergeKey(f);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(f);
+  }
+  return out;
+}
+
+// src/runners/git.ts
+init_execa();
+import { createHash as createHash4 } from "node:crypto";
+import { existsSync as existsSync11, mkdtempSync, rmSync as rmSync3 } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join16 } from "node:path";
+var GIT_TIMEOUT_MS2 = 6e4;
+var CHECKOUT_TIMEOUT_MS = 10 * 6e4;
+async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS2) {
+  try {
+    const r = await execa("git", ["-C", cwd, ...args], {
+      reject: false,
+      timeout: timeoutMs,
+      encoding: "utf8",
+      stripFinalNewline: false
+    });
+    if (r.exitCode === void 0) return { exitCode: 127, stdout: "", stderr: "git could not be run" };
+    return {
+      exitCode: r.exitCode,
+      stdout: typeof r.stdout === "string" ? r.stdout : "",
+      stderr: typeof r.stderr === "string" ? r.stderr : ""
+    };
+  } catch (e) {
+    return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
+  }
+}
+function splitNul(text2) {
+  return text2.split("\0").filter((s) => s.length > 0);
+}
+async function repoState(cwd) {
+  const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (top.exitCode !== 0) {
+    if (/not a git repository/i.test(top.stderr) || top.exitCode === 127) return { kind: "not_git" };
+    return { kind: "error", message: firstLine(top.stderr) || `git exited ${top.exitCode}` };
+  }
+  const toplevel = top.stdout.trim();
+  const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+  return head.exitCode === 0 ? { kind: "has_commits", toplevel } : { kind: "no_commits", toplevel };
+}
+async function resolveCommit(cwd, ref) {
+  const r = await git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
+  if (r.exitCode !== 0) return null;
+  const sha = r.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+async function changedFiles(cwd, base, head) {
+  const r = await git(cwd, [
+    "diff",
+    "-z",
+    "--name-only",
+    "--relative",
+    "--diff-filter=ACMR",
+    "--no-renames",
+    `${base}...${head}`,
+    "--"
+  ]);
+  if (r.exitCode !== 0) {
+    throw new Error(`git diff ${base}...${head} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return splitNul(r.stdout);
+}
+async function countCommits(cwd, range) {
+  const r = await git(cwd, ["rev-list", "--count", range, "--"]);
+  const n2 = Number(r.stdout.trim());
+  if (r.exitCode !== 0 || !Number.isInteger(n2)) {
+    throw new Error(`git rev-list --count ${range} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return n2;
+}
+async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
+  const excludes = excludeDirs.map((d) => `--exclude=${d}/`);
+  const untracked2 = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard", ...excludes]);
+  if (untracked2.exitCode !== 0) {
+    throw new Error(`git ls-files failed: ${firstLine(untracked2.stderr) || `exit ${untracked2.exitCode}`}`);
+  }
+  const tracked = hasCommits ? await git(cwd, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "HEAD", "--"]) : await git(cwd, ["ls-files", "-z", "--cached"]);
+  if (tracked.exitCode !== 0) {
+    throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
+  }
+  return [.../* @__PURE__ */ new Set([...splitNul(tracked.stdout), ...splitNul(untracked2.stdout)])];
+}
+async function historyState(cwd) {
+  const head = await resolveCommit(cwd, "HEAD");
+  if (head === null) return {};
+  const refs = await git(cwd, ["for-each-ref", "--format=%(objectname) %(refname)"]);
+  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine(refs.stderr)}`);
+  return { head, refs: createHash4("sha256").update(refs.stdout).digest("hex") };
+}
+async function showPrefix(cwd) {
+  const r = await git(cwd, ["rev-parse", "--show-prefix"]);
+  if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine(r.stderr)}`);
+  return r.stdout.trim();
+}
+async function materialiseCommit(cwd, sha) {
+  const holder = mkdtempSync(join16(tmpdir(), "guardian-review-"));
+  const root = join16(holder, "head");
+  const noHooks = join16(holder, "no-hooks");
+  const r = await git(cwd, ["-c", `core.hooksPath=${noHooks}`, "worktree", "add", "--detach", "--quiet", root, sha], CHECKOUT_TIMEOUT_MS);
+  const remove = async () => {
+    const problems = [];
+    const rm = await git(cwd, ["worktree", "remove", "--force", root]);
+    if (rm.exitCode !== 0 && existsSync11(root)) problems.push(firstLine(rm.stderr) || `git worktree remove exited ${rm.exitCode}`);
+    try {
+      rmSync3(holder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (e) {
+      problems.push(e instanceof Error ? e.message : String(e));
+    }
+    await git(cwd, ["worktree", "prune"]);
+    return problems.length > 0 ? `temporary checkout ${root} not fully removed: ${problems.join("; ")}` : null;
+  };
+  if (r.exitCode !== 0) {
+    await remove();
+    throw new Error(`git worktree add ${sha.slice(0, 12)} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return { root, remove };
+}
+function firstLine(text2) {
+  return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
 
 // src/schemas.ts
@@ -43700,7 +45527,7 @@ function hints(id, languages) {
     untestable_languages: languages === null ? [] : languages.filter((l) => !testable.has(l))
   };
 }
-function judge(contributions, project) {
+function judge2(contributions, project) {
   const { languages } = project;
   const agnostic = contributions.filter((c3) => c3.reach.kind === "any-language");
   const complete = (c3) => c3.entry.partial === void 0;
@@ -43785,7 +45612,7 @@ function owaspCoverage(runs, findings, project) {
   };
   const out = {
     categories: OWASP_TOP10_2025.map((c3) => {
-      const verdict = judge(contributionsOf(runs, c3.id), judged);
+      const verdict = judge2(contributionsOf(runs, c3.id), judged);
       return {
         id: c3.id,
         title: c3.title,
@@ -43827,22 +45654,22 @@ function coverageRunsOf(bookkeeping, scans) {
 
 // src/frameworks/projectLanguages.ts
 import { readdir as readdir2, readFile as readFile2 } from "node:fs/promises";
-import { join as join18 } from "node:path";
+import { join as join20 } from "node:path";
 
 // src/platform/guardianIgnore.ts
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync11, readFileSync as readFileSync11 } from "node:fs";
-import { dirname as dirname7, join as join17, resolve as resolve8, sep as sep5 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync12 } from "node:fs";
+import { dirname as dirname8, join as join19, resolve as resolve8, sep as sep5 } from "node:path";
 
 // src/runners/projectFiles.ts
-import { readdirSync as readdirSync6 } from "node:fs";
-import { join as join16 } from "node:path";
+import { readdirSync as readdirSync7 } from "node:fs";
+import { join as join18 } from "node:path";
 
 // src/treeHash/computeTreeHash.ts
 init_execa();
 import { createHash as createHash5 } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join as join15, relative as relative4, resolve as resolve7, sep as sep4 } from "node:path";
+import { join as join17, relative as relative4, resolve as resolve7, sep as sep4 } from "node:path";
 var FS_EXCLUDE = /* @__PURE__ */ new Set([
   ".git",
   ".guardian",
@@ -43868,7 +45695,7 @@ async function computeTreeHash(projectPath, options = {}) {
   files.sort();
   const hash = createHash5("sha256");
   for (const rel2 of files) {
-    const abs = join15(root, rel2);
+    const abs = join17(root, rel2);
     let contentHash;
     try {
       const bytes = await readFile(abs);
@@ -43917,7 +45744,7 @@ async function walk(root, dir, out) {
   for (const entry of entries2) {
     if (entry.name.startsWith(".") && FS_EXCLUDE.has(entry.name)) continue;
     if (FS_EXCLUDE.has(entry.name)) continue;
-    const abs = join15(dir, entry.name);
+    const abs = join17(dir, entry.name);
     if (entry.isDirectory()) {
       await walk(root, abs, out);
     } else if (entry.isFile()) {
@@ -43936,7 +45763,7 @@ async function walk(root, dir, out) {
 var PROJECT_WALK_EXCLUDE = /* @__PURE__ */ new Set([...FS_EXCLUDE, "vendor"]);
 function readDir(dir) {
   try {
-    return readdirSync6(dir, { withFileTypes: true });
+    return readdirSync7(dir, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -43948,7 +45775,7 @@ function hasFileWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUDE) 
     if (dir === void 0) break;
     for (const entry of readDir(dir)) {
       if (entry.isDirectory()) {
-        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join16(dir, entry.name));
+        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join18(dir, entry.name));
       } else if (entry.isFile()) {
         const lower = entry.name.toLowerCase();
         if (extensions.some((ext) => lower.endsWith(ext))) return true;
@@ -43965,7 +45792,7 @@ function countFilesWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUD
     if (dir === void 0) break;
     for (const entry of readDir(dir)) {
       if (entry.isDirectory()) {
-        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join16(dir, entry.name));
+        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join18(dir, entry.name));
       } else if (entry.isFile()) {
         const lower = entry.name.toLowerCase();
         if (extensions.some((ext) => lower.endsWith(ext)) && !skipFile(lower)) count2 += 1;
@@ -43983,7 +45810,7 @@ function listProjectFiles(root, exclude = PROJECT_WALK_EXCLUDE) {
     for (const entry of readDir(next.abs)) {
       const rel2 = next.rel === "" ? entry.name : `${next.rel}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (!exclude.has(entry.name)) stack.push({ abs: join16(next.abs, entry.name), rel: rel2 });
+        if (!exclude.has(entry.name)) stack.push({ abs: join18(next.abs, entry.name), rel: rel2 });
       } else if (entry.isFile()) {
         out.push(rel2);
       }
@@ -44128,10 +45955,10 @@ function escapeRegExp(text2) {
   return text2.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 async function loadProjectExclusions(projectPath) {
-  const file = join17(projectPath, GUARDIAN_IGNORE_FILE);
+  const file = join19(projectPath, GUARDIAN_IGNORE_FILE);
   let text2;
   try {
-    text2 = readFileSync11(file, "utf8");
+    text2 = readFileSync12(file, "utf8");
   } catch (e) {
     const code = typeof e === "object" && e !== null && "code" in e ? e.code : void 0;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
@@ -44161,7 +45988,7 @@ function projectPathTest(projectPath) {
     const key = segments.join("/");
     let v = exists.get(key);
     if (v === void 0) {
-      v = existsSync11(join17(projectPath, ...segments));
+      v = existsSync12(join19(projectPath, ...segments));
       exists.set(key, v);
     }
     return v;
@@ -44180,9 +46007,9 @@ function projectPathTest(projectPath) {
   };
 }
 function insideGitWorkTree(projectPath) {
-  for (let dir = resolve8(projectPath); ; dir = dirname7(dir)) {
-    if (existsSync11(join17(dir, ".git"))) return true;
-    if (dirname7(dir) === dir) return false;
+  for (let dir = resolve8(projectPath); ; dir = dirname8(dir)) {
+    if (existsSync12(join19(dir, ".git"))) return true;
+    if (dirname8(dir) === dir) return false;
   }
 }
 async function gitListFiles(root) {
@@ -44288,9 +46115,9 @@ function trivySkipArgs(ex) {
 }
 function banditExcludeArgs(ex, projectPath) {
   if (ex === null) return [];
-  const keptAbs = ex.keptFiles.map((k) => join17(projectPath, ...k.split("/")));
+  const keptAbs = ex.keptFiles.map((k) => join19(projectPath, ...k.split("/")));
   const entries2 = nativeEntries(ex).filter((e) => !e.rel.includes(",")).map((e) => {
-    const abs = join17(projectPath, ...e.rel.split("/"));
+    const abs = join19(projectPath, ...e.rel.split("/"));
     return e.dir ? `${abs}${sep5}` : abs;
   }).filter((abs) => !FNMATCH_SYNTAX.test(abs) && !keptAbs.some((k) => k.includes(abs)));
   const chosen = withinBudget(entries2, (a2) => a2.length + 1);
@@ -44373,8 +46200,8 @@ async function readTextAsync(path8) {
 }
 async function ignoreTextsAsync(root) {
   const [semgrep, guardian] = await Promise.all([
-    readTextAsync(join18(root, ".semgrepignore")),
-    readTextAsync(join18(root, GUARDIAN_IGNORE_FILE))
+    readTextAsync(join20(root, ".semgrepignore")),
+    readTextAsync(join20(root, GUARDIAN_IGNORE_FILE))
   ]);
   return { semgrep, guardian };
 }
@@ -44555,7 +46382,7 @@ async function walkAsync(root, exclusions, opts) {
   while (step.done !== true) {
     let entries2;
     try {
-      entries2 = await read2(join18(root, step.value));
+      entries2 = await read2(join20(root, step.value));
     } catch {
       entries2 = null;
     }
@@ -44772,12 +46599,12 @@ function list(items) {
 }
 
 // src/configdrift/detect.ts
-import { existsSync as existsSync12 } from "node:fs";
-import { join as join19 } from "node:path";
+import { existsSync as existsSync13 } from "node:fs";
+import { join as join21 } from "node:path";
 
 // src/configdrift/hash.ts
 import { createHash as createHash7 } from "node:crypto";
-import { readFileSync as readFileSync12 } from "node:fs";
+import { readFileSync as readFileSync13 } from "node:fs";
 
 // src/configdrift/header.ts
 var PROVENANCE_MARKER = "dev-guardian:managed";
@@ -44830,7 +46657,7 @@ function hashConfigText(text2) {
 }
 function hashConfigFile(path8) {
   try {
-    return hashConfigText(readFileSync12(path8, "utf8"));
+    return hashConfigText(readFileSync13(path8, "utf8"));
   } catch {
     return null;
   }
@@ -44852,12 +46679,12 @@ function classify3(entry, input) {
     recorded_plugin_version: entry.plugin_version,
     current_plugin_version: input.currentVersion
   };
-  const sourceHash = hashConfigFile(join19(input.configsDir, entry.source));
+  const sourceHash = hashConfigFile(join21(input.configsDir, entry.source));
   if (sourceHash === null) return { ...base, state: "source_missing" };
-  const targetPath = join19(input.projectPath, entry.target);
+  const targetPath = join21(input.projectPath, entry.target);
   const targetHash = hashConfigFile(targetPath);
   if (targetHash === null) return { ...base, state: "target_missing" };
-  if (entry.delivered_as !== void 0 && existsSync12(join19(input.projectPath, entry.delivered_as))) {
+  if (entry.delivered_as !== void 0 && existsSync13(join21(input.projectPath, entry.delivered_as))) {
     return { ...base, state: "pending_merge", delivered_as: entry.delivered_as };
   }
   const oursMoved = sourceHash !== entry.source_sha256;
@@ -44883,12 +46710,12 @@ function redactCredentialSnippets(findings) {
 
 // src/platform/scope.ts
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync13, lstatSync as lstatSync4, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute6, join as join21, relative as relative6, resolve as resolve9 } from "node:path";
+import { existsSync as existsSync14, lstatSync as lstatSync4, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute6, join as join23, relative as relative6, resolve as resolve9 } from "node:path";
 
 // src/platform/glob.ts
-import { readdirSync as readdirSync7, statSync as statSync8 } from "node:fs";
-import { join as join20, relative as relative5, sep as sep6 } from "node:path";
+import { readdirSync as readdirSync8, statSync as statSync8 } from "node:fs";
+import { join as join22, relative as relative5, sep as sep6 } from "node:path";
 function hasGlobMagic(pattern) {
   return /[*?{[]/.test(pattern);
 }
@@ -44953,13 +46780,13 @@ function expandGlob(root, pattern) {
   const walk4 = (dir) => {
     let names;
     try {
-      names = readdirSync7(dir);
+      names = readdirSync8(dir);
     } catch {
       return;
     }
     for (const name of names) {
       if (visited++ > MAX_VISITED) return;
-      const abs = join20(dir, name);
+      const abs = join22(dir, name);
       const rel2 = relative5(root, abs).split(sep6).join("/");
       let isDir = false;
       try {
@@ -45003,13 +46830,13 @@ var ScopeError = class extends Error {
 };
 function suggestScopeForFile(filePath) {
   const file = resolve9(filePath);
-  let root = dirname8(file);
-  for (let dir = root; ; dir = dirname8(dir)) {
-    if (existsSync13(join21(dir, ".git"))) {
+  let root = dirname9(file);
+  for (let dir = root; ; dir = dirname9(dir)) {
+    if (existsSync14(join23(dir, ".git"))) {
       root = dir;
       break;
     }
-    if (dirname8(dir) === dir) break;
+    if (dirname9(dir) === dir) break;
   }
   return { project_path: root, scope: { paths: [normaliseRelPath(relative6(root, file))] } };
 }
@@ -45084,7 +46911,7 @@ function resolvePaths(projectPath, entries2) {
     if (rel2 === null) {
       throw new ScopeError(`scope.paths entry "${entry}" is outside the project ${projectPath}`, "unsupported_target");
     }
-    const abs = rel2 === "" ? projectPath : join21(projectPath, ...rel2.split("/"));
+    const abs = rel2 === "" ? projectPath : join23(projectPath, ...rel2.split("/"));
     const kind = entryKind(abs, root);
     if (kind === "escapes") {
       throw new ScopeError(`scope.paths entry "${entry}" resolves outside the project`, "unsupported_target");
@@ -45178,7 +47005,7 @@ function insideChecker(projectPath, root, hint = "") {
     const dir = slash < 0 ? "" : rel2.slice(0, slash);
     let inside = dirs.get(dir);
     if (inside === void 0) {
-      inside = staysInside(dir === "" ? projectPath : join21(projectPath, ...dir.split("/")), root);
+      inside = staysInside(dir === "" ? projectPath : join23(projectPath, ...dir.split("/")), root);
       dirs.set(dir, inside);
     }
     if (!inside) {
@@ -45216,7 +47043,7 @@ function onDisk(projectPath, rels, fromUntracked = false) {
   for (const rel2 of rels) {
     let isFile2 = false;
     try {
-      isFile2 = lstatSync4(join21(projectPath, ...rel2.split("/"))).isFile();
+      isFile2 = lstatSync4(join23(projectPath, ...rel2.split("/"))).isFile();
     } catch {
     }
     if (!isFile2) continue;
@@ -45517,8 +47344,8 @@ function filterFindings(items, min) {
 
 // src/treeHash/cacheKey.ts
 import { createHash as createHash9 } from "node:crypto";
-import { readFileSync as readFileSync13, readdirSync as readdirSync8, statSync as statSync9 } from "node:fs";
-import { join as join22, relative as relative7, sep as sep7 } from "node:path";
+import { readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync9 } from "node:fs";
+import { join as join24, relative as relative7, sep as sep7 } from "node:path";
 function sha2563(text2) {
   return createHash9("sha256").update(text2).digest("hex");
 }
@@ -45541,12 +47368,12 @@ function listFilesRecursive(dir) {
   const walk4 = (current) => {
     let entries2;
     try {
-      entries2 = readdirSync8(current, { withFileTypes: true });
+      entries2 = readdirSync9(current, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of entries2) {
-      const abs = join22(current, entry.name);
+      const abs = join24(current, entry.name);
       if (entry.isDirectory()) walk4(abs);
       else if (entry.isFile()) out.push(relative7(dir, abs).split(sep7).join("/"));
     }
@@ -45565,7 +47392,7 @@ function describePack(entry) {
   }
   if (isFile2) {
     try {
-      return `file:${entry}:${sha2563(readFileSync13(entry))}`;
+      return `file:${entry}:${sha2563(readFileSync14(entry))}`;
     } catch {
       return `file:${entry}:unreadable`;
     }
@@ -45573,7 +47400,7 @@ function describePack(entry) {
   if (isDir) {
     const parts = listFilesRecursive(entry).map((rel2) => {
       try {
-        return `${rel2}:${sha2563(readFileSync13(join22(entry, rel2)))}`;
+        return `${rel2}:${sha2563(readFileSync14(join24(entry, rel2)))}`;
       } catch {
         return `${rel2}:unreadable`;
       }
@@ -45647,444 +47474,6 @@ function firstLine2(text2) {
     if (trimmed.length > 0) return trimmed;
   }
   return null;
-}
-
-// src/runners/scannerParsers/trivy.ts
-import { existsSync as existsSync14, readdirSync as readdirSync9, readFileSync as readFileSync14 } from "node:fs";
-import { dirname as dirname9, join as join23 } from "node:path";
-var TRIVY_TOOL_NAME = "trivy";
-var trivyParser = {
-  name: TRIVY_TOOL_NAME,
-  parse(input, ctx = {}) {
-    const root = parseInputAsJson(input);
-    const findings = [];
-    const cves = [];
-    for (const result of asArray(getProp(root, "Results"))) {
-      const target = getString(result, "Target") ?? "";
-      for (const v of asArray(getProp(result, "Vulnerabilities"))) {
-        const finding4 = mapVulnerability(v, target, ctx);
-        if (finding4) findings.push(finding4);
-        const cve = mapVulnerabilityCve(v);
-        if (cve) cves.push(cve);
-      }
-      for (const l of asArray(getProp(result, "Licenses"))) {
-        const finding4 = mapLicense(l, target, ctx);
-        if (finding4) findings.push(finding4);
-      }
-      for (const m of asArray(getProp(result, "Misconfigurations"))) {
-        const finding4 = mapMisconfiguration(m, target, ctx);
-        if (finding4) findings.push(finding4);
-      }
-      for (const s of asArray(getProp(result, "Secrets"))) {
-        const finding4 = mapSecret(s, target, ctx);
-        if (finding4) findings.push(finding4);
-      }
-    }
-    return { findings, cves };
-  }
-};
-function mapVulnerability(raw, target, ctx) {
-  const cveId = getString(raw, "VulnerabilityID");
-  const pkg = getString(raw, "PkgName");
-  if (!cveId || !pkg) return null;
-  const severity = normalizeSeverity(getString(raw, "Severity"));
-  const title = getString(raw, "Title") ?? `${cveId} in ${pkg}`;
-  const installed = getString(raw, "InstalledVersion");
-  const fixed = getString(raw, "FixedVersion");
-  const description = getString(raw, "Description");
-  const input = {
-    tool: TRIVY_TOOL_NAME,
-    rule_id: cveId,
-    severity,
-    category: "security",
-    subcategory: "cve",
-    title,
-    fix_available: fixed !== void 0 && fixed.length > 0,
-    file_path: toRelativeIfPossible(target, ctx.project_path),
-    // A vulnerable dependency is CWE-1395 and A03 whatever the flaw inside
-    // it; the advisory's own CweIDs name that flaw, in `cwe` only.
-    taxonomy: dependencyTaxonomy(asArray(getProp(raw, "CweIDs")))
-  };
-  if (description !== void 0) input.message = description;
-  input.vuln_aliases = asArray(getProp(raw, "VendorIDs"));
-  input.snippet = `${pkg}@${installed ?? ""}->${fixed ?? ""}`;
-  return makeFinding(input);
-}
-function mapVulnerabilityCve(raw) {
-  const cveId = getString(raw, "VulnerabilityID");
-  const pkg = getString(raw, "PkgName");
-  if (!cveId || !pkg) return null;
-  const cve = {
-    cve_id: cveId,
-    package_name: pkg,
-    severity: normalizeSeverity(getString(raw, "Severity"))
-  };
-  const installed = getString(raw, "InstalledVersion");
-  if (installed !== void 0) cve.installed_version = installed;
-  const fixed = getString(raw, "FixedVersion");
-  if (fixed !== void 0) cve.fixed_version = fixed;
-  return cve;
-}
-function mapLicense(raw, target, ctx) {
-  const pkg = getString(raw, "PkgName");
-  const license = getString(raw, "Name");
-  if (!license) return null;
-  const severity = normalizeSeverity(getString(raw, "Severity"));
-  const title = `License '${license}' on ${pkg ?? target}`;
-  const input = {
-    tool: TRIVY_TOOL_NAME,
-    rule_id: `license:${license}`,
-    severity,
-    category: "license",
-    subcategory: license.toLowerCase(),
-    title,
-    file_path: toRelativeIfPossible(target, ctx.project_path),
-    snippet: pkg ? `pkg:${pkg}` : `license:${license}`
-  };
-  return makeFinding(input);
-}
-function mapMisconfiguration(raw, target, ctx) {
-  const id = getString(raw, "ID") ?? getString(raw, "AVDID");
-  if (!id) return null;
-  const severity = normalizeSeverity(getString(raw, "Severity"));
-  const title = getString(raw, "Title") ?? id;
-  const message3 = getString(raw, "Description");
-  const cause = getProp(raw, "CauseMetadata");
-  const lineStart = getNumber(cause, "StartLine");
-  const lineEnd = getNumber(cause, "EndLine") ?? lineStart;
-  const type = getString(raw, "Type")?.toLowerCase();
-  const category = "security";
-  const subcategory = type ?? "misconfiguration";
-  const input = {
-    tool: TRIVY_TOOL_NAME,
-    rule_id: id,
-    severity,
-    category,
-    subcategory,
-    title,
-    file_path: toRelativeIfPossible(target, ctx.project_path)
-  };
-  if (message3 !== void 0) input.message = message3;
-  if (lineStart !== void 0) input.line_start = lineStart;
-  if (lineEnd !== void 0) input.line_end = lineEnd;
-  const fixHint = getString(raw, "Resolution");
-  if (fixHint !== void 0) input.snippet = fixHint;
-  return makeFinding(input);
-}
-function mapSecret(raw, target, ctx) {
-  const ruleId = getString(raw, "RuleID") ?? getString(raw, "Rule");
-  if (!ruleId) return null;
-  const severity = normalizeSeverity(getString(raw, "Severity") ?? "HIGH");
-  const lineStart = getNumber(raw, "StartLine");
-  const lineEnd = getNumber(raw, "EndLine") ?? lineStart;
-  const input = {
-    tool: TRIVY_TOOL_NAME,
-    rule_id: ruleId,
-    severity,
-    category: "security",
-    subcategory: "secret",
-    title: getString(raw, "Title") ?? ruleId,
-    file_path: toRelativeIfPossible(target, ctx.project_path),
-    taxonomy: { cwe: [SECRET_CWE] }
-  };
-  if (lineStart !== void 0) input.line_start = lineStart;
-  if (lineEnd !== void 0) input.line_end = lineEnd;
-  return makeFinding(input);
-}
-var ECOSYSTEM_MANIFESTS = [
-  {
-    ecosystem: "npm",
-    matches: (n2) => n2 === "package.json",
-    trivyTypes: ["npm", "yarn", "pnpm", "bun"],
-    lockfiles: ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock"],
-    declaresNothing: npmManifestDeclaresNothing,
-    fix: "commit the lock file your package manager writes (package-lock.json, yarn.lock, pnpm-lock.yaml or bun.lock)"
-  },
-  {
-    ecosystem: "composer",
-    matches: (n2) => n2 === "composer.json",
-    trivyTypes: ["composer"],
-    lockfiles: ["composer.lock"],
-    fix: "commit composer.lock (composer update writes it)"
-  },
-  {
-    ecosystem: "dotnet",
-    matches: (n2) => /\.(csproj|sln)$/i.test(n2),
-    trivyTypes: ["nuget"],
-    lockfiles: ["packages.lock.json", "packages.config"],
-    fix: "set RestorePackagesWithLockFile to true, run dotnet restore and commit packages.lock.json"
-  },
-  {
-    ecosystem: "rubygems",
-    matches: (n2) => n2 === "Gemfile",
-    trivyTypes: ["bundler"],
-    lockfiles: ["Gemfile.lock"],
-    fix: "commit Gemfile.lock (bundle lock writes it)"
-  },
-  {
-    ecosystem: "cargo",
-    matches: (n2) => n2 === "Cargo.toml",
-    trivyTypes: ["cargo"],
-    lockfiles: ["Cargo.lock"],
-    fix: "commit Cargo.lock (cargo generate-lockfile writes it)"
-  },
-  {
-    ecosystem: "gradle",
-    matches: (n2) => n2 === "build.gradle" || n2 === "build.gradle.kts",
-    trivyTypes: ["gradle"],
-    lockfiles: ["gradle.lockfile"],
-    // `--write-locks` writes nothing until locking is switched on in the build.
-    fix: "enable dependencyLocking { lockAllConfigurations() } in the build, then run gradle dependencies --write-locks and commit gradle.lockfile"
-  },
-  {
-    ecosystem: "python",
-    matches: (n2) => n2 === "pyproject.toml" || n2 === "Pipfile" || n2 === "setup.py" || n2 === "setup.cfg" || /^requirements.*\.txt$/i.test(n2),
-    trivyTypes: ["pip", "pipenv", "poetry", "uv"],
-    lockfiles: ["requirements.txt", "Pipfile.lock", "poetry.lock", "uv.lock"],
-    declaresNothing: pythonManifestDeclaresNothing,
-    fix: "commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), or pin every dependency (==) in requirements.txt"
-  }
-];
-var MANIFEST_ECOSYSTEMS = ECOSYSTEM_MANIFESTS.map((e) => e.ecosystem);
-function lockFileAdvice(ecosystem) {
-  return ECOSYSTEM_MANIFESTS.find((e) => e.ecosystem === ecosystem)?.fix ?? null;
-}
-var MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
-function manifestEcosystemOfTarget(target) {
-  const base = target.slice(Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\")) + 1).toLowerCase();
-  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base));
-  return eco?.ecosystem ?? null;
-}
-var NPM_DECLARING_FIELDS = [
-  "dependencies",
-  "devDependencies",
-  "optionalDependencies",
-  "peerDependencies",
-  "bundleDependencies",
-  "bundledDependencies",
-  "workspaces"
-];
-function isEmptyField(v) {
-  if (v === void 0) return true;
-  if (Array.isArray(v)) return v.length === 0;
-  return typeof v === "object" && v !== null && Object.keys(v).length === 0;
-}
-function readJsonFile(path8) {
-  try {
-    return JSON.parse(readFileSync14(path8, "utf8").replace(/^\uFEFF/, ""));
-  } catch {
-    return void 0;
-  }
-}
-var NPM_JSON_LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json"];
-var NPM_UNREAD_LOCKFILES = ["pnpm-lock.yaml", "bun.lock", "bun.lockb"];
-function npmLockFilesLockNothing(dir) {
-  for (const name of NPM_UNREAD_LOCKFILES) if (existsSync14(join23(dir, name))) return false;
-  for (const name of NPM_JSON_LOCKFILES) {
-    const path8 = join23(dir, name);
-    if (!existsSync14(path8)) continue;
-    const lock = readJsonFile(path8);
-    if (typeof lock !== "object" || lock === null || Array.isArray(lock)) return false;
-    const { packages, dependencies } = lock;
-    if (packages !== void 0) {
-      if (typeof packages !== "object" || packages === null || Array.isArray(packages)) return false;
-      if (Object.keys(packages).some((k) => k !== "")) return false;
-    }
-    if (!isEmptyField(dependencies)) return false;
-  }
-  const yarnLock = join23(dir, "yarn.lock");
-  if (existsSync14(yarnLock)) {
-    let text2;
-    try {
-      text2 = readFileSync14(yarnLock, "utf8");
-    } catch {
-      return false;
-    }
-    if (text2.split(/\r?\n/).some((line) => line.trim() !== "" && !line.trimStart().startsWith("#"))) return false;
-  }
-  return true;
-}
-function npmManifestDeclaresNothing(path8) {
-  const manifest = readJsonFile(path8);
-  if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
-  const fields = manifest;
-  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(dirname9(path8));
-}
-var EMPTY_TOML_VALUE = /^(\[\s*\]|\{\s*\})\s*(#.*)?$/;
-var PY_DEPENDENCY_KEYS = /* @__PURE__ */ new Set(["dependencies", "optional-dependencies", "dev-dependencies"]);
-var PY_DEPENDENCY_TABLES = /^(project\.optional-dependencies(\..+)?|dependency-groups|tool\.poetry\.(dependencies|dev-dependencies|group\.[^.]+\.dependencies)|tool\.pdm\.dev-dependencies|packages|dev-packages)$/;
-function pythonManifestDeclaresNothing(path8) {
-  let text2;
-  try {
-    text2 = readFileSync14(path8, "utf8").replace(/^﻿/, "");
-  } catch {
-    return false;
-  }
-  const lines = text2.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
-  if (/\.txt$/i.test(path8)) return lines.length === 0;
-  if (/(^|[\\/])setup\.py$/i.test(path8)) return !/\b(install_requires|extras_require)\b/.test(text2);
-  if (/(^|[\\/])setup\.cfg$/i.test(path8)) {
-    return !/^\s*(install_requires|extras_require)\s*=/m.test(text2) && !/^\s*\[options\.extras_require\]/m.test(text2);
-  }
-  let table = "";
-  for (const line of lines) {
-    if (line.startsWith("[")) {
-      const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
-      if (header?.[1] === void 0) return false;
-      table = header[1].replace(/["'\s]/g, "");
-      continue;
-    }
-    const kv = /^["']?([A-Za-z0-9_.-]+)["']?\s*=\s*(.*)$/.exec(line);
-    if (kv?.[1] === void 0 || kv[2] === void 0) continue;
-    const key = kv[1];
-    const empty = EMPTY_TOML_VALUE.test(kv[2]);
-    const lastSegment = key.slice(key.lastIndexOf(".") + 1);
-    if (PY_DEPENDENCY_KEYS.has(lastSegment) && !empty) return false;
-    if (PY_DEPENDENCY_TABLES.test(table) && !empty && !(table.startsWith("tool.poetry.") && key === "python")) {
-      return false;
-    }
-  }
-  return true;
-}
-function assessManifestCoverage(projectPath, rawTrivyOutput) {
-  let entries2;
-  try {
-    entries2 = readdirSync9(projectPath);
-  } catch {
-    return { gaps: [], sawAnyResults: false };
-  }
-  const root = parseInputAsJson(rawTrivyOutput);
-  const results = asArray(getProp(root, "Results"));
-  const coveredTypes = /* @__PURE__ */ new Set();
-  for (const result of results) {
-    const type = getString(result, "Type");
-    if (type) coveredTypes.add(type);
-  }
-  const gaps = [];
-  for (const eco of ECOSYSTEM_MANIFESTS) {
-    const files = entries2.filter((n2) => eco.matches(n2) && !(eco.declaresNothing?.(join23(projectPath, n2)) ?? false));
-    if (files.length === 0) continue;
-    const covered = eco.trivyTypes.some((t) => coveredTypes.has(t));
-    if (!covered) gaps.push({ ecosystem: eco.ecosystem, files });
-  }
-  return { gaps, sawAnyResults: results.length > 0 };
-}
-
-// src/tools/scanCoverage.ts
-function computeCoverage(toolsRun, missingTools) {
-  const ranOk = toolsRun.some((t) => t.status === "ok");
-  const failed = toolsRun.some((t) => t.status === "failed");
-  const hasGaps = missingTools.length > 0 || failed;
-  if (!hasGaps) return "full";
-  return ranOk ? "partial" : "none";
-}
-var NO_SUPPORTED_MANIFEST = "no_supported_manifest";
-function parseManifestGaps(value) {
-  if (!Array.isArray(value)) return [];
-  const out = [];
-  for (const entry of value) {
-    if (entry === null || typeof entry !== "object") continue;
-    const { ecosystem, files } = entry;
-    if (typeof ecosystem !== "string") continue;
-    out.push({
-      ecosystem,
-      files: Array.isArray(files) ? files.filter((f) => typeof f === "string") : []
-    });
-  }
-  return out;
-}
-function nameOf(gap) {
-  return gap.files.length > 0 ? `${gap.ecosystem} (${gap.files.join(", ")})` : gap.ecosystem;
-}
-function manifestAdvice(gaps) {
-  if (gaps.length === 0) {
-    return "generate the lock file Trivy reads for each dependency manifest (see manifest_coverage_gaps) and re-run";
-  }
-  return gaps.map((g) => `${nameOf(g)}: ${lockFileAdvice(g.ecosystem) ?? "generate the lock file Trivy reads for it"}`).join("; ");
-}
-function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
-  const coverage = computeCoverage(toolsRun, missingTools);
-  if (coverage === "full") return { coverage, warning: null };
-  const failedTools = toolsRun.filter((t) => t.status === "failed").map((t) => t.name);
-  const ruleErrors = [
-    ...new Set(toolsRun.filter((t) => t.status === "failed" && t.rule_config_error === true).map((t) => t.name))
-  ].filter((name) => !toolsRun.some((t) => t.name === name && t.status === "ok"));
-  const ruleClause = ruleErrors.length > 0 ? `${ruleErrors.join(", ")} ran, but its rules did not load (a rule configuration error \u2014 see its tools_run reason); fix or remove the rule and re-run` : null;
-  const gaps = [.../* @__PURE__ */ new Set([...missingTools, ...failedTools])].filter((name) => !ruleErrors.includes(name));
-  const list2 = gaps.length > 0 ? gaps.join(", ") : "one or more scanners";
-  const manifestGaps = parseManifestGaps(context.manifestGaps);
-  const unreadable = gaps.filter(
-    (name) => toolsRun.some((t) => t.name === name && t.status === "skipped" && t.reason === NO_SUPPORTED_MANIFEST)
-  );
-  if (coverage === "none") {
-    const packOnly = ruleErrors.filter(
-      (name) => toolsRun.some((t) => t.name === name && t.status === "failed" && t.plugin_pack_only === true)
-    );
-    if (packOnly.length > 0 && packOnly.length === ruleErrors.length) {
-      return {
-        coverage,
-        warning: `\u26A0\uFE0F ${scanType}: ${packOnly.join(", ")} ran, but no registry or project rule loaded; only the plugin's LLM pack ran \u2014 its findings are reported, and nothing else looked at this code (a rule configuration error \u2014 see its tools_run reason); fix or remove the rules and re-run.` + (gaps.length > 0 ? ` Also unavailable or failed: ${list2} \u2014 install or fix it (or use the Docker fallback).` : "") + " A result without them is NOT a clean bill of health."
-      };
-    }
-    if (ruleClause !== null) {
-      return {
-        coverage,
-        warning: `\u26A0\uFE0F ${scanType}: NOTHING was scanned \u2014 ${ruleClause}.` + (gaps.length > 0 ? ` Also unavailable or failed: ${list2} \u2014 install or fix it (or use the Docker fallback).` : "") + ' A "0 findings" result is NOT a clean bill of health.'
-      };
-    }
-    if (unreadable.length === 0) {
-      return {
-        coverage,
-        warning: `\u26A0\uFE0F ${scanType}: NO scanner ran (unavailable/failed: ${list2}). A "0 findings" result is NOT a clean bill of health \u2014 nothing was actually scanned. Install ${list2} (or use the Docker fallback) and re-run before trusting this scan.`
-      };
-    }
-    const others = gaps.filter((name) => !unreadable.includes(name));
-    return {
-      coverage,
-      warning: `\u26A0\uFE0F ${scanType}: NOTHING was scanned \u2014 ${unreadable.join(", ")} is installed and ran, but no dependency manifest here has a lock file it can read: ${manifestAdvice(manifestGaps)}. A "0 findings" result is NOT a clean bill of health.` + (others.length > 0 ? ` Install ${others.join(", ")} (or use the Docker fallback).` : "") + " Then re-run before trusting this scan."
-    };
-  }
-  const ranOkNames = new Set(toolsRun.filter((t) => t.status === "ok").map((t) => t.name));
-  const hasOwnRun = (name) => toolsRun.some((t) => t.name === name);
-  const partsOf = /* @__PURE__ */ new Map();
-  for (const name of gaps) {
-    const colon = name.indexOf(":");
-    if (colon <= 0 || hasOwnRun(name) || !ranOkNames.has(name.slice(0, colon))) continue;
-    const base = name.slice(0, colon);
-    partsOf.set(base, [...partsOf.get(base) ?? [], name.slice(colon + 1)]);
-  }
-  const isPart = (name) => {
-    const colon = name.indexOf(":");
-    return colon > 0 && (partsOf.get(name.slice(0, colon))?.includes(name.slice(colon + 1)) ?? false);
-  };
-  const notRun = gaps.filter((name) => !ranOkNames.has(name) && !isPart(name) && !unreadable.includes(name));
-  const ranWithGaps = gaps.filter((name) => ranOkNames.has(name));
-  const clauses = [];
-  if (ruleClause !== null) clauses.push(ruleClause);
-  if (notRun.length > 0) clauses.push(`${notRun.join(", ")} did not run`);
-  if (unreadable.length > 0) {
-    clauses.push(
-      `${unreadable.join(", ")} ran but read no dependency manifest \u2014 ${manifestAdvice(manifestGaps)}`
-    );
-  }
-  for (const [base, parts] of partsOf) {
-    const named = parts.map((part) => {
-      const gap = manifestGaps.find((g) => g.ecosystem === part);
-      return gap === void 0 ? part : nameOf(gap);
-    });
-    const covered = manifestGaps.filter((g) => parts.includes(g.ecosystem));
-    clauses.push(
-      `${base} ran, but ${named.join(", ")} was not covered` + (covered.length > 0 ? ` \u2014 ${manifestAdvice(covered)}` : "")
-    );
-  }
-  if (ranWithGaps.length > 0) {
-    clauses.push(`${ranWithGaps.join(", ")} ran with reduced coverage (see its tools_run reason)`);
-  }
-  const clause = clauses.length > 0 ? clauses.join("; ") : `${list2} did not run`;
-  return {
-    coverage,
-    warning: `\u26A0\uFE0F ${scanType}: partial coverage \u2014 ${clause}; findings may be incomplete.`
-  };
 }
 
 // src/tools/scanToolFactory.ts
@@ -46674,11 +48063,11 @@ function failDomain(code, message3, retry_with) {
 // src/tools/scanSast.ts
 import { existsSync as existsSync18, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, readFileSync as readFileSync17, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { basename as basename3, dirname as dirname12, join as join29, relative as relative9, resolve as resolve11, sep as sep8 } from "node:path";
+import { basename as basename3, dirname as dirname12, join as join30, relative as relative9, resolve as resolve11, sep as sep8 } from "node:path";
 
 // src/deps/dotnetRestore.ts
 import { existsSync as existsSync15, readFileSync as readFileSync15, readdirSync as readdirSync10, unlinkSync } from "node:fs";
-import { basename, dirname as dirname10, extname, isAbsolute as isAbsolute7, join as join24, relative as relative8, resolve as resolve10 } from "node:path";
+import { basename, dirname as dirname10, extname, isAbsolute as isAbsolute7, join as join25, relative as relative8, resolve as resolve10 } from "node:path";
 var SKIP_DIRS2 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 var PROJECT_WALK_MAX_DEPTH = 8;
 var PROJECT_EXTENSIONS = /* @__PURE__ */ new Set([".csproj", ".fsproj", ".vbproj"]);
@@ -46690,7 +48079,7 @@ function findDotnetTargets(projectPath) {
     return [];
   }
   const sln = rootEntries.find((n2) => n2.toLowerCase().endsWith(".sln")) ?? rootEntries.find((n2) => n2.toLowerCase().endsWith(".slnx"));
-  if (sln) return [join24(projectPath, sln)];
+  if (sln) return [join25(projectPath, sln)];
   return findProjectFiles(projectPath);
 }
 function findProjectFiles(projectPath) {
@@ -46705,7 +48094,7 @@ function findProjectFiles(projectPath) {
     }
     for (const entry of entries2) {
       if (SKIP_DIRS2.has(entry.name)) continue;
-      const abs = join24(dir, entry.name);
+      const abs = join25(dir, entry.name);
       if (entry.isDirectory()) walk4(abs, depth + 1);
       else if (entry.isFile() && PROJECT_EXTENSIONS.has(extname(entry.name).toLowerCase())) out.push(abs);
     }
@@ -46764,14 +48153,14 @@ function lockFileCandidates(project) {
   const dir = dirname10(project);
   const name = basename(project, extname(project));
   const names = /* @__PURE__ */ new Set(["packages.lock.json", `packages.${name}.lock.json`, `packages.${name.replace(/ /g, "_")}.lock.json`]);
-  return [...names].map((n2) => join24(dir, n2));
+  return [...names].map((n2) => join25(dir, n2));
 }
 function optsIntoLockFile(project, root) {
   const optIn = /<RestorePackagesWithLockFile>\s*true\s*<\/RestorePackagesWithLockFile>/i;
   if (optIn.test(readText(project))) return true;
   const stop = resolve10(root);
   for (let dir = dirname10(resolve10(project)); ; dir = dirname10(dir)) {
-    if (optIn.test(readText(join24(dir, "Directory.Build.props")))) return true;
+    if (optIn.test(readText(join25(dir, "Directory.Build.props")))) return true;
     if (dir === stop || dirname10(dir) === dir || relative8(stop, dir).startsWith("..")) return false;
   }
 }
@@ -46850,11 +48239,11 @@ function readPackageReferences(projects) {
 
 // src/runners/fileBatchScan.ts
 import { rmSync as rmSync4 } from "node:fs";
-import { join as join27 } from "node:path";
+import { join as join28 } from "node:path";
 
 // src/tools/scanHelpers.ts
 import { existsSync as existsSync16, mkdirSync as mkdirSync4, readFileSync as readFileSync16 } from "node:fs";
-import { join as join25 } from "node:path";
+import { join as join26 } from "node:path";
 
 // src/platform/pkgManagerDetect.ts
 init_execa();
@@ -46900,7 +48289,7 @@ function resetScannerCache() {
 }
 function ensureReportDir(projectPath, scanId, prefix) {
   const short2 = scanId.slice(0, 8);
-  const dir = join25(projectPath, ".guardian", "reports", `${prefix}-${short2}`);
+  const dir = join26(projectPath, ".guardian", "reports", `${prefix}-${short2}`);
   if (!existsSync16(dir)) mkdirSync4(dir, { recursive: true });
   return dir;
 }
@@ -46952,7 +48341,7 @@ import { basename as basename2 } from "node:path";
 // src/runners/windowsTreeKill.ts
 init_execa();
 import { existsSync as existsSync17 } from "node:fs";
-import { dirname as dirname11, join as join26 } from "node:path";
+import { dirname as dirname11, join as join27 } from "node:path";
 var PROC_TREE_ENV = "GUARDIAN_PROC_TREE_ID";
 var TASKKILL_TIMEOUT_MS = 1e4;
 var MSYS_PROBE_TIMEOUT_MS = 3e3;
@@ -47005,10 +48394,10 @@ function selectOwnMsysProcesses(snapshot, tokenPids, self) {
 function findMsysBin(command) {
   const candidates2 = [];
   const m = /^(.*)[\\/](?:usr[\\/])?bin[\\/]bash(?:\.exe)?$/i.exec(command);
-  if (m?.[1] !== void 0) candidates2.push(join26(m[1], "usr", "bin"));
+  if (m?.[1] !== void 0) candidates2.push(join27(m[1], "usr", "bin"));
   const programFiles = process.env["ProgramFiles"];
-  if (programFiles) candidates2.push(join26(programFiles, "Git", "usr", "bin"));
-  return candidates2.find((c3) => existsSync17(join26(c3, "ps.exe")) && existsSync17(join26(c3, "grep.exe"))) ?? null;
+  if (programFiles) candidates2.push(join27(programFiles, "Git", "usr", "bin"));
+  return candidates2.find((c3) => existsSync17(join27(c3, "ps.exe")) && existsSync17(join27(c3, "grep.exe"))) ?? null;
 }
 async function killWindowsTree(pid, command, token, fallback) {
   const own = await findOwnMsysProcesses(command, token);
@@ -47026,13 +48415,13 @@ async function findOwnMsysProcesses(command, token) {
   const self = { pid: process.pid, ppid: process.ppid };
   try {
     const opts = { reject: false, timeout: MSYS_PROBE_TIMEOUT_MS, cwd: dirname11(bin) };
-    const ps = await execa(join26(bin, "ps.exe"), [], opts);
+    const ps = await execa(join27(bin, "ps.exe"), [], opts);
     if (ps.exitCode !== 0) return none;
     const snapshot = parseMsysPs(ps.stdout);
     const roots = snapshot.filter((p) => p.ppid === 1).map((p) => `/proc/${p.pid}/environ`);
     if (roots.length === 0) return none;
     const needle = `${PROC_TREE_ENV}=${token}`;
-    const grep = (files) => execa(join26(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
+    const grep = (files) => execa(join27(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
     let matches3;
     const all = await grep(roots);
     if (all.exitCode === 0 || all.exitCode === 1) {
@@ -47238,7 +48627,7 @@ function signalGroup(pid, signal) {
 
 // src/runners/fileBatchScan.ts
 async function scanFileBatches(opts) {
-  const probeReport = join27(opts.reportDir, `${opts.reportPrefix}-000.json`);
+  const probeReport = join28(opts.reportDir, `${opts.reportPrefix}-000.json`);
   const batches = batchArgs(opts.files, {
     command: opts.command,
     fixedArgs: [...opts.args, ...opts.reportArgs(probeReport), "--"]
@@ -47258,7 +48647,7 @@ async function scanFileBatches(opts) {
       cancelled = true;
       break;
     }
-    const reportFile = join27(opts.reportDir, `${opts.reportPrefix}-${String(i2 + 1).padStart(3, "0")}.json`);
+    const reportFile = join28(opts.reportDir, `${opts.reportPrefix}-${String(i2 + 1).padStart(3, "0")}.json`);
     rmSync4(reportFile, { force: true });
     const run = await runProcess({
       command: opts.command,
@@ -47594,7 +48983,7 @@ function filePathOf(uri) {
 }
 
 // src/runners/dockerScanner.ts
-import { join as join28 } from "node:path";
+import { join as join29 } from "node:path";
 var DEFAULT_SEMGREP_IMAGE = "semgrep/semgrep";
 var CONTAINER_PROJECT_ROOT = "/src";
 function buildSemgrepDockerArgs(opts) {
@@ -47626,7 +49015,7 @@ function fromContainerPath(projectPath, containerPath) {
   const prefix = `${CONTAINER_PROJECT_ROOT}/`;
   if (containerPath === CONTAINER_PROJECT_ROOT) return projectPath;
   if (!containerPath.startsWith(prefix)) return containerPath;
-  return join28(projectPath, ...containerPath.slice(prefix.length).split("/"));
+  return join29(projectPath, ...containerPath.slice(prefix.length).split("/"));
 }
 function toContainerPathImpl(projectPath, outFileHost) {
   const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -47811,7 +49200,7 @@ registerToolModule(
 );
 async function runSemgrep(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
-  const outFile = join29(reportDir, "sast.json");
+  const outFile = join30(reportDir, "sast.json");
   const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly);
   if (plan.nothingToRun) {
     tools_run.push({
@@ -47920,7 +49309,7 @@ function judgeSemgrepRun(args) {
   const readAt = (config2) => {
     if (via === null) return config2;
     if (packsHostDir !== void 0 && config2.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
-      return join29(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
+      return join30(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
     }
     return fromContainerPath(ctx.projectPath, config2);
   };
@@ -48019,7 +49408,7 @@ function judgeSemgrepRun(args) {
 }
 async function runBandit(args) {
   const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = args;
-  const looksPython = existsSync18(join29(ctx.projectPath, "pyproject.toml")) || existsSync18(join29(ctx.projectPath, "requirements.txt")) || existsSync18(join29(ctx.projectPath, "setup.py")) || hasFileWithExtension(ctx.projectPath, [".py"]);
+  const looksPython = existsSync18(join30(ctx.projectPath, "pyproject.toml")) || existsSync18(join30(ctx.projectPath, "requirements.txt")) || existsSync18(join30(ctx.projectPath, "setup.py")) || hasFileWithExtension(ctx.projectPath, [".py"]);
   if (!looksPython) return;
   const banditBin = await scannerAvailable("bandit");
   if (!banditBin) {
@@ -48027,7 +49416,7 @@ async function runBandit(args) {
     missing_tools.push("bandit");
     return;
   }
-  const outFile = join29(reportDir, "bandit.json");
+  const outFile = join30(reportDir, "bandit.json");
   const result = await runProcess({
     command: "bandit",
     args: ["-r", ctx.projectPath, ...banditExcludeArgs(ctx.exclusions, ctx.projectPath), "-f", "json", "-o", outFile, "-q"],
@@ -48138,10 +49527,10 @@ async function runDotnetAnalyzers(args) {
     missing_tools.push("dotnet-sdk");
     return;
   }
-  const work = mkdtempSync2(join29(tmpdir2(), "guardian-sast-dotnet-"));
-  const sarifDir = join29(work, "sarif");
+  const work = mkdtempSync2(join30(tmpdir2(), "guardian-sast-dotnet-"));
+  const sarifDir = join30(work, "sarif");
   mkdirSync5(sarifDir);
-  const targetsFile = join29(work, "dev-guardian-sarif.targets");
+  const targetsFile = join30(work, "dev-guardian-sarif.targets");
   writeFileSync6(targetsFile, SARIF_TARGETS, "utf8");
   const failures = [];
   const sarifs = [];
@@ -48199,7 +49588,7 @@ async function runDotnetAnalyzers(args) {
       for (const name of listSarif(sarifDir).filter((n2) => !before.has(n2))) {
         let raw;
         try {
-          raw = readFileSync17(join29(sarifDir, name), "utf8");
+          raw = readFileSync17(join30(sarifDir, name), "utf8");
         } catch {
           failures.push(`${rel2}: SARIF ${name} unreadable`);
           continue;
@@ -48252,8 +49641,8 @@ function customAfterTargetsSetters(projectPath) {
     for (const project of projectsForTarget(target)) {
       check2(project);
       for (let dir = dirname12(resolve11(project)); ; dir = dirname12(dir)) {
-        check2(join29(dir, "Directory.Build.props"));
-        check2(join29(dir, "Directory.Build.targets"));
+        check2(join30(dir, "Directory.Build.props"));
+        check2(join30(dir, "Directory.Build.targets"));
         if (dir === root || dirname12(dir) === dir || relative9(root, dir).startsWith("..")) break;
       }
     }
@@ -48301,7 +49690,7 @@ function projectReferencesScs(projectPath) {
   }
   for (const file of files) {
     try {
-      if (/security[-_.]?code[-_.]?scan/i.test(readFileSync17(join29(projectPath, file), "utf8"))) return true;
+      if (/security[-_.]?code[-_.]?scan/i.test(readFileSync17(join30(projectPath, file), "utf8"))) return true;
     } catch {
     }
   }
@@ -48311,24 +49700,24 @@ function projectReferencesScs(projectPath) {
 // src/runners/gitleaksScan.ts
 import { copyFileSync, existsSync as existsSync19, lstatSync as lstatSync6, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync4, rmSync as rmSync7, writeFileSync as writeFileSync7 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { basename as basename4, dirname as dirname13, join as join31, relative as relative10, resolve as resolve12 } from "node:path";
+import { basename as basename4, dirname as dirname13, join as join32, relative as relative10, resolve as resolve12 } from "node:path";
 
 // src/secrets/verify/rawReport.ts
 import { chmodSync as chmodSync2, closeSync as closeSync2, lstatSync as lstatSync5, mkdtempSync as mkdtempSync3, openSync as openSync2, readdirSync as readdirSync12, rmSync as rmSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join30 } from "node:path";
+import { join as join31 } from "node:path";
 var REDACTED = "REDACTED";
 var STALE_AFTER_MS = 6 * 60 * 60 * 1e3;
 var PREFIX2 = "guardian-verify-";
 var POSIX = process.platform !== "win32";
 function openPrivateReportDir() {
   sweepStaleReportDirs();
-  const dir = mkdtempSync3(join30(tmpdir3(), PREFIX2));
+  const dir = mkdtempSync3(join31(tmpdir3(), PREFIX2));
   if (POSIX) chmodSync2(dir, 448);
   return {
     dir,
     pathFor(name) {
-      const path8 = join30(dir, name);
+      const path8 = join31(dir, name);
       closeSync2(openSync2(path8, "w", 384));
       if (POSIX) chmodSync2(path8, 384);
       return path8;
@@ -48356,7 +49745,7 @@ function sweepStaleReportDirs(root = tmpdir3(), now = Date.now()) {
   for (const name of names) {
     if (!name.startsWith(PREFIX2)) continue;
     try {
-      const path8 = join30(root, name);
+      const path8 = join31(root, name);
       const st = lstatSync5(path8);
       if (st.isSymbolicLink() || !st.isDirectory()) continue;
       if (uid !== null && st.uid !== uid) continue;
@@ -48772,7 +50161,7 @@ async function countCommitsSince(cwd, logOpts) {
   return n2;
 }
 async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix) {
-  const outFile = join31(opts.reportDir, "secrets-history.json");
+  const outFile = join32(opts.reportDir, "secrets-history.json");
   rmSync7(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const args = [
@@ -48843,7 +50232,7 @@ async function filesPass(opts, result, files, labels = {
   const maxTotal = opts.limits?.maxTotalBytes ?? MAX_TOTAL_BYTES;
   let tmp;
   try {
-    tmp = mkdtempSync4(join31(tmpdir4(), "guardian-gitleaks-"));
+    tmp = mkdtempSync4(join32(tmpdir4(), "guardian-gitleaks-"));
   } catch (e) {
     result.tools_run.push({ name, status: "failed", reason: `working tree: no temporary directory: ${message(e)}` });
     return;
@@ -48857,7 +50246,7 @@ async function filesPass(opts, result, files, labels = {
     let overTotal = 0;
     let total = 0;
     for (const rel2 of candidates2) {
-      const from = join31(opts.projectPath, rel2);
+      const from = join32(opts.projectPath, rel2);
       let size;
       try {
         const st = lstatSync6(from);
@@ -48875,7 +50264,7 @@ async function filesPass(opts, result, files, labels = {
         continue;
       }
       try {
-        const to = join31(tmp, rel2);
+        const to = join32(tmp, rel2);
         mkdirSync6(dirname13(to), { recursive: true });
         copyFileSync(from, to);
         copied += 1;
@@ -48897,7 +50286,7 @@ async function filesPass(opts, result, files, labels = {
       });
       return;
     }
-    const outFile = join31(opts.reportDir, "secrets-working-tree.json");
+    const outFile = join32(opts.reportDir, "secrets-working-tree.json");
     rmSync7(outFile, { force: true });
     const target = reportTarget(opts, outFile);
     const args = [
@@ -48911,7 +50300,7 @@ async function filesPass(opts, result, files, labels = {
       ".",
       `--gitleaks-ignore-path=${opts.projectPath}`
     ];
-    const projectConfig = join31(opts.projectPath, ".gitleaks.toml");
+    const projectConfig = join32(opts.projectPath, ".gitleaks.toml");
     if (existsSync19(projectConfig)) args.push(`--config=${projectConfig}`);
     const run = await runProcess({ command: "gitleaks", args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
     if (run.outcome === "cancelled") result.cancelled = true;
@@ -48931,13 +50320,13 @@ async function directoryPass(opts, result, name) {
   const prefix = "not a git repository \u2014 scanned the directory in place";
   let config2;
   try {
-    config2 = join31(opts.reportDir, "gitleaks-directory.toml");
+    config2 = join32(opts.reportDir, "gitleaks-directory.toml");
     writeFileSync7(config2, directoryConfig(opts.projectPath));
   } catch (e) {
     result.tools_run.push({ name, status: "failed", reason: `${prefix}: could not write its config: ${message(e)}` });
     return;
   }
-  const outFile = join31(opts.reportDir, "secrets.json");
+  const outFile = join32(opts.reportDir, "secrets.json");
   rmSync7(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const run = await runProcess({
@@ -48971,7 +50360,7 @@ async function directoryPass(opts, result, name) {
   recordFilesRun(result, name, run, report, "directory", `${prefix}${scanned}, excluding ${excluded}`, [], []);
 }
 function directoryConfig(projectPath) {
-  const own = join31(projectPath, ".gitleaks.toml");
+  const own = join32(projectPath, ".gitleaks.toml");
   const names = EXCLUDED_DIRS.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
   return [
     "# Generated by dev-guardian for one scan: the project's gitleaks config (or",
@@ -49827,7 +51216,7 @@ var tool = {
 registerToolModule(tool);
 
 // src/tools/scanDeps.ts
-import { join as join32 } from "node:path";
+import { join as join33 } from "node:path";
 registerToolModule(
   makeScanTool({
     name: "scan_deps",
@@ -49865,7 +51254,7 @@ registerToolModule(
           report_paths: [reportDir]
         };
       }
-      const outFile = join32(reportDir, "deps.json");
+      const outFile = join33(reportDir, "deps.json");
       const result = await runProcess({
         command: "trivy",
         args: [
@@ -49955,7 +51344,7 @@ function packagesView(packages, findings, scanId) {
 
 // src/tools/scanIac.ts
 import { readdirSync as readdirSync13, realpathSync as realpathSync4, statSync as statSync10, writeFileSync as writeFileSync8 } from "node:fs";
-import { isAbsolute as isAbsolute8, join as join33, relative as relative11, sep as sep9 } from "node:path";
+import { isAbsolute as isAbsolute8, join as join34, relative as relative11, sep as sep9 } from "node:path";
 
 // src/runners/scannerParsers/actionlint.ts
 var ACTIONLINT_TOOL_NAME = "actionlint";
@@ -50067,7 +51456,7 @@ function stripDotSlash(p) {
 var WORKFLOWS_DIR = ".github/workflows";
 var WORKFLOW_EXTENSIONS = [".yml", ".yaml"];
 function listWorkflowFiles(projectPath, exclusions) {
-  const dir = join33(projectPath, WORKFLOWS_DIR);
+  const dir = join34(projectPath, WORKFLOWS_DIR);
   if (!realWithinProject(projectPath, dir, false)) return [];
   let entries2;
   try {
@@ -50078,7 +51467,7 @@ function listWorkflowFiles(projectPath, exclusions) {
   const abs = [];
   for (const e of entries2) {
     if (!WORKFLOW_EXTENSIONS.some((ext) => e.name.toLowerCase().endsWith(ext))) continue;
-    const candidate = join33(dir, e.name);
+    const candidate = join34(dir, e.name);
     if (e.isFile()) {
       abs.push(candidate);
     } else if (e.isSymbolicLink() && realWithinProject(projectPath, candidate, true)) {
@@ -50130,7 +51519,7 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
   });
   if (result.stdout.length > 0) {
     try {
-      writeFileSync8(join33(reportDir, `${spec.name}.json`), result.stdout, "utf8");
+      writeFileSync8(join34(reportDir, `${spec.name}.json`), result.stdout, "utf8");
     } catch {
     }
   }
@@ -50180,7 +51569,7 @@ registerToolModule(
         tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
         missing_tools.push("trivy");
       } else {
-        const outFile = join33(reportDir, "iac.json");
+        const outFile = join34(reportDir, "iac.json");
         const result = await runProcess({
           command: "trivy",
           args: ["config", "--format", "json", "--output", outFile, "--quiet", ctx.projectPath],
@@ -50399,7 +51788,7 @@ function uniqueRuns(runs) {
 
 // src/tools/scanContainers.ts
 import { existsSync as existsSync20, readFileSync as readFileSync18, realpathSync as realpathSync5 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join34, relative as relative12, resolve as resolve13, sep as sep10 } from "node:path";
+import { isAbsolute as isAbsolute9, join as join35, relative as relative12, resolve as resolve13, sep as sep10 } from "node:path";
 
 // src/runners/composeChecks.ts
 var import_yaml4 = __toESM(require_dist2(), 1);
@@ -51577,7 +52966,7 @@ var scanContainers = makeScanTool({
     let imageSignature;
     const invalid = invalidInput(ctx.projectPath, inp);
     if (invalid) throw new Error(invalid);
-    const dockerfile = inp.dockerfile_path !== void 0 ? resolve13(ctx.projectPath, inp.dockerfile_path) : existsSync20(join34(ctx.projectPath, "Dockerfile")) ? join34(ctx.projectPath, "Dockerfile") : void 0;
+    const dockerfile = inp.dockerfile_path !== void 0 ? resolve13(ctx.projectPath, inp.dockerfile_path) : existsSync20(join35(ctx.projectPath, "Dockerfile")) ? join35(ctx.projectPath, "Dockerfile") : void 0;
     if (dockerfile !== void 0 || inp.image !== void 0) {
       const trivyBin = await scannerAvailable("trivy");
       if (!trivyBin) {
@@ -51585,7 +52974,7 @@ var scanContainers = makeScanTool({
         missing_tools.push("trivy");
       } else {
         if (dockerfile !== void 0) {
-          const outFile = join34(reportDir, "dockerfile.json");
+          const outFile = join35(reportDir, "dockerfile.json");
           const result = await runProcess({
             command: "trivy",
             args: ["config", "--format", "json", "--output", outFile, "--quiet", dockerfile],
@@ -51603,7 +52992,7 @@ var scanContainers = makeScanTool({
           if (result.outcome !== "completed") anyOutcome = result.outcome;
         }
         if (inp.image) {
-          const outFile = join34(reportDir, "image.json");
+          const outFile = join35(reportDir, "image.json");
           const result = await runProcess({
             command: "trivy",
             args: [
@@ -51738,7 +53127,7 @@ var tool2 = {
 registerToolModule(tool2);
 function findComposeFile(projectPath) {
   for (const name of COMPOSE_FILE_NAMES) {
-    const candidate = join34(projectPath, name);
+    const candidate = join35(projectPath, name);
     if (existsSync20(candidate)) return candidate;
   }
   return null;
@@ -51812,7 +53201,7 @@ function isInside3(root, candidate) {
 
 // src/tools/bugHunt.ts
 import { existsSync as existsSync21 } from "node:fs";
-import { join as join35 } from "node:path";
+import { join as join36 } from "node:path";
 
 // src/tools/semgrepConfigFailure.ts
 var DOWNLOAD_FAILURE_RE = /Failed to download configuration from (\S+)/;
@@ -51889,7 +53278,7 @@ function languagePacksFor(languages) {
   return packs;
 }
 function fallbackLanguages(projectPath) {
-  const has = (name) => existsSync21(join35(projectPath, name));
+  const has = (name) => existsSync21(join36(projectPath, name));
   const languages = [];
   if (has("package.json")) {
     languages.push("javascript");
@@ -52090,7 +53479,7 @@ async function invokeBugHunt(input, ctx) {
   if (ctx.scope !== null) {
     return invokeBugHuntOnScope({ input, ctx, reportDir, packs: configuredPacks, files: ctx.scope.files });
   }
-  const outFile = join35(reportDir, "bugs.json");
+  const outFile = join36(reportDir, "bugs.json");
   const runWithPacks = (packs) => {
     const args = packs.map((pack) => `--config=${pack}`);
     args.push(...semgrepExcludeArgs(ctx.exclusions));
@@ -52341,16 +53730,16 @@ function recordPackChoice(input, invocation) {
 
 // src/tools/qualityCheck.ts
 import { existsSync as existsSync23, readFileSync as readFileSync20 } from "node:fs";
-import { dirname as dirname14, join as join37, relative as relative13 } from "node:path";
+import { dirname as dirname14, join as join38, relative as relative13 } from "node:path";
 
 // src/budgets/budgets.ts
 var import_yaml5 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync22, readFileSync as readFileSync19 } from "node:fs";
-import { join as join36 } from "node:path";
+import { join as join37 } from "node:path";
 var PERF_FIELDS = ["lcp_ms", "inp_ms", "cls", "tbt_ms", "bundle_size_kb"];
 var QUALITY_FIELDS = ["duplication_pct", "complexity"];
 function loadBudgets(projectPath) {
-  const path8 = join36(projectPath, ".guardian", "budgets.yml");
+  const path8 = join37(projectPath, ".guardian", "budgets.yml");
   if (!existsSync22(path8)) return { kind: "none" };
   let text2;
   try {
@@ -52809,7 +54198,7 @@ registerToolModule(
         if (!out.cancelled) await runRadon(ctx, reportDir, out);
       }
       if (!out.cancelled && hasEslintConfig(ctx.projectPath)) await runEslint(ctx, reportDir, out);
-      if (!out.cancelled && existsSync23(join37(ctx.projectPath, "go.mod"))) await runStaticcheck(ctx, out);
+      if (!out.cancelled && existsSync23(join38(ctx.projectPath, "go.mod"))) await runStaticcheck(ctx, out);
       if (!out.cancelled) runBudgets(ctx.projectPath, reportDir, out);
       return {
         outcome: out.cancelled ? "cancelled" : "completed",
@@ -52848,7 +54237,7 @@ function runBudgets(projectPath, reportDir, out) {
 }
 function measureQuality(reportDir) {
   const measured = {};
-  const dup = parseInputAsJson(readJsonSafe(join37(reportDir, "dup", "jscpd-report.json")));
+  const dup = parseInputAsJson(readJsonSafe(join38(reportDir, "dup", "jscpd-report.json")));
   const total = getProp(dup, "statistics") ? getProp(getProp(dup, "statistics"), "total") : void 0;
   const reportedPct = getNumber(total, "percentage");
   if (reportedPct !== void 0) {
@@ -52860,7 +54249,7 @@ function measureQuality(reportDir) {
       measured.duplication_pct = duplicatedLines / lines * 100;
     }
   }
-  const radon = parseInputAsJson(readJsonSafe(join37(reportDir, "radon-cc.json")));
+  const radon = parseInputAsJson(readJsonSafe(join38(reportDir, "radon-cc.json")));
   const maxComplexity = highestComplexity(radon);
   if (maxComplexity !== null) measured.complexity = maxComplexity;
   return measured;
@@ -52907,7 +54296,7 @@ function record3(out, name, run, okExitCodes, report, reportOk, parser, gaps = [
 }
 async function runJscpd(ctx, reportDir, out) {
   if (!await scannerAvailable("jscpd")) return notInstalled(out, "jscpd");
-  const dupDir = join37(reportDir, "dup");
+  const dupDir = join38(reportDir, "dup");
   const run = await runProcess({
     command: "jscpd",
     args: [
@@ -52925,11 +54314,11 @@ async function runJscpd(ctx, reportDir, out) {
     signal: ctx.signal,
     onLog: ctx.onLog
   });
-  record3(out, "jscpd", run, [0, 1], readJsonSafe(join37(dupDir, "jscpd-report.json")), isObject3, jscpdParser);
+  record3(out, "jscpd", run, [0, 1], readJsonSafe(join38(dupDir, "jscpd-report.json")), isObject3, jscpdParser);
 }
 async function runRuff(ctx, reportDir, out) {
   if (!await scannerAvailable("ruff")) return notInstalled(out, "ruff");
-  const file = join37(reportDir, "ruff.json");
+  const file = join38(reportDir, "ruff.json");
   const run = await runProcess({
     command: "ruff",
     // --exit-zero: findings are exit 0, so any other exit is ruff failing.
@@ -52943,7 +54332,7 @@ async function runRuff(ctx, reportDir, out) {
 }
 async function runRadon(ctx, reportDir, out) {
   if (!await scannerAvailable("radon")) return notInstalled(out, "radon");
-  const file = join37(reportDir, "radon-cc.json");
+  const file = join38(reportDir, "radon-cc.json");
   const run = await runProcess({
     command: "radon",
     args: ["cc", "-j", "-O", file, "-i", [".*", ...IGNORED_DIRS].join(","), "."],
@@ -52965,7 +54354,7 @@ async function runEslint(ctx, reportDir, out) {
       "ESLint is configured but not installed in node_modules \u2014 run your package manager install first. npx is never used: it would download ESLint from the network."
     );
   }
-  const file = join37(reportDir, "eslint.json");
+  const file = join38(reportDir, "eslint.json");
   const run = await runProcess({
     command: process.execPath,
     args: [eslint, "--format", "json", "--output-file", file, "."],
@@ -53067,7 +54456,7 @@ async function runOnScope(ctx, reportDir, out, files) {
     }
   }
   const goFiles = files.filter((f) => f.endsWith(".go"));
-  if (!out.cancelled && goFiles.length > 0 && existsSync23(join37(ctx.projectPath, "go.mod"))) {
+  if (!out.cancelled && goFiles.length > 0 && existsSync23(join38(ctx.projectPath, "go.mod"))) {
     const packages = [...new Set(goFiles.map((f) => f.includes("/") ? `./${f.slice(0, f.lastIndexOf("/"))}` : "."))].sort();
     await runStaticcheck(ctx, out, packages);
   }
@@ -53081,11 +54470,11 @@ async function runOnScope(ctx, reportDir, out, files) {
 }
 async function runJscpdOnFiles(ctx, reportDir, out, files) {
   if (!await scannerAvailable("jscpd")) return notInstalled(out, "jscpd");
-  const fixed = ["--reporters", "json", "--output", join37(reportDir, "dup-000"), "--silent", "--"];
+  const fixed = ["--reporters", "json", "--output", join38(reportDir, "dup-000"), "--silent", "--"];
   const batches = batchArgs(files, { command: "jscpd", fixedArgs: fixed });
   const problems = [];
   for (const [i2, batch] of batches.entries()) {
-    const dupDir = join37(reportDir, `dup-${String(i2 + 1).padStart(3, "0")}`);
+    const dupDir = join38(reportDir, `dup-${String(i2 + 1).padStart(3, "0")}`);
     const run = await runProcess({
       command: "jscpd",
       args: ["--reporters", "json", "--output", dupDir, "--silent", "--", ...batch],
@@ -53095,7 +54484,7 @@ async function runJscpdOnFiles(ctx, reportDir, out, files) {
       onLog: ctx.onLog
     });
     if (run.outcome === "cancelled") out.cancelled = true;
-    const report = readJsonSafe(join37(dupDir, "jscpd-report.json"));
+    const report = readJsonSafe(join38(dupDir, "jscpd-report.json"));
     const label = batches.length > 1 ? `batch ${i2 + 1}/${batches.length}: ` : "";
     if (run.outcome === "cancelled" || run.outcome === "timed_out" || run.outcome === "output_too_large") {
       problems.push(`${label}did not finish (${run.outcome})`);
@@ -53153,9 +54542,9 @@ function couldNotAnalyse(errors) {
   return [`${errors.length} file(s) could not be analysed: ${shown}${errors.length > 5 ? "; \u2026" : ""}`];
 }
 function hasEslintConfig(projectPath) {
-  if (ESLINT_CONFIGS.some((name) => existsSync23(join37(projectPath, name)))) return true;
+  if (ESLINT_CONFIGS.some((name) => existsSync23(join38(projectPath, name)))) return true;
   try {
-    const pkg = parseInputAsJson(readFileSync20(join37(projectPath, "package.json"), "utf8"));
+    const pkg = parseInputAsJson(readFileSync20(join38(projectPath, "package.json"), "utf8"));
     return typeof pkg === "object" && pkg !== null && "eslintConfig" in pkg;
   } catch {
     return false;
@@ -53163,9 +54552,9 @@ function hasEslintConfig(projectPath) {
 }
 function localEslint(projectPath) {
   for (let dir = projectPath; ; dir = dirname14(dir)) {
-    const candidate = join37(dir, "node_modules", "eslint", "bin", "eslint.js");
+    const candidate = join38(dir, "node_modules", "eslint", "bin", "eslint.js");
     if (existsSync23(candidate)) return candidate;
-    if (existsSync23(join37(dir, ".git")) || dirname14(dir) === dir) return null;
+    if (existsSync23(join38(dir, ".git")) || dirname14(dir) === dir) return null;
   }
 }
 function isObject3(value) {
@@ -53209,7 +54598,7 @@ function qualityCategoriesView(categories, findings, scanId) {
 
 // src/tools/reviewPr.ts
 import { lstatSync as lstatSync7 } from "node:fs";
-import { basename as basename5, join as join38 } from "node:path";
+import { basename as basename5, join as join39 } from "node:path";
 var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|composer\.(json|lock)|Gemfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|.*\.csproj|packages\.lock\.json|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile)$/;
 var reviewPr = makeScanTool({
   name: "review_pr",
@@ -53246,7 +54635,7 @@ var reviewPr = makeScanTool({
       if (!headIsCheckedOut && changed.length > 0) {
         try {
           tree = await materialiseCommit(ctx.projectPath, head);
-          scanRoot = join38(tree.root, await showPrefix(ctx.projectPath));
+          scanRoot = join39(tree.root, await showPrefix(ctx.projectPath));
         } catch (e) {
           unavailable = `could not check out head ${head.slice(0, 12)}: ${e instanceof Error ? e.message : String(e)}`;
         }
@@ -53258,7 +54647,7 @@ var reviewPr = makeScanTool({
         if (changed.some(isPython2)) out.tools_run.push({ name: "bandit", status: "failed", reason: unavailable });
         if (changed.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
       } else {
-        const present2 = changed.filter((f) => isFileOnDisk(join38(scanRoot, f)));
+        const present2 = changed.filter((f) => isFileOnDisk(join39(scanRoot, f)));
         await runSemgrep2(ctx, input, out, { scanRoot, reportDir, changed, present: present2, where });
         if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present2.filter(isPython2) });
         if (!out.cancelled && changed.some(isManifest)) await runTrivy(ctx, out, { scanRoot, reportDir });
@@ -53386,7 +54775,7 @@ async function runTrivy(ctx, out, args) {
     out.missing_tools.push("trivy");
     return;
   }
-  const outFile = join38(args.reportDir, "deps.json");
+  const outFile = join39(args.reportDir, "deps.json");
   const run = await runProcess({
     command: "trivy",
     args: ["fs", "--scanners", "vuln", "--format", "json", "--output", outFile, "--quiet", args.scanRoot],
@@ -53477,7 +54866,7 @@ registerToolModule(tool3);
 
 // src/tools/depsAudit.ts
 import { existsSync as existsSync24, readdirSync as readdirSync14, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join39, relative as relative14 } from "node:path";
+import { join as join40, relative as relative14 } from "node:path";
 
 // src/runners/scannerParsers/dotnetSca.ts
 var DOTNET_SCA_TOOL_NAME = "dotnet-list-package";
@@ -53846,8 +55235,8 @@ function dropNpmDuplicatesOfTrivy(findings) {
 }
 function detectBots(projectPath) {
   return {
-    renovate: existsSync24(join39(projectPath, "renovate.json")) || existsSync24(join39(projectPath, ".renovaterc")) || existsSync24(join39(projectPath, ".renovaterc.json")),
-    dependabot: existsSync24(join39(projectPath, ".github", "dependabot.yml"))
+    renovate: existsSync24(join40(projectPath, "renovate.json")) || existsSync24(join40(projectPath, ".renovaterc")) || existsSync24(join40(projectPath, ".renovaterc.json")),
+    dependabot: existsSync24(join40(projectPath, ".github", "dependabot.yml"))
   };
 }
 registerToolModule(
@@ -53874,7 +55263,7 @@ registerToolModule(
       let manifestCoverageGaps = [];
       const trivyBin = await scannerAvailable("trivy");
       if (trivyBin) {
-        const outFile = join39(reportDir, "deps.json");
+        const outFile = join40(reportDir, "deps.json");
         const result = await runProcess({
           command: "trivy",
           args: [
@@ -53914,11 +55303,11 @@ registerToolModule(
         tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
         missing_tools.push("trivy");
       }
-      if (existsSync24(join39(ctx.projectPath, "package.json"))) {
+      if (existsSync24(join40(ctx.projectPath, "package.json"))) {
         await tryNativeAudit({
           command: "npm",
           args: ["audit", "--json", "--audit-level=info"],
-          outFile: join39(reportDir, "npm-audit.json"),
+          outFile: join40(reportDir, "npm-audit.json"),
           ctx,
           tools_run,
           missing_tools,
@@ -54012,13 +55401,13 @@ function findRequirementsFiles(projectPath) {
     return out;
   }
   for (const name of entries2) {
-    if (/^requirements.*\.txt$/i.test(name)) out.push(join39(projectPath, name));
+    if (/^requirements.*\.txt$/i.test(name)) out.push(join40(projectPath, name));
   }
-  const reqDir = join39(projectPath, "requirements");
+  const reqDir = join40(projectPath, "requirements");
   if (existsSync24(reqDir)) {
     try {
       for (const name of readdirSync14(reqDir)) {
-        if (name.toLowerCase().endsWith(".txt")) out.push(join39(reqDir, name));
+        if (name.toLowerCase().endsWith(".txt")) out.push(join40(reqDir, name));
       }
     } catch {
     }
@@ -54036,7 +55425,7 @@ function looksLikePipAuditReport(raw) {
 async function runPipAudit(opts) {
   const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
   const requirementsFiles = findRequirementsFiles(ctx.projectPath);
-  const hasPyproject = existsSync24(join39(ctx.projectPath, "pyproject.toml"));
+  const hasPyproject = existsSync24(join40(ctx.projectPath, "pyproject.toml"));
   if (requirementsFiles.length === 0 && !hasPyproject) return;
   const bin = await scannerAvailable("pip-audit");
   if (!bin) {
@@ -54048,7 +55437,7 @@ async function runPipAudit(opts) {
   let anyOk = false;
   let anyFailed = false;
   for (const [i2, target] of targets.entries()) {
-    const outFile = join39(reportDir, `pip-audit-${i2}.json`);
+    const outFile = join40(reportDir, `pip-audit-${i2}.json`);
     const args = requirementsFiles.length > 0 ? ["-r", target.arg, "--format", "json", "-o", outFile] : ["--format", "json", "-o", outFile, target.arg];
     const result = await runProcess({
       command: "pip-audit",
@@ -54146,7 +55535,7 @@ async function runDotnetSca(opts) {
     anyOk = true;
     parser_inputs.push({ parser: dotnetScaParser, input: list2.stdout });
     try {
-      writeFileSync9(join39(reportDir, `dotnet-list-${i2}.json`), list2.stdout, "utf8");
+      writeFileSync9(join40(reportDir, `dotnet-list-${i2}.json`), list2.stdout, "utf8");
     } catch {
     }
   }
@@ -54170,1367 +55559,6 @@ init_execa();
 var import_yaml6 = __toESM(require_dist2(), 1);
 import { existsSync as existsSync25, readFileSync as readFileSync21, readdirSync as readdirSync15, statSync as statSync11 } from "node:fs";
 import { dirname as dirname15, join as join41, relative as relative15, sep as sep11 } from "node:path";
-
-// src/history/runCompare.ts
-import { join as join40 } from "node:path";
-
-// src/history/runNames.ts
-var TRIVY_FS = "trivy:fs";
-var TRIVY_CONFIG = "trivy:config";
-var SKILL_OSV = "guardian-scanskill:osv";
-function trivyFsKey(ecosystem) {
-  return `${TRIVY_FS}:${ecosystem}`;
-}
-var TRIVY_FS_KEYS = [TRIVY_FS, ...MANIFEST_ECOSYSTEMS.map(trivyFsKey)];
-var SKILL_TOOL = "guardian-scanskill";
-var SKILL_OSV_RULE = "osv-vulnerable-dependency";
-function findingKey(f) {
-  if (f.tool === "trivy") {
-    if (f.subcategory === "secret") return TRIVY_FS;
-    if (f.category !== "license" && f.subcategory !== "cve") return TRIVY_CONFIG;
-    const eco = f.file_path === void 0 ? null : manifestEcosystemOfTarget(f.file_path);
-    return eco === null ? TRIVY_FS : trivyFsKey(eco);
-  }
-  if (f.tool === SKILL_TOOL && f.rule_id === SKILL_OSV_RULE) return SKILL_OSV;
-  return f.tool;
-}
-function toolsOfKey(key) {
-  if (key.startsWith("trivy:")) return ["trivy"];
-  if (key === SKILL_OSV) return [SKILL_TOOL];
-  return [key];
-}
-var scanner = (...measures) => ({ measures });
-var RUN_NAMES = {
-  // SAST — scan_sast, bug_hunt, review_pr, map_attack_surface, security_scan_full.
-  semgrep: scanner("semgrep"),
-  "semgrep-wp": scanner("semgrep"),
-  bandit: scanner("bandit"),
-  "security-code-scan": scanner("security-code-scan"),
-  // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
-  "dotnet-analyzers": scanner("dotnet-analyzers"),
-  // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
-  "dotnet-sdk": scanner("security-code-scan", "dotnet-analyzers"),
-  // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
-  gitleaks: scanner("gitleaks"),
-  "gitleaks-working-tree": scanner("gitleaks"),
-  // Trivy, by pass.
-  trivy: { measures: TRIVY_FS_KEYS, whenNotOk: [...TRIVY_FS_KEYS, TRIVY_CONFIG] },
-  // `trivy image --scanners vuln,secret,misconfig`: CVEs and secrets, and
-  // the image's own misconfigurations.
-  "trivy-image": { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true, onRequest: true },
-  "trivy-config": scanner(TRIVY_CONFIG),
-  "trivy-dockerfile": scanner(TRIVY_CONFIG),
-  // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
-  // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
-  // missing, never ok, so each is a gap in exactly its own ecosystem's
-  // dependency findings: an older scan's NuGet CVE is not re-measured when
-  // packages.lock.json has gone, and an npm CVE beside it still resolves.
-  // (Unlisted, the name would fall back to `trivy`'s not-ok keys — every
-  // Trivy finding, IaC misconfigurations included.) One per
-  // MANIFEST_ECOSYSTEMS entry: the exhaustiveness test holds the two equal.
-  "trivy:npm": scanner(trivyFsKey("npm")),
-  "trivy:composer": scanner(trivyFsKey("composer")),
-  "trivy:dotnet": scanner(trivyFsKey("dotnet")),
-  "trivy:rubygems": scanner(trivyFsKey("rubygems")),
-  "trivy:cargo": scanner(trivyFsKey("cargo")),
-  "trivy:gradle": scanner(trivyFsKey("gradle")),
-  "trivy:python": scanner(trivyFsKey("python")),
-  // deps_audit's native auditors, recorded by command: `npm audit`,
-  // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
-  // `dotnet list package --vulnerable`, whose findings say
-  // `dotnet-list-package`.
-  npm: scanner("npm-audit"),
-  "pip-audit": scanner("pip-audit"),
-  dotnet: scanner("dotnet-list-package"),
-  // quality_check. Its read of `.guardian/budgets.yml` measures the quality
-  // budgets against jscpd's and radon's own reports, so either one not
-  // running ok leaves the budget findings unmeasured too.
-  eslint: scanner("eslint"),
-  ruff: scanner("ruff"),
-  radon: { measures: ["radon"], whenNotOk: ["radon", "budgets"] },
-  jscpd: { measures: ["jscpd"], whenNotOk: ["jscpd", "budgets"] },
-  staticcheck: scanner("staticcheck"),
-  budgets: scanner("budgets"),
-  // scan_containers, beside its Trivy passes: the Dockerfile linter and the
-  // compose-file hardening checks.
-  hadolint: scanner("hadolint"),
-  "docker-compose": scanner("docker-compose"),
-  // scan_containers' cosign check of the image it was given
-  // (runners/cosignCheck.ts). Two passes, two keys: an existence check that
-  // finds a signature must never resolve a verification's "signed by the
-  // wrong identity". Each looks at its image only, and only on request (it
-  // needs an image). `cosign` is only ever skipped — not installed, or
-  // GUARDIAN_OFFLINE=1 — so neither pass ran.
-  "cosign-verify": { measures: ["cosign-verify"], ownTarget: true, onRequest: true },
-  "cosign-referrers": { measures: ["cosign-referrers"], ownTarget: true, onRequest: true },
-  cosign: scanner("cosign-verify", "cosign-referrers"),
-  // scan_iac's GitHub Actions workflow passes, gated on .github/workflows
-  // existing — independent of Trivy and of each other.
-  zizmor: scanner("zizmor"),
-  actionlint: scanner("actionlint"),
-  // scan_wordpress's PHPCS pass, and its missing_tools name.
-  "phpcs-wpcs": scanner("phpcs"),
-  phpcs: scanner("phpcs"),
-  // scan_dast: the own engine, its partial-run markers, and nuclei.
-  "guardian-dast": scanner("dast"),
-  "guardian-dast:unanswered": scanner("dast"),
-  "guardian-dast:wall-clock": scanner("dast"),
-  // The surface it probed was partial (a file Semgrep only partly parsed):
-  // routes the map could not read were never probed.
-  "guardian-dast:partial-surface": scanner("dast"),
-  nuclei: { measures: ["nuclei"], onRequest: true },
-  // only with use_nuclei
-  // WordPress.
-  wpscan: scanner("wpscan"),
-  wp_plugin_check: scanner(),
-  // a findings-less lookup
-  "wp-cli": scanner(),
-  // wp_audit, wp_cron_audit: report through meta
-  "http-probe": scanner(),
-  // wp_rest_audit: reports through meta
-  // wp_vuln_check_source: source-based WP vuln matching, no live URL.
-  "wordfence-feed": scanner("wordfence"),
-  "wp-plugin-api": scanner("wp-plugin-api"),
-  // Named, partial sub-gaps (fix round 1) — the pass itself stayed 'ok'
-  // (real matching/checking happened), but some installed components
-  // could not be covered. Same pattern as `trivy:<ecosystem>` below: an
-  // unlisted `base:suffix` would inherit `base`'s measures via
-  // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
-  // requires an exact literal key, so both get their own entry.
-  "wordfence-feed:unmatched-version": scanner("wordfence"),
-  "wp-plugin-api:deadline": scanner("wp-plugin-api"),
-  // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
-  // also audit_executive's entries for those sub-tools.
-  scan_dotnet_secrets: scanner("scan_dotnet_secrets"),
-  dotnet_efcore_audit: scanner("dotnet_efcore_audit"),
-  dotnet_target_framework_check: scanner(),
-  // compliance_check: its policy-document walk, and the RGPD Semgrep pack
-  // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
-  "policy-docs": scanner(),
-  "semgrep-rgpd": scanner("semgrep"),
-  // scan_skill.
-  "guardian-scanskill:patterns": scanner(SKILL_TOOL),
-  "guardian-scanskill:yara": scanner(SKILL_TOOL),
-  "guardian-scanskill:taint": scanner(SKILL_TOOL),
-  "osv.dev": scanner(SKILL_OSV),
-  // audit_agent_config: its own static checks of the agent workspace config.
-  "agent-audit": scanner("agent-audit"),
-  // audit_mcp_tools: one `mcp-tool-audit:<source>::<server>` entry per server
-  // it started (`runNameEntry` reads each as a pass of this base); a server
-  // that failed or was skipped leaves the audit's findings unmeasured.
-  "mcp-tool-audit": scanner("mcp-tool-audit"),
-  // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
-  // sub-scan's own bookkeeping instead whenever the row still exists; these
-  // speak for a sub-tool that failed before it wrote one.
-  security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers", "gitleaks", ...TRIVY_FS_KEYS, TRIVY_CONFIG),
-  quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
-  deps_audit: scanner(...TRIVY_FS_KEYS, "npm-audit", "pip-audit", "dotnet-list-package"),
-  compliance_check: scanner(...TRIVY_FS_KEYS, "semgrep"),
-  scan_wordpress: scanner("semgrep", "gitleaks", ...TRIVY_FS_KEYS, "phpcs"),
-  // security_scan_full: its own entry for a child that threw, answered an
-  // error, or is not registered — the child wrote no bookkeeping of its own.
-  // (An audit reads these through the security_scan_full sub-scan.)
-  scan_sast: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers"),
-  scan_secrets: scanner("gitleaks"),
-  scan_deps: scanner(...TRIVY_FS_KEYS),
-  scan_iac: scanner(TRIVY_CONFIG, "zizmor", "actionlint"),
-  // generate_sbom: the producer of an SBOM row, which holds no findings.
-  syft: scanner()
-};
-var BY_NAME = new Map(Object.entries(RUN_NAMES));
-function runNameEntry(name) {
-  const listed = BY_NAME.get(name);
-  if (listed !== void 0) return listed;
-  const colon = name.indexOf(":");
-  return colon > 0 ? BY_NAME.get(name.slice(0, colon)) ?? null : null;
-}
-function keysOfRun(name, ok) {
-  const entry = runNameEntry(name);
-  if (entry === null) return null;
-  return ok ? entry.measures : entry.whenNotOk ?? entry.measures;
-}
-var KNOWN_FINDING_KEYS = new Set(
-  [...BY_NAME.values()].flatMap((e) => [...e.measures, ...e.whenNotOk ?? []])
-);
-
-// src/history/scanRoles.ts
-var SCAN_TYPE_ROLE = {
-  // Two shapes — see isOrchestratedFullScan below. An orchestrated row's
-  // children (sast/secrets/deps/iac) are the sources, never the row itself;
-  // a script-era row is split across sast/secrets/deps/containers, so rows
-  // written before child scans existed do not vanish from the open set.
-  security_full: "state",
-  sast: "state",
-  secrets: "state",
-  deps: "state",
-  deps_audit: "state",
-  containers: "state",
-  iac: "state",
-  bugs: "state",
-  quality: "state",
-  dast: "state",
-  compliance: "state",
-  perf: "state",
-  wordpress: "state",
-  wp_vuln_check: "state",
-  wp_vuln_check_source: "state",
-  dotnet_secrets: "state",
-  dotnet_efcore_audit: "state",
-  sbom: "never",
-  detect_stack: "never",
-  init: "never",
-  observability: "never",
-  audit: "never",
-  skill_audit: "never",
-  agent_audit: "never",
-  mcp_tool_audit: "never",
-  review_pr: "never",
-  wp_audit: "never",
-  wp_cron_audit: "never",
-  wp_rest_audit: "never",
-  dotnet_target_framework: "never"
-};
-var STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === "state");
-var TARGET_SCAN_TYPES = /* @__PURE__ */ new Set(["skill_audit", "wp_rest_audit"]);
-function isOrchestratedFullScan(scan2) {
-  return scan2.scan_type === "security_full" && Array.isArray(scan2.meta?.["child_scans"]);
-}
-function isScriptEraFullScan(scan2) {
-  return scan2.scan_type === "security_full" && !isOrchestratedFullScan(scan2);
-}
-var SCRIPT_ERA_RUN_SLOTS = {
-  semgrep: "sast",
-  bandit: "sast",
-  gitleaks: "secrets",
-  trivy: "deps",
-  "trivy-dockerfile": "containers"
-};
-function scriptEraSlotOfFinding(f) {
-  switch (f.tool) {
-    case "semgrep":
-    case "bandit":
-      return "sast";
-    case "gitleaks":
-      return "secrets";
-    case "trivy":
-      if (f.category === "license" || f.subcategory === "cve") return "deps";
-      if (f.subcategory === "secret") return "secrets";
-      return "containers";
-    default:
-      return "security_full";
-  }
-}
-function sourceTypesOf(slot) {
-  if (slot === "security_full") return ["security_full"];
-  const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
-  return coveredByFull ? [slot, "security_full"] : [slot];
-}
-function runSlotOf(tool50) {
-  return SCRIPT_ERA_RUN_SLOTS[tool50] ?? "security_full";
-}
-function findingInSlot(scan2, finding4, slot) {
-  if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
-  return scriptEraSlotOfFinding(finding4) === slot;
-}
-function slotView(scan2, slot) {
-  if (scan2.scan_type !== "security_full") {
-    return { tools_run: scan2.tools_run, missing_tools: scan2.missing_tools };
-  }
-  return {
-    tools_run: scan2.tools_run.filter((t) => runSlotOf(t.name) === slot),
-    missing_tools: scan2.missing_tools.filter((t) => runSlotOf(t) === slot)
-  };
-}
-function isScopedScan(scan2) {
-  const meta = scan2.meta;
-  if (meta === void 0) return false;
-  if (meta["scope"] !== void 0 && meta["scope"] !== null) return true;
-  return scan2.scan_type === "wp_vuln_check" && meta["slug"] !== void 0;
-}
-
-// src/history/runCompare.ts
-var COMPLETE_COMPARISON = {
-  isNotRemeasured: () => false,
-  isNotPreviouslyMeasured: () => false,
-  notRunByTo: () => null,
-  notRunByFrom: () => null,
-  notMeasuredByTo: [],
-  gapsByTo: [],
-  notMeasuredByFrom: []
-};
-function childrenOf(storage, parent) {
-  const listed = parent.meta?.["child_scans"];
-  if (!Array.isArray(listed)) return [];
-  const out = [];
-  for (const entry of listed) {
-    if (entry === null || typeof entry !== "object") continue;
-    const e = entry;
-    const row = typeof e.scan_id === "string" ? storage.scans.getById(e.scan_id) : null;
-    const type = row?.scan_type ?? (typeof e.tool === "string" ? e.tool.replace(/^scan_/, "") : null);
-    if (type !== null) out.push({ type, row });
-  }
-  return out;
-}
-function usableChild(c3) {
-  return c3.row !== null && c3.row.status === "completed";
-}
-function auditBookkeeping(storage, audit) {
-  const ids2 = audit.meta?.["sub_scan_ids"];
-  if (ids2 === null || typeof ids2 !== "object" || Array.isArray(ids2)) return audit;
-  const byTool = ids2;
-  const tools_run = [];
-  const missing_tools = [...audit.missing_tools];
-  for (const entry of audit.tools_run) {
-    const id = Object.hasOwn(byTool, entry.name) ? byTool[entry.name] : void 0;
-    const sub = entry.status === "ok" && typeof id === "string" ? storage.scans.getById(id) : null;
-    if (sub === null || sub.tools_run.length === 0 && sub.missing_tools.length === 0) {
-      tools_run.push(entry);
-      continue;
-    }
-    tools_run.push(...sub.tools_run);
-    missing_tools.push(...sub.missing_tools);
-  }
-  return { tools_run, missing_tools };
-}
-function bookkeepingOf(storage, scan2) {
-  return scan2.scan_type === "audit" ? auditBookkeeping(storage, scan2) : scan2;
-}
-function keyVerdict(book, key) {
-  let named = false;
-  let anyOk = false;
-  let anyFailed = false;
-  const okNames = /* @__PURE__ */ new Set();
-  for (const run of book.tools_run) {
-    const ok = run.status === "ok";
-    if (!(keysOfRun(run.name, ok)?.includes(key) ?? false)) continue;
-    named = true;
-    if (ok) {
-      anyOk = true;
-      okNames.add(run.name);
-    } else if (run.status === "failed") {
-      anyFailed = true;
-    }
-  }
-  let missing = false;
-  for (const name of book.missing_tools) {
-    if (!(keysOfRun(name, false)?.includes(key) ?? false)) continue;
-    named = true;
-    if (!okNames.has(name)) missing = true;
-  }
-  if (named) {
-    if (anyFailed || missing) return "unmeasured";
-    return anyOk ? "measured" : "not_run";
-  }
-  if (KNOWN_FINDING_KEYS.has(key)) return "not_run";
-  return computeCoverage(book.tools_run, book.missing_tools) === "full" ? "measured" : "unmeasured";
-}
-function isEmptyBook(book) {
-  return book.tools_run.length === 0 && book.missing_tools.length === 0;
-}
-function fileOf(f) {
-  return f.file_path === void 0 ? void 0 : f.file_path.replace(/\\/g, "/");
-}
-function measuresKeyOk(run, key) {
-  return run.status === "ok" && (keysOfRun(run.name, true)?.includes(key) ?? false);
-}
-function isPluginPackGap(pp) {
-  return pp.type === FIXPOINT_TIMEOUT_PACK_TYPE;
-}
-var packRuleIds;
-function pluginPackRuleIds() {
-  packRuleIds ??= new Set(ruleIdsInFile(join40(pluginPacksDir(), LLM_RULES_FILE)));
-  return packRuleIds;
-}
-function isPluginPackRule(ruleId) {
-  return ruleId !== void 0 && pluginPackRuleIds().has(ruleId);
-}
-function narrowGapsOf(book, key) {
-  const files = /* @__PURE__ */ new Set();
-  const rules2 = /* @__PURE__ */ new Set();
-  const pairs = /* @__PURE__ */ new Map();
-  for (const run of book.tools_run) {
-    if (!measuresKeyOk(run, key)) continue;
-    for (const pp of run.partially_parsed ?? []) {
-      if (isPluginPackGap(pp)) pairs.set(pp.file, pluginPackRuleIds());
-      else files.add(pp.file);
-    }
-    for (const fr of run.failed_rules ?? []) rules2.add(fr.rule_id);
-  }
-  for (const f of files) pairs.delete(f);
-  return { files, rules: rules2, pairs };
-}
-function narrowGapOf(book, f) {
-  const key = findingKey(f);
-  const file = fileOf(f);
-  for (const run of book.tools_run) {
-    if (!measuresKeyOk(run, key)) continue;
-    const entries2 = file === void 0 ? [] : (run.partially_parsed ?? []).filter((pp) => pp.file === file);
-    if (entries2.some((pp) => !isPluginPackGap(pp))) {
-      return { run, label: `${run.name} (partly parsed: ${file})` };
-    }
-    if (entries2.length > 0 && isPluginPackRule(f.rule_id)) {
-      return { run, label: `${run.name} (LLM pack partly measured: ${file})` };
-    }
-    if (f.rule_id !== void 0 && (run.failed_rules ?? []).some((fr) => fr.rule_id === f.rule_id)) {
-      return { run, label: `${run.name} (rule not loaded: ${f.rule_id})` };
-    }
-  }
-  return null;
-}
-function bookkeepingVerdict(book, f) {
-  if (isEmptyBook(book)) return "measured";
-  const verdict = keyVerdict(book, findingKey(f));
-  return verdict === "measured" && narrowGapOf(book, f) !== null ? "unmeasured" : verdict;
-}
-function gapNamesFor(book, key) {
-  const okNames = new Set(book.tools_run.filter((r) => r.status === "ok").map((r) => r.name));
-  const names = [];
-  const add = (name) => {
-    if (!names.includes(name)) names.push(name);
-  };
-  for (const run of book.tools_run) {
-    if (run.status === "failed" && (keysOfRun(run.name, false)?.includes(key) ?? false)) add(run.name);
-  }
-  for (const name of book.missing_tools) {
-    if (!okNames.has(name) && (keysOfRun(name, false)?.includes(key) ?? false)) add(name);
-  }
-  return names;
-}
-function onRequestPassOf(holder, key) {
-  const run = holder.tools_run.find((r) => measuresKeyOk(r, key) && runNameEntry(r.name)?.onRequest === true);
-  return run === void 0 ? null : passLabel(run, targetOf(run));
-}
-function openGapFor(holder, asked, f) {
-  const answer = answerFor(holder, asked, f);
-  if (answer.verdict === "measured") return null;
-  if (answer.verdict === "unmeasured") {
-    const narrow = narrowGapOf(asked, f);
-    if (narrow !== null) return narrow.label;
-    const key = findingKey(f);
-    const names = gapNamesFor(asked, key);
-    return names.length > 0 ? names.join(", ") : key;
-  }
-  if (answer.byTarget) return answer.notRun;
-  return onRequestPassOf(holder, findingKey(f));
-}
-var NO_PAIRS = /* @__PURE__ */ new Map();
-var ADMIT_ALL = { all: true };
-var NEVER_SCOPE = { kind: "never" };
-var MAX_ADMIT_PAIRS = 1e4;
-function onlyConstraint(c3) {
-  const pairs = /* @__PURE__ */ new Map();
-  for (const [f, rs] of c3.pairs ?? NO_PAIRS) if (!c3.files.has(f)) pairs.set(f, new Set(rs));
-  return { all: false, files: new Set(c3.files), rules: new Set(c3.rules), pairs };
-}
-function meetAdmit(s, c3) {
-  if (s.all) return onlyConstraint(c3);
-  const cPairs = c3.pairs ?? NO_PAIRS;
-  const files = new Set([...s.files].filter((f) => c3.files.has(f)));
-  const rules2 = new Set([...s.rules].filter((r) => c3.rules.has(r)));
-  let bound2 = 0;
-  for (const rs of s.pairs.values()) bound2 += rs.size;
-  let filesLeaving = 0;
-  for (const f of s.files) {
-    if (c3.files.has(f)) continue;
-    filesLeaving += 1;
-    bound2 += cPairs.get(f)?.size ?? 0;
-  }
-  let rulesLeaving = 0;
-  for (const r of s.rules) if (!c3.rules.has(r)) rulesLeaving += 1;
-  let cPairCount = 0;
-  if (rulesLeaving > 0) for (const rs of cPairs.values()) cPairCount += rs.size;
-  bound2 += filesLeaving * c3.rules.size + rulesLeaving * c3.files.size + cPairCount;
-  if (bound2 > MAX_ADMIT_PAIRS) return onlyConstraint(c3);
-  const pairs = /* @__PURE__ */ new Map();
-  const add = (f, r) => {
-    if (files.has(f) || rules2.has(r)) return;
-    let set2 = pairs.get(f);
-    if (set2 === void 0) {
-      set2 = /* @__PURE__ */ new Set();
-      pairs.set(f, set2);
-    }
-    set2.add(r);
-  };
-  const inCPairs = (f, r) => cPairs.get(f)?.has(r) ?? false;
-  for (const [f, rs] of s.pairs) for (const r of rs) if (c3.files.has(f) || c3.rules.has(r) || inCPairs(f, r)) add(f, r);
-  for (const f of s.files) {
-    if (c3.files.has(f)) continue;
-    for (const r of c3.rules) add(f, r);
-    for (const r of cPairs.get(f) ?? []) add(f, r);
-  }
-  for (const r of s.rules) {
-    if (c3.rules.has(r)) continue;
-    for (const f of c3.files) add(f, r);
-    for (const [f, rs] of cPairs) if (rs.has(r)) add(f, r);
-  }
-  return { all: false, files, rules: rules2, pairs };
-}
-function admitsNothing(s) {
-  return !s.all && s.files.size === 0 && s.rules.size === 0 && s.pairs.size === 0;
-}
-function scopeAdmits(scope, file, rule) {
-  if (scope.kind === "never") return false;
-  const a2 = scope.admit;
-  if (a2.all) return true;
-  if (file !== void 0 && a2.files.has(file)) return true;
-  if (rule !== void 0 && a2.rules.has(rule)) return true;
-  return file !== void 0 && rule !== void 0 && (a2.pairs.get(file)?.has(rule) ?? false);
-}
-function admitLookup(admit) {
-  const files = new Set(admit.files);
-  const rules2 = new Set(admit.rules);
-  for (const [f, rs] of admit.pairs) {
-    files.add(f);
-    for (const r of rs) rules2.add(r);
-  }
-  return { files: [...files], rules: [...rules2] };
-}
-var NO_INDEXES = [];
-function pushTo(map, key, i2) {
-  const list2 = map.get(key);
-  if (list2 === void 0) map.set(key, [i2]);
-  else list2.push(i2);
-}
-function coversTarget(c3, t) {
-  if (t.pass === PROJECT_FILES) return c3.project;
-  if (t.ref === void 0) return c3.any.has(t.pass);
-  return c3.legacy.has(t.pass) || c3.images.has(`${t.pass}\0${t.ref}`);
-}
-var ChainIndex = class {
-  chain = [];
-  byKey = /* @__PURE__ */ new Map();
-  push(book) {
-    this.chain.push(book);
-  }
-  get length() {
-    return this.chain.length;
-  }
-  /** The chain's `i`-th scan, newest first. */
-  bookAt(i2) {
-    return this.chain[i2];
-  }
-  /** `holder` for one key, as {@link scopeOfClass} takes it. */
-  classOf(holder, key) {
-    const onRequest = onRequestPassOf(holder, key) !== null;
-    const seen = /* @__PURE__ */ new Map();
-    for (const run of holder.tools_run) {
-      if (!measuresKeyOk(run, key)) continue;
-      const t = targetOf(run);
-      seen.set(`${t.pass}\0${t.ref ?? ""}\0${t.ref === void 0 ? "legacy" : "ref"}`, t);
-    }
-    const targets = [...seen.values()];
-    const signature = JSON.stringify([onRequest, [...seen.keys()].sort()]);
-    return { signature, onRequest, targets };
-  }
-  /** {@link ChainScope} of `holder`'s findings under `key`, over the chain as it is now. */
-  scope(holder, key) {
-    return this.scopeOfClass(this.classOf(holder, key), key);
-  }
-  scopeOfClass(cls, key) {
-    const idx = this.indexed(key);
-    const L = this.chain.length;
-    if (idx.firstEmpty < L || !cls.onRequest && idx.firstNotRun < L) return NEVER_SCOPE;
-    let state = idx.classes.get(cls.signature);
-    if (state === void 0) {
-      state = { admit: ADMIT_ALL, met: /* @__PURE__ */ new Set(), closed: false, a: 0, b: 0, snapshot: null };
-      idx.classes.set(cls.signature, state);
-    }
-    this.advance(idx, cls, state, L);
-    if (state.closed) return NEVER_SCOPE;
-    if (state.snapshot === null) state.snapshot = { kind: "open", admit: state.admit };
-    return state.snapshot;
-  }
-  /** The class's driver: one or two ascending lists that hold every scan able to look at all its targets. */
-  driverOf(idx, cls) {
-    const image = cls.targets.find((t) => t.pass !== PROJECT_FILES && t.ref !== void 0);
-    if (image !== void 0) {
-      return [idx.byImage.get(`${image.pass}\0${image.ref ?? ""}`) ?? NO_INDEXES, idx.legacy.get(image.pass) ?? NO_INDEXES];
-    }
-    const legacyImage = cls.targets.find((t) => t.pass !== PROJECT_FILES);
-    if (legacyImage !== void 0) return [idx.anyOf.get(legacyImage.pass) ?? NO_INDEXES, NO_INDEXES];
-    if (cls.targets.length > 0) return [idx.project, NO_INDEXES];
-    return [idx.measured, NO_INDEXES];
-  }
-  advance(idx, cls, state, L) {
-    while (!state.closed) {
-      const [listA, listB] = this.driverOf(idx, cls);
-      const ia = listA[state.a];
-      const ib = listB[state.b];
-      const na2 = ia !== void 0 && ia < L ? ia : void 0;
-      const nb = ib !== void 0 && ib < L ? ib : void 0;
-      if (na2 === void 0 && nb === void 0) return;
-      const i2 = na2 === void 0 ? nb ?? 0 : nb === void 0 ? na2 : Math.min(na2, nb);
-      if (na2 === i2) state.a += 1;
-      if (nb === i2) state.b += 1;
-      const c3 = idx.at.get(i2);
-      if (c3 === void 0 || !cls.targets.every((t) => coversTarget(c3, t))) continue;
-      state.snapshot = null;
-      if (c3.narrow === null) {
-        state.closed = true;
-        return;
-      }
-      if (state.met.has(c3.narrowSig)) continue;
-      state.met.add(c3.narrowSig);
-      state.admit = meetAdmit(state.admit, c3.narrow);
-      if (admitsNothing(state.admit)) state.closed = true;
-    }
-  }
-  /** The key's index, caught up with the chain. */
-  indexed(key) {
-    let idx = this.byKey.get(key);
-    if (idx === void 0) {
-      idx = {
-        len: 0,
-        firstEmpty: Infinity,
-        firstNotRun: Infinity,
-        at: /* @__PURE__ */ new Map(),
-        measured: [],
-        project: [],
-        byImage: /* @__PURE__ */ new Map(),
-        legacy: /* @__PURE__ */ new Map(),
-        anyOf: /* @__PURE__ */ new Map(),
-        classes: /* @__PURE__ */ new Map()
-      };
-      this.byKey.set(key, idx);
-    }
-    for (; idx.len < this.chain.length; idx.len += 1) {
-      const i2 = idx.len;
-      const asked = this.chain[i2];
-      if (asked === void 0) break;
-      if (isEmptyBook(asked)) {
-        idx.firstEmpty = Math.min(idx.firstEmpty, i2);
-        continue;
-      }
-      const verdict = keyVerdict(asked, key);
-      if (verdict === "unmeasured") continue;
-      if (verdict === "not_run") {
-        idx.firstNotRun = Math.min(idx.firstNotRun, i2);
-        continue;
-      }
-      const c3 = { project: false, images: /* @__PURE__ */ new Set(), legacy: /* @__PURE__ */ new Set(), any: /* @__PURE__ */ new Set(), narrow: null, narrowSig: "" };
-      for (const run of asked.tools_run) {
-        if (!measuresKeyOk(run, key)) continue;
-        const t = targetOf(run);
-        if (t.pass === PROJECT_FILES) {
-          c3.project = true;
-          continue;
-        }
-        c3.any.add(t.pass);
-        if (t.ref === void 0) c3.legacy.add(t.pass);
-        else c3.images.add(`${t.pass}\0${t.ref}`);
-      }
-      const narrow = narrowGapsOf(asked, key);
-      if (narrow.files.size > 0 || narrow.rules.size > 0 || narrow.pairs.size > 0) {
-        c3.narrow = narrow;
-        c3.narrowSig = JSON.stringify([[...narrow.files].sort(), [...narrow.rules].sort(), [...narrow.pairs.keys()].sort()]);
-      }
-      idx.at.set(i2, c3);
-      idx.measured.push(i2);
-      if (c3.project) idx.project.push(i2);
-      for (const img of c3.images) pushTo(idx.byImage, img, i2);
-      for (const pass2 of c3.legacy) pushTo(idx.legacy, pass2, i2);
-      for (const pass2 of c3.any) pushTo(idx.anyOf, pass2, i2);
-    }
-    return idx;
-  }
-};
-var UNKNOWN_FINDING_KEY = "\0unknown";
-function producedKeys(holder) {
-  const keys = /* @__PURE__ */ new Set();
-  if (isEmptyBook(holder)) {
-    for (const key of KNOWN_FINDING_KEYS) keys.add(key);
-    keys.add(UNKNOWN_FINDING_KEY);
-  }
-  for (const run of holder.tools_run) {
-    if (run.status === "skipped") continue;
-    const k = keysOfRun(run.name, run.status === "ok");
-    if (k === null) keys.add(UNKNOWN_FINDING_KEY);
-    else for (const key of k) keys.add(key);
-  }
-  return [...keys];
-}
-var StillCarry = class {
-  constructor(index, names, anyEmpty) {
-    this.index = index;
-    const widest = {
-      tools_run: names.map((name) => ({ name, status: "ok", target: "\0any image no scan recorded" })),
-      missing_tools: []
-    };
-    const keys = new Set(producedKeys(widest));
-    if (anyEmpty) {
-      for (const key of KNOWN_FINDING_KEYS) keys.add(key);
-      keys.add(UNKNOWN_FINDING_KEY);
-    }
-    this.classes = [...keys].map((key) => ({ key, cls: index.classOf(widest, key) }));
-  }
-  index;
-  classes;
-  /** How much of the chain `check` has looked at for an empty book. */
-  seen = 0;
-  sawEmpty = false;
-  check() {
-    if (this.index.length === 0) return true;
-    for (; this.seen < this.index.length && !this.sawEmpty; this.seen += 1) {
-      const book = this.index.bookAt(this.seen);
-      if (book !== void 0 && isEmptyBook(book)) this.sawEmpty = true;
-    }
-    if (this.sawEmpty) return false;
-    return this.classes.some(({ key, cls }) => this.index.scopeOfClass(cls, key).kind !== "never");
-  }
-};
-function isNarrowGapName(name) {
-  return / \((partly parsed|rules not loaded|LLM pack partly measured): /.test(name);
-}
-var NARROW_GAP_FILES_NAMED = 5;
-function narrowGapNames(book) {
-  const names = [];
-  const named = (files) => {
-    const more = files.length - NARROW_GAP_FILES_NAMED;
-    return [...files.slice(0, NARROW_GAP_FILES_NAMED), ...more > 0 ? [`+${more} more`] : []].join(", ");
-  };
-  for (const run of book.tools_run) {
-    if (run.status !== "ok") continue;
-    const entries2 = run.partially_parsed ?? [];
-    const parsed = [...new Set(entries2.filter((pp) => !isPluginPackGap(pp)).map((pp) => pp.file))];
-    const byPack = [...new Set(entries2.filter(isPluginPackGap).map((pp) => pp.file))].filter((f) => !parsed.includes(f));
-    const failed = run.failed_rules ?? [];
-    if (parsed.length > 0) names.push(`${run.name} (partly parsed: ${named(parsed)})`);
-    if (byPack.length > 0) names.push(`${run.name} (LLM pack partly measured: ${named(byPack)})`);
-    if (failed.length > 0) names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(", ")})`);
-  }
-  return names;
-}
-function typeResolver(storage, scan2) {
-  if (isOrchestratedFullScan(scan2)) {
-    const indexed = childrenOf(storage, scan2).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
-    return (f) => indexed.find((c3) => c3.index.has(f))?.type ?? null;
-  }
-  if (isScriptEraFullScan(scan2)) {
-    return (f) => {
-      const slot = scriptEraSlotOfFinding(f);
-      if (slot === "containers") return "iac";
-      return slot === "security_full" ? null : slot;
-    };
-  }
-  return () => scan2.scan_type;
-}
-function booksOf(storage, scan2) {
-  if (!isOrchestratedFullScan(scan2)) {
-    const book = bookkeepingOf(storage, scan2);
-    return () => book;
-  }
-  const children = childrenOf(storage, scan2);
-  return (fType) => {
-    if (fType === null) return scan2;
-    const child = children.find((c3) => c3.type === fType);
-    return child !== void 0 && usableChild(child) ? child.row : null;
-  };
-}
-var PROJECT_FILES = "project files";
-function targetOf(run) {
-  if (runNameEntry(run.name)?.ownTarget !== true) return { pass: PROJECT_FILES };
-  if (run.target === void 0 || run.target === "") return { pass: run.name };
-  const signer = run.signer !== void 0 ? `\0signer\0${run.signer}` : "";
-  return { pass: run.name, ref: `${normalizeImageRef(run.target)}${signer}` };
-}
-function normalizeImageRef(ref) {
-  let name = ref.trim();
-  let digest = "";
-  const at = name.indexOf("@");
-  if (at >= 0) {
-    digest = name.slice(at);
-    name = name.slice(0, at);
-  }
-  let tag = "";
-  const colon = name.lastIndexOf(":");
-  if (colon > name.lastIndexOf("/")) {
-    tag = name.slice(colon);
-    name = name.slice(0, colon);
-  }
-  const slash = name.indexOf("/");
-  const first = slash >= 0 ? name.slice(0, slash) : "";
-  const hasRegistry = slash >= 0 && (first.includes(".") || first.includes(":") || first === "localhost");
-  let registry2 = hasRegistry ? first : "docker.io";
-  let path8 = hasRegistry ? name.slice(slash + 1) : name;
-  if (registry2 === "index.docker.io" || registry2 === "registry-1.docker.io") registry2 = "docker.io";
-  if (registry2 === "docker.io" && !path8.includes("/")) path8 = `library/${path8}`;
-  if (tag === "" && digest === "") tag = ":latest";
-  return `${registry2}/${path8}${tag}${digest}`;
-}
-function sameTarget(a2, b) {
-  if (a2.pass !== b.pass) return false;
-  return a2.ref === void 0 || b.ref === void 0 || a2.ref === b.ref;
-}
-function passLabel(run, target) {
-  if (target.ref === void 0) return run.name;
-  const signer = run.signer !== void 0 ? `, signer ${run.signer}` : "";
-  return `${run.name} (${run.target ?? target.ref}${signer})`;
-}
-function targetNotRun(holder, asked, f) {
-  return holder === null ? null : targetNotRunForKey(holder, asked, findingKey(f));
-}
-function targetNotRunForKey(holder, asked, key) {
-  if (isEmptyBook(asked)) return null;
-  for (const run of holder.tools_run) {
-    if (!measuresKeyOk(run, key)) continue;
-    const target = targetOf(run);
-    if (!asked.tools_run.some((r) => measuresKeyOk(r, key) && sameTarget(targetOf(r), target))) return passLabel(run, target);
-  }
-  return null;
-}
-function answerFor(holder, asked, f) {
-  if (asked === null) return { verdict: "unmeasured", notRun: null, byTarget: false };
-  const verdict = bookkeepingVerdict(asked, f);
-  if (verdict !== "measured") return { verdict, notRun: verdict === "not_run" ? f.tool : null, byTarget: false };
-  const pass2 = targetNotRun(holder, asked, f);
-  return pass2 === null ? { verdict, notRun: null, byTarget: false } : { verdict: "not_run", notRun: pass2, byTarget: true };
-}
-function notMeasured(storage, scan2, scope = "any") {
-  const out = [];
-  const add = (x) => {
-    if (!out.includes(x)) out.push(x);
-  };
-  const gapsOf = (book, wholeType) => {
-    if (computeCoverage(book.tools_run, book.missing_tools) === "none") {
-      add(wholeType);
-      return;
-    }
-    const names = [...book.tools_run.filter((t) => t.status !== "ok").map((t) => t.name), ...book.missing_tools];
-    for (const name of names) {
-      if (scope === "gaps") {
-        if (isGap(book, name)) add(name);
-        continue;
-      }
-      const keys = keysOfRun(name, false);
-      if (keys === null || keys.length === 0 || keys.some((k) => keyVerdict(book, k) !== "measured")) add(name);
-    }
-    for (const name of narrowGapNames(book)) add(name);
-  };
-  if (!isOrchestratedFullScan(scan2)) {
-    gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
-    return out;
-  }
-  for (const child of childrenOf(storage, scan2)) {
-    if (!usableChild(child)) add(child.type);
-    else gapsOf(child.row, child.type);
-  }
-  return out;
-}
-function isGap(book, name) {
-  const as = (status) => book.tools_run.some((t) => t.name === name && t.status === status);
-  return as("failed") || book.missing_tools.includes(name) && !as("ok");
-}
-function compareScansFor(storage, from, to) {
-  const typeOfFrom = typeResolver(storage, from);
-  const typeOfTo = typeResolver(storage, to);
-  const fromBooks = booksOf(storage, from);
-  const toBooks = booksOf(storage, to);
-  const inTo = (f) => {
-    const t = typeOfFrom(f);
-    return answerFor(fromBooks(t), toBooks(t), f);
-  };
-  const inFrom = (f) => {
-    const t = typeOfTo(f);
-    return answerFor(toBooks(t), fromBooks(t), f);
-  };
-  return {
-    // Anything short of measured: the newer scan cannot resolve what it did
-    // not look for, whether the scanner failed or did not run.
-    isNotRemeasured: (f) => inTo(f).verdict !== "measured",
-    // Only a gap: a reference that did not run the scanner at all looked at
-    // everything it had to, and the finding is new.
-    isNotPreviouslyMeasured: (f) => inFrom(f).verdict === "unmeasured",
-    notRunByTo: (f) => inTo(f).notRun,
-    notRunByFrom: (f) => inFrom(f).notRun,
-    notMeasuredByTo: notMeasured(storage, to, "any"),
-    gapsByTo: notMeasured(storage, to, "gaps"),
-    notMeasuredByFrom: notMeasured(storage, from, "gaps")
-  };
-}
-function classifyDiff(check2, fromFindings, toFindings) {
-  const fromIndex = indexFindings(fromFindings);
-  const toIndex = indexFindings(toFindings);
-  const out = {
-    new: [],
-    resolved: [],
-    unchanged: [],
-    notRemeasured: [],
-    notPreviouslyMeasured: [],
-    notRunByTo: [],
-    notRunByFrom: []
-  };
-  const note = (list2, name) => {
-    if (name !== null && !list2.includes(name)) list2.push(name);
-  };
-  for (const f of toFindings) {
-    if (fromIndex.has(f)) out.unchanged.push(f);
-    else if (check2.isNotPreviouslyMeasured(f)) out.notPreviouslyMeasured.push(f);
-    else {
-      out.new.push(f);
-      note(out.notRunByFrom, check2.notRunByFrom(f));
-    }
-  }
-  for (const f of fromFindings) {
-    if (toIndex.has(f)) continue;
-    if (check2.isNotRemeasured(f)) {
-      out.notRemeasured.push(f);
-      note(out.notRunByTo, check2.notRunByTo(f));
-    } else out.resolved.push(f);
-  }
-  return out;
-}
-function measurementGaps(check2, d) {
-  const byTo = [...check2.notMeasuredByTo, ...d.notRunByTo.filter((x) => !check2.notMeasuredByTo.includes(x))];
-  return {
-    byTo,
-    notRunByTo: byTo.filter((x) => !check2.gapsByTo.includes(x)),
-    byFrom: check2.notMeasuredByFrom,
-    notRunByFrom: d.notRunByFrom.filter((x) => !check2.notMeasuredByFrom.includes(x))
-  };
-}
-function describeMeasurementGaps(from, to, gaps) {
-  const parts = [];
-  const failedByTo = gaps.byTo.filter((x) => !gaps.notRunByTo.includes(x));
-  const narrowByTo = failedByTo.filter(isNarrowGapName);
-  const brokenByTo = failedByTo.filter((x) => !isNarrowGapName(x));
-  if (brokenByTo.length > 0) {
-    parts.push(
-      `Scan ${to.scan_id} did not measure ${brokenByTo.join(", ")} (it failed, or is not installed): earlier findings from it are reported as not re-measured, never as resolved \u2014 re-run once the scanner works.`
-    );
-  }
-  if (narrowByTo.length > 0) {
-    parts.push(
-      `Scan ${to.scan_id} only partly measured ${narrowByTo.join(", ")}: earlier findings in those files, or of those rules, are reported as not re-measured, never as resolved \u2014 they are measured again once a run reads the whole file (Semgrep's parser cannot always, even on valid code) and loads the rule.`
-    );
-  }
-  if (gaps.notRunByTo.length > 0) {
-    parts.push(
-      `Scan ${to.scan_id} did not run ${gaps.notRunByTo.join(", ")} (not requested, or nothing for it to scan): earlier findings from it are reported as not re-measured, never as resolved \u2014 run it again to re-measure them.`
-    );
-  }
-  const narrowByFrom = gaps.byFrom.filter(isNarrowGapName);
-  const brokenByFrom = gaps.byFrom.filter((x) => !isNarrowGapName(x));
-  if (brokenByFrom.length > 0) {
-    parts.push(
-      `The reference scan ${from.scan_id} did not measure ${brokenByFrom.join(", ")} (it failed, or was not installed): findings from it are reported as not previously measured, never as new.`
-    );
-  }
-  if (narrowByFrom.length > 0) {
-    parts.push(
-      `The reference scan ${from.scan_id} only partly measured ${narrowByFrom.join(", ")}: findings in those files, or of those rules, are reported as not previously measured, never as new.`
-    );
-  }
-  if (gaps.notRunByFrom.length > 0) {
-    parts.push(
-      `The reference scan ${from.scan_id} did not run ${gaps.notRunByFrom.join(", ")} (not applicable, or not requested, then): findings from it are new.`
-    );
-  }
-  return parts.length > 0 ? parts.join(" ") : null;
-}
-
-// src/history/openSet.ts
-var PAGE2 = 25;
-var SKIPPED_SAMPLE = 5;
-function findLatestUsable(storage, projectPath, types, opts = {}) {
-  const r = search(storage, projectPath, types, opts);
-  return { scan: r.scan, coverage: r.coverage, skipped: summarizeSkipped(r.hits), hits: r.hits };
-}
-function search(storage, projectPath, types, opts) {
-  const skipCoverageNone = opts.skipCoverageNone ?? true;
-  const hits = [];
-  for (let offset = 0; ; offset += PAGE2) {
-    const page = storage.scans.listCompletedOfTypes(projectPath, types, {
-      limit: PAGE2,
-      offset,
-      ...opts.beforeScanId !== void 0 ? { beforeScanId: opts.beforeScanId } : {},
-      ...opts.afterScanId !== void 0 ? { afterScanId: opts.afterScanId } : {},
-      ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
-    });
-    for (const scan2 of page) {
-      if (isScopedScan(scan2)) continue;
-      if (opts.predicate !== void 0 && !opts.predicate(scan2)) continue;
-      const judged = judge2(scan2, opts.slot);
-      if (judged === null) continue;
-      if (skipCoverageNone && judged === "none") {
-        hits.push({ slot: opts.slot ?? scan2.scan_type, scan: scan2, reason: "coverage_none" });
-        continue;
-      }
-      return { scan: scan2, coverage: judged, hits };
-    }
-    if (page.length < PAGE2) return { scan: null, coverage: null, hits };
-  }
-}
-function latestStateScan(storage, projectPath, scanType, opts = {}) {
-  const types = scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES;
-  const found = findLatestUsable(storage, projectPath, types, opts);
-  if (scanType !== void 0 || found.scan === null) return found;
-  const hits = [...found.hits];
-  const rejected = /* @__PURE__ */ new Set();
-  let current = found;
-  for (; ; ) {
-    const child = current.scan;
-    if (child === null) return { ...current, hits, skipped: summarizeSkipped(hits) };
-    const run = runOf(storage, projectPath, child);
-    if (run === child) return { ...current, hits, skipped: summarizeSkipped(hits) };
-    if (!rejected.has(run.scan_id)) {
-      const coverage = judge2(run, void 0);
-      if (coverage !== "none") return { ...current, scan: run, coverage, hits, skipped: summarizeSkipped(hits) };
-      rejected.add(run.scan_id);
-      hits.push({ slot: run.scan_type, scan: run, reason: "coverage_none" });
-    }
-    current = findLatestUsable(storage, projectPath, types, { beforeScanId: child.scan_id });
-    hits.push(...current.hits);
-  }
-}
-function mapRun(storage, projectPath, scan2) {
-  return scan2 === void 0 ? null : runOf(storage, projectPath, scan2);
-}
-function runOf(storage, projectPath, scan2) {
-  const parentId = scan2.meta?.["parent_scan_id"];
-  if (typeof parentId !== "string") return scan2;
-  const parent = storage.scans.getById(parentId);
-  if (parent === null || parent.status !== "completed" || parent.project_path !== projectPath || !isOrchestratedFullScan(parent)) {
-    return scan2;
-  }
-  return parent;
-}
-function judge2(scan2, slot) {
-  if (slot === void 0 || scan2.scan_type !== "security_full") {
-    return computeCoverage(scan2.tools_run, scan2.missing_tools);
-  }
-  if (scan2.tools_run.length === 0 && scan2.missing_tools.length === 0) return "full";
-  const view = slotView(scan2, slot);
-  if (view.tools_run.length === 0 && view.missing_tools.length === 0) return null;
-  return computeCoverage(view.tools_run, view.missing_tools);
-}
-function summarizeSkipped(hits) {
-  const byScan = /* @__PURE__ */ new Map();
-  for (const h2 of hits) {
-    const seen = byScan.get(h2.scan.scan_id);
-    if (seen !== void 0) {
-      if (!seen.slots.includes(h2.slot)) seen.slots.push(h2.slot);
-      continue;
-    }
-    byScan.set(h2.scan.scan_id, {
-      scan_id: h2.scan.scan_id,
-      scan_type: h2.scan.scan_type,
-      started_at: h2.scan.started_at,
-      reason: h2.reason,
-      slots: [h2.slot]
-    });
-  }
-  const all = [...byScan.values()].sort(
-    (a2, b) => a2.started_at === b.started_at ? 0 : a2.started_at < b.started_at ? 1 : -1
-  );
-  const by_reason = { coverage_none: 0 };
-  const newest = [];
-  for (const s of all) {
-    by_reason[s.reason] += 1;
-    if (by_reason[s.reason] <= SKIPPED_SAMPLE) newest.push(s);
-  }
-  return { count: all.length, by_reason, newest };
-}
-function suppressionMatcher(suppressions, now, projectPath) {
-  const fingerprints = /* @__PURE__ */ new Set();
-  const identities = /* @__PURE__ */ new Set();
-  for (const s of suppressions) {
-    if (s.expires_at !== void 0 && !(Date.parse(s.expires_at) > now)) continue;
-    if (s.project_path !== void 0 && s.project_path !== projectPath) continue;
-    fingerprints.add(s.finding_fingerprint);
-    if (s.finding_identity !== void 0) identities.add(s.finding_identity);
-  }
-  return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
-}
-function partitionSuppressed(storage, projectPath, findings, now = Date.now()) {
-  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), now, projectPath);
-  const visible = [];
-  const suppressed = [];
-  for (const f of findings) (isSuppressed(f) ? suppressed : visible).push(f);
-  return { visible, suppressed };
-}
-function suppressedOfEither(current, reference) {
-  const key = (f) => f.identity !== void 0 ? `i:${f.identity}` : `f:${f.fingerprint}`;
-  const seen = new Set(current.map(key));
-  return [...current, ...reference.filter((f) => !seen.has(key(f)))];
-}
-function slotSources(storage, projectPath, slot) {
-  const pick2 = (r) => r.scan !== null && r.coverage !== null ? [{ scan: r.scan, coverage: r.coverage }] : [];
-  const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
-  if (slot === "security_full") {
-    const r = search(storage, projectPath, ["security_full"], { slot, ...scriptEra });
-    return { picks: pick2(r), hits: r.hits };
-  }
-  const dedicated = search(storage, projectPath, [slot], { slot });
-  if (!sourceTypesOf(slot).includes("security_full")) {
-    return { picks: pick2(dedicated), hits: dedicated.hits };
-  }
-  const legacy = search(storage, projectPath, ["security_full"], {
-    slot,
-    ...scriptEra,
-    ...dedicated.scan !== null ? { afterScanId: dedicated.scan.scan_id } : {}
-  });
-  const picks = pick2(dedicated);
-  if (legacy.scan !== null && legacy.coverage !== null) {
-    picks.push({ scan: legacy.scan, coverage: legacy.coverage });
-  }
-  return { picks, hits: [...dedicated.hits, ...legacy.hits] };
-}
-var CARRY_WALK_LIMIT = 5e3;
-function carryForward(storage, projectPath, slot, source, sourceRows, isSuppressed) {
-  const index = new ChainIndex();
-  index.push(slotView(source, slot));
-  const history = storage.scans.runNamesOfType(projectPath, slot);
-  const stillCarry = new StillCarry(index, history.names, history.anyEmpty);
-  const known = new KnownFindings();
-  for (const f of sourceRows) if (findingInSlot(source, f, slot) && !isSuppressed(f)) known.add(f);
-  const out = [];
-  if (!stillCarry.check()) return out;
-  let walked = 0;
-  let before = source.scan_id;
-  while (walked < CARRY_WALK_LIMIT) {
-    const page = storage.scans.listCompletedOfTypes(projectPath, [slot], { limit: PAGE2, beforeScanId: before });
-    const last = page[page.length - 1];
-    if (last !== void 0) before = last.scan_id;
-    for (const scan2 of page) {
-      if (walked >= CARRY_WALK_LIMIT) break;
-      if (isScopedScan(scan2)) continue;
-      const coverage = judge2(scan2, slot);
-      if (coverage === null || coverage === "none") continue;
-      walked += 1;
-      const holder = slotView(scan2, slot);
-      const carried = carriedFrom({ storage, scan: scan2, slot, holder, index, isSuppressed, known });
-      if (carried.length > 0) {
-        out.push({ slot, scan: scan2, coverage, findings: carried });
-        for (const { finding: finding4 } of carried) known.add(finding4);
-      }
-      index.push(holder);
-      if (!stillCarry.check()) return out;
-    }
-    if (page.length < PAGE2) break;
-  }
-  return out;
-}
-var KnownFindings = class {
-  identities = /* @__PURE__ */ new Set();
-  bare = /* @__PURE__ */ new Set();
-  add(f) {
-    if (f.identity !== void 0) this.identities.add(f.identity);
-    else this.bare.add(f.fingerprint);
-  }
-  /** A row with these keys would lose to a finding already held. */
-  holds(keys) {
-    return keys.identity !== null && keys.identity !== void 0 ? this.identities.has(keys.identity) : this.bare.has(keys.fingerprint);
-  }
-};
-function carriedFrom(args) {
-  const { storage, scan: scan2, slot, holder, index, isSuppressed, known } = args;
-  const scopes = /* @__PURE__ */ new Map();
-  const scopeOf = (key) => {
-    let scope = scopes.get(key);
-    if (scope === void 0) {
-      scope = index.scope(holder, key);
-      scopes.set(key, scope);
-    }
-    return scope;
-  };
-  let everything = false;
-  const tools = /* @__PURE__ */ new Set();
-  const files = /* @__PURE__ */ new Set();
-  const rules2 = /* @__PURE__ */ new Set();
-  let anyOpen = false;
-  for (const key of producedKeys(holder)) {
-    const scope = scopeOf(key);
-    if (scope.kind === "never") continue;
-    anyOpen = true;
-    if (scope.admit.all) {
-      if (key === UNKNOWN_FINDING_KEY) {
-        everything = true;
-        break;
-      }
-      for (const tool50 of toolsOfKey(key)) tools.add(tool50);
-      continue;
-    }
-    const lookup = admitLookup(scope.admit);
-    for (const f of lookup.files) files.add(f);
-    for (const r of lookup.rules) rules2.add(r);
-  }
-  if (!anyOpen) return [];
-  const rows = everything ? storage.findings.listByScan(scan2.scan_id).filter((f) => !known.holds(f)) : storage.findings.listByScanMatching(
-    scan2.scan_id,
-    { tools: [...tools], files: [...files], rules: [...rules2] },
-    (keys) => known.holds(keys)
-  );
-  const newest = index.bookAt(0);
-  const labels = /* @__PURE__ */ new Map();
-  const carried = [];
-  for (const finding4 of rows) {
-    if (!findingInSlot(scan2, finding4, slot) || isSuppressed(finding4)) continue;
-    const key = findingKey(finding4);
-    const file = finding4.file_path === void 0 ? void 0 : finding4.file_path.replace(/\\/g, "/");
-    if (!scopeAdmits(scopeOf(key), file, finding4.rule_id)) continue;
-    const memo = JSON.stringify([key, file ?? null, finding4.rule_id ?? null]);
-    let gap = labels.get(memo);
-    if (gap === void 0) {
-      gap = newest === void 0 ? null : openGapFor(holder, newest, finding4);
-      labels.set(memo, gap);
-    }
-    if (gap === null) continue;
-    carried.push({ finding: finding4, gap });
-  }
-  return carried;
-}
-function scannersOfGap(gap) {
-  const head = gap.split(" (")[0] ?? gap;
-  return head.split(", ").filter((name) => name.length > 0);
-}
-function openSetForProject(storage, projectPath, opts = {}) {
-  const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
-  const picked = [];
-  const hits = [];
-  const considered2 = /* @__PURE__ */ new Map();
-  for (const slot of STATE_SCAN_TYPES) {
-    const found = slotSources(storage, projectPath, slot);
-    for (const h2 of found.hits) {
-      hits.push(h2);
-      considered2.set(h2.scan.scan_id, h2.scan);
-    }
-    for (const p of found.picks) {
-      picked.push({ slot, ...p });
-      considered2.set(p.scan.scan_id, p.scan);
-    }
-  }
-  const byScan = /* @__PURE__ */ new Map();
-  const rowsOf = (scan2) => {
-    let rows = byScan.get(scan2.scan_id);
-    if (rows === void 0) {
-      rows = storage.findings.listByScan(scan2.scan_id);
-      byScan.set(scan2.scan_id, rows);
-    }
-    return rows;
-  };
-  const carried = [];
-  for (const p of picked) {
-    if (p.slot === "security_full" || p.scan.scan_type !== p.slot) continue;
-    for (const c3 of carryForward(storage, projectPath, p.slot, p.scan, rowsOf(p.scan), isSuppressed)) {
-      carried.push(c3);
-      considered2.set(c3.scan.scan_id, c3.scan);
-    }
-  }
-  const order = storage.scans.sortNewestFirst([...considered2.keys()]);
-  const rank2 = new Map(order.map((id, i2) => [id, i2]));
-  const rankOf = (scanId) => rank2.get(scanId) ?? order.length;
-  picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
-  carried.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
-  const findings = [];
-  const sources = [];
-  const seen = indexFindings([]);
-  const admit = (batch) => {
-    for (const f of batch) {
-      findings.push(f);
-      seen.add(f);
-    }
-  };
-  const suppressedSeen = indexFindings([]);
-  let suppressedCount = 0;
-  for (const { slot, scan: scan2, coverage: coverage2 } of picked) {
-    const batch = [];
-    for (const f of rowsOf(scan2)) {
-      if (!findingInSlot(scan2, f, slot) || seen.has(f)) continue;
-      if (isSuppressed(f)) {
-        if (!suppressedSeen.has(f)) {
-          suppressedSeen.add(f);
-          suppressedCount += 1;
-        }
-        continue;
-      }
-      batch.push({ ...f, scan_id: scan2.scan_id });
-    }
-    admit(batch);
-    const contributed = batch.length;
-    sources.push({
-      slot,
-      scan_id: scan2.scan_id,
-      scan_type: scan2.scan_type,
-      started_at: scan2.started_at,
-      finished_at: scan2.finished_at,
-      coverage: coverage2,
-      findings: contributed
-    });
-  }
-  for (const { slot, scan: scan2, coverage: coverage2, findings: rows } of carried) {
-    const gaps = /* @__PURE__ */ new Set();
-    const batch = [];
-    for (const { finding: finding4, gap } of rows) {
-      if (seen.has(finding4)) continue;
-      batch.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true });
-      gaps.add(gap);
-    }
-    admit(batch);
-    const contributed = batch.length;
-    if (contributed === 0) continue;
-    sources.push({
-      slot,
-      scan_id: scan2.scan_id,
-      scan_type: scan2.scan_type,
-      started_at: scan2.started_at,
-      finished_at: scan2.finished_at,
-      coverage: coverage2,
-      findings: contributed,
-      carried_for: [...gaps]
-    });
-  }
-  findings.sort(
-    (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
-  );
-  sources.sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
-  const skipped2 = summarizeSkipped(hits);
-  const scans = [...considered2.values()].sort((a2, b) => rankOf(a2.scan_id) - rankOf(b.scan_id));
-  const coverage = sources.length === 0 ? "none" : sources.some((s) => s.coverage !== "full" || s.carried_for !== void 0) || skipped2.count > 0 ? "partial" : "full";
-  const okInSlot = /* @__PURE__ */ new Map();
-  for (const p of picked) {
-    const names = okInSlot.get(p.slot) ?? /* @__PURE__ */ new Set();
-    for (const t of slotView(p.scan, p.slot).tools_run) if (t.status === "ok") names.add(t.name);
-    okInSlot.set(p.slot, names);
-  }
-  const bookkeeping = [
-    ...picked.map((p) => ({ scan_id: p.scan.scan_id, slot: p.slot, ...slotView(p.scan, p.slot) })),
-    ...sources.filter((src) => src.carried_for !== void 0).map((src) => {
-      const scanners = [...new Set((src.carried_for ?? []).flatMap(scannersOfGap))];
-      const ran = okInSlot.get(src.slot) ?? /* @__PURE__ */ new Set();
-      return {
-        scan_id: src.scan_id,
-        slot: src.slot,
-        tools_run: scanners.filter((name) => ran.has(name)).map((name) => ({ name, status: "ok" })),
-        missing_tools: scanners
-      };
-    }),
-    ...hits.map((h2) => ({ scan_id: h2.scan.scan_id, slot: h2.slot, ...slotView(h2.scan, h2.slot) }))
-  ];
-  return {
-    project_path: projectPath,
-    findings,
-    suppressed: suppressedCount,
-    sources,
-    skipped: skipped2,
-    coverage,
-    scans,
-    bookkeeping,
-    // Named as a run: a child of an orchestrated security_full stands for
-    // its parent (see `latestStateScan`). `picked` is newest first.
-    newest: mapRun(storage, projectPath, scans[0]),
-    newestSource: mapRun(storage, projectPath, picked[0]?.scan)
-  };
-}
-function describeOpenSet(set2) {
-  return {
-    project_path: set2.project_path,
-    coverage: set2.coverage,
-    sources: set2.sources,
-    skipped: set2.skipped
-  };
-}
-
-// src/tools/depsUpdatePlan.ts
 var inputSchema = {
   project_path: ProjectPath,
   prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")

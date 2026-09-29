@@ -63,6 +63,7 @@
 import { lstatSync, statSync } from 'node:fs';
 import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { canonicalPath } from '../platform/projectPath.js';
+import { openSetForProject } from '../history/openSet.js';
 import { STACK_SNAPSHOTS_KEPT } from './stackRepo.js';
 export const DEFAULT_RETENTION_SCANS = 50;
 /**
@@ -238,17 +239,19 @@ export function listPrunableScans(db, keep) {
  * (on the scan itself, or on the orchestrated run it belongs to), or a newer
  * row gone. Returns how many scans were deleted.
  */
-export function deletePrunableScans(db, ids, keep) {
+export function deletePrunableScans(db, ids, keep, protect = NOTHING_PROTECTED) {
     if (ids.length === 0 || !(keep > 0))
         return 0;
     return db.transaction(() => {
         const eligible = db
             .prepare(prunableSql(ids.length))
             .all(...ids, keep, ...ids)
-            .map((r) => r.id);
+            .map((r) => r.id)
+            .filter((id) => !protect.has(id));
         return deleteRows(db, eligible);
     })();
 }
+const NOTHING_PROTECTED = new Set();
 /**
  * Deletes `ids` — whatever their rank — and every row that points at them,
  * in ONE short write transaction; for a caller that removes a scan it wrote
@@ -289,7 +292,8 @@ function deleteRows(db, eligible) {
 export function pruneScans(db, keep, budget = {}) {
     const now = budget.now ?? (() => performance.now());
     const started = now();
-    const pending = listPrunableScans(db, keep);
+    const protect = budget.protect ?? NOTHING_PROTECTED;
+    const pending = listPrunableScans(db, keep).filter((id) => !protect.has(id));
     const batchSize = budget.batchSize ?? PRUNE_BATCH;
     let deleted = 0;
     let batches = 0;
@@ -298,7 +302,7 @@ export function pruneScans(db, keep, budget = {}) {
             break;
         if (budget.budgetMs !== undefined && now() - started >= budget.budgetMs)
             break;
-        deleted += deletePrunableScans(db, pending.splice(0, batchSize), keep);
+        deleted += deletePrunableScans(db, pending.splice(0, batchSize), keep, protect);
         batches += 1;
     }
     return { deleted, remaining: pending.length, complete: pending.length === 0 };
@@ -331,6 +335,55 @@ export function pruneStackSnapshots(db, limit = STACK_PRUNE_BATCH) {
         }
         return { deleted, remaining: excess.length - deleted };
     })();
+}
+/**
+ * The scans each project's CURRENT open set reads from (`history/openSet.ts`
+ * `sources`: every slot's source and every older scan it carries findings
+ * forward from), and the orchestrated parent of each — for the projects of
+ * `candidates` only, the prunable scans, so a start with nothing prunable
+ * reads no open set at all.
+ *
+ * Why: ranking alone cannot see a carry. A newer scan that ran PARTLY
+ * (Semgrep failed beside an ok Bandit; Trivy broken beside an ok npm audit;
+ * a security_scan_full whose sast child did) is usable and ranks like any
+ * other, while the open set still reads the older scan for the findings the
+ * newer ones did not measure again. Fifty such runs evicted the only scan
+ * holding them — risk 18 -> 8, open 1 -> 0. Measured cost: see the commit
+ * that added this and CHANGELOG (the open set per candidate project, once
+ * per start, inside retention's work budget).
+ */
+export function openSetSourceIds(storage, candidates) {
+    const protect = new Set();
+    if (candidates.length === 0)
+        return protect;
+    const db = storage.rawHandle();
+    const projects = new Set();
+    for (let i = 0; i < candidates.length; i += 400) {
+        const chunk = candidates.slice(i, i + 400);
+        for (const row of db
+            .prepare(`SELECT DISTINCT project_path AS p FROM scans WHERE id IN (${chunk.map(() => '?').join(', ')})`)
+            .all(...chunk)) {
+            projects.add(row.p);
+        }
+    }
+    for (const project of projects) {
+        for (const source of openSetForProject(storage, project).sources) {
+            protect.add(source.scan_id);
+            const parent = storage.scans.getById(source.scan_id)?.meta?.['parent_scan_id'];
+            if (typeof parent === 'string')
+                protect.add(parent);
+        }
+    }
+    return protect;
+}
+/**
+ * {@link pruneScans} for a whole `Storage`: never deletes a scan the open
+ * set of its project reads from ({@link openSetSourceIds}).
+ */
+export function pruneScansFor(storage, keep, budget = {}) {
+    const db = storage.rawHandle();
+    const protect = openSetSourceIds(storage, listPrunableScans(db, keep));
+    return pruneScans(db, keep, { ...budget, protect });
 }
 /**
  * Fails scans whose owning process died (see `ScansRepo.reapRunning`). Runs
@@ -373,6 +426,7 @@ export function scheduleRetention(storage, log, options = {}) {
     let cancelled = false;
     let cancelNext = () => { };
     let pending;
+    let protect = NOTHING_PROTECTED;
     let spent = 0;
     let deleted = 0;
     const finish = (left) => {
@@ -397,8 +451,15 @@ export function scheduleRetention(storage, log, options = {}) {
                         (stack.remaining > 0 ? `; ${stack.remaining} left for the next start` : ''));
                 }
             }
-            pending ??= listPrunableScans(db, limit.keep);
-            deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep);
+            if (pending === undefined) {
+                // Once per start: what each candidate's project's open set reads
+                // from is never deleted (openSetSourceIds). Re-read per start — a
+                // scan the set stops reading goes at the next one.
+                const listed = listPrunableScans(db, limit.keep);
+                protect = openSetSourceIds(storage, listed);
+                pending = listed.filter((id) => !protect.has(id));
+            }
+            deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep, protect);
             left = pending.length;
         }
         catch (error) {

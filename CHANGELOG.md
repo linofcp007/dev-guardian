@@ -80,15 +80,23 @@ version bump.
 - The GitHub workflow `ci-init` generates no longer uploads the SARIF of an incomplete scan. It
   uploaded on `if: always()`, including after exit 2 (a scanner did not run), and GitHub code
   scanning closes as fixed every open alert of a scanner an upload does not contain — the
-  SARIF's `executionSuccessful: false` notwithstanding. The scan step now records its exit code
-  (`steps.scan.outputs.exit-code`) and the upload runs only after 0 or 1. The GitLab and
+  SARIF's `executionSuccessful: false` notwithstanding — and after exit 1, which a blocking
+  finding produces even while a scanner failed. The scan step now decides: it uploads after exit
+  0, or after exit 1 only when every SARIF run's `executionSuccessful` is true (coverage full), and
+  records that as `steps.scan.outputs.upload-sarif` (the exit code as `exit-code`). The GitLab and
   Bitbucket templates keep SARIF as a plain artifact, which closes nothing, and are unchanged.
   Regenerate an existing workflow with `ci-init github --write --force`.
-- Retention no longer evicts the last scan that measured anything. Fifty newer scans that measured
-  nothing (failed, or coverage `none` — a broken Semgrep rule, `local_only` with no rules) pushed
-  out the last usable one, and its findings left every reader: risk 18 (medium) → 8 (low), open
-  1 → 0. Usable and unusable scans are now ranked apart, as scoped ones already were, so the newest
-  usable scan of each (project, scan type, scope) is always kept.
+- Retention no longer evicts a scan the project's open set still reads from. Fifty newer scans
+  that measured nothing (failed, or coverage `none` — a broken Semgrep rule, `local_only` with no
+  rules) pushed out the last usable one, and its findings left every reader: risk 18 (medium) → 8
+  (low), open 1 → 0. Usable and unusable scans are now ranked apart, as scoped ones already were.
+  And fifty PARTIAL runs did the same — Semgrep failed beside an ok Bandit, Trivy broken beside an
+  ok npm audit, a security_scan_full whose sast child did — because they rank as usable while the
+  open set still carries the older scan's findings forward. Retention now never deletes a scan the
+  current open set of its project reads from (its sources and the scans it carries from, and
+  their orchestrated parents), computed once per start for the projects with something to prune:
+  20 ms on 10,000 findings, 126 ms on 120,000 (20 projects, 26 MB), 363 ms on 480,000 (60
+  projects, 104 MB), inside retention's 1 s background budget.
 - Suppressions and baselines from 2.0.0 apply again. 2.0.0 stored a project as typed (`c:\Users\…`),
   migration 011 scoped legacy suppressions to that spelling, and 3.0.0 stores scans under the
   canonical `C:\Users\…`; every reader compares exactly, so they lapsed (reproduced by seeding the

@@ -10,13 +10,14 @@ import {
   deleteScans,
   listPrunableScans,
   pruneScans,
+  pruneScansFor,
   reapOrphanedScans,
   resolveRetentionLimit,
   scheduleRetention,
   type Defer,
 } from '../../../src/storage/maintenance.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
-import type { ScanType } from '../../../src/types.js';
+import type { ScanType, ToolRun } from '../../../src/types.js';
 
 function fresh(): { db: GuardianDatabase; storage: Storage } {
   const db = new GuardianDatabase(':memory:');
@@ -281,6 +282,160 @@ function seedUnusable(storage: Storage, id: string, project: string, kind: 'fail
     .prepare('UPDATE scans SET started_at = ? WHERE id = ?')
     .run(new Date(Date.UTC(2026, 0, 1, 0, 0, 0, clock)).toISOString(), id);
 }
+
+/** One scan of `type` with the given bookkeeping and findings, stamped after the last. */
+function seedRun(
+  storage: Storage,
+  id: string,
+  type: ScanType,
+  project: string,
+  run: { tools_run: ToolRun[]; missing_tools?: string[]; meta?: Record<string, unknown> },
+  findings: Array<{ fp: string; tool: string; subcategory?: string; file?: string }> = [],
+): void {
+  storage.scans.insert({ scan_id: id, scan_type: type, project_path: project, tree_hash: `h-${id}`, ...(run.meta !== undefined ? { meta: run.meta } : {}) });
+  if (findings.length > 0) {
+    storage.findings.bulkInsert(
+      findings.map((f) => ({
+        scan_id: id,
+        fingerprint: f.fp,
+        tool: f.tool,
+        rule_id: `rule-${f.fp}`,
+        severity: 'high',
+        category: 'security',
+        title: f.fp,
+        ...(f.subcategory !== undefined ? { subcategory: f.subcategory } : {}),
+        ...(f.file !== undefined ? { file_path: f.file } : {}),
+        fix_available: false,
+      })),
+    );
+  }
+  storage.scans.finalize({
+    scan_id: id,
+    status: 'completed',
+    tools_run: run.tools_run,
+    missing_tools: run.missing_tools ?? [],
+    ...(run.meta !== undefined ? { meta: run.meta } : {}),
+  });
+  clock += 1;
+  storage
+    .rawHandle()
+    .prepare('UPDATE scans SET started_at = ? WHERE id = ?')
+    .run(new Date(Date.UTC(2026, 0, 1, 0, 0, 0, clock)).toISOString(), id);
+}
+
+describe('retention never deletes a scan the open set reads from (I-1)', () => {
+  // A newer scan that ran PARTLY (coverage partial — Semgrep failed beside an
+  // ok Bandit) is usable, so it ranked in the usable partition; the open set
+  // still CARRIES the older Semgrep findings forward, because Semgrep did not
+  // measure them again. Fifty such runs evicted the only scan holding them:
+  // risk 18 -> 8, open 1 -> 0, dashboard 1 -> 0.
+  const openFps = (storage: Storage, project: string): string[] =>
+    openSetForProject(storage, project).findings.map((f) => f.fingerprint).sort();
+
+  it('fifty partial sast runs (Semgrep failed, Bandit ok) keep the scan whose Semgrep finding they carry', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'full', 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [
+      { fp: 'fp-semgrep', tool: 'semgrep', file: 'a.js' },
+    ]);
+    for (let i = 0; i < 50; i++) {
+      seedRun(storage, `partial${i}`, 'sast', '/p1', {
+        tools_run: [
+          { name: 'semgrep', status: 'failed', reason: 'exit 2' },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      });
+    }
+    expect(openFps(storage, '/p1')).toEqual(['fp-semgrep']);
+
+    pruneScansFor(storage, 50);
+
+    expect(scanIds(db)).toContain('full');
+    expect(openFps(storage, '/p1')).toEqual(['fp-semgrep']);
+  });
+
+  it('fifty deps runs with Trivy broken and npm audit ok keep the scan whose Trivy CVE they carry', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'trivy-ok', 'deps', '/p1', { tools_run: [{ name: 'trivy', status: 'ok' }] }, [
+      { fp: 'fp-cve', tool: 'trivy', subcategory: 'cve', file: 'package-lock.json' },
+    ]);
+    for (let i = 0; i < 50; i++) {
+      seedRun(storage, `deps${i}`, 'deps', '/p1', {
+        tools_run: [
+          { name: 'trivy', status: 'failed', reason: 'db download' },
+          { name: 'npm', status: 'ok' },
+        ],
+        missing_tools: ['trivy'],
+      });
+    }
+    expect(openFps(storage, '/p1')).toEqual(['fp-cve']);
+
+    pruneScansFor(storage, 50);
+
+    expect(scanIds(db)).toContain('trivy-ok');
+    expect(openFps(storage, '/p1')).toEqual(['fp-cve']);
+  });
+
+  it("fifty security_scan_full runs whose sast child is partial keep the old run's sast child (and its parent)", () => {
+    const { db, storage } = fresh();
+    const run = (id: string, sast: { tools_run: ToolRun[]; missing_tools?: string[] }, findings: Parameters<typeof seedRun>[5]): void => {
+      seedRun(storage, id, 'security_full', '/p1', {
+        tools_run: sast.tools_run,
+        ...(sast.missing_tools !== undefined ? { missing_tools: sast.missing_tools } : {}),
+        meta: { child_scans: [{ tool: 'scan_sast', scan_id: `${id}-sast`, status: 'completed' }] },
+      });
+      seedRun(storage, `${id}-sast`, 'sast', '/p1', { ...sast, meta: { parent_scan_id: id } }, findings);
+    };
+    run('old', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [{ fp: 'fp-old', tool: 'semgrep', file: 'a.js' }]);
+    for (let i = 0; i < 50; i++) {
+      run(`r${i}`, {
+        tools_run: [
+          { name: 'semgrep', status: 'failed', reason: 'exit 2' },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      }, []);
+    }
+    expect(openFps(storage, '/p1')).toEqual(['fp-old']);
+
+    pruneScansFor(storage, 50);
+
+    expect(scanIds(db)).toEqual(expect.arrayContaining(['old-sast', 'old']));
+    expect(openFps(storage, '/p1')).toEqual(['fp-old']);
+  });
+
+  it('control: once a newer scan re-measured the finding, the old scan is pruned as before', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'old', 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [
+      { fp: 'fp-gone', tool: 'semgrep', file: 'a.js' },
+    ]);
+    for (let i = 0; i < 3; i++) seedRun(storage, `new${i}`, 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] });
+    pruneScansFor(storage, 2);
+    expect(scanIds(db)).toEqual(['new1', 'new2']);
+  });
+
+  it('scheduleRetention protects them too', () => {
+    const { db, storage } = fresh();
+    seedRun(storage, 'full', 'sast', '/p1', { tools_run: [{ name: 'semgrep', status: 'ok' }] }, [
+      { fp: 'fp-semgrep', tool: 'semgrep', file: 'a.js' },
+    ]);
+    for (let i = 0; i < 3; i++) {
+      seedRun(storage, `partial${i}`, 'sast', '/p1', {
+        tools_run: [
+          { name: 'semgrep', status: 'failed' },
+          { name: 'bandit', status: 'ok' },
+        ],
+        missing_tools: ['semgrep'],
+      });
+    }
+    const timers = manualTimers();
+    scheduleRetention(storage, () => {}, { env: { GUARDIAN_RETENTION_SCANS: '2' }, defer: timers.defer });
+    while (timers.runNext()) {
+      /* drain */
+    }
+    expect(scanIds(db)).toEqual(['full', 'partial1', 'partial2']);
+  });
+});
 
 describe('unusable scans are ranked apart from usable ones', () => {
   // Retention ranked every row of (project, type, scoped) together. Fifty
