@@ -50493,7 +50493,7 @@ var cosignParser = {
   }
 };
 var IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
-var SignerValue = external_exports.string().min(1).max(1024);
+var signerValue = () => external_exports.string().min(1).max(1024);
 var scanContainers = makeScanTool({
   name: "scan_containers",
   title: "Container scan (Dockerfile + image + compose)",
@@ -50506,16 +50506,16 @@ var scanContainers = makeScanTool({
     severity_min: SeverityMin,
     dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
     image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
-    signer_identity: SignerValue.optional().describe(
+    signer_identity: signerValue().optional().describe(
       "The identity `image` must be signed by: the signing certificate's subject \u2014 a workflow URL such as https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main, or an e-mail. Needs signer_issuer (or signer_issuer_regexp); runs cosign verify."
     ),
-    signer_identity_regexp: SignerValue.optional().describe(
+    signer_identity_regexp: signerValue().optional().describe(
       "signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every release workflow of one repository. Not with signer_identity."
     ),
-    signer_issuer: SignerValue.optional().describe(
+    signer_issuer: signerValue().optional().describe(
       "The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) or https://accounts.google.com."
     ),
-    signer_issuer_regexp: SignerValue.optional().describe(
+    signer_issuer_regexp: signerValue().optional().describe(
       "signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer."
     ),
     force: Force
@@ -56831,7 +56831,9 @@ var tool7 = {
   description: "Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then report a first-pass secrets/vuln/SAST status. Profile=minimal|standard|paranoid. paranoid is not an alias of standard: its gitleaks config drops every content-based allowlist entry (fixtures, known placeholders, stopwords \u2014 only generated/vendored trees stay excluded, for noise, not secrecy), and its Renovate config disables automerge everywhere (every update, not just major ones, waits for a human) with a 7-day minimum release age versus standard's 3. Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, so later scans can tell you when a shipped config has been fixed since yours was installed. refresh=true compares your copies against the current baselines: with apply=false it only reports what would change, and with apply=true it updates files you never edited in place and writes <name>.new alongside the ones you did. An edited file is never overwritten.",
   inputSchema: {
     project_path: ProjectPath,
-    profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional(),
+    profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional().describe(
+      "Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and pre-commit; paranoid: standard's files with a gitleaks config that has no content-based allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard."
+    ),
     apply: external_exports.boolean().optional().describe("When false, return only the proposed file list without writing. Default: true."),
     refresh: external_exports.boolean().optional().describe(
       "Opt-in re-sync of already-installed configs against the shipped baselines. Reports the per-file action; only writes when apply is also true, and never over a file you edited (that one is delivered as <name>.new instead). Default: false."
@@ -59210,10 +59212,14 @@ var ToEnum = external_exports.enum(["latest"]);
 var inputSchema6 = {
   project_path: ProjectPath,
   scan_type: external_exports.enum(SCAN_TYPES).optional().describe("With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type."),
-  from_scan_id: external_exports.string().uuid().optional(),
-  from: FromEnum.optional(),
-  to_scan_id: external_exports.string().uuid().optional(),
-  to: ToEnum.optional()
+  from_scan_id: external_exports.string().uuid().optional().describe("The older side: this exact scan. Takes precedence over from. Default: see from."),
+  from: FromEnum.optional().describe(
+    "The older side, when from_scan_id is not given: 'previous' \u2014 this project's usable scan of the same type just before the to scan \u2014 or 'baseline' \u2014 the baseline set_baseline recorded for that type. Default: 'previous'."
+  ),
+  to_scan_id: external_exports.string().uuid().optional().describe("The newer side: this exact scan. Takes precedence over to. Default: see to."),
+  to: ToEnum.optional().describe(
+    "The newer side, when to_scan_id is not given: 'latest' \u2014 this project's newest usable scan (of scan_type, when given). Default: 'latest'."
+  )
 };
 var tool12 = {
   name: "diff_scans",
@@ -61495,12 +61501,14 @@ import { existsSync as existsSync34, readFileSync as readFileSync27 } from "node
 var RESPONSE_CAP = 50;
 var inputSchema8 = {
   project_path: ProjectPath,
-  from_scan_id: external_exports.string().uuid().optional(),
-  to_scan_id: external_exports.string().uuid().optional(),
+  from_scan_id: external_exports.string().uuid().optional().describe("The older generate_sbom scan. Default: this project's second-newest completed SBOM scan."),
+  to_scan_id: external_exports.string().uuid().optional().describe("The newer generate_sbom scan. Default: this project's newest completed SBOM scan."),
   /** No longer changes behaviour — full-file comparison always happens now
    *  when the SBOM file is still on disk. Kept so an existing caller that
    *  passes it does not break. */
-  use_full_file: external_exports.boolean().optional()
+  use_full_file: external_exports.boolean().optional().describe(
+    "Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is still on disk, and the capped summary stored with the scan only when it is not (component_source says which)."
+  )
 };
 var tool18 = {
   name: "sbom_diff",
@@ -63487,8 +63495,12 @@ var inputSchema14 = {
   max_issues: external_exports.number().int().min(1).max(50).optional().describe(
     "Cap on issues filed in one run, highest severity first. Default: 10 \u2014 findings beyond the cap are counted in `filtered`, never silently dropped."
   ),
-  labels: external_exports.array(external_exports.string()).optional(),
-  dry_run: external_exports.boolean().optional()
+  labels: external_exports.array(external_exports.string()).optional().describe(
+    'Labels for every issue. Missing ones are created; one that cannot be is left off (labels_omitted). Default: ["dev-guardian", "security"].'
+  ),
+  dry_run: external_exports.boolean().optional().describe(
+    "true: list the issues that would be created and call nothing. Default: false \u2014 the call FILES REAL ISSUES on GitHub through the local gh CLI."
+  )
 };
 var tool27 = {
   name: "create_github_issues",
@@ -64037,9 +64049,13 @@ var RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
 var DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
 var inputSchema15 = {
   wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php."),
-  include_users: external_exports.boolean().optional(),
-  include_options: external_exports.boolean().optional(),
-  risky_login_names: external_exports.array(external_exports.string()).optional()
+  include_users: external_exports.boolean().optional().describe(
+    "List the administrator accounts (wp user list --role=administrator: login and e-mail), flagging risky login names. Default: true."
+  ),
+  include_options: external_exports.boolean().optional().describe("Read the config flags DISALLOW_FILE_EDIT, WP_DEBUG, WP_DEBUG_LOG and FORCE_SSL_ADMIN. Default: true."),
+  risky_login_names: external_exports.array(external_exports.string()).optional().describe(
+    'Administrator logins to flag as risky, compared case-insensitively. Replaces the default list: ["admin", "administrator", "root", "wpadmin"].'
+  )
 };
 var tool28 = {
   name: "wp_audit",
@@ -65860,7 +65876,7 @@ function failDomain22(code, message3) {
 import { randomUUID as randomUUID12 } from "node:crypto";
 var inputSchema19 = {
   target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
-  timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional()
+  timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional().describe("Per-request timeout in milliseconds, 1000-60000. Default: 15000.")
 };
 var tool33 = {
   name: "wp_rest_audit",

@@ -116,7 +116,12 @@ const tool = {
         'and writes <name>.new alongside the ones you did. An edited file is never overwritten.',
     inputSchema: {
         project_path: ProjectPath,
-        profile: z.enum(['minimal', 'standard', 'paranoid']).optional(),
+        profile: z
+            .enum(['minimal', 'standard', 'paranoid'])
+            .optional()
+            .describe('Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and ' +
+            'pre-commit; paranoid: standard\'s files with a gitleaks config that has no content-based ' +
+            'allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard.'),
         apply: z
             .boolean()
             .optional()

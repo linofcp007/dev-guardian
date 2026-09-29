@@ -178,8 +178,8 @@ Use the local `gh` CLI to open one issue per top open finding of project\_path (
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Minimum severity a finding must have to be filed. Default: high — what this drops is reported in `filtered`, never silently. |
 | `max_issues` | number | no | — | Cap on issues filed in one run, highest severity first. Default: 10 — findings beyond the cap are counted in `filtered`, never silently dropped. |
-| `labels` | array of string | no | — | — |
-| `dry_run` | boolean | no | — | — |
+| `labels` | array of string | no | — | Labels for every issue. Missing ones are created; one that cannot be is left off (labels\_omitted). Default: \["dev-guardian", "security"\]. |
+| `dry_run` | boolean | no | — | true: list the issues that would be created and call nothing. Default: false — the call FILES REAL ISSUES on GitHub through the local gh CLI. |
 
 ### `deps_audit`
 
@@ -216,10 +216,10 @@ Compare findings between two scans of one project (same scan\_type). Returns new
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit" | no | — | With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type. |
-| `from_scan_id` | string | no | — | — |
-| `from` | one of "baseline", "previous" | no | — | — |
-| `to_scan_id` | string | no | — | — |
-| `to` | one of "latest" | no | — | — |
+| `from_scan_id` | string | no | — | The older side: this exact scan. Takes precedence over from. Default: see from. |
+| `from` | one of "baseline", "previous" | no | — | The older side, when from\_scan\_id is not given: 'previous' — this project's usable scan of the same type just before the to scan — or 'baseline' — the baseline set\_baseline recorded for that type. Default: 'previous'. |
+| `to_scan_id` | string | no | — | The newer side: this exact scan. Takes precedence over to. Default: see to. |
+| `to` | one of "latest" | no | — | The newer side, when to\_scan\_id is not given: 'latest' — this project's newest usable scan (of scan\_type, when given). Default: 'latest'. |
 
 ### `dotnet_describe_setup`
 
@@ -280,7 +280,7 @@ Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempoten
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
-| `profile` | one of "minimal", "standard", "paranoid" | no | — | — |
+| `profile` | one of "minimal", "standard", "paranoid" | no | — | Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and pre-commit; paranoid: standard's files with a gitleaks config that has no content-based allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard. |
 | `apply` | boolean | no | — | When false, return only the proposed file list without writing. Default: true. |
 | `refresh` | boolean | no | — | Opt-in re-sync of already-installed configs against the shipped baselines. Reports the per-file action; only writes when apply is also true, and never over a file you edited (that one is delivered as &lt;name&gt;.new instead). Default: false. |
 
@@ -431,9 +431,9 @@ Compare two generate\_sbom scans, full component list, keyed by (ecosystem, name
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
-| `from_scan_id` | string | no | — | — |
-| `to_scan_id` | string | no | — | — |
-| `use_full_file` | boolean | no | — | — |
+| `from_scan_id` | string | no | — | The older generate\_sbom scan. Default: this project's second-newest completed SBOM scan. |
+| `to_scan_id` | string | no | — | The newer generate\_sbom scan. Default: this project's newest completed SBOM scan. |
+| `use_full_file` | boolean | no | — | Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is still on disk, and the capped summary stored with the scan only when it is not (component\_source says which). |
 
 ### `scan_containers`
 
@@ -648,9 +648,9 @@ Audit a running WordPress install via WP-CLI (read-only): core/plugin/theme file
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `wp_install_path` | string | yes | — | Path to the directory containing wp-config.php. |
-| `include_users` | boolean | no | — | — |
-| `include_options` | boolean | no | — | — |
-| `risky_login_names` | array of string | no | — | — |
+| `include_users` | boolean | no | — | List the administrator accounts (wp user list --role=administrator: login and e-mail), flagging risky login names. Default: true. |
+| `include_options` | boolean | no | — | Read the config flags DISALLOW\_FILE\_EDIT, WP\_DEBUG, WP\_DEBUG\_LOG and FORCE\_SSL\_ADMIN. Default: true. |
+| `risky_login_names` | array of string | no | — | Administrator logins to flag as risky, compared case-insensitively. Replaces the default list: \["admin", "administrator", "root", "wpadmin"\]. |
 
 ### `wp_cron_audit`
 
@@ -695,7 +695,7 @@ Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `target_url` | string | yes | — | Base URL of the WordPress site (e.g. `https://example.com`). |
-| `timeout_ms` | number | no | — | — |
+| `timeout_ms` | number | no | — | Per-request timeout in milliseconds, 1000-60000. Default: 15000. |
 
 ### `wp_vuln_check`
 

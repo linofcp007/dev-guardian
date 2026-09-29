@@ -52,6 +52,18 @@ version bump.
   "adding a dependency" sequence; `guardian-deps` has a "before installing"
   section and the router a row for it. A test holds every registered tool to
   being named in the rules template and in at least one skill or command.
+- Every parameter of every tool now has a description, and a test holds
+  that over `tools/list`. Fourteen had none, among them
+  `create_github_issues.dry_run` (whose default, `false`, files real issues),
+  `init_project.profile`, `diff_scans`' `from` / `to` / `from_scan_id` /
+  `to_scan_id`, `sbom_diff.use_full_file` (ignored, and now says so),
+  `wp_audit`'s `include_users` / `include_options` / `risky_login_names` and
+  `wp_rest_audit.timeout_ms`.
+- `scan_containers`' `signer_identity_regexp`, `signer_issuer` and
+  `signer_issuer_regexp` were emitted as `{"$ref": "#/properties/signer_identity"}`
+  plus a description draft-07 ignores beside a `$ref`: one zod instance was
+  reused for four parameters. Each now has its own, and a test holds every
+  tool's schema to containing no `$ref`.
 - **`wp_plugin_check` said it did two things it never did.** Its description
   promised the "latest known" version and, with `target_url`, "a fresh WPScan
   lookup"; the handler makes no network call at all, and `target_url` only

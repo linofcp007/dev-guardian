@@ -45,10 +45,21 @@ const inputSchema = {
         .enum(SCAN_TYPES)
         .optional()
         .describe("With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type."),
-    from_scan_id: z.string().uuid().optional(),
-    from: FromEnum.optional(),
-    to_scan_id: z.string().uuid().optional(),
-    to: ToEnum.optional(),
+    from_scan_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe('The older side: this exact scan. Takes precedence over from. Default: see from.'),
+    from: FromEnum.optional().describe("The older side, when from_scan_id is not given: 'previous' — this project's usable scan of the same " +
+        "type just before the to scan — or 'baseline' — the baseline set_baseline recorded for that type. " +
+        "Default: 'previous'."),
+    to_scan_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe('The newer side: this exact scan. Takes precedence over to. Default: see to.'),
+    to: ToEnum.optional().describe("The newer side, when to_scan_id is not given: 'latest' — this project's newest usable scan (of " +
+        "scan_type, when given). Default: 'latest'."),
 };
 const tool = {
     name: 'diff_scans',

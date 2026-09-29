@@ -73,12 +73,24 @@ import { registerToolModule } from './index.js';
 const RESPONSE_CAP = 50;
 const inputSchema = {
     project_path: ProjectPath,
-    from_scan_id: z.string().uuid().optional(),
-    to_scan_id: z.string().uuid().optional(),
+    from_scan_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe("The older generate_sbom scan. Default: this project's second-newest completed SBOM scan."),
+    to_scan_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe("The newer generate_sbom scan. Default: this project's newest completed SBOM scan."),
     /** No longer changes behaviour — full-file comparison always happens now
      *  when the SBOM file is still on disk. Kept so an existing caller that
      *  passes it does not break. */
-    use_full_file: z.boolean().optional(),
+    use_full_file: z
+        .boolean()
+        .optional()
+        .describe('Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is ' +
+        'still on disk, and the capped summary stored with the scan only when it is not (component_source says which).'),
 };
 const tool = {
     name: 'sbom_diff',
