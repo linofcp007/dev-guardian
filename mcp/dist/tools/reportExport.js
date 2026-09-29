@@ -28,7 +28,7 @@ import { z } from 'zod';
 import { owaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { latestStateScan } from '../history/openSet.js';
-import { isOrchestratedFullScan } from '../history/scanRoles.js';
+import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import { escapeHtml, markdownToSafeHtml, renderHtmlDocument, severityBar, severityChip, } from '../report/htmlTheme.js';
@@ -134,8 +134,10 @@ async function handler(input, ctx) {
         return failDomain('unknown_scan_id', `Scan '${scanId}' not found.`);
     // An explicit scan_id must be a scan of THIS project: the report is written
     // into this project's `.guardian/reports`, and it used to take any scan in
-    // the database — another project's findings filed under this one.
-    if (scan.project_path !== projectPath) {
+    // the database — another project's findings filed under this one. A scan of
+    // an audit target (a third-party skill, a site) belongs to no project, and
+    // is exported wherever it is asked for.
+    if (scan.project_path !== projectPath && !TARGET_SCAN_TYPES.has(scan.scan_type)) {
         return {
             ok: false,
             error: {

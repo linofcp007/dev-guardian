@@ -94,7 +94,9 @@ version bump.
   `from_scan_id` of another project or scan type than the `to` scan, and a scan that has not
   completed (one still running has not stored all its findings). `report_export` refuses a
   `scan_id` of another project — it wrote that scan's report into this project's
-  `.guardian/reports` — pointing at the right `project_path`, and a scan still running.
+  `.guardian/reports` — pointing at the right `project_path`, and a scan still running. A scan
+  of an audit target rather than a project (`scan_skill`'s skill, `wp_rest_audit`'s site) is
+  still exported wherever it is asked for.
 - The dashboard's coverage follows `risk_score`'s rule: `none` when no scan measured anything. It
   read `partial` whenever any scan existed, skipped ones included.
 - A large scan no longer locks other processes out of the database. Its findings were inserted in

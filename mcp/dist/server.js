@@ -54095,6 +54095,7 @@ var SCAN_TYPE_ROLE = {
   dotnet_target_framework: "never"
 };
 var STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === "state");
+var TARGET_SCAN_TYPES = /* @__PURE__ */ new Set(["skill_audit", "wp_rest_audit"]);
 function isOrchestratedFullScan(scan2) {
   return scan2.scan_type === "security_full" && Array.isArray(scan2.meta?.["child_scans"]);
 }
@@ -63737,7 +63738,7 @@ async function handler22(input, ctx) {
   }
   const scan2 = ctx.storage.scans.getById(scanId);
   if (!scan2) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
-  if (scan2.project_path !== projectPath) {
+  if (scan2.project_path !== projectPath && !TARGET_SCAN_TYPES.has(scan2.scan_type)) {
     return {
       ok: false,
       error: {
