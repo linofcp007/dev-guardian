@@ -1397,6 +1397,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       runHook(preToolUse(tool, { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
     it.each([
       ['PowerShell', 'ni -it HardLink -Path notes.json -Target .guardian\\hooks.config.json'],
+      ['PowerShell', 'New-Item -i HardLink -Path notes.json -v .guardian\\hooks.config.json'],
       ['Bash', 'cp -al .guardian backup'],
       ['Bash', 'ln .claude/settings.json s.json'],
     ])('%s: %s is denied', (tool, command) => {

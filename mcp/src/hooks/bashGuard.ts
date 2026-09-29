@@ -1636,10 +1636,12 @@ function lnHardSources(args: readonly string[]): string[] {
 
 /**
  * `New-Item`'s parameters that take a value, by the name the code below uses,
- * with every name and alias it may be spelled by. PowerShell takes any
- * unambiguous prefix of one (review 3.0, wave 2: `ni -it HardLink` is
- * `-ItemType`), so two letters or more name the parameter they begin — `-n`
- * alone is `-Name`, the one parameter that letter can start.
+ * with every name and alias it may be spelled by. PowerShell binds any prefix
+ * that names one parameter (review 3.0, wave 2: `ni -it HardLink` is
+ * `-ItemType`), and a common parameter never makes one ambiguous — measured
+ * on pwsh 7.6 and Windows PowerShell 5.1, `-i` is `-ItemType` and `-v` is
+ * `-Value`, whatever `-InformationAction` and `-Verbose` begin with (round 2).
+ * `-t` begins both `-Type` and `-Target`, and PowerShell refuses it.
  */
 const NEW_ITEM_VALUED: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['type', ['itemtype', 'type']],
@@ -1650,10 +1652,10 @@ const NEW_ITEM_VALUED: ReadonlyArray<readonly [string, readonly string[]]> = [
 ];
 
 function newItemParam(spelled: string): string | undefined {
-  for (const [param, names] of NEW_ITEM_VALUED) {
-    if (names.some((n) => n === spelled || (spelled.length >= (param === 'name' ? 1 : 2) && n.startsWith(spelled)))) return param;
-  }
-  return undefined;
+  const exact = NEW_ITEM_VALUED.find(([, names]) => names.includes(spelled));
+  if (exact !== undefined) return exact[0];
+  const matches = NEW_ITEM_VALUED.filter(([, names]) => names.some((n) => n.startsWith(spelled)));
+  return matches.length === 1 ? matches[0]?.[0] : undefined;
 }
 
 /**

@@ -474,6 +474,10 @@ version bump.
   through `env`, `sudo`, `bash -c`, `cmd /c`, `pwsh -Command`) and wherever `--yes` (or `--yes=…`) stands, with its
   own message: "db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt`
   without --yes". `db adopt` without `--yes` and every other CLI command stay allowed.
+- **`New-Item -i HardLink … -v <config>` still made the hard link.** The abbreviation rule above counted a
+  one-letter prefix as ambiguous, but PowerShell (pwsh 7.6 and 5.1 alike) never lets a common parameter make one
+  so: `-i` is `-ItemType`, `-v` is `-Value`, `-p` is `-Path`. A prefix now names the parameter it alone begins;
+  `-t` (`-Type` or `-Target`), which PowerShell refuses, names none.
 
 ## [3.0.0] - 2026-09-29
 

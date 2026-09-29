@@ -3011,3 +3011,29 @@ describe('assessBashCommand — dev-guardian db adopt --yes is the user’s deci
     expect(assessBashCommand('dev-guardian db adopt').denyMessage).toBeUndefined();
   });
 });
+
+// Review of 3.0, wave 2, round 2, item 2: measured on pwsh 7.6 and Windows
+// PowerShell 5.1, a common parameter never makes a prefix ambiguous — `-i` is
+// -ItemType and `-v` is -Value, whatever -InformationAction and -Verbose say —
+// and both read ok. `-t` is ambiguous in PowerShell itself (-Type, -Target).
+describe('assessBashCommand — New-Item parameters by any prefix PowerShell binds (review 3.0 wave 2, round 2)', () => {
+  it.each([
+    ['ni -i HardLink -Path notes.json -ta .guardian\\hooks.config.json', 'guard-config-hard-link'],
+    ['New-Item -ItemType HardLink -Path x.json -v .guardian\\hooks.config.json', 'guard-config-hard-link'],
+    ['New-Item -i HardLink -p s.json -v .claude\\settings.json', 'guard-config-hard-link'],
+    ['ni -i SymbolicLink -p .guardian\\hooks.config.json -v C:\\elsewhere\\x.json', 'guard-config-special-file'],
+    ['ni -i File -p .guardian\\hooks.config.json -v "{}"', 'guard-config-shell-write'],
+  ])('%s is denied', (command, rule) => {
+    const a = assessBashCommand(command, { shell: 'powershell' });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each([
+    'ni -i Directory -p build',
+    'New-Item -i HardLink -p b.txt -v a.txt',
+    'New-Item -i File -p notes.txt -v "hello"',
+  ])('%s stays ok', (command) => {
+    expect(verdict(command, 'powershell')).toEqual({ command, level: 'ok' });
+  });
+});
