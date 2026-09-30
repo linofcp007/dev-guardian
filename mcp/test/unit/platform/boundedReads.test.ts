@@ -9,8 +9,20 @@
  * them. So a parse is bounded by the document's STRUCTURE before it runs,
  * lines are iterated rather than split, a lock is parsed only below a cap far
  * under the read cap, and one walk shares one byte-and-file budget whose
- * overflow is named. Peak memory and wall time for these shapes, measured in
- * `node:22` under `--memory 768m`, are in CHANGELOG.md (3.0.x, W2E round 2).
+ * overflow is named.
+ *
+ * Measured in `node:22` (22.23.2) under `docker run --memory 768m` (396 MiB
+ * heap), one process per shape, before (ada72f20) → after (this change):
+ *
+ *   package-lock `{},` 8 MiB     2461 ms, 186 MB heap, gap dropped → 3 ms, 67 MiB RSS, gap kept
+ *   package-lock `{},` 30/60 MiB  out of heap                      → 4–5 ms, 67 MiB RSS
+ *   package-lock `1,` 60 MiB      OOM-killed (cgroup)              → 3 ms, 67 MiB RSS
+ *   yarn.lock of newlines 30/60   out of heap (GC saw 659 MB)      → 3–6 ms, 67 MiB RSS
+ *   detect_stack, 40 × 8 MiB reqs 646 MB heap, 713 MiB RSS, 1.6 s  → 284 ms, 24 MB heap, 103 MiB RSS
+ *   detect_stack, 80 × 8 MiB reqs out of heap                      → 264 ms, 24 MB heap, 103 MiB RSS
+ *   .semgrep.yml dense YAML 1 MiB out of heap                      → 9 ms, 59 MiB RSS
+ *
+ * The test below holds the shapes, at sizes a unit test can afford.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

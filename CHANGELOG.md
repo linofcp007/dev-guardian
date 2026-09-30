@@ -994,6 +994,33 @@ them again. Scans made on the fallback meanwhile are not merged back.
   registries: a `package-lock.json` whose `resolved` URLs point at another host makes `npm ci` and
   `npm install` fetch those tarballs from it, but without the user's token (npm scopes it to the configured
   host; the tarball on the user's own registry carried it). A test now holds `create_fix_pr` to that.
+- **Bytes read were not memory used: files under every read cap still took the server down.** The caps bound
+  what is read; nothing bounded what parsing it built. Measured in `node:22` (22.23.2) under
+  `docker run --memory 768m` (a 396 MiB heap), each shape in its own process — before (ada72f20) → after:
+  - a `package-lock.json` of `{},` (under the 64 MiB lock cap), read for Trivy's coverage: 8 MiB took 2.5 s,
+    a 186 MB heap and 333 MiB RSS — and dropped the gap, reading the lock as locking nothing; 30 and 60 MiB
+    ran out of heap. Now 3–5 ms, 67 MiB RSS, the gap kept ("not checked"): a lock is parsed only below
+    256 KiB, the most a lock that locks nothing could be.
+  - the same file of `1,`: 30 MiB took 456 MiB RSS; 60 MiB was OOM-killed. Now 3 ms, 67 MiB.
+  - a `yarn.lock` of newlines, 30 or 60 MiB: out of heap (`.split(/\r?\n/)` made one string per byte; GC
+    saw 659 MB). Now 3–6 ms, 67 MiB: lines are iterated (`platform/textLines.ts`), and a `yarn.lock` is
+    scanned only below 64 KiB.
+  - `detect_stack` on 10, 40 and 80 `requirements-N.txt` of just under 8 MiB: a 247 MB heap, then 646 MB
+    heap / 713 MiB RSS and 1.6 s, then out of heap. Now 264–417 ms, a 24 MB heap and 103 MiB RSS in all
+    three: one 64 MiB / 4 000-file budget per detection, and each file past it named in `unread_files` (3,
+    33, and 50 with `unread_files_more: 23`). Each file is tested on its own, never concatenated.
+  - a project `.semgrep.yml` of dense YAML, 1 or 7 MiB: out of heap. Now 9–26 ms, 70 MiB at most: a YAML
+    or JSON document is refused by its node count before it is parsed (`platform/boundedParse.ts`: 50 000
+    YAML nodes for a configuration, 100 000 for an API spec, 2 000 000 JSON values), and the rule-id reader
+    then reads no id from the file and treats it as one that may hold a taint rule.
+  - an OpenAPI JSON of `[1,…]`, 8 or 30 MiB: 160 and 446 MiB RSS. Now 73 and 116 MiB, reported as a spec
+    too complex to parse.
+
+  The IaC walk, the Trivy manifest walk and the WordPress inventory share one read budget each too, and a
+  file past it is named; the compose, pnpm-workspace, Semgrep-autofix and custom-rule YAML parses are bounded
+  the same way. The reviewer's 203 hostile-file cases (a `/dev/zero`, `/dev/urandom` or `/proc/self/environ`
+  link, a FIFO, a directory, 8 MiB, a link out, a hard link, at every path each reader opens) all return
+  in `node:22` under 768 MB; the one that hung before — a FIFO at `.git/shallow`, 15 s — takes 150 ms.
 - **`create_fix_pr`'s pip refusal was a denylist of regular expressions, and pip reads more than they did.**
   The adversarial review bypassed it with pip's own grammar: an abbreviated option (`--index`, `--extra-index`,
   `--find`, `--trusted`, `--edit`, `--requirem`), a glued one (`-ihttps://…`, `-egit+…`), a quoted editable, a

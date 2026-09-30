@@ -16,7 +16,7 @@
  * pip ≥ 24 it is skipped, visibly. Measured on pip 26.2.1 / Python 3.14.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { checkRequirements, describePipRefusal, urlHost } from '../../../src/deps/pipRequirements.js';
@@ -251,6 +251,23 @@ describe('what a refusal says', () => {
     writeFileSync(join(dir, 'r250.txt'), '--index-url https://evil.invalid/simple\n');
     const got = checkRequirements(dir, ['requirements.txt'], dir).refusals.map((r) => r.kind);
     expect(got).toContain('too many files');
+  });
+
+  it.skipIf(process.platform === 'win32')('an include that is a FIFO or a link to /dev/zero is refused as unreadable, at once (POSIX)', () => {
+    for (const make of [
+      (p: string): void => {
+        expect(spawnSync('mkfifo', [p]).status).toBe(0);
+      },
+      (p: string): void => symlinkSync('/dev/zero', p),
+    ]) {
+      const dir = makeTempDir('pip-hostile-');
+      writeFileSync(join(dir, 'requirements.txt'), '-r more.txt\n');
+      make(join(dir, 'more.txt'));
+      const t0 = Date.now();
+      const got = checkRequirements(dir, ['requirements.txt'], dir).refusals;
+      expect(Date.now() - t0).toBeLessThan(3_000);
+      expect(got.map((r) => r.kind)).toEqual(['unreadable']);
+    }
   });
 
   it('an include out of the checkout, or through a link out of it, is refused', () => {
