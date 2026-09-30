@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { join, relative, isAbsolute } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { runSemgrep, semgrepAvailable } from '../../helpers/semgrep.js';
-import { spawnSyncCapped, testTimeoutAbove } from '../../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../../helpers/spawnCap.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import { semgrepHomeFiles, snapshot, sweepLegacySettingsDirs, touched } from '../../setup/semgrepHome.js';
 
@@ -20,7 +20,7 @@ afterAll(cleanupTempDirs);
 // machine at 100% CPU): above their caps, so a hung one is reported by
 // the cap, not by vitest's 10 s default (R7-I1).
 const SEMGREP_CAP_MS = 60_000;
-vi.setConfig({ testTimeout: testTimeoutAbove(SEMGREP_CAP_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(SEMGREP_CAP_MS) });
 
 const AVAILABLE = semgrepAvailable();
 const inside = (outer: string, inner: string): boolean => {

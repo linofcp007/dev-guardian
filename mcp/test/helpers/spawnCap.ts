@@ -17,7 +17,7 @@
  * - {@link spawnSyncCapped} throws {@link SpawnCapError} — naming the command,
  *   its arguments and the bound — when the bound kills the child, instead of
  *   handing back a `status: null` for an assertion to misreport;
- * - {@link testTimeoutAbove} is the per-file `testTimeout` a file with such
+ * - {@link timeoutAbove} is the per-file `testTimeout` a file with such
  *   spawns sets (`vi.setConfig`), comfortably above its cap, so a hung spawn
  *   reaches its own bound (and its own message) before vitest's.
  *
@@ -40,8 +40,12 @@ export class SpawnCapError extends Error {
  * for the rest of the test (setup, the other, healthy spawns), so the
  * {@link SpawnCapError} is what the run reports. A test whose healthy spawns
  * together take longer than this is slow, not hung, and vitest says so.
+ *
+ * Not `testTimeoutAbove`: vitest's static test listing (`vitest list`) reads
+ * any call whose name starts with `test` as a test, and reported 15 phantom
+ * tests named after its argument (review 3.0, R7 round 2).
  */
-export function testTimeoutAbove(capMs: number): number {
+export function timeoutAbove(capMs: number): number {
   return 2 * capMs;
 }
 

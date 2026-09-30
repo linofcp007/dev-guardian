@@ -30,7 +30,7 @@ import { detectOs } from '../../src/platform/osDetect.js';
 import { candidatesFor } from '../../src/platform/shellProbe.js';
 import { isWslLauncher, resolveExecutable } from '../helpers/resolveExecutable.js';
 import { rmDirOrDefer } from '../helpers/tempDir.js';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { isInstalled, PROBE_TIMEOUT_MS } from '../helpers/toolchain.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
@@ -46,7 +46,7 @@ const BASH_TIMEOUT_MS = 30_000;
 // Above every cap a test with the default timeout runs under, so a hung
 // child is reported by its cap — naming it — and not by vitest's 10 s
 // default failing the test after the fact (review 3.0, R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(Math.max(TIMEOUT_MS, LINTER_TIMEOUT_MS, BASH_TIMEOUT_MS)) });
+vi.setConfig({ testTimeout: timeoutAbove(Math.max(TIMEOUT_MS, LINTER_TIMEOUT_MS, BASH_TIMEOUT_MS)) });
 
 /**
  * A bash that can actually run a script, chosen the way the server chooses one

@@ -45,7 +45,7 @@ import { gitIndexAt } from '../../../src/storage/dbProvenance.js';
 import { registerDbId, registryDir } from '../../../src/storage/dbRegistry.js';
 import { Storage } from '../../../src/storage/index.js';
 import { listMigrations } from '../../../src/storage/migrations/runner.js';
-import { spawnSyncCapped, testTimeoutAbove } from '../../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../../helpers/spawnCap.js';
 import { cleanupTempDirs, makeTempDir, rmDir } from '../../helpers/tempDir.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
@@ -60,7 +60,7 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof
 // 30 s. The bound is now above the cap on each git call the tests make
 // themselves, so a hung git is reported by that cap, naming the command.
 const GIT_TIMEOUT_MS = 60_000;
-vi.setConfig({ testTimeout: testTimeoutAbove(GIT_TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(GIT_TIMEOUT_MS) });
 
 const undo: Array<() => void> = [];
 afterEach(() => {

@@ -44,7 +44,7 @@ import { type SpawnSyncReturns } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, beforeAll, vi } from 'vitest';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 
 import { detectOs } from '../../src/platform/osDetect.js';
 import { rmDirOrDefer } from '../helpers/tempDir.js';
@@ -107,7 +107,7 @@ const START_COMMAND_SUITE_TIMEOUT_MS = 60_000;
 // Every other test in this file runs the CLI under FAST_TIMEOUT_MS too, and
 // vitest's 10 s default would fail a slow one after the fact — anonymously —
 // long before the 45 s cap could name it (review 3.0, R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(FAST_TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(FAST_TIMEOUT_MS) });
 
 /* ------------------------------------------------------------------ */
 /* Toolchain availability — same technique as rulePackFixture.test.ts  */
