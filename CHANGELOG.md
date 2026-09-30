@@ -113,6 +113,14 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Fixed
 
+- **A git that timed out read as "not a git repository", and gitleaks skipped the history.** Every git without an
+  exit status — not installed, but also killed at its timeout — came back as 127, and the repository check read
+  127 as "not a git repository": under load, `scan_secrets` replaced the history pass with a directory pass
+  reported as "not a git repository — scanned the directory in place", so the history went unscanned under a
+  reason that said something else. A timeout on the HEAD query read as "the repository has no commits yet" the
+  same way. Only a git that is not installed is 127 now; a killed one is 124 with its reason, and the check
+  answers "git could not read the repository (git took longer than …) — history not scanned": a failed pass,
+  named.
 - **A scanner `install_toolchain` had just installed was reported missing.** The pinned release installers put
   Syft, Trivy, gitleaks and cosign in `%USERPROFILE%\.local\bin` on Windows (`~/.local/bin` on Linux and macOS),
   which no default Windows or macOS PATH holds, so the next scan and `check_toolchain` said `not_installed`.

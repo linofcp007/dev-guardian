@@ -57,8 +57,15 @@ export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_
   const r = await execGit(cwd, args, { timeoutMs });
   const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
   if (r.failure?.code === 'refused') return { exitCode: 126, stdout: '', stderr: r.stderr, ...notApplied };
-  // No exit code: git could not be started (not on PATH) or was killed.
-  if (r.status === null) return { exitCode: 127, stdout: '', stderr: r.failure?.message ?? 'git could not be run', ...notApplied };
+  // No exit code. 127 — the shell's "command not found" — only when git is not
+  // installed; a git that was killed (a timeout, an oversized output, a failed
+  // spawn) is 124 with the reason, never "not installed": under load a
+  // `rev-parse` past its timeout used to read as "not a git repository", and
+  // gitleaks swapped the history pass for a directory pass (review of 3.0).
+  if (r.status === null) {
+    const exitCode = r.failure?.code === 'not-found' ? 127 : 124;
+    return { exitCode, stdout: '', stderr: r.failure?.message ?? 'git could not be run', ...notApplied };
+  }
   return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
 }
 
@@ -72,7 +79,11 @@ export type RepoState =
   /** Inside a work tree whose repository has no commit yet. */
   | { kind: 'no_commits'; toplevel: string }
   | { kind: 'has_commits'; toplevel: string }
-  /** git answered, but with an error other than "not a repository" (e.g. dubious ownership). */
+  /**
+   * git answered with an error other than "not a repository" (e.g. dubious
+   * ownership), or did not answer — a timeout, a refusal
+   * (`platform/gitSafety.ts`) — which is never read as a negative.
+   */
   | { kind: 'error'; message: string };
 
 export async function repoState(cwd: string): Promise<RepoState> {
@@ -83,7 +94,11 @@ export async function repoState(cwd: string): Promise<RepoState> {
   }
   const toplevel = top.stdout.trim();
   const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
-  return head.exitCode === 0 ? { kind: 'has_commits', toplevel } : { kind: 'no_commits', toplevel };
+  if (head.exitCode === 0) return { kind: 'has_commits', toplevel };
+  // `--verify --quiet` says "no such commit" by exit 1 alone; anything else
+  // (a timeout, a refusal) says nothing about the history.
+  if (head.exitCode === 1) return { kind: 'no_commits', toplevel };
+  return { kind: 'error', message: firstLine(head.stderr) || `git exited ${head.exitCode}` };
 }
 
 /**

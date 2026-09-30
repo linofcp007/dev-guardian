@@ -111,7 +111,8 @@ describe('aliases, merge keys, documents, duplicate keys', () => {
 
   it("anchored collections holding aliases — yaml's own alias counter took 49 s — are linear now", () => {
     expectLinear('alias chain', (n) => void parseYamlBounded(YAML_FAMILIES['alias-chain']?.(n) ?? '', YAML_SPEC_LIMITS), 1_000);
-  });
+    // A ratio test's own bound, as the other timing files give theirs: 3.2 s alone on Windows, past 10 s in node:22 under load.
+  }, 120_000);
 
   it('more than one document is refused before any is composed', () => {
     expect(parseYamlBounded('a: 1\n---\nb: 2\n')).toEqual({ ok: false, reason: 'invalid', detail: 'the file holds more than one YAML document' });
@@ -120,7 +121,7 @@ describe('aliases, merge keys, documents, duplicate keys', () => {
   it('a map of many keys is linear (the pairwise duplicate check was quadratic), and a later duplicate wins', () => {
     expectLinear('wide map', (n) => void parseYamlBounded(YAML_FAMILIES['wide-map']?.(n) ?? ''), 2_500);
     expect(parseYamlBounded('privileged: false\nprivileged: true\n')).toEqual({ ok: true, value: { privileged: true } });
-  });
+  }, 120_000);
 
   it('every refusal has a sentence', () => {
     for (const reason of ['too-large', 'too-complex', 'too-deep', 'too-expanded', 'invalid'] as const) {

@@ -45015,7 +45015,10 @@ async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS2) {
   const r = await execGit(cwd, args, { timeoutMs });
   const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
   if (r.failure?.code === "refused") return { exitCode: 126, stdout: "", stderr: r.stderr, ...notApplied };
-  if (r.status === null) return { exitCode: 127, stdout: "", stderr: r.failure?.message ?? "git could not be run", ...notApplied };
+  if (r.status === null) {
+    const exitCode = r.failure?.code === "not-found" ? 127 : 124;
+    return { exitCode, stdout: "", stderr: r.failure?.message ?? "git could not be run", ...notApplied };
+  }
   return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
 }
 function splitNul(text2) {
@@ -45029,7 +45032,9 @@ async function repoState(cwd) {
   }
   const toplevel = top.stdout.trim();
   const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
-  return head.exitCode === 0 ? { kind: "has_commits", toplevel } : { kind: "no_commits", toplevel };
+  if (head.exitCode === 0) return { kind: "has_commits", toplevel };
+  if (head.exitCode === 1) return { kind: "no_commits", toplevel };
+  return { kind: "error", message: firstLine3(head.stderr) || `git exited ${head.exitCode}` };
 }
 var SHALLOW_UNDETERMINED = "(undetermined)";
 var SHALLOW_QUERY_TIMEOUT_MS = 1e4;
