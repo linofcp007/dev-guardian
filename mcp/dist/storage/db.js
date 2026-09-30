@@ -14,7 +14,7 @@
  * build creates gets a random `db_id`, registered in the per-user registry
  * before it is written; an existing one is trusted only when its id is
  * registered for the very path it is opened at. Nothing else is trusted
- * automatically — a database from before 3.0.1, a copy of a registered one,
+ * automatically — a database from before 3.1.0, a copy of a registered one,
  * another user's — until the user registers it with `dev-guardian db adopt
  * --yes` ({@link registerProjectDatabase}), after seeing what it holds. It is
  * REFUSED otherwise, and the per-user fallback used instead, with a warning
@@ -508,14 +508,14 @@ function judgeProjectDatabase(projectPath, dbPath) {
 }
 /**
  * The warning for a foreign database: short, what it is, and what to do.
- * For a database from before 3.0.1 this is the upgrade path.
+ * For a database from before 3.1.0 this is the upgrade path.
  */
 function foreignReason(projectPath, dbPath, foreign) {
     const adopt = adoptCommand(projectPath);
     const yourself = 'yourself, in a terminal (an assistant must not run it for you: it decides whose data dev-guardian trusts)';
     switch (foreign.kind) {
         case 'legacy':
-            return (`This project's database '${dbPath}' was created before dev-guardian 3.0.1 and is not trusted ` +
+            return (`This project's database '${dbPath}' was created before dev-guardian 3.1.0 and is not trusted ` +
                 `automatically. If it is yours, run \`${adopt} --yes\` once, ${yourself}; without --yes it shows what ` +
                 'the database holds first');
         case 'unregistered-id':
@@ -616,7 +616,7 @@ export function inspectProjectDatabase(projectPath) {
 function shortReason(foreign) {
     switch (foreign.kind) {
         case 'legacy':
-            return 'created before dev-guardian 3.0.1 (it carries no id): not used until you register it';
+            return 'created before dev-guardian 3.1.0 (it carries no id): not used until you register it';
         case 'unregistered-id':
             return 'it carries an id this user never registered (another user or another machine): not used';
         case 'registered-elsewhere':

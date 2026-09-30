@@ -549,14 +549,14 @@ describe('provenance: only a database registered for its own path is trusted', (
   // directory's creation time (Windows' own tar.exe with its defaults; 7-Zip
   // for an archive built with -mtc=on), and a dense series of future-dated
   // scans always has one near "now" — it was adopted, open 7 -> 0. So a
-  // database from before 3.0.1 is never trusted automatically; the warning
+  // database from before 3.1.0 is never trusted automatically; the warning
   // is the upgrade path, and `db adopt --yes` the one way in.
-  it('a database from before 3.0.1 is never adopted automatically: the warning says what to run, once', () => {
+  it('a database from before 3.1.0 is never adopted automatically: the warning says what to run, once', () => {
     const dir = project();
     git(dir, 'init', '-q');
     const primary = legacyDatabase(dir, scanOf(canonicalPath(dir)));
     const before = sha256(primary);
-    const warning = expectForeign(dir, /was created before dev-guardian 3\.0\.1 and is not trusted automatically/);
+    const warning = expectForeign(dir, /was created before dev-guardian 3\.1\.0 and is not trusted automatically/);
     expect(warning).toContain(primary);
     expect(warning).toMatch(/If it is yours, run `node ".+" db adopt --project ".+" --yes` once, yourself, in a terminal/);
     expect(warning).toMatch(/an assistant must not run it for you/);
@@ -567,7 +567,7 @@ describe('provenance: only a database registered for its own path is trusted', (
   it('every shape rounds 3 to 5 adopted stays foreign: no git, a linked worktree, and the future-dated series', () => {
     const plain = project();
     legacyDatabase(plain, scanOf(canonicalPath(plain)));
-    expectForeign(plain, /created before dev-guardian 3\.0\.1/);
+    expectForeign(plain, /created before dev-guardian 3\.1\.0/);
 
     const base = makeTempDir('guardian-worktree-');
     const main = join(base, 'main');
@@ -580,7 +580,7 @@ describe('provenance: only a database registered for its own path is trusted', (
     git(main, 'worktree', 'add', '-q', wt);
     undo.push(() => rmDir(dirname(resolveFallbackDbPath(wt))));
     legacyDatabase(wt, scanOf(canonicalPath(wt)));
-    expectForeign(wt, /created before dev-guardian 3\.0\.1/);
+    expectForeign(wt, /created before dev-guardian 3\.1\.0/);
 
     // The reviewer's series: every 9 minutes from now - 2 h to now + 2 days.
     const series = project();
@@ -592,7 +592,7 @@ describe('provenance: only a database registered for its own path is trusted', (
     }
     // One transaction: 334 autocommitted inserts took 70 s on Docker's overlay file system.
     legacyDatabase(series, `BEGIN; ${rows.join('\n')} COMMIT;`);
-    expectForeign(series, /created before dev-guardian 3\.0\.1/);
+    expectForeign(series, /created before dev-guardian 3\.1\.0/);
   });
 
   it('once the user registers it (`db adopt --yes`), it is trusted — and stays so', () => {

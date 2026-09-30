@@ -8,6 +8,16 @@ version bump.
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-09-30
+
+A full review of 3.0.0. Its theme: **the repository being scanned is untrusted input** — nothing in it
+may hang or crash the server, run a command, choose where a credential goes, or make a check read as
+clean when it did not run. Repository reads are bounded (FIFOs, device links, network links, memory
+bombs); a repository's own git configuration runs nothing; binaries resolve on PATH, never in the
+project; `create_fix_pr` refuses installs whose source the repository chooses; a project database is
+used only once its owner registers it; and a CI gate on a pull request reads its baseline and rules
+from the base commit.
+
 ### Upgrading from 3.0.0 — your project database needs one command
 
 A project's `.guardian/guardian.db` is now used only when it is registered as yours (see
@@ -29,7 +39,7 @@ them again. Scans made on the fallback meanwhile are not merged back.
 ### Added
 
 - `dev-guardian db adopt [--project <path>] [--yes [--rehome]]` (CLI only, never an MCP tool): the
-  one way an existing project database comes to be trusted — one from before 3.0.1, a copy of a
+  one way an existing project database comes to be trusted — one from before 3.1.0, a copy of a
   registered one, another machine's. It prints what the database holds, flagging first what to
   weigh — suppressions with no project (they apply to every project) and scans dated in the
   future — then its projects with scan counts and dates, the suppressions and baselines, and every
@@ -850,7 +860,7 @@ them again. Scans made on the fallback meanwhile are not merged back.
   defaults, 7-Zip does for an archive built with `-mtc=on`), and a dense series of future-dated
   scans always has one within any window around "now" — it was adopted, open 7 → 0. Nothing in a
   file tells its owner from whoever wrote it, so the user decides, with `db adopt`. A database
-  that is not trusted — from before 3.0.1, a copy, another user's, one git tracks (under a
+  that is not trusted — from before 3.1.0, a copy, another user's, one git tracks (under a
   case-insensitive pathspec: `.Guardian/guardian.db` committed is served as
   `.guardian/guardian.db` on Windows and macOS) or a submodule brings, one reached through a link
   or junction — is foreign: the per-user fallback is used, the project file is left untouched (it

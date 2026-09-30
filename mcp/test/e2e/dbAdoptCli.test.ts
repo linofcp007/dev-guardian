@@ -1,6 +1,6 @@
 /**
  * `dev-guardian db adopt` — since round 6, the ONLY way an existing database
- * comes to be trusted: a database from before 3.0.1, a copy of a registered
+ * comes to be trusted: a database from before 3.1.0, a copy of a registered
  * one, another machine's. Nothing is adopted automatically (round 6 of the
  * 3.0 review defeated every rule that tried), so this is the upgrade path
  * from 3.0.0 as well.
@@ -134,7 +134,7 @@ describe('dev-guardian db adopt', () => {
     const before = openDatabase({ projectPath: dir });
     try {
       expect(before.path).toBe(resolveFallbackDbPath(dir));
-      expect(before.warning).toMatch(/created before dev-guardian 3\.0\.1 and is not trusted automatically/);
+      expect(before.warning).toMatch(/created before dev-guardian 3\.1\.0 and is not trusted automatically/);
       expect(before.warning).toContain(`db adopt --project "${dir}" --yes`);
     } finally {
       before.db.close();
@@ -147,7 +147,7 @@ describe('dev-guardian db adopt', () => {
     // What to weigh comes first, flagged.
     expect(shown.stdout.split('\n')[0]).toMatch(/^!! 2 suppression\(s\) have no project: they apply to EVERY project/);
     expect(shown.stdout).toContain(`Database      ${primary}`);
-    expect(shown.stdout).toMatch(/Status\s+not used: created before dev-guardian 3\.0\.1/);
+    expect(shown.stdout).toMatch(/Status\s+not used: created before dev-guardian 3\.1\.0/);
     expect(shown.stdout).toMatch(/Scans\s+1 \(1 completed\)/);
     expect(shown.stdout).toMatch(/Suppressions\s+3, of which 2 have no project and apply to EVERY project/);
     expect(shown.stdout).toMatch(/Not registered\. .*--yes yourself/);

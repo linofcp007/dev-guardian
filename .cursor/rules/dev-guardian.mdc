@@ -210,7 +210,7 @@ plugin's own trend command still asks for history nothing here computes).
 
 If `health_status` returns a `storage_warning`, or a scan's `warnings` say the
 project's `.guardian/guardian.db` is not used, history is going to a per-user
-fallback: a database from before 3.0.1, or a copy, is never trusted automatically.
+fallback: a database from before 3.1.0, or a copy, is never trusted automatically.
 Tell the user, and give them the command the warning names to run **themselves, in a
 terminal**, if the database is theirs — `node cli/dev-guardian.mjs db adopt --project <project>`
 shows what it holds; the same with `--yes` registers it. **Never run it yourself**,

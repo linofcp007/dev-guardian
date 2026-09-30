@@ -73,7 +73,7 @@
  *                           holds (projects, scans, dates, suppressions,
  *                           paths) and, with --yes, register it as this
  *                           user's database — the only way an existing one
- *                           (from before 3.0.1, a copy) comes to be trusted.
+ *                           (from before 3.1.0, a copy) comes to be trusted.
  *                           CLI only, never an MCP tool.
  *                             --project <path>        default: cwd
  *                             --yes                    register it
@@ -2533,7 +2533,7 @@ async function loadDashboardModules() {
 /**
  * The storage layer's `existingOnly` open makes every decision the server
  * makes — a project database that is not this user's own (no id registered
- * for its path: one from before 3.0.1 until `db adopt --yes`), one git
+ * for its path: one from before 3.1.0 until `db adopt --yes`), one git
  * tracks or one holding schema objects the migrations never create is
  * refused; the per-user fallback (no longer the shared temp directory) must
  * belong to this user — and never creates a database: an empty in-memory one
@@ -2822,7 +2822,7 @@ export function fatalOutcome(e) {
 // A project's `.guardian/guardian.db` is used only when it is this user's own
 // (mcp/src/storage/dbProvenance.ts): created here, or registered here by the
 // user. Nothing else is trusted automatically — not a database from before
-// 3.0.1, not a copy of a registered one — because nothing in a file tells its
+// 3.1.0, not a copy of a registered one — because nothing in a file tells its
 // owner from whoever wrote it (round 6 of the 3.0 review defeated every rule
 // that tried). `db adopt` lets the PERSON decide: it prints what the database
 // holds — what to weigh first (suppressions with no project, which apply to

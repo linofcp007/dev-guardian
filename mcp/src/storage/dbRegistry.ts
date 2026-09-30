@@ -6,7 +6,7 @@
  * `schema_meta`, registered here first; `dev-guardian db adopt --yes`
  * registers an existing one the user vouches for. On open, a project
  * database whose `db_id` is registered for its path is this user's own
- * (`db.ts#openDatabase`); one with no id (from before 3.0.1), or an id this
+ * (`db.ts#openDatabase`); one with no id (from before 3.1.0), or an id this
  * user never registered, came from somewhere else — a clone, an archive, a
  * submodule — or has not been registered yet, and is FOREIGN.
  *

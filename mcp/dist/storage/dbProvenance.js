@@ -10,7 +10,7 @@
  * dev-guardian created, or one this user registered by hand: it carries a
  * random `db_id` registered in the per-user registry (`dbRegistry.ts`) for
  * the very path it is opened at. Anything else is FOREIGN — a database from
- * before 3.0.1 (no id), a clone, an archive of a repository, a copy of a
+ * before 3.1.0 (no id), a clone, an archive of a repository, a copy of a
  * registered one, a submodule, a link to somewhere else — and goes to the
  * per-user fallback, the project file left as it is.
  *

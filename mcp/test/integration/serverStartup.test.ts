@@ -168,7 +168,7 @@ describe('server startup against a 3.0 development database', () => {
     await server.waitFor(/listening on stdio/);
     const err = server.stderr();
     expect(err).not.toContain(`db opened: ${dbPath}`);
-    expect(err).toMatch(/db warning: This project's database .* was created before dev-guardian 3\.0\.1/);
+    expect(err).toMatch(/db warning: This project's database .* was created before dev-guardian 3\.1\.0/);
     expect(err).toMatch(/db adopt --project ".+" --yes` once/);
   }, 60_000);
 

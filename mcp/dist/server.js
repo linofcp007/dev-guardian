@@ -41691,7 +41691,7 @@ function foreignReason(projectPath, dbPath, foreign) {
   const yourself = "yourself, in a terminal (an assistant must not run it for you: it decides whose data dev-guardian trusts)";
   switch (foreign.kind) {
     case "legacy":
-      return `This project's database '${dbPath}' was created before dev-guardian 3.0.1 and is not trusted automatically. If it is yours, run \`${adopt} --yes\` once, ${yourself}; without --yes it shows what the database holds first`;
+      return `This project's database '${dbPath}' was created before dev-guardian 3.1.0 and is not trusted automatically. If it is yours, run \`${adopt} --yes\` once, ${yourself}; without --yes it shows what the database holds first`;
     case "unregistered-id":
       return `'${dbPath}' carries a dev-guardian id this user never registered \u2014 another user's or another machine's database \u2014 and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ${yourself}; otherwise delete it`;
     case "registered-elsewhere":
@@ -67644,7 +67644,7 @@ var SERVER_VERSION = resolveVersion();
 var tool24 = {
   name: "health_status",
   title: "Server health",
-  description: "Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and one project's last scan and scan count (project_path, default: the server's working directory). Read-only. `storage_warning` (null when fine): the project's .guardian/guardian.db is not being used \u2014 one from before 3.0.1 or a copy is not trusted until its owner registers it, and history goes to a per-user fallback meanwhile. Tell the user, with the `db adopt` command the warning names, to run it themselves in a terminal; never run it yourself \u2014 it decides whose data dev-guardian trusts. `suppressions` {active, this_project, all_projects}: the active suppressions that apply here; all_projects ones have no project and hide findings in every project. `storage.future_dated_scans_ignored` and `future_dated_note`: scans dated in the future, which every count, list and \"latest\" ignores.",
+  description: "Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and one project's last scan and scan count (project_path, default: the server's working directory). Read-only. `storage_warning` (null when fine): the project's .guardian/guardian.db is not being used \u2014 one from before 3.1.0 or a copy is not trusted until its owner registers it, and history goes to a per-user fallback meanwhile. Tell the user, with the `db adopt` command the warning names, to run it themselves in a terminal; never run it yourself \u2014 it decides whose data dev-guardian trusts. `suppressions` {active, this_project, all_projects}: the active suppressions that apply here; all_projects ones have no project and hide findings in every project. `storage.future_dated_scans_ignored` and `future_dated_note`: scans dated in the future, which every count, list and \"latest\" ignores.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler21(input, ctx)
 };

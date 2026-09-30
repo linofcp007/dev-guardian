@@ -14,7 +14,7 @@
  * build creates gets a random `db_id`, registered in the per-user registry
  * before it is written; an existing one is trusted only when its id is
  * registered for the very path it is opened at. Nothing else is trusted
- * automatically — a database from before 3.0.1, a copy of a registered one,
+ * automatically — a database from before 3.1.0, a copy of a registered one,
  * another user's — until the user registers it with `dev-guardian db adopt
  * --yes` ({@link registerProjectDatabase}), after seeing what it holds. It is
  * REFUSED otherwise, and the per-user fallback used instead, with a warning
@@ -430,7 +430,7 @@ export interface OpenedDatabase {
   path: string;
   /**
    * Set when the project's database was not used: it is foreign (not this
-   * user's — a database from before 3.0.1 among them), not writable,
+   * user's — a database from before 3.1.0 among them), not writable,
    * unreadable, or holds objects the migrations never create. Says why,
    * where the history goes instead, and how to get the project's own back;
    * tools surface it (`health_status.storage_warning`, every scan's
@@ -448,7 +448,7 @@ export interface OpenedDatabase {
 
 /** Why `.guardian/guardian.db` is not this user's ({@link foreignReason}). */
 type Foreign =
-  /** Before 3.0.1: no id. The upgrade path — `db adopt --yes`. */
+  /** Before 3.1.0: no id. The upgrade path — `db adopt --yes`. */
   | { kind: 'legacy' }
   /** An id this user never registered: another user's or another machine's. */
   | { kind: 'unregistered-id' }
@@ -642,7 +642,7 @@ function judgeProjectDatabase(projectPath: string, dbPath: string): Verdict {
 
 /**
  * The warning for a foreign database: short, what it is, and what to do.
- * For a database from before 3.0.1 this is the upgrade path.
+ * For a database from before 3.1.0 this is the upgrade path.
  */
 function foreignReason(projectPath: string, dbPath: string, foreign: Foreign): string {
   const adopt = adoptCommand(projectPath);
@@ -650,7 +650,7 @@ function foreignReason(projectPath: string, dbPath: string, foreign: Foreign): s
   switch (foreign.kind) {
     case 'legacy':
       return (
-        `This project's database '${dbPath}' was created before dev-guardian 3.0.1 and is not trusted ` +
+        `This project's database '${dbPath}' was created before dev-guardian 3.1.0 and is not trusted ` +
         `automatically. If it is yours, run \`${adopt} --yes\` once, ${yourself}; without --yes it shows what ` +
         'the database holds first'
       );
@@ -798,7 +798,7 @@ export function inspectProjectDatabase(projectPath: string): ProjectDatabaseRepo
 function shortReason(foreign: Foreign): string {
   switch (foreign.kind) {
     case 'legacy':
-      return 'created before dev-guardian 3.0.1 (it carries no id): not used until you register it';
+      return 'created before dev-guardian 3.1.0 (it carries no id): not used until you register it';
     case 'unregistered-id':
       return 'it carries an id this user never registered (another user or another machine): not used';
     case 'registered-elsewhere':

@@ -682,13 +682,13 @@ async function handleSessionStart(root, cfg) {
       /* ignore */
     }
     lines.push(`Project is guardian-initialized.${scanNote} Use /guardian-status for the dashboard, /guardian-scan before pushing.`);
-    // Since 3.0.1 a project database is used only when it is registered as
+    // Since 3.1.0 a project database is used only when it is registered as
     // the user's; one from 3.0.0 is not, until the user adopts it.
     if (reachable && databaseRegistration(dbPath) === 'unregistered') {
       const cli = join(PLUGIN_ROOT, 'cli', 'dev-guardian.mjs');
       lines.push(
         '⚠️ dev-guardian is not using .guardian/guardian.db: it is not registered as the user\'s (a database from ' +
-          `before 3.0.1, or one that came with the files). The user can review it with \`node "${cli}" db adopt ` +
+          `before 3.1.0, or one that came with the files). The user can review it with \`node "${cli}" db adopt ` +
           `--project "${root}"\` in a terminal and register it with --yes if it is theirs — never run that for them.`,
       );
     }
