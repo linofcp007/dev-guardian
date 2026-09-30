@@ -39,7 +39,7 @@ import {
 import { inspectProjectSemgrepConfigs } from '../../../src/platform/projectSemgrepConfig.js';
 import { checkCompose } from '../../../src/runners/composeChecks.js';
 import { ruleIdsInFile } from '../../../src/runners/semgrepRuleIds.js';
-import { expectLinear, PERF_STRICT } from '../../helpers/timing.js';
+import { bestOf, expectLinear, PERF_STRICT } from '../../helpers/timing.js';
 import { mulberry32, randomYaml, YAML_FAMILIES } from '../../helpers/yamlFuzz.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -129,6 +129,15 @@ describe('aliases, merge keys, documents, duplicate keys', () => {
   });
 });
 
+/**
+ * The strict bound. Standalone, the slowest admitted input took 1.2 s
+ * (`node:22`, 768 MB); inside a vitest worker in the same container the
+ * slowest shapes (one error per line, deep-and-wide nesting) took up to
+ * 5.4 s, even after a warm-up and a full collection. 10 s still sits far
+ * below what the gates exist for: the quadratic paths took more than 60 s.
+ */
+const STRICT_MS = 10_000;
+
 /** The largest n the character gates (bytes, indicators) admit for a family. */
 function largestPreAdmitted(gen: (n: number) => string, limits: YamlLimits): number {
   if (yamlTooComplex(gen(1), limits)) return 0;
@@ -152,17 +161,16 @@ describe('fuzz: every family at the largest size the character gates admit', () 
     ['configuration', YAML_CONFIG_LIMITS],
     ['API spec', YAML_SPEC_LIMITS],
   ] as const) {
-    it.each(Object.keys(YAML_FAMILIES))(`%s (${name} bounds): an answer, a value never circular${PERF_STRICT ? ', under 3 s' : ''}`, (family) => {
+    it.each(Object.keys(YAML_FAMILIES))(`%s (${name} bounds): an answer, a value never circular${PERF_STRICT ? ', under 10 s' : ''}`, (family) => {
       const gen = YAML_FAMILIES[family];
       if (gen === undefined) throw new Error(family);
       const n = largestPreAdmitted(gen, limits);
       const text = gen(Math.max(n, 1));
-      const t0 = performance.now();
       const r = parseYamlBounded(text, limits);
-      const ms = performance.now() - t0;
       if (r.ok) expect(() => JSON.stringify(r.value)).not.toThrow();
       else expect(['too-large', 'too-complex', 'too-deep', 'too-expanded', 'invalid']).toContain(r.reason);
-      if (PERF_STRICT) expect(ms).toBeLessThan(3_000);
+      // Timed after a warm-up and a full collection: a vitest worker carries every earlier test's heap.
+      if (PERF_STRICT) expect(bestOf(1, () => void parseYamlBounded(text, limits))).toBeLessThan(STRICT_MS);
     }, 60_000);
   }
 });
@@ -173,16 +181,14 @@ describe('fuzz: a seeded random corpus of block, flow, anchor, alias, merge, tag
     for (let seed = 1; seed <= 60; seed++) {
       const rand = mulberry32(seed);
       const text = randomYaml(rand, 50 + Math.floor(rand() * 2_500), seed % 3 === 0);
-      const t0 = performance.now();
       const r = parseYamlBounded(text);
-      const ms = performance.now() - t0;
       const key = r.ok ? 'ok' : r.reason;
       outcomes[key] = (outcomes[key] ?? 0) + 1;
       if (r.ok) {
         expect(() => JSON.stringify(r.value)).not.toThrow();
         expect(yamlGate(text)).toBeNull();
       }
-      if (PERF_STRICT) expect(ms, `seed ${seed}`).toBeLessThan(3_000);
+      if (PERF_STRICT) expect(bestOf(1, () => void parseYamlBounded(text)), `seed ${seed}`).toBeLessThan(STRICT_MS);
     }
     // The corpus reaches every outcome that matters, so a regression in any gate shows.
     expect(Object.keys(outcomes).sort()).toEqual(expect.arrayContaining(['invalid', 'ok', 'too-expanded']));
