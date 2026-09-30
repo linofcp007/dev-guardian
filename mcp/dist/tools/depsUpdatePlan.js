@@ -110,14 +110,14 @@
  *   5. Order the result by `prefer` (default: security, then patch, then
  *      minor, then major).
  */
-import { existsSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { execa } from 'execa';
-import { parse as parseYaml } from 'yaml';
+import { parseYamlBounded } from '../platform/boundedParse.js';
 import { z } from 'zod';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { commandFor } from '../platform/binaryPath.js';
 import { matchesAny } from '../platform/glob.js';
-import { listProjectDir, PROJECT_LOCKFILE_MAX_BYTES, projectPathKind, readProjectJson, readProjectTextOrUndefined, } from '../platform/projectFs.js';
+import { listProjectDir, presentInProject, PROJECT_LOCKFILE_MAX_BYTES, projectEntryKind, projectPathKind, readProjectJson, readProjectTextOrUndefined, } from '../platform/projectFs.js';
 import { compareSemver } from '../platform/semverCompare.js';
 import { classifyRestoreFailure, findDotnetTargets, lockFileCandidates, planDotnetRestore, projectsForTarget, readPackageReferences, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { compareVersions, compareVersionsLoose, isCleanVersion, isLooseVersion, minCleanVersionAbove, minCleanVersionAboveLoose, } from '../deps/versionCompare.js';
@@ -126,6 +126,15 @@ import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { registerToolModule } from './index.js';
+/**
+ * A package manager by the absolute path it resolves to on the PATH its
+ * child gets — `cwd` is the project, and a planted `npm.cmd` there must not
+ * answer (`platform/binaryPath.ts`).
+ */
+function pmCommand(name) {
+    const opts = packageManagerEnvOptions();
+    return commandFor(name, 'env' in opts ? opts.env : process.env);
+}
 const inputSchema = {
     project_path: ProjectPath,
     prefer: z
@@ -208,19 +217,19 @@ async function handler(input, ctx, callMeta) {
 // ---------------------------------------------------------------------- detection
 function detectEcosystems(projectPath) {
     const out = [];
-    if (existsSync(join(projectPath, 'package.json')))
+    if (presentInProject(projectPath, 'package.json'))
         out.push('npm');
-    if (existsSync(join(projectPath, 'pyproject.toml')) ||
-        existsSync(join(projectPath, 'requirements.txt')) ||
-        existsSync(join(projectPath, 'setup.py')))
+    if (presentInProject(projectPath, 'pyproject.toml') ||
+        presentInProject(projectPath, 'requirements.txt') ||
+        presentInProject(projectPath, 'setup.py'))
         out.push('pip');
-    if (existsSync(join(projectPath, 'composer.json')))
+    if (presentInProject(projectPath, 'composer.json'))
         out.push('composer');
-    if (existsSync(join(projectPath, 'Cargo.toml')))
+    if (presentInProject(projectPath, 'Cargo.toml'))
         out.push('cargo');
-    if (existsSync(join(projectPath, 'go.mod')))
+    if (presentInProject(projectPath, 'go.mod'))
         out.push('go');
-    if (existsSync(join(projectPath, 'Gemfile')))
+    if (presentInProject(projectPath, 'Gemfile'))
         out.push('rubygems');
     // The same target discovery `deps_audit` uses (a root solution, else every
     // project file) — a repo whose only .csproj lives under src/ has a .NET
@@ -234,10 +243,10 @@ function detectUnsupportedEcosystems(projectPath) {
     // `gradle dependencyUpdates` output is non-trivial — listed as unsupported
     // pending demand.
     const out = [];
-    if (existsSync(join(projectPath, 'pom.xml')))
+    if (presentInProject(projectPath, 'pom.xml'))
         out.push('maven');
-    if (existsSync(join(projectPath, 'build.gradle')) ||
-        existsSync(join(projectPath, 'build.gradle.kts')))
+    if (presentInProject(projectPath, 'build.gradle') ||
+        presentInProject(projectPath, 'build.gradle.kts'))
         out.push('gradle');
     return out;
 }
@@ -607,7 +616,7 @@ async function runNpmOutdated(projectPath, cves) {
     const manager = detectNpmPackageManager(projectPath);
     if (manager.name !== 'npm')
         return planForNonNpmManager(projectPath, cves, manager);
-    const result = await execa('npm', ['outdated', '--json'], {
+    const result = await execa(pmCommand('npm'), ['outdated', '--json'], {
         ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
@@ -843,7 +852,8 @@ function toPosix(p) {
     return p.split(sep).join('/');
 }
 function detectNpmPackageManager(projectPath) {
-    const has = (dir, file) => existsSync(join(dir, file));
+    // Each directory is the project or a workspace root above it, up to the git root: the repository's.
+    const has = (dir, file) => presentInProject(dir, file);
     const at = (dir, file) => {
         const rel = toPosix(relative(projectPath, join(dir, file)));
         return dir === projectPath ? file : `${rel}, the workspace root`;
@@ -889,7 +899,7 @@ function detectNpmPackageManager(projectPath) {
             return { name: m[1], evidence: 'package.json "packageManager"', root: projectPath };
         }
     }
-    if (existsSync(join(projectPath, 'node_modules', '.pnpm'))) {
+    if (presentInProject(projectPath, join('node_modules', '.pnpm'))) {
         return { name: 'pnpm', evidence: 'node_modules/.pnpm', root: projectPath };
     }
     return { name: 'npm', evidence: 'default', root: projectPath };
@@ -898,7 +908,8 @@ function detectNpmPackageManager(projectPath) {
  *  a worktree's `.git` file), or null when there is none. */
 function gitRootAbove(start) {
     for (let dir = start;;) {
-        if (existsSync(join(dir, '.git')))
+        // lstat only: `.git` is never followed to find out.
+        if (projectEntryKind(join(dir, '.git')) !== 'absent')
             return dir;
         const parent = dirname(dir);
         if (parent === dir)
@@ -921,7 +932,9 @@ function workspaceIncludes(root, projectPath) {
     // are read contained in it (`platform/projectFs.ts`).
     try {
         const text = readProjectTextOrUndefined(root, 'pnpm-workspace.yaml');
-        const doc = text === undefined ? undefined : parseYaml(text);
+        // Bounded by structure too (platform/boundedParse.ts); too dense reads as no declaration.
+        const parsed = text === undefined ? undefined : parseYamlBounded(text);
+        const doc = parsed?.ok === true ? parsed.value : undefined;
         const packages = typeof doc === 'object' && doc !== null ? doc['packages'] : undefined;
         if (Array.isArray(packages))
             patterns.push(...packages.filter((p) => typeof p === 'string'));
@@ -1060,7 +1073,7 @@ async function pnpmVersionOf(root) {
         }
     }
     try {
-        const r = await execa('pnpm', ['--version'], {
+        const r = await execa(pmCommand('pnpm'), ['--version'], {
             ...packageManagerEnvOptions(),
             cwd: root,
             reject: false,
@@ -1686,7 +1699,7 @@ async function runComposerOutdated(projectPath, cves) {
     // step vanished; `--locked` lists the lock's packages with their latest.
     // It is also the right source: the lock is what the fix edits and what CI
     // installs from.
-    const result = await execa('composer', ['outdated', '--locked', '--format=json'], {
+    const result = await execa(pmCommand('composer'), ['outdated', '--locked', '--format=json'], {
         ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
@@ -1739,7 +1752,7 @@ async function runComposerOutdated(projectPath, cves) {
 }
 async function runCargoOutdated(projectPath, cves) {
     // Requires `cargo install cargo-outdated`.
-    const result = await execa('cargo', ['outdated', '--format', 'json'], {
+    const result = await execa(pmCommand('cargo'), ['outdated', '--format', 'json'], {
         ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
@@ -1780,7 +1793,7 @@ async function runCargoOutdated(projectPath, cves) {
 }
 async function runGoOutdated(projectPath, cves) {
     // `go list -m -u -json all` emits one JSON object per line.
-    const result = await execa('go', ['list', '-m', '-u', '-json', 'all'], {
+    const result = await execa(pmCommand('go'), ['list', '-m', '-u', '-json', 'all'], {
         ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
@@ -1824,7 +1837,7 @@ async function runGoOutdated(projectPath, cves) {
 async function runBundlerOutdated(projectPath, cves) {
     // `bundle outdated --parseable` emits machine-friendly lines:
     // gem-name (newest 1.2.3, installed 1.2.0)
-    const result = await execa('bundle', ['outdated', '--parseable'], {
+    const result = await execa(pmCommand('bundle'), ['outdated', '--parseable'], {
         ...packageManagerEnvOptions(),
         cwd: projectPath,
         reject: false,
@@ -1891,7 +1904,7 @@ async function runDotnetOutdated(projectPath, cves) {
             failures.push({ ecosystem: 'dotnet', target: rel, code: plan.blocked.code, reason: plan.blocked.reason });
             continue;
         }
-        const restore = await execa('dotnet', plan.args, {
+        const restore = await execa(pmCommand('dotnet'), plan.args, {
             ...packageManagerEnvOptions(),
             cwd: projectPath,
             reject: false,
@@ -1916,7 +1929,7 @@ async function runDotnetOutdated(projectPath, cves) {
             failures.push({ ecosystem: 'dotnet', target: rel, code: failure.code, reason: failure.reason });
             continue;
         }
-        const r = await execa('dotnet', ['list', target, 'package', '--outdated', '--format', 'json', '--no-restore'], {
+        const r = await execa(pmCommand('dotnet'), ['list', target, 'package', '--outdated', '--format', 'json', '--no-restore'], {
             ...packageManagerEnvOptions(),
             cwd: projectPath,
             reject: false,
@@ -1929,7 +1942,7 @@ async function runDotnetOutdated(projectPath, cves) {
             steps.push(...parseDotnetJson(listed, cves));
             continue;
         }
-        const fallback = await execa('dotnet', ['list', target, 'package', '--outdated', '--no-restore'], {
+        const fallback = await execa(pmCommand('dotnet'), ['list', target, 'package', '--outdated', '--no-restore'], {
             ...packageManagerEnvOptions(),
             cwd: projectPath,
             reject: false,

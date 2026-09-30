@@ -19,15 +19,16 @@
  * belongs to stays a gap, named.
  */
 
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { dirname, join, relative, sep } from 'node:path';
+import { parseYamlBounded } from '../../platform/boundedParse.js';
 import {
   listProjectDirOrNull,
+  presentInProject,
   PROJECT_FILE_MAX_BYTES,
-  PROJECT_LOCKFILE_MAX_BYTES,
-  readProjectText,
+  directoryLinkOut,
+  ReadBudget,
 } from '../../platform/projectFs.js';
+import { textLines } from '../../platform/textLines.js';
 import type { Category, Finding, Severity } from '../../types.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from '../projectFiles.js';
 import {
@@ -299,7 +300,7 @@ interface EcosystemManifest {
   /** True when the manifest at this path (inside the project `root`)
    *  declares nothing Trivy could report on, so its missing Result is not a
    *  gap. Absent: always a gap. */
-  declaresNothing?: (root: string, path: string) => boolean;
+  declaresNothing?: (r: CoverageReader, path: string) => boolean;
   /**
    * True when the manifest at this path declares only what Trivy skips by
    * default (npm's devDependencies). With a lock file Trivy reads beside it
@@ -307,7 +308,7 @@ interface EcosystemManifest {
    * Result is still a gap, but not for want of a lock file: the gap says so
    * (`ManifestCoverageGap.dev_only`), and so does the advice.
    */
-  declaresOnlyDev?: (root: string, path: string) => boolean;
+  declaresOnlyDev?: (r: CoverageReader, path: string) => boolean;
   /** How to give Trivy something to read: the lock file to generate, and how. */
   fix: string;
 }
@@ -441,21 +442,74 @@ function isEmptyField(v: unknown): boolean {
   return typeof v === 'object' && v !== null && Object.keys(v).length === 0;
 }
 
-/** A project file's text through `platform/projectFs.ts`, or null when it is absent or was refused. */
-function readText(root: string, path: string, maxBytes: number = PROJECT_FILE_MAX_BYTES): string | null {
-  const r = readProjectText(root, path, maxBytes);
-  return r.status === 'ok' ? r.text : null;
+// ---------------------------------------------------------------- bounded reads
+//
+// Review of 3.0, W2E: a cap on bytes READ is not a bound on memory. A 30 MiB
+// `yarn.lock` of newlines, under the 64 MiB lock-file cap, became a
+// 31-million-string array in `.split(/\r?\n/)` and hit the heap limit; a
+// 30 MiB `package-lock.json` of `[{},{},…]` took `JSON.parse` past 768 MB (60
+// MiB: 1.35 GB of heap and a 20 s synchronous block). What coverage needs
+// from those files is tiny — does the lock lock anything, does the manifest
+// declare anything, which members a workspace names — so:
+//
+//   - text is scanned line by line (`platform/textLines.ts`), never split;
+//   - JSON and YAML are parsed only under small caps of their own: a lock
+//     that locks nothing is a few hundred bytes, a manifest that declares
+//     nothing or a workspace declaration a few KB. Above the cap the file is
+//     not parsed, and the answer is the conservative one — it "may declare
+//     something", so the manifest stays a named gap;
+//   - one {@link ReadBudget} covers the whole assessment, and a workspace
+//     declaration is read once per directory, not once per member;
+//   - a workspace pattern is compiled only when short and simple — a
+//     repository's `**a**a**…` would otherwise backtrack for ever on a
+//     member's path.
+
+/** `package.json` is parsed up to this size; a real one is a few KB. */
+const MANIFEST_JSON_PARSE_MAX = 1024 * 1024;
+/** A lock file is parsed only to learn it locks nothing — such a lock is a few hundred bytes. */
+const LOCK_PARSE_MAX = 256 * 1024;
+/** `yarn.lock` is scanned only to learn it holds nothing but its `#` header. */
+const YARN_LOCK_SCAN_MAX = 64 * 1024;
+/** A workspace declaration in YAML (`pnpm-workspace.yaml`). */
+const WORKSPACE_YAML_MAX = 256 * 1024;
+/** A TOML manifest read for a workspace table or a dependency key, line by line. */
+const TOML_SCAN_MAX = 1024 * 1024;
+/** What the whole assessment may read. */
+export const COVERAGE_BUDGET_BYTES = 64 * 1024 * 1024;
+export const COVERAGE_BUDGET_FILES = 5_000;
+/** Workspace patterns considered per declaration, their length, and their wildcards. */
+const MAX_WORKSPACE_PATTERNS = 1_000;
+const MAX_WORKSPACE_PATTERN_LENGTH = 256;
+const MAX_WORKSPACE_PATTERN_STARS = 6;
+
+/** The project, the assessment's read budget, and what it has already learned. */
+interface CoverageReader {
+  root: string;
+  budget: ReadBudget;
+  /** `<dir>\0<ecosystem>` → its workspace declaration (null: none, or none readable). */
+  workspaces: Map<string, WorkspaceDecl | null>;
 }
 
-/** Parsed JSON, BOM tolerated, or `undefined` when the file is absent, refused or does not parse. */
-function readJsonFile(root: string, path: string, maxBytes: number = PROJECT_FILE_MAX_BYTES): unknown {
-  const text = readText(root, path, maxBytes);
+/** A project file's text within the budget and `maxBytes`, or null when it is absent or was refused. */
+function readText(r: CoverageReader, path: string, maxBytes: number): string | null {
+  const read = r.budget.readText(r.root, path, maxBytes);
+  return read.status === 'ok' ? read.text : null;
+}
+
+/** Parsed JSON under `maxBytes`, or `undefined`: absent, refused, too large to parse, or not JSON. */
+function readJsonFile(r: CoverageReader, path: string, maxBytes: number): unknown {
+  const text = readText(r, path, maxBytes);
   if (text === null) return undefined;
   try {
     return JSON.parse(text) as unknown;
   } catch {
     return undefined;
   }
+}
+
+/** Anything at `path` — a dangling link, a FIFO included — judged without following a link. */
+function present(r: CoverageReader, path: string): boolean {
+  return presentInProject(r.root, path);
 }
 
 /** Root npm lock files this code reads: they lock nothing when every `packages` key is the root (`''`) and v1's `dependencies` is empty. */
@@ -465,16 +519,16 @@ const NPM_UNREAD_LOCKFILES = ['pnpm-lock.yaml', 'bun.lock', 'bun.lockb'] as cons
 
 /**
  * Whether every npm lock file at the root of `dir` is absent or locks
- * nothing. A lock file that does not parse, or one this code does not read,
- * may lock something: see the module comment on this exclusion's boundary.
+ * nothing. A lock file that does not parse, is larger than a lock locking
+ * nothing ever is, or is one this code does not read, may lock something:
+ * see the module comment on this exclusion's boundary.
  */
-function npmLockFilesLockNothing(root: string, dir: string): boolean {
-  for (const name of NPM_UNREAD_LOCKFILES) if (existsSync(join(dir, name))) return false;
+function npmLockFilesLockNothing(r: CoverageReader, dir: string): boolean {
+  for (const name of NPM_UNREAD_LOCKFILES) if (present(r, join(dir, name))) return false;
   for (const name of NPM_JSON_LOCKFILES) {
     const path = join(dir, name);
-    if (!existsSync(path)) continue;
-    // Refused (a link out, a FIFO, over the cap) reads as `undefined`: it may lock something.
-    const lock = readJsonFile(root, path, PROJECT_LOCKFILE_MAX_BYTES);
+    if (!present(r, path)) continue;
+    const lock = readJsonFile(r, path, LOCK_PARSE_MAX);
     if (typeof lock !== 'object' || lock === null || Array.isArray(lock)) return false;
     const { packages, dependencies } = lock as Record<string, unknown>;
     if (packages !== undefined) {
@@ -484,11 +538,11 @@ function npmLockFilesLockNothing(root: string, dir: string): boolean {
     if (!isEmptyField(dependencies)) return false;
   }
   const yarnLock = join(dir, 'yarn.lock');
-  if (existsSync(yarnLock)) {
-    const text = readText(root, yarnLock, PROJECT_LOCKFILE_MAX_BYTES);
+  if (present(r, yarnLock)) {
+    const text = readText(r, yarnLock, YARN_LOCK_SCAN_MAX);
     if (text === null) return false;
     // Only the `# ...` header and blank lines: what yarn writes with nothing to lock.
-    if (text.split(/\r?\n/).some((line) => line.trim() !== '' && !line.trimStart().startsWith('#'))) return false;
+    for (const line of textLines(text)) if (line.trim() !== '' && !line.trimStart().startsWith('#')) return false;
   }
   return true;
 }
@@ -497,14 +551,15 @@ function npmLockFilesLockNothing(root: string, dir: string): boolean {
  * A `package.json` that parses to an object, whose every dependency field
  * (and `workspaces`) is absent, `{}` or `[]`, and beside which no root lock
  * file locks anything. Anything else (a field with entries,
- * `bundleDependencies: true`, a manifest that does not parse, a stale lock
- * file still locking packages) may declare something, and stays a gap.
+ * `bundleDependencies: true`, a manifest that does not parse or is too large
+ * to, a stale lock file still locking packages) may declare something, and
+ * stays a gap.
  */
-function npmManifestDeclaresNothing(root: string, path: string): boolean {
-  const manifest = readJsonFile(root, path);
+function npmManifestDeclaresNothing(r: CoverageReader, path: string): boolean {
+  const manifest = readJsonFile(r, path, MANIFEST_JSON_PARSE_MAX);
   if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return false;
   const fields = manifest as Record<string, unknown>;
-  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(root, dirname(path));
+  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(r, dirname(path));
 }
 
 /**
@@ -515,8 +570,8 @@ function npmManifestDeclaresNothing(root: string, path: string): boolean {
  * own is one whose members lock nothing else either: a member's production
  * dependency is in the root's lock file, and Trivy reports that file.
  */
-function npmManifestDeclaresOnlyDev(root: string, path: string): boolean {
-  const manifest = readJsonFile(root, path);
+function npmManifestDeclaresOnlyDev(r: CoverageReader, path: string): boolean {
+  const manifest = readJsonFile(r, path, MANIFEST_JSON_PARSE_MAX);
   if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return false;
   const fields = manifest as Record<string, unknown>;
   return (
@@ -546,15 +601,17 @@ const PY_DEPENDENCY_TABLES =
  * cannot parse, or a file it cannot read — each may declare something, and
  * stays a gap.
  */
-function pythonManifestDeclaresNothing(root: string, path: string): boolean {
-  // Refused (a link out, a FIFO, over the cap): it may declare something.
-  const text = readText(root, path);
+function pythonManifestDeclaresNothing(r: CoverageReader, path: string): boolean {
+  // Refused (a link out, a FIFO, over the cap, past the budget): it may declare something.
+  const text = readText(r, path, PROJECT_FILE_MAX_BYTES);
   if (text === null) return false;
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l !== '' && !l.startsWith('#'));
-  if (/\.txt$/i.test(path)) return lines.length === 0;
+  const meaningful = function* (): Generator<string> {
+    for (const raw of textLines(text)) {
+      const line = raw.trim();
+      if (line !== '' && !line.startsWith('#')) yield line;
+    }
+  };
+  if (/\.txt$/i.test(path)) return meaningful().next().done === true;
   // setuptools: Trivy reads neither file. `install_requires` / `extras_require`
   // anywhere (a keyword argument in setup.py, a key or an
   // `[options.extras_require]` section in setup.cfg) may declare something.
@@ -564,7 +621,7 @@ function pythonManifestDeclaresNothing(root: string, path: string): boolean {
   }
 
   let table = '';
-  for (const line of lines) {
+  for (const line of meaningful()) {
     if (line.startsWith('[')) {
       const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
       if (header?.[1] === undefined) return false;
@@ -610,6 +667,12 @@ export interface ManifestCoverageAssessment {
   sawAnyResults: boolean;
   /** Why the walk did not read every directory — manifests below were not checked. Absent: it did. */
   walkIncomplete?: string;
+  /**
+   * The assessment's read budget ran out: the files past it were taken to
+   * declare something, so a manifest among them with no Result is a gap
+   * rather than excused. Absent: every file it needed was read.
+   */
+  readNote?: string;
 }
 
 export interface ManifestWalkOptions {
@@ -647,14 +710,20 @@ function dirOf(path: string): string {
  * reads (`node_modules`, `vendor`, build output, virtualenvs, caches — the
  * `PROJECT_WALK_EXCLUDE` every other walk uses), `SCANNER_WALK_EXCLUDE`
  * (version control, package-manager caches, bower's and jspm's dependency
- * directories) and `.guardianignore` entries are not entered, symbolic
- * links are not followed, and at most `maxDirs` directories are read.
+ * directories) and `.guardianignore` entries are not entered, and at most
+ * `maxDirs` directories are read.
  *
  * Every other hidden directory IS walked (round 4, item 4): Trivy reads
  * them, and a GitHub composite action's `.github/actions/notify/
  * package.json` with no lock read full while the walk skipped `.github`.
  * Examples, docs and fixtures are walked too — whether one ships is the
  * project's to say, in `.guardianignore` (the coverage warning says so).
+ *
+ * A manifest's NAME is what counts (review of 3.0, W2E): a `package.json`
+ * that is a link or a FIFO is found, and — unread — may declare something,
+ * so without a Result it is a gap; it used to be skipped as "not a file" and
+ * read clean. A directory link is not followed; one that leads out of the
+ * project (or cannot be resolved) makes the walk incomplete, naming it.
  */
 function walkManifests(
   projectPath: string,
@@ -667,6 +736,7 @@ function walkManifests(
   let visited = 0;
   let rootRead = false;
   const unreadable: string[] = [];
+  const linksOut: string[] = [];
   while (stack.length > 0) {
     const rel = stack.pop();
     if (rel === undefined) break;
@@ -684,24 +754,37 @@ function walkManifests(
     if (rel === '') rootRead = true;
     for (const e of entries) {
       const child = rel === '' ? e.name : `${rel}/${e.name}`;
-      if (e.kind === 'directory') {
+      if (e.kind === 'directory' || e.kind === 'link') {
         if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name)) continue;
         if (ignores !== null && ignores(child, true)) continue;
+      }
+      if (e.kind === 'directory') {
         stack.push(child);
-      } else if (e.kind === 'file') {
-        const eco = ECOSYSTEM_MANIFESTS.find((m) => m.matches(e.name));
-        if (eco === undefined) continue;
+        continue;
+      }
+      const eco = ECOSYSTEM_MANIFESTS.find((m) => m.matches(e.name));
+      if (eco !== undefined) {
         if (ignores !== null && ignores(child, false)) continue;
         found.push({ rel: child, dir: rel, abs: join(abs, e.name), eco });
+        continue;
       }
+      if (e.kind === 'link' && directoryLinkOut(projectPath, join(abs, e.name))) linksOut.push(`${child}/`);
     }
   }
   if (!rootRead) return null;
+  const parts: string[] = [];
   if (unreadable.length > 0) {
     const shown = unreadable.slice(0, 3).join(', ');
-    return { found, incomplete: `could not read ${shown}${unreadable.length > 3 ? ` and ${unreadable.length - 3} more` : ''}` };
+    parts.push(`could not read ${shown}${unreadable.length > 3 ? ` and ${unreadable.length - 3} more` : ''}`);
   }
-  return { found };
+  if (linksOut.length > 0) {
+    const shown = linksOut.slice(0, 3).join(', ');
+    parts.push(
+      `did not follow ${shown}${linksOut.length > 3 ? ` and ${linksOut.length - 3} more` : ''} ` +
+        '(a directory link out of the project, or unresolvable)',
+    );
+  }
+  return parts.length > 0 ? { found, incomplete: parts.join('; ') } : { found };
 }
 
 // ---------------------------------------------------------------- workspaces
@@ -717,10 +800,14 @@ function walkManifests(
 // `[workspace] members` / `exclude`, uv `[tool.uv.workspace] members` /
 // `exclude`. Gradle and .NET lock per project, so no workspace applies.
 
-/** A workspace glob, relative to its root: `*` one segment, `**` any depth. */
+/** A workspace glob, relative to its root: `*` one segment, `**` any depth. Null: not one this code compiles. */
 function workspaceGlob(pattern: string): RegExp | null {
   const p = pattern.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
   if (p === '' || p.startsWith('/') || p.split('/').includes('..')) return null;
+  // Bounded: a long pattern, or one with many wildcards, backtracks without
+  // end on a member's path. Such a pattern declares no member here — the
+  // member stays a gap, the conservative answer.
+  if (p.length > MAX_WORKSPACE_PATTERN_LENGTH || (p.match(/\*/g) ?? []).length > MAX_WORKSPACE_PATTERN_STARS) return null;
   let re = '';
   for (let i = 0; i < p.length; i++) {
     const c = p.charAt(i);
@@ -741,17 +828,17 @@ function workspaceGlob(pattern: string): RegExp | null {
 }
 
 interface WorkspaceDecl {
-  include: string[];
-  exclude: string[];
+  include: RegExp[];
+  exclude: RegExp[];
 }
 
-/** The quoted strings of a TOML array `key = [ … ]` inside `table` (possibly multi-line). */
+/** The quoted strings of a TOML array `key = [ … ]` inside `table` (possibly multi-line), line by line. */
 function tomlArrayIn(text: string, table: string, key: string): string[] | null {
-  const lines = text.split(/\r?\n/);
+  const keyRe = new RegExp(`^${key}\\s*=\\s*(\\[.*)$`);
   let inTable = false;
   let collecting = false;
   let buf = '';
-  for (const raw of lines) {
+  for (const raw of textLines(text)) {
     const line = raw.replace(/#.*$/, '').trim();
     if (!collecting && line.startsWith('[')) {
       const header = /^\[\s*([^\]]+?)\s*\]$/.exec(line);
@@ -760,7 +847,7 @@ function tomlArrayIn(text: string, table: string, key: string): string[] | null 
     }
     if (!inTable) continue;
     if (!collecting) {
-      const m = new RegExp(`^${key}\\s*=\\s*(\\[.*)$`).exec(line);
+      const m = keyRe.exec(line);
       if (m?.[1] === undefined) continue;
       collecting = true;
       buf = m[1];
@@ -768,64 +855,93 @@ function tomlArrayIn(text: string, table: string, key: string): string[] | null 
       buf += ` ${line}`;
     }
     if (buf.includes(']')) {
-      const items = [...buf.matchAll(/"([^"]*)"|'([^']*)'/g)].map((x) => x[1] ?? x[2] ?? '');
+      const items: string[] = [];
+      for (const x of buf.matchAll(/"([^"]*)"|'([^']*)'/g)) {
+        items.push(x[1] ?? x[2] ?? '');
+        if (items.length >= MAX_WORKSPACE_PATTERNS) break;
+      }
       return items;
     }
+    // An array that never closes within the read: not a declaration this code can read.
+    if (buf.length > TOML_SCAN_MAX) return null;
   }
   return null;
 }
 
+/** Compiled include/exclude patterns, or null when none includes anything. */
+function compileDecl(include: readonly string[], exclude: readonly string[]): WorkspaceDecl | null {
+  const compile = (ps: readonly string[]): RegExp[] =>
+    ps.slice(0, MAX_WORKSPACE_PATTERNS).flatMap((p) => {
+      const re = workspaceGlob(p);
+      return re === null ? [] : [re];
+    });
+  const inc = compile(include);
+  return inc.length > 0 ? { include: inc, exclude: compile(exclude) } : null;
+}
+
 /**
- * The workspace `rootAbs` (inside the project `projectPath`) declares for
- * `ecosystem`, or null. A declaration file that is refused declares no
- * member — the conservative answer: the member stays a gap.
+ * The workspace `rootAbs` declares for `ecosystem`, or null — read once per
+ * directory and ecosystem. A declaration file that is refused, or too large
+ * to parse, declares no member — the conservative answer: the member stays a
+ * gap.
  */
-function workspaceOf(projectPath: string, rootAbs: string, ecosystem: string): WorkspaceDecl | null {
-  const read = (name: string): string | null => readText(projectPath, join(rootAbs, name));
+function workspaceOf(r: CoverageReader, rootAbs: string, ecosystem: string): WorkspaceDecl | null {
+  const key = `${rootAbs}\0${ecosystem}`;
+  const known = r.workspaces.get(key);
+  if (known !== undefined) return known;
+  const decl = readWorkspace(r, rootAbs, ecosystem);
+  r.workspaces.set(key, decl);
+  return decl;
+}
+
+function readWorkspace(r: CoverageReader, rootAbs: string, ecosystem: string): WorkspaceDecl | null {
   if (ecosystem === 'npm') {
     const include: string[] = [];
     const exclude: string[] = [];
     const add = (p: string): void => {
+      if (include.length + exclude.length >= MAX_WORKSPACE_PATTERNS) return;
       if (p.startsWith('!')) exclude.push(p.slice(1));
       else include.push(p);
     };
-    const manifest = readJsonFile(projectPath, join(rootAbs, 'package.json'));
-    if (typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)) {
-      const ws = (manifest as Record<string, unknown>)['workspaces'];
-      const list = Array.isArray(ws)
-        ? ws
-        : typeof ws === 'object' && ws !== null
-          ? (ws as Record<string, unknown>)['packages']
-          : undefined;
-      if (Array.isArray(list)) for (const p of list) if (typeof p === 'string') add(p);
-    }
-    const pnpm = read('pnpm-workspace.yaml');
-    if (pnpm !== null) {
-      try {
-        const doc = parseYaml(pnpm) as unknown;
-        const pkgs = typeof doc === 'object' && doc !== null ? (doc as Record<string, unknown>)['packages'] : undefined;
-        if (Array.isArray(pkgs)) for (const p of pkgs) if (typeof p === 'string') add(p);
-      } catch {
-        /* not a workspace we can read: no member */
+    if (present(r, join(rootAbs, 'package.json'))) {
+      const manifest = readJsonFile(r, join(rootAbs, 'package.json'), MANIFEST_JSON_PARSE_MAX);
+      if (typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)) {
+        const ws = (manifest as Record<string, unknown>)['workspaces'];
+        const list = Array.isArray(ws)
+          ? ws
+          : typeof ws === 'object' && ws !== null
+            ? (ws as Record<string, unknown>)['packages']
+            : undefined;
+        if (Array.isArray(list)) for (const p of list) if (typeof p === 'string') add(p);
       }
     }
-    return include.length > 0 ? { include, exclude } : null;
+    if (present(r, join(rootAbs, 'pnpm-workspace.yaml'))) {
+      const pnpm = readText(r, join(rootAbs, 'pnpm-workspace.yaml'), WORKSPACE_YAML_MAX);
+      // Not a workspace we can read (or too dense to parse — boundedParse): no member.
+      const parsed = pnpm === null ? null : parseYamlBounded(pnpm);
+      if (parsed?.ok === true) {
+        const doc = parsed.value;
+        const pkgs = typeof doc === 'object' && doc !== null ? (doc as Record<string, unknown>)['packages'] : undefined;
+        if (Array.isArray(pkgs)) for (const p of pkgs) if (typeof p === 'string') add(p);
+      }
+    }
+    return compileDecl(include, exclude);
   }
   if (ecosystem === 'cargo' || ecosystem === 'python') {
-    const text = read(ecosystem === 'cargo' ? 'Cargo.toml' : 'pyproject.toml');
+    const file = join(rootAbs, ecosystem === 'cargo' ? 'Cargo.toml' : 'pyproject.toml');
+    if (!present(r, file)) return null;
+    const text = readText(r, file, TOML_SCAN_MAX);
     if (text === null) return null;
     const table = ecosystem === 'cargo' ? 'workspace' : 'tool.uv.workspace';
     const include = tomlArrayIn(text, table, 'members');
     if (include === null || include.length === 0) return null;
-    return { include, exclude: tomlArrayIn(text, table, 'exclude') ?? [] };
+    return compileDecl(include, tomlArrayIn(text, table, 'exclude') ?? []);
   }
   return null;
 }
 
 function declaredMember(decl: WorkspaceDecl, relFromRoot: string): boolean {
-  const hit = (patterns: readonly string[]): boolean =>
-    patterns.some((p) => workspaceGlob(p)?.test(relFromRoot) ?? false);
-  return hit(decl.include) && !hit(decl.exclude);
+  return decl.include.some((re) => re.test(relFromRoot)) && !decl.exclude.some((re) => re.test(relFromRoot));
 }
 
 /**
@@ -846,6 +962,11 @@ export function assessManifestCoverage(
 ): ManifestCoverageAssessment {
   const walked = walkManifests(projectPath, opts);
   if (walked === null) return { gaps: [], sawAnyResults: false };
+  const reader: CoverageReader = {
+    root: projectPath,
+    budget: new ReadBudget(COVERAGE_BUDGET_BYTES, COVERAGE_BUDGET_FILES),
+    workspaces: new Map(),
+  };
 
   const root = parseInputAsJson(rawTrivyOutput);
   const results = asArray(getProp(root, 'Results'));
@@ -864,6 +985,7 @@ export function assessManifestCoverage(
     for (const t of eco.trivyTypes) for (const d of dirsByType.get(t) ?? []) out.add(d);
     return out;
   };
+  const abs = (rel: string): string => (rel === '' ? projectPath : join(projectPath, ...rel.split('/')));
 
   const covered = (eco: EcosystemManifest, dir: string, dirs: Set<string>): boolean => {
     if (dirs.has(dir)) return true;
@@ -872,7 +994,7 @@ export function assessManifestCoverage(
     for (let n = segments.length - 1; n >= 0; n--) {
       const ancestor = segments.slice(0, n).join('/');
       if (!dirs.has(ancestor)) continue;
-      const decl = workspaceOf(projectPath, ancestor === '' ? projectPath : join(projectPath, ...ancestor.split('/')), eco.ecosystem);
+      const decl = workspaceOf(reader, abs(ancestor), eco.ecosystem);
       if (decl !== null && declaredMember(decl, segments.slice(n).join('/'))) return true;
     }
     return false;
@@ -880,13 +1002,12 @@ export function assessManifestCoverage(
 
   /** A lock file of `eco` in `dir`, or at an ancestor whose workspace declares `dir` a member. */
   const hasLockFile = (eco: EcosystemManifest, dir: string): boolean => {
-    const abs = (rel: string): string => (rel === '' ? projectPath : join(projectPath, ...rel.split('/')));
-    const lockIn = (rel: string): boolean => eco.lockfiles.some((name) => existsSync(join(abs(rel), name)));
+    const lockIn = (rel: string): boolean => eco.lockfiles.some((name) => present(reader, join(abs(rel), name)));
     if (lockIn(dir)) return true;
     const segments = dir === '' ? [] : dir.split('/');
     for (let n = segments.length - 1; n >= 0; n--) {
       const ancestor = segments.slice(0, n).join('/');
-      const decl = workspaceOf(projectPath, abs(ancestor), eco.ecosystem);
+      const decl = workspaceOf(reader, abs(ancestor), eco.ecosystem);
       if (decl !== null && declaredMember(decl, segments.slice(n).join('/')) && lockIn(ancestor)) return true;
     }
     return false;
@@ -895,18 +1016,21 @@ export function assessManifestCoverage(
   const gapFiles = new Map<string, string[]>();
   const devOnlyFiles = new Map<string, string[]>();
   const dirsOf = new Map<string, Set<string>>();
+  const push = (m: Map<string, string[]>, k: string, v: string): void => {
+    const list = m.get(k);
+    if (list === undefined) m.set(k, [v]);
+    else list.push(v);
+  };
   for (const m of walked.found) {
-    if (m.eco.declaresNothing?.(projectPath, m.abs) ?? false) continue;
+    if (m.eco.declaresNothing?.(reader, m.abs) ?? false) continue;
     let dirs = dirsOf.get(m.eco.ecosystem);
     if (dirs === undefined) {
       dirs = resultDirs(m.eco);
       dirsOf.set(m.eco.ecosystem, dirs);
     }
     if (covered(m.eco, m.dir, dirs)) continue;
-    gapFiles.set(m.eco.ecosystem, [...(gapFiles.get(m.eco.ecosystem) ?? []), m.rel]);
-    if ((m.eco.declaresOnlyDev?.(projectPath, m.abs) ?? false) && hasLockFile(m.eco, m.dir)) {
-      devOnlyFiles.set(m.eco.ecosystem, [...(devOnlyFiles.get(m.eco.ecosystem) ?? []), m.rel]);
-    }
+    push(gapFiles, m.eco.ecosystem, m.rel);
+    if ((m.eco.declaresOnlyDev?.(reader, m.abs) ?? false) && hasLockFile(m.eco, m.dir)) push(devOnlyFiles, m.eco.ecosystem, m.rel);
   }
 
   const gaps: ManifestCoverageGap[] = [];
@@ -918,5 +1042,12 @@ export function assessManifestCoverage(
   }
   const out: ManifestCoverageAssessment = { gaps, sawAnyResults: results.length > 0 };
   if (walked.incomplete !== undefined) out.walkIncomplete = walked.incomplete;
+  const unread = reader.budget.refused;
+  if (unread.length > 0) {
+    const shown = unread.slice(0, 3).map((p) => relative(projectPath, p).split(sep).join('/')).join(', ');
+    out.readNote =
+      `the manifest checks spent their read budget (${reader.budget.describe()}): ${shown}` +
+      `${unread.length > 3 ? ` and ${unread.length - 3} more` : ''} were not read and count as declaring something`;
+  }
   return out;
 }

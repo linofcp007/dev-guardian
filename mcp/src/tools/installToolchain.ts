@@ -29,6 +29,7 @@
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { commandFor } from '../platform/binaryPath.js';
 import { detectOs, type DetectedOs } from '../platform/osDetect.js';
 import {
   firstWindowsAvailable,
@@ -472,7 +473,7 @@ async function isWslUsable(): Promise<boolean> {
   if (!wslPath) return false;
   try {
     const { execa } = await import('execa');
-    const r = await execa('wsl', ['-l', '--quiet'], { timeout: 5_000, reject: false });
+    const r = await execa(commandFor('wsl'), ['-l', '--quiet'], { timeout: 5_000, reject: false });
     // `wsl -l --quiet` prints one distro name per line. UTF-16 BOM on
     // Windows means even with a distro, stdout starts with `\x00\x00\x00`
     // bytes — looking for non-whitespace is enough.
@@ -490,7 +491,7 @@ async function ensurePipxOnPath(ctx: PluginContext): Promise<void> {
   const pipx = await resolveBinary('pipx');
   if (!pipx) return;
   const { execa } = await import('execa');
-  await execa('pipx', ['ensurepath'], {
+  await execa(commandFor('pipx'), ['ensurepath'], {
     cwd: ctx.scriptsDir,
     reject: false,
     timeout: 10_000,

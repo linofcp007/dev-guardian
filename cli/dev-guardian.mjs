@@ -137,6 +137,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
 import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
 import { detectOs } from '../mcp/dist/platform/osDetect.js';
+import { hardenCommandSearch } from '../mcp/dist/platform/binaryPath.js';
 import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
@@ -169,6 +170,10 @@ import {
 // `loadCiModules()`'s identical reasoning for `scan`/`baseline update`,
 // just below), so every OTHER subcommand's process never touches
 // `node:sqlite` at all, on any Node version.
+
+// `scan` runs in the project it scans: no spawn by bare name may find a binary
+// there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
+hardenCommandSearch();
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
 const ROOT = resolve(HERE, '..'); // <plugin>

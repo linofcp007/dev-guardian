@@ -5,7 +5,10 @@
  * Boot sequence:
  *   0. Refuse to start, with one line on stderr and exit 1, on a Node without
  *      `node:sqlite` (< 22.13) — not a stack trace from deep in module loading.
- *   1. Resolve project_path (defaults to process.cwd()).
+ *   1. Resolve project_path (defaults to process.cwd()), and keep that
+ *      directory out of every bare-name command search: on Windows
+ *      `NoDefaultCurrentDirectoryInExePath`, everywhere no relative PATH
+ *      entry (platform/binaryPath.ts).
  *   2. Open SQLite at `<project_root>/.guardian/guardian.db` when it is this
  *      user's (else the per-user fallback, or an in-memory database when
  *      neither can be used — never an exit), apply migrations.
@@ -35,6 +38,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { resolve } from 'node:path';
 import type { PluginContext } from './context.js';
+import { hardenCommandSearch } from './platform/binaryPath.js';
 import { ensureGuardianIgnored } from './gitignoreGuard.js';
 import { resolveScriptsDir } from './platform/scriptsDir.js';
 import { probeShell } from './platform/shellProbe.js';
@@ -68,6 +72,11 @@ async function main(): Promise<void> {
   }
 
   const projectPath = resolve(process.cwd());
+
+  // This process starts in the project root: no spawn by bare name may find a binary there
+  // (platform/binaryPath.ts). Before anything spawns — the shell probe included.
+  const droppedPath = hardenCommandSearch();
+  if (droppedPath.length > 0) logErr(`PATH: dropped relative entries ${droppedPath.map((e) => JSON.stringify(e)).join(', ')} (they name the current directory)`);
 
   // Never throws for a database it cannot use: a foreign or unreadable one
   // gives way to the per-user fallback or an in-memory database, with a

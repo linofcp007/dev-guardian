@@ -13,6 +13,7 @@
  */
 
 import { isMap, isScalar, parseDocument } from 'yaml';
+import { describeTooComplex, JSON_MAX_NODES, parseJsonBounded, YAML_SPEC_MAX_NODES, yamlTooComplex } from '../platform/boundedParse.js';
 import type { HttpMethod, RouteRecord, SpecFileReport } from '../types.js';
 
 /**
@@ -174,10 +175,17 @@ type ParsedRoot =
  * `doc.errors.length > 0` is the actual signal.
  */
 function parseRoot(text: string): ParsedRoot {
-  try {
-    return { kind: 'ok', root: JSON.parse(text), lineFor: () => 0 };
-  } catch {
-    // Not JSON — fall through to the YAML parser below.
+  // Both parses bounded by structure, not only by the 5 MiB read cap
+  // (platform/boundedParse.ts): 5 MiB of dense YAML would take
+  // `parseDocument` past the server's heap (review of 3.0, W2E).
+  const json = parseJsonBounded(text, JSON_MAX_NODES);
+  if (json.ok) return { kind: 'ok', root: json.value, lineFor: () => 0 };
+  if (json.reason === 'too-complex') {
+    return { kind: 'parse_error', reason: describeTooComplex(JSON_MAX_NODES, 'JSON values') };
+  }
+  // Not JSON — the YAML parser below.
+  if (yamlTooComplex(text, YAML_SPEC_MAX_NODES)) {
+    return { kind: 'parse_error', reason: describeTooComplex(YAML_SPEC_MAX_NODES, 'YAML nodes') };
   }
 
   const doc = parseDocument(text);

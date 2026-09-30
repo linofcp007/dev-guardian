@@ -88,14 +88,16 @@ describe('detect_stack — a hostile manifest never hangs or crashes the server,
     expect(snap.unread_files?.map((u) => u.path)).toEqual(['package.json']);
   });
 
-  it.skipIf(!POSIX)('a FIFO package.json, requirements.txt and deploy.yaml never wait for a writer (POSIX)', () => {
+  it.skipIf(!POSIX)('a FIFO package.json, pyproject.toml, requirements-dev.txt and deploy.yaml never wait for a writer, and each is named (POSIX)', () => {
     const p = makeTempDir('rrh-stack-');
     mkfifo(join(p, 'package.json'));
     mkfifo(join(p, 'pyproject.toml'));
+    mkfifo(join(p, 'requirements-dev.txt'));
     mkfifo(join(p, 'deploy.yaml'));
     const snap = fast(() => detectStack(p));
-    expect(snap.unread_files?.map((u) => u.path)).toEqual(['package.json', 'pyproject.toml']);
-    expect(snap.unread_files?.[0]?.reason).toMatch(/not a regular file/);
+    // Round 2 (M2): a FIFO under a candidate's name is read and refused, never dropped as "not a file".
+    expect(snap.unread_files?.map((u) => u.path)).toEqual(['deploy.yaml', 'package.json', 'pyproject.toml', 'requirements-dev.txt']);
+    for (const u of snap.unread_files ?? []) expect(u.reason).toMatch(/not a regular file/);
   });
 
   it('the detect_stack tool returns and persists the named file', async () => {
@@ -149,7 +151,7 @@ describe('repoConfig — a `when` file that cannot be read is named, never dropp
         path: 'pyproject.toml',
         decides:
           'its [tool.radon] excludes and ignores decide what is measured, if it applies: ' +
-          'it is larger than the size cap and was not read, so it was not checked',
+          'present, not checked: it is larger than the size cap and was not read',
       },
     ]);
   });
@@ -159,16 +161,19 @@ describe('repoConfig — a `when` file that cannot be read is named, never dropp
     oversized(join(p, 'requirements.txt'), 1024 * 1024);
     const handed = honouredHandedFiles(p, 'pip-audit', ['requirements.txt']);
     expect(handed.map((h) => h.path)).toEqual(['requirements.txt']);
-    expect(handed[0]?.decides).toMatch(/was not checked$/);
+    expect(handed[0]?.decides).toMatch(/present, not checked: it is larger than the size cap/);
   });
 
-  it.skipIf(!POSIX)('a FIFO at a config name is never opened (POSIX)', async () => {
+  it.skipIf(!POSIX)('a FIFO at a config name is never opened, and is named as present, not checked (POSIX)', async () => {
     const p = makeTempDir('rrh-cfg-');
     mkfifo(join(p, 'pyproject.toml'));
     mkfifo(join(p, 'tox.ini'));
     const t0 = Date.now();
-    expect(await honouredFiles(p, 'radon')).toEqual([]);
+    const named = await honouredFiles(p, 'radon');
     expect(Date.now() - t0).toBeLessThan(3000);
+    // Round 2 (I3): a config that could not be checked is never taken for absent.
+    expect(named.map((h) => h.path)).toEqual(['pyproject.toml', 'tox.ini']);
+    for (const h of named) expect(h.decides).toMatch(/if it applies: present, not checked: not a regular file/);
   });
 });
 

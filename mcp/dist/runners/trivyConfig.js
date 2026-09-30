@@ -73,7 +73,7 @@
  * keys at column 0 and was num=0 with no error.
  */
 import { join } from 'node:path';
-import { describeReadRefusal, listProjectDirOrNull, readProjectHead, readProjectText } from '../platform/projectFs.js';
+import { describeReadRefusal, directoryLinkOut, listProjectDirOrNull, ReadBudget } from '../platform/projectFs.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { withHonoured } from './trivyRun.js';
@@ -139,6 +139,14 @@ const TERRAFORM = /\.(tf|tf\.json|tofu|tofu\.json)$/;
 /** JSON files larger than this are not parsed to decide (and not counted as IaC-looking). */
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 /**
+ * What the whole walk may read, and how much of it may go through
+ * `JSON.parse` — 2 MiB of `[{},{},…]` is ~45 MB of heap and a fraction of a
+ * second of a blocked event loop, and a repository can carry thousands
+ * (review of 3.0, W2E). Past either, the files are named as not read.
+ */
+const IAC_BUDGET_BYTES = 64 * 1024 * 1024;
+const IAC_JSON_PARSE_BUDGET = 16 * 1024 * 1024;
+/**
  * A JSON document's TOP-LEVEL keys decide (round 4, item 7): the three
  * Kubernetes keys anywhere used to match a JSON Schema that merely lists them
  * as properties. Parsed, bounded; an array, a non-object or a file that does
@@ -197,9 +205,12 @@ function looksLikeIacText(text) {
 export function iacLookingFiles(projectPath, exclusions) {
     const files = [];
     const unread = [];
+    const unlisted = [];
+    const linksOut = [];
     const stack = [''];
+    const budget = new ReadBudget(IAC_BUDGET_BYTES, MAX_SNIFFED);
+    let jsonParsed = 0;
     let visited = 0;
-    let sniffed = 0;
     let incomplete;
     while (stack.length > 0) {
         const rel = stack.pop();
@@ -212,14 +223,17 @@ export function iacLookingFiles(projectPath, exclusions) {
         visited += 1;
         const abs = rel === '' ? projectPath : join(projectPath, ...rel.split('/'));
         const entries = listProjectDirOrNull(projectPath, abs);
-        if (entries === null)
+        if (entries === null) {
+            // Only directories the walk reached as directories are listed: a race or a permission.
+            unlisted.push(rel === '' ? '.' : `${rel}/`);
             continue;
+        }
         // A chart's templates are Helm's to render (module comment): one disabled
         // by its values renders nothing and is absent from the report legitimately.
         const isChart = entries.some((e) => e.kind === 'file' && e.name === 'Chart.yaml');
         for (const e of entries) {
             const child = rel === '' ? e.name : `${rel}/${e.name}`;
-            if (e.kind === 'directory') {
+            if (e.kind === 'directory' || e.kind === 'link') {
                 // Hidden directories too (round 5, item 1): Trivy reads `.devcontainer/`, `.k8s/`.
                 if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name))
                     continue;
@@ -227,29 +241,34 @@ export function iacLookingFiles(projectPath, exclusions) {
                     continue;
                 if (exclusions !== null && exclusions.ignores(child, true))
                     continue;
+            }
+            if (e.kind === 'directory') {
                 stack.push(child);
                 continue;
             }
-            if (e.kind !== 'file')
-                continue;
             if (exclusions !== null && exclusions.ignores(child, false))
                 continue;
             const lower = e.name.toLowerCase();
+            // By name, whatever is there: a link or a FIFO named like IaC is IaC-looking
+            // too, and if Trivy did not read it the pass says so.
             if (TERRAFORM.test(e.name) || isDockerfileName(e.name)) {
                 files.push(child);
                 continue;
             }
-            if (!/\.(ya?ml|json|template)$/.test(lower) || lower === 'package.json' || lower.startsWith('docker-compose'))
-                continue;
-            if (sniffed >= MAX_SNIFFED) {
-                incomplete ??= `read the head of ${MAX_SNIFFED} YAML/JSON files at most`;
+            const sniffable = /\.(ya?ml|json|template)$/.test(lower) && lower !== 'package.json' && !lower.startsWith('docker-compose');
+            if (!sniffable) {
+                // A directory link out of the project is not followed (nor by Trivy): named.
+                if (e.kind === 'link' && directoryLinkOut(projectPath, join(abs, e.name)))
+                    linksOut.push(`${child}/`);
                 continue;
             }
-            sniffed += 1;
             // Too large to parse is by design (not IaC-looking); anything else refused is named.
-            const read = lower.endsWith('.json')
-                ? readProjectText(projectPath, join(abs, e.name), MAX_JSON_BYTES)
-                : readProjectHead(projectPath, join(abs, e.name), SNIFF_BYTES);
+            const isJson = lower.endsWith('.json');
+            let read;
+            if (isJson && jsonParsed >= IAC_JSON_PARSE_BUDGET)
+                read = { status: 'refused', reason: 'read-budget' };
+            else
+                read = isJson ? budget.readText(projectPath, join(abs, e.name), MAX_JSON_BYTES) : budget.readHead(projectPath, join(abs, e.name), SNIFF_BYTES);
             if (read.status === 'refused') {
                 if (read.reason !== 'too-large')
                     unread.push(`${child} (${describeReadRefusal(read.reason)})`);
@@ -257,18 +276,26 @@ export function iacLookingFiles(projectPath, exclusions) {
             }
             if (read.status !== 'ok')
                 continue;
-            if (lower.endsWith('.json') ? looksLikeIacJson(read.text) : looksLikeIacText(read.text))
+            if (isJson)
+                jsonParsed += read.text.length;
+            if (isJson ? looksLikeIacJson(read.text) : looksLikeIacText(read.text))
                 files.push(child);
         }
     }
     files.sort();
+    const notes = [];
+    if (incomplete !== undefined)
+        notes.push(incomplete);
+    const list = (items, sepr) => `${items.slice(0, 3).join(sepr)}${items.length > 3 ? ` and ${items.length - 3} more` : ''}`;
     if (unread.length > 0) {
-        const shown = unread.slice(0, 3).join('; ');
-        const more = unread.length > 3 ? ` and ${unread.length - 3} more` : '';
-        const note = `could not read ${unread.length} YAML/JSON file${unread.length === 1 ? '' : 's'} to tell whether it is IaC: ${shown}${more}`;
-        incomplete = incomplete !== undefined ? `${incomplete}; ${note}` : note;
+        notes.push(`could not read ${unread.length} YAML/JSON file${unread.length === 1 ? '' : 's'} to tell whether it is IaC: ${list(unread, '; ')}`);
     }
-    return incomplete !== undefined ? { files, incomplete } : { files };
+    if (unlisted.length > 0)
+        notes.push(`could not list ${list(unlisted, ', ')} — IaC below was not looked for`);
+    if (linksOut.length > 0) {
+        notes.push(`did not follow ${list(linksOut, ', ')} (a directory link out of the project, or unresolvable) — IaC behind it was not looked for`);
+    }
+    return notes.length > 0 ? { files, incomplete: notes.join('; ') } : { files };
 }
 const MAX_NAMED = 5;
 const MAX_MESSAGE = 200;

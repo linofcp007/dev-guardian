@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, lstatSync } from 'node:fs';
+import { copyFileSync, lstatSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import {
   buildSemgrepDockerArgs,
@@ -160,7 +161,7 @@ const SEMGREP_DEFAULT_IGNORED_SUFFIXES: readonly string[] = ['.min.js', '_test.g
  * directories, as the walk always has.
  */
 export async function countRouteTargets(projectPath: string): Promise<number> {
-  const ownIgnore = existsSync(join(projectPath, '.semgrepignore'));
+  const ownIgnore = presentInProject(projectPath, '.semgrepignore');
   const listed = await gitListedFiles(projectPath);
   if (listed !== null) return countListedRouteTargets(projectPath, listed, ownIgnore);
   if (ownIgnore) {

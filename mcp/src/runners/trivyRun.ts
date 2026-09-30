@@ -50,9 +50,11 @@
  */
 
 import { execa } from 'execa';
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { commandFor } from '../platform/binaryPath.js';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compareSemver } from '../platform/semverCompare.js';
+import { projectEntryKindIn } from '../platform/projectFs.js';
 import { extractVersion } from './toolProbe.js';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
 import type { Finding, RepoSuppression, ToolRun } from '../types.js';
@@ -103,12 +105,9 @@ export interface TrivyRunResult extends ProcessRunResult {
 
 /** The project's `.trivyignore`, when it is a regular file; else null. */
 export function projectTrivyIgnore(projectPath: string): string | null {
-  const path = join(projectPath, PROJECT_TRIVYIGNORE);
-  try {
-    return existsSync(path) && lstatSync(path).isFile() ? path : null;
-  } catch {
-    return null;
-  }
+  // lstat only (links below the project walked first): `existsSync` followed
+  // a link to a network path and blocked the server (review of 3.0, W2E).
+  return projectEntryKindIn(projectPath, PROJECT_TRIVYIGNORE) === 'file' ? join(projectPath, PROJECT_TRIVYIGNORE) : null;
 }
 
 /** The argv of one run — pure, for the tests. */
@@ -277,9 +276,11 @@ let versionProbe: Promise<string | null> | null = null;
 async function installedTrivyVersion(cwd: string): Promise<string | null> {
   versionProbe ??= (async () => {
     try {
-      const r = await execa('trivy', ['--version'], {
+      const env = { ...process.env, ...TRIVY_NO_PHONE_HOME_ENV };
+      // By absolute path: `cwd` is the project, and a planted `trivy.cmd` there must not answer (binaryPath.ts).
+      const r = await execa(commandFor('trivy', env), ['--version'], {
         cwd,
-        env: { ...process.env, ...TRIVY_NO_PHONE_HOME_ENV },
+        env,
         reject: false,
         timeout: 30_000,
         encoding: 'utf8',
@@ -439,9 +440,12 @@ export function judgeTrivyFs(args: {
     ignores: exclusions === null ? null : (rel, isDir) => exclusions.ignores(rel, isDir),
     ...(args.maxDirs !== undefined ? { maxDirs: args.maxDirs } : {}),
   });
-  const note =
+  const walkNote =
     coverage.walkIncomplete !== undefined ? `${coverage.walkIncomplete} — manifests below were not checked` : null;
-  const walkGap = note !== null ? [TRIVY_MANIFEST_WALK_GAP] : [];
+  const walkGap = walkNote !== null ? [TRIVY_MANIFEST_WALK_GAP] : [];
+  // A read budget spent is named too; the files past it already count as gaps.
+  const notes = [walkNote, coverage.readNote ?? null].filter((n): n is string => n !== null);
+  const note = notes.length > 0 ? notes.join('; ') : null;
   const withNote = (r: ToolRun): ToolRun =>
     withHonoured(note === null ? r : { ...r, reason: r.reason !== undefined ? `${r.reason}; ${note}` : note }, run);
   if (coverage.gaps.length > 0 && coverage.sawAnyResults) {

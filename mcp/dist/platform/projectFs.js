@@ -52,7 +52,18 @@
  * most make a small regular file outside the project be read. The threat
  * here is the repository's CONTENT — a clone, an archive, a pull request —
  * which cannot run anything before a scan; a process already running as the
- * user can read those files itself.
+ * user can read those files itself. **A hard link is not a link here**: it is
+ * a regular file with a second name, indistinguishable from any other, so one
+ * that shares an inode with a file outside the project is read as the
+ * project's own (a repository cannot carry one — git stores content, not
+ * inodes — but a directory copied with `cp -l` can).
+ *
+ * **Bytes read are not memory used.** A cap bounds what is read, not what a
+ * caller builds from it: 30 MiB of newlines split into an array, or 30 MiB of
+ * `{},` handed to `JSON.parse`, took a 768 MB server down (review of 3.0,
+ * W2E). A caller iterates lines with `platform/textLines.ts`, parses JSON or
+ * YAML only under a small cap of its own, and spends a {@link ReadBudget}
+ * across a walk, so no project makes one tool call read without end.
  *
  * ## Writes
  *
@@ -76,8 +87,9 @@ import { randomBytes } from 'node:crypto';
 import { closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, } from 'node:fs';
 import { open as openAsync, lstat as lstatAsync, readlink as readlinkAsync } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { readSmallText, walkLinksUnder } from '../hooks/configFile.js';
+import { parseJsonBounded } from './boundedJson.js';
 /** A project file's default read cap: far above any config or source file, far below a denial of service. */
 export const PROJECT_FILE_MAX_BYTES = 8 * 1024 * 1024;
 /**
@@ -164,12 +176,10 @@ export function readProjectJson(root, path, maxBytes = PROJECT_FILE_MAX_BYTES) {
     const text = readProjectTextOrUndefined(root, path, maxBytes);
     if (text === undefined)
         return undefined;
-    try {
-        return JSON.parse(text);
-    }
-    catch {
-        return undefined;
-    }
+    // Bounded by structure too (platform/boundedJson.ts): a lock file under the
+    // byte cap took JSON.parse past the heap. Too complex reads as unreadable.
+    const parsed = parseJsonBounded(text);
+    return parsed.ok ? parsed.value : undefined;
 }
 /**
  * A file's bytes, judged exactly as {@link readProjectText} judges them, for
@@ -404,14 +414,50 @@ export function projectEntryKind(path) {
     return 'other';
 }
 /**
- * Whether anything — a dangling link included — is at `path`, which must lie
- * lexically inside `root` (anything outside is `false`, never looked at). For
- * a path named by a repository file, where `existsSync` would both follow a
- * link and answer about any path at all.
+ * {@link projectEntryKind} for a path below `root`, safe on any component:
+ * every link on the way below `root` is walked first with `lstat` and
+ * `readlink` only (`hooks/configFile.ts#walkLinksUnder`), so one that points
+ * at a network or device path is `remote` and nothing reaches it. A plain
+ * `lstat` follows every component but the last — a `wp-content` link to
+ * `\\host\share` held `lstat('wp-content/themes/x')`, like `existsSync`, for
+ * 157 s on Windows (review of 3.0, W2E). A path outside `root` is `absent`.
+ */
+export function projectEntryKindIn(root, path) {
+    const abs = resolve(root, path);
+    if (!isWithinDir(root, abs))
+        return 'absent';
+    const walk = walkLinksUnder(root, abs);
+    if (!walk.ok)
+        return walk.reason === 'remote-link' ? 'remote' : 'other';
+    return projectEntryKind(abs);
+}
+/**
+ * What is at `path`, an absolute path named by repository content that may
+ * lie anywhere on disk (a solution's `ProjectReference`, a path a tool
+ * printed): `remote` for a network path — lexically (`\\host\share`,
+ * `\\?\…`, `//host`) or through a link on the way — which is never opened,
+ * stat'ed or followed; otherwise as {@link projectEntryKindIn} from the
+ * filesystem root.
+ */
+export function entryKindAnywhere(path) {
+    const lexicallyRemote = /^(?:\\\\|\/\/)/;
+    if (lexicallyRemote.test(path))
+        return 'remote';
+    const abs = resolve(path);
+    if (lexicallyRemote.test(abs))
+        return 'remote';
+    return projectEntryKindIn(parse(abs).root, abs);
+}
+/**
+ * Whether anything — a dangling link, or a link to a network path, included
+ * — is at `path`, which must lie lexically inside `root` (anything outside is
+ * `false`, never looked at). For a path named by a repository file, where
+ * `existsSync` would follow a link (to a network path too, blocking the
+ * server) and answer about any path at all. Nothing is followed:
+ * {@link projectEntryKindIn}.
  */
 export function presentInProject(root, path) {
-    const abs = resolve(root, path);
-    return isWithinDir(root, abs) && projectEntryKind(abs) !== 'absent';
+    return projectEntryKindIn(root, path) !== 'absent';
 }
 /**
  * Where `path` resolves, when that is inside `root`; `null` when it does not
@@ -439,11 +485,20 @@ export function projectPathKind(root, path) {
     const abs = resolve(root, path);
     if (!isWithinDir(root, abs))
         return 'outside';
+    // Links below the root walked first, lstat/readlink only: one to a network
+    // or device path is never followed, not even to ask whether it dangles —
+    // that realpath is what blocked the server (review of 3.0, W2E); a loop is
+    // `other`.
+    const walk = walkLinksUnder(root, abs);
+    if (!walk.ok)
+        return walk.reason === 'remote-link' ? 'outside' : 'other';
     if (projectEntryKind(abs) === 'absent')
         return 'absent';
-    const real = realpathInProject(root, abs);
+    const real = realpathOrNull(abs);
     if (real === null)
-        return realpathOrNull(abs) === null ? 'absent' : 'outside';
+        return 'absent';
+    if (!isWithinDir(realRoot(root), real))
+        return 'outside';
     let st;
     try {
         st = lstatSync(real);
@@ -456,6 +511,44 @@ export function projectPathKind(root, path) {
     if (st.isDirectory())
         return 'directory';
     return 'other';
+}
+/**
+ * What a link below `root` finally names — `directory`, `file`, `other`,
+ * `absent` (dangling) — wherever that is, or `remote` when a link on the way
+ * points at a network or device path (never followed). Metadata only: a
+ * local target is `lstat`ed after the links were walked, nothing is opened.
+ * For a walk that must tell a directory link out of the project (a
+ * sub-project it did not enter) from a file link it names elsewhere.
+ */
+export function linkTargetKind(root, path) {
+    const abs = resolve(root, path);
+    const walk = walkLinksUnder(root, abs);
+    if (!walk.ok)
+        return walk.reason === 'remote-link' ? 'remote' : 'other';
+    const real = realpathOrNull(abs);
+    if (real === null)
+        return 'absent';
+    try {
+        const st = lstatSync(real);
+        return st.isDirectory() ? 'directory' : st.isFile() ? 'file' : 'other';
+    }
+    catch {
+        return 'absent';
+    }
+}
+/**
+ * Whether the link at `path` is one a directory walk should name as not
+ * entered: it leads out of the project (or cannot be resolved) and names a
+ * directory — or a network or device path, whose kind is never asked. A link
+ * that stays inside is walked in its own place; a file link is read where it
+ * is found, and named if refused.
+ */
+export function directoryLinkOut(root, path) {
+    const kind = projectPathKind(root, path);
+    if (kind !== 'outside' && kind !== 'other')
+        return false;
+    const target = linkTargetKind(root, path);
+    return target === 'directory' || target === 'remote' || target === 'other';
 }
 /**
  * The entries of a directory inside the project — `[]` when it is absent,
@@ -521,6 +614,76 @@ export function describeReadRefusal(reason) {
             return 'it is larger than the size cap and was not read';
         case 'unreadable':
             return 'it could not be read (permissions, a link loop, or an I/O error)';
+        case 'read-budget':
+            return "it was not read: this check's read budget was spent before it";
+    }
+}
+/**
+ * What one walk of a project may read in all: `bytes` and `files`. Per-file
+ * caps bound one read; a walk that reads every manifest, header or config it
+ * finds needs a bound of its own — 80 `requirements-N.txt` of 8 MiB each (one
+ * git blob, a few KB on the wire) were each under the cap and together took a
+ * 768 MB server down (review of 3.0, W2E). A read the budget cannot cover is
+ * `read-budget`, and the caller names the file like any other refusal.
+ */
+export class ReadBudget {
+    maxBytes;
+    maxFiles;
+    bytesLeft;
+    filesLeft;
+    spentOn = [];
+    constructor(maxBytes, maxFiles) {
+        this.maxBytes = maxBytes;
+        this.maxFiles = maxFiles;
+        this.bytesLeft = maxBytes;
+        this.filesLeft = maxFiles;
+    }
+    /** Whether anything is left to read. */
+    get spent() {
+        return this.bytesLeft <= 0 || this.filesLeft <= 0;
+    }
+    /** The paths refused for the budget, in the order they were asked for. */
+    get refused() {
+        return this.spentOn;
+    }
+    /** `bytes, files` in a sentence, for a note. */
+    describe() {
+        return `${Math.round(this.maxBytes / (1024 * 1024))} MiB / ${this.maxFiles} files`;
+    }
+    /** {@link readProjectText} within the budget: at most `maxBytes`, and never past what is left. */
+    readText(root, path, maxBytes) {
+        const cap = this.take(path, maxBytes);
+        if (cap === null)
+            return { status: 'refused', reason: 'read-budget' };
+        const r = readProjectText(root, path, cap);
+        return this.settle(path, r, cap < maxBytes, r.status === 'ok' ? Buffer.byteLength(r.text) : 0);
+    }
+    /** {@link readProjectHead} within the budget. */
+    readHead(root, path, maxBytes) {
+        const cap = this.take(path, maxBytes);
+        if (cap === null)
+            return { status: 'refused', reason: 'read-budget' };
+        const r = readProjectHead(root, path, cap);
+        return this.settle(path, r, false, r.status === 'ok' ? Buffer.byteLength(r.text) : 0);
+    }
+    /** The cap for the next read, or null (refused) when nothing is left. */
+    take(path, maxBytes) {
+        if (this.spent) {
+            this.spentOn.push(path);
+            return null;
+        }
+        this.filesLeft -= 1;
+        return Math.min(maxBytes, this.bytesLeft);
+    }
+    settle(path, r, capped, bytes) {
+        this.bytesLeft -= bytes;
+        // Too large for what was LEFT, though not for the caller's own cap: the budget's refusal.
+        if (capped && r.status === 'refused' && r.reason === 'too-large') {
+            this.bytesLeft = 0;
+            this.spentOn.push(path);
+            return { status: 'refused', reason: 'read-budget' };
+        }
+        return r;
     }
 }
 /**
@@ -558,6 +721,9 @@ function ensureDirsInside(root, dir) {
             }
         }
         if (st.isSymbolicLink()) {
+            // Never followed to a network or device path, not even by realpath.
+            if (!walkLinksUnder(rootAbs, current).ok)
+                return current;
             const real = realpathOrNull(current);
             if (real === null || !isWithinDir(rootReal, real))
                 return current;

@@ -83,7 +83,7 @@
  * the project's `.guardianignore` reaches Semgrep as `--exclude` and Bandit as
  * `-x` (`platform/guardianIgnore.ts`); the factory filters the rest.
  */
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
@@ -105,7 +105,7 @@ import { CONTAINER_PACKS_ROOT, hasDotnetProject, LLM_RULES_FILE, planSemgrepConf
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded, pythonUtf8Env, semgrepEngineOf, withPluginPackFixpoint, } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
-import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { listProjectDir, presentInProject, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { applySemgrepCoverageGaps, markMissing, scannedNothingBecause, semgrepCoverageGaps, } from '../runners/semgrepCoverageGaps.js';
 import { registerToolModule } from './index.js';
@@ -462,9 +462,9 @@ async function runBandit(args) {
     const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = args;
     // Only attempt Bandit when the project has Python sources: a manifest,
     // or any `.py` file (a walk that stops at the first).
-    const looksPython = existsSync(join(ctx.projectPath, 'pyproject.toml')) ||
-        existsSync(join(ctx.projectPath, 'requirements.txt')) ||
-        existsSync(join(ctx.projectPath, 'setup.py')) ||
+    const looksPython = presentInProject(ctx.projectPath, 'pyproject.toml') ||
+        presentInProject(ctx.projectPath, 'requirements.txt') ||
+        presentInProject(ctx.projectPath, 'setup.py') ||
         hasFileWithExtension(ctx.projectPath, ['.py']);
     if (!looksPython)
         return;

@@ -41,7 +41,8 @@
  * until 2026-08-18 — see its module comment.
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
+import { projectPathKind } from '../platform/projectFs.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -278,7 +279,9 @@ function collectDiscovered(projectPath: string): { registered: string[]; rejecte
   const rejected: Rejected[] = [];
   for (const dir of ['.semgrep', 'semgrep', 'rules']) {
     const abs = join(projectPath, dir);
-    if (!existsSync(abs)) continue;
+    // The repository's: a link out of it — to a network path above all — is never stat'ed by consider().
+    const kind = projectPathKind(projectPath, dir);
+    if (kind !== 'directory' && kind !== 'file') continue;
     consider(abs, registered, rejected);
   }
   return { registered, rejected };

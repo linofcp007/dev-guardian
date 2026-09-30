@@ -69,8 +69,7 @@
  * targets a regular plugin becomes) and counted in `assessComponentCoverage`.
  */
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { presentInProject } from '../platform/projectFs.js';
 import { makeFinding, type ParserCveInput, type ScannerParser } from '../runners/scannerParsers/index.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { Finding, Severity, ToolRun } from '../types.js';
@@ -135,8 +134,8 @@ registerToolModule(
       const findings: Finding[] = [];
       const cves: ParserCveInput[] = [];
 
-      const looksLikeWpRoot =
-        existsSync(join(ctx.projectPath, 'wp-includes')) || existsSync(join(ctx.projectPath, 'wp-content'));
+      // Nothing followed: a `wp-content` link to a network path must not block the server.
+      const looksLikeWpRoot = presentInProject(ctx.projectPath, 'wp-includes') || presentInProject(ctx.projectPath, 'wp-content');
       if (!looksLikeWpRoot) {
         warnings.push(
           'not_a_wordpress_install_root: no wp-includes/ or wp-content/ at project_path — ' +
@@ -168,6 +167,16 @@ registerToolModule(
             `Wordfence feed: serving a cached copy from ${wf.fetched_at} (a refresh could not be ` +
               'completed this run) — results may be outdated.',
           );
+        }
+        // What is there and was never inventoried (a plugins directory linked
+        // out of the install, a component that cannot be listed or read) was
+        // matched against nothing — never a clean result (review of 3.0, W2E).
+        const notInventoried = inventory.not_inventoried;
+        if (notInventoried.length > 0) {
+          missing_tools.push('wordfence-feed:not-inventoried');
+          const shown = notInventoried.slice(0, 5).join(', ');
+          const more = notInventoried.length > 5 ? ` and ${notInventoried.length - 5} more` : '';
+          entry.reason = [entry.reason, `not inventoried, so not checked: ${shown}${more}`].filter((x) => x !== undefined).join('; ');
         }
         if (coverage.total > 0 && coverage.matchable === 0) {
           // Nothing whatsoever could be checked — a "0 matches" result here

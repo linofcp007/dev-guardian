@@ -272,10 +272,14 @@ describe("create_fix_pr — a lockfile's resolved URLs never carry the user's re
 
 describe('create_fix_pr — a pip requirement that names its own host is refused', () => {
   it.each([
-    [`pkg @ http://127.0.0.1:{port}/pkg-1.0.tar.gz`, 'a direct reference (http://127.0.0.1)'],
-    [`http://127.0.0.1:{port}/pkg-1.0.tar.gz`, 'a URL (http://127.0.0.1)'],
-    [`git+http://127.0.0.1:{port}/repo.git#egg=pkg`, 'a VCS URL (git+http://127.0.0.1)'],
-    [`-r http://127.0.0.1:{port}/more.txt`, 'an include from a URL (http://127.0.0.1)'],
+    [`pkg @ http://127.0.0.1:{port}/pkg-1.0.tar.gz`, 'direct reference (http://127.0.0.1)'],
+    [`http://127.0.0.1:{port}/pkg-1.0.tar.gz`, 'URL requirement (http://127.0.0.1)'],
+    [`git+http://127.0.0.1:{port}/repo.git#egg=pkg`, 'VCS requirement (git+http://127.0.0.1)'],
+    [`-r http://127.0.0.1:{port}/more.txt`, 'include of a URL (http://127.0.0.1)'],
+    // Round 2: bypasses of the first version, measured against pip 26's own parser.
+    [`--index http://127.0.0.1:{port}/simple`, 'index option (--index, http://127.0.0.1)'],
+    [`-egit+http://127.0.0.1:{port}/r.git#egg=x`, 'editable requirement (-e, git+http://127.0.0.1)'],
+    [`pkg @ http://ci:S3CRET@127.0.0.1:{port}/p.tgz`, 'direct reference (http://127.0.0.1)'],
   ])(
     '%s: refused, named, and never contacted',
     async (line, what) => {
@@ -288,9 +292,10 @@ describe('create_fix_pr — a pip requirement that names its own host is refused
       expect(groups).toHaveLength(1);
       expect(groups[0]?.outcome).toBe('refused');
       expect(groups[0]?.note).toBe(
-        `refused: the project's requirements fetch from a host they name (requirements.txt: ${what}); ` +
-          "dev-guardian doesn't install from a repository-chosen source",
+        `refused: the project's Python requirements name where pip installs from, or could not be checked (requirements.txt:2: ${what}); ` +
+          'dev-guardian installs only plain requirements it has read — a name, extras, versions and markers',
       );
+      expect(groups[0]?.note).not.toContain('S3CRET');
       expect(attacker.seen).toEqual([]);
     },
     TIMEOUT_MS,

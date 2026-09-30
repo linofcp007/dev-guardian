@@ -10,7 +10,6 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   composerChoosesRepository,
   installRefusal,
-  requirementsChooseIndex,
   setAsidePackageConfig,
 } from '../../../src/fixpr/repoPackageConfig.js';
 import { packageManagerEnv, userConfigReferences } from '../../../src/fixpr/testCommandEnv.js';
@@ -112,62 +111,22 @@ describe('composerChoosesRepository', () => {
   });
 });
 
-describe('requirementsChooseIndex', () => {
-  it.each([
-    ['-i https://attacker.example/simple', '-i'],
-    ['-ihttps://attacker.example/simple', '-i'],
-    ['--index-url https://attacker.example/simple', '--index-url'],
-    ['--index-url=https://attacker.example/simple', '--index-url'],
-    ['--extra-index-url https://attacker.example/simple', '--extra-index-url'],
-    ['-f https://attacker.example/wheels', '-f'],
-    ['--find-links=./wheels', '--find-links'],
-    ['--trusted-host attacker.example', '--trusted-host'],
-  ])('finds %s in requirements.txt', (line, option) => {
-    const dir = tree({ 'requirements.txt': `requests==2.0.0\n${line}\n` });
-    expect(requirementsChooseIndex(dir)).toBe(`requirements.txt: ${option}`);
-  });
-
-  it('follows -r includes and -c constraints, and requirements/*.txt', () => {
-    expect(requirementsChooseIndex(tree({ 'requirements.txt': '-r base.txt\n', 'base.txt': '--index-url https://x/simple\n' }))).toBe(
-      'base.txt: --index-url',
-    );
-    expect(requirementsChooseIndex(tree({ 'requirements.txt': '-c constraints.txt\n', 'constraints.txt': '-i https://x\n' }))).toBe(
-      'constraints.txt: -i',
-    );
-    expect(requirementsChooseIndex(tree({ 'requirements/dev.txt': '--extra-index-url https://x\n' }))).toBe(
-      'requirements/dev.txt: --extra-index-url',
-    );
-  });
-
-  it('ignores comments, a package named like an option, and an include that leaves the project', () => {
-    const outside = makeTempDir('repo-pm-outside-');
-    writeFileSync(join(outside, 'evil.txt'), '-i https://x\n');
-    const dir = tree({
-      'requirements.txt': `# -i https://x\nrequests==2.0.0  # --index-url in a comment\n-r ${join(outside, 'evil.txt')}\n`,
-    });
-    expect(requirementsChooseIndex(dir)).toBeNull();
-  });
-
-  it('reads a continued line as one', () => {
-    expect(requirementsChooseIndex(tree({ 'requirements.txt': 'requests==2.0.0 \\\n--index-url https://x\n' }))).toBeNull();
-    expect(requirementsChooseIndex(tree({ 'requirements.txt': '--index-url \\\n  https://x\n' }))).toBe('requirements.txt: --index-url');
-  });
-});
-
 describe('installRefusal', () => {
   const pipIndex = tree({ 'requirements.txt': 'django==3.2.0\n--index-url https://attacker.example/simple\n' });
 
-  it('refuses a pip step where the requirements choose an index', () => {
+  it('refuses a pip step where the requirements choose an index, naming the file, the line and the option', () => {
     expect(
       installRefusal({ projectDir: pipIndex, stepEcosystems: ['pip'], stepFiles: ['requirements.txt'], rescanTools: ['scan_deps'] }),
     ).toBe(
-      "the project's requirements choose a package index (requirements.txt: --index-url); dev-guardian doesn't install from a repository-chosen index",
+      "the project's Python requirements name where pip installs from, or could not be checked " +
+        '(requirements.txt:2: index option (--index-url, https://attacker.example)); ' +
+        'dev-guardian installs only plain requirements it has read — a name, extras, versions and markers',
     );
   });
 
   it("refuses any group deps_audit re-scans there: its pip-audit installs every requirements file", () => {
     expect(installRefusal({ projectDir: pipIndex, stepEcosystems: ['npm'], stepFiles: [], rescanTools: ['deps_audit'] })).toMatch(
-      /repository-chosen index/,
+      /index option/,
     );
   });
 
@@ -181,7 +140,19 @@ describe('installRefusal', () => {
     const dir = tree({ 'composer.json': '{"repositories":[{"type":"composer","url":"https://attacker.example"}]}' });
     expect(installRefusal({ projectDir: dir, stepEcosystems: ['composer'], stepFiles: [], rescanTools: [] })).toMatch(/repositories/);
   });
+
+  it('refuses an npm install where a dependency points at a network path, naming it by host', () => {
+    const dir = tree({ 'package.json': JSON.stringify({ dependencies: { a: '1.0.0', b: 'file:\\\\evil.invalid\\share\\b' } }) });
+    expect(installRefusal({ projectDir: dir, stepEcosystems: ['npm'], stepFiles: [], rescanTools: [] })).toBe(
+      "the project's npm dependencies point at a network path (package.json: dependencies.b (\\\\evil.invalid)); " +
+        "dev-guardian doesn't install from a network path",
+    );
+    // No npm install in this checkout: nothing to refuse.
+    expect(installRefusal({ projectDir: dir, stepEcosystems: ['pip'], stepFiles: [], rescanTools: [] })).toBeNull();
+    expect(installRefusal({ projectDir: dir, stepEcosystems: [], stepFiles: [], rescanTools: [], npmInstalls: true })).toMatch(/network path/);
+  });
 });
+
 
 describe('packageManagerEnv', () => {
   it("keeps the allowlist, the package managers' own configuration, and what the user's ~/.npmrc references — nothing else", () => {

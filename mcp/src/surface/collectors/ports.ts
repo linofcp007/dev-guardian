@@ -11,7 +11,7 @@
 
 import { realpathSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { readProjectTextOrUndefined } from '../../platform/projectFs.js';
+import { projectPathKind, readProjectTextOrUndefined } from '../../platform/projectFs.js';
 
 const DOCKERFILES = ['Dockerfile', 'dockerfile'];
 const COMPOSE_FILES = [
@@ -42,7 +42,7 @@ export function collectPorts(projectPath: string): { port: number; source: strin
     // can collide (ino: 0) on some FAT/exFAT/SMB/FUSE filesystems -- both
     // de-duplicates correctly and yields the real on-disk casing for
     // `source`, instead of whichever candidate name happened to be checked.
-    const canonical = canonicalPath(path);
+    const canonical = canonicalPath(projectPath, path);
     if (canonical === undefined) continue;
     if (seenDockerfiles.has(canonical)) continue;
     seenDockerfiles.add(canonical);
@@ -96,7 +96,9 @@ function readLines(projectPath: string, path: string): string[] {
  * available on this platform) -- in every one of those cases the candidate
  * is simply skipped, not treated as a crash.
  */
-function canonicalPath(path: string): string | undefined {
+function canonicalPath(projectPath: string, path: string): string | undefined {
+  // Links walked first, never followed to a network path or out of the project (platform/projectFs.ts).
+  if (projectPathKind(projectPath, path) !== 'file') return undefined;
   try {
     return realpathSync.native(path);
   } catch {

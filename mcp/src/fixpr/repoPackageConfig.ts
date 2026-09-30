@@ -33,7 +33,9 @@
 
 import { mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { describeReadRefusal, isWithinDir, listProjectDir, readProjectJson, readProjectText } from '../platform/projectFs.js';
+import { isWithinDir, listProjectDir, PROJECT_LOCKFILE_MAX_BYTES, readProjectJson } from '../platform/projectFs.js';
+import { checkRequirements, describePipRefusal, urlHost, type PipRefusal } from '../deps/pipRequirements.js';
+import { checkPyproject, checkSetupCfg } from '../deps/pythonProject.js';
 
 /** Names moved aside in each directory, lower-cased (the match is case-insensitive). */
 const TOP_LEVEL = new Set(['.npmrc', '.pnpmrc', '.yarnrc', '.yarnrc.yml', 'pip.conf', 'pip.ini', '.pip', 'nuget.config']);
@@ -136,168 +138,128 @@ export function composerChoosesRepository(projectDir: string): string | null {
 
 // ------------------------------------------------------------------ pip
 
-/** pip's options that choose where packages come from. */
-const INDEX_OPTION = /^\s*(?:-[if](?![A-Za-z-])|-[if]\S|--(?:index-url|extra-index-url|find-links|trusted-host)(?=[\s=]|$))/;
-/** `-r` / `--requirement` / `-c` / `--constraint`, and the file they name. */
-const INCLUDE = /^\s*(?:-[rc](?![A-Za-z-])\s*=?\s*|-[rc](?=\S)|--(?:requirement|constraint)(?:\s*=\s*|\s+))(\S+)/;
-
-/**
- * A requirement that pip fetches from a host the LINE names, not from an
- * index — as much the repository's choice of where the user's machine
- * downloads (and builds) code from as `--index-url`, and refused the same
- * way (review of 3.0, W2E). Each is `[what it is, pattern]`; the pattern's
- * first group is the URL. `file:` URLs and plain paths are local and pass:
- *
- *   - a VCS URL, alone, after `-e` / `--editable`, or as a direct reference:
- *     `git+https://…`, `hg+…`, `svn+…`, `bzr+…`, any transport;
- *   - a PEP 508 direct reference: `name @ https://…` (extras and markers
- *     allowed);
- *   - a bare URL, alone or after `-e` / `--editable`: `https://…/pkg.tar.gz`;
- *   - an include of a URL: `-r https://…/requirements.txt`, `-c …`, which
- *     pip downloads and then reads — its lines unseen here.
- */
-const REMOTE_SOURCES: ReadonlyArray<readonly [string, RegExp]> = [
-  ['a VCS URL', /(?:^|[\s@=])((?:git|hg|svn|bzr)\+\S+)/i],
-  ['a direct reference', /^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@\s*((?!file:)\S+)/i],
-  ['a URL', /^\s*(?:(?:-e|--editable)(?:\s*=\s*|\s+))?((?!file:)[a-z][a-z0-9+.-]*:\/\/\S+)/i],
-  ['an include from a URL', /^\s*(?:-[rc]|--requirement|--constraint)(?:\s*=\s*|\s*)((?!file:)[a-z][a-z0-9+.-]*:\/\/\S+)/i],
-];
-
-/** `scheme://host` of a URL for a result — never its path, query or credentials. */
-function urlHost(url: string): string {
-  const m = /^((?:[a-z]+\+)?[a-z][a-z0-9+.-]*:\/\/)(?:[^@/?#]*@)?([^/?#:]*)/i.exec(url);
-  return m !== null ? `${m[1] ?? ''}${m[2] ?? ''}` : url.split(/[/?#]/)[0] ?? url;
-}
-
-/** The first remote source on a (comment-stripped) requirement line, described. */
-function remoteSourceOn(line: string): string | null {
-  for (const [what, re] of REMOTE_SOURCES) {
-    const url = re.exec(line)?.[1];
-    if (url !== undefined) return `${what} (${urlHost(url)})`;
-  }
-  return null;
-}
-
-/** Where a project's pip requirements choose to install from, and in which file. */
-export interface PipSourceChoice {
-  /** `<file>: <option or what the line fetches>`, `/`-separated. */
-  where: string;
-  /**
-   * `index`: an index option (`-i`, `--extra-index-url`, `-f`, `--trusted-host`, …);
-   * `remote`: a line that fetches from a host it names (a VCS URL, a direct
-   * reference, a bare URL, an include from a URL); `unchecked`: a
-   * requirements file there that could not be read to check.
-   */
-  kind: 'index' | 'remote' | 'unchecked';
-}
-
 /** The requirement files the re-scan's pip-audit reads, as `deps_audit` finds them. */
-function rootRequirementFiles(projectDir: string): string[] {
+export function rootRequirementFiles(projectDir: string): string[] {
   const out: string[] = [];
-  for (const { name } of listProjectDir(projectDir, projectDir)) {
-    if (/^requirements.*\.txt$/i.test(name)) out.push(name);
+  for (const { name, kind } of listProjectDir(projectDir, projectDir)) {
+    if (kind !== 'directory' && /^requirements.*\.txt$/i.test(name)) out.push(name);
   }
-  for (const { name } of listProjectDir(projectDir, join(projectDir, 'requirements'))) {
-    if (name.toLowerCase().endsWith('.txt')) out.push(`requirements/${name}`);
+  for (const { name, kind } of listProjectDir(projectDir, join(projectDir, 'requirements'))) {
+    if (kind !== 'directory' && name.toLowerCase().endsWith('.txt')) out.push(`requirements/${name}`);
   }
   return out;
 }
 
 /**
- * The first requirement file — among the project's own and every file they
- * include with `-r` or `-c`, constraints included — that chooses where pip
- * installs from, or null:
- *
- *   - `index`: a package-index option (`-i`, `--index-url`,
- *     `--extra-index-url`, `-f`, `--find-links`, `--trusted-host`), as
- *     `<file>: <option>`;
- *   - `remote`: a line that fetches from a host it names — a VCS URL, a
- *     direct reference, a bare URL, an include from a URL
- *     ({@link REMOTE_SOURCES}) — as `<file>: <what> (<scheme>://<host>)`;
- *   - `unchecked`: a file in that set that is there and could not be read
- *     (a FIFO, over the size cap, a link out of the checkout), or an include
- *     that leaves the checkout — pip would read it, so "chooses nothing"
- *     cannot be said of it.
- *
- * `extra` names more files to start from (a fix's own requirements file).
- * Read through `platform/projectFs.ts`, contained in `checkoutRoot` (the
- * whole checkout the project sits in — a monorepo's `-r ../shared/…` is the
- * repository's too); `projectDir` when not given.
+ * Every reason a pip install from this project must not happen
+ * (`pipRequirements.ts`, `pythonProject.ts`): the requirements files
+ * `deps_audit` hands pip-audit and `extra` (a fix's own file), with every
+ * file they include; `pyproject.toml` and `setup.cfg`. Read within
+ * `checkoutRoot`. Empty: installable.
  */
-export function requirementsChooseSource(
-  projectDir: string,
-  extra: readonly string[] = [],
-  checkoutRoot: string = projectDir,
-): PipSourceChoice | null {
-  const queue = [...new Set([...rootRequirementFiles(projectDir), ...extra])];
-  const seen = new Set<string>();
-  const shown = (key: string): string => relative(projectDir, key).split(sep).join('/');
-  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-    const key = resolve(projectDir, file);
-    if (seen.has(key) || seen.size > 200) continue;
-    seen.add(key);
-    const read = readProjectText(checkoutRoot, key, MAX_REQUIREMENTS_BYTES);
-    if (read.status === 'absent') continue;
-    if (read.status === 'refused') return { where: `${shown(key)}: ${describeReadRefusal(read.reason)}`, kind: 'unchecked' };
-    // A `\` at the end of a line continues it (pip's own rule).
-    for (const raw of read.text.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
-      const line = raw.replace(/(^|\s)#.*$/, '');
-      const option = INDEX_OPTION.exec(line);
-      if (option !== null) {
-        const name = option[0].trim().split(/[\s=]/)[0] ?? option[0].trim();
-        return { where: `${shown(key)}: ${name.startsWith('--') ? name : name.slice(0, 2)}`, kind: 'index' };
-      }
-      const remote = remoteSourceOn(line);
-      if (remote !== null) return { where: `${shown(key)}: ${remote}`, kind: 'remote' };
-      const include = INCLUDE.exec(line);
-      if (include?.[1] !== undefined) queue.push(relative(projectDir, resolve(dirname(key), include[1])));
-    }
+export function pythonInstallRefusals(projectDir: string, checkoutRoot: string, extra: readonly string[] = []): PipRefusal[] {
+  const handed = rootRequirementFiles(projectDir);
+  const requirements = checkRequirements(projectDir, [...handed, ...extra], checkoutRoot).refusals;
+  return [
+    ...requirements,
+    ...checkPyproject(projectDir, checkoutRoot, handed.length === 0),
+    ...checkSetupCfg(projectDir, checkoutRoot),
+  ];
+}
+
+/** The refusal reason for a pip install, naming the first few refusals. */
+export function pipInstallRefusal(refusals: readonly PipRefusal[]): string {
+  const shown = refusals.slice(0, 3).map(describePipRefusal).join('; ');
+  const more = refusals.length > 3 ? `; and ${refusals.length - 3} more` : '';
+  return (
+    `the project's Python requirements name where pip installs from, or could not be checked (${shown}${more}); ` +
+    "dev-guardian installs only plain requirements it has read — a name, extras, versions and markers"
+  );
+}
+
+// ------------------------------------------------------------------ npm
+
+/** The package.json fields whose values are dependency specs. */
+const NPM_SPEC_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides', 'resolutions'] as const;
+
+/**
+ * Whether an npm dependency spec reaches a NETWORK path: `file:`, `link:`,
+ * `portal:` or `git+file:` (or no prefix) followed by `\\host\share`,
+ * `//host/share`, or `file://<host>/…` with a host other than `localhost`.
+ * On Windows npm opens it — and Windows sends the user's credentials to the
+ * host that answers.
+ */
+export function npmSpecNetworkHost(spec: string): string | null {
+  const m = /^(?:(?:file|link|portal|git\+file):)?(.*)$/i.exec(spec.trim());
+  const rest = m?.[1] ?? spec;
+  if (/^(?:\\\\|\/\/)[^\\/]/.test(rest)) {
+    // `file://host/…` after the prefix is stripped reads `//host/…`; `file:///…` reads `///…` (local).
+    const host = /^(?:\\\\|\/\/)([^\\/]+)/.exec(rest)?.[1] ?? '';
+    if (/^file:\/\//i.test(spec.trim()) && host.toLowerCase() === 'localhost') return null;
+    return urlHost(rest);
+  }
+  if (/^\/{3,}[^/]/.test(rest) && /^(?:file|git\+file):/i.test(spec.trim())) {
+    // `file:////host/share` — four slashes is a UNC path to Windows.
+    const unc = rest.replace(/^\/+/, '//');
+    return /^\/{4,}/.test(rest) ? urlHost(unc) : null;
   }
   return null;
 }
 
-/** {@link requirementsChooseSource}'s `where` for an index option only; null for anything else. */
-export function requirementsChooseIndex(projectDir: string, extra: readonly string[] = []): string | null {
-  const choice = requirementsChooseSource(projectDir, extra);
-  return choice?.kind === 'index' ? choice.where : null;
-}
-
-/** The largest requirements file read; a real one is a few KB. */
-const MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
-
-/** The refusal reason for a repository-chosen pip index. */
-export function pipIndexRefusal(where: string): string {
-  return `the project's requirements choose a package index (${where}); dev-guardian doesn't install from a repository-chosen index`;
-}
-
-/** The refusal reason for any {@link PipSourceChoice}. */
-export function pipSourceRefusal(choice: PipSourceChoice): string {
-  switch (choice.kind) {
-    case 'index':
-      return pipIndexRefusal(choice.where);
-    case 'remote':
-      return (
-        `the project's requirements fetch from a host they name (${choice.where}); ` +
-        "dev-guardian doesn't install from a repository-chosen source"
-      );
-    case 'unchecked':
-      return (
-        `the project's requirements could not all be read to check where they install from (${choice.where}); ` +
-        "dev-guardian doesn't install from requirements it cannot check"
-      );
+/**
+ * Dependency specs in `package.json` (and lock-file `resolved` entries) that
+ * reach a network path, as `<file>: <field>.<name> (\\host)` — or empty.
+ */
+export function npmNetworkPaths(projectDir: string, checkoutRoot: string = projectDir): string[] {
+  const out: string[] = [];
+  const walk = (file: string, where: string, v: unknown, depth: number): void => {
+    if (depth > 6 || out.length >= 10) return;
+    if (typeof v === 'string') {
+      const host = npmSpecNetworkHost(v);
+      if (host !== null) out.push(`${file}: ${where} (${host})`);
+      return;
+    }
+    if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+      for (const [k, inner] of Object.entries(v)) walk(file, where === '' ? k : `${where}.${k}`, inner, depth + 1);
+    }
+  };
+  const pkg = readProjectJson(checkoutRoot, join(projectDir, 'package.json'));
+  if (typeof pkg === 'object' && pkg !== null) {
+    for (const field of NPM_SPEC_FIELDS) walk('package.json', field, (pkg as Record<string, unknown>)[field], 0);
   }
+  const lock = readProjectJson(checkoutRoot, join(projectDir, 'package-lock.json'), PROJECT_LOCKFILE_MAX_BYTES);
+  const packages = typeof lock === 'object' && lock !== null ? (lock as Record<string, unknown>)['packages'] : undefined;
+  if (typeof packages === 'object' && packages !== null) {
+    for (const [key, entry] of Object.entries(packages)) {
+      if (out.length >= 10) break;
+      const resolved = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>)['resolved'] : undefined;
+      if (typeof resolved === 'string') walk('package-lock.json', `packages.${key || '(root)'}.resolved`, resolved, 0);
+    }
+  }
+  return out;
+}
+
+/** The refusal reason for an npm install that would reach a network path. */
+export function npmNetworkRefusal(where: readonly string[]): string {
+  const shown = where.slice(0, 3).join('; ');
+  const more = where.length > 3 ? `; and ${where.length - 3} more` : '';
+  return `the project's npm dependencies point at a network path (${shown}${more}); dev-guardian doesn't install from a network path`;
 }
 
 /**
- * Why a group must not be attempted in this checkout, or null: a Composer
- * step where `composer.json` declares its own repositories
- * ({@link composerChoosesRepository}); or a pip step, or a re-scan by
- * `deps_audit` (whose pip-audit installs every requirements file into a
- * temporary virtualenv — running an sdist's build code), where the
- * requirements choose a package index, fetch from a host a line names, or
- * cannot all be read to check ({@link requirementsChooseSource}).
- * `checkoutRoot`: the whole checkout `projectDir` sits in, which the
- * requirements files are read within.
+ * Why a group must not be attempted in this checkout, or null:
+ *
+ *   - a Composer step where `composer.json` declares its own repositories
+ *     ({@link composerChoosesRepository});
+ *   - a pip step, or a re-scan by `deps_audit` (whose pip-audit installs
+ *     every requirement into a temporary virtualenv — building any sdist it
+ *     fetches), where the project's Python requirements are not all plain
+ *     requirements this server has read ({@link pythonInstallRefusals});
+ *   - an npm install — a step, or the test environment's `npm ci` — where a
+ *     dependency points at a network path ({@link npmNetworkPaths}).
+ *
+ * `checkoutRoot`: the whole checkout `projectDir` sits in, which every file
+ * is read within.
  */
 export function installRefusal(opts: {
   projectDir: string;
@@ -305,18 +267,25 @@ export function installRefusal(opts: {
   stepEcosystems: readonly string[];
   stepFiles: readonly string[];
   rescanTools: readonly string[];
+  /** An npm install runs in this checkout: the test environment's `npm ci`, or an npm step. */
+  npmInstalls?: boolean;
 }): string | null {
+  const root = opts.checkoutRoot ?? opts.projectDir;
   if (opts.stepEcosystems.includes('composer')) {
     const composer = composerChoosesRepository(opts.projectDir);
     if (composer !== null) return composer;
   }
   if (opts.stepEcosystems.includes('pip') || opts.rescanTools.includes('deps_audit')) {
-    const choice = requirementsChooseSource(
+    const refusals = pythonInstallRefusals(
       opts.projectDir,
+      root,
       opts.stepFiles.filter((f) => /\.(txt|in)$/i.test(f)),
-      opts.checkoutRoot ?? opts.projectDir,
     );
-    if (choice !== null) return pipSourceRefusal(choice);
+    if (refusals.length > 0) return pipInstallRefusal(refusals);
+  }
+  if (opts.npmInstalls === true || opts.stepEcosystems.includes('npm')) {
+    const network = npmNetworkPaths(opts.projectDir, root);
+    if (network.length > 0) return npmNetworkRefusal(network);
   }
   return null;
 }

@@ -22,16 +22,37 @@
  *      `Version:` header — always at that exact path, parent and child
  *      themes alike.
  *
+ * ## The install is hostile input (review of 3.0, W2E)
+ *
  * Every read stays inside the install and goes through
- * `platform/projectFs.ts` (review of 3.0, W2E): a `version.php` linked to
- * `/dev/zero` OOM-killed the MCP server. A file that is there and was not
- * read is a warning naming it and why — a component whose version was never
- * read must not read as one with no known vulnerability.
+ * `platform/projectFs.ts`: a `version.php` linked to `/dev/zero` OOM-killed
+ * the MCP server. What was there and could not be inventoried is never a
+ * clean result:
+ *
+ *   - a file that was not read (a link out of the install, a FIFO, a file
+ *     past the inventory's read budget) is a warning naming it and why;
+ *   - a directory under `wp-content/plugins`, `themes` or `mu-plugins`, or
+ *     one of those three itself, that is a link out of the install, cannot
+ *     be listed or is not a directory is in `not_inventoried`, and
+ *     `wp_vuln_check_source` reports partial coverage for it. A link that
+ *     STAYS inside the install is followed: a `wp-content/plugins` linked to
+ *     a shared directory in the same tree used to read as "0 plugins", and
+ *     the Wordfence match then read clean (Akismet was inventoried on
+ *     e27a37ae; the conversion to `listProjectDir` dropped it).
+ *
+ * Reads are bounded per file (a header's first 8 KiB) and for the whole
+ * inventory ({@link INVENTORY_BUDGET_BYTES} / {@link INVENTORY_BUDGET_FILES}).
  */
 
 import { join, relative, sep } from 'node:path';
-import { describeReadRefusal } from '../platform/projectFs.js';
-import { readDirSafe, readTextSafe, type OnRefusedRead } from '../runners/stackDetect.js';
+import {
+  describeReadRefusal,
+  listProjectDirOrNull,
+  presentInProject,
+  projectPathKind,
+  ReadBudget,
+  type ProjectDirEntry,
+} from '../platform/projectFs.js';
 
 /** A plugin's or theme's main file header is always near the top; bounding
  *  the read keeps a pathologically large file from being read in full. */
@@ -41,6 +62,9 @@ const MAX_HEADER_BYTES = 8192;
 const MAX_README_BYTES = 16384;
 /** `wp-includes/version.php` is a few KB; `$wp_version` sits near its top. */
 const MAX_VERSION_PHP_BYTES = 64 * 1024;
+/** What one inventory may read in all: a large site has a few thousand plugin files, each read for 8 KiB. */
+export const INVENTORY_BUDGET_BYTES = 64 * 1024 * 1024;
+export const INVENTORY_BUDGET_FILES = 20_000;
 
 export interface WpComponentInventory {
   /** Directory name under `wp-content/plugins/` or `wp-content/themes/`
@@ -70,6 +94,14 @@ export interface WpSourceInventory {
    *  worth matching against a vulnerability feed by slug. See
    *  {@link inventoryMuPlugins}. */
   mu_plugins: WpComponentInventory[];
+  /**
+   * Install-relative paths (`/`) of what is there and could not be
+   * inventoried — a component directory, or `wp-content/plugins` itself,
+   * that links out of the install, cannot be listed or is not a directory;
+   * a candidate main file that was not read. Each is also a warning, with
+   * why. What is in it was matched against nothing: coverage is partial.
+   */
+  not_inventoried: string[];
   /** Non-fatal notices: e.g. core version unreadable, a plugin directory
    *  with no discoverable main file, a component whose main file WAS found
    *  but carried no usable version (fix round 1, GC3 — this used to be
@@ -80,27 +112,68 @@ export interface WpSourceInventory {
   warnings: string[];
 }
 
-/** The install being read, and who hears about a file in it that was not read. */
+/** The install being read, what it may still read, and what could not be inventoried. */
 interface Src {
   root: string;
-  onRefused: OnRefusedRead;
+  budget: ReadBudget;
+  /** Install-relative path → why it was not read or listed. */
+  unread: Map<string, string>;
 }
 
-/** `path`'s text (its first `maxBytes` bytes when given), or null — through {@link readTextSafe}. */
-function read(src: Src, path: string, maxBytes?: number): string | null {
-  return readTextSafe(src.root, path, { ...(maxBytes !== undefined ? { maxBytes } : {}), onRefused: src.onRefused });
+function relOf(src: Src, abs: string): string {
+  return relative(src.root, abs).split(sep).join('/');
+}
+
+function noteUnread(src: Src, abs: string, why: string): void {
+  const rel = relOf(src, abs);
+  if (!src.unread.has(rel)) src.unread.set(rel, why);
+}
+
+/** The first `maxBytes` bytes of `path`, within the budget — or null, naming why when it was there. */
+function read(src: Src, path: string, maxBytes: number): string | null {
+  const r = src.budget.readHead(src.root, path, maxBytes);
+  if (r.status === 'ok') return r.text;
+  if (r.status === 'refused') noteUnread(src, path, describeReadRefusal(r.reason));
+  return null;
+}
+
+/** What an entry of a listing is, a link followed only while it stays inside the install. */
+type EntryKind = 'directory' | 'file' | 'absent' | 'unreachable';
+
+function kindOf(src: Src, abs: string, e: ProjectDirEntry): EntryKind {
+  if (e.kind === 'directory') return 'directory';
+  if (e.kind === 'file') return 'file';
+  if (e.kind === 'other') return 'unreachable';
+  const k = projectPathKind(src.root, abs);
+  if (k === 'directory' || k === 'file' || k === 'absent') return k;
+  return 'unreachable';
+}
+
+/**
+ * The entries of `dir` — or null, naming it, when something is there and it
+ * could not be listed (a link out of the install, not a directory). Absent:
+ * `[]`, nothing to name.
+ */
+function listDir(src: Src, dir: string): ProjectDirEntry[] | null {
+  const entries = listProjectDirOrNull(src.root, dir);
+  if (entries !== null) return entries;
+  if (!presentInProject(src.root, dir)) return [];
+  const kind = projectPathKind(src.root, dir);
+  noteUnread(
+    src,
+    dir,
+    kind === 'outside'
+      ? 'a link out of the install (or to a network or device path), not followed — not inventoried'
+      : kind === 'file' || kind === 'other'
+        ? 'not a directory — not inventoried'
+        : 'this directory could not be listed — not inventoried',
+  );
+  return null;
 }
 
 export function inventoryWordPressSource(wpPath: string): WpSourceInventory {
   const warnings: string[] = [];
-  const unread = new Map<string, string>();
-  const src: Src = {
-    root: wpPath,
-    onRefused: (path, reason) => {
-      const rel = relative(wpPath, path).split(sep).join('/');
-      if (!unread.has(rel)) unread.set(rel, describeReadRefusal(reason));
-    },
-  };
+  const src: Src = { root: wpPath, budget: new ReadBudget(INVENTORY_BUDGET_BYTES, INVENTORY_BUDGET_FILES), unread: new Map() };
   const coreVersion = readCoreVersion(src);
   if (coreVersion === null) {
     warnings.push(
@@ -110,12 +183,18 @@ export function inventoryWordPressSource(wpPath: string): WpSourceInventory {
   const plugins = inventoryPlugins(src, warnings);
   const themes = inventoryThemes(src, warnings);
   const muPlugins = inventoryMuPlugins(src, warnings);
-  for (const [rel, why] of unread) warnings.push(`${rel}: not read — ${why}.`);
+  const notInventoried: string[] = [];
+  for (const [rel, why] of src.unread) {
+    warnings.push(`${rel}: not read — ${why}.`);
+    // The core version file has its own warning, and matters to no component.
+    if (rel !== 'wp-includes/version.php') notInventoried.push(rel);
+  }
   return {
     core: { version: coreVersion },
     plugins,
     themes,
     mu_plugins: muPlugins,
+    not_inventoried: notInventoried.sort(),
     warnings,
   };
 }
@@ -143,16 +222,17 @@ function readCoreVersion(src: Src): string | null {
 function inventoryPlugins(src: Src, warnings: string[]): WpComponentInventory[] {
   const pluginsDir = join(src.root, 'wp-content', 'plugins');
   const out: WpComponentInventory[] = [];
-  for (const entry of readDirSafe(src.root, pluginsDir)) {
-    if (entry.kind === 'directory') {
-      const dir = join(pluginsDir, entry.name);
-      const main = findMainFile(src, dir, entry.name, 'Plugin Name');
+  for (const entry of listDir(src, pluginsDir) ?? []) {
+    const abs = join(pluginsDir, entry.name);
+    const kind = kindOf(src, abs, entry);
+    if (kind === 'directory') {
+      const main = findMainFile(src, abs, entry.name, 'Plugin Name');
       if (main === null) {
         warnings.push(`wp-content/plugins/${entry.name}: no file with a "Plugin Name:" header — skipped.`);
         continue;
       }
       const text = read(src, main, MAX_HEADER_BYTES) ?? '';
-      const stableTag = readStableTag(src, join(dir, 'readme.txt'));
+      const stableTag = readStableTag(src, join(abs, 'readme.txt'));
       const headerVersion = extractHeader(text, 'Version');
       const version = headerVersion ?? usableVersion(stableTag);
       const component: WpComponentInventory = {
@@ -164,9 +244,10 @@ function inventoryPlugins(src: Src, warnings: string[]): WpComponentInventory[] 
       if (stableTag !== null) component.stable_tag = stableTag;
       if (version === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, stableTag);
       out.push(component);
-    } else if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.php')) {
-      const filePath = join(pluginsDir, entry.name);
-      const text = read(src, filePath, MAX_HEADER_BYTES);
+    } else if (kind === 'unreachable') {
+      noteUnread(src, abs, 'a link out of the install, to a network or device path, or not a regular file or directory — not inventoried');
+    } else if (kind === 'file' && entry.name.toLowerCase().endsWith('.php')) {
+      const text = read(src, abs, MAX_HEADER_BYTES);
       if (text === null || !hasHeader(text, 'Plugin Name')) continue;
       const version = extractHeader(text, 'Version');
       if (version === null) warnUnversioned(warnings, `wp-content/plugins/${entry.name}`, undefined);
@@ -174,7 +255,7 @@ function inventoryPlugins(src: Src, warnings: string[]): WpComponentInventory[] 
         slug: entry.name.slice(0, -'.php'.length),
         name: extractHeader(text, 'Plugin Name'),
         version,
-        path: filePath,
+        path: abs,
       });
     }
   }
@@ -184,9 +265,15 @@ function inventoryPlugins(src: Src, warnings: string[]): WpComponentInventory[] 
 function inventoryThemes(src: Src, warnings: string[]): WpComponentInventory[] {
   const themesDir = join(src.root, 'wp-content', 'themes');
   const out: WpComponentInventory[] = [];
-  for (const entry of readDirSafe(src.root, themesDir)) {
-    if (entry.kind !== 'directory') continue;
-    const styleCssPath = join(themesDir, entry.name, 'style.css');
+  for (const entry of listDir(src, themesDir) ?? []) {
+    const abs = join(themesDir, entry.name);
+    const kind = kindOf(src, abs, entry);
+    if (kind === 'unreachable') {
+      noteUnread(src, abs, 'a link out of the install, to a network or device path, or not a regular file or directory — not inventoried');
+      continue;
+    }
+    if (kind !== 'directory') continue;
+    const styleCssPath = join(abs, 'style.css');
     const text = read(src, styleCssPath, MAX_HEADER_BYTES);
     if (text === null || !hasHeader(text, 'Theme Name')) {
       warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header — skipped.`);
@@ -230,8 +317,8 @@ const MU_PLUGIN_LOADER_RE =
 function inventoryMuPlugins(src: Src, warnings: string[]): WpComponentInventory[] {
   const muDir = join(src.root, 'wp-content', 'mu-plugins');
   const out: WpComponentInventory[] = [];
-  for (const entry of readDirSafe(src.root, muDir)) {
-    if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.php')) continue;
+  for (const entry of listDir(src, muDir) ?? []) {
+    if (!entry.name.toLowerCase().endsWith('.php') || entry.kind === 'directory') continue;
     const filePath = join(muDir, entry.name);
     const text = read(src, filePath, MAX_HEADER_BYTES);
     if (text === null) continue;
@@ -274,10 +361,12 @@ function inventoryMuPlugins(src: Src, warnings: string[]): WpComponentInventory[
  * `nameHeader`. `<dirName>.php` is tried first (the overwhelmingly common
  * convention) so a helper file that happens to sort earlier alphabetically
  * never wins by accident; every other top-level `*.php` file is tried next,
- * in directory order. Returns null when none carries the header.
+ * in directory order. A link or a FIFO under a `*.php` name is tried too —
+ * read if it stays inside the install, else named. Returns null when none
+ * carries the header.
  */
 function findMainFile(src: Src, dir: string, dirName: string, nameHeader: string): string | null {
-  const candidates = readDirSafe(src.root, dir).filter((e) => e.kind === 'file' && e.name.toLowerCase().endsWith('.php'));
+  const candidates = (listDir(src, dir) ?? []).filter((e) => e.kind !== 'directory' && e.name.toLowerCase().endsWith('.php'));
   const preferredName = `${dirName.toLowerCase()}.php`;
   const preferred = candidates.find((e) => e.name.toLowerCase() === preferredName);
   const ordered = preferred ? [preferred, ...candidates.filter((e) => e !== preferred)] : candidates;

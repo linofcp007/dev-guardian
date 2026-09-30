@@ -44,8 +44,8 @@
 
 import { readdirSync, type Dirent } from 'node:fs';
 import path from 'node:path';
-import { parse as parseYaml } from 'yaml';
 import { readSmallText } from '../hooks/configFile.js';
+import { parseYamlBounded } from '../platform/boundedParse.js';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 
 /**
@@ -55,14 +55,19 @@ import { resolveConfigsDir } from '../platform/configsDir.js';
  * `hooks/configFile.ts#readSmallText` — a regular file only, judged on a
  * non-blocking descriptor, at most this many bytes (review of 3.0, W2E: a
  * `.semgrep.yml` FIFO hung the server, one linked to `/dev/zero` OOM-killed
- * it). One that is refused reads as "cannot be told": no ids, and "may hold
- * a taint rule".
+ * it), every link on its path walked first from the filesystem root so one
+ * to a network or device path is refused before anything is opened (a
+ * `.semgrep.yml` link to `\\host\share\…` blocked the server for 158 s on
+ * Windows). It is parsed only under `platform/boundedParse.ts`'s node bound:
+ * 8 MiB of `- {}` would take `yaml` past 1.9 GB. One that is refused, or too
+ * complex to parse, reads as "cannot be told": no ids, and "may hold a taint
+ * rule".
  */
 const RULE_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
 /** A rule file's text, or null when it is absent or was refused. */
 function readRuleFile(file: string): string | null {
-  const r = readSmallText(file, RULE_FILE_MAX_BYTES);
+  const r = readSmallText(file, RULE_FILE_MAX_BYTES, path.parse(path.resolve(file)).root);
   return r.status === 'ok' ? r.text : null;
 }
 
@@ -264,12 +269,7 @@ function fileMayHoldTaintRule(file: string): boolean {
   const text = readRuleFile(file);
   if (text === null) return true;
   if (TAINT_TOKENS.test(text)) return true;
-  try {
-    parseYaml(text);
-  } catch {
-    return true;
-  }
-  return false;
+  return !parseYamlBounded(text).ok;
 }
 
 /**
@@ -353,12 +353,9 @@ export function ruleIdsInDir(dir: string): Set<string> {
 export function ruleIdsInFile(file: string): string[] {
   const text = readRuleFile(file);
   if (text === null) return [];
-  let doc: unknown;
-  try {
-    doc = parseYaml(text);
-  } catch {
-    return [];
-  }
+  const parsed = parseYamlBounded(text);
+  if (!parsed.ok) return [];
+  const doc = parsed.value;
   const rules = doc !== null && typeof doc === 'object' ? (doc as { rules?: unknown }).rules : undefined;
   if (!Array.isArray(rules)) return [];
   return rules.flatMap((rule: unknown) => {

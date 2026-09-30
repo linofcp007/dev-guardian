@@ -22,6 +22,7 @@
  */
 
 import { execa } from 'execa';
+import { commandFor } from '../platform/binaryPath.js';
 import {
   existsSync,
   lstatSync,
@@ -35,7 +36,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { describeReadRefusal, readProjectBytes } from '../platform/projectFs.js';
+import { describeReadRefusal, entryKindAnywhere, readProjectBytes } from '../platform/projectFs.js';
 
 export interface IngestedFile {
   relPath: string;
@@ -284,13 +285,13 @@ async function ingestZip(
 async function tryExtract(zipPath: string, destDir: string): Promise<boolean> {
   // bsdtar (Windows 10+, macOS, most Linux) understands zip via `tar -xf`.
   try {
-    await execa('tar', ['-xf', zipPath, '-C', destDir], { timeout: 120000 });
+    await execa(commandFor('tar'), ['-xf', zipPath, '-C', destDir], { timeout: 120000 });
     return true;
   } catch {
     /* fall through */
   }
   try {
-    await execa('unzip', ['-o', '-q', zipPath, '-d', destDir], { timeout: 120000 });
+    await execa(commandFor('unzip'), ['-o', '-q', zipPath, '-d', destDir], { timeout: 120000 });
     return true;
   } catch {
     return false;
@@ -380,7 +381,8 @@ function collectDir(root: string): {
         // version where `lstat` does not flag it as a link at all. Never
         // descended into; reported the same way a link is, target string
         // (the realpath) only.
-        const real = safeRealpath(abs);
+        // A network path on the way is never resolved (Windows would authenticate to its host): it escapes.
+        const real = entryKindAnywhere(abs) === 'remote' ? null : safeRealpath(abs);
         if (real === null || !isPathWithinRoot(real, rootReal)) {
           symlinks.push({
             relPath: rel(root, abs),
@@ -393,7 +395,13 @@ function collectDir(root: string): {
         stack.push(abs);
         continue;
       }
-      if (!s.isFile()) continue;
+      if (!s.isFile()) {
+        // A FIFO, a device or a socket in the skill: never opened, never silent
+        // (review of 3.0, W2E — it used to vanish from the audit uncounted).
+        skipped += 1;
+        warnings.push(`not read: ${rel(root, abs)} (not a regular file: a FIFO, a device or a socket)`);
+        continue;
+      }
       const ext = extOf(entry);
       if (BINARY_EXT.has(ext)) {
         skipped += 1;

@@ -107,7 +107,7 @@
  * assumes is a bare tool name.
  */
 
-import { existsSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveBugfixRules } from '../platform/configsDir.js';
@@ -256,7 +256,7 @@ export function languagePacksFor(languages: readonly string[]): string[] {
  * was never run); the persisted snapshot is preferred whenever one exists.
  */
 function fallbackLanguages(projectPath: string): string[] {
-  const has = (name: string): boolean => existsSync(join(projectPath, name));
+  const has = (name: string): boolean => presentInProject(projectPath, name);
   const languages: string[] = [];
   if (has('package.json')) {
     languages.push('javascript');

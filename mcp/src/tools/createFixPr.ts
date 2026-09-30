@@ -144,6 +144,8 @@ import { withPackageManagerEnv } from '../fixpr/childEnv.js';
 import {
   composerChoosesRepository,
   installRefusal,
+  npmNetworkPaths,
+  npmNetworkRefusal,
   setAsidePackageConfig,
   type SetAside,
 } from '../fixpr/repoPackageConfig.js';
@@ -192,8 +194,9 @@ type GroupOutcome =
   | 'internal_error'
   /**
    * Not attempted: the project's own configuration chooses a package source
-   * (a pip index in its requirements, a Composer repository) that
-   * dev-guardian does not install from.
+   * dev-guardian does not install from — a Python requirement that is not a
+   * plain one it has read (`deps/pipRequirements.ts`), an npm dependency on a
+   * network path, a Composer repository.
    */
   | 'refused'
   /** The host cancelled the call before this group started. */
@@ -264,8 +267,8 @@ const tool: ToolModule = {
     "go test) in those worktrees — that is the project's code, run as you, with an allowlisted " +
     'environment that carries no token or credential of this server. Package managers get it plus ' +
     "your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs " +
-    'are set aside (package_config_set_aside), and a repo-chosen pip index or URL/VCS requirement ' +
-    'or Composer repository refuses the fix. Every open finding ' +
+    'are set aside (package_config_set_aside), and a non-plain pip requirement, an npm network path ' +
+    'or a Composer repository refuses the fix. Every open finding ' +
     'that did NOT become a candidate is accounted for in `filtered` and `filtered_reason` (below ' +
     'severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan ' +
     'covers it). ' +
@@ -567,6 +570,13 @@ async function fetchUpgradeSteps(
       rmSync(join(planDir, 'composer.json'), { force: true });
       planFailures.push({ ecosystem: 'composer', code: 'repository_chosen_by_project', reason: composerRefused });
     }
+    // `npm outdated` opens a `file:` dependency — on a network path, Windows
+    // sends the user's credentials to its host. Not planned (review of 3.0, W2E).
+    const npmNetwork = npmNetworkPaths(planDir, created.worktree.path);
+    if (npmNetwork.length > 0) {
+      rmSync(join(planDir, 'package.json'), { force: true });
+      planFailures.push({ ecosystem: 'npm', code: 'network_path_chosen_by_project', reason: npmNetworkRefusal(npmNetwork) });
+    }
     const result = await withPackageManagerEnv(packageManagerEnv(), () =>
       depsPlanTool.handler({ project_path: planDir }, ctx, meta),
     );
@@ -729,6 +739,7 @@ async function processGroup(opts: {
     // the user's credentials go — and put back before anything is committed.
     setAside = setAsidePackageConfig(worktree.path, projectDir);
     if (setAside.moved.length > 0) base.package_config_set_aside = setAside.moved;
+    const derivedTest = deriveTestCommand(readManifests(projectDir));
     const refused = installRefusal({
       projectDir,
       checkoutRoot: worktree.path,
@@ -738,12 +749,12 @@ async function processGroup(opts: {
         const o = origins.get(f.fingerprint);
         return o === undefined ? [] : [o.toolName];
       }),
+      // The test environment's `npm ci` (fixpr/testEnv.ts) installs too.
+      npmInstalls: derivedTest?.command === 'npm',
     });
     if (refused !== null) {
       return { ...base, commands, outcome: 'refused', scan: null, tests: null, pr: null, note: `refused: ${refused}` };
     }
-
-    const derivedTest = deriveTestCommand(readManifests(projectDir));
 
     // The same dependency install the base-commit tree gets, if any — see
     // fixpr/testEnv.ts: the test differential compares like with like.

@@ -6,10 +6,10 @@
  * defer to the install scripts which already do their own detection, but
  * `unixCandidates` is exposed for completeness.
  *
- * The probe uses `where` (Windows) / `which` (POSIX) with a short timeout
- * because some Windows boxes have stale PATH entries that block for seconds.
+ * The probe walks PATH in-process (`binaryPath.ts`): never the current
+ * directory, never a spawn, never a timeout.
  */
-import { execa } from 'execa';
+import { findOnPath } from './binaryPath.js';
 export const WINDOWS_CANDIDATES_ORDER = ['winget', 'scoop', 'choco'];
 export const UNIX_CANDIDATES_ORDER = ['brew', 'apt-get', 'dnf', 'yum', 'pacman', 'zypper'];
 export async function windowsCandidates(deps = defaultDeps()) {
@@ -44,17 +44,12 @@ async function probeAll(order, deps) {
 function defaultDeps() {
     return { resolveBinary };
 }
+/**
+ * A bare name's absolute path on PATH, or null. In-process and never the
+ * current directory — `where` searched it first, and timed out under load
+ * (`platform/binaryPath.ts`). Async only to keep its callers' shape.
+ */
 export async function resolveBinary(name) {
-    const finder = process.platform === 'win32' ? 'where' : 'which';
-    try {
-        const result = await execa(finder, [name], { timeout: 2_000, reject: false });
-        if (result.exitCode !== 0)
-            return null;
-        const firstLine = result.stdout.split(/\r?\n/)[0]?.trim();
-        return firstLine && firstLine.length > 0 ? firstLine : null;
-    }
-    catch {
-        return null;
-    }
+    return Promise.resolve(findOnPath(name));
 }
 //# sourceMappingURL=pkgManagerDetect.js.map
