@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { PERF_STRICT } from '../helpers/timing.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +33,19 @@ const HOOK = resolve(REPO_ROOT, 'hooks', 'guardian-hook.mjs');
 const TIMEOUT_MS = 15_000;
 // Above the cap, so a hung child is reported by the cap — naming it — and
 // not by vitest's 10 s default failing the test after the fact (R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
+
+/**
+ * The bound on how long the hook takes to answer. What these tests guard is
+ * an answer before Claude Code kills the hook at 15 s — after which the
+ * command runs unassessed — and the defects they were written for took 15 s
+ * to hours (a FIFO read, an unreachable UNC path, 127 statements of the worst
+ * shape, 64 KB of `-c`). So by default the bound is 12 s: under that kill,
+ * far under every defect, and above what a machine at 100% CPU adds (a
+ * 3 s bound measured 3.0 s there, review 3.0 R7 round 2). The tight number,
+ * for a quiet machine, runs with GUARDIAN_PERF_STRICT=1.
+ */
+const answersWithin = (strictMs: number): number => (PERF_STRICT ? strictMs : 12_000);
 
 /** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
 const CAN_SYMLINK = ((): boolean => {
@@ -146,7 +158,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const command = `${Array.from({ length: 127 }, () => chmod).join('; ')}; rm -rf /`;
       const t0 = Date.now();
       const r = runHook(preToolUse('Bash', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
-      expect(Date.now() - t0).toBeLessThan(PERF_STRICT ? 5000 : 12_000);
+      expect(Date.now() - t0).toBeLessThan(answersWithin(5000));
       const out = (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput;
       expect(out?.additionalContext).toMatch(/not assessed \(over 512 KB\)/);
     }, 30_000);
@@ -199,16 +211,17 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     }, 30_000);
 
-    // Fix round 3 (I-2): 512 KB of the worst in-statement shapes, under 3 s.
+    // Fix round 3 (I-2): 512 KB of the worst in-statement shapes, under 3 s
+    // on a quiet machine (64 KB of `-c` took 15 s before it).
     it.each([
       ['-c', '-c '],
       ['find -exec', 'find . -exec rm {} + '],
       ['git -c', 'git -c '],
-    ])('512 KB of %s answers in under 3 s through the hook', (_label, unit) => {
+    ])('512 KB of %s answers well inside the hook timeout (3 s on a quiet machine)', (_label, unit) => {
       const command = `${unit.repeat(Math.floor((512 * 1024 - 20) / unit.length))}; rm -rf /`;
       const t0 = Date.now();
       const r = runHook(preToolUse('Bash', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
-      expect(Date.now() - t0).toBeLessThan(3000);
+      expect(Date.now() - t0).toBeLessThan(answersWithin(3000));
       expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     }, 30_000);
 
@@ -678,14 +691,14 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(spawnSync('mkfifo', [join(guardianDir(), 'hooks.config.json')]).status).toBe(0);
       const { r, ms } = timedRmRf();
       expect(decision(r)).toBe('deny');
-      expect(ms).toBeLessThan(5000);
+      expect(ms).toBeLessThan(answersWithin(5000));
     });
 
     it.skipIf(!POSIX)('a hooks.config.json linked to /dev/zero: denied at once (POSIX only: Windows has no /dev/zero)', () => {
       symlinkSync('/dev/zero', join(guardianDir(), 'hooks.config.json'));
       const { r, ms } = timedRmRf();
       expect(decision(r)).toBe('deny');
-      expect(ms).toBeLessThan(5000);
+      expect(ms).toBeLessThan(answersWithin(5000));
     });
 
     it.skipIf(!POSIX)('a FIFO or /dev/zero allowlist: denied at once, and SessionStart names both (POSIX only)', () => {
@@ -693,7 +706,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       symlinkSync('/dev/zero', join(guardianDir(), 'hooks.config.json'));
       const { r, ms } = timedRmRf();
       expect(decision(r)).toBe('deny');
-      expect(ms).toBeLessThan(5000);
+      expect(ms).toBeLessThan(answersWithin(5000));
       const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
       expect(ctx).toContain('.guardian/hooks.config.json');
       expect(ctx).toContain('.guardian/hooks-allowlist.json');
@@ -743,10 +756,10 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         symlinkSync(UNC, join(projectDir, '.guardian'), 'dir');
         const { r, ms } = timedRmRf();
         expect(decision(r)).toBe('deny');
-        expect(ms).toBeLessThan(5000);
+        expect(ms).toBeLessThan(answersWithin(5000));
         const t0 = Date.now();
         const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
-        expect(Date.now() - t0).toBeLessThan(5000);
+        expect(Date.now() - t0).toBeLessThan(answersWithin(5000));
         expect(ctx).toMatch(
           /\.guardian\/hooks\.config\.json was not read \(reached through a link to a network or device path\)/,
         );
@@ -761,7 +774,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         symlinkSync(UNC, join(homeDir, '.config', 'dev-guardian'), 'dir');
         const { r, ms } = timedRmRf();
         expect(decision(r)).toBe('deny');
-        expect(ms).toBeLessThan(5000);
+        expect(ms).toBeLessThan(answersWithin(5000));
       },
       30_000,
     );
