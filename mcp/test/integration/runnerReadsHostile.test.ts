@@ -178,11 +178,14 @@ describe('repoConfig — a `when` file that cannot be read is named, never dropp
 });
 
 describe('trivyConfig — the IaC-looking walk', () => {
-  it.skipIf(!POSIX)('FIFOs named like IaC are never opened (POSIX)', () => {
+  it.skipIf(!POSIX)('FIFOs named like IaC are never opened, and are named (POSIX)', () => {
     const p = makeTempDir('rrh-iac-');
     mkfifo(join(p, 'deploy.yaml'));
     mkfifo(join(p, 'stack.json'));
-    expect(fast(() => iacLookingFiles(p, null))).toEqual({ files: [] });
+    const r = fast(() => iacLookingFiles(p, null));
+    expect(r.files).toEqual([]);
+    // Round 2 (M2): a refused candidate of any kind is named — a FIFO was dropped by a regular-files filter.
+    expect(r.incomplete).toMatch(/could not read 2 YAML\/JSON files to tell whether it is IaC: deploy\.yaml \(.+\); stack\.json \(.+\)$/);
   });
 
   it.skipIf(!NOT_ROOT)('a candidate that cannot be opened makes the walk incomplete, naming it (POSIX, not root)', () => {
