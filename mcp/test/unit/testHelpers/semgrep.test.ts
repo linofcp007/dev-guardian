@@ -31,6 +31,7 @@ function fakeSemgrep(): string {
       "if (process.argv.includes('--version')) { process.stdout.write('0.0.0-fake\\n'); process.exit(0); }",
       "if (process.argv.includes('--fail')) { process.stderr.write('boom\\n'); process.exit(2); }",
       "if (process.argv.includes('--echo')) { process.stdout.write('{\"results\":[]}'); process.exit(0); }",
+      "if (process.argv.includes('--errors')) { process.stdout.write('{\"results\":[],\"errors\":[{\"type\":\"Timeout\",\"message\":\"rule r timed out on f.py\"}]}'); process.exit(2); }",
       'setInterval(() => {}, 1 << 30);',
     ].join('\n'),
   );
@@ -82,6 +83,13 @@ describe('runSemgrep — ordinary runs', () => {
     useFake();
     expect(semgrepStdout(['--echo'])).toBe('{"results":[]}');
     expect(() => semgrepStdout(['--fail'])).toThrow(/semgrep exited 2: semgrep --fail\nboom/);
+  });
+
+  // Under --quiet --json the report's `errors` are the only place Semgrep
+  // says why it exited 2; the failure message used to drop them.
+  it("semgrepStdout's failure names the report's errors", () => {
+    useFake();
+    expect(() => semgrepStdout(['--errors'])).toThrow(/report errors \(1\): .*rule r timed out on f\.py/);
   });
 
   it('semgrepAvailable is false for a command that does not exist, true for one that answers', () => {

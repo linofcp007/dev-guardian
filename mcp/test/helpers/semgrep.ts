@@ -136,6 +136,22 @@ export function runSemgrep(args: readonly string[], options: SemgrepOptions = {}
 }
 
 /**
+ * The `errors` of a `--json` report, for a failure message: under `--quiet`
+ * that is the only place a Semgrep that exited 2 says why. Empty when stdout
+ * is not such a report.
+ */
+function reportedErrors(stdout: string): string {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    const errors = (parsed as { errors?: unknown }).errors;
+    if (!Array.isArray(errors) || errors.length === 0) return '';
+    return `\nreport errors (${String(errors.length)}): ${JSON.stringify(errors.slice(0, 5)).slice(0, 4000)}`;
+  } catch {
+    return stdout === '' ? '' : `\nstdout (head): ${stdout.slice(0, 2000)}`;
+  }
+}
+
+/**
  * `execFileSync` semantics: the stdout of a run that exited 0, or an error
  * naming the exit status and the tail of stderr. A timeout throws
  * {@link SemgrepTimeoutError} as in {@link runSemgrep}.
@@ -144,7 +160,8 @@ export function semgrepStdout(args: readonly string[], options: SemgrepOptions =
   const run = runSemgrep(args, options);
   if (run.status !== 0) {
     throw new Error(
-      `semgrep exited ${String(run.status)}: semgrep ${args.join(' ')}\n${run.stderr.slice(-4000)}`,
+      `semgrep exited ${String(run.status)}: semgrep ${args.join(' ')}\n${run.stderr.slice(-4000)}` +
+        reportedErrors(run.stdout),
     );
   }
   return run.stdout;
