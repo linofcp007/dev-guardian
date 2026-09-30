@@ -63,6 +63,8 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 
 /** The git executable, for callers that describe a git spawn as data (`runProcess`). */
 export const GIT_COMMAND = 'git';
@@ -105,7 +107,13 @@ export function noHooksPath(platform: NodeJS.Platform = process.platform, execPa
   return '/dev/null/no-git-hooks';
 }
 
-/** The static overrides: what every git process dev-guardian starts gets, whatever the repository. */
+/**
+ * The static overrides: what every git process dev-guardian starts gets,
+ * whatever the repository. `diff.submodule=short`: a repository's own
+ * `diff.submodule=diff` makes `git log -p` — gitleaks' — diff INSIDE each
+ * submodule, running the submodule's textconv driver (measured); `short`
+ * (git's default) prints the commit ids alone.
+ */
 function staticConfig(hooksPath: string): ConfigPair[] {
   return [
     ['core.fsmonitor', 'false'],
@@ -114,6 +122,7 @@ function staticConfig(hooksPath: string): ConfigPair[] {
     ['log.showSignature', 'false'],
     ['gc.auto', '0'],
     ['maintenance.auto', 'false'],
+    ['diff.submodule', 'short'],
   ];
 }
 
@@ -164,6 +173,17 @@ export function staticGitSafety(platform: NodeJS.Platform = process.platform): G
  * (gc — and automatic gc is off, static). `uploadpack.packObjectsHook` is
  * honoured by git only from protected (system, global, command-line)
  * configuration, never a repository's.
+ *
+ * Also the keys that decide where and how a git sends the user's credentials
+ * over HTTP — each measured to apply from a repository's own configuration
+ * (review 3.0, W2E-git round 2): `http[.<url>].extraHeader` (a header on every
+ * request), `.proxy` and `remote.<n>.proxy` (every request through a host of
+ * the repository's choosing), `.sslVerify`, `.sslCAInfo`, `.sslCAPath` (a
+ * certificate the repository chose — a man in the middle of the user's
+ * token), `.cookieFile` and `.saveCookies` (cookies sent from, and WRITTEN
+ * to, a path of its choosing), `.followRedirects`. `url.<base>.insteadOf` and
+ * `pushInsteadOf` cannot be overridden from the environment; `create_fix_pr`'s
+ * push refuses a URL they rewrite (`fixpr/pr.ts`).
  */
 export const COMMAND_KEYS_REGEX =
   '^(' +
@@ -178,7 +198,8 @@ export const COMMAND_KEYS_REGEX =
     'credential\\.(.+\\.)?helper',
     'gpg\\.(program|.+\\.program|ssh\\.defaultkeycommand)',
     'alias\\..+',
-    'remote\\..+\\.(uploadpack|receivepack)',
+    'remote\\..+\\.(uploadpack|receivepack|proxy)',
+    'http\\.(.+\\.)?(extraheader|proxy|sslverify|sslcainfo|sslcapath|cookiefile|savecookies|followredirects)',
     'devguardian\\.envprobe',
   ].join('|') +
   ')$';
@@ -192,6 +213,11 @@ export const PROBE_KEY = 'devguardian.envprobe';
 
 /** Scopes whose values are the user's own. Everything else (`local`, `worktree`, …) is the repository's. */
 const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
+
+/** Whether a `git config --show-scope` scope is the repository's own (not the user's). */
+export function isRepositoryScope(scope: string): boolean {
+  return !TRUSTED_SCOPES.has(scope);
+}
 
 interface Entry {
   scope: string;
@@ -272,7 +298,20 @@ const STATIC_KEYS = new Set(['core.fsmonitor', 'core.hookspath', 'core.pager', '
  *     `core.askPass`, `core.alternateRefsCommand`,
  *     `gpg.ssh.defaultKeyCommand`, `alias.<x>` = `''`; `gpg.program` and
  *     `gpg.openpgp.program` = `gpg`, `gpg.x509.program` = `gpgsm`,
- *     `gpg.ssh.program` = `ssh-keygen` — git's own defaults.
+ *     `gpg.ssh.program` = `ssh-keygen` — git's own defaults;
+ *   - `http[.<url>].proxy`, `remote.<n>.proxy` = the user's own proxy
+ *     variable (`https_proxy`, `http_proxy`, `all_proxy`, as git reads them),
+ *     else `''`: git reads those variables only when no `http.proxy` is set,
+ *     and an empty one means no proxy at all (measured) — so this is what the
+ *     user's git would have done without the repository's setting;
+ *   - `http[.<url>].sslVerify` = `true`; `.sslCAInfo`, `.sslCAPath` = `''`,
+ *     which fails the TLS handshake — loudly, nothing reaches the server
+ *     (measured: schannel and OpenSSL); `.cookieFile` = `''`;
+ *     `.saveCookies` = `false`; `.followRedirects` = `initial`, git's default.
+ *
+ * A URL-specific `http.<url>.<name>` is always overridden under its OWN key:
+ * git keeps the most specific match per URL, so a generic `http.<name>`
+ * appended after it loses (measured).
  */
 export function neutralValue(key: string, env: NodeJS.ProcessEnv): string {
   if (FILTER_KEY.test(key)) return '';
@@ -284,7 +323,40 @@ export function neutralValue(key: string, env: NodeJS.ProcessEnv): string {
   if (key === 'gpg.program' || key === 'gpg.openpgp.program') return 'gpg';
   if (key === 'gpg.x509.program') return 'gpgsm';
   if (key === 'gpg.ssh.program') return 'ssh-keygen';
+  const http = HTTP_KEY.exec(key);
+  if (http !== null) {
+    const name = http[2] ?? '';
+    if (name === 'proxy') return envProxy(env, http[1]);
+    if (name === 'sslverify') return 'true';
+    if (name === 'savecookies') return 'false';
+    if (name === 'followredirects') return 'initial';
+    return '';
+  }
+  if (/^remote\..+\.proxy$/.test(key)) return envProxy(env, undefined);
   return '';
+}
+
+/** `http.<name>` or `http.<url>.<name>` for the HTTP keys the policy handles: [, url, name]. */
+const HTTP_KEY = /^http\.(?:(.+)\.)?(extraheader|proxy|sslverify|sslcainfo|sslcapath|cookiefile|savecookies|followredirects)$/;
+
+/**
+ * The proxy the user's own environment names, as git reads it when no
+ * `http.proxy` is configured: for an `https` URL `HTTPS_PROXY` then
+ * `https_proxy`, for `http` `http_proxy`, then `ALL_PROXY`, `all_proxy` — the
+ * later one winning. `''` when there is none. For a key that names no URL
+ * (`http.proxy`, `remote.<n>.proxy` — one value for every URL), the first the
+ * user set of `https_proxy`, `HTTPS_PROXY`, `http_proxy`, `all_proxy`,
+ * `ALL_PROXY`.
+ */
+function envProxy(env: NodeJS.ProcessEnv, url: string | undefined): string {
+  const exact = (name: string): string | undefined => {
+    const v = env[name];
+    return v === undefined || v === '' ? undefined : v;
+  };
+  const all = exact('all_proxy') ?? exact('ALL_PROXY');
+  if (url === undefined) return exact('https_proxy') ?? exact('HTTPS_PROXY') ?? exact('http_proxy') ?? all ?? '';
+  const primary = /^http:\/\//i.test(url) ? exact('http_proxy') : (exact('https_proxy') ?? exact('HTTPS_PROXY'));
+  return primary ?? all ?? '';
 }
 
 /** A POSIX single-quoted word: `core.sshCommand` goes through a shell, `GIT_SSH` does not. */
@@ -301,6 +373,7 @@ function neutraliseListing(entries: readonly Entry[], env: NodeJS.ProcessEnv): O
   const vars: Record<string, string> = {};
   const notApplied = new Set<string>();
   const drivers = new Set<string>();
+  const extraHeaders = new Set<string>();
   let credentials = false;
   const trustedValue = (key: string): string | null => {
     let v: string | null = null;
@@ -313,6 +386,18 @@ function neutraliseListing(entries: readonly Entry[], env: NodeJS.ProcessEnv): O
     if (STATIC_KEYS.has(key) || /^pager\./.test(key)) continue;
     if (CREDENTIAL_HELPER.test(key)) {
       credentials = true;
+      continue;
+    }
+    const http = HTTP_KEY.exec(key);
+    if (http?.[2] === 'extraheader') {
+      extraHeaders.add(key);
+      continue;
+    }
+    if (http !== null) {
+      // The user's own value for this very key, else for its generic form
+      // (what would have applied to that URL without the repository's key).
+      const mine = trustedValue(key) ?? (http[1] !== undefined ? trustedValue(`http.${http[2] ?? ''}`) : null);
+      config.push([key, mine ?? neutralValue(key, env)]);
       continue;
     }
     if (key === 'core.gitproxy') {
@@ -338,6 +423,17 @@ function neutraliseListing(entries: readonly Entry[], env: NodeJS.ProcessEnv): O
     if (filter?.[1] !== undefined && mine === null) drivers.add(filter[1]);
   }
   for (const driver of drivers) config.push([`filter.${driver}.required`, 'false']);
+  for (const key of extraHeaders) {
+    // An empty value resets the list — under the repository's OWN key: git
+    // keeps the most specific match per URL, so a generic reset loses to a
+    // URL-specific header (measured). Then the user's own headers that
+    // applied to that URL are replayed under the same key: those set for
+    // exactly it, and the generic ones — never a header set for another URL.
+    config.push([key, '']);
+    for (const e of trusted) {
+      if ((e.key === key || e.key === 'http.extraheader') && e.value !== null) config.push([key, e.value]);
+    }
+  }
   if (credentials) {
     // An empty helper resets the list (git's documented idiom): the
     // repository's helpers go, and the user's own are replayed after, in order.
@@ -395,10 +491,12 @@ function countProblem(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string
 
 /**
  * Git's own refusals to read a configuration at all — measured: `git status`
- * dies with the same message — so no git can run a command it names. Any
- * other failure of the read is a refusal of ours.
+ * dies with the same message — so no git can run a command it names: a bad
+ * line, a bad include, an include cycle, a `.git` file pointing at no
+ * repository (a broken submodule). Any other failure of the read is a
+ * refusal of ours.
  */
-const GIT_CANNOT_READ = /cannot change to|bad config line|bad numeric config value|exceeded maximum include depth/i;
+const GIT_CANNOT_READ = /cannot change to|bad config line|bad numeric config value|exceeded maximum include depth|not a git repository/i;
 
 function interpretExit(status: number | null, stdout: Buffer, stderr: string, dir: string): Probe {
   if (status === 0) return { kind: 'listing', bytes: stdout };
@@ -414,14 +512,24 @@ function interpretExit(status: number | null, stdout: Buffer, stderr: string, di
   };
 }
 
-function combine(probes: ReadonlyArray<{ dir: string; probe: Probe }>, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): GitSafety {
+/** One directory read, and — for a submodule — its path from the directory the caller named. */
+interface ReadDir {
+  dir: string;
+  probe: Probe;
+  submodule?: string;
+}
+
+function combine(probes: readonly ReadDir[], env: NodeJS.ProcessEnv, platform: NodeJS.Platform): GitSafety {
   const base = staticGitSafety(platform);
   const config: ConfigPair[] = [...base.config];
   const vars: Record<string, string> = { ...base.vars };
   const notApplied = new Set<string>();
   const refusals: string[] = [];
+  // A pair another repository's reading already added is not added again;
+  // within one reading, every pair stands (an empty reset and a replay of the
+  // same value are both meaningful there).
   const seen = new Set<string>();
-  for (const { dir, probe } of probes) {
+  for (const { dir, probe, submodule } of probes) {
     if (probe.kind === 'refused') refusals.push(probe.message);
     if (probe.kind !== 'listing') continue;
     const parsed = parseConfigListing(probe.bytes);
@@ -441,14 +549,15 @@ function combine(probes: ReadonlyArray<{ dir: string; probe: Probe }>, env: Node
       refusals.push(`the git configuration of ${dir} names ${n.notApplied.length} commands, more than ${MAX_REPOSITORY_KEYS}`);
       continue;
     }
+    const earlier = new Set(seen);
     for (const pair of n.config) {
       const id = `${pair[0]}\0${pair[1]}`;
-      if (seen.has(id)) continue;
+      if (earlier.has(id)) continue;
       seen.add(id);
       config.push(pair);
     }
     Object.assign(vars, n.vars);
-    for (const k of n.notApplied) notApplied.add(k);
+    for (const k of n.notApplied) notApplied.add(submodule === undefined ? k : `${k} (submodule ${submodule})`);
   }
   return {
     config,
@@ -486,23 +595,36 @@ export interface GitSafetyOptions {
 /**
  * The static layer plus, for each of `dirs`, the neutralisation its
  * repository's own configuration calls for — read in `dir` exactly as a git
- * started there would read it. `dirs` that are not in a repository add
- * nothing.
+ * started there would read it — and, the same way, for every initialised
+ * submodule of that repository, nested ones included ({@link gitlinks}). `dirs`
+ * that are not in a repository add nothing.
+ *
+ * Submodules, because git goes into them: a `status` or a `diff` against the
+ * work tree runs a `status` inside each initialised submodule, whose OWN
+ * configuration (`.git/modules/<name>/config`, or an in-tree `sub/.git/`)
+ * names its own filter and textconv drivers. Measured (review 3.0, W2E-git
+ * round 2): a superproject `git status --porcelain` ran a clean filter
+ * defined only in the submodule, and so did one with an old-style in-tree
+ * `.git`. The environment reaches that inner git — git keeps
+ * `GIT_CONFIG_COUNT` for a submodule (unlike for a local transport) — so the
+ * submodule's command keys are simply added to the overrides.
  */
 export async function gitSafetyFor(dirs: readonly string[], opts: GitSafetyOptions = {}): Promise<GitSafety> {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
   const problem = countProblem(env, platform);
   if (problem !== null) return { ...staticGitSafety(platform), refused: problem };
-  const penv = probeEnv(env, platform);
-  const unique = [...new Set(dirs)];
-  const probes = await Promise.all(
-    unique.map(async (dir) => ({
-      dir,
-      probe: await probeAsync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS, opts.reuseMs ?? PROBE_REUSE_MS),
-    })),
-  );
-  return combine(probes, env, platform);
+  const walk: Walk = {
+    git: opts.git ?? GIT_COMMAND,
+    env: probeEnv(env, platform),
+    timeoutMs: opts.timeoutMs ?? PROBE_TIMEOUT_MS,
+    reuseMs: opts.reuseMs ?? PROBE_REUSE_MS,
+    read: [],
+    visited: new Set(),
+    submodules: 0,
+  };
+  for (const dir of new Set(dirs)) await walkAsync(walk, dir, dir, 0);
+  return combine(walk.read, env, platform);
 }
 
 /** {@link gitSafetyFor}, synchronously — for the CLI, the hook and the synchronous readers. */
@@ -511,12 +633,175 @@ export function gitSafetyForSync(dirs: readonly string[], opts: GitSafetyOptions
   const env = opts.env ?? process.env;
   const problem = countProblem(env, platform);
   if (problem !== null) return { ...staticGitSafety(platform), refused: problem };
-  const penv = probeEnv(env, platform);
-  const probes = [...new Set(dirs)].map((dir) => ({
-    dir,
-    probe: probeSync(opts.git ?? GIT_COMMAND, dir, penv, opts.timeoutMs ?? PROBE_TIMEOUT_MS, opts.reuseMs ?? PROBE_REUSE_MS),
-  }));
-  return combine(probes, env, platform);
+  const walk: Walk = {
+    git: opts.git ?? GIT_COMMAND,
+    env: probeEnv(env, platform),
+    timeoutMs: opts.timeoutMs ?? PROBE_TIMEOUT_MS,
+    reuseMs: opts.reuseMs ?? PROBE_REUSE_MS,
+    read: [],
+    visited: new Set(),
+    submodules: 0,
+  };
+  for (const dir of new Set(dirs)) walkSync(walk, dir, dir, 0);
+  return combine(walk.read, env, platform);
+}
+
+/** More initialised submodules than this, every level together, is refused, not read. */
+const MAX_SUBMODULES = 64;
+/** Submodules of submodules are followed this deep; a deeper one is refused. */
+const MAX_SUBMODULE_DEPTH = 8;
+
+interface Walk {
+  git: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  reuseMs: number;
+  read: ReadDir[];
+  visited: Set<string>;
+  submodules: number;
+}
+
+/** What {@link walkAsync} and {@link walkSync} do with one directory's gitlinks. */
+function nextSubmodules(walk: Walk, dir: string, depth: number, links: Gitlinks): string[] {
+  if (links.kind === 'refused') {
+    walk.read.push({ dir, probe: { kind: 'refused', message: links.message } });
+    return [];
+  }
+  const next: string[] = [];
+  for (const sub of links.dirs) {
+    if (walk.visited.has(sub)) continue;
+    walk.visited.add(sub);
+    walk.submodules += 1;
+    if (walk.submodules > MAX_SUBMODULES || depth + 1 > MAX_SUBMODULE_DEPTH) {
+      walk.read.push({
+        dir: sub,
+        probe: {
+          kind: 'refused',
+          message:
+            `${dir} has initialised submodules past what dev-guardian reads (${MAX_SUBMODULES} in all, ` +
+            `${MAX_SUBMODULE_DEPTH} levels deep), so their git configuration could not be kept from running commands`,
+        },
+      });
+      return [];
+    }
+    next.push(sub);
+  }
+  return next;
+}
+
+async function walkAsync(walk: Walk, root: string, dir: string, depth: number): Promise<void> {
+  walk.visited.add(dir);
+  const probe = await probeAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
+  walk.read.push(depth === 0 ? { dir, probe } : { dir, probe, submodule: relativeLabel(root, dir) });
+  if (probe.kind !== 'listing') return;
+  const links = await gitlinksAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
+  for (const sub of nextSubmodules(walk, dir, depth, links)) await walkAsync(walk, root, sub, depth + 1);
+}
+
+function walkSync(walk: Walk, root: string, dir: string, depth: number): void {
+  walk.visited.add(dir);
+  const probe = probeSync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
+  walk.read.push(depth === 0 ? { dir, probe } : { dir, probe, submodule: relativeLabel(root, dir) });
+  if (probe.kind !== 'listing') return;
+  const links = gitlinksSync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
+  for (const sub of nextSubmodules(walk, dir, depth, links)) walkSync(walk, root, sub, depth + 1);
+}
+
+function relativeLabel(root: string, dir: string): string {
+  const rel = relative(root, dir).split('\\').join('/');
+  return rel === '' ? '.' : rel;
+}
+
+/** A repository's initialised submodules: the directories git would go into. */
+type Gitlinks = { kind: 'dirs'; dirs: string[] } | { kind: 'refused'; message: string };
+
+/**
+ * `git ls-files -z --stage -- :/` — the whole index, from wherever `dir` is in
+ * the work tree (runs nothing: no work-tree file is read, and fsmonitor is
+ * off) — keeping each gitlink (mode 160000) whose directory holds a `.git`,
+ * file (an absorbed submodule's pointer into `.git/modules/…`) or directory
+ * (an old-style in-tree repository): exactly the submodules a `git status`
+ * goes into. A gitlink path that is not UTF-8 cannot be followed, so it is a
+ * refusal; git failing to read the index (no repository, a damaged index —
+ * which a `status` fails on too) is no submodule.
+ */
+function gitlinkArgs(dir: string): string[] {
+  return ['-c', 'safe.directory=*', '-C', dir, 'ls-files', '-z', '--stage', '--', ':/'];
+}
+
+/** The index listing is every file in the repository; more than this is refused. */
+const GITLINK_LISTING_MAX_BYTES = 512 * 1024 * 1024;
+
+function parseGitlinks(dir: string, status: number | null, stdout: Buffer): Gitlinks {
+  if (status !== 0) return { kind: 'dirs', dirs: [] };
+  const dirs: string[] = [];
+  let start = 0;
+  for (let i = 0; i <= stdout.length; i++) {
+    if (i < stdout.length && stdout[i] !== 0) continue;
+    const entry = stdout.subarray(start, i);
+    start = i + 1;
+    // `<mode> <object> <stage>\t<path>`
+    if (entry.length < 8 || entry.toString('latin1', 0, 7) !== '160000 ') continue;
+    const tab = entry.indexOf(0x09);
+    if (tab < 0) continue;
+    let path: string;
+    try {
+      path = STRICT_UTF8.decode(entry.subarray(tab + 1));
+    } catch {
+      return { kind: 'refused', message: `${dir} has a submodule whose path is not UTF-8, which dev-guardian cannot follow` };
+    }
+    const abs = resolve(dir, path);
+    if (!dirs.includes(abs) && existsSync(join(abs, '.git'))) dirs.push(abs);
+  }
+  return { kind: 'dirs', dirs };
+}
+
+function gitlinksError(error: NodeJS.ErrnoException, dir: string, timeoutMs: number): Gitlinks {
+  if (error.code === 'ENOENT') return { kind: 'dirs', dirs: [] };
+  if (error.code === 'ETIMEDOUT') return { kind: 'refused', message: `listing the submodules of ${dir} took longer than ${timeoutMs} ms` };
+  if (error.code === 'ENOBUFS') {
+    return { kind: 'refused', message: `the index of ${dir} lists more than ${GITLINK_LISTING_MAX_BYTES} bytes of files; its submodules were not read` };
+  }
+  return { kind: 'refused', message: `could not list the submodules of ${dir}: ${error.message}` };
+}
+
+const gitlinkCache = new Map<string, { at: number; links: Gitlinks }>();
+
+function cachedGitlinks(key: string, reuseMs: number): Gitlinks | null {
+  const hit = gitlinkCache.get(key);
+  if (hit === undefined || Date.now() - hit.at > reuseMs) return null;
+  return hit.links;
+}
+
+function rememberGitlinks(key: string, links: Gitlinks): Gitlinks {
+  if (links.kind === 'refused') return links;
+  if (gitlinkCache.size >= PROBE_CACHE_MAX) gitlinkCache.clear();
+  gitlinkCache.set(key, { at: Date.now(), links });
+  return links;
+}
+
+function gitlinksSync(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number, reuseMs: number): Gitlinks {
+  const key = probeCacheKey(git, dir, env);
+  const hit = cachedGitlinks(key, reuseMs);
+  if (hit !== null) return hit;
+  const r = spawnSync(git, gitlinkArgs(dir), {
+    env,
+    timeout: timeoutMs,
+    maxBuffer: GITLINK_LISTING_MAX_BYTES,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (r.error !== undefined) return gitlinksError(r.error, dir, timeoutMs);
+  return rememberGitlinks(key, parseGitlinks(dir, r.status, Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.alloc(0)));
+}
+
+async function gitlinksAsync(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number, reuseMs: number): Promise<Gitlinks> {
+  const key = probeCacheKey(git, dir, env);
+  const hit = cachedGitlinks(key, reuseMs);
+  if (hit !== null) return hit;
+  const r = await collect(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
+  if (r.error !== undefined) return gitlinksError(r.error, dir, timeoutMs);
+  return rememberGitlinks(key, parseGitlinks(dir, r.status, r.stdout));
 }
 
 /**
@@ -564,6 +849,7 @@ function rememberProbe(key: string, probe: Probe): Probe {
 /** Forget every reading — for a test that rewrites a repository's configuration between two runs. */
 export function forgetGitConfigReads(): void {
   probeCache.clear();
+  gitlinkCache.clear();
 }
 
 function probeSync(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number, reuseMs: number): Probe {

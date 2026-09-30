@@ -22,6 +22,11 @@
  */
 import { execGit } from '../platform/gitSafety.js';
 export async function workingTreeState(projectPath) {
+    // Full recursion into submodules, on purpose: uncommitted work INSIDE a
+    // submodule is uncommitted work auto_fix could destroy, and
+    // `--ignore-submodules=dirty` would call that tree clean. What git runs in
+    // there is kept safe instead: each submodule's own configuration is read and
+    // neutralised with the superproject's (`platform/gitSafety.ts`).
     const result = await execGit(projectPath, ['status', '--porcelain'], { timeoutMs: 10_000 });
     // No git on PATH, a timeout, a sandbox that blocked the spawn, or a
     // configuration dev-guardian would not run git with: git said nothing

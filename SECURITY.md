@@ -313,7 +313,9 @@ their respective projects.
   - always: `core.fsmonitor=false`; `core.hooksPath` at a path that cannot
     exist (beneath the Node executable on Windows, beneath `/dev/null`
     elsewhere); `protocol.ext.allow=never`; `log.showSignature=false`;
-    `gc.auto=0` and `maintenance.auto=false`; and `GIT_PAGER=cat`,
+    `gc.auto=0` and `maintenance.auto=false`; `diff.submodule=short` (a
+    repository's `diff.submodule=diff` made gitleaks' `git log -p` diff inside
+    a submodule, running its textconv driver — measured); and `GIT_PAGER=cat`,
     `GIT_EDITOR=:`, `GIT_SEQUENCE_EDITOR=:`;
   - for the repository at hand, read first with `git config --get-regexp`
     (which runs nothing) from its `local` and `worktree` scopes — every file
@@ -327,22 +329,57 @@ their respective projects.
     `core.gitProxy` (first match wins) is answered with an empty
     `GIT_PROXY_COMMAND` unless you set one; a repository
     `remote.<name>.uploadpack` (first value wins) with `GIT_NO_LAZY_FETCH=1`;
+  - what decides where, and how, a git sends your credentials over HTTP — each
+    measured to apply from a repository's own configuration, each measured
+    overridden against local servers: `http[.<url>].extraHeader` (a header on
+    every request) is reset under the repository's own key and your own
+    headers for that URL replayed — never a header you set for another URL;
+    `http[.<url>].proxy` and `remote.<name>.proxy` become your own proxy
+    variable (`https_proxy`, `http_proxy`, `all_proxy`) or none;
+    `http[.<url>].sslVerify` becomes `true`, and `.sslCAInfo` / `.sslCAPath`
+    empty — the handshake then fails rather than trust a certificate authority
+    of the repository's choosing; `.cookieFile` empty and `.saveCookies`
+    false (a plain git WROTE its cookie jar to the path the repository chose);
+    `.followRedirects` `initial`. A URL-specific key is overridden under its
+    own key: git keeps the most specific match per URL, and a generic override
+    appended after it loses (measured). `url.<base>.insteadOf` and
+    `pushInsteadOf` cannot be overridden: `create_fix_pr` refuses to push, and
+    names the key, when one from the repository's own configuration rewrites
+    origin's push URL (yours still apply);
+  - every initialised submodule, the same way — git goes into each one on a
+    `status` or a `diff` of the work tree, where the submodule's OWN
+    configuration (`.git/modules/<name>/config`, or an old-style in-tree
+    `sub/.git/`) names its own drivers. Measured: a superproject
+    `git status --porcelain` ran clean filters defined only in an absorbed
+    submodule, in a submodule of that submodule, and in an in-tree one. Each
+    gitlink in the index whose directory holds a `.git` is read, nested ones
+    too, and its keys added to the overrides (named `… (submodule <path>)`).
+    Where a query needs nothing inside a submodule's work tree —
+    SessionStart's count, the working-tree file listings, `create_fix_pr`'s
+    tree state, the CI gate's configuration diff — it also passes
+    `--ignore-submodules=dirty`, which keeps git out of the submodule and
+    still reports a submodule whose commit moved (measured). The auto_fix
+    guard and CI's clean-checkout check keep full recursion — uncommitted work
+    inside a submodule is still work — safe through the first layer;
   - dev-guardian's own commit passes `--no-verify`, and its push
     `--no-verify --receive-pack=git-receive-pack`. To a repository on this
     machine the receive-pack is `git -c … receive-pack` carrying that
     destination's own overrides: git removes `GIT_CONFIG_COUNT` from a local
     receive-pack's environment (measured — the destination's hooks ran). A
     checkout (`review_pr`'s head, `create_fix_pr`'s worktrees) is
-    `worktree add --no-checkout`, then `reset --hard` inside the new worktree,
-    so an `includeIf` that matches the new worktree is read — and neutralised
-    — where the checkout runs. Semgrep's Docker fallback gets the overrides
-    with `-e`.
-  - A repository whose configuration cannot be read safely — a key that is
-    not UTF-8, more than 200 command keys, a read that takes over 10 s — is
-    not run, and the tool says why. So is every repository when the git on
-    `PATH` does not read `GIT_CONFIG_COUNT` (older than 2.31). What a run did
-    not apply is named: `review_pr`'s warnings, the gitleaks history pass's
-    reason, `create_fix_pr`'s `git_config_not_applied`.
+    `worktree add --no-checkout`, then `reset --hard --no-recurse-submodules`
+    inside the new worktree, so an `includeIf` that matches the new worktree
+    is read — and neutralised — where the checkout runs, and a
+    `submodule.recurse=true` (yours or the repository's) does not send the
+    reset into submodules the worktree was never given. Semgrep's Docker
+    fallback gets the overrides with `-e`.
+  - A repository whose configuration cannot be read safely — a key or a
+    submodule path that is not UTF-8, more than 200 command keys, more than 64
+    initialised submodules or more than 8 levels of them, a read that takes
+    over 10 s — is not run, and the tool says why. So is every repository
+    when the git on `PATH` does not read `GIT_CONFIG_COUNT` (older than 2.31).
+    What a run did not apply is named: `review_pr`'s warnings, the gitleaks
+    history pass's reason, `create_fix_pr`'s `git_config_not_applied`.
   - **Limits.** Not hardened: the test command `create_fix_pr` runs and the
     application the DAST gate starts — both are the project's own code, run by
     design; `precommit_install` keeps every override but the hooks redirect
@@ -367,6 +404,19 @@ their respective projects.
     `core.worktree` can still point git's file listing at another directory:
     a read, not an execution. On Windows the textconv identity `cat` is Git
     for Windows' own; where git cannot find it, git fails, loudly.
+    Submodules: one that is not initialised (no `.git` in its directory) is
+    not read — git does not go into it either; nor is an untracked nested
+    repository, which a `status` lists as `?? dir/` without entering
+    (measured). Over HTTP, not overridden: `http.sslCert` / `sslKey`,
+    `sslVersion` / `sslCipherList`, the proxy's own TLS and authentication
+    settings; the neutral proxy for a key that names no URL is the first of
+    your `https_proxy`, `HTTPS_PROXY`, `http_proxy`, `all_proxy`,
+    `ALL_PROXY`, which can differ from git's per-scheme choice; a repository
+    that legitimately sets its own `sslCAInfo` cannot reach its server under
+    dev-guardian (set it in your own configuration). A repository's own
+    `url.<base>.insteadOf` is refused only for `create_fix_pr`'s push; any
+    other network git in the project — a package manager resolving a git
+    dependency in `create_fix_pr`'s worktree, `gh` — still follows it.
 - **Repository text is escaped before it is shown.** A rule message, a
   snippet, a file name, a reason or a title can carry characters that render
   as nothing or reorder what does (a right-to-left override, a zero-width

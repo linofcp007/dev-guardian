@@ -45,9 +45,11 @@ type Kind =
 
 const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string }>> = {
   'mcp/src/platform/gitSafety.ts': {
-    count: 3,
+    count: 4,
     kind: 'helper',
-    reason: 'the configuration probe (sync and async) and git itself, with the overrides applied',
+    reason:
+      'the configuration probe and the submodule listing (sync, and async through one spawn helper), ' +
+      'and git itself with the overrides applied',
   },
   'mcp/src/runners/processRunner.ts': {
     count: 1,
@@ -222,7 +224,7 @@ describe('the patterns catch what they are for (positive controls)', () => {
 describe('a git inside the Docker Semgrep fallback gets the same overrides', () => {
   it('the static layer by default, with a hooks path that exists in no container, before the image', () => {
     const args = buildSemgrepDockerArgs({ projectPath: '/p', outFileHost: '/p/out.json' });
-    const count = args.indexOf('GIT_CONFIG_COUNT=6');
+    const count = args.indexOf('GIT_CONFIG_COUNT=7');
     expect(count).toBeGreaterThan(0);
     expect(args[count - 1]).toBe('-e');
     expect(count).toBeLessThan(args.indexOf(DEFAULT_SEMGREP_IMAGE));

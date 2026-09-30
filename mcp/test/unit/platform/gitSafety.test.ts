@@ -3,7 +3,7 @@
  * overrides out) and the environment it produces. What each override does
  * to a REAL git is `test/integration/gitHardening.test.ts`.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -22,7 +22,7 @@ import {
   withoutHooksPath,
   type GitSafety,
 } from '../../../src/platform/gitSafety.js';
-import { buildHostileRepo } from '../../helpers/hostileRepo.js';
+import { buildHostileRepo, buildHostileSuperproject } from '../../helpers/hostileRepo.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 // The real-git block builds a repository (about twenty git processes) per
@@ -55,7 +55,7 @@ describe('the static layer', () => {
     expect(noHooksPath('darwin', '/opt/homebrew/bin/node')).toBe('/dev/null/no-git-hooks');
   });
 
-  it('turns off fsmonitor, hooks, ext::, signature checks by log and automatic gc — and pager and editors', () => {
+  it('turns off fsmonitor, hooks, ext::, signature checks by log, automatic gc and diffs inside submodules — and pager and editors', () => {
     const s = staticGitSafety('linux');
     expect(pairsOf(s)).toEqual([
       'core.fsmonitor=false',
@@ -64,6 +64,7 @@ describe('the static layer', () => {
       'log.showSignature=false',
       'gc.auto=0',
       'maintenance.auto=false',
+      'diff.submodule=short',
     ]);
     expect(s.vars).toEqual({ GIT_PAGER: 'cat', GIT_EDITOR: ':', GIT_SEQUENCE_EDITOR: ':' });
     expect(s.refused).toBeNull();
@@ -75,10 +76,10 @@ describe('applyGitSafety: the environment', () => {
 
   it('counts from zero when the environment has no entries of its own', () => {
     const env = applyGitSafety(safety, { PATH: '/bin' }, 'linux');
-    expect(env['GIT_CONFIG_COUNT']).toBe('6');
+    expect(env['GIT_CONFIG_COUNT']).toBe('7');
     expect(env['GIT_CONFIG_KEY_0']).toBe('core.fsmonitor');
     expect(env['GIT_CONFIG_VALUE_0']).toBe('false');
-    expect(env['GIT_CONFIG_KEY_5']).toBe('maintenance.auto');
+    expect(env['GIT_CONFIG_KEY_6']).toBe('diff.submodule');
     expect(env['PATH']).toBe('/bin');
     expect(env['GIT_PAGER']).toBe('cat');
   });
@@ -89,18 +90,18 @@ describe('applyGitSafety: the environment', () => {
       { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: 'Me', GIT_CONFIG_KEY_1: 'a.b', GIT_CONFIG_VALUE_1: 'c' },
       'linux',
     );
-    expect(env['GIT_CONFIG_COUNT']).toBe('8');
+    expect(env['GIT_CONFIG_COUNT']).toBe('9');
     expect(env['GIT_CONFIG_KEY_0']).toBe('user.name');
     expect(env['GIT_CONFIG_VALUE_1']).toBe('c');
     expect(env['GIT_CONFIG_KEY_2']).toBe('core.fsmonitor');
-    expect(env['GIT_CONFIG_KEY_7']).toBe('maintenance.auto');
+    expect(env['GIT_CONFIG_KEY_8']).toBe('diff.submodule');
   });
 
   it('on Windows, one variable per name whatever its case', () => {
     const env = applyGitSafety(safety, { Git_Config_Count: '1', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c', git_pager: 'less' }, 'win32');
     const names = Object.keys(env);
     expect(names.filter((n) => n.toUpperCase() === 'GIT_CONFIG_COUNT')).toEqual(['Git_Config_Count']);
-    expect(env['Git_Config_Count']).toBe('7');
+    expect(env['Git_Config_Count']).toBe('8');
     expect(names.filter((n) => n.toUpperCase() === 'GIT_PAGER')).toEqual(['GIT_PAGER']);
     expect(env['GIT_CONFIG_KEY_1']).toBe('core.fsmonitor');
   });
@@ -113,7 +114,14 @@ describe('applyGitSafety: the environment', () => {
 
   it('withoutHooksPath keeps every override but the hooks redirect (precommit_install)', () => {
     const s = withoutHooksPath(staticGitSafety('linux'));
-    expect(pairsOf(s)).toEqual(['core.fsmonitor=false', 'protocol.ext.allow=never', 'log.showSignature=false', 'gc.auto=0', 'maintenance.auto=false']);
+    expect(pairsOf(s)).toEqual([
+      'core.fsmonitor=false',
+      'protocol.ext.allow=never',
+      'log.showSignature=false',
+      'gc.auto=0',
+      'maintenance.auto=false',
+      'diff.submodule=short',
+    ]);
     expect(s.vars).toEqual(staticGitSafety('linux').vars);
   });
 
@@ -121,7 +129,7 @@ describe('applyGitSafety: the environment', () => {
     const args = dockerGitEnvArgs(staticGitSafety('win32'));
     expect(args).toContain('GIT_CONFIG_KEY_1=core.hooksPath');
     expect(args).toContain('GIT_CONFIG_VALUE_1=/dev/null/no-git-hooks');
-    expect(args).toContain('GIT_CONFIG_COUNT=6');
+    expect(args).toContain('GIT_CONFIG_COUNT=7');
     expect(args).toContain('GIT_PAGER=cat');
     for (let i = 0; i < args.length; i += 2) expect(args[i]).toBe('-e');
   });
@@ -273,6 +281,75 @@ describe('safetyFromListing: what the repository asked for, and what it gets ins
     expect(safetyFromListing('/r', listing(rows), {}, 'linux').refused).toMatch(/more than 200/);
   });
 
+  it("http.extraHeader: reset under the repository's OWN key, then the user's headers for that URL replayed — never another URL's", () => {
+    const s = safetyFromListing(
+      '/r',
+      listing([
+        ['global', 'http.extraheader', 'X-Mine: 1'],
+        ['global', 'http.https://intranet.invalid/.extraheader', 'Authorization: Bearer secret'],
+        ['local', 'http.https://example.invalid/.extraheader', 'X-Evil: 1'],
+        ['local', 'http.extraheader', 'X-Evil: 2'],
+      ]),
+      {},
+      'linux',
+    );
+    expect(dynamic(s)).toEqual([
+      'http.https://example.invalid/.extraheader=',
+      'http.https://example.invalid/.extraheader=X-Mine: 1',
+      'http.extraheader=',
+      'http.extraheader=X-Mine: 1',
+    ]);
+    expect(dynamic(s).join('\n')).not.toContain('Bearer');
+  });
+
+  it("http proxy, TLS and cookie keys: the user's own value (the key's, else its generic form's), else a neutral one", () => {
+    const s = safetyFromListing(
+      '/r',
+      listing([
+        ['global', 'http.sslverify', 'true'],
+        ['local', 'http.https://example.invalid/.sslverify', 'false'],
+        ['local', 'http.proxy', 'http://192.0.2.1:3128'],
+        ['local', 'http.cookiefile', '/tmp/jar'],
+        ['local', 'http.savecookies', 'true'],
+        ['local', 'http.followredirects', 'true'],
+        ['local', 'http.sslcainfo', '/tmp/evil-ca.pem'],
+        ['local', 'http.sslcapath', '/tmp/evil-ca'],
+        ['local', 'remote.origin.proxy', 'http://192.0.2.1:3128'],
+      ]),
+      {},
+      'linux',
+    );
+    expect(dynamic(s)).toEqual([
+      'http.https://example.invalid/.sslverify=true',
+      'http.proxy=',
+      'http.cookiefile=',
+      'http.savecookies=false',
+      'http.followredirects=initial',
+      'http.sslcainfo=',
+      'http.sslcapath=',
+      'remote.origin.proxy=',
+    ]);
+  });
+
+  it("a repository's proxy gives way to the user's own proxy variables, as git reads them", () => {
+    const rows: Row[] = [
+      ['local', 'http.proxy', 'http://192.0.2.1:3128'],
+      ['local', 'http.http://example.invalid/.proxy', 'http://192.0.2.1:3128'],
+      ['local', 'remote.origin.proxy', 'http://192.0.2.1:3128'],
+    ];
+    const s = safetyFromListing('/r', listing(rows), { https_proxy: 'http://mine.invalid:1', http_proxy: 'http://plain.invalid:2' }, 'linux');
+    expect(dynamic(s)).toEqual([
+      'http.proxy=http://mine.invalid:1',
+      'http.http://example.invalid/.proxy=http://plain.invalid:2',
+      'remote.origin.proxy=http://mine.invalid:1',
+    ]);
+    expect(dynamic(safetyFromListing('/r', listing(rows), { ALL_PROXY: 'http://all.invalid:3' }, 'linux'))).toEqual([
+      'http.proxy=http://all.invalid:3',
+      'http.http://example.invalid/.proxy=http://all.invalid:3',
+      'remote.origin.proxy=http://all.invalid:3',
+    ]);
+  });
+
   it('a key with no value (`[alias] x`) is still overridden', () => {
     const s = safetyFromListing('/r', listing([['local', 'alias.x', null]]), {}, 'linux');
     expect(dynamic(s)).toEqual(['alias.x=']);
@@ -307,11 +384,21 @@ describe('the regular expression names what the policy handles', () => {
     'alias.st',
     'remote.origin.uploadpack',
     'remote.a.b.receivepack',
+    'remote.origin.proxy',
+    'http.extraheader',
+    'http.https://example.invalid/.extraheader',
+    'http.proxy',
+    'http.sslverify',
+    'http.https://example.invalid/.sslcainfo',
+    'http.sslcapath',
+    'http.cookiefile',
+    'http.savecookies',
+    'http.followredirects',
     PROBE_KEY,
   ])('matches %s', (key) => {
     expect(re.test(key)).toBe(true);
   });
-  it.each(['filter.a.required', 'diff.x.binary', 'core.editorx', 'user.name', 'remote.origin.url', 'credential.helperx'])(
+  it.each(['filter.a.required', 'diff.x.binary', 'core.editorx', 'user.name', 'remote.origin.url', 'credential.helperx', 'http.postbuffer'])(
     'does not match %s',
     (key) => {
       expect(re.test(key)).toBe(false);
@@ -336,6 +423,50 @@ describe('gitSafetyFor against a real git', () => {
       'gpg.program',
     ]);
     expect(gitSafetyForSync([repo.root])).toEqual(s);
+    expect(repo.markersWritten()).toEqual([]);
+  });
+
+  it("reads every initialised submodule's own configuration — absorbed, nested and in-tree — and names each by its path", async () => {
+    const s = buildHostileSuperproject();
+    for (const [k, v] of Object.entries(s.env)) vi.stubEnv(k, v);
+    const safety = await gitSafetyFor([s.root]);
+    expect(safety.refused).toBeNull();
+    expect(safety.notApplied).toEqual([
+      'diff.smtv.textconv (submodule sub)',
+      'filter.dp.clean (submodule sub/deep)',
+      'filter.ol.clean (submodule old)',
+      'filter.sm.clean (submodule sub)',
+    ]);
+    expect(pairsOf(safety)).toEqual(expect.arrayContaining(['filter.sm.clean=', 'filter.dp.clean=', 'filter.ol.clean=', 'diff.smtv.textconv=cat']));
+    // From a subdirectory of the work tree too (`ls-files :/` lists the whole index).
+    mkdirSync(join(s.root, 'deeper'), { recursive: true });
+    expect(gitSafetyForSync([join(s.root, 'deeper')]).notApplied).toContain('filter.dp.clean (submodule ../sub/deep)');
+    expect(s.markersWritten()).toEqual([]);
+  });
+
+  it('a submodule whose .git names no repository is nothing to read — every git there fails too', async () => {
+    const s = buildHostileSuperproject();
+    for (const [k, v] of Object.entries(s.env)) vi.stubEnv(k, v);
+    rmSync(join(s.root, 'old', '.git'), { recursive: true, force: true });
+    writeFileSync(join(s.root, 'old', '.git'), `gitdir: ${join(s.base, 'nowhere').replace(/\\/g, '/')}\n`);
+    const safety = await gitSafetyFor([s.root]);
+    expect(safety.refused).toBeNull();
+    expect(safety.notApplied).not.toContain('filter.ol.clean (submodule old)');
+    expect(safety.notApplied).toContain('filter.sm.clean (submodule sub)');
+  });
+
+  it('more initialised submodules than it reads is a refusal, named — not a partial reading', async () => {
+    const repo = buildHostileRepo();
+    for (const [k, v] of Object.entries(repo.env)) vi.stubEnv(k, v);
+    const head = repo.plainGit(['rev-parse', 'HEAD']).stdout.trim();
+    for (let i = 0; i < 65; i++) {
+      mkdirSync(join(repo.root, `m${i}`, '.git'), { recursive: true });
+      repo.plainGit(['update-index', '--add', '--cacheinfo', `160000,${head},m${i}`]);
+    }
+    repo.clearMarkers(); // the plain-git setup above ran the fixture's own fsmonitor
+    const safety = await gitSafetyFor([repo.root]);
+    expect(safety.refused).toMatch(/initialised submodules past what dev-guardian reads \(64 in all/);
+    expect((await execGit(repo.root, ['status', '--porcelain'])).failure?.code).toBe('refused');
     expect(repo.markersWritten()).toEqual([]);
   });
 

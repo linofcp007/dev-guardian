@@ -99,7 +99,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../runners/processRunner.js';
-import { GIT_COMMAND, gitSafetyFor, localReceivePackCommand } from '../platform/gitSafety.js';
+import { GIT_COMMAND, gitSafetyFor, isRepositoryScope, localReceivePackCommand, parseConfigListing } from '../platform/gitSafety.js';
 /** Excludes dev-guardian's own scan-report artifacts from both staging and
  *  the "did anything real change" check — see the module comment (C1). At
  *  ANY depth: a project in a subdirectory of its repository has its re-scan
@@ -204,7 +204,9 @@ export async function openPr(opts) {
     // empty stdout IS "nothing staged, nothing unstaged, nothing untracked".
     const status = await run({
         command: GIT_COMMAND,
-        args: ['status', '--porcelain', '--', EXCLUDE_GUARDIAN_DIR],
+        // No submodule is initialised in the worktree; `dirty` keeps git out of
+        // one all the same (platform/gitSafety.ts).
+        args: ['status', '--porcelain', '--ignore-submodules=dirty', '--', EXCLUDE_GUARDIAN_DIR],
         cwd: worktreePath,
     });
     if (hasFailed(status)) {
@@ -316,12 +318,16 @@ async function receivePackFor(worktreePath, run) {
     const r = await run({ command: GIT_COMMAND, args: ['remote', 'get-url', '--push', '--all', 'origin'], cwd: worktreePath });
     if (hasFailed(r))
         return standard;
+    const effective = r.stdout
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l !== '');
+    const rewritten = await repositoryRewrite(worktreePath, run, effective);
+    if (rewritten !== null)
+        return { refused: rewritten };
     const local = [];
     let network = 0;
-    for (const line of r.stdout.split(/\r?\n/)) {
-        const url = line.trim();
-        if (url === '')
-            continue;
+    for (const url of effective) {
         const path = localPath(worktreePath, url);
         if (path === null)
             network += 1;
@@ -340,6 +346,44 @@ async function receivePackFor(worktreePath, run) {
     if (program === null)
         return { refused: "the push destination's git configuration has a key that cannot be passed on a command line" };
     return { program };
+}
+/**
+ * Why the push must not go where git would send it, or null: the
+ * repository's OWN configuration (`url.<base>.insteadOf` /
+ * `pushInsteadOf`, local or worktree scope) rewrites origin's push URL —
+ * measured: `get-url --push` and the push itself go to the rewritten host,
+ * which then receives the user's credentials. Git has no way to switch a
+ * rewrite off from the environment, so the push is refused and the rewrite
+ * named. A rewrite from the user's own configuration (`git@github.com:` for
+ * `https://github.com/`, say) is theirs, and stands.
+ */
+async function repositoryRewrite(worktreePath, run, effective) {
+    const r = await run({
+        command: GIT_COMMAND,
+        args: ['config', '--show-scope', '-z', '--get-regexp', '^(url\\..+\\.(insteadof|pushinsteadof)|remote\\.origin\\.(url|pushurl))$'],
+        cwd: worktreePath,
+    });
+    if (hasFailed(r))
+        return null;
+    const parsed = parseConfigListing(Buffer.from(r.stdout, 'utf8'));
+    if ('refused' in parsed)
+        return parsed.refused;
+    const pushurls = parsed.entries.filter((e) => e.key === 'remote.origin.pushurl' && e.value !== null).map((e) => e.value ?? '');
+    const raw = pushurls.length > 0 ? pushurls : parsed.entries.filter((e) => e.key === 'remote.origin.url' && e.value !== null).map((e) => e.value ?? '');
+    if (raw.length === effective.length && raw.every((u, i) => u === effective[i]))
+        return null;
+    for (const e of parsed.entries) {
+        const rewrite = /^url\.(.+)\.(insteadof|pushinsteadof)$/.exec(e.key);
+        if (rewrite === null || !isRepositoryScope(e.scope) || e.value === null || e.value === '')
+            continue;
+        const prefix = e.value;
+        const hit = raw.find((u) => u.startsWith(prefix));
+        if (hit !== undefined) {
+            return (`the repository's own git configuration rewrites where origin is pushed — ${e.key} = ${prefix} turns ${hit} ` +
+                `into ${effective.join(', ')} — and a push carries your credentials, so dev-guardian does not push there`);
+        }
+    }
+    return null;
 }
 /**
  * The directory a push URL names on this machine, or null for one that

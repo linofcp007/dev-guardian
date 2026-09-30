@@ -17,7 +17,9 @@
  * `GUARDIAN_REQUIRE_SEMGREP=1` turn a missing scanner into a failure.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,7 +29,8 @@ import { createWorktree } from '../../src/fixpr/worktree.js';
 import { openPr } from '../../src/fixpr/pr.js';
 import { projectTreeState } from '../../src/fixpr/treeState.js';
 import { languagesFromFiles, languagesFromFilesAsync } from '../../src/frameworks/projectLanguages.js';
-import { applyGitSafety, forgetGitConfigReads, gitSafetyFor } from '../../src/platform/gitSafety.js';
+import { applyGitSafety, execGit, forgetGitConfigReads, GIT_COMMAND, gitSafetyFor } from '../../src/platform/gitSafety.js';
+import { resolveScope } from '../../src/platform/scope.js';
 import {
   changedFiles,
   historyState,
@@ -46,7 +49,7 @@ import { isGitRepo, workingTreeState } from '../../src/tools/gitState.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { resetScannerCache } from '../../src/tools/scanHelpers.js';
 import type { ToolRun } from '../../src/types.js';
-import { buildHostileRepo, shPath, type HostileRepo } from '../helpers/hostileRepo.js';
+import { buildHostileRepo, buildHostileSuperproject, shPath, type HostileRepo, type HostileSuperproject } from '../helpers/hostileRepo.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
@@ -68,7 +71,7 @@ beforeAll(async () => {
 });
 
 /** The process environment with the fixture's isolation, and no git variable of this machine's. */
-function isolate(repo: HostileRepo): void {
+function isolate(repo: { env: Record<string, string>; base: string }): void {
   for (const k of Object.keys(process.env)) if (/^GIT_/i.test(k)) vi.stubEnv(k, undefined);
   for (const [k, v] of Object.entries(repo.env)) vi.stubEnv(k, v);
   vi.stubEnv('GUARDIAN_DATA_DIR', join(repo.base, 'guardian-data'));
@@ -336,23 +339,29 @@ describe('dev-guardian on the same repository runs none of them', () => {
   );
 
   it("the hook's SessionStart briefing (git status in the project a session opens)", () => {
-    expect(existsSync(join(REPO_ROOT, 'mcp', 'dist', 'platform', 'gitSafety.js'))).toBe(true);
-    const home = join(repo.base, 'hook-home');
-    mkdirSync(home, { recursive: true });
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: repo.root };
-    delete env['CLAUDE_CONFIG_DIR'];
-    const r = spawnSync(process.execPath, [HOOK], {
-      cwd: repo.root,
-      input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: repo.root }),
-      encoding: 'utf8',
-      env,
-      timeout: 60_000,
-    });
+    const r = sessionStart(repo.root, repo.base);
     expect(r.status).toBe(0);
     // git DID run — the briefing names the branch — and ran nothing of the repository's.
     expect(r.stdout).toContain('branch `main`');
   });
 });
+
+/** The real SessionStart dispatcher (from `dist/`), in `root`, with a fake home. */
+function sessionStart(root: string, base: string): { status: number | null; stdout: string } {
+  expect(existsSync(join(REPO_ROOT, 'mcp', 'dist', 'platform', 'gitSafety.js'))).toBe(true);
+  const home = join(base, 'hook-home');
+  mkdirSync(home, { recursive: true });
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: root };
+  delete env['CLAUDE_CONFIG_DIR'];
+  const r = spawnSync(process.execPath, [HOOK], {
+    cwd: root,
+    input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: root }),
+    encoding: 'utf8',
+    env,
+    timeout: 60_000,
+  });
+  return { status: r.status, stdout: r.stdout };
+}
 
 /** `gh` answered locally: no pull request yet, and one created. Everything else is the real runner. */
 async function fakeGh(o: ProcessRunOptions): Promise<ProcessRunResult> {
@@ -362,6 +371,291 @@ async function fakeGh(o: ProcessRunOptions): Promise<ProcessRunResult> {
   }
   return runProcess(o);
 }
+
+// ---------------------------------------------------------------- submodules (round 2)
+
+describe("submodules: each one's OWN drivers — absorbed, nested and in-tree — run nowhere dev-guardian goes", () => {
+  let s: HostileSuperproject;
+  beforeAll(() => {
+    s = buildHostileSuperproject();
+  });
+  beforeEach(() => {
+    isolate(s);
+    s.clearMarkers();
+    s.touchMapped();
+  });
+
+  it('control: a plain superproject status runs all three filters; a plain log -p the submodule textconv', () => {
+    expect(s.plainGit(['status', '--porcelain'], s.root).status).toBe(0);
+    expect(s.markersWritten()).toEqual(['DEEPCLEAN', 'OLDCLEAN', 'SUBCLEAN']);
+    s.clearMarkers();
+    s.touchMapped();
+    expect(s.plainGit(['log', '-p', '-1'], s.root).status).toBe(0);
+    expect(s.markersWritten()).toEqual(['SUBTEXTCONV']);
+  });
+
+  it('control: --ignore-submodules=dirty alone keeps a plain status out of every submodule', () => {
+    expect(s.plainGit(['status', '--porcelain', '--ignore-submodules=dirty'], s.root).status).toBe(0);
+    expect(s.markersWritten()).toEqual([]);
+  });
+
+  describe('dev-guardian', () => {
+    afterEach(() => {
+      expect(s.markersWritten()).toEqual([]);
+    });
+
+    it('a full, recursing status runs none of them: every submodule configuration is neutralised', async () => {
+      const r = await execGit(s.root, ['status', '--porcelain']);
+      expect(r.status).toBe(0);
+      expect(r.notApplied).toEqual(expect.arrayContaining(['filter.sm.clean (submodule sub)', 'filter.dp.clean (submodule sub/deep)']));
+    });
+
+    it("the auto_fix guard: clean when clean, and still dirty for a submodule's uncommitted work or moved commit", async () => {
+      expect(await workingTreeState(s.root)).toEqual({ state: 'clean' });
+      expect(s.markersWritten()).toEqual([]);
+      const x = join(s.root, 'sub', 'x.dat');
+      writeFileSync(x, 'changed\n');
+      expect((await workingTreeState(s.root)).state).toBe('dirty');
+      writeFileSync(x, 'data\n');
+      s.touchMapped();
+      expect(await workingTreeState(s.root)).toEqual({ state: 'clean' });
+      expect(s.markersWritten()).toEqual([]);
+      s.plainGit(['checkout', '-q', 'HEAD~1'], join(s.root, 'sub'));
+      s.clearMarkers(); // the plain checkout above, not dev-guardian
+      s.touchMapped();
+      expect((await workingTreeState(s.root)).state).toBe('dirty');
+      expect(s.markersWritten()).toEqual([]);
+      s.plainGit(['checkout', '-q', '-'], join(s.root, 'sub'));
+      s.clearMarkers();
+    });
+
+    it("the hook's SessionStart briefing", () => {
+      const r = sessionStart(s.root, s.base);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('branch `main`');
+    });
+
+    it('the working-tree listings: uncommitted files, a diff scope, create_fix_pr tree state, the CI gate', async () => {
+      expect(await uncommittedFiles(s.root, true, [])).toEqual(expect.any(Array));
+      expect((await resolveScope(s.root, { diff: {} }, { exclusions: null })).kind).toBe('diff');
+      expect((await projectTreeState(s.root)).ok).toBe(true);
+      const at = await resolveCiRef(s.root, 'HEAD', '--rules-ref');
+      await configDifferences(s.root, at, await copyConfigFromRef(s.root, at, makeTempDir('guardian-rules-ref-sub-')));
+    });
+
+    it('a scanner running status and log -p itself (and the repository asks for diffs inside submodules)', async () => {
+      const r = await runProcess({ command: process.execPath, args: ['-e', FAKE_SCANNER], cwd: s.root });
+      expect(r.stderr).toBe('');
+      expect(r.outcome).toBe('completed');
+    });
+
+    it.skipIf(!GITLEAKS)("scan_secrets: gitleaks' git log -p stays out of the submodule", async () => {
+      const out = await runTool('scan_secrets', { project_path: s.root, force: true });
+      expect(out.tools_run.find((t) => t.name === 'gitleaks')?.status).toBe('ok');
+    });
+
+    it("with the user's own submodule.recurse=true, review_pr's head checkout and create_fix_pr's worktree still work", async () => {
+      appendFileSync(s.globalConfig, '[submodule]\n\trecurse = true\n');
+      try {
+        const tree = await materialiseCommit(s.root, s.headSha);
+        expect(existsSync(join(tree.root, 'a.txt'))).toBe(true);
+        expect(await tree.remove()).toBeNull();
+        const created = await createWorktree({ projectPath: s.root, branch: null });
+        if (!created.ok) throw new Error(created.reason);
+        expect(existsSync(join(created.worktree.path, 'a.txt'))).toBe(true);
+        await created.worktree.remove();
+      } finally {
+        writeFileSync(s.globalConfig, readFileSync(s.globalConfig, 'utf8').replace('[submodule]\n\trecurse = true\n', ''));
+      }
+    });
+  });
+});
+
+// ---------------------------------------------------------------- credentials over HTTP (round 2)
+
+interface Seen {
+  server: string;
+  url: string;
+  headers: Record<string, string | string[] | undefined>;
+}
+
+/** A local HTTP server that records every request; `info/refs` answers as an empty (dumb) repository. */
+async function recorder(name: string, seen: Seen[]): Promise<{ url: string; close: () => void }> {
+  const server = createServer((req, res) => {
+    seen.push({ server: name, url: req.url ?? '', headers: req.headers });
+    res.setHeader('Set-Cookie', 'sess=abc; Path=/');
+    if (req.url?.includes('/info/refs')) {
+      res.setHeader('Content-Type', 'text/plain');
+      res.end('');
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  return { url: `http://127.0.0.1:${port}`, close: () => server.close() };
+}
+
+describe('the repository cannot route, inspect or redirect the credentials a git sends over HTTP (local servers only)', () => {
+  let repo: HostileRepo;
+  let origin: { url: string; close: () => void };
+  let other: { url: string; close: () => void };
+  const seen: Seen[] = [];
+  beforeAll(async () => {
+    repo = buildHostileRepo();
+    origin = await recorder('origin', seen);
+    other = await recorder('other', seen);
+    repo.plainGit(['remote', 'add', 'origin', `${origin.url}/r.git`]);
+  });
+  afterAll(() => {
+    origin.close();
+    other.close();
+  });
+  beforeEach(() => {
+    isolate(repo);
+    seen.length = 0;
+  });
+
+  const lsRemote = (): Promise<ProcessRunResult> =>
+    runProcess({ command: GIT_COMMAND, args: ['ls-remote', 'origin'], cwd: repo.root, timeoutMs: 30_000 });
+  const reached = (): string[] => [...new Set(seen.map((s) => s.server))].sort();
+  const headerValues = (h: string): string[] => seen.flatMap((s) => (typeof s.headers[h] === 'string' ? [s.headers[h] as string] : []));
+
+  it("extra headers: the repository's, generic and URL-specific, are not sent; the user's own still are", async () => {
+    repo.plainGit(['config', 'http.extraHeader', 'X-Evil: 1']);
+    repo.plainGit(['config', `http.${origin.url}/.extraHeader`, 'X-Evil: 2']);
+    appendFileSync(repo.env['GIT_CONFIG_GLOBAL'] ?? '', '[http]\n\textraHeader = X-Mine: 1\n');
+    try {
+      await repo.plainGitAsync(['ls-remote', 'origin']);
+      expect(headerValues('x-evil')).toEqual(expect.arrayContaining(['1, 2']));
+      seen.length = 0;
+      expect((await lsRemote()).outcome).toBe('completed');
+      expect(headerValues('x-evil')).toEqual([]);
+      expect(headerValues('x-mine').length).toBeGreaterThan(0);
+    } finally {
+      repo.plainGit(['config', '--unset-all', 'http.extraHeader']);
+      repo.plainGit(['config', '--unset-all', `http.${origin.url}/.extraHeader`]);
+      const global = repo.env['GIT_CONFIG_GLOBAL'] ?? '';
+      writeFileSync(global, readFileSync(global, 'utf8').replace('[http]\n\textraHeader = X-Mine: 1\n', ''));
+    }
+  });
+
+  const proxyKeys: ReadonlyArray<readonly [string, () => string]> = [
+    ['http.proxy', (): string => 'http.proxy'],
+    ['http.<url>.proxy', (): string => `http.${origin.url}/.proxy`],
+    ['remote.origin.proxy', (): string => 'remote.origin.proxy'],
+  ];
+  it.each(proxyKeys)("%s: the repository's proxy is not used — the user's own proxy variable is", async (_label, key) => {
+    repo.plainGit(['config', key(), other.url]);
+    try {
+      await repo.plainGitAsync(['ls-remote', 'origin']);
+      expect(reached()).toEqual(['other']);
+      seen.length = 0;
+      await lsRemote();
+      expect(reached()).toEqual(['origin']);
+      seen.length = 0;
+      vi.stubEnv('http_proxy', other.url);
+      await lsRemote();
+      expect(reached()).toEqual(['other']);
+    } finally {
+      repo.plainGit(['config', '--unset', key()]);
+    }
+  });
+
+  it('cookies: none sent from a file of the repository\'s choosing, and none written to one', async () => {
+    const jar = join(repo.base, 'jar.txt');
+    writeFileSync(jar, '127.0.0.1\tFALSE\t/\tFALSE\t0\tstolen\tyes\n');
+    repo.plainGit(['config', 'http.cookieFile', jar]);
+    repo.plainGit(['config', 'http.saveCookies', 'true']);
+    try {
+      await repo.plainGitAsync(['ls-remote', 'origin']);
+      expect(headerValues('cookie').join(';')).toContain('stolen=yes');
+      expect(readFileSync(jar, 'utf8')).toContain('sess');
+      writeFileSync(jar, '127.0.0.1\tFALSE\t/\tFALSE\t0\tstolen\tyes\n');
+      seen.length = 0;
+      expect((await lsRemote()).outcome).toBe('completed');
+      expect(headerValues('cookie').join(';')).not.toContain('stolen');
+      expect(readFileSync(jar, 'utf8')).not.toContain('sess');
+    } finally {
+      repo.plainGit(['config', '--unset', 'http.cookieFile']);
+      repo.plainGit(['config', '--unset', 'http.saveCookies']);
+    }
+  });
+
+  it('followRedirects: git reads its own default, not the repository\'s', async () => {
+    repo.plainGit(['config', 'http.followRedirects', 'true']);
+    try {
+      expect((await execGit(repo.root, ['config', '--get', 'http.followRedirects'])).stdout.trim()).toBe('initial');
+    } finally {
+      repo.plainGit(['config', '--unset', 'http.followRedirects']);
+    }
+  });
+
+  const OPENSSL = spawnSync('openssl', ['version'], { encoding: 'utf8' }).status === 0;
+  it.skipIf(!OPENSSL)('TLS: neither sslVerify=false nor a certificate authority of the repository\'s choosing lets a self-signed server through', async () => {
+    const dir = makeTempDir('guardian-tls-');
+    const key = join(dir, 'k.pem');
+    const cert = join(dir, 'c.pem');
+    const made = spawnSync(
+      'openssl',
+      ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1'],
+      { encoding: 'utf8' },
+    );
+    expect(made.status, made.stderr).toBe(0);
+    const tls = createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) }, (req, res) => {
+      seen.push({ server: 'tls', url: req.url ?? '', headers: req.headers });
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise<void>((r) => tls.listen(0, '127.0.0.1', r));
+    const address = tls.address();
+    const tlsUrl = `https://127.0.0.1:${typeof address === 'object' && address !== null ? address.port : 0}/r.git`;
+    repo.plainGit(['remote', 'set-url', 'origin', tlsUrl]);
+    try {
+      for (const [k, v] of [['http.sslVerify', 'false'], ['http.sslCAInfo', cert]] as const) {
+        repo.plainGit(['config', k, v]);
+        forgetGitConfigReads(); // the configuration changed inside the 2 s a reading is reused
+        seen.length = 0;
+        await repo.plainGitAsync(['ls-remote', 'origin']);
+        expect(reached(), `plain git with ${k}`).toEqual(['tls']);
+        seen.length = 0;
+        await lsRemote();
+        expect(reached(), `dev-guardian with ${k}`).toEqual([]);
+        repo.plainGit(['config', '--unset', k]);
+      }
+    } finally {
+      repo.plainGit(['remote', 'set-url', 'origin', `${origin.url}/r.git`]);
+      tls.close();
+    }
+  });
+
+  it("create_fix_pr refuses a push the repository's own url.<base>.insteadOf sends to another host, and names it", async () => {
+    repo.plainGit(['config', `url.${other.url}/.insteadOf`, `${origin.url}/`]);
+    try {
+      await repo.plainGitAsync(['push', '--no-verify', 'origin', 'HEAD:refs/heads/control']);
+      expect(reached()).toEqual(['other']);
+      seen.length = 0;
+      forgetGitConfigReads();
+      const branch = 'dev-guardian/fix-w2e-rewrite';
+      const created = await createWorktree({ projectPath: repo.root, branch });
+      if (!created.ok) throw new Error(created.reason);
+      try {
+        writeFileSync(join(created.worktree.path, 'a.js'), 'console.log("fixed");\n');
+        const pr = await openPr({ projectPath: repo.root, worktreePath: created.worktree.path, branch, title: 'fix', body: 'b', run: fakeGh });
+        expect(pr.status).toBe('push_failed');
+        expect(pr.detail).toMatch(/url\.http:\/\/127\.0\.0\.1:\d+\/\.insteadof = http:\/\/127\.0\.0\.1:\d+\/ turns/);
+        expect(reached()).toEqual([]);
+      } finally {
+        await created.worktree.remove();
+        repo.plainGit(['branch', '-D', branch]);
+      }
+    } finally {
+      repo.plainGit(['config', '--unset', `url.${other.url}/.insteadOf`]);
+    }
+  });
+});
 
 // ---------------------------------------------------------------- measured overrides
 

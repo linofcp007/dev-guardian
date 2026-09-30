@@ -30,7 +30,20 @@ export async function projectTreeState(projectPath, run = runProcess) {
     }
     const status = await run({
         command: GIT_COMMAND,
-        args: ['--no-optional-locks', '-C', projectPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'],
+        // `--ignore-submodules=dirty`: not into a submodule's work tree; a moved
+        // submodule commit is still listed (its path is no file a finding names).
+        args: [
+            '--no-optional-locks',
+            '-C',
+            projectPath,
+            'status',
+            '--porcelain=v1',
+            '-z',
+            '--untracked-files=all',
+            '--ignore-submodules=dirty',
+            '--',
+            '.',
+        ],
         cwd: projectPath,
     });
     if (status.outcome !== 'completed') {

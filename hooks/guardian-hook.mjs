@@ -660,7 +660,10 @@ async function handleSessionStart(root, cfg) {
   const initialized = reachable ? existsSync(guardianDir) : true;
   await loadGitSafety();
   const branch = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const status = git(root, ['status', '--porcelain']);
+  // `--ignore-submodules=dirty`: the count does not go into a submodule's
+  // work tree, where that submodule's own drivers would run (they are also
+  // neutralised by gitSafety); a submodule whose commit moved still counts.
+  const status = git(root, ['status', '--porcelain', '--ignore-submodules=dirty']);
   const changed = status ? status.split('\n').filter(Boolean).length : 0;
 
   const state = guardsOff ? 'running with guards OFF (see below)' : 'active';

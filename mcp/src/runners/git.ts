@@ -224,8 +224,10 @@ export async function uncommittedFiles(
   if (untracked.exitCode !== 0) {
     throw new Error(`git ls-files failed: ${firstLine(untracked.stderr) || `exit ${untracked.exitCode}`}`);
   }
+  // `--ignore-submodules=dirty`: not into a submodule's work tree (a moved
+  // submodule commit is still listed — as a directory, which no caller reads).
   const tracked = hasCommits
-    ? await git(cwd, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', 'HEAD', '--'])
+    ? await git(cwd, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', '--ignore-submodules=dirty', 'HEAD', '--'])
     : await git(cwd, ['ls-files', '-z', '--cached']);
   if (tracked.exitCode !== 0) {
     throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
@@ -291,7 +293,11 @@ export async function materialiseCommit(cwd: string, sha: string): Promise<Mater
     ['-c', `core.hooksPath=${noHooks}`, 'worktree', 'add', '--detach', '--no-checkout', '--quiet', root, sha],
     CHECKOUT_TIMEOUT_MS,
   );
-  const r = add.exitCode === 0 ? await git(root, ['reset', '--hard', '--quiet'], CHECKOUT_TIMEOUT_MS) : add;
+  // `--no-recurse-submodules`, as `worktree add`'s own reset passes: with the
+  // user's `submodule.recurse=true` (or the repository's), a reset in a
+  // `--no-checkout` worktree goes into submodules whose git directories it
+  // was never given, and dies (review of W2E-git, measured).
+  const r = add.exitCode === 0 ? await git(root, ['reset', '--hard', '--quiet', '--no-recurse-submodules'], CHECKOUT_TIMEOUT_MS) : add;
   const notApplied = [...new Set([...(add.notApplied ?? []), ...(r === add ? [] : (r.notApplied ?? []))])].sort();
   const remove = async (): Promise<string | null> => {
     const problems: string[] = [];

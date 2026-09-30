@@ -321,7 +321,17 @@ async function changedAgainst(projectPath, at, pathspecs) {
     const out = new Map();
     if (pathspecs.length === 0)
         return out;
-    const diff = await git(projectPath, ['diff', '--name-status', '-z', '--no-renames', '--relative', at.commit, '--', ...pathspecs]);
+    const diff = await git(projectPath, [
+        'diff',
+        '--name-status',
+        '-z',
+        '--no-renames',
+        '--relative',
+        '--ignore-submodules=dirty',
+        at.commit,
+        '--',
+        ...pathspecs,
+    ]);
     if (diff.exitCode !== 0)
         throw new CiRefError(`git diff ${at.ref} failed: ${firstLine(diff.stderr)}`);
     const fields = splitNul(diff.stdout);

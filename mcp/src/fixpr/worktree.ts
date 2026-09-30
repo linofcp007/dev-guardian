@@ -141,9 +141,12 @@ export async function createWorktree(opts: {
   // `includeIf "onbranch:…"` or `"gitdir:…"` can match the new worktree's
   // branch or git directory and not the project's, and a filter driver it
   // defines would otherwise run on this checkout.
+  // `--no-recurse-submodules`, as `worktree add`'s own reset passes: with the
+  // user's `submodule.recurse=true` (or the repository's), a reset here goes
+  // into submodules this worktree was never given and dies (measured).
   const checkout = await runProcess({
     command: GIT_COMMAND,
-    args: ['-C', canonicalPath, 'reset', '--hard', '--quiet'],
+    args: ['-C', canonicalPath, 'reset', '--hard', '--quiet', '--no-recurse-submodules'],
     cwd: canonicalPath,
     timeoutMs: opts.timeoutMs,
   });

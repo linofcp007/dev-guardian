@@ -526,6 +526,26 @@ them again. Scans made on the fallback meanwhile are not merged back.
   project's code. The limits are listed in SECURITY.md. Measured with real git — a fixture
   repository armed with every vector, whose markers plain git writes and dev-guardian does not —
   on git 2.52.0.windows.1 and on git 2.39.5 in `node:22`.
+  - **Submodules too (review round 2).** A superproject `git status` goes into each initialised
+    submodule, whose own configuration names its own drivers — measured: clean filters defined only
+    in an absorbed submodule, in a submodule of it and in an old-style in-tree one all ran, through
+    SessionStart and through the auto_fix guard, which then answered "clean". Every initialised
+    submodule's configuration is now read and neutralised with the superproject's (capped at 64, 8
+    levels deep, else refused and named); queries that need nothing inside a submodule's work tree
+    pass `--ignore-submodules=dirty`; `diff.submodule=short` keeps `git log -p` out of them. The
+    auto_fix guard still calls a tree with uncommitted work inside a submodule, or a moved
+    submodule commit, dirty.
+  - **`submodule.recurse=true` broke the two-step checkout (review round 2).** With it in the
+    user's configuration, `review_pr`'s head checkout and `create_fix_pr`'s worktrees died on any
+    repository with a submodule; the reset now passes `--no-recurse-submodules`, as `worktree add`'s
+    own does.
+  - **Credentials over HTTP (review round 2).** A repository's own `http[.<url>].extraHeader`,
+    `.proxy`, `remote.<name>.proxy`, `.sslVerify`, `.sslCAInfo`, `.sslCAPath`, `.cookieFile`,
+    `.saveCookies` and `.followRedirects` are overridden for every git dev-guardian starts (measured
+    against local servers: a plain git sent the repository's header, went through its proxy,
+    trusted its certificate authority, sent cookies from its file and wrote a cookie jar to the path
+    it chose); `create_fix_pr` refuses to push, naming the key, when the repository's own
+    `url.<base>.insteadOf` / `pushInsteadOf` rewrites origin.
 - **A pull request could gate itself.** `dev-guardian scan` read `.guardian/baseline.json`, the
   project's Semgrep rules and its `.guardianignore` from the checkout it scanned — on a pull
   request, the pull request's own. A fork adopted its new finding into the baseline, or deleted
