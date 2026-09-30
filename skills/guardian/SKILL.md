@@ -64,6 +64,7 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 | "puxei a main" / "merged a PR" | `/guardian-scan --incoming` |
 | "verifica este ficheiro" | `/guardian-scan <ficheiro>` |
 | "antes do PR / merge" | `guardian-review` e, para as decisões de domínio, `guardian-grill` |
+| "posso instalar o X?" / "vou adicionar esta dependência" | `vet_packages { ecosystem: "npm", packages: ["X"] }` antes do install (`guardian-deps`, secção 3) |
 | "acabei de instalar deps" | `guardian-deps` (secção pós-install) |
 | "já corrigi, confirma" | `/guardian-fix --verify` |
 | "antes do deploy" | `/guardian-release predeploy` |
@@ -83,9 +84,9 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 | "o `.mcp.json` / as settings do agente são seguras?" | `audit_agent_config { project_path: "<project>" }` |
 | "as tools que o servidor MCP X expõe são seguras?" / "mudaram?" | `guardian-security` → `audit_mcp_tools { servers: ["X"] }` (executa o servidor — só os nomes que o utilizador indicar) |
 
-**Features de AI / LLM dentro da app** (prompt injection, custo, evals): não há módulo dedicado. `/guardian-scan` apanha chaves expostas e sinks perigosos; o resto — input do utilizador a chegar ao prompt sem isolamento, output do modelo a causar efeitos (escritas na DB, chamadas externas), limites de tokens e de custo — revê-se à mão com a secção "Features de AI / LLM" da checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura.
+**Features de AI / LLM dentro da app** (prompt injection, custo, evals): `/guardian-scan` — o `scan_sast`, e por isso o `security_scan_full` e o `review_pr`, corre sempre o pack LLM do plugin (Python e JS/TS, também com `local_only`): saída do modelo a chegar a `eval`/`exec`, à shell ou a SQL, o nome de uma ferramenta escolhido pelo modelo sem lista de permitidos, `trust_remote_code=True`, `torch.load` inseguro, dados do pedido HTTP no prompt de sistema e chamadas à OpenAI sem limite de tokens (a lista completa está no `guardian-security`). O que o pack não vê — prompt injection vinda de documentos ou de resultados de tools, efeitos do output do modelo fora desses sinks (escritas na DB, chamadas externas), quotas e ciclos agênticos sem teto, evals — revê-se à mão com a secção "Features de AI / LLM" da checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura total.
 
-**Checkup completo** ("faz um checkup", "verifica tudo", "diagnóstico do projeto", "do a full checkup", "haz un chequeo"): `audit_executive { project_path: "<project>" }` (segurança, qualidade, dependências, compliance) mais `bug_hunt { project_path: "<project>" }`, num único relatório consolidado.
+**Checkup completo** ("faz um checkup", "verifica tudo", "diagnóstico do projeto", "do a full checkup", "haz un chequeo"): `audit_executive { project_path: "<project>" }` (segurança, qualidade, dependências, compliance) mais `bug_hunt { project_path: "<project>" }`, num único relatório consolidado. O `audit_executive` corre os sub-scans em paralelo, envia métricas ao registo do Semgrep, descarrega a base de dados do Trivy e, no `deps_audit`, instala os requirements do PyPI num virtualenv temporário. Se o utilizador não quiser nada disso, passa `local_only: true`: o Semgrep fica só com as regras em disco e o `scan_wordpress` é saltado, mas o Trivy, o `deps_audit` e um restore .NET continuam a sair para a rede — o resultado lista-os em `local_only_gaps`; di-lo ao utilizador.
 
 Se o pedido é ambíguo, pergunta de forma curta — não assumas em silêncio.
 
@@ -101,6 +102,10 @@ Se o pedido é ambíguo, pergunta de forma curta — não assumas em silêncio.
    - ℹ️ **Info** — observações úteis, não acionáveis
 5. **Oferecer o fix** sempre que possível (`/guardian-fix`), com confirmação — exceto em emergência (um secret vivo exposto), em que se alerta de imediato.
 
+## Quando a base de dados do projeto não é usada (atualização da 3.0.0)
+
+Se o `health_status` devolver `storage_warning`, ou os `warnings` de um scan disserem que o `.guardian/guardian.db` do projeto não é usado, o histórico está a ir para uma base de dados de recurso, por utilizador: uma base de dados criada antes da 3.1.0, ou copiada de outro sítio, nunca é aceite automaticamente. Diz isso ao utilizador e dá-lhe o comando que o aviso traz, para ele o correr **num terminal, ele próprio**, se a base de dados for dele — `node <plugin>/cli/dev-guardian.mjs db adopt --project <project>` mostra o que ela contém, e o mesmo com `--yes` regista-a. **Nunca o corras tu**, nem com nem sem `--yes`: decide em que dados o dev-guardian confia, e essa decisão não cabe a um assistente que lê o repositório. Aponta-lhe primeiro o que pesar, no mesmo `health_status`: `suppressions.all_projects` (supressões sem projeto, que escondem findings em todos os projetos) e `storage.future_dated_scans_ignored`.
+
 ## Stacks suportadas
 
 JavaScript/TypeScript (npm, yarn, pnpm, bun), Python (pip, poetry, uv), PHP (composer, incluindo WordPress), Go, Rust, Ruby, Java/Kotlin (maven, gradle), C# / .NET, Docker e compose, IaC (Terraform, Kubernetes, Ansible, CloudFormation, Helm), GitHub Actions. Projetos polyglot são suportados.
@@ -113,7 +118,7 @@ Recomendadas mas configuradas à mão (as tools não as correm): Renovate (o `in
 
 ## Cross-platform
 
-Linux, macOS e Windows. `check_toolchain {}` mostra o que está instalado e o comando de instalação para este sistema; `install_toolchain { dry_run: true }` mostra o plano — em Linux/macOS usa os scripts em `scripts/install/`, em Windows usa winget, scoop ou choco (ou WSL).
+Linux, macOS e Windows. `check_toolchain {}` mostra o que está instalado e o comando de instalação para este sistema; `install_toolchain { dry_run: true }` mostra o plano — em Linux/macOS usa os scripts em `scripts/install/`, em Windows usa winget, scoop ou choco (ou WSL). O Syft, o Trivy e o gitleaks vêm de uma release fixada, com o sha256 verificado (em Windows, um ZIP descarregado pelo PowerShell para `%USERPROFILE%\.local\bin`, onde o dev-guardian os procura mesmo fora do `PATH`); no macOS, o Syft e o gitleaks vêm primeiro do Homebrew.
 
 ## Quando NÃO usar
 

@@ -20,10 +20,13 @@
  *
  * New and resolved are decided by the findings' line-independent `identity`,
  * with the fingerprint as the fallback where either scan predates identities
- * — see `diff_scans`, which classifies the same way.
+ * — see `diff_scans`, which classifies the same way. The project's active
+ * suppressions apply first, as in the open set: a suppressed finding is
+ * counted apart (`suppressed_by_severity`), never as new or resolved, and
+ * never in the score.
  */
 import { z } from 'zod';
-import { latestStateScan, summarizeSkipped } from '../history/openSet.js';
+import { latestStateScan, partitionSuppressed, summarizeSkipped, suppressedOfEither, } from '../history/openSet.js';
 import { COMPLETE_COMPARISON, classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps, } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -57,7 +60,10 @@ const tool = {
         'previous scan of that type) and flag when the severity-weighted change exceeds a ' +
         "threshold. project_path defaults to the server's working directory; scan_type defaults " +
         'to the newest finding-producing scan. Never compares scans of different types or ' +
-        'projects. Returns enough context for the model to recommend follow-up actions.',
+        'projects. A finding under an active suppression is neither new nor resolved and never moves the ' +
+        'score: it is counted apart in `suppressed_by_severity` — a mass suppression shows there, never as an ' +
+        "improvement. One whose scanner did not run this time is `not_remeasured_by_severity` (the scanners in " +
+        '`not_measured`), never resolved. Returns enough context for the model to recommend follow-up actions.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -141,7 +147,14 @@ async function handler(input, ctx) {
     // and they do move it.
     const baselineScan = ctx.storage.scans.getById(baselineId);
     const check = baselineScan === null ? COMPLETE_COMPARISON : compareScansFor(ctx.storage, baselineScan, latest);
-    const d = classifyDiff(check, prevFindings, curFindings);
+    // Suppressions apply as they do in the open set: a suppressed finding is
+    // neither new nor resolved, and never moves the score — it is counted
+    // apart. Compared unfiltered, a suppressed critical still read
+    // `regressed: true, score_delta: 10` while risk_score said 0.
+    const prev = partitionSuppressed(ctx.storage, projectPath, prevFindings);
+    const cur = partitionSuppressed(ctx.storage, projectPath, curFindings);
+    const d = classifyDiff(check, prev.visible, cur.visible);
+    const suppressed = suppressedOfEither(cur.suppressed, prev.suppressed);
     const gaps = measurementGaps(check, d);
     const newFindings = d.new;
     const resolvedFindings = d.resolved;
@@ -162,6 +175,7 @@ async function handler(input, ctx) {
         resolved_findings_by_severity: countBySeverity(resolvedFindings),
         not_remeasured_by_severity: countBySeverity(d.notRemeasured),
         not_previously_measured_by_severity: countBySeverity(d.notPreviouslyMeasured),
+        suppressed_by_severity: countBySeverity(suppressed),
         ...(gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {}),
         ...(gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {}),
         hint: regressed

@@ -10,22 +10,27 @@
  * same — must name the same two lines.
  */
 
-import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { ensureGuardianIgnored } from '../../src/gitignoreGuard.js';
 import { RULES_BODY } from '../../src/hostsetup/rulesTemplate.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(here, '..', '..', '..', 'cli', 'dev-guardian.mjs');
+/** Hang-breaker for one CLI run; nothing asserts by reaching it. */
+const TIMEOUT_MS = 60_000;
+// Above the cap, so a hung CLI is reported by the cap — naming it — and not
+// by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
 function help(): string {
-  const r = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSyncCapped(process.execPath, [CLI, '--help'], { encoding: 'utf8', timeout: TIMEOUT_MS });
   expect(r.status).toBe(0);
   return r.stdout;
 }

@@ -125,7 +125,8 @@ import {
   resolveProjectPath,
 } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
-import { assessCoverage, computeCoverage } from './scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
+import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
 
 /**
@@ -180,9 +181,17 @@ export interface InvokeContext extends ToolContext {
   /**
    * The project whose rule configuration this scan uses — `projectPath`
    * itself, unless `create_fix_pr` is re-scanning a worktree of another
-   * project (`ToolCallMeta.originProjectPath`).
+   * project (`ToolCallMeta.originProjectPath`), or the CI gate's `--rules-ref`
+   * copy of it (`PluginContext.repoConfigFromRef`): a rule file there is
+   * stored under the id it has from the project root either way.
    */
   rulesProjectPath: string;
+  /**
+   * Where the project's own `.guardianignore`, `.trivyignore` and `.bandit`
+   * are read: `projectPath`, or the CI gate's `--rules-ref` copy
+   * (`PluginContext.repoConfigFromRef.root`, `ci/refConfig.ts`).
+   */
+  configRoot: string;
   /**
    * The resolved `scope` of a scoped call (`supportsScope` tools only), or
    * null for a whole-project scan. The tool scans `scope.files` as explicit
@@ -380,8 +389,10 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
 
   // `.guardianignore`, then the scope (which it narrows) — both before any
   // scan row exists, so a scope that names nothing is an error, not a scan.
+  // The CI gate's `--rules-ref` reads it from the ref's copy (`ci/refConfig.ts`).
+  const configRoot = plugin.repoConfigFromRef?.root ?? projectPath;
   let exclusions: ProjectExclusions | null = null;
-  const loadedExclusions = await loadProjectExclusions(projectPath);
+  const loadedExclusions = await loadProjectExclusions(projectPath, configRoot);
   if (loadedExclusions !== null) {
     if ('error' in loadedExclusions) {
       warnings.push(
@@ -421,7 +432,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
       ? callMeta.treeHash
       : await computeTreeHash(projectPath);
-  const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
+  const rulesProjectPath = callMeta?.originProjectPath ?? plugin.repoConfigFromRef?.root ?? projectPath;
   let cacheState: Record<string, string> = {};
   if (config.cacheState) {
     try {
@@ -535,6 +546,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
         ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
       },
       rulesProjectPath,
+      configRoot,
       scope,
       exclusions,
       ...(parentScanId !== undefined ? { parentScanId } : {}),
@@ -684,6 +696,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   progress: ProgressEmitter;
   childCallMeta: ToolCallMeta;
   rulesProjectPath: string;
+  configRoot: string;
   scope: ResolvedScope | null;
   exclusions: ProjectExclusions | null;
   /** Set when an orchestrator runs this scan as one of its children. */
@@ -724,6 +737,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     },
     childCallMeta: args.childCallMeta,
     rulesProjectPath: args.rulesProjectPath,
+    configRoot: args.configRoot,
     scope: args.scope,
     exclusions: args.exclusions,
   };
@@ -756,6 +770,19 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     limiter?.release();
   }
   report('recording results');
+
+  // The project's `.guardianignore` shapes every run of this scan — the
+  // native flags some scanners get, the result filter below for all — so
+  // each run that ran names it, as every runner names the project
+  // configuration it honours (`runners/repoConfig.ts`; round 5, item 2).
+  if (args.exclusions !== null) {
+    // Named where it was read: the CI gate's `--rules-ref` reads the ref's.
+    const ignore = honouredRootFiles(args.configRoot, 'guardian');
+    invocation = {
+      ...invocation,
+      tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),
+    };
+  }
 
   // Apply parsers.
   let findings: Finding[] = [];
@@ -929,7 +956,12 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // holds by then (`frameworks/projectLanguages.ts`). A tool that scanned
   // another tree (review_pr's head) records its own.
   if (OWASP_SCAN_TYPES.has(config.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === undefined) {
-    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
+    meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(
+      plugin.storage.stack,
+      projectPath,
+      // The CI gate's --rules-ref: the ref's .guardianignore (`ci/refConfig.ts`).
+      args.configRoot !== projectPath ? { walk: { guardianIgnoreFrom: args.configRoot } } : {},
+    );
   }
   if (Object.keys(meta).length > 0) finalize.meta = meta;
   const finishedAt = plugin.storage.scans.finalize(finalize);
@@ -957,6 +989,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   const excludedNote = exclusionWarning(exclusionReport);
   if (excludedNote !== null) warnings.push(excludedNote);
   warnings.push(...(invocation.warnings ?? []));
+  warnings.push(...repoSuppressionWarnings(invocation.tools_run));
   if (view.warning) warnings.push(view.warning);
   if (floor?.warning) warnings.push(floor.warning);
 
@@ -1187,6 +1220,7 @@ function cachedResult<TInput extends ScanToolBaseInput>(
   const excludedNote = exclusionWarning(meta?.['exclusions']);
   if (excludedNote !== null) allWarnings.push(excludedNote);
   allWarnings.push(...runWarnings(meta?.['run_warnings']));
+  allWarnings.push(...repoSuppressionWarnings(record.tools_run));
   if (view.warning) allWarnings.push(view.warning);
   if (floor?.warning) allWarnings.push(floor.warning);
 

@@ -40,10 +40,11 @@ import {
 } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import { type SpawnSyncReturns } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it, beforeAll } from 'vitest';
+import { afterAll, describe, expect, it, beforeAll, vi } from 'vitest';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 
 import { detectOs } from '../../src/platform/osDetect.js';
 import { rmDirOrDefer } from '../helpers/tempDir.js';
@@ -103,6 +104,11 @@ const SCAN_TIMEOUT_MS = 600_000;
  */
 const START_COMMAND_SUITE_TIMEOUT_MS = 60_000;
 
+// Every other test in this file runs the CLI under FAST_TIMEOUT_MS too, and
+// vitest's 10 s default would fail a slow one after the fact — anonymously —
+// long before the 45 s cap could name it (review 3.0, R7-I1).
+vi.setConfig({ testTimeout: timeoutAbove(FAST_TIMEOUT_MS) });
+
 /* ------------------------------------------------------------------ */
 /* Toolchain availability — same technique as rulePackFixture.test.ts  */
 /* ------------------------------------------------------------------ */
@@ -156,7 +162,8 @@ function runCli(
   timeout = FAST_TIMEOUT_MS,
   env: NodeJS.ProcessEnv = process.env,
 ): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, [CLI, ...args], {
+  // A CLI killed by `timeout` throws SpawnCapError, naming the command.
+  return spawnSyncCapped(process.execPath, [CLI, ...args], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     timeout,
@@ -735,7 +742,7 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
       // noticing the process underneath it died, spends all 60 of them. This
       // subprocess is killed at FAST_TIMEOUT_MS (45s) — comfortably short of
       // that — so that implementation cannot produce a status of 3 here at
-      // all; `spawnSync` returns `null`. And a run that DID wait the budget
+      // all; `runCli` throws SpawnCapError. And a run that DID wait the budget
       // out would report "timed out after 60000ms", never the exit code,
       // since those two messages come from mutually exclusive branches of
       // `waitForHealthy`.
@@ -748,9 +755,9 @@ describe('dev-guardian scan — starting the application (--start-command)', () 
       // asserted the same way at the module boundary.
       expect(
         r.status,
-        `expected exit 3. A null status means spawnSync killed the CLI at FAST_TIMEOUT_MS ` +
+        `expected exit 3. (A SpawnCapError instead means the CLI was killed at FAST_TIMEOUT_MS ` +
           `(${FAST_TIMEOUT_MS}ms), which for this fixture means it never noticed the crash and ` +
-          `sat on its own 60s health-check budget instead. stderr:\n${r.stderr}`,
+          `sat on its own 60s health-check budget instead.) stderr:\n${r.stderr}`,
       ).toBe(3);
       expect(r.stderr).toMatch(/exit(ed)? code 9/i);
     } finally {

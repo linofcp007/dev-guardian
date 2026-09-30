@@ -62,6 +62,7 @@
  * Pure: bookkeeping, findings and languages in, a table out.
  */
 
+import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
 import type { Finding, ScanType, ToolRun } from '../types.js';
 import { canonicalLanguage, type SourceLanguage } from './languages.js';
 import { OWASP_TOP10_2025, type Owasp2025Id } from './owaspTop10_2025.js';
@@ -509,7 +510,13 @@ function incompleteReason(run: CoverageRun, d: OwaspDetector): string | undefine
   const gaps = run.missing_tools.filter((m) => family.some((n) => m === n || m.startsWith(`${n}:`)));
   if (gaps.length > 0) reasons.push(`listed missing (${[...new Set(gaps)].join(', ')})`);
   const okPasses = run.tools_run.filter((t) => family.includes(t.name) && t.status === 'ok');
-  if (okPasses.some((t) => (t.partially_parsed?.length ?? 0) > 0)) reasons.push('some files were only partly parsed');
+  // The plugin's LLM pack's own taint timeouts (`FIXPOINT_TIMEOUT_PACK_TYPE`)
+  // are the pack's gap, not the run's: counted here they turned every
+  // category the registry reached from tested to partial on nearly every
+  // scan_sast of a TypeScript codebase.
+  if (okPasses.some((t) => (t.partially_parsed ?? []).some((pp) => pp.type !== FIXPOINT_TIMEOUT_PACK_TYPE))) {
+    reasons.push('some files were only partly parsed');
+  }
   if (okPasses.some((t) => (t.failed_rules?.length ?? 0) > 0)) reasons.push('some rules did not load');
   return reasons.length > 0 ? reasons.join('; ') : undefined;
 }

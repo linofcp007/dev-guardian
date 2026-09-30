@@ -77,11 +77,12 @@
  * today's tree, and the source says so. The MCP server's readers use the
  * async listing: on a large tree `git ls-files --others` takes seconds.
  */
-import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
+import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { git, splitNul } from '../runners/git.js';
 import { OWASP_SCAN_TYPES } from './coverage.js';
 import { canonicalLanguage, languageOfFile, SOURCE_LANGUAGES } from './languages.js';
@@ -148,29 +149,27 @@ export const PERIPHERAL_TOP_DIRS = new Set([
 ]);
 /** C++ sources and headers: with any of these, a `.h` is C++'s, not C's. */
 const CPP_EXTENSIONS = /\.(cc|cpp|cxx|hpp|hh|hxx)$/i;
-function readTextSync(path) {
-    try {
-        return readFileSync(path, 'utf8');
-    }
-    catch {
-        return null;
-    }
+/** The largest ignore file read; a real one is a few KB. */
+const MAX_IGNORE_FILE_BYTES = 1024 * 1024;
+/**
+ * An ignore file at the project root — the repository's: bounded, regular
+ * files only, never through a link out of the project
+ * (`platform/projectFs.ts`). Small enough to read synchronously on the async
+ * path too.
+ */
+function readTextSync(root, name) {
+    return readProjectTextOrUndefined(root, name, MAX_IGNORE_FILE_BYTES) ?? null;
 }
-async function readTextAsync(path) {
-    try {
-        return await readFile(path, 'utf8');
-    }
-    catch {
-        return null;
-    }
+async function readTextAsync(root, name) {
+    return readTextSync(root, name);
 }
-function ignoreTextsSync(root) {
-    return { semgrep: readTextSync(join(root, '.semgrepignore')), guardian: readTextSync(join(root, GUARDIAN_IGNORE_FILE)) };
+function ignoreTextsSync(root, guardianFrom = root) {
+    return { semgrep: readTextSync(root, '.semgrepignore'), guardian: readTextSync(guardianFrom, GUARDIAN_IGNORE_FILE) };
 }
-async function ignoreTextsAsync(root) {
+async function ignoreTextsAsync(root, guardianFrom = root) {
     const [semgrep, guardian] = await Promise.all([
-        readTextAsync(join(root, '.semgrepignore')),
-        readTextAsync(join(root, GUARDIAN_IGNORE_FILE)),
+        readTextAsync(root, '.semgrepignore'),
+        readTextAsync(guardianFrom, GUARDIAN_IGNORE_FILE),
     ]);
     return { semgrep, guardian };
 }
@@ -305,19 +304,10 @@ function parseGitList(stdout) {
     }
     return out;
 }
+/** Hardened (`platform/gitSafety.ts`); refused or failed, the caller walks the directory instead. */
 function gitListSync(root) {
-    try {
-        const r = spawnSync('git', ['-C', root, ...GIT_LIST_ARGS], {
-            encoding: 'utf8',
-            timeout: 30_000,
-            maxBuffer: 512 * 1024 * 1024,
-            windowsHide: true,
-        });
-        return r.status === 0 && typeof r.stdout === 'string' ? parseGitList(r.stdout) : null;
-    }
-    catch {
-        return null;
-    }
+    const r = execGitSync(root, GIT_LIST_ARGS, { timeoutMs: 30_000, maxBuffer: 512 * 1024 * 1024 });
+    return r.failure === null && r.status === 0 ? parseGitList(r.stdout) : null;
 }
 async function gitListAsync(root) {
     const r = await git(root, GIT_LIST_ARGS, 30_000);
@@ -443,7 +433,7 @@ function fromFiles(listing, files, exclusions, incomplete) {
 }
 /** The source languages among the files the scanners would read — synchronous (the CLI dashboard). */
 export function languagesFromFiles(root, opts = {}) {
-    const exclusions = scannerExclusions(ignoreTextsSync(root));
+    const exclusions = scannerExclusions(ignoreTextsSync(root, opts.guardianIgnoreFrom));
     const listed = opts.useGit === false ? null : gitListSync(root);
     if (listed !== null)
         return fromFiles('git', listed, exclusions);
@@ -452,12 +442,80 @@ export function languagesFromFiles(root, opts = {}) {
 }
 /** {@link languagesFromFiles} without blocking the event loop — scan time and the MCP readers. */
 export async function languagesFromFilesAsync(root, opts = {}) {
-    const exclusions = scannerExclusions(await ignoreTextsAsync(root));
+    const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
     const listed = opts.useGit === false ? null : await gitListAsync(root);
     if (listed !== null)
         return fromFiles('git', listed, exclusions);
     const walked = await walkAsync(root, exclusions, opts);
     return fromFiles('walk', walked?.files ?? null, exclusions, walked?.incomplete);
+}
+// ---------------------------------------------------------------- files too large for Semgrep
+/** Semgrep's `--max-target-bytes` default (1.176.1: "Defaults to 1000000 bytes"): a larger target is ignored. */
+export const SEMGREP_MAX_TARGET_BYTES = 1_000_000;
+/** Whether `rel` is a file the scanners read with a source language — see the module comment. */
+function isScannedSource(rel, exclusions) {
+    if (languageOfFile(rel) === null && !/\.h$/i.test(rel))
+        return false;
+    const segments = rel.split('/');
+    for (let i = 1; i < segments.length; i++) {
+        if (exclusions.layer(segments.slice(0, i).join('/'), true) !== null)
+            return false;
+    }
+    return exclusions.layer(rel) === null;
+}
+async function sizesOver(root, rels, limit) {
+    const out = [];
+    const BATCH = 64;
+    for (let i = 0; i < rels.length; i += BATCH) {
+        const batch = rels.slice(i, i + BATCH);
+        const sizes = await Promise.all(batch.map(async (rel) => {
+            try {
+                const st = await lstat(join(root, ...rel.split('/')));
+                return st.isFile() ? st.size : -1;
+            }
+            catch {
+                return -1;
+            }
+        }));
+        sizes.forEach((bytes, j) => {
+            const rel = batch[j];
+            if (rel !== undefined && bytes > limit)
+                out.push({ path: rel, bytes });
+        });
+    }
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+/**
+ * The files Semgrep would read here — the scanners' own listing and
+ * exclusions (the module comment), with a source language — that are over
+ * `limit` bytes, which Semgrep ignores without a word (review M1: its
+ * `paths.skipped` says so only under `--verbose`, and a 1.16 MB file of
+ * the project's only Python read as "no covered language"). `only`, when
+ * given, restricts the answer to those paths (a scoped scan's files).
+ */
+export async function oversizedSourceFilesAsync(root, opts = {}) {
+    const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
+    const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
+    if (opts.only !== undefined) {
+        const rels = opts.only.map((p) => p.split('\\').join('/')).filter((rel) => isScannedSource(rel, exclusions));
+        return { files: await sizesOver(root, rels, limit) };
+    }
+    const listed = await gitListAsync(root);
+    const walked = listed === null ? await walkAsync(root, exclusions, {}) : null;
+    const files = listed ?? walked?.files ?? [];
+    const out = { files: await sizesOver(root, files.filter((rel) => isScannedSource(rel, exclusions)), limit) };
+    if (walked?.incomplete !== undefined)
+        out.incomplete = walked.incomplete;
+    return out;
+}
+/** `src/big.py (1.2 MB)`, the first few, then "and N more". */
+export function describeOversized(files, limit = SEMGREP_MAX_TARGET_BYTES) {
+    const mb = (n) => `${(n / 1_000_000).toFixed(1)} MB`;
+    const shown = files.slice(0, 5).map((f) => `${f.path} (${mb(f.bytes)})`);
+    const more = files.length > shown.length ? ` and ${files.length - shown.length} more` : '';
+    const n = files.length;
+    return (`${n} file${n === 1 ? '' : 's'} over Semgrep's ${mb(limit).replace('.0 ', ' ')} target limit ` +
+        `${n === 1 ? 'was' : 'were'} not scanned: ${shown.join(', ')}${more}`);
 }
 function snapshotLanguages(snapshot) {
     if (snapshot === null || typeof snapshot !== 'object')

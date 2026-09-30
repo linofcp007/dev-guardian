@@ -32,7 +32,8 @@
  * whole project — so a scoped run skips them and says why.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { isWithinDir, presentInProject, projectEntryKind, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { dirname, join, relative } from 'node:path';
 import { z } from 'zod';
 import { budgetViolationFindings, evaluateQualityBudgets, loadBudgets, type QualityBudgets } from '../budgets/budgets.js';
@@ -40,6 +41,7 @@ import { ScanScopeInput } from '../platform/scope.js';
 import { batchArgs } from '../runners/argBatches.js';
 import { scanFileBatches } from '../runners/fileBatchScan.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { nameRepoConfig, type RepoConfigRunner } from '../runners/repoConfig.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { eslintFatalErrors, eslintParser } from '../runners/scannerParsers/eslint.js';
 import { asArray, getNumber, getProp, parseInputAsJson, type ScannerParser } from '../runners/scannerParsers/index.js';
@@ -78,6 +80,25 @@ const ESLINT_CONFIGS = [
   '.eslintrc.yaml',
   '.eslintrc.yml',
 ];
+
+/**
+ * The analysers here that read the project's own configuration — ruff
+ * `ruff.toml` / `[tool.ruff]` from each file upwards, jscpd `.jscpd.json`,
+ * radon `radon.cfg` / `[radon]`, staticcheck `staticcheck.conf`, ESLint its
+ * config — in whole-project and scoped runs alike. Each run that ran names
+ * them (`runners/repoConfig.ts`; round 5, item 2).
+ */
+const QUALITY_RUNNERS: readonly RepoConfigRunner[] = ['ruff', 'jscpd', 'radon', 'staticcheck', 'eslint'];
+
+async function nameQualityConfig(projectPath: string, out: Collected): Promise<void> {
+  const named: ToolRun[] = [];
+  for (const run of out.tools_run) {
+    const runner = QUALITY_RUNNERS.find((r) => r === run.name);
+    const ran = !(run.status === 'skipped');
+    named.push(runner !== undefined && ran ? await nameRepoConfig(run, projectPath, runner) : run);
+  }
+  out.tools_run = named;
+}
 
 /** Kept out of jscpd and radon, as they are out of every other walk of the project. */
 const IGNORED_DIRS = ['node_modules', '.git', '.guardian', 'vendor', 'dist', 'build', 'venv', '.venv', '__pycache__'];
@@ -127,6 +148,7 @@ registerToolModule(
 
       if (ctx.scope !== null) {
         await runOnScope(ctx, reportDir, out, ctx.scope.files);
+        await nameQualityConfig(ctx.projectPath, out);
         return {
           outcome: out.cancelled ? 'cancelled' : 'completed',
           tools_run: out.tools_run,
@@ -142,11 +164,12 @@ registerToolModule(
         if (!out.cancelled) await runRadon(ctx, reportDir, out);
       }
       if (!out.cancelled && hasEslintConfig(ctx.projectPath)) await runEslint(ctx, reportDir, out);
-      if (!out.cancelled && existsSync(join(ctx.projectPath, 'go.mod'))) await runStaticcheck(ctx, out);
+      if (!out.cancelled && presentInProject(ctx.projectPath, 'go.mod')) await runStaticcheck(ctx, out);
       // Separated step, deliberately: reads the jscpd/radon reports jscpd and
       // radon already wrote above (never re-runs a scanner), and is the only
       // part of this file that knows about .guardian/budgets.yml at all.
       if (!out.cancelled) runBudgets(ctx.projectPath, reportDir, out);
+      await nameQualityConfig(ctx.projectPath, out);
 
       return {
         outcome: out.cancelled ? 'cancelled' : 'completed',
@@ -467,7 +490,7 @@ async function runOnScope(ctx: InvokeContext, reportDir: string, out: Collected,
     }
   }
   const goFiles = files.filter((f) => f.endsWith('.go'));
-  if (!out.cancelled && goFiles.length > 0 && existsSync(join(ctx.projectPath, 'go.mod'))) {
+  if (!out.cancelled && goFiles.length > 0 && presentInProject(ctx.projectPath, 'go.mod')) {
     // staticcheck analyses packages: the directories holding the scoped files.
     const packages = [...new Set(goFiles.map((f) => (f.includes('/') ? `./${f.slice(0, f.lastIndexOf('/'))}` : '.')))].sort();
     await runStaticcheck(ctx, out, packages);
@@ -590,9 +613,12 @@ function couldNotAnalyse(errors: readonly string[]): string[] {
 }
 
 function hasEslintConfig(projectPath: string): boolean {
-  if (ESLINT_CONFIGS.some((name) => existsSync(join(projectPath, name)))) return true;
+  if (ESLINT_CONFIGS.some((name) => presentInProject(projectPath, name))) return true;
   try {
-    const pkg = parseInputAsJson(readFileSync(join(projectPath, 'package.json'), 'utf8'));
+    // The repository's file: bounded, never through a link out of the project.
+    const text = readProjectTextOrUndefined(projectPath, 'package.json');
+    if (text === undefined) return false;
+    const pkg = parseInputAsJson(text);
     return typeof pkg === 'object' && pkg !== null && 'eslintConfig' in pkg;
   } catch {
     return false;
@@ -608,8 +634,9 @@ function hasEslintConfig(projectPath: string): boolean {
 function localEslint(projectPath: string): string | null {
   for (let dir = projectPath; ; dir = dirname(dir)) {
     const candidate = join(dir, 'node_modules', 'eslint', 'bin', 'eslint.js');
-    if (existsSync(candidate)) return candidate;
-    if (existsSync(join(dir, '.git')) || dirname(dir) === dir) return null;
+    // Inside the project, never through a link out of it; above it, the user's own directories.
+    if (isWithinDir(projectPath, dir) ? projectPathKind(projectPath, candidate) === 'file' : existsSync(candidate)) return candidate;
+    if (projectEntryKind(join(dir, '.git')) !== 'absent' || dirname(dir) === dir) return null;
   }
 }
 

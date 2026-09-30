@@ -45,10 +45,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { git, splitNul } from '../runners/git.js';
 import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
+import { describeReadRefusal, presentInProject, projectEntryKind, readProjectText, readProjectTextOrUndefined } from './projectFs.js';
+
+/** The largest `.guardianignore` read; a real one is a few KB. */
+const MAX_GUARDIAN_IGNORE_BYTES = 1024 * 1024;
 
 export const GUARDIAN_IGNORE_FILE = '.guardianignore';
 
@@ -276,19 +279,24 @@ export interface ExclusionsLoadError {
  * of the directory. Either way `PROJECT_WALK_EXCLUDE` (`node_modules`,
  * `.git`, `.guardian`, build output, …) is left out: no scan of the
  * project's own files reads those.
+ *
+ * `configRoot` is where the file itself is read — the project, unless the CI
+ * gate took it from `--rules-ref` (`ci/refConfig.ts`): the ref's copy is then
+ * applied to the project's files, and the project's own is never read.
  */
 export async function loadProjectExclusions(
   projectPath: string,
+  configRoot: string = projectPath,
 ): Promise<ProjectExclusions | ExclusionsLoadError | null> {
-  const file = join(projectPath, GUARDIAN_IGNORE_FILE);
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch (e) {
-    const code = typeof e === 'object' && e !== null && 'code' in e ? (e as { code: unknown }).code : undefined;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    return { file, error: e instanceof Error ? e.message : String(e) };
-  }
+  const file = join(configRoot, GUARDIAN_IGNORE_FILE);
+  // The repository's file (or the CI gate's --rules-ref copy): bounded,
+  // regular files only, never through a link out of its root
+  // (`platform/projectFs.ts`). One that is there and refused is an error the
+  // caller reports, never "nothing excluded".
+  const read = readProjectText(configRoot, GUARDIAN_IGNORE_FILE, MAX_GUARDIAN_IGNORE_BYTES);
+  if (read.status === 'absent') return null;
+  if (read.status === 'refused') return { file, error: `not read: ${describeReadRefusal(read.reason)}` };
+  const text = read.text;
   const matcher = compileIgnore(text);
   const listed = await gitListFiles(projectPath);
   let semgrepAnchor: string | null;
@@ -309,6 +317,31 @@ export async function loadProjectExclusions(
     ...classify(listed ?? listProjectFiles(projectPath), matcher),
     semgrepAnchor,
   };
+}
+
+/** A name no file has, to ask whether EVERYTHING inside a directory is excluded (`libs/core/**`). */
+const PROBE_CHILD = '.guardian-probe-7f3a';
+
+/**
+ * The submodules (project-relative directories) the project's
+ * `.guardianignore` leaves in (round 4, item 6). One it excludes — by name
+ * (`libs/core`), by a directory above it (`libs/`), or all of its contents
+ * (`libs/core/**`) — is not the project's to scan, so its unscanned
+ * contents are no gap; one it excludes only part of (`libs/core/*.js`) still
+ * is. A `.guardianignore` that cannot be read excludes nothing here: the gap
+ * stays named. `configRoot` is where it is read — the CI gate's `--rules-ref`
+ * copy (`ci/refConfig.ts`) instead of the project, like `loadProjectExclusions`.
+ */
+export function submodulesNotIgnored(
+  projectPath: string,
+  submodules: readonly string[],
+  configRoot: string = projectPath,
+): string[] {
+  if (submodules.length === 0) return [];
+  const text = readProjectTextOrUndefined(configRoot, GUARDIAN_IGNORE_FILE, MAX_GUARDIAN_IGNORE_BYTES);
+  if (text === undefined) return [...submodules];
+  const matcher = compileIgnore(text);
+  return submodules.filter((sub) => !matcher.ignores(sub, true) && !matcher.ignores(`${sub}/${PROBE_CHILD}`, false));
 }
 
 /**
@@ -340,7 +373,7 @@ export function projectPathTest(projectPath: string): (relPath: string) => boole
     const key = segments.join('/');
     let v = exists.get(key);
     if (v === undefined) {
-      v = existsSync(join(projectPath, ...segments));
+      v = presentInProject(projectPath, join(...segments));
       exists.set(key, v);
     }
     return v;
@@ -362,7 +395,8 @@ export function projectPathTest(projectPath: string): (relPath: string) => boole
 /** A `.git` (directory or worktree file) in the project or one of its ancestors. */
 function insideGitWorkTree(projectPath: string): boolean {
   for (let dir = resolve(projectPath); ; dir = dirname(dir)) {
-    if (existsSync(join(dir, '.git'))) return true;
+    // lstat only: a `.git` link is never followed to find out.
+    if (projectEntryKind(join(dir, '.git')) !== 'absent') return true;
     if (dirname(dir) === dir) return false;
   }
 }

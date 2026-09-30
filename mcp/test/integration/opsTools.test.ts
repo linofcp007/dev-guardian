@@ -90,6 +90,18 @@ function tempProject(): string {
   return makeTempDir('ops-tools-');
 }
 
+/**
+ * `<its own temp dir>/scripts`: init_project reads its baselines from the
+ * sibling `configs/`. A bare `makeTempDir()` as the scripts dir put that
+ * sibling at `<os temp>/configs` — one fixed directory every test and every
+ * concurrent run shared, and nothing removed (review 3.0, R7).
+ */
+function pluginScriptsDir(): string {
+  const scriptsDir = join(makeTempDir('init-plugin-'), 'scripts');
+  mkdirSync(scriptsDir, { recursive: true });
+  return scriptsDir;
+}
+
 function getTool(name: string) {
   const t = TOOLS.find((x) => x.name === name);
   if (!t) throw new Error(`Tool '${name}' not registered`);
@@ -182,7 +194,7 @@ describe('init_project', () => {
   it('copies profile configs into the project (idempotent)', async () => {
     const project = tempProject();
     // Build a fake "configs/" alongside scripts/ so initProject can resolve them.
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -245,7 +257,7 @@ describe('init_project', () => {
 
   it('respects apply=false (dry-run)', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -267,7 +279,7 @@ describe('init_project', () => {
   it("reports this project's stack snapshot, never another project's newer one (Task 24)", async () => {
     const project = tempProject();
     const other = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     writeFileSync(join(configsDir, 'gitleaks', 'gitleaks.toml'), '# gl\n', 'utf8');
@@ -307,7 +319,7 @@ describe('init_project', () => {
 
   it('paranoid installs the paranoid gitleaks/renovate variants, not the standard ones', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     makeFullConfigsDir(scriptsDir);
     mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
     writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
@@ -332,7 +344,7 @@ describe('init_project', () => {
 
   it('standard installs the standard gitleaks/renovate files (not the paranoid ones)', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     makeFullConfigsDir(scriptsDir);
     mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
     writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
@@ -358,7 +370,7 @@ describe('init_project', () => {
 
   it("computes the secrets line from gitleaks directly, catching what the shell script's own history-only pass would miss", async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -417,7 +429,7 @@ describe('init_project', () => {
 
   it('leaves the shell summary untouched when gitleaks is not installed (nothing to correct it with)', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -702,6 +714,76 @@ describe('perf_check', () => {
     expect(r.budgets.reason?.length ?? 0).toBeGreaterThan(0);
     expect(r.budgets.path).toContain('budgets.yml');
     expect(r.warnings?.some((w) => /budgets\.yml/.test(w))).toBe(true);
+  });
+
+  /**
+   * Review M5: perf_check read neither Lighthouse's exit code nor
+   * `lhr.runtimeError`, so a page that failed to load gave null scores and
+   * budgets "ok". Lighthouse's own CLI (`cli/run.js`) saves the report and
+   * THEN exits `_RUNTIME_ERROR_CODE = 1` on `lhr.runtimeError` ("we'll still
+   * exit with an error code after we saved the results"); a protocol
+   * timeout exits 67.
+   */
+  function mockLighthouse(report: unknown, exitCode: number): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'lighthouse' ? '/fake/bin/lighthouse' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outFile = opts.args?.find((a) => a.startsWith('--output-path='))?.replace('--output-path=', '');
+      if (outFile) writeFileSync(outFile, JSON.stringify(report), 'utf8');
+      return {
+        outcome: exitCode === 0 ? ('completed' as const) : ('failed' as const),
+        exitCode,
+        stdout: '',
+        stderr: exitCode === 0 ? '' : 'Runtime error encountered: Lighthouse was unable to reliably load the page you requested.',
+        truncated: false,
+      };
+    });
+  }
+
+  it('a page that failed to load (lhr.runtimeError, exit 1) is a failed check with the reason', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  lcp_ms: 2500\n', 'utf8');
+    mockLighthouse(
+      {
+        runtimeError: {
+          code: 'FAILED_DOCUMENT_REQUEST',
+          message: 'Lighthouse was unable to reliably load the page you requested. (Details: net::ERR_CONNECTION_REFUSED)',
+        },
+        categories: { performance: { score: null } },
+        audits: {},
+      },
+      1,
+    );
+    const r = await getTool('perf_check').handler({ project_path: project, target_url: 'https://example.com' }, makePlugin(project));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('scanner_failed');
+    expect(r.error.message).toMatch(/FAILED_DOCUMENT_REQUEST.*unable to reliably load/);
+  });
+
+  it('a non-zero exit with a report but no runtimeError (protocol timeout, 67) is failed too', async () => {
+    const project = tempProject();
+    mockLighthouse({ categories: {}, audits: { 'largest-contentful-paint': { numericValue: 100 } } }, 67);
+    const r = await getTool('perf_check').handler({ project_path: project, target_url: 'https://example.com' }, makePlugin(project));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.message).toMatch(/exit 67/);
+  });
+
+  it('a budget whose metric Lighthouse did not measure is "not_measured", never ok', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(join(project, '.guardian', 'budgets.yml'), 'perf:\n  lcp_ms: 2500\n  inp_ms: 200\n', 'utf8');
+    // LCP measured and within budget; INP not measured at all (null).
+    mockLighthouse({ categories: { performance: { score: 0.9 } }, audits: { 'largest-contentful-paint': { numericValue: 1200 } } }, 0);
+    const r = (await getTool('perf_check').handler(
+      { project_path: project, target_url: 'https://example.com' },
+      makePlugin(project),
+    )) as { ok: true; findings: unknown[]; budgets: { status: string; not_measured?: string[] }; warnings?: string[] };
+    expect(r.ok).toBe(true);
+    expect(r.budgets.status).toBe('not_measured');
+    expect(r.budgets.not_measured).toEqual(['perf.inp_ms']);
+    expect(r.warnings?.some((w) => /inp_ms.*not measured/.test(w))).toBe(true);
   });
 
   it('derives bundle_size_kb from the total-byte-weight audit', async () => {

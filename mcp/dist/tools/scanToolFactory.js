@@ -89,7 +89,8 @@ import { hashInput, hashRulePacks, scanCacheKey } from '../treeHash/cacheKey.js'
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { InvalidProjectPathError, resolveProjectPath, } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
-import { assessCoverage, computeCoverage } from './scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
+import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 /** Inputs that never enter the cache key — see the module comment. */
 const KEYLESS_INPUTS = ['project_path', 'severity_min', 'force'];
@@ -164,8 +165,10 @@ async function runScanPipeline(config, input, plugin, callMeta) {
         warnings.push(driftAdvisory);
     // `.guardianignore`, then the scope (which it narrows) — both before any
     // scan row exists, so a scope that names nothing is an error, not a scan.
+    // The CI gate's `--rules-ref` reads it from the ref's copy (`ci/refConfig.ts`).
+    const configRoot = plugin.repoConfigFromRef?.root ?? projectPath;
     let exclusions = null;
-    const loadedExclusions = await loadProjectExclusions(projectPath);
+    const loadedExclusions = await loadProjectExclusions(projectPath, configRoot);
     if (loadedExclusions !== null) {
         if ('error' in loadedExclusions) {
             warnings.push(`${GUARDIAN_IGNORE_FILE} could not be read (${loadedExclusions.error}) — NOTHING was excluded from ` +
@@ -203,7 +206,7 @@ async function runScanPipeline(config, input, plugin, callMeta) {
     const treeHash = callMeta?.parentScanId !== undefined && callMeta.treeHash !== undefined
         ? callMeta.treeHash
         : await computeTreeHash(projectPath);
-    const rulesProjectPath = callMeta?.originProjectPath ?? projectPath;
+    const rulesProjectPath = callMeta?.originProjectPath ?? plugin.repoConfigFromRef?.root ?? projectPath;
     let cacheState = {};
     if (config.cacheState) {
         try {
@@ -313,6 +316,7 @@ async function runScanPipeline(config, input, plugin, callMeta) {
                 ...(callMeta?.originProjectPath !== undefined ? { originProjectPath: callMeta.originProjectPath } : {}),
             },
             rulesProjectPath,
+            configRoot,
             scope,
             exclusions,
             ...(parentScanId !== undefined ? { parentScanId } : {}),
@@ -459,6 +463,7 @@ async function runScanBody(args) {
         },
         childCallMeta: args.childCallMeta,
         rulesProjectPath: args.rulesProjectPath,
+        configRoot: args.configRoot,
         scope: args.scope,
         exclusions: args.exclusions,
     };
@@ -489,6 +494,18 @@ async function runScanBody(args) {
         limiter?.release();
     }
     report('recording results');
+    // The project's `.guardianignore` shapes every run of this scan — the
+    // native flags some scanners get, the result filter below for all — so
+    // each run that ran names it, as every runner names the project
+    // configuration it honours (`runners/repoConfig.ts`; round 5, item 2).
+    if (args.exclusions !== null) {
+        // Named where it was read: the CI gate's `--rules-ref` reads the ref's.
+        const ignore = honouredRootFiles(args.configRoot, 'guardian');
+        invocation = {
+            ...invocation,
+            tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),
+        };
+    }
     // Apply parsers.
     let findings = [];
     const cves = [];
@@ -654,7 +671,9 @@ async function runScanBody(args) {
     // holds by then (`frameworks/projectLanguages.ts`). A tool that scanned
     // another tree (review_pr's head) records its own.
     if (OWASP_SCAN_TYPES.has(config.scan_type) && meta[PROJECT_LANGUAGES_META_KEY] === undefined) {
-        meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath);
+        meta[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(plugin.storage.stack, projectPath, 
+        // The CI gate's --rules-ref: the ref's .guardianignore (`ci/refConfig.ts`).
+        args.configRoot !== projectPath ? { walk: { guardianIgnoreFrom: args.configRoot } } : {});
     }
     if (Object.keys(meta).length > 0)
         finalize.meta = meta;
@@ -677,6 +696,7 @@ async function runScanBody(args) {
     if (excludedNote !== null)
         warnings.push(excludedNote);
     warnings.push(...(invocation.warnings ?? []));
+    warnings.push(...repoSuppressionWarnings(invocation.tools_run));
     if (view.warning)
         warnings.push(view.warning);
     if (floor?.warning)
@@ -880,6 +900,7 @@ function cachedResult(config, input, plugin, scanId, warnings) {
     if (excludedNote !== null)
         allWarnings.push(excludedNote);
     allWarnings.push(...runWarnings(meta?.['run_warnings']));
+    allWarnings.push(...repoSuppressionWarnings(record.tools_run));
     if (view.warning)
         allWarnings.push(view.warning);
     if (floor?.warning)

@@ -132,7 +132,7 @@ describe('failure isolation', () => {
     const tools = new Set(p.storage.findings.listByScan(res.scan_id).map((f) => f.tool));
     expect(tools.has('semgrep')).toBe(true);
     expect(res.coverage).toBe('partial');
-  });
+  }, 30_000); // Measured in full-suite runs (review 3.0, R7): past 10 s under load, like its sibling (5.2 s).
 
   it('security_scan_full: a child that throws is a failed entry; its siblings are kept', async () => {
     const iac = TOOLS.find((t) => t.name === 'scan_iac');

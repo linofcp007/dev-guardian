@@ -37,14 +37,21 @@
  *
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { listProjectDir, presentInProject, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
-import { assessManifestCoverage, TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
+import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { honouredRootFiles, nameRepoConfig, withProjectConfig } from '../runners/repoConfig.js';
+import { checkRequirements, INDEX_KINDS, SOURCE_KINDS } from '../deps/pipRequirements.js';
+import { checkPyproject, checkSetupCfg } from '../deps/pythonProject.js';
+import { judgeTrivyFs, runTrivy } from '../runners/trivyRun.js';
+import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
@@ -91,10 +98,10 @@ function dropNpmDuplicatesOfTrivy(findings) {
 }
 function detectBots(projectPath) {
     return {
-        renovate: existsSync(join(projectPath, 'renovate.json')) ||
-            existsSync(join(projectPath, '.renovaterc')) ||
-            existsSync(join(projectPath, '.renovaterc.json')),
-        dependabot: existsSync(join(projectPath, '.github', 'dependabot.yml')),
+        renovate: presentInProject(projectPath, 'renovate.json') ||
+            presentInProject(projectPath, '.renovaterc') ||
+            presentInProject(projectPath, '.renovaterc.json'),
+        dependabot: presentInProject(projectPath, join('.github', 'dependabot.yml')),
     };
 }
 registerToolModule(makeScanTool({
@@ -103,7 +110,8 @@ registerToolModule(makeScanTool({
     description: 'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; ' +
         'pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the ' +
         'host Python — it builds a TEMPORARY virtualenv and installs those requirements into it ' +
-        'from PyPI (network access; an sdist\'s build step runs there); and for any .sln/.csproj, ' +
+        'from PyPI, or from an index the requirements file names (named in tools_run) — network ' +
+        'access; an sdist\'s build step runs there; and for any .sln/.csproj, ' +
         '`dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive ' +
         '--no-restore`. That restore EXECUTES the project\'s own MSBuild (targets, imported .props) ' +
         'and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an ' +
@@ -131,20 +139,12 @@ registerToolModule(makeScanTool({
         const trivyBin = await scannerAvailable('trivy');
         if (trivyBin) {
             const outFile = join(reportDir, 'deps.json');
-            const result = await runProcess({
-                command: 'trivy',
-                args: [
-                    'fs',
-                    '--scanners',
-                    'vuln,license',
-                    '--format',
-                    'json',
-                    '--output',
-                    outFile,
-                    '--quiet',
-                    ctx.projectPath,
-                ],
-                cwd: ctx.projectPath,
+            // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+            const result = await runTrivy({
+                args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+                target: ctx.projectPath,
+                workDir: reportDir,
+                ignoreFrom: ctx.projectPath,
                 env: ctx.scriptEnv,
                 signal: ctx.signal,
                 onLog: ctx.onLog,
@@ -152,42 +152,14 @@ registerToolModule(makeScanTool({
             const raw = readJsonSafe(outFile);
             if (raw)
                 parser_inputs.push({ parser: trivyParser, input: raw });
-            if (result.outcome !== 'completed') {
-                tools_run.push({ name: 'trivy', status: 'failed' });
-            }
-            else {
-                // See scanDeps.ts / trivy.ts's own module comment: a manifest
-                // Trivy recognises nothing for (e.g. a bare .csproj with no
-                // packages.lock.json) must never read as a clean scan.
-                const coverage = assessManifestCoverage(ctx.projectPath, raw ?? '');
-                manifestCoverageGaps = coverage.gaps;
-                if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
-                    // PARTIAL: trivy genuinely ran and covered SOME ecosystems (its
-                    // own tools_run status stays 'ok') but not this one. Fix round
-                    // 1, item 4: the gap is named `trivy:<ecosystem>`, never the
-                    // bare 'trivy' — `create_fix_pr`'s own verification
-                    // (`DEPS_AUDIT_MISSING_TOOLS_NAME`) treats a literal 'trivy' in
-                    // `missing_tools` as "trivy did not run at all, nothing it
-                    // found can be re-verified", which would block EVERY
-                    // trivy-sourced fix (e.g. an unrelated npm CVE) just because
-                    // one ecosystem (e.g. NuGet) went uncovered. A pseudo-name that
-                    // matches no `tools_run` entry still forces coverage to
-                    // 'partial' (missing_tools.length > 0), without colliding with
-                    // the exact-string check downstream.
-                    tools_run.push({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' });
-                    missing_tools.push(...coverage.gaps.map((g) => `trivy:${g.ecosystem}`));
-                }
-                else if (coverage.gaps.length > 0) {
-                    // FULL SKIP: trivy's own Results were entirely empty — nothing
-                    // it reports can be trusted as re-verified, so the bare 'trivy'
-                    // name is correct here (unchanged from before this fix round).
-                    tools_run.push({ name: 'trivy', status: 'skipped', reason: 'no_supported_manifest' });
-                    missing_tools.push('trivy');
-                }
-                else {
-                    tools_run.push({ name: 'trivy', status: 'ok' });
-                }
-            }
+            // The one judgement scan_deps, deps_audit and scan_wordpress share
+            // (runners/trivyRun.ts#judgeTrivyFs): a manifest anywhere in the
+            // tree that Trivy read nothing for (e.g. a bare .csproj with no
+            // packages.lock.json) must never read as a clean scan.
+            const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+            tools_run.push(judged.toolRun);
+            missing_tools.push(...judged.missing);
+            manifestCoverageGaps = judged.gaps;
         }
         else {
             tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
@@ -196,7 +168,7 @@ registerToolModule(makeScanTool({
         // --- Native auditors ----------------------------------------------
         // npm audit is parsed into Findings; so is pip-audit, now that it is
         // pointed at this project's own manifests instead of the host Python.
-        if (existsSync(join(ctx.projectPath, 'package.json'))) {
+        if (presentInProject(ctx.projectPath, 'package.json')) {
             await tryNativeAudit({
                 command: 'npm',
                 args: ['audit', '--json', '--audit-level=info'],
@@ -257,6 +229,42 @@ function looksLikeNpmAuditReport(raw) {
         return false;
     }
 }
+/** The public npm registry: npm audit answered by it is not worth a note. */
+const NPM_PUBLIC_REGISTRY = /^https?:\/\/registry\.npmjs\.org\/?$/i;
+/**
+ * The registry the project's own `.npmrc` sends `npm audit` to, when it is
+ * not the public one — credentials in the URL removed — or null.
+ *
+ * `npm audit` runs in the project, so the project's `.npmrc` decides which
+ * server answers it: a private registry is legitimate and stays honoured, but
+ * the answer is that server's, and a repository could equally point it at a
+ * server of its own that answers "no vulnerabilities". Named in the result,
+ * never silent. Only the unscoped `registry` key: a `@scope:registry` line
+ * does not move the audit endpoint. The user's own `~/.npmrc` and
+ * `npm_config_registry` are the user's choice, not the project's, and are
+ * not read here.
+ */
+export function projectNpmRegistry(projectPath) {
+    // The repository's file: bounded, never through a link out of the project.
+    const text = readProjectTextOrUndefined(projectPath, '.npmrc', 1024 * 1024);
+    if (text === undefined)
+        return null;
+    let registry = null;
+    for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (line === '' || line.startsWith('#') || line.startsWith(';'))
+            continue;
+        const m = /^registry\s*=\s*(.*)$/i.exec(line);
+        if (m?.[1] === undefined)
+            continue;
+        // The last one wins, as in npm's own ini reader.
+        registry = m[1].trim().replace(/^["']|["']$/g, '');
+    }
+    if (registry === null || registry === '' || NPM_PUBLIC_REGISTRY.test(registry))
+        return null;
+    // Never echo a credential written into the URL.
+    return registry.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
+}
 async function tryNativeAudit(opts) {
     const bin = await scannerAvailable(opts.command);
     if (!bin) {
@@ -274,7 +282,7 @@ async function tryNativeAudit(opts) {
         command: opts.command,
         args: opts.args,
         cwd: opts.ctx.projectPath,
-        env: opts.ctx.scriptEnv,
+        ...auditEnv(opts.ctx),
         signal: opts.ctx.signal,
         onLog: opts.ctx.onLog,
     });
@@ -305,22 +313,52 @@ async function tryNativeAudit(opts) {
             parsed = true;
         }
     }
+    // The project's .npmrc is named whenever npm audit read one (round 5, item
+    // 2: `runners/repoConfig.ts`) — its registry, `omit=dev`, `audit-level`
+    // decide what is audited — and whoever answered, when the project chose a
+    // registry other than npm's (see `projectNpmRegistry`).
+    const registry = isNpmStdout ? projectNpmRegistry(opts.ctx.projectPath) : null;
+    const npmrc = isNpmStdout ? honouredRootFiles(opts.ctx.projectPath, 'npm') : [];
+    const registryNote = (run) => {
+        const named = withProjectConfig(run, npmrc);
+        if (registry === null)
+            return named;
+        const note = `npm audit answered by ${registry} (from the project's .npmrc)`;
+        return {
+            ...named,
+            reason: named.reason !== undefined && named.reason.length > 0 ? `${named.reason}; ${note}` : note,
+            honoured_config: [...new Set([...(named.honoured_config ?? []), '.npmrc'])],
+        };
+    };
     if (ok) {
-        opts.tools_run.push({
+        opts.tools_run.push(registryNote({
             name: opts.command,
             status: 'ok',
             reason: parsed ? 'parsed into findings' : 'captured (evidence only)',
-        });
+        }));
     }
     else {
         const reason = isNpmStdout && exitOk
             ? 'ran but produced no audit report (missing lockfile?)'
             : 'failed to run';
-        opts.tools_run.push({ name: opts.command, status: 'failed', reason });
+        opts.tools_run.push(registryNote({ name: opts.command, status: 'failed', reason }));
         // A failed auditor is a coverage gap — surface it so the roll-up and the
         // executive summary do not read the result as fully covered.
         opts.missing_tools?.push(opts.command);
     }
+}
+/**
+ * The environment of a package-manager process this tool starts: the scan's
+ * own, except while `create_fix_pr` re-scans a fix — then the
+ * package-manager environment (`fixpr/childEnv.ts`), with `extendEnv: false`,
+ * so `npm audit`, `pip-audit` (which installs the requirements into a
+ * temporary virtualenv, running an sdist's build code) and `dotnet restore`
+ * see no token or credential beyond the user's own package-manager
+ * configuration.
+ */
+function auditEnv(ctx) {
+    const pm = packageManagerEnvOptions();
+    return 'env' in pm ? { env: pm.env, extendEnv: false } : { env: ctx.scriptEnv };
 }
 // --------------------------------------------------------------- pip-audit
 /**
@@ -329,33 +367,48 @@ async function tryNativeAudit(opts) {
  * `requirements/dev.txt` split) — never a recursive walk, matching this
  * file's other manifest checks (`package.json`, `pyproject.toml`), which are
  * root-level existence checks too.
+ *
+ * `files` are handed to pip-audit. `outside` — project-relative, a
+ * `requirements/` directory with its trailing `/` — are candidates that lead
+ * out of the project through a link (`platform/projectFs.ts`): never listed,
+ * read or handed over, and named as not audited rather than skipped silently.
  */
 function findRequirementsFiles(projectPath) {
-    const out = [];
-    let entries = [];
-    try {
-        entries = readdirSync(projectPath);
-    }
-    catch {
-        return out;
-    }
-    for (const name of entries) {
+    const files = [];
+    const outside = [];
+    const sort = (abs, rel) => {
+        const kind = projectPathKind(projectPath, abs);
+        if (kind === 'file')
+            files.push(abs);
+        else if (kind === 'outside')
+            outside.push(rel);
+    };
+    for (const { name } of listProjectDir(projectPath, projectPath)) {
         if (/^requirements.*\.txt$/i.test(name))
-            out.push(join(projectPath, name));
+            sort(join(projectPath, name), name);
     }
     const reqDir = join(projectPath, 'requirements');
-    if (existsSync(reqDir)) {
-        try {
-            for (const name of readdirSync(reqDir)) {
-                if (name.toLowerCase().endsWith('.txt'))
-                    out.push(join(reqDir, name));
-            }
-        }
-        catch {
-            /* ignore — best-effort */
-        }
+    if (projectPathKind(projectPath, reqDir) === 'outside')
+        outside.push('requirements/');
+    for (const { name } of listProjectDir(projectPath, reqDir)) {
+        if (name.toLowerCase().endsWith('.txt'))
+            sort(join(reqDir, name), `requirements/${name}`);
     }
-    return out;
+    return { files, outside };
+}
+/**
+ * `run` naming the requirements candidates {@link findRequirementsFiles} did
+ * not hand to pip-audit because they lead out of the project: in the reason,
+ * each as not audited. Not in `honoured_config` — nothing was taken from them.
+ */
+function withOutsideRequirements(run, outside) {
+    if (outside.length === 0)
+        return run;
+    const notes = outside.map((rel) => `${rel} leads out of the project: not read or audited by dev-guardian`);
+    const shown = notes.slice(0, MAX_UNREAD_NAMED);
+    const more = notes.length > shown.length ? [`and ${notes.length - shown.length} more not audited`] : [];
+    const reason = [run.reason, ...shown, ...more].filter((s) => s !== undefined && s.length > 0).join('; ');
+    return { ...run, reason };
 }
 /**
  * A real `pip-audit --format json` report has a `dependencies` array — even
@@ -399,14 +452,22 @@ function looksLikePipAuditReport(raw) {
  */
 async function runPipAudit(opts) {
     const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
-    const requirementsFiles = findRequirementsFiles(ctx.projectPath);
-    const hasPyproject = existsSync(join(ctx.projectPath, 'pyproject.toml'));
-    if (requirementsFiles.length === 0 && !hasPyproject)
-        return; // nothing to audit — not a gap
+    const { files: requirementsFiles, outside } = findRequirementsFiles(ctx.projectPath);
+    const hasPyproject = presentInProject(ctx.projectPath, 'pyproject.toml');
+    // Nothing to audit — not a gap. A candidate that leads out of the project is one.
+    if (requirementsFiles.length === 0 && !hasPyproject && outside.length === 0)
+        return;
     const bin = await scannerAvailable('pip-audit');
     if (!bin) {
         tools_run.push({ name: 'pip-audit', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('pip-audit');
+        return;
+    }
+    // Something left unaudited is a gap in coverage, whatever the rest did.
+    if (outside.length > 0)
+        missing_tools.push('pip-audit');
+    if (requirementsFiles.length === 0 && !hasPyproject) {
+        tools_run.push(withOutsideRequirements({ name: 'pip-audit', status: 'skipped' }, outside));
         return;
     }
     // One "target" per invocation: each requirements file individually, or
@@ -425,7 +486,7 @@ async function runPipAudit(opts) {
             command: 'pip-audit',
             args,
             cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
+            ...auditEnv(ctx),
             signal: ctx.signal,
             onLog: ctx.onLog,
         });
@@ -451,23 +512,91 @@ async function runPipAudit(opts) {
             anyFailed = true;
         }
     }
+    // What decides where pip-audit's resolution installs from, named
+    // (`runners/repoConfig.ts`): honoured — a private index, a VCS dependency
+    // are legitimate in the user's own audit — never silently. Read with the
+    // same fail-closed parser create_fix_pr refuses by (`deps/pipRequirements.ts`),
+    // so an index option, a direct / URL / VCS / network-path requirement, an
+    // editable one, and what pip reads that this server could not check (an
+    // include out of the project or of a URL, `${VAR}`, an unreadable file)
+    // are each named with its line — a URL as `scheme://host` only.
+    const steering = pipSourcesNamed(ctx.projectPath, requirementsFiles, requirementsFiles.length === 0 && hasPyproject);
+    const named = (run) => withOutsideRequirements(withProjectConfig(run, steering), outside);
     if (anyOk) {
-        tools_run.push({
+        tools_run.push(named({
             name: 'pip-audit',
             status: 'ok',
             reason: anyFailed ? 'parsed into findings (failed for at least one target)' : 'parsed into findings',
-        });
-        if (anyFailed)
+        }));
+        if (anyFailed && outside.length === 0)
             missing_tools.push('pip-audit');
     }
     else {
-        tools_run.push({
+        tools_run.push(named({
             name: 'pip-audit',
             status: 'failed',
             reason: 'ran but produced no audit report for any target (resolution failure or unsupported project?)',
-        });
-        missing_tools.push('pip-audit');
+        }));
+        if (outside.length === 0)
+            missing_tools.push('pip-audit');
     }
+}
+/** Refusals shown per file in a note; `honoured_config` names every file. */
+const MAX_LINES_NAMED = 3;
+/** Requirements candidates leading out of the project, named in the reason at most. */
+const MAX_UNREAD_NAMED = 5;
+/**
+ * What decides where pip-audit installs from, as honoured-config entries:
+ * the requirements files handed to it (and all they include), or — when it
+ * builds the project itself — `pyproject.toml` and `setup.cfg`. One entry
+ * per file and category, its lines named:
+ *
+ *   - index options: "its package-index options decide which index
+ *     pip-audit's resolution installs from" (the wording `REPO_CONFIG` has
+ *     always used);
+ *   - a direct, URL, VCS, network-path, local-path or editable requirement,
+ *     a tool's own source table: "its <kinds> (line N (scheme://host)) decide
+ *     where pip-audit's resolution fetches from";
+ *   - anything else the parser did not admit: "pip reads what dev-guardian
+ *     did not check (line N: …) — pip may take its sources from it".
+ */
+function pipSourcesNamed(projectPath, requirementsFiles, buildsProject) {
+    const handed = requirementsFiles.map((f) => relative(projectPath, f) || f);
+    const refusals = [
+        ...checkRequirements(projectPath, handed, projectPath).refusals,
+        ...(buildsProject ? [...checkPyproject(projectPath, projectPath, true), ...checkSetupCfg(projectPath, projectPath)] : []),
+    ];
+    const groups = new Map();
+    for (const r of refusals) {
+        const category = INDEX_KINDS.has(r.kind) ? 'index' : SOURCE_KINDS.has(r.kind) ? 'source' : 'unchecked';
+        const key = `${r.file}\0${category}`;
+        const g = groups.get(key) ?? { category, items: [] };
+        g.items.push(r);
+        groups.set(key, g);
+    }
+    const lineOf = (r) => {
+        const at = r.line > 0 ? `line ${r.line}` : 'the file';
+        const extra = [r.detail, r.host].filter((x) => x !== undefined && x !== '');
+        return `${at}${extra.length > 0 ? ` (${extra.join(', ')})` : ''}`;
+    };
+    const out = [];
+    for (const [key, g] of groups) {
+        const file = key.slice(0, key.indexOf('\0'));
+        const shown = g.items.slice(0, MAX_LINES_NAMED);
+        const more = g.items.length > shown.length ? ` and ${g.items.length - shown.length} more` : '';
+        if (g.category === 'index') {
+            out.push({ path: file, decides: "its package-index options decide which index pip-audit's resolution installs from" });
+        }
+        else if (g.category === 'source') {
+            const kinds = [...new Set(g.items.map((r) => r.kind))].join(', ');
+            out.push({ path: file, decides: `its ${kinds} (${shown.map(lineOf).join('; ')}${more}) decide where pip-audit's resolution fetches from` });
+        }
+        else {
+            const what = shown.map((r) => `${lineOf(r).replace(/^line \d+|^the file/, (m) => `${m}: ${r.kind}`)}`).join('; ');
+            out.push({ path: file, decides: `pip reads what dev-guardian did not check (${what}${more}) — pip may take its sources from it` });
+        }
+    }
+    return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 /**
  * Runs `dotnet list <target> package --vulnerable --include-transitive
@@ -515,7 +644,7 @@ async function runDotnetSca(opts) {
             command: 'dotnet',
             args: plan.args,
             cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
+            ...auditEnv(ctx),
             signal: ctx.signal,
             onLog: ctx.onLog,
         });
@@ -540,7 +669,7 @@ async function runDotnetSca(opts) {
             command: 'dotnet',
             args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json', '--no-restore'],
             cwd: ctx.projectPath,
-            env: ctx.scriptEnv,
+            ...auditEnv(ctx),
             signal: ctx.signal,
             onLog: ctx.onLog,
         });
@@ -558,17 +687,18 @@ async function runDotnetSca(opts) {
         }
     }
     const gapReason = failures.map((f) => `${f.target}: ${f.reason}`).join('; ');
+    // The project's NuGet.config files answer the lookup: named (`runners/repoConfig.ts`).
     if (anyOk) {
-        tools_run.push({
+        tools_run.push(await nameRepoConfig({
             name: 'dotnet',
             status: 'ok',
             reason: failures.length > 0 ? `parsed into findings (gap — ${gapReason})` : 'parsed into findings',
-        });
+        }, ctx.projectPath, 'dotnet'));
         if (failures.length > 0)
             missing_tools.push('dotnet');
     }
     else {
-        tools_run.push({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' });
+        tools_run.push(await nameRepoConfig({ name: 'dotnet', status: 'failed', reason: gapReason || 'no target could be listed' }, ctx.projectPath, 'dotnet'));
         missing_tools.push('dotnet');
     }
     return failures;

@@ -8,7 +8,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -68,6 +68,65 @@ const CAN_SYMLINK = ((): boolean => {
 })();
 
 /**
+ * How many members of process group `pgid` are still running — zombies not
+ * counted: a zombie has finished every system call it will ever make, so it
+ * cannot put a link back. Read from /proc (Linux); `null` where there is none.
+ */
+function runningGroupMembers(pgid: number): number | null {
+  let entries: string[];
+  try {
+    entries = readdirSync('/proc');
+  } catch {
+    return null;
+  }
+  let running = 0;
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      // `pid (comm) state ppid pgrp …` — comm may hold spaces and parentheses.
+      const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+      const [state, , pgrp] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      if (Number(pgrp) === pgid && state !== 'Z') running += 1;
+    } catch {
+      /* gone between the listing and the read */
+    }
+  }
+  return running;
+}
+
+/**
+ * Resolves once nothing in the process group `pgid` is still running, or
+ * throws after `boundMs`. SIGKILL is delivered at once, but an `ln` killed
+ * mid-call may still be completing its link until it is gone.
+ *
+ * Not "until `kill(-pgid, 0)` says ESRCH": the orphaned `ln` is reparented to
+ * PID 1, and without a PID 1 that reaps (`docker run` without `--init`, where
+ * node itself is PID 1) its zombie stays in the group for good and that wait
+ * never ended (review 3.0, R7 round 2). On Linux the running members are read
+ * from /proc, zombies excluded, so the test holds with or without `--init`;
+ * elsewhere (macOS) PID 1 is launchd, which reaps.
+ */
+async function groupGone(pgid: number, boundMs = 5000): Promise<void> {
+  const deadline = Date.now() + boundMs;
+  for (;;) {
+    const running = runningGroupMembers(pgid);
+    if (running === 0) return;
+    if (running === null) {
+      try {
+        process.kill(-pgid, 0);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ESRCH') return;
+        throw e;
+      }
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`process group ${String(pgid)} still has a running member ${String(boundMs)} ms after SIGKILL`);
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+/**
  * Runs the reader in a CHILD process, `iterations` times on `path`, and
  * resolves with the status counts and the milliseconds the reads themselves
  * took (measured inside the child, so a slow child start under a loaded
@@ -108,7 +167,8 @@ function readInChild(
       child.kill('SIGKILL');
       done({ timedOut: true, code: null, counts: {}, readMs: Number.NaN });
     }, timeoutMs);
-    child.on('exit', (code) => {
+    // 'close', not 'exit': at 'exit' stdout may still hold the child's report.
+    child.on('close', (code) => {
       clearTimeout(timer);
       let parsed: { counts: Record<string, number>; readMs: number } = { counts: {}, readMs: Number.NaN };
       try {
@@ -125,11 +185,15 @@ let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'hook-config-file-'));
 });
-// Retries ENOTEMPTY: a `ln -sfn` the swapper test had started can finish after
-// its shell was killed and put a link back while the directory is removed —
-// in a parallel POSIX run that failed the test in teardown, not in its reads.
+// No retries on POSIX. A `ln -sfn` the swapper test had started could finish
+// after its shell was killed and put a link back while this removed the
+// directory — ENOTEMPTY in teardown, in a parallel run — and a retry here used
+// to be what made that pass. The swapper's whole process group is now dead
+// before the test ends (see there), so the directory is still when this runs,
+// and a retry would only hide it if that ever stopped being true. Windows
+// keeps them for its lock errors (see test/helpers/tempDir.ts).
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  rmSync(dir, { recursive: true, force: true, ...(POSIX ? {} : { maxRetries: 10, retryDelay: 50 }) });
 });
 
 describe('readSmallJsonFile', () => {
@@ -284,10 +348,13 @@ describe('readSmallJsonFile — what it opened, not what the path said', () => {
       writeFileSync(regular, '{"secrets":{"block":true}}');
       expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
       symlinkSync(regular, cfg);
+      // Its own process group (`detached`), so the `ln` it is running at the
+      // end dies with it: killing the shell alone left that `ln` to finish —
+      // and re-create the link — after the test had moved on (review 3.0, R7).
       const swapper = spawn(
         'sh',
         ['-c', 'while :; do ln -sfn "$1" "$4"; ln -sfn "$2" "$4"; ln -sfn "$3" "$4"; done', 'sh', regular, fifo, '/dev/zero', cfg],
-        { stdio: 'ignore' },
+        { stdio: 'ignore', detached: true },
       );
       try {
         const r = await readInChild(cfg, 3000, 45_000);
@@ -308,8 +375,18 @@ describe('readSmallJsonFile — what it opened, not what the path said', () => {
           if (swapper.exitCode !== null || swapper.signalCode !== null) settle();
           else swapper.once('exit', () => settle());
         });
-        swapper.kill('SIGKILL');
+        const group = swapper.pid;
+        if (group !== undefined) {
+          try {
+            process.kill(-group, 'SIGKILL');
+          } catch {
+            /* already gone */
+          }
+        }
         await exited;
+        // The group is empty only once its last `ln` has been reaped; until
+        // then that `ln` may still be completing the link it had started.
+        if (group !== undefined) await groupGone(group);
       }
     },
     60_000,

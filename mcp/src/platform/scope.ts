@@ -36,7 +36,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
+import { entryKindAnywhere, projectEntryKind } from './projectFs.js';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { changedFiles, git, repoState, resolveCommit, splitNul } from '../runners/git.js';
@@ -134,7 +135,8 @@ export function suggestScopeForFile(filePath: string): { project_path: string; s
   const file = resolve(filePath);
   let root = dirname(file);
   for (let dir = root; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, '.git'))) {
+    // lstat only: a `.git` link is never followed to find out.
+    if (projectEntryKind(join(dir, '.git')) !== 'absent') {
       root = dir;
       break;
     }
@@ -337,6 +339,8 @@ function realOrSelf(p: string): string {
  * would rewrite it and gitleaks would copy it.
  */
 function staysInside(abs: string, root: string): boolean {
+  // A link to a network path is never resolved to find out where it leads: it leaves (entryKindAnywhere).
+  if (entryKindAnywhere(abs) === 'remote') return false;
   return !escapes(relative(root, realOrSelf(abs)));
 }
 
@@ -513,8 +517,22 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
       ? await listZ(projectPath, ['diff', '-z', '--name-only', '--relative', '--cached', '--diff-filter=ACMR', '--no-renames', 'HEAD', '--'])
       : await listZ(projectPath, ['ls-files', '-z', '--cached']);
   } else {
+    // `--ignore-submodules=dirty`: git does not go into a submodule's work
+    // tree (where the submodule's own drivers would run — they are also
+    // neutralised, platform/gitSafety.ts); a moved submodule commit is still
+    // listed. Either way only regular files become targets (`onDisk`).
     tracked = hasCommits
-      ? await listZ(projectPath, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', 'HEAD', '--'])
+      ? await listZ(projectPath, [
+          'diff',
+          '-z',
+          '--name-only',
+          '--relative',
+          '--diff-filter=d',
+          '--no-renames',
+          '--ignore-submodules=dirty',
+          'HEAD',
+          '--',
+        ])
       : await listZ(projectPath, ['ls-files', '-z', '--cached']);
   }
   const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];

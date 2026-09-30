@@ -39,6 +39,7 @@
  * reach.
  */
 import { execa } from 'execa';
+import { commandFor } from '../platform/binaryPath.js';
 /** Gap between failed health-check attempts. Short enough that a
  *  fast-booting app is detected almost immediately; long enough that
  *  polling a refused connection — which fails near-instantly, not on its
@@ -295,7 +296,7 @@ async function killTree(child) {
             // `/F` is unconditionally forceful — matches processRunner.ts's own
             // Windows handling, deliberately mirrored rather than reinvented.
             try {
-                await execa('taskkill', ['/PID', String(pid), '/T', '/F'], {
+                await execa(commandFor('taskkill'), ['/PID', String(pid), '/T', '/F'], {
                     reject: false,
                     timeout: KILL_GRACE_MS,
                 });

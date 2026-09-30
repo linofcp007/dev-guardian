@@ -14,6 +14,8 @@
  */
 
 import { join } from 'node:path';
+import { dockerGitEnvArgs, staticGitSafety, type GitSafety } from '../platform/gitSafety.js';
+import { SEMGREP_NO_VERSION_CHECK_ENV } from './semgrepRun.js';
 
 export const DEFAULT_SEMGREP_IMAGE = 'semgrep/semgrep';
 
@@ -56,13 +58,23 @@ export interface SemgrepDockerOptions {
    * its `target` path.
    */
   readOnlyMounts?: ReadonlyArray<{ source: string; target: string }>;
+  /**
+   * The git hardening for the mounted project (`platform/gitSafety.ts#gitSafetyFor`),
+   * passed into the container: Semgrep's own `git ls-files` there reads the
+   * same `.git/config` through the mount. Defaults to the static layer.
+   */
+  git?: GitSafety;
 }
 
 /**
  * Build the argv for `docker run … semgrep …`, mirroring the native Semgrep
  * invocation in scan_sast (config=auto, +p/csharp for .NET, --json --quiet,
  * --output, optional --autofix). The report path is rewritten to its location
- * *inside* the mount so the file lands back on the host.
+ * *inside* the mount so the file lands back on the host. Semgrep's version
+ * check is switched off inside the container, as for a native run
+ * (`semgrepRun.ts#SEMGREP_NO_VERSION_CHECK_ENV`, one `-e` each), and git
+ * inside it is hardened like any git dev-guardian starts
+ * (`gitSafety.ts#dockerGitEnvArgs`).
  */
 export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
   const image = opts.image ?? DEFAULT_SEMGREP_IMAGE;
@@ -74,6 +86,8 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
     '--mount',
     `type=bind,source=${opts.projectPath},target=${CONTAINER_PROJECT_ROOT}`,
     ...(opts.readOnlyMounts ?? []).flatMap((m) => ['--mount', `type=bind,source=${m.source},target=${m.target},readonly`]),
+    ...Object.entries(SEMGREP_NO_VERSION_CHECK_ENV).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
+    ...dockerGitEnvArgs(opts.git ?? staticGitSafety('linux')),
     '-w',
     CONTAINER_PROJECT_ROOT,
     image,

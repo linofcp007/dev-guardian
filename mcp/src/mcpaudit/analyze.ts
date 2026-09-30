@@ -18,6 +18,7 @@ import { capFindingText, capPath, capSegment, MAX_PATH_CHARS } from './output.js
 import {
   escapeInvisible,
   findEncodedBlob,
+  mcpRuleTaxonomy,
   mixedScriptWord,
   OVERSIZED_DESCRIPTION_CHARS,
   PASS_TO_DESTINATION,
@@ -763,8 +764,15 @@ export function shadowingFromMentions(
       file_path: target.sourceLabel,
       snippet: escapeInvisible(`${server} > ${ref.item} > ${ref.path}: names '${name}'`),
       fix_available: false,
+      ...taxonomyOf(meta.rule),
     }),
   );
+}
+
+/** `makeFinding`'s taxonomy for a rule (`rules.ts#mcpRuleTaxonomy`), or nothing: unmapped. */
+function taxonomyOf(rule: string): { taxonomy?: { cwe: string[] } } {
+  const taxonomy = mcpRuleTaxonomy(rule);
+  return taxonomy === undefined ? {} : { taxonomy };
 }
 
 function itemKey(hit: Hit): string {
@@ -948,6 +956,7 @@ function finishRun(run: AnalysisRun, others: readonly OtherServer[]): ListingAna
           `${server} > ${first.field.item} > ${first.field.path}: ${excerpt(first.field.text, first.index)}`,
         ),
         fix_available: false,
+        ...taxonomyOf(first.rule),
       })),
     );
   }

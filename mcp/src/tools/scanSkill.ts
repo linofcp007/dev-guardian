@@ -17,7 +17,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { ensureReportDir } from './scanHelpers.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -90,7 +91,14 @@ const tool: ToolModule = {
     'privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt ' +
     'leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, ' +
     'taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE ' +
-    'lookups on declared dependencies. Returns a 0-100 risk score and an install recommendation ' +
+    'lookups on declared dependencies. The commands in an instruction file (a SKILL.md\'s fenced, indented ' +
+    'and <pre> blocks, inline code and prose) and the commands a plugin\'s hooks.json, plugin.json and ' +
+    '.mcp.json run are scored like the skill\'s own scripts, including a file ' +
+    'downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a ' +
+    'placeholder (…, <url>, example.com) stands for its target; any other finding, when nothing nearby is a ' +
+    'fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack ' +
+    'to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 ' +
+    'risk score and an install recommendation ' +
     '(SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
@@ -160,9 +168,10 @@ async function handler(
 
     const reportPaths: string[] = [];
     if (inp.write_reports !== false) {
-      const outDir = join(basePath, '.guardian', 'reports', `skill-audit-${scanId.slice(0, 8)}`);
       try {
-        mkdirSync(outDir, { recursive: true });
+        // A verified real directory of the project's, or a temp one
+        // (`ensureReportDir`): never created through a `.guardian` link.
+        const outDir = ensureReportDir(basePath, scanId, 'skill-audit');
         const sarifPath = join(outDir, 'report.sarif');
         const jsonPath = join(outDir, 'report.json');
         writeFileSync(sarifPath, toSarif(findings, { toolName: 'guardian-scanskill' }), 'utf8');

@@ -5,13 +5,19 @@
  * Boot sequence:
  *   0. Refuse to start, with one line on stderr and exit 1, on a Node without
  *      `node:sqlite` (< 22.13) — not a stack trace from deep in module loading.
- *   1. Resolve project_path (defaults to process.cwd()).
- *   2. Open SQLite at `<project_root>/.guardian/guardian.db` (or temp
- *      fallback), apply migrations.
+ *   1. Resolve project_path (defaults to process.cwd()), and keep that
+ *      directory out of every bare-name command search: on Windows
+ *      `NoDefaultCurrentDirectoryInExePath`, everywhere no relative PATH
+ *      entry (platform/binaryPath.ts).
+ *   2. Open SQLite at `<project_root>/.guardian/guardian.db` when it is this
+ *      user's (else the per-user fallback, or an in-memory database when
+ *      neither can be used — never an exit), apply migrations.
  *   3. Probe a usable bash. Failure is fatal-for-scripts but the server
  *      still starts so resources and pure-SQL tools can serve data.
- *   4. Reap scans whose owning process died (storage/maintenance.ts).
- *      Best-effort: a failure is logged and never stops the server.
+ *   4. Reap scans whose owning process died (storage/maintenance.ts), and
+ *      rewrite suppressions and baselines stored under a 2.0.0 spelling of
+ *      a project path to the canonical one. Best-effort: a failure is
+ *      logged and never stops the server.
  *   5. Keep `.guardian/` out of git in the target project's `.gitignore`
  *      (every `.guardian` directory's contents, at any depth, with its
  *      `baseline.json` re-included — gitignoreGuard.ts).
@@ -32,14 +38,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { resolve } from 'node:path';
 import type { PluginContext } from './context.js';
+import { hardenCommandSearch } from './platform/binaryPath.js';
 import { ensureGuardianIgnored } from './gitignoreGuard.js';
 import { resolveScriptsDir } from './platform/scriptsDir.js';
 import { probeShell } from './platform/shellProbe.js';
+import { ensureUserBinOnPath } from './platform/userBin.js';
 import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
 import { openDatabase, Storage } from './storage/index.js';
-import { reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
+import { canonicalizeProjectPathsAtStartup, reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, TOOLS } from './tools/index.js';
 import { RESOURCES } from './resources/index.js';
@@ -65,6 +73,14 @@ async function main(): Promise<void> {
 
   const projectPath = resolve(process.cwd());
 
+  // This process starts in the project root: no spawn by bare name may find a binary there
+  // (platform/binaryPath.ts). Before anything spawns — the shell probe included.
+  const droppedPath = hardenCommandSearch();
+  if (droppedPath.length > 0) logErr(`PATH: dropped relative entries ${droppedPath.map((e) => JSON.stringify(e)).join(', ')} (they name the current directory)`);
+
+  // Never throws for a database it cannot use: a foreign or unreadable one
+  // gives way to the per-user fallback or an in-memory database, with a
+  // warning every tool surfaces (storage/db.ts#openDatabase).
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
@@ -72,6 +88,15 @@ async function main(): Promise<void> {
 
   // Reap dead processes' scans. Never fatal. (Retention runs after connect.)
   reapOrphanedScans(storage, logErr);
+  // Suppressions and baselines stored under a 2.0.0 spelling of a project
+  // path (`c:\…`) take the canonical one every scan uses. Never fatal.
+  canonicalizeProjectPathsAtStartup(storage, logErr);
+
+  // The per-user tools directory install_toolchain's pinned installers write
+  // to, appended to this server's PATH when it is not there
+  // (platform/userBin.ts): every scanner lookup and spawn then finds them.
+  const userBin = ensureUserBinOnPath();
+  if (userBin.added && userBin.dir !== null) logErr(`PATH: appended ${userBin.dir} (the pinned installers' directory)`);
 
   // Probe a usable shell once; tools read the choice from the cache later.
   const shell = await probeShell(storage.runtimeMeta);
@@ -87,6 +112,9 @@ async function main(): Promise<void> {
   // Ensure .guardian/ is git-ignored in the target project (baseline.json excepted).
   const guard = ensureGuardianIgnored(projectPath);
   if (guard.updated) logErr(`.gitignore ${guard.reason} for .guardian/`);
+  else if (guard.reason === 'refused' || guard.reason === 'unwritable') {
+    logErr(`.gitignore left alone (${guard.reason}): ${guard.detail ?? 'no detail'}`);
+  }
 
   // Build the MCP server.
   const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
@@ -170,6 +198,9 @@ function logErr(line: string): void {
 }
 
 main().catch((err) => {
+  // A database the server cannot use is never fatal: openDatabase answers it
+  // with the per-user fallback or an in-memory database, and a warning. What
+  // reaches here is a real failure.
   logErr(`fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
   process.exit(1);
 });

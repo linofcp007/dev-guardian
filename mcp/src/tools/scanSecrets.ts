@@ -83,7 +83,8 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
     'is reported as failed, never as clean. The raw secret never reaches MCP output, the database or ' +
     'reports. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are ' +
     'scanned as files, diff.base and since as exactly those commits. .guardianignore paths are ' +
-    'filtered out. verify_live (off by default) asks whether each GitHub, GitLab, Slack, Stripe, ' +
+    "filtered out. The project's .gitleaks.toml and .gitleaksignore are honoured, and named in " +
+    '`tools_run[].honoured_config`. verify_live (off by default) asks whether each GitHub, GitLab, Slack, Stripe, ' +
     "OpenAI, Anthropic, npm or SendGrid secret still works: it sends each secret to its own provider's " +
     'read-only API and nowhere else (5 s timeout, at most 50 per scan), and marks the finding live ' +
     '(raised to critical, with where to revoke it), revoked or unknown.',
@@ -146,6 +147,8 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
       signal: ctx.signal,
       onLog: ctx.onLog,
       ...(verify && !offline ? { captureSecrets: isVerifiableRule } : {}),
+      // The CI gate's --rules-ref: the ref's .guardianignore decides the submodule gap too.
+      ...(ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {}),
     });
     const invocation: ScannerInvocation = {
       outcome: scan.cancelled ? 'cancelled' : 'completed',

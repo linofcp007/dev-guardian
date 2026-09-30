@@ -69,8 +69,9 @@ const tool: ToolModule = {
     '(Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the ' +
     'absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when ' +
     'present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in ' +
-    '`findings`. `budgets.status` says none/ok/invalid — an invalid file is never reported the same ' +
-    'as "no budgets" or "within budget".',
+    '`findings`. `budgets.status` says none/ok/not_measured/invalid — an invalid file, or a budget whose ' +
+    'metric Lighthouse did not measure, is never reported as "within budget". A page Lighthouse could not ' +
+    'load (runtimeError, non-zero exit) is a failed check.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -182,6 +183,25 @@ async function runLighthouse(
     return failDomain('scanner_failed', 'Lighthouse output was not valid JSON.');
   }
 
+  // Review M5: a page Lighthouse could not load is reported in the report
+  // itself (`runtimeError`), and the CLI exits 1 after saving it (cli/run.js:
+  // "we'll still exit with an error code after we saved the results"); a
+  // protocol timeout exits 67. Either way nothing was measured: its null
+  // scores used to read as a run, and its budgets as "ok".
+  const runtimeError = getProp(parsed, 'runtimeError');
+  if (runtimeError !== undefined && runtimeError !== null) {
+    const code = getString(runtimeError, 'code') ?? 'UNKNOWN';
+    const message = getString(runtimeError, 'message') ?? '';
+    return failDomain(
+      'scanner_failed',
+      `Lighthouse could not measure ${opts.url}: ${code}${message ? ` — ${message}` : ''} (report: ${outFile})`,
+    );
+  }
+  if (result.exitCode !== 0) {
+    const line = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? result.outcome;
+    return failDomain('scanner_failed', `Lighthouse exit ${String(result.exitCode)}: ${line} (report: ${outFile})`);
+  }
+
   const summary = summariseLighthouse(parsed);
   const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
   return {
@@ -207,13 +227,21 @@ async function runLighthouse(
  * this field is the equivalent signal for it.
  */
 export interface PerfBudgetsStatus {
-  status: 'none' | 'ok' | 'invalid';
-  /** Present for 'ok' and 'invalid' — the budgets file that was (or would have been) read. */
+  /**
+   * `not_measured`: a budget is configured whose metric this run has no
+   * value for (Lighthouse returned null — INP in a navigation run, an audit
+   * that did not run). It is never `ok`: an unmeasured budget is not a
+   * budget kept (review M5). The measured ones are still evaluated.
+   */
+  status: 'none' | 'ok' | 'invalid' | 'not_measured';
+  /** Present for 'ok', 'not_measured' and 'invalid' — the budgets file that was (or would have been) read. */
   path?: string;
   /** 'invalid' only: why it could not be evaluated. */
   reason?: string;
-  /** 'ok' only: how many of THIS run's measurements broke their budget. */
+  /** 'ok' / 'not_measured': how many of THIS run's measurements broke their budget. */
   violations?: number;
+  /** 'not_measured' only: the budgets with no measurement (`perf.inp_ms`). */
+  not_measured?: string[];
 }
 
 interface LighthouseBudgetResult {
@@ -264,6 +292,22 @@ function evaluateLighthouseBudgets(
   };
   const violations = evaluatePerfBudgets(measured, loaded.budgets.perf);
   const findings = budgetViolationFindings(violations, relPath);
+  // A configured budget with no measurement was not kept, nor broken: said so.
+  const perf = loaded.budgets.perf;
+  const unmeasured = (Object.keys(perf) as Array<keyof PerfBudgets>)
+    .filter((key) => perf[key] !== undefined && (measured[key] === undefined || measured[key] === null))
+    .map((key) => `perf.${key}`);
+  if (unmeasured.length > 0) {
+    return {
+      findings,
+      budgets: { status: 'not_measured', path: relPath, violations: findings.length, not_measured: unmeasured },
+      warnings: [
+        `${unmeasured.join(', ')} not measured: Lighthouse reported no value for ${
+          unmeasured.length === 1 ? 'that metric' : 'those metrics'
+        }, so ${unmeasured.length === 1 ? 'that budget was' : 'those budgets were'} not checked — never read that as within budget.`,
+      ],
+    };
+  }
   return { findings, budgets: { status: 'ok', path: relPath, violations: findings.length }, warnings: [] };
 }
 

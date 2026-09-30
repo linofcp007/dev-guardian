@@ -16,6 +16,7 @@ import { MCP_DESCRIPTION_POISONING } from '../skillaudit/analyze.js';
 import { SKILL_RULES } from '../skillaudit/patterns.js';
 import type { ThreatCategory } from '../skillaudit/taxonomy.js';
 import type { Severity } from '../types.js';
+import { isLegitimateInvisible, subdivisionFlagTags } from '../platform/invisibleChars.js';
 
 export type McpRuleId =
   | 'mcp-tool-poisoning'
@@ -58,17 +59,16 @@ const SKILL_TEXT_RULE_IDS = new Set([
 ]);
 
 /**
- * `mp-persist-instruction` also matches a bare `~/.claude/` or
- * `.claude/memory` PATH. In a skill that is a write target; in a tool
- * description it is a reference, and it is checked as one — by
- * `mcp-tool-sensitive-file-access` below. Measured: kept here, it reported
- * `audit_agent_config`'s own list of the files it reads as "poisoning".
+ * A bare `~/.claude/` path is not among them: `mp-persist-instruction` no
+ * longer matches one (wave 2 of the 3.0 review), and a write into agent
+ * config is `mp-write-agent-config`, a command shape a description never
+ * has. In a tool description a path is a reference, checked as one by
+ * `mcp-tool-sensitive-file-access` below — kept as poisoning, it reported
+ * `audit_agent_config`'s own list of the files it reads.
  */
-const isPathOnlyPattern = (p: RegExp): boolean => p.source.includes(String.raw`\.claude\/`);
-
-const SKILL_TEXT_PATTERNS: readonly RegExp[] = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id))
-  .flatMap((r) => r.patterns)
-  .filter((p) => !isPathOnlyPattern(p));
+const SKILL_TEXT_PATTERNS: readonly RegExp[] = SKILL_RULES.filter((r) => SKILL_TEXT_RULE_IDS.has(r.id)).flatMap(
+  (r) => r.patterns,
+);
 
 const CONCEAL_SKILL_PATTERNS: readonly RegExp[] =
   SKILL_RULES.find((r) => r.id === 'pi-conceal-from-user')?.patterns ?? [];
@@ -291,8 +291,6 @@ export const TEXT_RULES: readonly TextRule[] = [
  * U+206A–206F, U+FFF9–FFFB and U+1D173–1D17A.
  */
 const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u{FFF9}-\u{FFFB}]/u;
-const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
-const IDEOGRAPHIC = /\p{Ideographic}/u;
 
 export type InvisibleKind =
   | 'tag characters'
@@ -307,26 +305,6 @@ export function invisibleKind(code: number): InvisibleKind | null {
   if ((code >= 0xfe00 && code <= 0xfe0f) || (code >= 0xe0100 && code <= 0xe01ef)) return 'variation selectors';
   if (/\p{Bidi_Control}/u.test(ch)) return 'bidi controls';
   return 'zero-width and other invisible characters';
-}
-
-/**
- * The invisible code points that belong where they are: one VS15/VS16 after
- * an emoji (❤️) or on a keycap (1️⃣), a zero-width joiner inside an emoji
- * sequence (👨‍👩‍👧), and one ideographic variation selector after a CJK
- * ideograph (葛󠄀). Anything else invisible is reported.
- */
-function isLegitimate(code: number, prev: number | undefined, next: number | undefined): boolean {
-  const prevCh = prev === undefined ? '' : String.fromCodePoint(prev);
-  const nextCh = next === undefined ? '' : String.fromCodePoint(next);
-  if (code === 0xfe0e || code === 0xfe0f) {
-    return PICTOGRAPHIC.test(prevCh) || (/[0-9#*]/.test(prevCh) && next === 0x20e3);
-  }
-  if (code === 0x200d) {
-    const prevIsEmoji = PICTOGRAPHIC.test(prevCh) || prev === 0xfe0f || (prev !== undefined && prev >= 0x1f3fb && prev <= 0x1f3ff);
-    return prevIsEmoji && PICTOGRAPHIC.test(nextCh);
-  }
-  if (code >= 0xe0100 && code <= 0xe01ef) return IDEOGRAPHIC.test(prevCh);
-  return false;
 }
 
 export interface InvisibleScan {
@@ -350,30 +328,6 @@ function readable(text: string): boolean {
   return printable / [...text].length >= 0.9;
 }
 
-/**
- * The only tag sequences Unicode recommends for general interchange (RGI):
- * the England, Scotland and Wales flags — 🏴 U+1F3F4, the tag letters of
- * `gbeng`/`gbsct`/`gbwls`, and CANCEL TAG U+E007F (fix round 4). Any other
- * use of tag characters, a flag or not, stays reported.
- */
-const RGI_SUBDIVISION_FLAGS = new Set(['gbeng', 'gbsct', 'gbwls']);
-
-function subdivisionFlagTags(points: readonly number[]): Set<number> {
-  const exempt = new Set<number>();
-  for (let i = 0; i < points.length; i += 1) {
-    if (points[i] !== 0x1f3f4) continue;
-    let j = i + 1;
-    let tag = '';
-    for (let c = points[j]; c !== undefined && c >= 0xe0020 && c <= 0xe007e; c = points[j]) {
-      tag += String.fromCharCode(c - 0xe0000);
-      j += 1;
-    }
-    if (points[j] === 0xe007f && RGI_SUBDIVISION_FLAGS.has(tag)) {
-      for (let k = i + 1; k <= j; k += 1) exempt.add(k);
-    }
-  }
-  return exempt;
-}
 
 export function scanInvisible(text: string): InvisibleScan | null {
   const points = [...text].map((ch) => ch.codePointAt(0) ?? 0);
@@ -387,7 +341,7 @@ export function scanInvisible(text: string): InvisibleScan | null {
   for (let i = 0; i < points.length; i += 1) {
     const code = points[i] ?? 0;
     const kind = invisibleKind(code);
-    if (kind !== null && !flagTags.has(i) && !isLegitimate(code, points[i - 1], points[i + 1])) {
+    if (kind !== null && !flagTags.has(i) && !isLegitimateInvisible(code, points[i - 1], points[i + 1])) {
       kinds.add(kind);
       count += 1;
       if (index < 0) index = offset;
@@ -500,3 +454,49 @@ export function findEncodedBlob(text: string): EncodedBlob | null {
  * payload hides below the part anyone reads.
  */
 export const OVERSIZED_DESCRIPTION_CHARS = 2048;
+
+/**
+ * The weakness a finding of `rule` is, where one is defensible — the CWE
+ * only: the OWASP Top 10:2025 category is derived from OWASP's own CWE lists
+ * (`frameworks/taxonomy.ts`), never assigned here. Undefined leaves the
+ * finding unmapped, which every renderer reads as unknown.
+ *
+ *   - CWE-1427 (Improper Neutralization of Input Used for LLM Prompting):
+ *     every rule that finds an INSTRUCTION to the model in text the server
+ *     controls — poisoning, credential reads, concealment, exfiltration,
+ *     parameter smuggling, cross-server shadowing. The definitions are fed
+ *     into the model's context unneutralised, and the rule has found text
+ *     written to steer it. OWASP 2025 lists 1427 under no category, so these
+ *     carry no OWASP id.
+ *   - CWE-451 (User Interface Misrepresentation of Critical Information):
+ *     hidden Unicode — invisible or reordering code points — shows the person
+ *     who approves a tool one text while the model reads another. 1007 is
+ *     narrower (homoglyphs) and is used for exactly that below. OWASP 2025
+ *     files 451 under A06 (Insecure Design).
+ *   - CWE-1007 (Insufficient Visual Distinction of Homoglyphs Presented to
+ *     User): look-alike letters from another script. No OWASP 2025 category.
+ *
+ * Unmapped on purpose: an encoded blob, an oversized description and the
+ * analysis bounds (a string too long, a schema too deep) are signals to go
+ * and read the text, not weaknesses of their own; a changed or removed
+ * definition (`pins.ts`, the rug pull) may be a legitimate release, and its
+ * new text is judged by the rules above; the "N more findings" summary
+ * (`output.ts`) stands for findings of several rules at once.
+ */
+export function mcpRuleTaxonomy(rule: string): { cwe: string[] } | undefined {
+  switch (rule) {
+    case 'mcp-tool-poisoning':
+    case 'mcp-tool-sensitive-file-access':
+    case 'mcp-tool-conceal-from-user':
+    case 'mcp-tool-exfiltration':
+    case 'mcp-tool-parameter-smuggling':
+    case 'mcp-tool-cross-server-shadowing':
+      return { cwe: ['CWE-1427'] };
+    case 'mcp-tool-hidden-unicode':
+      return { cwe: ['CWE-451'] };
+    case 'mcp-tool-homoglyph':
+      return { cwe: ['CWE-1007'] };
+    default:
+      return undefined;
+  }
+}

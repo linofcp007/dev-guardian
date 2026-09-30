@@ -53,9 +53,11 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 // Fix round 1, item 4 (2026-09-25 full review) — see baseRules.test.ts's
 // identical comment for the full reasoning: real, synchronous `semgrep`
 // calls (`--validate` across every pack in "compiles clean, silently, and
-// exits 0" — the slowest single test in this suite, measured up to ~90s
-// under heavy load) are never bounded by vitest's default testTimeout, so
-// this file opts into a longer one explicitly.
+// exits 0" — the slowest single test in this suite while it ran one Semgrep
+// per pack, up to ~108 s under load; one batched call since review 3.0, and
+// per pack only when that fails) are never bounded by vitest's default
+// testTimeout, so this file opts into a longer one explicitly — above
+// helpers/semgrep.ts's 120 s cap on each call.
 vi.setConfig({ testTimeout: 180_000 });
 import { Buffer } from 'node:buffer';
 import { copyFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -206,21 +208,40 @@ describe('every Semgrep rule pack', () => {
     // `--disable-version-check` is passed because the upgrade notice is network
     // state, and an empty-stderr assertion hostage to network state is a flake
     // waiting to happen.
-    const problems = packs
-      .map((file) => {
-        const config = resolve(PACK_DIR, file);
-        const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', config]);
-        if (run.status === 0 && run.stdout === '' && run.stderr === '') return '';
-        return [
-          `${file}: does not compile. exit=${String(run.status)}`,
-          `  stdout=${JSON.stringify(run.stdout)}`,
-          `  stderr=${JSON.stringify(run.stderr)}`,
-          '  A pack that fails to load does NOT fail the scan that uses it — it',
-          '  returns fewer findings, or none, and can report zero errors while',
-          '  doing so. Re-run without --quiet to see the reason.',
-        ].join('\n');
-      })
-      .filter((line) => line !== '');
+    //
+    // ONE Semgrep for every pack (review 3.0, R7): a Semgrep start costs
+    // seconds, and one per pack made this the slowest test in the suite —
+    // 108 s of the file's 120 in a full run. Every pack goes in as its own
+    // `--config`, and a broken one fails the whole call (measured: exit 2
+    // with the poisoned or the unparseable pack among the eleven real ones;
+    // the positive control below holds that). Only then is each pack
+    // validated on its own, to name the one that broke.
+    const validate = (configs: readonly string[]): ReturnType<typeof runSemgrep> =>
+      runSemgrep(['--validate', '--quiet', '--disable-version-check', ...configs.flatMap((c) => ['--config', c])]);
+    const clean = (run: ReturnType<typeof runSemgrep>): boolean => run.status === 0 && run.stdout === '' && run.stderr === '';
+    const batch = validate(packs.map((file) => resolve(PACK_DIR, file)));
+    const problems = clean(batch)
+      ? []
+      : packs
+          .map((file) => {
+            const run = validate([resolve(PACK_DIR, file)]);
+            if (clean(run)) return '';
+            return [
+              `${file}: does not compile. exit=${String(run.status)}`,
+              `  stdout=${JSON.stringify(run.stdout)}`,
+              `  stderr=${JSON.stringify(run.stderr)}`,
+              '  A pack that fails to load does NOT fail the scan that uses it — it',
+              '  returns fewer findings, or none, and can report zero errors while',
+              '  doing so. Re-run without --quiet to see the reason.',
+            ].join('\n');
+          })
+          .filter((line) => line !== '');
+    if (!clean(batch) && problems.length === 0) {
+      problems.push(
+        `every pack compiles alone, but not together: exit=${String(batch.status)}\n` +
+          `  stdout=${JSON.stringify(batch.stdout)}\n  stderr=${JSON.stringify(batch.stderr)}`,
+      );
+    }
     expect(problems).toEqual([]);
   });
 });
@@ -279,6 +300,18 @@ describe('the encoding check can actually fail', () => {
     const target = poisonedCopy();
     const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', target], LOCALE_CODEC);
     expect(run.status).not.toBe(0);
+  });
+
+  // The cross-pack test validates every pack in ONE call: that call must not
+  // pass because the other packs are fine.
+  it.skipIf(!AVAILABLE)('and one --validate over every real pack plus the poisoned one refuses them all', () => {
+    const validate = (configs: readonly string[]): number | null =>
+      runSemgrep(['--validate', '--quiet', '--disable-version-check', ...configs.flatMap((c) => ['--config', c])], LOCALE_CODEC)
+        .status;
+    const real = packFiles().map((file) => resolve(PACK_DIR, file));
+    // The same call without the poisoned copy passes, so it is the copy that fails it.
+    expect(validate(real)).toBe(0);
+    expect(validate([...real, poisonedCopy()])).not.toBe(0);
   });
 
   it.skipIf(!AVAILABLE)('and a SCAN with it reports nothing at all, with no error', () => {

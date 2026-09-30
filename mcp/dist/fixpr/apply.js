@@ -44,12 +44,15 @@
  * verification stays in seconds. `applyGroup` only ever does what
  * `lockfileOnly` says, and only on npm's `install` subcommand.
  */
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { describeReadRefusal, describeWriteRefusal, presentInProject, PROJECT_FILE_MAX_BYTES, readProjectBytes, writeProjectFile, } from '../platform/projectFs.js';
 import { batchArgs } from '../runners/argBatches.js';
 import { runProcess } from '../runners/processRunner.js';
-import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport } from '../runners/semgrepReport.js';
+import { runSemgrep, SEMGREP_COMMAND } from '../runners/semgrepRun.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
+import { packageManagerEnv } from './testCommandEnv.js';
 export async function applyGroup(opts) {
     const run = opts.run ?? runProcess;
     if (opts.group.source === 'semgrep') {
@@ -67,7 +70,7 @@ export async function applyGroup(opts) {
 // --------------------------------------------------------------- semgrep
 async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
     const label = `semgrep --metrics=off --autofix [${plan.configLabels.join('; ')}]`;
-    const missing = plan.files.filter((f) => !existsSync(join(worktreePath, f)));
+    const missing = plan.files.filter((f) => !presentInProject(worktreePath, f));
     if (missing.length > 0) {
         return {
             applied: false,
@@ -83,7 +86,7 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
     }
     const fixed = ['--metrics=off', ...plan.configs.map((c) => `--config=${c}`), '--autofix', '--json', '--quiet'];
     const batches = batchArgs(plan.files, {
-        command: 'semgrep',
+        command: SEMGREP_COMMAND,
         fixedArgs: [...fixed, '--output', join(plan.dir, 'fix-000.json'), '--'],
     });
     const commands = [];
@@ -91,13 +94,12 @@ async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
         const batch = batches[i] ?? [];
         const report = join(plan.dir, `fix-${String(i).padStart(3, '0')}.json`);
         rmSync(report, { force: true });
-        const result = await run({
-            command: 'semgrep',
+        // UTF-8 mode comes with the helper (runners/semgrepRun.ts).
+        const result = await runSemgrep({
             args: [...fixed, '--output', report, '--', ...batch],
             cwd: worktreePath,
-            env: pythonUtf8Env(undefined),
             timeoutMs,
-        });
+        }, run);
         const invoked = `${label} -- ${batch.join(' ')}`;
         commands.push(invoked);
         const check = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });
@@ -173,7 +175,17 @@ async function runCommand(run, worktreePath, timeoutMs, lockfileOnly, commandLin
     if (refused !== null) {
         return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: refused };
     }
-    const result = await run({ command: argv.command, args: argv.args, cwd: worktreePath, timeoutMs });
+    // A package manager, fetching: never with this server's environment — the
+    // allowlist plus the user's own package-manager configuration
+    // (`fixpr/testCommandEnv.ts#packageManagerEnv`).
+    const result = await run({
+        command: argv.command,
+        args: argv.args,
+        cwd: worktreePath,
+        env: packageManagerEnv(),
+        extendEnv: false,
+        timeoutMs,
+    });
     const invoked = [argv.command, ...argv.args].join(' ');
     commands.push(invoked);
     // `outcome !== 'completed'`, never a list of failure outcomes: a
@@ -232,13 +244,17 @@ function editPipPin(worktreePath, step) {
     if (isAbsolute(file) || rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
         return { ok: false, label, reason: `'${file}' is not a file inside the project` };
     }
-    let text;
-    try {
-        text = readFileSync(target, 'utf8');
-    }
-    catch {
+    // The worktree is a checkout of the repository, and a checkout creates the
+    // links the repository holds: read and write through `platform/projectFs.ts`,
+    // which refuses a link out of the worktree for the read and any link for
+    // the write. Bytes, so a byte-order mark survives the edit.
+    const read = readProjectBytes(worktreePath, file, PROJECT_FILE_MAX_BYTES);
+    if (read.status === 'absent')
         return { ok: false, label, reason: `'${file}' is not in the committed tree` };
+    if (read.status === 'refused') {
+        return { ok: false, label, reason: `'${file}' was not read: ${describeReadRefusal(read.reason)}` };
     }
+    const text = read.bytes.toString('utf8');
     const name = step.package_name.split(/[-_.]+/).map(escapeRegExp).join('[-_.]+');
     const pin = new RegExp(`(^|[\\s"'\\[,])(${name})(\\s*\\[[^\\]]*\\])?(\\s*==\\s*)${escapeRegExp(step.installed_version)}(?=$|[\\s;"',#\\]\\\\])`, 'gim');
     let count = 0;
@@ -249,7 +265,10 @@ function editPipPin(worktreePath, step) {
     if (count === 0) {
         return { ok: false, label, reason: `no '${step.package_name}==${step.installed_version}' pin in '${file}'` };
     }
-    writeFileSync(target, edited, 'utf8');
+    const written = writeProjectFile(worktreePath, file, edited, { mode: 'replace' });
+    if (!written.ok) {
+        return { ok: false, label, reason: `'${file}' was not written: ${describeWriteRefusal(written.reason, written.detail)}` };
+    }
     return { ok: true, label };
 }
 // --------------------------------------------------------------- shared

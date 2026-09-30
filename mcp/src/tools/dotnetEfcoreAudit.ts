@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -104,20 +104,15 @@ async function handler(
   const findings: Finding[] = [];
 
   for (const dir of migrationDirs) {
-    let files: string[];
-    try {
-      files = readdirSync(dir).filter((n) => n.endsWith('.cs'));
-    } catch {
-      continue;
-    }
+    const files = listProjectDir(projectPath, dir)
+      .map((e) => e.name)
+      .filter((n) => n.endsWith('.cs'));
     for (const fname of files) {
       const abs = join(dir, fname);
-      let content: string;
-      try {
-        content = readFileSync(abs, 'utf8');
-      } catch {
-        continue;
-      }
+      // The repository's file: bounded, regular files only, never through a
+      // link out of the project (`platform/projectFs.ts`).
+      const content = readProjectTextOrUndefined(projectPath, abs);
+      if (content === undefined) continue;
       const lines = content.split(/\r?\n/);
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
@@ -193,23 +188,12 @@ function findMigrationsDirs(root: string): string[] {
   const SKIP = new Set(['bin', 'obj', 'node_modules', '.git', '.guardian', 'packages', '.vs']);
   function walk(dir: string, depth: number): void {
     if (depth > 6) return;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of entries) {
+    // A directory link is never descended (`platform/projectFs.ts`).
+    for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP.has(name)) continue;
       const abs = join(dir, name);
-      let s;
-      try {
-        s = statSync(abs);
-      } catch {
-        continue;
-      }
-      if (!s.isDirectory()) continue;
-      if (name === 'Migrations' && existsSync(abs)) {
+      if (kind !== 'directory') continue;
+      if (name === 'Migrations') {
         out.push(abs);
       } else {
         walk(abs, depth + 1);

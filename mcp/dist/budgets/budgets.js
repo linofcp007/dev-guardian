@@ -24,9 +24,9 @@
  * schema follows it. FID does not appear anywhere in this codebase; keep it
  * that way.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { describeYamlRefusal, parseYamlBounded } from '../platform/boundedParse.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 const PERF_FIELDS = ['lcp_ms', 'inp_ms', 'cls', 'tbt_ms', 'bundle_size_kb'];
 const QUALITY_FIELDS = ['duplication_pct', 'complexity'];
@@ -41,22 +41,25 @@ const QUALITY_FIELDS = ['duplication_pct', 'complexity'];
  */
 export function loadBudgets(projectPath) {
     const path = join(projectPath, '.guardian', 'budgets.yml');
-    if (!existsSync(path))
+    // The repository's file: bounded, regular files only, never through a
+    // link out of the project (`platform/projectFs.ts`).
+    const read = readProjectText(projectPath, path, 1024 * 1024);
+    if (read.status === 'absent')
         return { kind: 'none' };
-    let text;
-    try {
-        text = readFileSync(path, 'utf8');
+    if (read.status === 'refused') {
+        return { kind: 'invalid', path, error: `the file was not read: ${describeReadRefusal(read.reason)}` };
     }
-    catch (e) {
-        return { kind: 'invalid', path, error: `could not read the file: ${message(e)}` };
+    // Bounded by bytes, indicators and depth (platform/boundedParse.ts): 1 MiB of dense YAML took
+    // `yaml` 6 s and ~500 MB of heap.
+    const parsed = parseYamlBounded(read.text);
+    if (!parsed.ok) {
+        return {
+            kind: 'invalid',
+            path,
+            error: parsed.reason === 'invalid' ? `invalid YAML: ${parsed.detail ?? 'unparsable'}` : `the file was not read: ${describeYamlRefusal(parsed)}`,
+        };
     }
-    let doc;
-    try {
-        doc = parseYaml(text);
-    }
-    catch (e) {
-        return { kind: 'invalid', path, error: `invalid YAML: ${message(e)}` };
-    }
+    const doc = parsed.value;
     if (!isRecord(doc)) {
         return { kind: 'invalid', path, error: 'the document must be a mapping with perf: and/or quality: keys' };
     }
@@ -175,8 +178,5 @@ export function budgetViolationFindings(violations, filePath) {
 }
 function isRecord(v) {
     return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-function message(e) {
-    return e instanceof Error ? e.message : String(e);
 }
 //# sourceMappingURL=budgets.js.map

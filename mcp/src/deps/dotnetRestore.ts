@@ -34,8 +34,13 @@
  * trust boundary both tools' descriptions name.
  */
 
-import { type Dirent, existsSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { readSmallTextFile } from '../hooks/configFile.js';
+import { entryKindAnywhere, listProjectDir } from '../platform/projectFs.js';
+
+/** The largest `.sln` / project / `.props` file read; a real one is well under this. */
+const MAX_DOTNET_FILE_BYTES = 4 * 1024 * 1024;
 
 const SKIP_DIRS = new Set(['bin', 'obj', 'node_modules', '.git', '.guardian', 'packages', '.vs']);
 /** How deep the no-solution `.csproj` walk goes. Only decides which projects
@@ -51,12 +56,10 @@ const PROJECT_EXTENSIONS = new Set(['.csproj', '.fsproj', '.vbproj']);
  * finds.
  */
 export function findDotnetTargets(projectPath: string): string[] {
-  let rootEntries: string[];
-  try {
-    rootEntries = readdirSync(projectPath).sort();
-  } catch {
-    return [];
-  }
+  const rootEntries = listProjectDir(projectPath, projectPath)
+    .filter((e) => e.kind === 'file')
+    .map((e) => e.name)
+    .sort();
   const sln =
     rootEntries.find((n) => n.toLowerCase().endsWith('.sln')) ??
     rootEntries.find((n) => n.toLowerCase().endsWith('.slnx'));
@@ -66,22 +69,18 @@ export function findDotnetTargets(projectPath: string): string[] {
 
 function findProjectFiles(projectPath: string): string[] {
   const out: string[] = [];
-  // `Dirent` types, not `statSync`: a symlinked directory is not followed
-  // (no cycles), and the walk costs one syscall per directory, not per entry
-  // — it runs for every `deps_update_plan` call, .NET project or not.
+  // `listProjectDir` (entry types, not `statSync`): a symlinked directory is
+  // not followed (no cycles, nothing outside the project), and the walk costs
+  // one syscall per directory, not per entry — it runs for every
+  // `deps_update_plan` call, .NET project or not.
   const walk = (dir: string, depth: number): void => {
     if (depth > PROJECT_WALK_MAX_DEPTH) return;
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
-    } catch {
-      return;
-    }
+    const entries = listProjectDir(projectPath, dir).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (SKIP_DIRS.has(entry.name)) continue;
       const abs = join(dir, entry.name);
-      if (entry.isDirectory()) walk(abs, depth + 1);
-      else if (entry.isFile() && PROJECT_EXTENSIONS.has(extname(entry.name).toLowerCase())) out.push(abs);
+      if (entry.kind === 'directory') walk(abs, depth + 1);
+      else if (entry.kind === 'file' && PROJECT_EXTENSIONS.has(extname(entry.name).toLowerCase())) out.push(abs);
     }
   };
   walk(projectPath, 0);
@@ -95,12 +94,27 @@ function resolveFromFile(file: string, written: string): string {
   return isAbsolute(normalised) ? resolve(normalised) : resolve(dirname(file), normalised);
 }
 
+/**
+ * A solution, project or `.props` file's text — `''` for anything that is
+ * absent, not a regular file, or over {@link MAX_DOTNET_FILE_BYTES}. Bounded
+ * and regular-files-only (`hooks/configFile.ts`), because every path here
+ * comes from a repository file: a `.sln` entry or a `ProjectReference` naming
+ * `/dev/zero` or a FIFO was read without end. NOT contained in the scanned
+ * directory: a solution legitimately references projects beside it, and
+ * `dotnet restore` follows them whatever this reads — only a regex runs over
+ * the text, and none of it is echoed. A network path — named so, or reached
+ * through a link — is never opened: Windows would authenticate to its host
+ * (`entryKindAnywhere`, review of 3.0, W2E).
+ */
 function readText(path: string): string {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return '';
-  }
+  if (entryKindAnywhere(path) === 'remote') return '';
+  return readSmallTextFile(path, MAX_DOTNET_FILE_BYTES) ?? '';
+}
+
+/** Whether something is at a path a repository file named — never following a link to a network path to find out. */
+function present(path: string): boolean {
+  const kind = entryKindAnywhere(path);
+  return kind !== 'absent' && kind !== 'remote';
 }
 
 /** Project files a solution lists — `.sln` `Project(...) = "Name", "path", …`
@@ -148,7 +162,7 @@ export function projectsForTarget(target: string): string[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(next);
-    if (existsSync(next)) queue.push(...projectReferences(next));
+    if (present(next)) queue.push(...projectReferences(next));
   }
   return out;
 }
@@ -188,7 +202,7 @@ export interface DotnetRestorePlan {
   args: string[];
   /** Set when the restore must NOT run: it would create a lock file that
    *  cannot be prevented with a global property (see the module comment). */
-  blocked?: { code: 'lock_file_would_be_created'; reason: string };
+  blocked?: { code: 'lock_file_would_be_created' | 'network_path_reference'; reason: string };
   /** Lock-file paths that do not exist yet — checked again after restore. */
   absentLockCandidates: string[];
 }
@@ -200,13 +214,23 @@ export function planDotnetRestore(root: string, target: string): DotnetRestorePl
   const withoutLock: string[] = [];
   for (const project of projects) {
     const candidates = lockFileCandidates(project);
-    const present = candidates.filter((c) => existsSync(c));
-    lockFiles.push(...present);
-    absentLockCandidates.push(...candidates.filter((c) => !existsSync(c)));
-    if (present.length === 0) withoutLock.push(project);
+    const locks = candidates.filter((c) => present(c));
+    lockFiles.push(...locks);
+    absentLockCandidates.push(...candidates.filter((c) => !present(c)));
+    if (locks.length === 0) withoutLock.push(project);
   }
   const args = ['restore', target, '--locked-mode', '--nologo', '--verbosity', 'quiet'];
   const plan: DotnetRestorePlan = { target, projects, lockFiles, args, absentLockCandidates };
+  // A solution entry or a ProjectReference on a network path: `dotnet restore` would open it, and Windows
+  // would authenticate to its host with the user's credentials.
+  const remote = projects.filter((p) => entryKindAnywhere(p) === 'remote');
+  if (remote.length > 0) {
+    plan.blocked = {
+      code: 'network_path_reference',
+      reason: `not restored: ${remote.map((p) => relative(root, p) || p).join(', ')} is on a network path, which dotnet restore would open`,
+    };
+    return plan;
+  }
   if (lockFiles.length === 0) {
     // Nothing to protect, so nothing can fail NU1005 — and this is the one
     // switch that stops an opted-in project from creating a lock file.
@@ -232,7 +256,8 @@ export function planDotnetRestore(root: string, target: string): DotnetRestorePl
 export function removeCreatedLockFiles(plan: DotnetRestorePlan): string[] {
   const created: string[] = [];
   for (const candidate of plan.absentLockCandidates) {
-    if (!existsSync(candidate)) continue;
+    const kind = entryKindAnywhere(candidate);
+    if (kind === 'absent' || kind === 'remote') continue;
     try {
       unlinkSync(candidate);
     } catch {

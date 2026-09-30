@@ -191,6 +191,33 @@ describe.skipIf(!GITLEAKS)('scan_secrets with real gitleaks', () => {
     const { r, p } = await scan(dir);
     const res = r as unknown as SecretsResult;
     expect(findings(p, res.scan_id).map((f) => f.file_path)).toEqual(['keep.env']);
+    // Round 4, item 3: honoured, and named — never in silence.
+    const files = res.tools_run.find((t) => t.name === 'gitleaks-working-tree');
+    expect(files?.honoured_config).toEqual(['.gitleaksignore']);
+    expect(files?.reason).toMatch(/honoured the project's \.gitleaksignore/);
+  });
+
+  /**
+   * Round 4, item 3: gitleaks reads `<source>/.gitleaks.toml` on its own — the
+   * history pass runs `detect -s <project>` — so a committed config decides
+   * what the scan reports (here: an allowlist over the one secret in
+   * history, which then reads 0 findings). Honoured, as the project's own
+   * rules and allowlists are, and named on every pass that read it.
+   */
+  it("names the project's .gitleaks.toml, which gitleaks reads on its own", async () => {
+    const dir = await repoWithCleanCommit('secrets-config-');
+    writeFileSync(join(dir, 'creds.txt'), SECRET_LINE);
+    writeFileSync(join(dir, '.gitleaks.toml'), "[extend]\nuseDefault = true\n\n[allowlist]\npaths = ['''creds\\.txt''']\n");
+    await git(dir, 'add', 'creds.txt', '.gitleaks.toml');
+    await git(dir, 'commit', '-q', '-m', 'config');
+
+    const { r, p } = await scan(dir);
+    const res = r as unknown as SecretsResult;
+    expect(findings(p, res.scan_id)).toEqual([]);
+    const history = res.tools_run.find((t) => t.name === 'gitleaks');
+    expect(history?.status).toBe('ok');
+    expect(history?.honoured_config).toEqual(['.gitleaks.toml']);
+    expect(history?.reason).toMatch(/honoured the project's \.gitleaks\.toml \(its rules and allowlists decide/);
   });
 
   it('log_opts restricts history to a range, resolving each ref first', async () => {
@@ -213,6 +240,58 @@ describe.skipIf(!GITLEAKS)('scan_secrets with real gitleaks', () => {
     expect(history?.status).toBe('failed');
     expect(history?.reason).toMatch(/0 commits/);
     expect(res.coverage).not.toBe('full');
+  });
+
+  /**
+   * Review I4, reproduced with gitleaks 8.30.1: a repository whose secret was
+   * committed and then removed gives "history: 2 commit(s) scanned" and one
+   * high; `git clone --depth 1` of it gave "1 commit(s) scanned", coverage
+   * full, 0 findings — a truncated history read as a complete one.
+   */
+  async function repoWithRemovedSecret(prefix: string): Promise<string> {
+    const dir = await repoWithCleanCommit(prefix);
+    writeFileSync(join(dir, 'config.ini'), SECRET_LINE);
+    await git(dir, 'add', 'config.ini');
+    await git(dir, 'commit', '-q', '-m', 'add config');
+    writeFileSync(join(dir, 'config.ini'), 'aws_access_key_id = redacted\n');
+    await git(dir, 'commit', '-q', '-am', 'remove the key');
+    return dir;
+  }
+
+  it('a shallow clone names its truncated history: the pass stays ok, coverage partial, never full', async () => {
+    const origin = await repoWithRemovedSecret('secrets-shallow-origin-');
+    const full = await scan(origin);
+    const fullRes = full.r as unknown as SecretsResult;
+    expect(findings(full.p, fullRes.scan_id)).toHaveLength(1);
+    expect(fullRes.coverage).toBe('full');
+
+    const clone = makeTempDir('secrets-shallow-clone-');
+    // file:// so --depth is honoured for a local clone.
+    await execa('git', ['clone', '-q', '--depth', '1', `file://${origin.replace(/\\/g, '/')}`, clone]);
+    const shallow = await scan(clone);
+    const res = shallow.r as unknown as SecretsResult;
+    const history = res.tools_run.find((t) => t.name === 'gitleaks');
+    expect(history?.status).toBe('ok');
+    const boundary = (await git(clone, 'rev-parse', 'HEAD')).trim().slice(0, 12);
+    expect(history?.reason).toMatch(new RegExp(`history truncated at ${boundary}`));
+    expect(res.missing_tools).toContain('gitleaks');
+    expect(res.coverage).toBe('partial');
+  });
+
+  it('a range below the shallow boundary is complete; one that crosses it is truncated', async () => {
+    const origin = await repoWithRemovedSecret('secrets-shallow-range-origin-');
+    const clone = makeTempDir('secrets-shallow-range-clone-');
+    await execa('git', ['clone', '-q', '--depth', '2', `file://${origin.replace(/\\/g, '/')}`, clone]);
+    // HEAD~1..HEAD holds one commit, entirely above the boundary (HEAD~1).
+    const inside = await scan(clone, { log_opts: 'HEAD~1..HEAD' });
+    const insideRes = inside.r as unknown as SecretsResult;
+    expect(insideRes.tools_run.find((t) => t.name === 'gitleaks')?.reason ?? '').not.toMatch(/truncated/);
+    expect(insideRes.missing_tools).not.toContain('gitleaks');
+    // --all reaches the boundary.
+    const all = await scan(clone, { log_opts: '--all' });
+    const allRes = all.r as unknown as SecretsResult;
+    expect(allRes.tools_run.find((t) => t.name === 'gitleaks')?.reason).toMatch(/history truncated at/);
+    expect(allRes.missing_tools).toContain('gitleaks');
   });
 });
 

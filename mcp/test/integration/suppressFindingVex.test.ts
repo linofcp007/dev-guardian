@@ -263,3 +263,56 @@ describe('suppress_finding — the copies it names are export_vex’s copies', (
     expect(await copiesNamedFor(PIP_AUDIT)).toEqual([TRIVY_A, TRIVY_B].sort());
   });
 });
+
+describe("suppress_finding — export_vex's scope decides exportable and the copies", () => {
+  // export_vex states the CVEs of the project's latest usable dependency scan
+  // (scan_deps, deps_audit, security_scan_full). suppress_finding judged
+  // `exportable` and the other copies over every scan type: a container
+  // image's CVE (scan_containers' trivy-image) was promised `exportable: true`
+  // and never exported, and a dependency copy suppressed beside it got a
+  // "copies" warning about the image's.
+  const IMAGE_FP = '7'.repeat(64);
+  const DEPS_COPY_FP = '8'.repeat(64);
+  const cve = (fingerprint: string, file: string): Finding => ({
+    fingerprint, tool: 'trivy', rule_id: 'CVE-2023-0464', severity: 'high', category: 'security', subcategory: 'cve',
+    title: 'openssl: excessive resource use', file_path: file, snippet: 'openssl@3.0.8->3.0.9', fix_available: true,
+  });
+
+  beforeEach(() => {
+    ctx.storage.findings.bulkInsert([{ ...cve(DEPS_COPY_FP, 'requirements.txt'), scan_id: 's1' }]);
+    ctx.storage.scans.insert({ scan_id: 'img', scan_type: 'containers', project_path: projectPath, tree_hash: 'h3' });
+    ctx.storage.findings.bulkInsert([{ ...cve(IMAGE_FP, 'registry/app:1 (alpine 3.18)'), scan_id: 'img' }]);
+    ctx.storage.scans.finalize({ scan_id: 'img', status: 'completed', tools_run: [{ name: 'trivy-image', status: 'ok' }], missing_tools: [] });
+  });
+
+  it('a container image CVE is not exportable, says why, and names no copies', async () => {
+    const r = okResult<{ vex: { exportable: boolean; note?: string; other_open_findings: unknown[] }; warning?: string }>(
+      await suppress({ finding_fingerprint: IMAGE_FP, vex_status: 'not_affected', justification: 'component_not_present' }),
+    );
+    expect(r.vex.exportable).toBe(false);
+    expect(r.vex.note).toMatch(/container images are not in export_vex's scope/);
+    expect(r.vex.other_open_findings).toEqual([]);
+    expect(r.warning).toBeUndefined();
+  });
+
+  it("the dependency copy is exportable, and the image's copy is not named as one", async () => {
+    const r = okResult<{
+      vex: { exportable: boolean; other_open_findings: Array<{ fingerprint: string }> };
+      warning?: string;
+    }>(await suppress({ finding_fingerprint: DEPS_COPY_FP, vex_status: 'not_affected', justification: 'component_not_present' }));
+    expect(r.vex.exportable).toBe(true);
+    expect(r.vex.other_open_findings.map((f) => f.fingerprint)).not.toContain(IMAGE_FP);
+    expect(r.warning ?? '').not.toMatch(/alpine/);
+  });
+
+  it('a dependency finding the latest dependency scan no longer reports is not exportable either', async () => {
+    // A newer, usable deps scan without the CVE: export_vex reads that one.
+    ctx.storage.scans.insert({ scan_id: 's9', scan_type: 'deps', project_path: projectPath, tree_hash: 'h9' });
+    ctx.storage.scans.finalize({ scan_id: 's9', status: 'completed', tools_run: [{ name: 'trivy', status: 'ok' }], missing_tools: [] });
+    const r = okResult<{ vex: { exportable: boolean; note?: string } }>(
+      await suppress({ finding_fingerprint: DEPS_COPY_FP, vex_status: 'not_affected', justification: 'component_not_present' }),
+    );
+    expect(r.vex.exportable).toBe(false);
+    expect(r.vex.note).toMatch(/s9/);
+  });
+});

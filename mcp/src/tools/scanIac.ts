@@ -83,13 +83,18 @@
  * `mapMisconfiguration`).
  */
 
-import { readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { listProjectDir, projectPathKind } from '../platform/projectFs.js';
+import { join, relative } from 'node:path';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
 import { actionlintParser } from '../runners/scannerParsers/actionlint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { zizmorParser } from '../runners/scannerParsers/zizmor.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { nameRepoConfig } from '../runners/repoConfig.js';
+import { iacLookingFiles, judgeTrivyConfig } from '../runners/trivyConfig.js';
+import { runTrivy } from '../runners/trivyRun.js';
+import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { toPosixPath, type ScannerParser } from '../runners/scannerParsers/index.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { ToolRun } from '../types.js';
@@ -145,20 +150,16 @@ const WORKFLOW_EXTENSIONS = ['.yml', '.yaml'];
  */
 function listWorkflowFiles(projectPath: string, exclusions: ProjectExclusions | null): string[] {
   const dir = join(projectPath, WORKFLOWS_DIR);
-  if (!realWithinProject(projectPath, dir, false)) return [];
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  // `listProjectDir` lists nothing when the directory resolves outside the
+  // project; a linked workflow file is kept only when it resolves to a
+  // regular file inside it (`platform/projectFs.ts`).
   const abs: string[] = [];
-  for (const e of entries) {
+  for (const e of listProjectDir(projectPath, dir)) {
     if (!WORKFLOW_EXTENSIONS.some((ext) => e.name.toLowerCase().endsWith(ext))) continue;
     const candidate = join(dir, e.name);
-    if (e.isFile()) {
+    if (e.kind === 'file') {
       abs.push(candidate);
-    } else if (e.isSymbolicLink() && realWithinProject(projectPath, candidate, true)) {
+    } else if (e.kind === 'link' && projectPathKind(projectPath, candidate) === 'file') {
       abs.push(candidate);
     }
   }
@@ -167,43 +168,12 @@ function listWorkflowFiles(projectPath: string, exclusions: ProjectExclusions | 
   return relPaths.filter((p) => !exclusions.ignores(p));
 }
 
-/**
- * Whether `candidate` (already known to exist) resolves — following any
- * symlink on its own path or at its end — to something inside `root`.
- * `requireFile` additionally requires the resolved target to be a regular
- * file (for a workflow FILE candidate); false for a directory candidate
- * (`.github/workflows` itself), which only needs to resolve inside the
- * project, not be any particular type.
- */
-function realWithinProject(root: string, candidate: string, requireFile: boolean): boolean {
-  let real: string;
-  try {
-    real = realpathSync.native(candidate);
-  } catch {
-    return false; // does not exist, or a broken link
-  }
-  if (requireFile) {
-    try {
-      if (!statSync(real).isFile()) return false;
-    } catch {
-      return false;
-    }
-  }
-  let realRoot: string;
-  try {
-    realRoot = realpathSync.native(root);
-  } catch {
-    return false;
-  }
-  const rel = relative(realRoot, real);
-  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
-
 interface WorkflowScannerSpec {
   name: 'zizmor' | 'actionlint';
   binary: string;
   args: string[];
   parser: ScannerParser;
+
   /** Whether this run counts as a success, given its process result. */
   isOk: (result: ProcessRunResult) => boolean;
 }
@@ -260,9 +230,12 @@ async function runWorkflowScanner(
       // not fail the scan over a report artifact.
     }
   }
+  // The project's own config the scanner reads on its own is named on the
+  // run (round 4, item 3): `runners/repoConfig.ts#REPO_CONFIG` says which.
+  const named = (run: ToolRun): Promise<ToolRun> => nameRepoConfig(run, ctx.projectPath, spec.name);
   if (spec.isOk(result)) {
     return {
-      toolRun: { name: spec.name, status: 'ok' },
+      toolRun: await named({ name: spec.name, status: 'ok' }),
       missing: false,
       parserInput: { parser: spec.parser, input: result.stdout },
       // A run its spec accepts is a completed one, whatever the runner
@@ -274,7 +247,7 @@ async function runWorkflowScanner(
     result.outcome === 'completed'
       ? { name: spec.name, status: 'failed' }
       : { name: spec.name, status: 'failed', reason: result.outcome };
-  return { toolRun, missing: false, processOutcome: result.outcome };
+  return { toolRun: await named(toolRun), missing: false, processOutcome: result.outcome };
 }
 
 registerToolModule(
@@ -285,7 +258,10 @@ registerToolModule(
       'Run Trivy config against the project root (Terraform, Kubernetes manifests, CloudFormation ' +
       'templates, Helm charts). When .github/workflows/*.yml exist, also run zizmor (GitHub Actions ' +
       'security auditor: template injection, unpinned actions, excessive permissions) and actionlint ' +
-      '(workflow schema/expression correctness), each when installed.',
+      '(workflow schema/expression correctness), each when installed. The project configuration each ' +
+      'one reads (.trivyignore, actionlint.yaml, zizmor.yml) is named in `tools_run[].honoured_config`; ' +
+      "`suppressed_by_repo_config` says what .trivyignore suppressed — `trivy config` cannot list it and " +
+      'says so (count null, unlisted_because).',
     scan_type: 'iac',
     category: 'security',
     supportsAutoFix: false,
@@ -320,20 +296,32 @@ registerToolModule(
         missing_tools.push('trivy');
       } else {
         const outFile = join(reportDir, 'iac.json');
-        const result = await runProcess({
-          command: 'trivy',
-          args: ['config', '--format', 'json', '--output', outFile, '--quiet', ctx.projectPath],
-          cwd: ctx.projectPath,
+        // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+        // No --quiet: a file Trivy cannot parse is one ERROR line in its log,
+        // and --quiet hides it (runners/trivyConfig.ts, review I3).
+        const result = await runTrivy({
+          args: ['config', '--format', 'json', '--output', outFile, ...trivySkipArgs(ctx.exclusions)],
+          target: ctx.projectPath,
+          workDir: reportDir,
+          ignoreFrom: ctx.projectPath,
+          // The CI gate's --rules-ref reads the ref's copy (`ci/refConfig.ts`).
+          ...(ctx.configRoot !== ctx.projectPath ? { ignoreFileFrom: ctx.configRoot } : {}),
           env: ctx.scriptEnv,
           signal: ctx.signal,
           onLog: ctx.onLog,
         });
         const raw = readJsonSafe(outFile);
         if (raw) parser_inputs.push({ parser: trivyParser, input: raw });
-        tools_run.push({
+        const iac = result.outcome === 'completed' ? iacLookingFiles(ctx.projectPath, ctx.exclusions) : null;
+        const judged = judgeTrivyConfig({
           name: 'trivy-config',
-          status: result.outcome === 'completed' ? 'ok' : 'failed',
+          run: result,
+          raw,
+          iacFiles: iac?.files ?? [],
+          ...(iac?.incomplete !== undefined ? { iacIncomplete: iac.incomplete } : {}),
         });
+        tools_run.push(judged.toolRun);
+        missing_tools.push(...judged.missing);
         absorbOutcome(result.outcome);
       }
 

@@ -35,6 +35,11 @@ import { TOOLS } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
+
+// The file's first test pays for loading the tool's module graph: 1.5-1.7 s
+// ordinarily, 10.0 s — past the 10 s default — with the CPU at 100% (other
+// suites running; review 3.0, R7). Scanners are mocked here: nothing can hang.
+vi.setConfig({ testTimeout: 30_000 });
 beforeAll(async () => {
   await import('../../src/tools/scanContainers.js');
 });
@@ -132,6 +137,41 @@ describe('scan_containers: hadolint', () => {
     expect(r.tools_run.find((t) => t.name === 'hadolint')?.status).toBe('ok');
     const total = Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0);
     expect(total).toBeGreaterThan(0);
+  });
+
+  /**
+   * Round 4, item 3: hadolint reads `.hadolint.yaml` from its working
+   * directory (`ignored:` rules, `trustedRegistries`, severity overrides), and
+   * it ran in the project. It runs in the report directory now; the
+   * project's own root config is passed with `--config`, and named.
+   */
+  it("runs outside the project; the project's .hadolint.yaml is passed explicitly and named", async () => {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'hadolint' ? '/fake/bin/hadolint' : null));
+    vi.mocked(runProcess).mockImplementation(async () => ({ ...ok, stdout: '[]' }));
+    const bare = makeTempDir('containers-');
+    writeFileSync(join(bare, 'Dockerfile'), 'FROM alpine\n', 'utf8');
+    const plain = (await tool().handler({ project_path: bare }, plugin(bare))) as Result & {
+      tools_run: { name: string; honoured_config?: string[] }[];
+    };
+    const first = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'hadolint')?.[0];
+    expect(first?.cwd).not.toBe(bare);
+    expect(first?.args).not.toContain('--config');
+    expect(plain.tools_run.find((t) => t.name === 'hadolint')?.honoured_config).toBeUndefined();
+
+    vi.mocked(runProcess).mockClear();
+    const own = makeTempDir('containers-');
+    writeFileSync(join(own, 'Dockerfile'), 'FROM alpine\n', 'utf8');
+    writeFileSync(join(own, '.hadolint.yaml'), 'ignored:\n  - DL3006\n', 'utf8');
+    const r = (await tool().handler({ project_path: own }, plugin(own))) as Result & {
+      tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const call = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'hadolint')?.[0];
+    expect(call?.cwd).not.toBe(own);
+    expect(call?.args).toEqual(expect.arrayContaining(['--config', join(own, '.hadolint.yaml')]));
+    const hadolint = r.tools_run.find((t) => t.name === 'hadolint');
+    expect(hadolint?.status).toBe('ok');
+    expect(hadolint?.honoured_config).toEqual(['.hadolint.yaml']);
+    expect(hadolint?.reason).toMatch(/honoured the project's \.hadolint\.yaml/);
   });
 
   it('is a named gap (skipped, missing_tools) when hadolint is not installed', async () => {

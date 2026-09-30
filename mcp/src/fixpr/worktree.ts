@@ -22,19 +22,28 @@
  * other git invocation here is a read (`status --porcelain`, `rev-parse`,
  * `diff --name-only`, `ls-files`, `symbolic-ref`). Every call in this module
  * goes through `runProcess`: no shell, argv arrays end to end, and it never
- * throws — outcomes are inspected, not caught.
+ * throws — outcomes are inspected, not caught. `runProcess` also hardens
+ * each one (`platform/gitSafety.ts`): no hook, `core.fsmonitor` or filter
+ * driver the repository's own git configuration names runs on the checkout.
  */
 
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { GIT_COMMAND } from '../platform/gitSafety.js';
 
 export interface Worktree {
   /** Absolute path to the worktree directory. */
   path: string;
   /** The branch created inside it; null for a detached worktree. */
   branch: string | null;
+  /**
+   * Keys of the repository's own git configuration its checkout overrode
+   * (`platform/gitSafety.ts`) — a filter driver's `smudge` among them means
+   * files were written as stored in git.
+   */
+  notApplied: readonly string[];
   /** Idempotent. Removes the worktree and prunes. Safe to call twice. */
   remove(): Promise<{ removed: boolean; warning: string | null }>;
 }
@@ -73,12 +82,14 @@ export async function createWorktree(opts: {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage(e)}` };
   }
 
+  // `--no-checkout`: the files are written by the `reset --hard` below, in
+  // the new worktree itself — see there.
   const add = await runProcess({
-    command: 'git',
+    command: GIT_COMMAND,
     args:
       opts.branch === null
-        ? ['-C', opts.projectPath, 'worktree', 'add', '--detach', dir, 'HEAD']
-        : ['-C', opts.projectPath, 'worktree', 'add', '-b', opts.branch, dir, 'HEAD'],
+        ? ['-C', opts.projectPath, 'worktree', 'add', '--no-checkout', '--detach', dir, 'HEAD']
+        : ['-C', opts.projectPath, 'worktree', 'add', '--no-checkout', '-b', opts.branch, dir, 'HEAD'],
     cwd: opts.projectPath,
     timeoutMs: opts.timeoutMs,
   });
@@ -99,7 +110,7 @@ export async function createWorktree(opts: {
     // it. Pruning unconditionally here costs nothing on the common path
     // (prune against nothing to prune is a fast no-op) and closes that gap.
     await runProcess({
-      command: 'git',
+      command: GIT_COMMAND,
       args: ['-C', opts.projectPath, 'worktree', 'prune'],
       cwd: opts.projectPath,
       timeoutMs: opts.timeoutMs,
@@ -124,10 +135,35 @@ export async function createWorktree(opts: {
   const canonicalPath =
     (await resolveRegisteredPath(opts.projectPath, opts.branch, dir, opts.timeoutMs)) ?? dir;
 
-  return {
-    ok: true,
-    worktree: makeWorktree(opts.projectPath, canonicalPath, opts.branch, opts.timeoutMs),
-  };
+  // The checkout itself, run IN the new worktree — what `worktree add` does
+  // in a child git of its own, split out so the configuration that child
+  // reads is the one neutralised (`platform/gitSafety.ts`): an
+  // `includeIf "onbranch:…"` or `"gitdir:…"` can match the new worktree's
+  // branch or git directory and not the project's, and a filter driver it
+  // defines would otherwise run on this checkout.
+  // `--no-recurse-submodules`, as `worktree add`'s own reset passes: with the
+  // user's `submodule.recurse=true` (or the repository's), a reset here goes
+  // into submodules this worktree was never given and dies (measured).
+  const checkout = await runProcess({
+    command: GIT_COMMAND,
+    args: ['-C', canonicalPath, 'reset', '--hard', '--quiet', '--no-recurse-submodules'],
+    cwd: canonicalPath,
+    timeoutMs: opts.timeoutMs,
+  });
+  const worktree = makeWorktree(opts.projectPath, canonicalPath, opts.branch, opts.timeoutMs, [
+    ...(add.gitNotApplied ?? []),
+    ...(checkout.gitNotApplied ?? []),
+  ]);
+  if (checkout.outcome !== 'completed') {
+    const removed = await worktree.remove();
+    return {
+      ok: false,
+      reason:
+        describeFailure(checkout, 'git reset --hard (the worktree checkout)') +
+        (removed.warning !== null ? `; ${removed.warning}` : ''),
+    };
+  }
+  return { ok: true, worktree };
 }
 
 function makeWorktree(
@@ -135,6 +171,7 @@ function makeWorktree(
   path: string,
   branch: string | null,
   timeoutMs: number | undefined,
+  notApplied: readonly string[],
 ): Worktree {
   // A shared IN-FLIGHT PROMISE, not a boolean flag set before the first
   // `await` — `appRunner.ts`'s `makeStop` documents exactly why the boolean
@@ -148,6 +185,7 @@ function makeWorktree(
   return {
     path,
     branch,
+    notApplied: [...new Set(notApplied)].sort(),
     remove: () => {
       removePromise ??= removeWorktree(projectPath, path, timeoutMs);
       return removePromise;
@@ -161,7 +199,7 @@ async function removeWorktree(
   timeoutMs: number | undefined,
 ): Promise<{ removed: boolean; warning: string | null }> {
   const removeResult = await runProcess({
-    command: 'git',
+    command: GIT_COMMAND,
     args: ['-C', projectPath, 'worktree', 'remove', '--force', path],
     cwd: projectPath,
     timeoutMs,
@@ -174,7 +212,7 @@ async function removeWorktree(
   // `.git/worktrees/<name>` admin state regardless, and is a no-op when
   // there is nothing to prune.
   await runProcess({
-    command: 'git',
+    command: GIT_COMMAND,
     args: ['-C', projectPath, 'worktree', 'prune'],
     cwd: projectPath,
     timeoutMs,
@@ -216,7 +254,7 @@ async function resolveRegisteredPath(
   timeoutMs: number | undefined,
 ): Promise<string | null> {
   const list = await runProcess({
-    command: 'git',
+    command: GIT_COMMAND,
     args: ['-C', projectPath, 'worktree', 'list', '--porcelain'],
     cwd: projectPath,
     timeoutMs,

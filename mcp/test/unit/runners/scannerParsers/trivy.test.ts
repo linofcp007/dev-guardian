@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -199,12 +199,24 @@ describe('assessManifestCoverage', () => {
     expect(gaps).toEqual([{ ecosystem: 'dotnet', files: ['Api.csproj'] }]);
   });
 
-  it('does not flag go.mod — Trivy scans it without a lockfile', () => {
+  // Trivy reads go.mod itself, no lock file needed — measured on 0.69.3: a
+  // go.mod with or without `require` lines gets a `gomod` Result. One that
+  // does not parse gets none, logs `Number of language-specific files
+  // num=0` and exits 0: that is the gap (review I1).
+  it('covers a go.mod Trivy read (a gomod Result in its directory)', () => {
     const project = makeTempDir('trivy-manifest-');
     writeFileSync(join(project, 'go.mod'), 'module x\n\ngo 1.21\n', 'utf8');
+    const output = JSON.stringify({ Results: [{ Target: 'go.mod', Type: 'gomod', Vulnerabilities: [] }] });
+    expect(assessManifestCoverage(project, output)).toEqual({ gaps: [], sawAnyResults: true });
+  });
 
-    const { gaps } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
-    expect(gaps).toEqual([]);
+  it('flags a go.mod Trivy said nothing about (it did not parse) as a go gap', () => {
+    const project = makeTempDir('trivy-manifest-');
+    writeFileSync(join(project, 'go.mod'), 'module x\n\ngo 1.21\n\nrequire golang.org/x/text v0.3.0 (\n', 'utf8');
+    expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT)).toEqual({
+      gaps: [{ ecosystem: 'go', files: ['go.mod'] }],
+      sawAnyResults: false,
+    });
   });
 
   // Measured against Trivy 0.69.3 (test/e2e/trivyManifestCoverage.test.ts
@@ -317,7 +329,9 @@ describe('assessManifestCoverage', () => {
     expect(manifestEcosystemOfTarget('svc\\poetry.lock')).toBe('python');
     expect(manifestEcosystemOfTarget('uv.lock')).toBe('python');
     expect(manifestEcosystemOfTarget('Pipfile.lock')).toBe('python');
-    expect(manifestEcosystemOfTarget('go.mod')).toBeNull();
+    expect(manifestEcosystemOfTarget('go.mod')).toBe('go');
+    expect(manifestEcosystemOfTarget('svc/go.mod')).toBe('go');
+    expect(manifestEcosystemOfTarget('pom.xml')).toBeNull();
   });
 
   it('does not flag an ecosystem Trivy DID produce Results for', () => {
@@ -352,6 +366,213 @@ describe('assessManifestCoverage', () => {
     const { gaps, sawAnyResults } = assessManifestCoverage(project, NO_RESULTS_OUTPUT);
     expect(gaps).toEqual([]);
     expect(sawAnyResults).toBe(false);
+  });
+});
+
+/**
+ * Review I1: the check read the project ROOT only, calling a buried manifest
+ * "Trivy's own concern" — and Trivy skips one without a lock file in
+ * silence. Reproduced on 0.69.3 with scan_deps: web/package.json (lodash
+ * 4.17.4, no lock) and api/pyproject.toml + api/requirements-dev.txt read
+ * trivy ok, coverage full, 0 findings, no Results key. The tree is walked
+ * now, and each manifest's DIRECTORY is compared with the directories of
+ * the Results of its ecosystem — never the Type alone, which a root lock
+ * file already satisfies.
+ */
+describe('assessManifestCoverage — the whole tree', () => {
+  const NO_RESULTS_OUTPUT = JSON.stringify({ SchemaVersion: 2, ArtifactType: 'filesystem' });
+
+  function tree(files: Record<string, string>): string {
+    const project = makeTempDir('trivy-manifest-tree-');
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(project, rel)), { recursive: true });
+      writeFileSync(join(project, rel), body, 'utf8');
+    }
+    return project;
+  }
+  const results = (...rs: Array<[string, string]>): string =>
+    JSON.stringify({ Results: rs.map(([Target, Type]) => ({ Target, Type, Vulnerabilities: [] })) });
+
+  const LODASH_PKG = '{"name":"web","dependencies":{"lodash":"4.17.4","minimist":"0.0.8"}}';
+  const DJANGO_PEP621 = '[project]\nname = "api"\ndependencies = ["django==2.2.0"]\n';
+
+  it('names manifests buried below the root that Trivy said nothing about (the reproduction)', () => {
+    const project = tree({
+      'web/package.json': LODASH_PKG,
+      'api/pyproject.toml': DJANGO_PEP621,
+      'api/requirements-dev.txt': 'pytest==7.0.0\n',
+    });
+    expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT)).toEqual({
+      gaps: [
+        { ecosystem: 'npm', files: ['web/package.json'] },
+        { ecosystem: 'python', files: ['api/pyproject.toml', 'api/requirements-dev.txt'] },
+      ],
+      sawAnyResults: false,
+    });
+  });
+
+  it('a root lock file does not cover a nested manifest of the same ecosystem (Type alone is not coverage)', () => {
+    const project = tree({
+      'package.json': '{"name":"root","dependencies":{"express":"4.0.0"}}',
+      'package-lock.json': '{}',
+      'web/package.json': LODASH_PKG,
+    });
+    expect(assessManifestCoverage(project, results(['package-lock.json', 'npm']))).toEqual({
+      gaps: [{ ecosystem: 'npm', files: ['web/package.json'] }],
+      sawAnyResults: true,
+    });
+  });
+
+  it('a nested manifest is covered by a Result in its own directory', () => {
+    const project = tree({ 'web/package.json': LODASH_PKG, 'web/package-lock.json': '{}', 'svc/go.mod': 'module x\n' });
+    expect(assessManifestCoverage(project, results(['web/package-lock.json', 'npm'], ['svc/go.mod', 'gomod']))).toEqual({
+      gaps: [],
+      sawAnyResults: true,
+    });
+  });
+
+  it('Results in the other separator style still count (a Windows Target)', () => {
+    const project = tree({ 'web/package.json': LODASH_PKG });
+    expect(assessManifestCoverage(project, results(['web\\package-lock.json', 'npm'])).gaps).toEqual([]);
+  });
+
+  it('a different ecosystem in the same directory does not cover it', () => {
+    const project = tree({ 'api/pyproject.toml': DJANGO_PEP621, 'api/package.json': LODASH_PKG });
+    expect(assessManifestCoverage(project, results(['api/package-lock.json', 'npm'])).gaps).toEqual([
+      { ecosystem: 'python', files: ['api/pyproject.toml'] },
+    ]);
+  });
+
+  it('an npm workspace member is covered by the root lock file that locks it', () => {
+    const project = tree({
+      'package.json': '{"name":"root","private":true,"workspaces":["packages/*","!packages/legacy"]}',
+      'packages/a/package.json': LODASH_PKG,
+      'packages/legacy/package.json': LODASH_PKG,
+      'tools/x/package.json': LODASH_PKG,
+    });
+    expect(assessManifestCoverage(project, results(['package-lock.json', 'npm'])).gaps).toEqual([
+      // Excluded by the root's own negation, and not a member at all.
+      { ecosystem: 'npm', files: ['packages/legacy/package.json', 'tools/x/package.json'] },
+    ]);
+  });
+
+  it('pnpm, yarn ({packages}), Cargo and uv workspaces cover their members', () => {
+    const project = tree({
+      'pnpm-workspace.yaml': "packages:\n  - 'apps/**'\n",
+      'package.json': '{"name":"root","private":true}',
+      'apps/web/site/package.json': LODASH_PKG,
+      'y/package.json': '{"name":"y","private":true,"workspaces":{"packages":["libs/*"]}}',
+      'y/libs/one/package.json': LODASH_PKG,
+      'Cargo.toml': '[workspace]\nmembers = [\n  "crates/*",\n]\nexclude = ["crates/old"]\n',
+      'crates/core/Cargo.toml': '[package]\nname = "core"\n[dependencies]\nserde = "1"\n',
+      'crates/old/Cargo.toml': '[package]\nname = "old"\n[dependencies]\nserde = "1"\n',
+      'py/pyproject.toml': '[tool.uv.workspace]\nmembers = ["pkgs/*"]\n',
+      'py/pkgs/lib/pyproject.toml': DJANGO_PEP621,
+    });
+    const output = results(
+      ['pnpm-lock.yaml', 'pnpm'],
+      ['y/yarn.lock', 'yarn'],
+      ['Cargo.lock', 'cargo'],
+      ['py/uv.lock', 'uv'],
+    );
+    expect(assessManifestCoverage(project, output).gaps).toEqual([{ ecosystem: 'cargo', files: ['crates/old/Cargo.toml'] }]);
+  });
+
+  it('never walks into dependency, build, version-control, cache or .guardianignore directories', () => {
+    const project = tree({
+      'node_modules/lodash/package.json': LODASH_PKG,
+      'vendor/x/composer.json': '{"require":{"a/b":"1.0"}}',
+      // Round 4, item 5: bower's and jspm's dependency directories.
+      'bower_components/x/package.json': LODASH_PKG,
+      'jspm_packages/npm/x@1.0.0/package.json': LODASH_PKG,
+      'dist/package.json': LODASH_PKG,
+      '.cache/package.json': LODASH_PKG,
+      '.hg/store/package.json': LODASH_PKG,
+      '.svn/pristine/package.json': LODASH_PKG,
+      '.yarn/cache/package.json': LODASH_PKG,
+      '.pnpm-store/v3/package.json': LODASH_PKG,
+      '.npm/_cacache/package.json': LODASH_PKG,
+      'fixtures/vuln/package.json': LODASH_PKG,
+      'app/package.json': LODASH_PKG,
+    });
+    const ignores = (rel: string): boolean => rel === 'fixtures' || rel.startsWith('fixtures/');
+    expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT, { ignores }).gaps).toEqual([
+      { ecosystem: 'npm', files: ['app/package.json'] },
+    ]);
+  });
+
+  /**
+   * Round 4, item 4: the walk skipped every hidden directory, but Trivy reads
+   * them — a GitHub composite action's `.github/actions/notify/package.json`
+   * with no lock read full. Hidden directories are walked now, all but
+   * version control and tool caches.
+   */
+  it('walks hidden directories Trivy reads: a composite action\'s manifest is named', () => {
+    const project = tree({
+      'package.json': '{"name":"root","dependencies":{"express":"4.0.0"}}',
+      'package-lock.json': '{}',
+      '.github/actions/notify/package.json': LODASH_PKG,
+    });
+    expect(assessManifestCoverage(project, results(['package-lock.json', 'npm'])).gaps).toEqual([
+      { ecosystem: 'npm', files: ['.github/actions/notify/package.json'] },
+    ]);
+  });
+
+  it('a nested manifest that declares nothing is no gap, as at the root', () => {
+    const project = tree({ 'tools/package.json': '{"name":"tools","private":true,"scripts":{"x":"y"}}' });
+    expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([]);
+  });
+
+  it('a walk that reaches its directory ceiling says so', () => {
+    const project = tree({ 'a/b/c/package.json': LODASH_PKG, 'package.json': LODASH_PKG });
+    const r = assessManifestCoverage(project, NO_RESULTS_OUTPUT, { maxDirs: 2 });
+    expect(r.walkIncomplete).toMatch(/2 directories/);
+    // What it did see is still reported.
+    expect(r.gaps[0]?.files).toContain('package.json');
+  });
+
+  /**
+   * Review 3.0, wave 2 (c): Trivy skips devDependencies by default (measured
+   * on 0.69.3: a lock holding only `dev: true` packages gets no Result). A
+   * package.json with only devDependencies beside a committed lock is still
+   * a gap — nothing was reported for it — but its lock file is there: the
+   * gap says which of its files are that case, so the advice is not "commit
+   * the lock file".
+   */
+  describe('a package.json with only devDependencies', () => {
+    const DEV_ONLY = '{"name":"x","devDependencies":{"lodash":"4.17.4"}}';
+
+    it('beside a lock file: a gap, marked dev_only', () => {
+      const project = tree({ 'package.json': DEV_ONLY, 'package-lock.json': '{"lockfileVersion":3}' });
+      expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([
+        { ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] },
+      ]);
+    });
+
+    it('a workspace member whose root holds the lock file is dev_only too, and so is that root', () => {
+      const project = tree({
+        'package.json': '{"name":"root","private":true,"workspaces":["packages/*"]}',
+        'yarn.lock': '# yarn lockfile v1\n',
+        'packages/a/package.json': DEV_ONLY,
+        // Not a member: no lock of its own, and the root's does not lock it.
+        'tools/b/package.json': DEV_ONLY,
+      });
+      const both = ['package.json', 'packages/a/package.json'];
+      expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([
+        { ecosystem: 'npm', files: [...both, 'tools/b/package.json'], dev_only: both },
+      ]);
+    });
+
+    it('without a lock file, or with a production dependency beside the dev ones: a plain gap', () => {
+      const project = tree({
+        'nolock/package.json': DEV_ONLY,
+        'prod/package.json': '{"name":"p","dependencies":{"express":"4.0.0"},"devDependencies":{"lodash":"4.17.4"}}',
+        'prod/package-lock.json': '{"lockfileVersion":3}',
+      });
+      expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([
+        { ecosystem: 'npm', files: ['nolock/package.json', 'prod/package.json'] },
+      ]);
+    });
   });
 });
 

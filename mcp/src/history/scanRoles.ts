@@ -83,6 +83,14 @@ export const STATE_SCAN_TYPES: readonly ScanType[] = (
   Object.keys(SCAN_TYPE_ROLE) as ScanType[]
 ).filter((t) => SCAN_TYPE_ROLE[t] === 'state');
 
+/**
+ * Scan types whose `project_path` names the audited TARGET, not a project: a
+ * third-party skill (`scan_skill`) or a live WordPress site's URL
+ * (`wp_rest_audit`). A report of one belongs to whichever project asks for
+ * it — `report_export` refuses another PROJECT's scan, never one of these.
+ */
+export const TARGET_SCAN_TYPES: ReadonlySet<ScanType> = new Set<ScanType>(['skill_audit', 'wp_rest_audit']);
+
 export function isStateScanType(type: string): type is ScanType {
   return (STATE_SCAN_TYPES as readonly string[]).includes(type);
 }

@@ -41,6 +41,8 @@ function measured(): Record<string, unknown> {
   return {
     coverage_caveat: false,
     project_path: P,
+    // Unreleased: how many findings an active suppression takes out (none here).
+    suppressed_count: 0,
     coverage: expect.objectContaining({
       level: 'full',
       skipped: { count: 0, by_reason: { coverage_none: 0 }, newest: [] },

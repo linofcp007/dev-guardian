@@ -17,9 +17,25 @@
  * compiled copy from `mcp/dist/hooks/` in an install with no `node_modules`.
  */
 
-/** `.claude/settings.json` or `.claude/settings.local.json`, anywhere. */
-export function isClaudeSettingsPath(path: string): boolean {
-  return /(?:^|[\\/])\.claude[\\/]settings(?:\.local)?\.json$/i.test(path);
+/**
+ * `.claude/settings.json` or `.claude/settings.local.json`, anywhere — and,
+ * given Claude Code's `CLAUDE_CONFIG_DIR` (`configDir`), the same two files
+ * directly in that directory, which are then the user's settings (review
+ * round 2: `~/.claude-conta2/settings.json` was not guarded). Both paths are
+ * compared as given — the caller resolves them (`guardedPath`) — with either
+ * separator, and case-insensitively on Windows.
+ */
+export function isClaudeSettingsPath(path: string, configDir?: string): boolean {
+  if (/(?:^|[\\/])\.claude[\\/]settings(?:\.local)?\.json$/i.test(path)) return true;
+  if (configDir === undefined || configDir.trim() === '') return false;
+  const fold = process.platform === 'win32';
+  const m = (fold ? /^(.*)[\\/](settings(?:\.local)?\.json)$/i : /^(.*)\/(settings(?:\.local)?\.json)$/).exec(path);
+  if (m === null) return false;
+  const norm = (p: string): string => {
+    const t = p.replace(/\\/g, '/').replace(/\/+$/, '');
+    return fold ? t.toLowerCase() : t;
+  };
+  return norm(m[1] ?? '') === norm(configDir);
 }
 
 /** The env switches the dispatcher reads, and the values that turn a hook off. */

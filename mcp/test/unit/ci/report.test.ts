@@ -398,6 +398,22 @@ describe('renderSarif', () => {
 });
 
 describe('renderHuman', () => {
+  it("escapes a finding's control, bidi and zero-width characters before they reach the terminal (review of 3.0.0, item 2)", () => {
+    const esc = String.fromCodePoint(0x1b);
+    const rlo = String.fromCodePoint(0x202e);
+    const zwsp = String.fromCodePoint(0x200b);
+    const v = evaluateGate(
+      input({
+        findings: [finding({ title: `key${zwsp} found ${esc}]0;owned${String.fromCodePoint(7)}`, file_path: `src/a${rlo}sj.exe` })],
+      }),
+    );
+    const text = renderHuman(v);
+    for (const raw of [esc, rlo, zwsp, String.fromCodePoint(7)]) expect(text.includes(raw)).toBe(false);
+    expect(text).toContain('src/a\\u{202E}sj.exe');
+    expect(text).toContain('\\u{001B}]0;owned\\u{0007}');
+    expect(text.split('\n').length).toBeGreaterThan(3);
+  });
+
   it('names every coverage gap, not only the finding count', () => {
     const v = evaluateGate(input({ steps: [step({ tools_run: [], missing_tools: ['semgrep'] })] }));
     expect(renderHuman(v)).toMatch(/semgrep/);
@@ -550,5 +566,197 @@ describe('renderJson', () => {
     const empty = JSON.parse(renderJson(evaluateGate(input({ baseline: buildBaseline([], null, 'x') }))));
     expect(absent.baseline_absent).toBe(true);
     expect(empty.baseline_absent).toBe(false);
+  });
+});
+
+/**
+ * Round 4, item 2: a step whose Trivy run the repository's own .trivyignore
+ * silenced — counted and named (`runners/trivyRun.ts`), never a gap.
+ */
+function suppressedStep(): ScanStepResult {
+  const suppressedFinding = (id: string): Finding => ({
+    fingerprint: `fp-${id}`,
+    tool: 'trivy',
+    rule_id: id,
+    severity: 'high',
+    category: 'security',
+    subcategory: 'cve',
+    title: `${id} in lodash`,
+    file_path: 'package-lock.json',
+    fix_available: true,
+  });
+  return step({
+    tool: 'security_scan_full',
+    tools_run: [
+      {
+        name: 'trivy',
+        status: 'ok',
+        honoured_config: ['.trivyignore'],
+        suppressed_by_repo_config: {
+          file: '.trivyignore',
+          count: 2,
+          ids: ['CVE-2020-8203', 'NSWG-ECO-516'],
+          findings: [suppressedFinding('CVE-2020-8203'), suppressedFinding('NSWG-ECO-516')],
+        },
+      },
+    ],
+  });
+}
+
+describe("findings the repository's own configuration suppressed (round 4, item 2)", () => {
+  const schema = JSON.parse(readFileSync('test/fixtures/sarif/sarif-schema-2.1.0.json', 'utf8')) as object;
+  const ajv = new Ajv({ strict: false, allErrors: true, logger: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+
+  it('human: named, counted, and said not to be counted by the gate', () => {
+    const text = renderHuman(evaluateGate(input({ steps: [suppressedStep()] })));
+    expect(text).toMatch(/PASS/);
+    expect(text).toMatch(/suppressed by the repository's own configuration \(not counted by the gate\):/);
+    expect(text).toMatch(
+      /  - security_scan_full: trivy: 2 findings suppressed by the repository's \.trivyignore: CVE-2020-8203, NSWG-ECO-516/,
+    );
+    expect(renderHuman(evaluateGate(input()))).not.toMatch(/suppressed by the repository/);
+  });
+
+  it('JSON: suppressed_by_repo_config', () => {
+    const o = JSON.parse(renderJson(evaluateGate(input({ steps: [suppressedStep()] }))));
+    expect(o.suppressed_by_repo_config).toHaveLength(1);
+    expect(o.suppressed_by_repo_config[0]).toMatchObject({
+      step: 'security_scan_full',
+      tool: 'trivy',
+      file: '.trivyignore',
+      count: 2,
+      ids: ['CVE-2020-8203', 'NSWG-ECO-516'],
+    });
+    expect(o.suppressed_by_repo_config[0].findings).toHaveLength(2);
+    expect(JSON.parse(renderJson(evaluateGate(input()))).suppressed_by_repo_config).toEqual([]);
+  });
+
+  it('SARIF: each as a result with an external suppression naming the file; still a valid document', () => {
+    const v = evaluateGate(input({ findings: [finding()], steps: [suppressedStep()] }));
+    const doc = JSON.parse(renderSarif(v, PROJECT));
+    const ok = validate(doc);
+    expect(validate.errors ?? [], JSON.stringify(validate.errors, null, 2)).toEqual([]);
+    expect(ok).toBe(true);
+    const results = doc.runs[0].results as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(3);
+    const suppressed = results.filter((r) => r['suppressions'] !== undefined);
+    expect(suppressed.map((r) => r['ruleId'])).toEqual(['CVE-2020-8203', 'NSWG-ECO-516']);
+    for (const r of suppressed) {
+      expect(r['suppressions']).toEqual([
+        { kind: 'external', justification: "suppressed by the repository's .trivyignore" },
+      ]);
+    }
+    // The new finding is not suppressed, and a rule exists for every result.
+    expect(results.filter((r) => r['suppressions'] === undefined)).toHaveLength(1);
+    const rules = (doc.runs[0].tool.driver.rules as Array<{ id: string }>).map((r) => r.id);
+    expect(rules).toEqual(expect.arrayContaining(['CVE-2020-8203', 'NSWG-ECO-516']));
+  });
+});
+
+describe('where the baseline and the rules came from (--baseline-ref, --rules-ref)', () => {
+  const COMMIT = '3a5adedb7f872de55c5a35820033be7f01d75f2a';
+
+  it("without either flag, both lines name the scanned tree — the pull request's own, on a pull request", () => {
+    const v = evaluateGate(input());
+    expect(v.baselineSource).toEqual({ from: 'tree', path: '.guardian/baseline.json' });
+    expect(v.rulesSource).toEqual({ from: 'tree' });
+    const text = renderHuman(v);
+    expect(text).toMatch(/^baseline: \.guardian\/baseline\.json in the scanned tree \(no --baseline-ref\)$/m);
+    expect(text).toMatch(/^rules and configuration: the scanned tree's own \(no --rules-ref\)$/m);
+    const o = JSON.parse(renderJson(v));
+    expect(o.baseline_source).toEqual({ from: 'tree', path: '.guardian/baseline.json' });
+    expect(o.rules_source).toEqual({ from: 'tree' });
+  });
+
+  it("a baseline read at a ref names the ref and its commit, and says the tree's differing copy was not read", () => {
+    const baselineSource = {
+      from: 'ref' as const,
+      path: '.guardian/baseline.json',
+      ref: 'origin/main',
+      commit: COMMIT,
+      present: true,
+      tree_differs: true,
+    };
+    const v = evaluateGate(input({ baseline: buildBaseline([], null, 'now'), baselineSource }));
+    expect(renderHuman(v)).toMatch(
+      /^baseline: \.guardian\/baseline\.json at origin\/main \(3a5adedb7f87\) — the scanned tree's copy differs and was not read$/m,
+    );
+    expect(JSON.parse(renderJson(v)).baseline_source).toEqual(baselineSource);
+  });
+
+  it('none at the ref: every finding is new, and the fix is on that branch — not "run baseline update" here', () => {
+    const baselineSource = {
+      from: 'ref' as const,
+      path: '.guardian/baseline.json',
+      ref: 'origin/main',
+      commit: COMMIT,
+      present: false,
+      tree_differs: false,
+    };
+    const text = renderHuman(evaluateGate(input({ findings: [finding()], baselineSource })));
+    expect(text).toMatch(/^baseline: none at origin\/main \(3a5adedb7f87\), so every finding is new$/m);
+    expect(text).toMatch(/no usable baseline at origin\/main — run `dev-guardian baseline update` on that branch/);
+    expect(text).not.toMatch(/no baseline found/);
+  });
+
+  it('rules from a ref: what was read, what the ref lacks, and each configuration change named by which copy applied', () => {
+    const rulesSource = {
+      from: 'ref' as const,
+      ref: 'origin/main',
+      commit: COMMIT,
+      copied: ['.semgrep.yml'],
+      absent: ['.guardianignore', '.trivyignore'],
+      tree_differences: [
+        { path: '.gitleaksignore', change: 'added' as const, applied: 'tree' as const, read_by: ['gitleaks'] },
+        { path: '.guardianignore', change: 'added' as const, applied: 'ref' as const, read_by: ['guardian'] },
+        { path: '.semgrep.yml', change: 'modified' as const, applied: 'ref' as const, read_by: ['semgrep'] },
+      ],
+    };
+    const v = evaluateGate(input({ rulesSource }));
+    // Visibility only: a clean run still passes.
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    const text = renderHuman(v);
+    expect(text).toMatch(
+      /^rules and configuration: from origin\/main \(3a5adedb7f87\): \.semgrep\.yml; not at the ref, so none read: \.guardianignore, \.trivyignore$/m,
+    );
+    expect(text).toMatch(
+      /read from the scanned tree although it differs from origin\/main \(no ref can supply it — review it\):\n {2}- \.gitleaksignore \(added; read by gitleaks\)/,
+    );
+    expect(text).toMatch(
+      /changed in the scanned tree, not applied \(origin\/main's copy was read\):\n {2}- \.guardianignore \(added\)\n {2}- \.semgrep\.yml \(modified\)/,
+    );
+    expect(JSON.parse(renderJson(v)).rules_source).toEqual(rulesSource);
+  });
+
+  it('--reset-exclusions-from: the files it put back are named, in the human report and the JSON; absent otherwise', () => {
+    const exclusionsReset = { ref: 'origin/main', commit: COMMIT, restored: ['.semgrepignore'], removed: ['.gitleaksignore', 'src/.semgrepignore'] };
+    const v = evaluateGate(input({ exclusionsReset }));
+    expect(renderHuman(v)).toMatch(
+      /^exclusion files reset to origin\/main \(3a5adedb7f87\) before the scan: restored \.semgrepignore; removed \.gitleaksignore, src\/\.semgrepignore \(none at the ref\)$/m,
+    );
+    expect(JSON.parse(renderJson(v)).exclusions_reset).toEqual(exclusionsReset);
+    const none = evaluateGate(input({ exclusionsReset: { ...exclusionsReset, restored: [], removed: [] } }));
+    expect(renderHuman(none)).toMatch(/^exclusion files reset to origin\/main \(3a5adedb7f87\) before the scan: none differed$/m);
+    const without = evaluateGate(input());
+    expect(renderHuman(without)).not.toMatch(/exclusion files reset/);
+    expect(JSON.parse(renderJson(without)).exclusions_reset).toBeNull();
+  });
+
+  it('nothing changed against the ref: no difference section at all', () => {
+    const rulesSource = {
+      from: 'ref' as const,
+      ref: 'main',
+      commit: COMMIT,
+      copied: [],
+      absent: ['.semgrep.yml'],
+      tree_differences: [],
+    };
+    const text = renderHuman(evaluateGate(input({ rulesSource })));
+    expect(text).toMatch(
+      /^rules and configuration: from main \(3a5adedb7f87\): none — the ref has none of them; not at the ref, so none read: \.semgrep\.yml$/m,
+    );
+    expect(text).not.toMatch(/differs from main|not applied/);
   });
 });

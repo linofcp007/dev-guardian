@@ -25,9 +25,9 @@
  * that way.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { describeYamlRefusal, parseYamlBounded } from '../platform/boundedParse.js';
 import type { Category, Finding } from '../types.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 
@@ -75,21 +75,24 @@ const QUALITY_FIELDS: readonly (keyof QualityBudgets)[] = ['duplication_pct', 'c
  */
 export function loadBudgets(projectPath: string): BudgetsLoadResult {
   const path = join(projectPath, '.guardian', 'budgets.yml');
-  if (!existsSync(path)) return { kind: 'none' };
-
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (e) {
-    return { kind: 'invalid', path, error: `could not read the file: ${message(e)}` };
+  // The repository's file: bounded, regular files only, never through a
+  // link out of the project (`platform/projectFs.ts`).
+  const read = readProjectText(projectPath, path, 1024 * 1024);
+  if (read.status === 'absent') return { kind: 'none' };
+  if (read.status === 'refused') {
+    return { kind: 'invalid', path, error: `the file was not read: ${describeReadRefusal(read.reason)}` };
   }
-
-  let doc: unknown;
-  try {
-    doc = parseYaml(text);
-  } catch (e) {
-    return { kind: 'invalid', path, error: `invalid YAML: ${message(e)}` };
+  // Bounded by bytes, indicators and depth (platform/boundedParse.ts): 1 MiB of dense YAML took
+  // `yaml` 6 s and ~500 MB of heap.
+  const parsed = parseYamlBounded(read.text);
+  if (!parsed.ok) {
+    return {
+      kind: 'invalid',
+      path,
+      error: parsed.reason === 'invalid' ? `invalid YAML: ${parsed.detail ?? 'unparsable'}` : `the file was not read: ${describeYamlRefusal(parsed)}`,
+    };
   }
+  const doc = parsed.value;
 
   if (!isRecord(doc)) {
     return { kind: 'invalid', path, error: 'the document must be a mapping with perf: and/or quality: keys' };
@@ -231,8 +234,4 @@ export function budgetViolationFindings(violations: readonly BudgetViolation[], 
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }

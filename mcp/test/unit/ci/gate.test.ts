@@ -574,3 +574,55 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
     ]);
   });
 });
+
+/**
+ * Round 4, item 2: a step whose Trivy run the repository's own .trivyignore
+ * silenced — counted and named (`runners/trivyRun.ts`), never a gap.
+ */
+function suppressedStep(): ScanStepResult {
+  const suppressedFinding = (id: string): Finding => ({
+    fingerprint: `fp-${id}`,
+    tool: 'trivy',
+    rule_id: id,
+    severity: 'high',
+    category: 'security',
+    subcategory: 'cve',
+    title: `${id} in lodash`,
+    file_path: 'package-lock.json',
+    fix_available: true,
+  });
+  return step({
+    tool: 'security_scan_full',
+    tools_run: [
+      {
+        name: 'trivy',
+        status: 'ok',
+        honoured_config: ['.trivyignore'],
+        suppressed_by_repo_config: {
+          file: '.trivyignore',
+          count: 2,
+          ids: ['CVE-2020-8203', 'NSWG-ECO-516'],
+          findings: [suppressedFinding('CVE-2020-8203'), suppressedFinding('NSWG-ECO-516')],
+        },
+      },
+    ],
+  });
+}
+
+describe("findings the repository's own configuration suppressed", () => {
+  it('are carried on the verdict, by step and scanner, and change neither coverage nor the exit code', () => {
+    const v = evaluateGate(input({ steps: [suppressedStep()] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.coverage).toBe('full');
+    expect(v.coverageGaps).toEqual([]);
+    expect(v.suppressedByRepoConfig).toHaveLength(1);
+    expect(v.suppressedByRepoConfig[0]).toMatchObject({
+      step: 'security_scan_full',
+      tool: 'trivy',
+      file: '.trivyignore',
+      count: 2,
+      ids: ['CVE-2020-8203', 'NSWG-ECO-516'],
+    });
+    expect(evaluateGate(input()).suppressedByRepoConfig).toEqual([]);
+  });
+});

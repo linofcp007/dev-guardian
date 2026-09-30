@@ -1,10 +1,13 @@
-import { copyFileSync, existsSync, lstatSync } from 'node:fs';
+import { copyFileSync, lstatSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE, toContainerPath, } from '../runners/dockerScanner.js';
+import { gitSafetyFor } from '../platform/gitSafety.js';
 import { git, splitNul } from '../runners/git.js';
 import { runProcess } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
-import { checkSemgrepReport, describePartialParse, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
 /**
@@ -25,14 +28,12 @@ export async function invokeSemgrep(options) {
     const { projectPath, rulesPath, outFile, reportDir } = options;
     const semgrepBin = await scannerAvailable('semgrep');
     if (semgrepBin !== null) {
-        const run = await runProcess({
-            command: 'semgrep',
+        // UTF-8 mode, like every other Semgrep call site: otherwise the locale
+        // codec reads the rule pack and writes `--output` (runners/semgrepRun.ts).
+        const run = await runSemgrep({
             args: ['--config', rulesPath, '--json', '--output', outFile, '--quiet', projectPath],
             cwd: projectPath,
-            // UTF-8 mode, like every other Semgrep call site: otherwise the locale
-            // codec reads the rule pack and writes `--output`
-            // (runners/semgrepReport.ts#pythonUtf8Env).
-            env: pythonUtf8Env(process.env),
+            env: process.env,
         });
         return { toolRun: buildToolRun(run), run, via: null };
     }
@@ -65,6 +66,7 @@ export async function invokeSemgrep(options) {
             outFileHost: outFile,
             image,
             configs: [containerRules],
+            git: await gitSafetyFor([projectPath]),
         }),
         cwd: projectPath,
     });
@@ -135,7 +137,7 @@ const SEMGREP_DEFAULT_IGNORED_SUFFIXES = ['.min.js', '_test.go'];
  * directories, as the walk always has.
  */
 export async function countRouteTargets(projectPath) {
-    const ownIgnore = existsSync(join(projectPath, '.semgrepignore'));
+    const ownIgnore = presentInProject(projectPath, '.semgrepignore');
     const listed = await gitListedFiles(projectPath);
     if (listed !== null)
         return countListedRouteTargets(projectPath, listed, ownIgnore);

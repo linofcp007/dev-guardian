@@ -68,6 +68,7 @@ import {
 import type { PluginContext } from '../context.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectEntryKind } from '../platform/projectFs.js';
 import { resolveVersion } from '../platform/version.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runShellScript } from '../runners/shellRunner.js';
@@ -143,7 +144,14 @@ const tool: ToolModule = {
     'and writes <name>.new alongside the ones you did. An edited file is never overwritten.',
   inputSchema: {
     project_path: ProjectPath,
-    profile: z.enum(['minimal', 'standard', 'paranoid']).optional(),
+    profile: z
+      .enum(['minimal', 'standard', 'paranoid'])
+      .optional()
+      .describe(
+        'Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and ' +
+          'pre-commit; paranoid: standard\'s files with a gitleaks config that has no content-based ' +
+          'allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard.',
+      ),
     apply: z
       .boolean()
       .optional()
@@ -228,17 +236,28 @@ async function handler(
         failed.push({ ...p, error: `source missing: ${src}` });
         continue;
       }
-      if (existsSync(dst)) {
+      // `lstat`, never `existsSync`: a dangling link reads as absent to the
+      // latter, and the install would have followed it out of the project.
+      const kind = projectEntryKind(dst);
+      if (kind === 'file') {
         skipped.push({ ...p, reason_skipped: 'already_exists' });
         continue;
       }
+      if (kind !== 'absent') {
+        failed.push({
+          ...p,
+          error: `${p.target} is a link (a symlink or a junction) or not a regular file — never written through`,
+        });
+        continue;
+      }
       if (!apply) continue;
-      if (!installFile({ srcPath: src, dstPath: dst, source: p.source, version })) {
-        failed.push({ ...p, error: 'could not write the file' });
+      const w = installFile({ configsDir, source: p.source, projectPath, target: p.target, version, mode: 'create' });
+      if (!w.ok) {
+        failed.push({ ...p, error: w.reason });
         continue;
       }
       written.push(p);
-      const srcHash = hashConfigFile(src);
+      const srcHash = hashConfigFile(configsDir, p.source);
       if (srcHash !== null) {
         manifest = upsertManifestEntry(manifest, {
           target: p.target,

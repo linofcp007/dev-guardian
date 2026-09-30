@@ -8,18 +8,18 @@
  * already read. `scanContainers.ts` wraps this as a `ScannerParser` so it
  * flows through the same `parser_inputs` pipeline as every other finding.
  */
-import { parse as parseYaml } from 'yaml';
+import { parseYamlBounded } from '../platform/boundedParse.js';
 import { makeFinding } from './scannerParsers/index.js';
 export const COMPOSE_TOOL_NAME = 'docker-compose';
 const CATEGORY = 'security';
 export function checkCompose(text, filePath) {
-    let doc;
-    try {
-        doc = parseYaml(text);
-    }
-    catch {
-        return [];
-    }
+    // Bounded (platform/boundedParse.ts); scan_containers parses once itself and
+    // names a file it could not parse, then hands the value to checkComposeValue.
+    const parsed = parseYamlBounded(text);
+    return parsed.ok ? checkComposeValue(parsed.value, filePath) : [];
+}
+/** The checks on an already-parsed compose document. */
+export function checkComposeValue(doc, filePath) {
     const services = getServices(doc);
     if (services === null)
         return [];

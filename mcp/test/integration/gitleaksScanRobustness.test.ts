@@ -34,12 +34,18 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
     ...actual,
-    copyFileSync: (from: string, to: string) => {
-      faults.copies += 1;
-      if (faults.copyFails !== null && String(from).endsWith(faults.copyFails)) {
-        throw Object.assign(new Error(`EBUSY: resource busy or locked, copyfile '${String(from)}'`), { code: 'EBUSY' });
+    // The copy reads each file through `platform/projectFs.ts#readProjectBytes`
+    // (an open of the file itself) and writes it into the scan's own
+    // `guardian-gitleaks-*` directory.
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (faults.copyFails !== null && String(args[0]).endsWith(faults.copyFails)) {
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${String(args[0])}'`), { code: 'EBUSY' });
       }
-      actual.copyFileSync(from, to);
+      return actual.openSync(...args);
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (String(args[0]).includes('guardian-gitleaks-')) faults.copies += 1;
+      actual.writeFileSync(...args);
     },
     mkdtempSync: (prefix: string) => {
       const dir = actual.mkdtempSync(prefix);

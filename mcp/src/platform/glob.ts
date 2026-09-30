@@ -9,7 +9,7 @@
  * first time they run.
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { listProjectDir, projectPathKind } from './projectFs.js';
 import { join, relative, sep } from 'node:path';
 
 /** True when `pattern` contains a glob metacharacter. */
@@ -90,33 +90,23 @@ const MAX_VISITED = 50_000;
 
 /**
  * Every existing file or directory under `root` whose POSIX relative path
- * matches `pattern` (relative to `root`), sorted. Symlinks are followed by
- * `statSync` but never descended through twice; `.git` and `node_modules`
- * are never entered.
+ * matches `pattern` (relative to `root`), sorted. `root` is the project, so
+ * the walk is `platform/projectFs.ts`'s: a directory link is never descended
+ * (no loop, nothing outside `root` listed), and a link matches only when it
+ * resolves inside `root`. `.git` and `node_modules` are never entered.
  */
 export function expandGlob(root: string, pattern: string): string[] {
   const re = globToRegExp(pattern);
   const out: string[] = [];
   let visited = 0;
   const walk = (dir: string): void => {
-    let names: string[];
-    try {
-      names = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
+    for (const { name, kind } of listProjectDir(root, dir)) {
       if (visited++ > MAX_VISITED) return;
       const abs = join(dir, name);
       const rel = relative(root, abs).split(sep).join('/');
-      let isDir = false;
-      try {
-        isDir = statSync(abs).isDirectory();
-      } catch {
-        continue;
-      }
+      if (kind === 'link' && projectPathKind(root, abs) === 'outside') continue;
       if (re.test(rel)) out.push(abs);
-      if (isDir && !SKIP_DIRS.has(name)) walk(abs);
+      if (kind === 'directory' && !SKIP_DIRS.has(name)) walk(abs);
     }
   };
   walk(root);

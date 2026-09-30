@@ -13,6 +13,28 @@ function recordingNotifier() {
 }
 
 describe('makeProgressEmitter', () => {
+  it("escapes a scanner's stderr line before the host shows it (review of 3.0.0, round 2, item 2)", () => {
+    vi.useFakeTimers();
+    try {
+      const esc = String.fromCodePoint(0x1b);
+      const rlo = String.fromCodePoint(0x202e);
+      const { notifier, sent } = recordingNotifier();
+      const emitter = makeProgressEmitter({ token: 'tok-esc', notifier, heartbeatMs: 1_000 });
+      emitter.emit({ step: 1, message: `scanning src/a${rlo}sj.exe` });
+      // What scanToolFactory's onLog does with a scanner's stderr.
+      emitter.note(`semgrep: ${esc}]0;owned${String.fromCodePoint(7)} line\nsecond`);
+      vi.advanceTimersByTime(1_000);
+      emitter.dispose();
+      for (const p of sent) {
+        for (const raw of [esc, rlo, String.fromCodePoint(7), '\n']) expect(p.message?.includes(raw), p.message).toBe(false);
+      }
+      expect(sent[0]?.message).toBe('scanning src/a\\u{202E}sj.exe');
+      expect(sent[1]?.message).toMatch(/^semgrep: \\u\{001B\}\]0;owned\\u\{0007\} line\\u\{000A\}second \(1s elapsed\)$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is a no-op when no token is provided', () => {
     const { notifier, sent } = recordingNotifier();
     const emitter = makeProgressEmitter({ token: undefined, notifier });

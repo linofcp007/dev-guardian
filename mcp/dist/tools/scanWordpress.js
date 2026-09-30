@@ -3,14 +3,16 @@
  *
  * Source-side scan (no live WP install required). Aggregates:
  *   - Semgrep with `p/php` (and `p/wordpress` if available locally)
- *   - Trivy fs for composer.lock CVEs
+ *   - Trivy fs for dependency CVEs and licences, judged like scan_deps: a
+ *     manifest Trivy read nothing for (a composer.json with no lock) is a
+ *     named gap (`runners/trivyRun.ts#judgeTrivyFs`)
  *   - gitleaks for secrets
  *   - PHPCS with `WordPress` standard (when phpcs + WPCS installed)
  *
  * For live-install audits, use `wp_audit`. For WPScan vuln-DB lookup,
  * use `wp_vuln_check`.
  */
-import { existsSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { historyState } from '../runners/git.js';
@@ -19,6 +21,10 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
+import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
+import { judgeTrivyFs, runTrivy } from '../runners/trivyRun.js';
+import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
 import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
@@ -31,8 +37,9 @@ registerToolModule(makeScanTool({
     name: 'scan_wordpress',
     title: 'WordPress code scan (Semgrep + Trivy + gitleaks + PHPCS-WPCS)',
     description: 'Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + ' +
-        'WP rule pack, Trivy fs for composer.lock CVEs, gitleaks for secrets, PHPCS WordPress ' +
-        'standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
+        'WP rule pack, Trivy fs for dependency CVEs (a manifest it cannot read, e.g. composer.json with no ' +
+        'composer.lock, is a named gap), gitleaks for secrets, PHPCS WordPress standard. Each scanner that ' +
+        'is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
         'for live-install scenarios.',
     scan_type: 'wordpress',
     // Its secrets pass reads git history: HEAD and every ref join the key.
@@ -56,10 +63,10 @@ registerToolModule(makeScanTool({
         const parser_inputs = [];
         const inp = input;
         const standard = inp.standard ?? 'WordPress';
-        const looksWp = existsSync(join(ctx.projectPath, 'wp-config.php')) ||
-            existsSync(join(ctx.projectPath, 'wp-config-sample.php')) ||
-            existsSync(join(ctx.projectPath, 'style.css')) || // theme root
-            existsSync(join(ctx.projectPath, 'readme.txt')); // plugin/theme readme
+        const looksWp = presentInProject(ctx.projectPath, 'wp-config.php') ||
+            presentInProject(ctx.projectPath, 'wp-config-sample.php') ||
+            presentInProject(ctx.projectPath, 'style.css') || // theme root
+            presentInProject(ctx.projectPath, 'readme.txt'); // plugin/theme readme
         const warnings = [];
         if (!looksWp) {
             warnings.push('not_a_wordpress_project: no wp-config.php / style.css / readme.txt at the root — running generic PHP scans anyway.');
@@ -72,6 +79,7 @@ registerToolModule(makeScanTool({
             scannerAvailable('phpcs'),
         ]);
         const tasks = [];
+        let manifestGaps = [];
         if (semgrepBin) {
             tasks.push((async () => {
                 const outFile = join(reportDir, 'sast.json');
@@ -86,8 +94,8 @@ registerToolModule(makeScanTool({
                 if (inp.auto_fix === true)
                     args.push('--autofix');
                 args.push(ctx.projectPath);
-                const r = await runProcess({
-                    command: 'semgrep',
+                // UTF-8 mode (runners/semgrepRun.ts, review M3).
+                const r = await runSemgrep({
                     args,
                     cwd: ctx.projectPath,
                     env: ctx.scriptEnv,
@@ -98,6 +106,18 @@ registerToolModule(makeScanTool({
                 if (raw)
                     parser_inputs.push({ parser: semgrepParser, input: raw });
                 recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
+                // The shared gaps: files over Semgrep's size limit, initialised
+                // submodules (runners/semgrepCoverageGaps.ts).
+                const at = tools_run.findIndex((t) => t.name === 'semgrep-wp');
+                const entry = tools_run[at];
+                if (entry !== undefined) {
+                    const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
+                        scannedNothing: entry.status === 'skipped',
+                    });
+                    tools_run[at] = applied.toolRun;
+                    if (applied.missing)
+                        markMissing(missing_tools, 'semgrep-wp');
+                }
             })());
         }
         else {
@@ -134,20 +154,12 @@ registerToolModule(makeScanTool({
         if (trivyBin) {
             tasks.push((async () => {
                 const outFile = join(reportDir, 'deps.json');
-                const r = await runProcess({
-                    command: 'trivy',
-                    args: [
-                        'fs',
-                        '--scanners',
-                        'vuln,license',
-                        '--format',
-                        'json',
-                        '--output',
-                        outFile,
-                        '--quiet',
-                        ctx.projectPath,
-                    ],
-                    cwd: ctx.projectPath,
+                // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+                const r = await runTrivy({
+                    args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+                    target: ctx.projectPath,
+                    workDir: reportDir,
+                    ignoreFrom: ctx.projectPath,
                     env: ctx.scriptEnv,
                     signal: ctx.signal,
                     onLog: ctx.onLog,
@@ -155,10 +167,12 @@ registerToolModule(makeScanTool({
                 const raw = readJsonSafe(outFile);
                 if (raw)
                     parser_inputs.push({ parser: trivyParser, input: raw });
-                tools_run.push({
-                    name: 'trivy',
-                    status: r.outcome === 'completed' ? 'ok' : 'failed',
-                });
+                // The same judgement as scan_deps (review I2): a composer.json
+                // with no composer.lock is a named gap, never `ok`, full.
+                const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: r, exclusions: ctx.exclusions });
+                tools_run.push(judged.toolRun);
+                missing_tools.push(...judged.missing);
+                manifestGaps = judged.gaps;
             })());
         }
         else {
@@ -199,6 +213,8 @@ registerToolModule(makeScanTool({
         }
         await Promise.all(tasks);
         const extras = { wordpress_layout_detected: looksWp };
+        if (manifestGaps.length > 0)
+            extras['manifest_coverage_gaps'] = manifestGaps;
         if (warnings.length > 0)
             extras['warnings_extra'] = warnings;
         return {

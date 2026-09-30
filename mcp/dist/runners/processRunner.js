@@ -4,9 +4,19 @@
  *   - 10-minute default timeout (override via `GUARDIAN_SCAN_TIMEOUT_MS`)
  *   - AbortSignal → SIGTERM, then SIGKILL after 5 s
  *   - stderr line streaming via `onLog`
+ *   - git hardening in the child's environment (`platform/gitSafety.ts`):
+ *     no git the child starts — a scanner's `git ls-files`, gitleaks'
+ *     `git log -p`, a package manager's clone — runs a command the scanned
+ *     repository's own git configuration or hooks name. A repository whose
+ *     configuration cannot be read safely is not run at all: outcome
+ *     `failed`, the reason in stderr.
  *
  * `runShellScript` builds on this — direct scanner invocations (Semgrep,
  * Trivy CLI, gitleaks) call `runProcess` straight.
+ *
+ * A bare command name is resolved in-process on the child's PATH and the
+ * absolute path is spawned: never a binary the scanned project planted in
+ * `cwd` (`platform/binaryPath.ts`).
  *
  * ---- Every kill is a TREE kill ----------------------------------------------
  *
@@ -41,6 +51,8 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { execa } from 'execa';
 import { onExit } from 'signal-exit';
+import { findOnPath, isBareName } from '../platform/binaryPath.js';
+import { applyGitSafety, gitSafetyFor, withoutHooksPath } from '../platform/gitSafety.js';
 import { killWindowsTree, PROC_TREE_ENV } from './windowsTreeKill.js';
 const FIVE_MB = 5 * 1024 * 1024;
 const KILL_GRACE_MS = 5_000;
@@ -51,6 +63,9 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 /** `setTimeout`'s ceiling; a larger delay fires after 1 ms instead. */
 const MAX_TIMER_MS = 2_147_483_647;
 export async function runProcess(options) {
+    // The timeout covers the whole call — the git configuration read below
+    // included — so a caller's budget is the time it waits.
+    const started = Date.now();
     const timeoutMs = options.timeoutMs ??
         (Number(process.env['GUARDIAN_SCAN_TIMEOUT_MS']) || DEFAULT_TIMEOUT_MS);
     const cap = options.stdoutCapBytes ?? FIVE_MB;
@@ -61,13 +76,44 @@ export async function runProcess(options) {
     let stderrBuf = '';
     let truncated = false;
     let outcome = 'completed';
-    const child = execa(options.command, options.args ?? [], {
+    // `?? true` restates execa's own default explicitly rather than relying on
+    // `undefined` meaning it, so the merge behaviour is visible here instead of
+    // only in execa's docs.
+    let env = options.env;
+    let extendEnv = options.extendEnv ?? true;
+    let gitNotApplied = [];
+    if (options.gitHardening !== false) {
+        // The environment the child would have had, hardened — merged here, so
+        // the child is handed exactly this (extendEnv false) and the user's own
+        // GIT_CONFIG_COUNT entries are counted before ours are appended.
+        const base = extendEnv ? { ...process.env, ...(options.env ?? {}) } : { ...(options.env ?? {}) };
+        const full = await gitSafetyFor([options.cwd, ...(options.gitRepos ?? [])], { env: base });
+        const safety = options.gitHardening === 'except-hooks-path' ? withoutHooksPath(full) : full;
+        if (safety.refused !== null) {
+            return {
+                outcome: 'failed',
+                exitCode: null,
+                stdout: '',
+                stderr: `dev-guardian did not run ${basename(options.command)}: ${safety.refused}`,
+                truncated: false,
+            };
+        }
+        env = applyGitSafety(safety, base);
+        extendEnv = false;
+        gitNotApplied = safety.notApplied;
+    }
+    // A bare name is spawned by the absolute path it resolves to on the CHILD's PATH, looked up here —
+    // never in `cwd`, which is usually the project being scanned (platform/binaryPath.ts). Found on no
+    // PATH entry, the one place left for a spawn to find it is `cwd`: it is not spawned at all.
+    const childEnv = extendEnv ? { ...process.env, ...env } : (env ?? {});
+    const command = isBareName(options.command) ? findOnPath(options.command, childEnv) : options.command;
+    if (command === null) {
+        return { outcome: 'failed', exitCode: null, stdout: '', stderr: `${options.command}: not found on PATH\n`, truncated: false };
+    }
+    const child = execa(command, options.args ?? [], {
         cwd: options.cwd,
-        env: envFor(options.command, options.env, treeToken),
-        // `?? true` restates execa's own default explicitly rather than relying
-        // on `undefined` meaning it, so the merge behaviour is visible here
-        // instead of only in execa's docs.
-        extendEnv: options.extendEnv ?? true,
+        env: envFor(command, env, treeToken),
+        extendEnv,
         shell: false,
         encoding: 'utf8',
         // Own process group on POSIX, so `killTree` can signal the whole group.
@@ -83,7 +129,7 @@ export async function runProcess(options) {
         if (stopping)
             return;
         stopping = true;
-        killTree(child, options.command, treeToken, () => settled);
+        killTree(child, command, treeToken, () => settled);
     };
     // execa skips its own exit cleanup for a detached child; supply it.
     const removeExitHook = posixGroup ? onExit(() => signalGroup(child.pid, 'SIGTERM')) : null;
@@ -121,7 +167,9 @@ export async function runProcess(options) {
             if (outcome === 'completed')
                 outcome = 'timed_out';
             stopTree();
-        }, Math.min(timeoutMs, MAX_TIMER_MS));
+        }, 
+        // What is left of the budget after the configuration read (at least 1 ms).
+        Math.min(Math.max(1, timeoutMs - (Date.now() - started)), MAX_TIMER_MS));
     }
     let abortListener = null;
     if (options.signal) {
@@ -154,6 +202,7 @@ export async function runProcess(options) {
         stdout: stdoutBuf,
         stderr: stderrBuf,
         truncated,
+        ...(gitNotApplied.length > 0 ? { gitNotApplied } : {}),
     };
 }
 /**

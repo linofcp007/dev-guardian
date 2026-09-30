@@ -15,9 +15,13 @@
  *
  * Out of scope: anything that requires diffing — that belongs in the
  * `review_pr` tool, not here.
+ *
+ * Git runs hardened (`platform/gitSafety.ts`): `status` is where a
+ * repository's own `core.fsmonitor`, `post-index-change` hook and filter
+ * drivers ran before.
  */
 
-import { execa } from 'execa';
+import { execGit } from '../platform/gitSafety.js';
 
 export type WorkingTreeState =
   | { state: 'clean' }
@@ -25,34 +29,27 @@ export type WorkingTreeState =
   | { state: 'unknown'; reason: string };
 
 export async function workingTreeState(projectPath: string): Promise<WorkingTreeState> {
-  try {
-    const result = await execa('git', ['-C', projectPath, 'status', '--porcelain'], {
-      reject: false,
-      timeout: 10_000,
-    });
-    if (result.exitCode !== 0) {
-      const line = firstLine(result.stderr) ?? `git status exited ${String(result.exitCode)}`;
-      return { state: 'unknown', reason: line };
-    }
-    const changed = result.stdout.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
-    return changed === 0 ? { state: 'clean' } : { state: 'dirty', changed };
-  } catch (e) {
-    // No git on PATH, a timeout, or a sandbox that blocked the spawn: git
-    // said nothing either way, which is not the same as "clean".
-    return { state: 'unknown', reason: e instanceof Error ? e.message : String(e) };
+  // Full recursion into submodules, on purpose: uncommitted work INSIDE a
+  // submodule is uncommitted work auto_fix could destroy, and
+  // `--ignore-submodules=dirty` would call that tree clean. What git runs in
+  // there is kept safe instead: each submodule's own configuration is read and
+  // neutralised with the superproject's (`platform/gitSafety.ts`).
+  const result = await execGit(projectPath, ['status', '--porcelain'], { timeoutMs: 10_000 });
+  // No git on PATH, a timeout, a sandbox that blocked the spawn, or a
+  // configuration dev-guardian would not run git with: git said nothing
+  // either way, which is not the same as "clean".
+  if (result.failure !== null) return { state: 'unknown', reason: result.failure.message };
+  if (result.status !== 0) {
+    const line = firstLine(result.stderr) ?? `git status exited ${String(result.status)}`;
+    return { state: 'unknown', reason: line };
   }
+  const changed = result.stdout.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
+  return changed === 0 ? { state: 'clean' } : { state: 'dirty', changed };
 }
 
 export async function isGitRepo(projectPath: string): Promise<boolean> {
-  try {
-    const result = await execa('git', ['-C', projectPath, 'rev-parse', '--is-inside-work-tree'], {
-      reject: false,
-      timeout: 5_000,
-    });
-    return result.exitCode === 0 && result.stdout.trim() === 'true';
-  } catch {
-    return false;
-  }
+  const result = await execGit(projectPath, ['rev-parse', '--is-inside-work-tree'], { timeoutMs: 5_000 });
+  return result.status === 0 && result.stdout.trim() === 'true';
 }
 
 function firstLine(text: string): string | null {

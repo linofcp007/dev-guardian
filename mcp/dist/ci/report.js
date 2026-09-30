@@ -28,7 +28,9 @@
  * general coverage-gap prose (tool names, "not installed" reasons) still
  * out of it entirely.
  */
+import { untrustedText } from '../platform/untrustedText.js';
 import { toSarif } from '../report/sarif.js';
+import { suppressionNote } from '../runners/trivyRun.js';
 import { CI_EXIT } from './types.js';
 const EXIT_LABEL = {
     [CI_EXIT.PASS]: 'PASS',
@@ -65,9 +67,17 @@ export function renderHuman(v) {
     const lines = [
         `dev-guardian CI: ${EXIT_LABEL[v.exitCode]} (exit code ${v.exitCode})`,
         `coverage: ${v.coverage}`,
+        // Where the baseline and the rules came from, every run: on a pull
+        // request, "the scanned tree's own" is the pull request's (docs/ci.md).
+        describeBaselineSource(v.baselineSource),
+        describeRulesSource(v.rulesSource),
+        ...(v.exclusionsReset !== null ? [describeExclusionReset(v.exclusionsReset)] : []),
     ];
     if (v.baselineAbsent) {
-        lines.push('no baseline found — run `dev-guardian baseline update` to adopt these findings as the baseline');
+        lines.push(v.baselineSource.from === 'ref'
+            ? `no usable baseline at ${v.baselineSource.ref} — run \`dev-guardian baseline update\` on that branch and ` +
+                'commit .guardian/baseline.json there to adopt its findings'
+            : 'no baseline found — run `dev-guardian baseline update` to adopt these findings as the baseline');
     }
     lines.push(`new findings: ${v.newFindings.length} (${v.blocking.length} at or above the fail-on threshold)`);
     if (v.coverageGaps.length > 0) {
@@ -91,7 +101,67 @@ export function renderHuman(v) {
         for (const f of v.blocking)
             lines.push(`  - ${describeFinding(f)}`);
     }
-    return `${lines.join('\n')}\n`;
+    // Round 4, item 2: what the repository's own .trivyignore silenced left no
+    // trace here. Named — never counted, never a gap.
+    if (v.suppressedByRepoConfig.length > 0) {
+        lines.push("suppressed by the repository's own configuration (not counted by the gate):");
+        for (const s of v.suppressedByRepoConfig)
+            lines.push(`  - ${s.step}: ${s.tool}: ${suppressionNote(s)}`);
+    }
+    // --rules-ref: configuration the tree changes against the ref. What the
+    // gate read from the tree anyway comes first — a reviewer's to judge.
+    if (v.rulesSource.from === 'ref') {
+        const { ref, tree_differences: diffs } = v.rulesSource;
+        const applied = diffs.filter((d) => d.applied === 'tree');
+        const notApplied = diffs.filter((d) => d.applied === 'ref');
+        if (applied.length > 0) {
+            lines.push(`read from the scanned tree although it differs from ${ref} (no ref can supply it — review it):`);
+            for (const d of applied)
+                lines.push(`  - ${d.path} (${d.change}; read by ${d.read_by.join(', ')})`);
+        }
+        if (notApplied.length > 0) {
+            lines.push(`changed in the scanned tree, not applied (${ref}'s copy was read):`);
+            for (const d of notApplied)
+                lines.push(`  - ${d.path} (${d.change})`);
+        }
+    }
+    // Titles, paths and gap reasons come from the scanned repository and its
+    // scanners: control, bidi and zero-width characters are written as visible
+    // `\u{XXXX}` before they reach a terminal (`platform/untrustedText.ts`).
+    return `${untrustedText(lines.join('\n'))}\n`;
+}
+function shortCommit(commit) {
+    return commit.slice(0, 12);
+}
+/** The one line naming where the baseline came from. */
+function describeBaselineSource(b) {
+    if (b.from === 'tree')
+        return `baseline: ${b.path} in the scanned tree (no --baseline-ref)`;
+    const at = `${b.ref} (${shortCommit(b.commit)})`;
+    const differs = b.tree_differs ? " — the scanned tree's copy differs and was not read" : '';
+    return b.present
+        ? `baseline: ${b.path} at ${at}${differs}`
+        : `baseline: none at ${at}, so every finding is new${differs}`;
+}
+/** The one line naming what `--reset-exclusions-from` put back before the scan. */
+function describeExclusionReset(r) {
+    const at = `${r.ref} (${shortCommit(r.commit)})`;
+    const parts = [
+        ...(r.restored.length > 0 ? [`restored ${r.restored.join(', ')}`] : []),
+        ...(r.removed.length > 0 ? [`removed ${r.removed.join(', ')} (none at the ref)`] : []),
+    ];
+    return parts.length > 0
+        ? `exclusion files reset to ${at} before the scan: ${parts.join('; ')}`
+        : `exclusion files reset to ${at} before the scan: none differed`;
+}
+/** The one line naming where the rules and scanner configuration came from. */
+function describeRulesSource(r) {
+    if (r.from === 'tree')
+        return "rules and configuration: the scanned tree's own (no --rules-ref)";
+    const at = `${r.ref} (${shortCommit(r.commit)})`;
+    const read = r.copied.length > 0 ? r.copied.join(', ') : 'none — the ref has none of them';
+    const absent = r.absent.length > 0 ? `; not at the ref, so none read: ${r.absent.join(', ')}` : '';
+    return `rules and configuration: from ${at}: ${read}${absent}`;
 }
 function describeFinding(f) {
     const location = f.file_path !== undefined
@@ -116,6 +186,10 @@ export function renderJson(v) {
         baseline_absent: v.baselineAbsent,
         accepted_gaps: v.acceptedGaps,
         unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
+        suppressed_by_repo_config: v.suppressedByRepoConfig,
+        baseline_source: v.baselineSource,
+        rules_source: v.rulesSource,
+        exclusions_reset: v.exclusionsReset,
     };
     return JSON.stringify(payload, null, 2);
 }
@@ -136,7 +210,10 @@ const BASELINE_GAP_PREFIX = 'baseline: ';
  * about the *run* that change how those findings should be read — not the
  * general coverage-gap prose (tool names, "semgrep not installed" reasons),
  * which has no home in a findings-shaped format and stays
- * exit-code-and-human/JSON-only.
+ * exit-code-and-human/JSON-only. The findings the repository's own
+ * `.trivyignore` suppressed follow the new ones as results carrying an
+ * `external` suppression that names the file (round 4, item 2): SARIF's
+ * own way to say "found, and dismissed outside this tool".
  *
  * 1. `invocation.executionSuccessful` is set to `v.coverage === 'full'`.
  *    This is the SARIF-native way to say "this run was incomplete" — a
@@ -175,8 +252,13 @@ export function renderSarif(v, projectPath) {
     // `locations` entirely, rather than emitting an empty URI. That is the
     // right outcome, not a gap: a finding about the whole project has no
     // single line to annotate, so no location is more honest than one.
-    const relocated = v.newFindings.map((f) => f.file_path === undefined ? f : { ...f, file_path: toProjectRelativeUri(f.file_path, projectPath) });
-    const parsed = JSON.parse(toSarif(relocated));
+    const relocate = (f) => f.file_path === undefined ? f : { ...f, file_path: toProjectRelativeUri(f.file_path, projectPath) };
+    const relocated = v.newFindings.map(relocate);
+    // Round 4, item 2: what the repository's own configuration suppressed, as
+    // results carrying an `external` suppression that names the file — how
+    // SARIF says "found, and dismissed outside this tool".
+    const suppressed = v.suppressedByRepoConfig.flatMap((s) => s.findings.map((f) => ({ finding: relocate(f), justification: `suppressed by the repository's ${s.file}` })));
+    const parsed = JSON.parse(toSarif(relocated, { suppressed }));
     // Safe: this is JSON we just produced from `toSarif` on the line above,
     // not untrusted input — a full runtime re-validation of our own output
     // belongs in the schema-validation test, not here.

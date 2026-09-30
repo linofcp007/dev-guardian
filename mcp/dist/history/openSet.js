@@ -72,6 +72,7 @@
  * rows it skips; nothing here searches a fixed window of recent scans.
  */
 import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { futureDatedNote } from '../storage/scanClock.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { SEVERITY_ORDER, } from '../types.js';
 import { admitLookup, ChainIndex, openGapFor, producedKeys, scopeAdmits, StillCarry, UNKNOWN_FINDING_KEY, } from './runCompare.js';
@@ -257,6 +258,33 @@ export function suppressionMatcher(suppressions, now, projectPath) {
             identities.add(s.finding_identity);
     }
     return (f) => fingerprints.has(f.fingerprint) || (f.identity !== undefined && identities.has(f.identity));
+}
+/**
+ * `findings` split by `projectPath`'s suppressions active at `now`, exactly
+ * as the open set applies them ({@link suppressionMatcher}) — for a reader
+ * that compares scans rather than reading the open set (`regression_alert`,
+ * `diff_scans`). A suppressed finding is never new, resolved or a regression
+ * there; it is listed apart. They used to compare every stored finding, so a
+ * suppressed critical still raised `regressed: true, score_delta: 10` while
+ * the dashboard and risk_score said 0.
+ */
+export function partitionSuppressed(storage, projectPath, findings, now = Date.now()) {
+    const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), now, projectPath);
+    const visible = [];
+    const suppressed = [];
+    for (const f of findings)
+        (isSuppressed(f) ? suppressed : visible).push(f);
+    return { visible, suppressed };
+}
+/**
+ * The suppressed findings of two compared scans, once each: all of
+ * `current`'s, then those of `reference` whose identity (the fingerprint
+ * where there is none) `current` does not hold.
+ */
+export function suppressedOfEither(current, reference) {
+    const key = (f) => (f.identity !== undefined ? `i:${f.identity}` : `f:${f.fingerprint}`);
+    const seen = new Set(current.map(key));
+    return [...current, ...reference.filter((f) => !seen.has(key(f)))];
 }
 /**
  * The source(s) of one slot, and the scans passed over for it. See the
@@ -527,11 +555,22 @@ export function openSetForProject(storage, projectPath, opts = {}) {
             seen.add(f);
         }
     };
+    // The findings the sources hold that a suppression hides, once each — so
+    // a reader can say how much a suppression (a mass one included) takes out.
+    const suppressedSeen = indexFindings([]);
+    let suppressedCount = 0;
     for (const { slot, scan, coverage } of picked) {
         const batch = [];
         for (const f of rowsOf(scan)) {
-            if (!findingInSlot(scan, f, slot) || isSuppressed(f) || seen.has(f))
+            if (!findingInSlot(scan, f, slot) || seen.has(f))
                 continue;
+            if (isSuppressed(f)) {
+                if (!suppressedSeen.has(f)) {
+                    suppressedSeen.add(f);
+                    suppressedCount += 1;
+                }
+                continue;
+            }
             batch.push({ ...f, scan_id: scan.scan_id });
         }
         admit(batch);
@@ -617,6 +656,7 @@ export function openSetForProject(storage, projectPath, opts = {}) {
     return {
         project_path: projectPath,
         findings,
+        suppressed: suppressedCount,
         sources,
         skipped,
         coverage,
@@ -626,7 +666,13 @@ export function openSetForProject(storage, projectPath, opts = {}) {
         // its parent (see `latestStateScan`). `picked` is newest first.
         newest: mapRun(storage, projectPath, scans[0]),
         newestSource: mapRun(storage, projectPath, picked[0]?.scan),
+        ...futureNoteOf(storage, projectPath),
     };
+}
+/** `{ future_dated_note }` when `projectPath` holds scans every reader ignored as dated in the future. */
+export function futureNoteOf(storage, projectPath) {
+    const note = futureDatedNote(storage.scans.countFutureDated(projectPath));
+    return note === null ? {} : { future_dated_note: note };
 }
 /**
  * What a reader tells its caller about the set it answered from: which
@@ -638,6 +684,7 @@ export function describeOpenSet(set) {
         coverage: set.coverage,
         sources: set.sources,
         skipped: set.skipped,
+        ...(set.future_dated_note !== undefined ? { future_dated_note: set.future_dated_note } : {}),
     };
 }
 //# sourceMappingURL=openSet.js.map

@@ -31,7 +31,13 @@ const inputSchema = {
     .string()
     .url()
     .describe('Base URL of the WordPress site (e.g. https://example.com).'),
-  timeout_ms: z.number().int().min(1000).max(60_000).optional(),
+  timeout_ms: z
+    .number()
+    .int()
+    .min(1000)
+    .max(60_000)
+    .optional()
+    .describe('Per-request timeout in milliseconds, 1000-60000. Default: 15000.'),
 };
 
 const tool: ToolModule = {

@@ -17,39 +17,43 @@
  * `--end-of-options` means a ref spelt like an option (`--output=x`) is only
  * ever a ref.
  *
- * Runs `git` through execa directly, like `tools/gitState.ts`: these are quick
- * local queries, not scanner runs, and must not share the scan runner's
- * limits (or its test doubles).
+ * Runs `git` directly through `platform/gitSafety.ts#execGit`, like
+ * `tools/gitState.ts`: these are quick local queries, not scanner runs, and
+ * must not share the scan runner's limits (or its test doubles). That helper
+ * is also what keeps the scanned repository's own git configuration from
+ * running anything (`core.fsmonitor`, hooks, filter and textconv drivers).
  */
-import { execa } from 'execa';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, parse } from 'node:path';
+import { readSmallText } from '../hooks/configFile.js';
+import { listProjectDir, projectEntryKindIn } from '../platform/projectFs.js';
+import { textLines } from '../platform/textLines.js';
+import { execGit } from '../platform/gitSafety.js';
 const GIT_TIMEOUT_MS = 60_000;
 /** A checkout writes the whole tree: a large repository needs longer than a query. */
 const CHECKOUT_TIMEOUT_MS = 10 * 60_000;
-/** `git -C cwd …args`, never throwing; a missing git reads as exit 127. */
+/**
+ * `git -C cwd …args`, never throwing; a missing git reads as exit 127. A
+ * repository whose git configuration could not be read safely is not run at
+ * all: exit 126, with the reason in stderr.
+ */
 export async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS) {
-    try {
-        const r = await execa('git', ['-C', cwd, ...args], {
-            reject: false,
-            timeout: timeoutMs,
-            encoding: 'utf8',
-            stripFinalNewline: false,
-        });
-        // No exit code: git could not be started (not on PATH) or was killed.
-        if (r.exitCode === undefined)
-            return { exitCode: 127, stdout: '', stderr: 'git could not be run' };
-        return {
-            exitCode: r.exitCode,
-            stdout: typeof r.stdout === 'string' ? r.stdout : '',
-            stderr: typeof r.stderr === 'string' ? r.stderr : '',
-        };
+    const r = await execGit(cwd, args, { timeoutMs });
+    const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
+    if (r.failure?.code === 'refused')
+        return { exitCode: 126, stdout: '', stderr: r.stderr, ...notApplied };
+    // No exit code. 127 — the shell's "command not found" — only when git is not
+    // installed; a git that was killed (a timeout, an oversized output, a failed
+    // spawn) is 124 with the reason, never "not installed": under load a
+    // `rev-parse` past its timeout used to read as "not a git repository", and
+    // gitleaks swapped the history pass for a directory pass (review of 3.0).
+    if (r.status === null) {
+        const exitCode = r.failure?.code === 'not-found' ? 127 : 124;
+        return { exitCode, stdout: '', stderr: r.failure?.message ?? 'git could not be run', ...notApplied };
     }
-    catch (e) {
-        return { exitCode: 127, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
-    }
+    return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
 }
 /** Split `-z` output into its entries. */
 export function splitNul(text) {
@@ -64,7 +68,129 @@ export async function repoState(cwd) {
     }
     const toplevel = top.stdout.trim();
     const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
-    return head.exitCode === 0 ? { kind: 'has_commits', toplevel } : { kind: 'no_commits', toplevel };
+    if (head.exitCode === 0)
+        return { kind: 'has_commits', toplevel };
+    // `--verify --quiet` says "no such commit" by exit 1 alone; anything else
+    // (a timeout, a refusal) says nothing about the history.
+    if (head.exitCode === 1)
+        return { kind: 'no_commits', toplevel };
+    return { kind: 'error', message: firstLine(head.stderr) || `git exited ${head.exitCode}` };
+}
+/**
+ * {@link shallowBoundary}'s answer when git could not tell whether the
+ * history is complete — never read as "not shallow".
+ */
+export const SHALLOW_UNDETERMINED = '(undetermined)';
+/** The shallowness queries: they read one small file, so a minute is only ever a blocked read. */
+const SHALLOW_QUERY_TIMEOUT_MS = 10_000;
+/**
+ * The shallow boundary of a shallow clone — the commits whose parents were
+ * never fetched (`git rev-parse --git-path shallow` lists them) — or null
+ * when the repository is not shallow. A shallow repository whose boundary
+ * file cannot be read answers `['(unknown)']`: shallow, boundary unnamed.
+ *
+ * `[SHALLOW_UNDETERMINED]` when it cannot be told at all (review of 3.0,
+ * W2E): git's own `--is-shallow-repository` READS the shallow file, and one
+ * that is a FIFO blocked it until the 60 s timeout — which used to read as
+ * "not shallow", a complete history. Where git keeps the file is asked first
+ * (that reads nothing), and what is there judged with `lstat`: absent is not
+ * shallow, anything but a regular file is undetermined and git is never
+ * pointed at it; a query that fails or runs past 10 s is undetermined too.
+ */
+export async function shallowBoundary(cwd) {
+    const where = await git(cwd, ['rev-parse', '--git-path', 'shallow'], SHALLOW_QUERY_TIMEOUT_MS);
+    const rel = where.stdout.trim();
+    if (where.exitCode !== 0 || rel === '')
+        return [SHALLOW_UNDETERMINED];
+    const path = isAbsolute(rel) ? rel : join(cwd, rel);
+    // Every link on the way walked from the filesystem root first: a `.git` link to a
+    // network path must not block this process (the lstat below follows directories).
+    const kind = projectEntryKindIn(parse(path).root, path);
+    if (kind === 'absent')
+        return null;
+    if (kind !== 'file')
+        return [SHALLOW_UNDETERMINED];
+    const shallow = await git(cwd, ['rev-parse', '--is-shallow-repository'], SHALLOW_QUERY_TIMEOUT_MS);
+    if (shallow.exitCode !== 0)
+        return [SHALLOW_UNDETERMINED];
+    if (shallow.stdout.trim() !== 'true')
+        return null;
+    // The path git names (a linked worktree's lies in the main repository's
+    // git directory, outside the project): read bounded, a regular file only,
+    // on a non-blocking descriptor — never a FIFO or `/dev/zero` (W2E) — and
+    // scanned line by line, never split into an array.
+    const read = readSmallText(path, SHALLOW_FILE_MAX_BYTES);
+    if (read.status !== 'ok')
+        return ['(unknown)'];
+    const shas = [];
+    for (const line of textLines(read.text)) {
+        const sha = line.trim();
+        if (/^[0-9a-f]{40,64}$/.test(sha))
+            shas.push(sha);
+    }
+    return shas.length > 0 ? shas : ['(unknown)'];
+}
+/** A shallow file lists one commit per line: 16 MiB is some 250 000 boundary commits. */
+const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * The submodules under `cwd` that are initialised and hold content — the
+ * index's gitlinks (mode 160000, one per `.gitmodules` entry that was
+ * added) whose checkout directory is not empty (an uninitialised submodule
+ * is an empty directory) — as `/`-separated paths relative to `cwd`,
+ * sorted. Their files are in no listing a scanner of the superproject uses
+ * (review M2). Empty outside a repository.
+ *
+ * Read from `git ls-files --stage` (~30 ms) rather than `git submodule
+ * status`, which spawns a shell and took ~770 ms per call on Windows
+ * (git 2.52) — on every secrets and SAST scan.
+ */
+export async function initialisedSubmodules(cwd) {
+    const r = await git(cwd, ['ls-files', '-z', '--stage', '--', '.']);
+    if (r.exitCode !== 0)
+        return [];
+    const out = new Set();
+    for (const entry of splitNul(r.stdout)) {
+        // `<mode> <object> <stage>\t<path>`.
+        const tab = entry.indexOf('\t');
+        if (tab < 0 || !entry.startsWith('160000 '))
+            continue;
+        const path = entry.slice(tab + 1);
+        // Names only, never through a link out of the project; not there on
+        // disk (or reached through such a link) is nothing a scan could have read.
+        if (listProjectDir(cwd, join(cwd, path)).some(({ name }) => name !== '.git'))
+            out.add(path.split('\\').join('/'));
+    }
+    return [...out].sort();
+}
+/**
+ * The submodules (gitlinks, mode 160000) among `paths` in the tree of `rev`,
+ * relative to `cwd` — what a review's diff bumped: those commits' files are
+ * in no range of the superproject, whether or not anything is checked out.
+ * Empty when git cannot answer.
+ */
+export async function gitlinksAmong(cwd, rev, paths) {
+    if (paths.length === 0)
+        return [];
+    const r = await git(cwd, ['ls-tree', '-r', '-z', rev, '--', '.']);
+    if (r.exitCode !== 0)
+        return [];
+    const wanted = new Set(paths.map((p) => p.split('\\').join('/')));
+    const out = [];
+    for (const entry of splitNul(r.stdout)) {
+        // `<mode> <type> <object>\t<path>`.
+        const tab = entry.indexOf('\t');
+        if (tab < 0 || !entry.startsWith('160000 '))
+            continue;
+        const path = entry.slice(tab + 1);
+        if (wanted.has(path))
+            out.push(path);
+    }
+    return out.sort();
+}
+/** `submodule contents not scanned: a, b` — the first few, then "and N more". */
+export function describeSubmodules(paths) {
+    const shown = paths.slice(0, 5).join(', ');
+    return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ''}`;
 }
 /** The full commit id `ref` names, or null when it names no commit. */
 export async function resolveCommit(cwd, ref) {
@@ -120,8 +246,10 @@ export async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
     if (untracked.exitCode !== 0) {
         throw new Error(`git ls-files failed: ${firstLine(untracked.stderr) || `exit ${untracked.exitCode}`}`);
     }
+    // `--ignore-submodules=dirty`: not into a submodule's work tree (a moved
+    // submodule commit is still listed — as a directory, which no caller reads).
     const tracked = hasCommits
-        ? await git(cwd, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', 'HEAD', '--'])
+        ? await git(cwd, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', '--ignore-submodules=dirty', 'HEAD', '--'])
         : await git(cwd, ['ls-files', '-z', '--cached']);
     if (tracked.exitCode !== 0) {
         throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
@@ -154,15 +282,28 @@ export async function showPrefix(cwd) {
 /**
  * Check out commit `sha` into a new temporary directory with `git worktree
  * add --detach`, so its files can be scanned without touching the user's
- * working tree. Hooks are disabled for the checkout (a `post-checkout` hook
- * is the repository's code, and scanning must not run it). The caller must
- * call `remove()` — in a `finally`.
+ * working tree. No hook runs (a `post-checkout` hook is the repository's
+ * code, and scanning must not run it), nor any filter driver the
+ * repository's own configuration names (`platform/gitSafety.ts`).
+ *
+ * In two steps — `worktree add --no-checkout`, then `reset --hard` INSIDE
+ * the new worktree — which is what `worktree add` does itself, in a child
+ * git started there. The split is for that child's configuration: an
+ * `includeIf "gitdir:…"` can match the new worktree's git directory and not
+ * the project's, so the configuration is read, and neutralised, where the
+ * checkout actually runs. The caller must call `remove()` — in a `finally`.
  */
 export async function materialiseCommit(cwd, sha) {
     const holder = mkdtempSync(join(tmpdir(), 'guardian-review-'));
     const root = join(holder, 'head');
     const noHooks = join(holder, 'no-hooks');
-    const r = await git(cwd, ['-c', `core.hooksPath=${noHooks}`, 'worktree', 'add', '--detach', '--quiet', root, sha], CHECKOUT_TIMEOUT_MS);
+    const add = await git(cwd, ['-c', `core.hooksPath=${noHooks}`, 'worktree', 'add', '--detach', '--no-checkout', '--quiet', root, sha], CHECKOUT_TIMEOUT_MS);
+    // `--no-recurse-submodules`, as `worktree add`'s own reset passes: with the
+    // user's `submodule.recurse=true` (or the repository's), a reset in a
+    // `--no-checkout` worktree goes into submodules whose git directories it
+    // was never given, and dies (review of W2E-git, measured).
+    const r = add.exitCode === 0 ? await git(root, ['reset', '--hard', '--quiet', '--no-recurse-submodules'], CHECKOUT_TIMEOUT_MS) : add;
+    const notApplied = [...new Set([...(add.notApplied ?? []), ...(r === add ? [] : (r.notApplied ?? []))])].sort();
     const remove = async () => {
         const problems = [];
         const rm = await git(cwd, ['worktree', 'remove', '--force', root]);
@@ -179,9 +320,10 @@ export async function materialiseCommit(cwd, sha) {
     };
     if (r.exitCode !== 0) {
         await remove();
-        throw new Error(`git worktree add ${sha.slice(0, 12)} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+        const step = r === add ? 'git worktree add' : 'git reset --hard (the checkout)';
+        throw new Error(`${step} ${sha.slice(0, 12)} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
     }
-    return { root, remove };
+    return { root, remove, notApplied };
 }
 function firstLine(text) {
     return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? '';

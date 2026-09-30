@@ -24,6 +24,7 @@ import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
 import { serverProjectPath } from '../resources/paging.js';
+import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
 import { registerToolModule, TOOLS, type ToolModule } from './index.js';
@@ -42,7 +43,14 @@ const tool: ToolModule = {
   description:
     'Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and ' +
     "one project's last scan and scan count (project_path, default: the server's working " +
-    'directory). Read-only.',
+    "directory). Read-only. `storage_warning` (null when fine): the project's .guardian/guardian.db " +
+    'is not being used — one from before 3.1.0 or a copy is not trusted until its owner registers it, ' +
+    "and history goes to a per-user fallback meanwhile. Tell the user, with the `db adopt` command the " +
+    'warning names, to run it themselves in a terminal; never run it yourself — it decides whose data ' +
+    'dev-guardian trusts. `suppressions` {active, this_project, all_projects}: the active suppressions ' +
+    'that apply here; all_projects ones have no project and hide findings in every project. ' +
+    '`storage.future_dated_scans_ignored` and `future_dated_note`: scans dated in the future, which ' +
+    'every count, list and "latest" ignores.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -95,6 +103,8 @@ async function handler(
       db_size_bytes: dbSizeBytes,
       // This project's scans, any status and type — never another project's.
       total_scans: ctx.storage.scans.countForProject(projectPath),
+      // Scans dated in the future: in no count, list or "latest" here, or anywhere.
+      future_dated_scans_ignored: ctx.storage.scans.countFutureDated(projectPath),
       ...(ctx.storage.runtimeMeta.get('shell_choice') !== null
         ? { shell_label: ctx.shell?.label ?? 'unknown' }
         : {}),
@@ -117,5 +127,27 @@ async function handler(
       resources: RESOURCES.length,
     },
     storage_warning: ctx.storageWarning ?? null,
+    ...futureNoteOf(ctx.storage, projectPath),
+    suppressions: activeSuppressions(ctx, projectPath),
   };
+}
+
+/**
+ * The suppressions active now that apply to `projectPath`: its own, and
+ * those with no project, which match EVERY project (rows written before
+ * migration 011, and whatever an older build still inserts). A database a
+ * user trusts is theirs, so those are legitimate — but a mass suppression is
+ * how findings disappear without a trace, so how many apply is said here.
+ */
+function activeSuppressions(
+  ctx: PluginContext,
+  projectPath: string,
+): { active: number; this_project: number; all_projects: number } {
+  let own = 0;
+  let global = 0;
+  for (const s of ctx.storage.suppressions.listActive()) {
+    if (s.project_path === undefined) global += 1;
+    else if (s.project_path === projectPath) own += 1;
+  }
+  return { active: own + global, this_project: own, all_projects: global };
 }

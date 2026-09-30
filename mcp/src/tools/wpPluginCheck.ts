@@ -1,11 +1,21 @@
 /**
- * `wp_plugin_check` — focused vuln/health check for a single WordPress
- * plugin slug. Useful for "before I install plugin X, what do I need to
- * know?".
+ * `wp_plugin_check` — what dev-guardian has already recorded about one
+ * WordPress plugin slug: its known CVEs, and — with a local install — the
+ * version WP-CLI reports installed there.
  *
- * Returns: installed version (if any), latest available, change since
- * latest scan, known active CVEs (from `cves` table). When `live=true`
- * and a `target_url` is supplied, calls WPScan for a fresh vuln lookup.
+ * It makes NO network call. It used to be described as returning the
+ * "latest known" version and doing "a fresh WPScan lookup" with target_url;
+ * it never did either (review 3.0 I2). target_url only adds the
+ * `wp_vuln_check` recorded under that site URL to the rows read.
+ *
+ * **A version probe that did not answer is a gap, not "not installed".**
+ * WP-CLI missing, failing, timing out, printing nothing or printing
+ * something that is not JSON used to leave `installed_version: null`,
+ * `warnings: []` and a tools_run entry of `ok` — the same answer as a plugin
+ * that is not installed. Each is now a warning, a `wp-cli` tools_run entry
+ * that is `skipped` (with `wp-cli` in missing_tools) or `failed` with the
+ * reason, and coverage `partial`; `installed` is `null` (unknown), `false`
+ * only when WP-CLI listed the install's plugins and this one was not there.
  *
  * **Whose CVEs (Task 24).** The project's own (`project_path`, else
  * `wp_install_path`, else the server's working directory — the install root
@@ -43,7 +53,8 @@ import { serverProjectPath } from '../resources/paging.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
-import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, type ToolResult } from '../types.js';
+import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, type ToolResult, type ToolRun } from '../types.js';
+import { computeCoverage } from './scanCoverage.js';
 import { latestUnderKeys, wpInstallKeys, wpInstallPathProblem, wpSiteKeys } from '../wordpress/siteKeys.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -53,13 +64,17 @@ const inputSchema = {
     .string()
     .optional()
     .describe(
-      'Optional path to the WP install (version detection when it is local). Absolute, or existing on this machine.',
+      'Path to the WordPress install. On this machine, WP-CLI (`wp plugin list`) reads the installed version and ' +
+        'active state from it; it also keys the CVE lookup when project_path is omitted. Absolute, or existing on this machine.',
     ),
   target_url: z
     .string()
     .url()
     .optional()
-    .describe('Optional live URL for fresh WPScan lookup (skipped without API token).'),
+    .describe(
+      'Site URL a wp_vuln_check was recorded under: its CVEs are read too. Nothing is sent to the site — for a ' +
+        'live WPScan lookup run wp_vuln_check.',
+    ),
   project_path: ProjectPath.describe(
     "The WordPress project whose recorded CVEs are searched. Default: wp_install_path when given, else the server's working directory.",
   ),
@@ -69,9 +84,13 @@ const tool: ToolModule = {
   name: 'wp_plugin_check',
   title: 'WordPress plugin check (1 plugin)',
   description:
-    'Focused check on one plugin: installed version (when wp_install_path given), latest known, ' +
-    'active CVEs from the dev-guardian cves table. Pass target_url to also do a fresh WPScan ' +
-    'lookup. Read-mostly: no DB writes other than a scan row.',
+    'What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this ' +
+    "project's newest dependency scan, newest wp_vuln_check and newest wp_vuln_check_source. It makes no " +
+    'network call — no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) ' +
+    'or wp_vuln_check_source (plugin sources) first. With a local wp_install_path, WP-CLI reports the ' +
+    'installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a ' +
+    'warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the ' +
+    'site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -96,11 +115,14 @@ async function handler(
       : null;
   if (installProblem !== null && !hasProject) return failDomain('unsupported_target', installProblem);
   const warnings: string[] = [];
+  const toolsRun: ToolRun[] = [{ name: 'wp_plugin_check', status: 'ok' }];
+  const missingTools: string[] = [];
   if (installProblem !== null) {
     warnings.push(
       `${installProblem} The installed version was not detected (the WP-CLI probe was skipped); ` +
         'the CVE lookup used project_path.',
     );
+    toolsRun.push({ name: 'wp-cli', status: 'skipped', reason: 'wp_install_path names no install on this machine' });
   }
   const probePath = installProblem === null ? inp.wp_install_path : undefined;
   let projectPath: string;
@@ -117,38 +139,19 @@ async function handler(
     projectPath = serverProjectPath();
   }
 
+  let installed: boolean | null = null;
   let installedVersion: string | null = null;
   let active: boolean | null = null;
   if (probePath !== undefined && probePath.length > 0) {
-    const wpBin = await scannerAvailable('wp');
-    if (wpBin) {
-      const r = await runProcess({
-        command: 'wp',
-        args: [
-          'plugin',
-          'list',
-          `--path=${probePath}`,
-          `--name=${inp.slug}`,
-          '--fields=name,status,version',
-          '--format=json',
-        ],
-        cwd: probePath,
-        timeoutMs: 30_000,
-      });
-      if (r.outcome === 'completed') {
-        try {
-          const arr = JSON.parse(r.stdout) as Array<{ name: string; status: string; version: string }>;
-          const match = arr.find((p) => p.name === inp.slug);
-          if (match) {
-            installedVersion = match.version;
-            active = (match.status ?? '').toLowerCase() === 'active';
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+    const probe = await probeInstalled(probePath, inp.slug);
+    toolsRun.push(probe.run);
+    if (probe.run.status === 'skipped') missingTools.push('wp-cli');
+    if (probe.warning !== null) warnings.push(probe.warning);
+    installed = probe.installed;
+    installedVersion = probe.version;
+    active = probe.active;
   }
+  const coverage = computeCoverage(toolsRun, missingTools);
 
   // CVE lookup from local DB (no network call). Match by package_name == slug.
   // CVEs are normalised lowercased in our DB.
@@ -177,11 +180,12 @@ async function handler(
   ctx.storage.scans.finalize({
     scan_id: scanId,
     status: 'completed',
-    tools_run: [{ name: 'wp_plugin_check', status: 'ok' }],
-    missing_tools: [],
+    tools_run: toolsRun,
+    missing_tools: missingTools,
     meta: {
       scope: { kind: 'plugin', slug: inp.slug },
       slug: inp.slug,
+      installed,
       installed_version: installedVersion,
       active,
       known_cves: knownCves,
@@ -193,15 +197,80 @@ async function handler(
     project_path: projectPath,
     scan_id: scanId,
     slug: inp.slug,
+    installed,
     installed_version: installedVersion,
     active,
     known_cves: knownCves,
     cve_count: knownCves.length,
+    coverage,
+    tools_run: toolsRun,
+    missing_tools: missingTools,
     warnings,
     hint:
       knownCves.length > 0
         ? `Run wp_vuln_check or deps_audit for a fresh DB lookup before relying on this.`
         : 'No CVEs for this slug in the local DB. Run wp_vuln_check for a fresh online lookup.',
+  };
+}
+
+interface InstallProbe {
+  run: ToolRun;
+  /** null: WP-CLI did not answer. false: it listed the plugins and this one is not there. */
+  installed: boolean | null;
+  version: string | null;
+  active: boolean | null;
+  warning: string | null;
+}
+
+/** `wp plugin list` for one slug, with every way it can fail to answer named. */
+async function probeInstalled(probePath: string, slug: string): Promise<InstallProbe> {
+  const unknown = (run: ToolRun, warning: string): InstallProbe => ({
+    run,
+    installed: null,
+    version: null,
+    active: null,
+    warning: `${warning} The installed version and active state of ${slug} are unknown, not absent.`,
+  });
+  if (!(await scannerAvailable('wp'))) {
+    return unknown(
+      { name: 'wp-cli', status: 'skipped', reason: 'WP-CLI (wp) is not installed' },
+      'WP-CLI (`wp`) is not installed, so the install was not probed (install_toolchain with tools=["wp-cli"]).',
+    );
+  }
+  const r = await runProcess({
+    command: 'wp',
+    args: ['plugin', 'list', `--path=${probePath}`, `--name=${slug}`, '--fields=name,status,version', '--format=json'],
+    cwd: probePath,
+    timeoutMs: 30_000,
+  });
+  // WP-CLI's own messages end in a full stop; the sentence gets one only when it has none.
+  const failed = (reason: string): InstallProbe =>
+    unknown(
+      { name: 'wp-cli', status: 'failed', reason },
+      `The WP-CLI probe of ${probePath} failed: ${reason}${/[.!?]$/.test(reason) ? '' : '.'}`,
+    );
+  if (r.outcome !== 'completed') {
+    const stderr = r.stderr.split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
+    return failed(`${r.outcome}, exit ${r.exitCode ?? '?'}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ''}`);
+  }
+  if (r.stdout.trim() === '') return failed('WP-CLI printed nothing');
+  let rows: unknown;
+  try {
+    rows = JSON.parse(r.stdout);
+  } catch {
+    return failed(`WP-CLI output is not JSON: ${r.stdout.trim().slice(0, 120)}`);
+  }
+  if (!Array.isArray(rows)) return failed('WP-CLI output is not a JSON list');
+  const match = (rows as Array<{ name?: unknown; status?: unknown; version?: unknown } | null>).find(
+    (p) => p?.name === slug,
+  );
+  if (!match) return { run: { name: 'wp-cli', status: 'ok' }, installed: false, version: null, active: null, warning: null };
+  return {
+    run: { name: 'wp-cli', status: 'ok' },
+    installed: true,
+    version: typeof match.version === 'string' ? match.version : null,
+    active: typeof match.status === 'string' ? match.status.toLowerCase() === 'active' : null,
+    warning: null,
   };
 }
 

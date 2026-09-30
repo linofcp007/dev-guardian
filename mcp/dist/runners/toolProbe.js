@@ -16,6 +16,7 @@
  */
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
 import { compareSemver } from '../platform/semverCompare.js';
+import { ensureUserBinOnPath } from '../platform/userBin.js';
 import { runProcess } from './processRunner.js';
 /** Per-probe ceiling. A version command answers in well under a second; a
  *  loaded machine can stretch Python-based ones (semgrep, bandit) to several. */
@@ -52,10 +53,15 @@ export function highestDotnetSdk(text) {
     return best;
 }
 export async function runVersionProbe(probe, cwd) {
+    // check_toolchain sees what the scans will: the per-user tools directory
+    // the pinned installers write to is on the PATH (`platform/userBin.ts`).
+    ensureUserBinOnPath();
     const r = await runProcess({
         command: probe.command,
         args: probe.args,
         cwd,
+        // Merged over the server's own environment (runProcess extends it).
+        ...(probe.env !== undefined ? { env: { ...probe.env } } : {}),
         timeoutMs: PROBE_TIMEOUT_MS,
         stdoutCapBytes: 256 * 1024,
     });

@@ -15,6 +15,7 @@
 
 import type { DB, Statement } from './db.js';
 import type { Cve, Severity } from '../types.js';
+import { notInFutureSql } from './scanClock.js';
 
 interface CveRow {
   cve_id: string;
@@ -45,7 +46,7 @@ function seenIn(direction: 'ASC' | 'DESC'): string {
       SELECT o.scan_id FROM scan_cves o JOIN scans os ON os.id = o.scan_id
       WHERE o.cve_id = sc.cve_id AND o.package_name = sc.package_name
         AND o.installed_version = sc.installed_version
-        AND os.project_path = s.project_path
+        AND os.project_path = s.project_path AND ${notInFutureSql('os')}
       ORDER BY os.started_at ${direction}, os.rowid ${direction}
       LIMIT 1
     ), sc.scan_id)`;

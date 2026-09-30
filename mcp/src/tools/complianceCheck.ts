@@ -44,14 +44,17 @@
  *     real, just not the whole answer.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { listProjectDir, projectPathKind } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
-import { checkSemgrepReport, pythonUtf8Env } from '../runners/semgrepReport.js';
+import { checkSemgrepReport } from '../runners/semgrepReport.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
+import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { runProcess } from '../runners/processRunner.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath } from '../schemas.js';
 import {
   asArray,
@@ -127,25 +130,47 @@ export function loadedRuleCount(raw: string | null): number | null {
   return Array.isArray(rules) ? rules.length : null;
 }
 
-/** Runs the RGPD pack and records the outcome — see the module header for the verdicts. */
+/**
+ * Runs the RGPD pack and records the outcome — see the module header for the
+ * verdicts — with the shared Semgrep coverage gaps on the run that ran
+ * (`runners/semgrepCoverageGaps.ts`: files over the size limit, initialised
+ * submodules), each a named gap.
+ */
 async function runRgpdPack(
   ctx: InvokeContext,
   reportDir: string,
   out: Pick<ScannerInvocation, 'tools_run' | 'missing_tools' | 'parser_inputs'>,
 ): Promise<void> {
+  const before = out.tools_run.length;
+  const ran = await runRgpdPackOnce(ctx, reportDir, out);
+  const at = out.tools_run.findIndex((t, i) => i >= before && t.name === 'semgrep-rgpd');
+  const entry = out.tools_run[at];
+  if (!ran || entry === undefined) return;
+  const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
+    scannedNothing: entry.status === 'skipped',
+  });
+  out.tools_run[at] = applied.toolRun;
+  if (applied.missing) markMissing(out.missing_tools, 'semgrep-rgpd');
+}
+
+/** One run of the pack; false when Semgrep never ran (not installed, the pack missing). */
+async function runRgpdPackOnce(
+  ctx: InvokeContext,
+  reportDir: string,
+  out: Pick<ScannerInvocation, 'tools_run' | 'missing_tools' | 'parser_inputs'>,
+): Promise<boolean> {
   if (!(await scannerAvailable('semgrep'))) {
     out.tools_run.push({ name: 'semgrep-rgpd', status: 'skipped', reason: 'not_installed' });
     out.missing_tools.push('semgrep');
-    return;
+    return false;
   }
   const pack = rgpdRulesPath();
   if (!existsSync(pack)) {
     out.tools_run.push({ name: 'semgrep-rgpd', status: 'failed', reason: `RGPD rule pack not found at ${pack}` });
-    return;
+    return false;
   }
   const outFile = join(reportDir, 'rgpd.json');
-  const result = await runProcess({
-    command: 'semgrep',
+  const result = await runSemgrep({
     args: [
       `--config=${pack}`,
       '--metrics=off',
@@ -160,8 +185,8 @@ async function runRgpdPack(
       ctx.projectPath,
     ],
     cwd: ctx.projectPath,
-    // UTF-8 mode: see runners/semgrepReport.ts.
-    env: pythonUtf8Env(ctx.scriptEnv),
+    // UTF-8 mode comes with the helper (runners/semgrepRun.ts).
+    env: ctx.scriptEnv,
     signal: ctx.signal,
     onLog: ctx.onLog,
   });
@@ -170,7 +195,7 @@ async function runRgpdPack(
   const check = checkSemgrepReport({ raw, exitCode: result.exitCode, outcome: result.outcome, targets: 1 });
   if (check.ok) {
     out.tools_run.push({ name: 'semgrep-rgpd', status: 'ok' });
-    return;
+    return true;
   }
   const exitClean = result.outcome === 'completed' || result.exitCode === 1;
   if (exitClean && raw !== null && check.scanned === 0 && check.errors === 0) {
@@ -184,16 +209,17 @@ async function runRgpdPack(
           'not applicable: the RGPD pack loaded but found no file it reads here (JS/TS, PHP, Python, ' +
           'C#, and HTML/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars templates)',
       });
-      return;
+      return true;
     }
     out.tools_run.push({
       name: 'semgrep-rgpd',
       status: 'failed',
       reason: 'semgrep scanned 0 files and loaded no rule from the RGPD pack — a pack that failed to load, not a clean result',
     });
-    return;
+    return true;
   }
   out.tools_run.push({ name: 'semgrep-rgpd', status: 'failed', reason: check.reason ?? 'semgrep failed' });
+  return true;
 }
 
 const RISKY_LICENSE_PATTERNS: Array<{ pattern: RegExp; severity: 'high' | 'medium' }> = [
@@ -270,26 +296,17 @@ function walk(
   out: string[],
 ): void {
   if (depth > maxDepth) return;
-  let entries: string[];
-  try {
-    entries = readdirSync(dir) as unknown as string[];
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
+  // `platform/projectFs.ts`: a directory link is never descended, and a link
+  // counts as a file only when it resolves to one inside the project.
+  for (const { name: entry, kind } of listProjectDir(root, dir)) {
     if (entry.startsWith('.') && entry !== '.github' && entry !== '.gitlab') continue;
     if (entry === 'node_modules' || entry === '.guardian' || entry === 'dist' || entry === 'build')
       continue;
     const abs = join(dir, entry);
-    try {
-      const s = statSync(abs);
-      if (s.isDirectory()) {
-        if (depth + 1 <= maxDepth) walk(root, abs, depth + 1, maxDepth, out);
-      } else if (s.isFile()) {
-        out.push(abs.slice(root.length + 1).replace(/\\/g, '/'));
-      }
-    } catch {
-      /* skip */
+    if (kind === 'directory') {
+      if (depth + 1 <= maxDepth) walk(root, abs, depth + 1, maxDepth, out);
+    } else if (kind === 'file' || (kind === 'link' && projectPathKind(root, abs) === 'file')) {
+      out.push(abs.slice(root.length + 1).replace(/\\/g, '/'));
     }
   }
 }
@@ -394,20 +411,12 @@ registerToolModule(
       const trivyBin = await scannerAvailable('trivy');
       if (trivyBin) {
         const outFile = join(reportDir, 'licenses.json');
-        const result = await runProcess({
-          command: 'trivy',
-          args: [
-            'fs',
-            '--scanners',
-            'license',
-            '--format',
-            'json',
-            '--output',
-            outFile,
-            '--quiet',
-            ctx.projectPath,
-          ],
-          cwd: ctx.projectPath,
+        // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+        const result = await runTrivy({
+          args: ['fs', '--scanners', 'license', '--format', 'json', '--output', outFile, '--quiet'],
+          target: ctx.projectPath,
+          workDir: reportDir,
+          ignoreFrom: ctx.projectPath,
           env: ctx.scriptEnv,
           signal: ctx.signal,
           onLog: ctx.onLog,
@@ -417,10 +426,9 @@ registerToolModule(
           parser_inputs.push({ parser: trivyParser, input: raw });
           licensesSummary = summariseLicenses(raw);
         }
-        tools_run.push({
-          name: 'trivy',
-          status: result.outcome === 'completed' ? 'ok' : 'failed',
-        });
+        tools_run.push(
+          withHonoured({ name: 'trivy', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result),
+        );
       } else {
         tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('trivy');

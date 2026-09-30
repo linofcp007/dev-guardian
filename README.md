@@ -90,7 +90,7 @@ Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacem
 | WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
 | C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
 
-Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed.
+Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed. History, suppressions and baselines are keyed by the project's path: moving or renaming the repository starts them afresh (the old rows stay under the old path). A `guardian.db` your dev-guardian did not create (one that came with a clone or an archive, or that git tracks) is never opened. **Upgrading from 3.0.0:** your existing `guardian.db` is not trusted automatically either — until you register it, scans go to a per-user fallback and `health_status` says so. If it is yours, run `node <plugin>/cli/dev-guardian.mjs db adopt --project . --yes` once, yourself (without `--yes` it first shows what it holds; `--rehome` also moves scans recorded under a link to the project). See [SECURITY.md](SECURITY.md).
 
 ## What each stack gets
 
@@ -109,7 +109,7 @@ Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cv
 
 Beyond the table, `scan_sast` runs Semgrep's registry ruleset (`--config=auto`), which picks rules for whatever languages it finds — Kotlin included — and gitleaks scans every project for secrets. Containers and IaC (Dockerfile, images, compose, Terraform, Kubernetes, CloudFormation, Helm, GitHub Actions workflows) are covered by `scan_containers` and `scan_iac`; for an image, `scan_containers` also uses cosign to check whether it is signed and has signed SLSA provenance, and verifies the signer when you name one. "Reachable / unknown only" means the tool never claims code is unreachable in a language that resolves code at runtime (autoload, annotations, DI containers). `.NET` also has four dedicated tools; WordPress has ten. Trivy reads a Gradle lock file for any project, Kotlin included, and a Gradle build it could not read is a named coverage gap; no bug rule or route extractor exists for Kotlin.
 
-**Gradle and Python need a lock file for Trivy.** Trivy reads Gradle dependencies only from `gradle.lockfile`, and Python ones only from `poetry.lock`, `uv.lock`, `Pipfile.lock` or a pinned `requirements.txt`. A `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` or `requirements*.txt` it could not read is reported as a coverage gap (`trivy:gradle`, `trivy:python`, or `trivy` skipped when it read nothing else), never as a clean scan. Generate the lock file to close it. For Gradle, first enable `dependencyLocking { lockAllConfigurations() }` in the build — without it `gradle dependencies --write-locks` writes nothing — then run that command. For Python, run `poetry lock`, `uv lock` or `pipenv lock`, or pin every dependency in `requirements.txt`.
+**Gradle and Python need a lock file for Trivy.** Trivy reads Gradle dependencies only from `gradle.lockfile`, and Python ones only from `poetry.lock`, `uv.lock`, `Pipfile.lock` or a pinned `requirements.txt`. A `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` or `requirements*.txt` it could not read is reported as a coverage gap (`trivy:gradle`, `trivy:python`, or `trivy` skipped when it read nothing else), never as a clean scan. That holds for a manifest anywhere in the tree — a `web/package.json` beside a root lock file included; only a workspace member is covered by its root's lock — and for a `go.mod` Trivy could not parse (`trivy:go`). Generate the lock file to close it. For Gradle, first enable `dependencyLocking { lockAllConfigurations() }` in the build — without it `gradle dependencies --write-locks` writes nothing — then run that command. For Python, run `poetry lock`, `uv lock` or `pipenv lock`, or pin every dependency in `requirements.txt`.
 
 ## Guardrail hooks
 
@@ -129,7 +129,7 @@ Details, configuration and the escape hatches: [docs/hooks.md](docs/hooks.md). T
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline and Claude Desktop get the MCP server and a rules file (no skills, commands or hooks). Clone once, then run the CLI **by its absolute path** from your project:
 
 ```text
-git clone --depth 1 --branch v3.0.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.1.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
@@ -145,11 +145,11 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .      
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network).
+`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. On a pull request the generated pipeline gates against the base commit's baseline and Semgrep rules (`--baseline-ref`, `--rules-ref`), never the pull request's own. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network).
 
 ## Privacy and network
 
-dev-guardian sends no telemetry of its own. Some tools do reach the network — Semgrep's registry mode (which sends usage metrics to Semgrep Inc.; `local_only: true` avoids it) and its version check, Trivy's database, a .NET project's NuGet feeds (`scan_sast` restores and builds it, `local_only` or not), OSV, package registries, CISA KEV / FIRST EPSS, Wordfence, and opt-in live secret verification. The complete list, per tool, is in [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` switches off the lookups dev-guardian makes on its own (threat intelligence, package vetting, live secret verification, the Wordfence feed); every environment variable is in [docs/env.md](docs/env.md).
+dev-guardian sends no telemetry of its own. Some tools do reach the network — Semgrep's registry mode (which sends usage metrics to Semgrep Inc.; `local_only: true` avoids it), Trivy's database, a .NET project's NuGet feeds (`scan_sast` restores and builds it, `local_only` or not), OSV, package registries, CISA KEV / FIRST EPSS, Wordfence, and opt-in live secret verification. The complete list, per tool, is in [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` switches off the lookups dev-guardian makes on its own (threat intelligence, package vetting, live secret verification, the Wordfence feed); every environment variable is in [docs/env.md](docs/env.md).
 
 ## Troubleshooting
 
@@ -164,7 +164,7 @@ dev-guardian sends no telemetry of its own. Some tools do reach the network — 
 
 **`install_toolchain` with `elevation_allowed: true` fails with "sudo: a terminal is required to read the password".** Install steps run detached, with no terminal, so on Linux and macOS elevation only works with passwordless sudo for those commands. Otherwise run the commands listed under `requires_elevation` yourself. The .NET SDK is never installed automatically.
 
-**Semgrep sends metrics.** The default `scan_sast` uses `--config=auto`, which Semgrep only allows with metrics on. Pass `local_only: true` (or `--local-only` on the CLI) to run only the rules on disk with `--metrics=off`.
+**Semgrep sends metrics.** The default `scan_sast` uses `--config=auto`, which Semgrep only allows with metrics on. Pass `local_only: true` (or `--local-only` on the CLI) to keep Semgrep local: only rules on disk — the project's own and the plugin's packs (the LLM-application pack still runs) — with `--metrics=off` and no registry download. It is not "nothing leaves the machine": Trivy still fetches its vulnerability database and a .NET project is still restored from its NuGet feeds ([SECURITY.md](SECURITY.md#network-egress)). Semgrep's own version check is off on every run.
 
 ## Repository layout
 
@@ -173,7 +173,7 @@ dev-guardian sends no telemetry of its own. Some tools do reach the network — 
 commands/         the 10 slash commands
 skills/           the 13 skills
 hooks/            hooks.json + guardian-hook.mjs
-cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard)
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt)
 mcp/              the MCP server: src/, test/, dist/ (committed)
 configs/          Semgrep packs, CI templates, gitleaks/Renovate/pre-commit configs, compliance templates
 host-rules/       rules templates for other hosts

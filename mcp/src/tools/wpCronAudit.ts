@@ -12,9 +12,8 @@
  *     list`).
  */
 
-import { existsSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -88,7 +87,7 @@ async function handler(
   } catch (e) {
     return failDomain('not_a_wordpress_install', (e as Error).message);
   }
-  if (!existsSync(join(installPath, 'wp-config.php'))) {
+  if (!presentInProject(installPath, 'wp-config.php')) {
     return failDomain('not_a_wordpress_install', `No wp-config.php in ${installPath}`);
   }
 

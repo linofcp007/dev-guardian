@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseInstallCommands, parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from '../../../src/pkgvet/types.js';
+import { expectLinear, PERF_STRICT } from '../../helpers/timing.js';
 
 /** `[name, range?]` pairs of every package the command would have vetted. */
 function vetted(command: string): Array<[string, string | undefined]> {
@@ -505,15 +506,30 @@ describe('Part Y — edge shapes, one table', () => {
 
 // Fix round 3: the PowerShell environment check restarted `[^;\n]*` at every
 // `Set-Item` / `New-Item` — quadratic on every command the hook sees.
+// Review 3.0, R7-I2: this was "250 KB parses in well under 1 s" — a bound that
+// measured the machine and failed the coverage run. The defect is a shape, so
+// the assertion is a ratio (test/helpers/timing.ts): eight times as long
+// (875 against 7 000 cmdlets, 8 KB against 63 KB) must cost under 22.6 times
+// as much. At 4x the Set-Item shape read 11 for the defect, under its bound
+// of 12; and at the original 250 KB the defect takes 14 s — a vitest timeout,
+// not an assertion. The absolute bound runs only with GUARDIAN_PERF_STRICT=1.
 describe('parseInstallCommands — linear on the shapes that were not', () => {
-  it.each([
-    ['Set-Item', 'Set-Item '.repeat(28_000)],
-    ['New-Item', 'New-Item '.repeat(28_000)],
-    ['New-Item … then an install', `${'New-Item '.repeat(28_000)}; npm i lodash`],
-  ])('250 KB of %s parses in well under 1 s', (_label, command) => {
-    const t0 = performance.now();
+  const shapes: Array<[string, (n: number) => string]> = [
+    ['Set-Item', (n) => 'Set-Item '.repeat(n)],
+    ['New-Item', (n) => 'New-Item '.repeat(n)],
+    ['New-Item … then an install', (n) => `${'New-Item '.repeat(n)}; npm i lodash`],
+  ];
+  const parseBoth = (command: string): void => {
     parseInstallCommands(command, { shell: 'bash' });
     parseInstallCommands(command, { shell: 'powershell' });
+  };
+  it.each(shapes)('%s: eight times as long costs well under 22.6 times as much', (label, make) => {
+    expectLinear(label, (n) => parseBoth(make(n)), 875);
+  }, 120_000);
+  it.runIf(PERF_STRICT).each(shapes)('250 KB of %s parses in well under 1 s (GUARDIAN_PERF_STRICT=1)', (_label, make) => {
+    const command = make(28_000);
+    const t0 = performance.now();
+    parseBoth(command);
     expect(performance.now() - t0).toBeLessThan(1000);
   });
 
@@ -523,6 +539,107 @@ describe('parseInstallCommands — linear on the shapes that were not', () => {
       'New-Item -Path env:PIP_INDEX_URL -Value https://x; pip install y',
     ]) {
       expect(parseInstallCommands(command).flatMap((c) => c.uncertain).join(' ')).toMatch(/environment/);
+    }
+  });
+});
+
+// Review of 3.0.0, P1: the launchers that download a package and run it were
+// not vetted at all, while `npm i -g` of the same name was denied.
+describe('parseInstallCommands — launchers that download and run a package (review P1)', () => {
+  it.each([
+    ['npx -y create-vite-zz my-app --template react', 'npm', [['create-vite-zz', undefined]]],
+    ['npx --yes cowsay@1.5.0 hello', 'npm', [['cowsay', '1.5.0']]],
+    ['npx -p typescript -p ts-node-zz tsc --version', 'npm', [['typescript', undefined], ['ts-node-zz', undefined]]],
+    ['npx --package=@scope/tool-zz tool-zz run', 'npm', [['@scope/tool-zz', undefined]]],
+    ['pnpx create-next-app-zz app', 'npm', [['create-next-app-zz', undefined]]],
+    ['npm exec -- cowsay-zz hi', 'npm', [['cowsay-zz', undefined]]],
+    ['npm exec --yes cowsay-zz -- hi', 'npm', [['cowsay-zz', undefined]]],
+    ['npm x cowsay-zz', 'npm', [['cowsay-zz', undefined]]],
+    ['pnpm dlx create-next-app@14 app', 'npm', [['create-next-app', '14']]],
+    ['pnpm --package=cowsay-zz dlx cowsay hi', 'npm', [['cowsay-zz', undefined]]],
+    ['yarn dlx some-pkg-zz --flag', 'npm', [['some-pkg-zz', undefined]]],
+    ['yarn dlx -p pkg-a-zz -p pkg-b-zz cmd', 'npm', [['pkg-a-zz', undefined], ['pkg-b-zz', undefined]]],
+    ['bunx cowsay-zz hi', 'npm', [['cowsay-zz', undefined]]],
+    ['bun x cowsay-zz hi', 'npm', [['cowsay-zz', undefined]]],
+    ['uvx ruff-zz check .', 'pypi', [['ruff-zz', undefined]]],
+    ['uvx ruff-zz@0.6.0 check .', 'pypi', [['ruff-zz', '0.6.0']]],
+    ['uvx --from httpie-zz http GET example.com', 'pypi', [['httpie-zz', undefined]]],
+    ['uvx --with requests-zz ruff-zz check', 'pypi', [['requests-zz', undefined], ['ruff-zz', undefined]]],
+    ['uv tool run black-zz .', 'pypi', [['black-zz', undefined]]],
+    ['uv tool install ruff-zz', 'pypi', [['ruff-zz', undefined]]],
+    ['uv tool install ruff-zz --with plugin-zz', 'pypi', [['ruff-zz', undefined], ['plugin-zz', undefined]]],
+    ['pipx install poetry-zz', 'pypi', [['poetry-zz', undefined]]],
+    ['pipx install tool-a-zz tool-b-zz', 'pypi', [['tool-a-zz', undefined], ['tool-b-zz', undefined]]],
+    ['pipx run cowsay-zz moo', 'pypi', [['cowsay-zz', undefined]]],
+    ['pipx run --spec httpie-zz http GET example.com', 'pypi', [['httpie-zz', undefined]]],
+  ] as const)('%s', (command, eco, expected) => {
+    const parsed = parseInstallCommands(command);
+    expect(parsed.map((c) => c.ecosystem)).toEqual(parsed.map(() => eco));
+    expect(
+      parsed
+        .flatMap((c) => c.packages.map((p): [string, string | undefined] => [p.name, p.range]))
+        .sort((a, b) => a[0].localeCompare(b[0])),
+    ).toEqual([...expected].map(([n, r]) => [n, r]).sort((a, b) => (a[0] ?? '').localeCompare(b[0] ?? '')));
+  });
+
+  it.each([
+    'npx -y create-vite-zz my-app --template react',
+    'npm exec cowsay-zz',
+    'pnpm dlx cowsay-zz',
+    'yarn dlx cowsay-zz',
+    'bunx cowsay-zz',
+    'uvx ruff-zz check .',
+    'uv tool install ruff-zz',
+    'pipx install poetry-zz',
+    'pipx run cowsay-zz moo',
+  ])('%s has the confident shape: a missing name may be denied', (command) => {
+    expect(uncertain(command)).toEqual([]);
+  });
+
+  it.each([
+    ['npx -p typescript tsc', /-p/],
+    ['uvx --from httpie-zz http', /--from/],
+    ['pipx install --pip-args="--index-url https://corp" tool-zz', /pip-args/],
+    ['npx --registry https://npm.corp tool-zz', /registry|--registry/],
+  ])('%s is not confident', (command, why) => {
+    expect(uncertain(command).join(' ')).toMatch(why);
+  });
+
+  it.each([
+    'npx -c "echo hi"',
+    'npx --no-install eslint .',
+    'npx --offline eslint .',
+    'npx ./scripts/build.js',
+    'uvx ./tool',
+    'npm exec',
+    'pipx list',
+    'uv tool list',
+    'pnpm dlx',
+    'npx',
+  ])('%s fetches nothing named: nothing to vet', (command) => {
+    expect(parseInstallCommands(command).flatMap((c) => c.packages)).toEqual([]);
+  });
+
+  it('a registry named on a launcher counts, as on an install', () => {
+    expect(parseInstallCommands('npx --registry https://npm.corp tool-zz')[0]?.registries).toEqual(['https://npm.corp']);
+    expect(parseInstallCommands('uvx --index https://pypi.corp/simple tool-zz')[0]?.registries).toEqual(['https://pypi.corp/simple']);
+  });
+
+  // The runner prefix is read with its own options, as the shell guard reads
+  // it: a table shared by every runner made `sudo -n` swallow the `npm`.
+  it.each(['sudo -n npm install left-pad', 'sudo -i npm i left-pad', 'env -i npm i left-pad', 'sudo -u ci -- npx -y left-pad'])(
+    '%s is still an install of left-pad',
+    (command) => {
+      expect(parseInstallCommands(command).flatMap((c) => c.packages.map((p) => p.name))).toEqual(['left-pad']);
+    },
+  );
+
+  it('npx / npm exec / bunx run a locally installed bin first: the command says so', () => {
+    for (const command of ['npx eslint .', 'npm exec eslint', 'bunx eslint', 'bun x eslint']) {
+      expect(parseInstallCommands(command)[0]?.localFirst).toBe(true);
+    }
+    for (const command of ['pnpm dlx eslint', 'yarn dlx eslint', 'uvx ruff', 'pipx run ruff']) {
+      expect(parseInstallCommands(command)[0]?.localFirst).toBeUndefined();
     }
   });
 });

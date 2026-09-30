@@ -88,3 +88,68 @@ export interface PartialParseRef {
   file: string;
   type: string;
 }
+
+/**
+ * Where the gate's baseline came from (`--baseline-ref`, `ci/refConfig.ts`):
+ * the scanned tree's own file — on a pull request, the pull request's — or
+ * the commit a ref named.
+ */
+export type BaselineSource =
+  | { from: 'tree'; path: string }
+  | {
+      from: 'ref';
+      path: string;
+      ref: string;
+      commit: string;
+      /** The ref has a baseline. False: no baseline — every finding is new. */
+      present: boolean;
+      /** The scanned tree's copy differs from the ref's (and was not read). */
+      tree_differs: boolean;
+    };
+
+/**
+ * Where the project's Semgrep rules and scanner configuration came from
+ * (`--rules-ref`, `ci/refConfig.ts`), and every configuration file the tree
+ * holds differently from the ref — `applied: 'tree'` ones the scan read
+ * anyway (the gate cannot take them from a ref), for a reviewer to look at.
+ */
+export type RulesSource =
+  | { from: 'tree' }
+  | {
+      from: 'ref';
+      ref: string;
+      commit: string;
+      /** Read from the ref (project-relative). */
+      copied: string[];
+      /** Looked for at the ref and not there: read from nowhere. */
+      absent: string[];
+      tree_differences: ConfigDifference[];
+    };
+
+/**
+ * What `--reset-exclusions-from` put back before the scan
+ * (`ci/refConfig.ts#resetExclusionsFromRef`): project-relative paths.
+ */
+export interface ExclusionReset {
+  ref: string;
+  commit: string;
+  /** Rewritten with the ref's bytes. */
+  restored: string[];
+  /** Deleted: the ref has none there. */
+  removed: string[];
+}
+
+/** One configuration file the scanned tree holds differently from the `--rules-ref` ref. */
+export interface ConfigDifference {
+  /** Project-relative, `/`-separated. */
+  path: string;
+  change: 'added' | 'modified' | 'deleted';
+  /**
+   * The copy the scan read: `tree` — the pull request's own, so its change
+   * WAS applied (a file the gate cannot take from a ref); `ref` — the ref's,
+   * so it was not.
+   */
+  applied: 'tree' | 'ref';
+  /** The scanners that read it. */
+  read_by: string[];
+}

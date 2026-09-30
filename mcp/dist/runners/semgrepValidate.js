@@ -19,8 +19,7 @@
  * nothing — the caller keeps the shape check and says Semgrep did not look.
  * `--metrics=off`: nothing is sent anywhere.
  */
-import { pythonUtf8Env } from './semgrepReport.js';
-import { runProcess } from './processRunner.js';
+import { runSemgrep } from './semgrepRun.js';
 /** Bound on one `semgrep --validate` run. */
 export const SEMGREP_VALIDATE_TIMEOUT_MS = 60_000;
 const ANSI = /\u001b\[[0-9;]*m/g;
@@ -38,11 +37,10 @@ export function validateMessage(stderr, stdout) {
     return text.length > MAX_MESSAGE ? `${text.slice(0, MAX_MESSAGE - 1)}…` : text;
 }
 async function validateOnce(files, cwd) {
-    const run = await runProcess({
-        command: 'semgrep',
+    const run = await runSemgrep({
         args: ['--validate', '--metrics=off', '--disable-version-check', ...files.flatMap((f) => ['--config', f])],
         cwd,
-        env: pythonUtf8Env(process.env),
+        env: process.env,
         timeoutMs: SEMGREP_VALIDATE_TIMEOUT_MS,
     });
     if (run.outcome === 'timed_out' || run.outcome === 'cancelled' || run.outcome === 'output_too_large' || run.exitCode === null) {

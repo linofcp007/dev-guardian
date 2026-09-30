@@ -7,15 +7,17 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ZodRawShape } from 'zod';
+import { z, type ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { ToolResult } from '../types.js';
+import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
 
 /**
  * The shape registered with the SDK. `inputSchema` is a raw zod shape (an
- * object literal of zod fields), NOT a `ZodObject` — the SDK derives both
- * the JSON schema for the client and the validated TS type from it.
+ * object literal of zod fields), NOT a `ZodObject`; `attachAllTools` wraps it
+ * in a strict `z.object` (`strictInputSchema`), from which the SDK derives
+ * both the JSON schema for the client and the validation.
  */
 /**
  * Per-call metadata the registry extracts from the MCP request and forwards
@@ -94,7 +96,22 @@ export function registerToolModule(tool: ToolModule): void {
   TOOLS.push(tool);
 }
 
-/** Wire every registered tool into an active McpServer. */
+/**
+ * Wire every registered tool into an active McpServer.
+ *
+ * Each input schema is registered STRICT. Handed a raw shape, the SDK wraps
+ * it in a stripping `z.object`: a key the tool does not take was removed
+ * without a word, while `tools/list` advertised `additionalProperties:
+ * false`. A misnamed parameter therefore became the default instead of an
+ * error — `scan_skill { project_path }` (it takes `target`) audited the
+ * server's working directory and answered SAFE. Strict, the SDK answers
+ * -32602 naming the key, before the handler runs.
+ *
+ * A call with no `arguments` at all (the MCP spec makes the field optional)
+ * validates as `{}`. Measured on 430c797, before the schemas were strict, it
+ * was already rejected — -32602 "Required" from every tool, `check_toolchain`
+ * (no parameters at all) included — and an unknown key was stripped.
+ */
 export function attachAllTools(server: McpServer, ctx: PluginContext): void {
   for (const tool of TOOLS) {
     server.registerTool(
@@ -102,7 +119,7 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
       {
         ...(tool.title ? { title: tool.title } : {}),
         description: tool.description,
-        inputSchema: tool.inputSchema,
+        inputSchema: strictInputSchema(tool),
       },
       async (input, extra) => {
         const callMeta: ToolCallMeta = {};
@@ -124,9 +141,34 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
 }
 
 /**
+ * The schema a tool is registered with: its shape, rejecting any other key,
+ * and reading an absent `arguments` as `{}`.
+ *
+ * The default is applied on THIS instance's `safeParseAsync`, the one call
+ * the SDK validates tool input with, rather than with `z.preprocess` or
+ * `.default({})`: the SDK lists a tool's JSON schema only when the schema it
+ * was given is an object (`.shape`), and either wrapper would turn every
+ * tool's advertised schema into an empty one.
+ */
+export function strictInputSchema(tool: Pick<ToolModule, 'inputSchema'>): z.ZodObject<ZodRawShape, 'strict'> {
+  const schema = z.object(tool.inputSchema).strict();
+  const parse = schema.safeParseAsync.bind(schema);
+  schema.safeParseAsync = (data, params) => parse(data ?? {}, params);
+  return schema;
+}
+
+/**
  * A handler's result as the MCP host receives it. Per-file gap lists are cut
  * here and only here (`tools/responseBounds.ts`): the row and every internal
  * caller keep them whole. Exported for the response-size tests.
+ *
+ * Every string of the result — keys included, the error message and the
+ * content-only keys too — is passed through `untrustedValue`
+ * (`platform/untrustedText.ts`) here and only here: a rule message, a
+ * snippet, a file name or a title from the scanned repository reaches the
+ * model with its control, bidi and zero-width characters written as visible
+ * `\u{XXXX}`. The handler's own object — and so the stored row — keeps its
+ * bytes.
  */
 export function toCallToolResult<T extends Record<string, unknown>>(
   result: ToolResult<T>,
@@ -138,7 +180,7 @@ export function toCallToolResult<T extends Record<string, unknown>>(
 } {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
-    const payload = boundResponsePayload({ ok: true, ...rest } as Record<string, unknown>);
+    const payload = untrustedValue(boundResponsePayload({ ok: true, ...rest } as Record<string, unknown>));
     const structured: Record<string, unknown> = { ...payload };
     for (const key of contentOnlyKeys) delete structured[key];
     // A tool with a bulky content-only payload is serialised compactly too:
@@ -149,13 +191,14 @@ export function toCallToolResult<T extends Record<string, unknown>>(
       structuredContent: structured,
     };
   }
-  const errorPayload = { ok: false, error: result.error } as Record<string, unknown>;
+  const error = untrustedValue(result.error);
+  const errorPayload = { ok: false, error } as Record<string, unknown>;
   return {
     isError: true,
     content: [
       {
         type: 'text',
-        text: `Error (${result.error.code}): ${result.error.message}`,
+        text: `Error (${error.code}): ${error.message}`,
       },
     ],
     structuredContent: errorPayload,

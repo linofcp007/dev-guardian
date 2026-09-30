@@ -23,8 +23,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { hashRegularFileSync } from '../platform/projectFs.js';
 
 function sha256(text: string | Buffer): string {
   return createHash('sha256').update(text).digest('hex');
@@ -85,21 +86,15 @@ function describePack(entry: string): string {
     // Not on disk: a registry name (`p/r2c-bug-scan`, `auto`) — only the
     // name can be keyed. Plugin version and the cache TTL bound its drift.
   }
+  // Streamed, and judged on a non-blocking descriptor (`hashRegularFileSync`):
+  // a pack may be the project's own Semgrep config, and a path swapped for a
+  // FIFO or a device after the `stat` above is never waited on or read.
+  // Same digest as hashing the whole buffer: no stored cache key moves.
   if (isFile) {
-    try {
-      return `file:${entry}:${sha256(readFileSync(entry))}`;
-    } catch {
-      return `file:${entry}:unreadable`;
-    }
+    return `file:${entry}:${hashRegularFileSync(entry) ?? 'unreadable'}`;
   }
   if (isDir) {
-    const parts = listFilesRecursive(entry).map((rel) => {
-      try {
-        return `${rel}:${sha256(readFileSync(join(entry, rel)))}`;
-      } catch {
-        return `${rel}:unreadable`;
-      }
-    });
+    const parts = listFilesRecursive(entry).map((rel) => `${rel}:${hashRegularFileSync(join(entry, rel)) ?? 'unreadable'}`);
     return `dir:${entry}:${sha256(parts.join('\n'))}`;
   }
   return `ref:${entry}`;

@@ -53,15 +53,19 @@
  * nothing else; a signer needs an image, exactly one identity form and one
  * issuer form, and no control characters.
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { describeYamlRefusal, parseYamlBounded } from '../platform/boundedParse.js';
+import { presentInProject, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
-import { checkCompose } from '../runners/composeChecks.js';
+import { checkComposeValue } from '../runners/composeChecks.js';
 import { UNSAFE_CHARS, UNSAFE_CHAR_CLASS, cosignReadiness, escapeUnsafe, detectImageSupplyChain, skippedSummary, unanchoredSignerRegexps, verifyImage, } from '../runners/cosignCheck.js';
 import { hadolintParser } from '../runners/scannerParsers/hadolint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
+import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
+import { judgeTrivyConfig } from '../runners/trivyConfig.js';
+import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.js';
@@ -72,8 +76,8 @@ const COMPOSE_FILE_NAMES = ['docker-compose.yml', 'compose.yml', 'docker-compose
 const composeParser = {
     name: 'docker-compose',
     parse(input) {
-        const { text, filePath } = input;
-        return { findings: checkCompose(text, filePath), cves: [] };
+        const { value, filePath } = input;
+        return { findings: checkComposeValue(value, filePath), cves: [] };
     },
 };
 /** Hands the cosign check's findings (already built) to the same `parser_inputs` pipeline. */
@@ -91,8 +95,14 @@ const cosignParser = {
  * cosign's reasons, notes and findings.
  */
 const IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
-/** A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character. */
-const SignerValue = z.string().min(1).max(1024);
+/**
+ * A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character.
+ * A FACTORY, not one shared instance: the JSON-schema converter emits a reused
+ * zod instance as `$ref` to its first use, and draft-07 ignores every keyword
+ * beside a `$ref` — the other three parameters' descriptions were invisible
+ * (review 3.0 M2).
+ */
+const signerValue = () => z.string().min(1).max(1024);
 const scanContainers = makeScanTool({
     name: 'scan_containers',
     title: 'Container scan (Dockerfile + image + compose)',
@@ -124,14 +134,14 @@ const scanContainers = makeScanTool({
             .regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"')
             .optional()
             .describe('Container image reference to scan with `trivy image`.'),
-        signer_identity: SignerValue.optional().describe("The identity `image` must be signed by: the signing certificate's subject — a workflow URL such as " +
+        signer_identity: signerValue().optional().describe("The identity `image` must be signed by: the signing certificate's subject — a workflow URL such as " +
             'https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main, or an e-mail. Needs ' +
             'signer_issuer (or signer_issuer_regexp); runs cosign verify.'),
-        signer_identity_regexp: SignerValue.optional().describe('signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every ' +
+        signer_identity_regexp: signerValue().optional().describe('signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every ' +
             'release workflow of one repository. Not with signer_identity.'),
-        signer_issuer: SignerValue.optional().describe('The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) ' +
+        signer_issuer: signerValue().optional().describe('The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) ' +
             'or https://accounts.google.com.'),
-        signer_issuer_regexp: SignerValue.optional().describe('signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer.'),
+        signer_issuer_regexp: signerValue().optional().describe('signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer.'),
         force: Force,
     },
     invoke: async (input, ctx) => {
@@ -150,7 +160,7 @@ const scanContainers = makeScanTool({
             throw new Error(invalid);
         const dockerfile = inp.dockerfile_path !== undefined
             ? resolve(ctx.projectPath, inp.dockerfile_path)
-            : existsSync(join(ctx.projectPath, 'Dockerfile'))
+            : presentInProject(ctx.projectPath, 'Dockerfile')
                 ? join(ctx.projectPath, 'Dockerfile')
                 : undefined;
         // Trivy's own gap is only a gap when there was something for it to
@@ -166,10 +176,14 @@ const scanContainers = makeScanTool({
             else {
                 if (dockerfile !== undefined) {
                     const outFile = join(reportDir, 'dockerfile.json');
-                    const result = await runProcess({
-                        command: 'trivy',
-                        args: ['config', '--format', 'json', '--output', outFile, '--quiet', dockerfile],
-                        cwd: ctx.projectPath,
+                    // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+                    // No --quiet: a Dockerfile Trivy cannot parse is one ERROR line
+                    // in its log, and --quiet hides it (runners/trivyConfig.ts).
+                    const result = await runTrivy({
+                        args: ['config', '--format', 'json', '--output', outFile],
+                        target: dockerfile,
+                        workDir: reportDir,
+                        ignoreFrom: ctx.projectPath,
                         env: ctx.scriptEnv,
                         signal: ctx.signal,
                         onLog: ctx.onLog,
@@ -177,17 +191,24 @@ const scanContainers = makeScanTool({
                     const raw = readJsonSafe(outFile);
                     if (raw)
                         parser_inputs.push({ parser: trivyParser, input: raw });
-                    tools_run.push({
+                    // The file it was given is the one that must be recognised.
+                    const judged = judgeTrivyConfig({
                         name: 'trivy-dockerfile',
-                        status: result.outcome === 'completed' ? 'ok' : 'failed',
+                        run: result,
+                        raw,
+                        iacFiles: [relative(ctx.projectPath, dockerfile).split(sep).join('/')],
+                        singleFile: true,
                     });
+                    tools_run.push(judged.toolRun);
+                    missing_tools.push(...judged.missing);
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }
                 if (inp.image) {
                     const outFile = join(reportDir, 'image.json');
-                    const result = await runProcess({
-                        command: 'trivy',
+                    // The project's .trivyignore applied to its image as it always
+                    // was, now explicitly and named; its trivy.yaml never.
+                    const result = await runTrivy({
                         args: [
                             'image',
                             '--format',
@@ -200,9 +221,10 @@ const scanContainers = makeScanTool({
                             // layer, and image-level misconfigurations, unreported;
                             // trivyParser already handles all three result shapes.
                             'vuln,secret,misconfig',
-                            inp.image,
                         ],
-                        cwd: ctx.projectPath,
+                        target: inp.image,
+                        workDir: reportDir,
+                        ignoreFrom: ctx.projectPath,
                         env: ctx.scriptEnv,
                         signal: ctx.signal,
                         onLog: ctx.onLog,
@@ -214,12 +236,12 @@ const scanContainers = makeScanTool({
                     // re-measures an image's findings only by a scan of the SAME
                     // image (history/runCompare.ts) — image B's scan never resolves
                     // image A's.
-                    tools_run.push({
+                    tools_run.push(withHonoured({
                         name: 'trivy-image',
                         status: result.outcome === 'completed' ? 'ok' : 'failed',
                         reason: `image ${inp.image}`,
                         target: inp.image,
-                    });
+                    }, result));
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }
@@ -285,10 +307,15 @@ const scanContainers = makeScanTool({
                 missing_tools.push('hadolint');
             }
             else {
+                // hadolint reads `.hadolint.yaml` from its working directory: not
+                // the project (round 4, item 3). Its own root config is passed
+                // explicitly and named (`runners/repoConfig.ts`).
+                const hadolintConfig = honouredRootFiles(ctx.projectPath, 'hadolint').slice(0, 1);
+                const configArgs = hadolintConfig.flatMap((f) => ['--config', join(ctx.projectPath, f.path)]);
                 const result = await runProcess({
                     command: 'hadolint',
-                    args: ['--format', 'json', dockerfile],
-                    cwd: ctx.projectPath,
+                    args: ['--format', 'json', ...configArgs, dockerfile],
+                    cwd: reportDir,
                     env: ctx.scriptEnv,
                     signal: ctx.signal,
                     onLog: ctx.onLog,
@@ -301,10 +328,10 @@ const scanContainers = makeScanTool({
                     result.outcome !== 'output_too_large';
                 if (finished && (result.exitCode === 0 || result.exitCode === 1)) {
                     parser_inputs.push({ parser: hadolintParser, input: result.stdout });
-                    tools_run.push({ name: 'hadolint', status: 'ok' });
+                    tools_run.push(withProjectConfig({ name: 'hadolint', status: 'ok' }, hadolintConfig));
                 }
                 else {
-                    tools_run.push({ name: 'hadolint', status: 'failed' });
+                    tools_run.push(withProjectConfig({ name: 'hadolint', status: 'failed' }, hadolintConfig));
                     if (result.outcome !== 'completed')
                         anyOutcome = result.outcome;
                 }
@@ -312,11 +339,20 @@ const scanContainers = makeScanTool({
         }
         const composeFile = findComposeFile(ctx.projectPath);
         if (composeFile) {
-            const text = readComposeFileSafe(composeFile);
-            if (text !== null) {
+            const text = readComposeFileSafe(ctx.projectPath, composeFile);
+            // Parsed once, bounded (platform/boundedParse.ts); a file it could not parse is named, never 'ok'.
+            const parsed = text === null ? null : parseYamlBounded(text);
+            if (parsed !== null && !parsed.ok) {
+                tools_run.push({
+                    name: 'docker-compose',
+                    status: 'failed',
+                    reason: `the compose file was not checked: ${describeYamlRefusal(parsed)}`,
+                });
+            }
+            else if (parsed !== null) {
                 parser_inputs.push({
                     parser: composeParser,
-                    input: { text, filePath: relative(ctx.projectPath, composeFile) },
+                    input: { value: parsed.value, filePath: relative(ctx.projectPath, composeFile) },
                 });
                 tools_run.push({ name: 'docker-compose', status: 'ok' });
             }
@@ -365,19 +401,14 @@ registerToolModule(tool);
 /** The first of `COMPOSE_FILE_NAMES` present at the project root, or null. */
 function findComposeFile(projectPath) {
     for (const name of COMPOSE_FILE_NAMES) {
-        const candidate = join(projectPath, name);
-        if (existsSync(candidate))
-            return candidate;
+        if (presentInProject(projectPath, name))
+            return join(projectPath, name);
     }
     return null;
 }
-function readComposeFileSafe(path) {
-    try {
-        return readFileSync(path, 'utf8');
-    }
-    catch {
-        return null;
-    }
+/** The repository's compose file: bounded, regular files only, never through a link out of the project. */
+function readComposeFileSafe(projectPath, path) {
+    return readProjectTextOrUndefined(projectPath, path) ?? null;
 }
 const SIGNER_FIELDS = ['signer_identity', 'signer_identity_regexp', 'signer_issuer', 'signer_issuer_regexp'];
 /** The signer `image` must be signed by, or null when none was named (existence check only). */
@@ -452,13 +483,8 @@ function isInside(root, candidate) {
     const abs = resolve(root, candidate);
     if (!within(root, abs))
         return false;
-    if (!existsSync(abs))
-        return true;
-    try {
-        return within(realpathSync.native(root), realpathSync.native(abs));
-    }
-    catch {
-        return false;
-    }
+    // Links below the root judged with lstat/readlink first (platform/projectFs.ts):
+    // `existsSync` + `realpath` followed one to a network path and blocked the server.
+    return projectPathKind(root, abs) !== 'outside';
 }
 //# sourceMappingURL=scanContainers.js.map

@@ -40,6 +40,7 @@
  */
 
 import { execa, type ResultPromise } from 'execa';
+import { commandFor } from '../platform/binaryPath.js';
 
 export interface StartAppOptions {
   /** argv array — never a shell string. `command[0]` is the executable. */
@@ -364,7 +365,7 @@ async function killTree(child: ResultPromise): Promise<void> {
       // `/F` is unconditionally forceful — matches processRunner.ts's own
       // Windows handling, deliberately mirrored rather than reinvented.
       try {
-        await execa('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        await execa(commandFor('taskkill'), ['/PID', String(pid), '/T', '/F'], {
           reject: false,
           timeout: KILL_GRACE_MS,
         });

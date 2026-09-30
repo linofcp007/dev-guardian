@@ -5,7 +5,9 @@
  * and produces canonical `Finding`s plus the rolled-up risk score and
  * per-category breakdown:
  *
- *   1. Pattern rules     (patterns.ts)      — prompt-level + code-level signals
+ *   1. Pattern rules     (patterns.ts)      — prompt-level + code-level signals,
+ *                                            the code rules also over the fenced
+ *                                            and inline code of an instruction file
  *   2. YARA signatures   (yaraSignatures.ts)— known-bad artifacts
  *   3. Taint-light       (taint.ts)         — source→sink within a file
  *   4. Hidden Unicode    (here)             — invisible instruction smuggling
@@ -33,10 +35,16 @@ export async function analyzeSkill(files, opts = {}) {
     const signals = [];
     let executableFiles = 0;
     let hiddenUnicodeFiles = 0;
-    const push = (f, isExecutable) => {
+    const push = (f, isExecutable, scored = true) => {
         findings.push(f);
-        signals.push({ severity: f.severity, isExecutable });
+        signals.push({ severity: f.severity, isExecutable, scored });
     };
+    // A citation (see `patterns.ts`) is reported every time, at low, but a
+    // rule's citations score once per skill: a threat catalogue that quotes
+    // the same attack class ten times is one fact about it, not ten. Measured
+    // in round 2 of the wave: without this, dev-spec-driven's catalogue read
+    // CAUTION on its eight quoted examples alone.
+    const citedRules = new Set();
     // 0. Symlinks/junctions the ingester refused to follow. Reported here
     // (never as a raw ingested "file") so the pattern/YARA/taint passes below
     // never see a link's target string as if it were reviewable source — see
@@ -62,21 +70,44 @@ export async function analyzeSkill(files, opts = {}) {
         if (file.isExecutable)
             executableFiles += 1;
         // 1. Pattern rules.
-        for (const m of scanContent(file.content, file.isCode)) {
-            const sev = severityOfRule(m.rule);
+        for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
+            const repeat = m.cited && citedRules.has(m.rule.id);
+            if (m.cited)
+                citedRules.add(m.rule.id);
             push(makeFinding({
                 tool: TOOL,
                 rule_id: m.rule.id,
-                severity: sev,
+                severity: m.severity,
                 category: 'security',
                 subcategory: m.rule.category,
                 title: m.rule.title,
-                message: m.rule.message,
+                message: m.rule.message + whereFound(m),
                 file_path: file.relPath,
                 line_start: m.line,
                 line_end: m.line,
                 snippet: m.snippet,
-            }), file.isExecutable);
+            }), file.isExecutable, !repeat);
+        }
+        // 1b. The commands a plugin's configuration runs. A `.json` file is not
+        // code, so its strings never met the code rules — but the host executes
+        // a hook's `command` on every matching event, and an MCP server's
+        // `command` + `args` when it starts (round 2 of the wave).
+        for (const cmd of executedCommands(file)) {
+            for (const m of scanContent(cmd.text, true)) {
+                push(makeFinding({
+                    tool: TOOL,
+                    rule_id: m.rule.id,
+                    severity: m.severity,
+                    category: 'security',
+                    subcategory: m.rule.category,
+                    title: m.rule.title,
+                    message: `${m.rule.message} Found in a command ${cmd.what}, which the host runs as written.`,
+                    file_path: file.relPath,
+                    line_start: cmd.line,
+                    line_end: cmd.line,
+                    snippet: m.snippet,
+                }), file.isExecutable);
+            }
         }
         // 2. YARA signatures.
         for (const m of matchSignatures(file.content)) {
@@ -181,6 +212,82 @@ export async function analyzeSkill(files, opts = {}) {
         executable_files: executableFiles,
         hidden_unicode_files: hiddenUnicodeFiles,
     };
+}
+/**
+ * The command lines a plugin's configuration makes the host run: every
+ * `command` string (with its `args`, when they are strings) in a
+ * `hooks.json`, a `plugin.json`, an `.mcp.json` / `mcp.json`, or a
+ * `.claude/settings*.json` — hooks and MCP servers alike. Each carries the
+ * line its `command` sits on.
+ */
+function executedCommands(file) {
+    const name = file.relPath.split('/').pop()?.toLowerCase() ?? '';
+    const inClaudeDir = /(^|\/)\.claude\/settings(\.local)?\.json$/i.test(file.relPath);
+    if (!['hooks.json', 'plugin.json', '.mcp.json', 'mcp.json'].includes(name) && !inClaudeDir)
+        return [];
+    let json;
+    try {
+        json = JSON.parse(file.content);
+    }
+    catch {
+        return [];
+    }
+    const out = [];
+    const walk = (node, depth) => {
+        if (depth > 12 || node === null || typeof node !== 'object')
+            return;
+        if (Array.isArray(node)) {
+            for (const item of node)
+                walk(item, depth + 1);
+            return;
+        }
+        const obj = node;
+        const command = obj['command'];
+        if (typeof command === 'string' && command.trim() !== '') {
+            const args = Array.isArray(obj['args']) ? obj['args'].filter((a) => typeof a === 'string') : [];
+            const at = file.content.indexOf(JSON.stringify(command));
+            out.push({
+                text: [command, ...args].join(' '),
+                line: at === -1 ? 1 : file.content.slice(0, at).split(/\r?\n/).length,
+                what: obj['type'] === 'command' || name === 'hooks.json' ? `a hook in ${name}` : `an MCP server in ${name}`,
+            });
+        }
+        for (const value of Object.values(obj))
+            walk(value, depth + 1);
+    };
+    walk(json, 0);
+    return out;
+}
+/** Markdown or plain text, where an indented block is code: `.md`, `.txt`, `.rst`, `.adoc`, or no extension. */
+function isMarkdownLike(relPath) {
+    const name = relPath.split('/').pop() ?? '';
+    return /\.(md|markdown|mdx|txt|rst|adoc)$/i.test(name) || !name.includes('.');
+}
+/** Says which part of an instruction file a code rule read, and why a hit scores below its rule. */
+const CODE_SOURCE_TEXT = {
+    fenced: 'a fenced code block',
+    indented: 'an indented code block',
+    pre: 'an HTML <pre> / <code> block',
+    inline: 'inline code',
+};
+function whereFound(m) {
+    if (m.cited) {
+        return (' Cited, not said: the phrase is quoted — in quotation marks, a code span, or a code block — under text ' +
+            'that labels it an attack to resist and does not tell the reader to use it: the shape of documentation ' +
+            'that describes the attack. Reported at low, not dismissed: a model does not stop obeying an instruction ' +
+            'because it is quoted, so read it if the file is not about AI safety.');
+    }
+    const kind = CODE_SOURCE_TEXT[m.source];
+    if (kind === undefined)
+        return '';
+    const where = ` Found in ${kind} of an instruction file, which the model may run as written.`;
+    if (m.severity === severityOfRule(m.rule))
+        return where;
+    return m.rule.fetchesOrSends === true
+        ? `${where} Scored one level below the rule: a placeholder (…, <url>, example.com) stands where its ` +
+            'target would be, and nothing in it or in its block is a real target — the shape of documentation.'
+        : `${where} Scored one level below the rule: nothing in it or in its block is a fetch target, and such ` +
+            'code is as often a mention of the command as an instruction to run it.';
 }
 function emptyBreakdown() {
     const out = {};

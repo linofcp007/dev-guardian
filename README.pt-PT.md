@@ -90,7 +90,7 @@ A versão 2.0.0 tinha 48; o `CHANGELOG.md` indica, para cada nome antigo, o que 
 | WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
 | C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
 
-Os recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) servem os resultados guardados em JSON. Tudo fica em `.guardian/guardian.db`; o servidor mantém `.guardian/` fora do git, exceto `.guardian/baseline.json`, que a CI precisa de ter no repositório.
+Os recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) servem os resultados guardados em JSON. Tudo fica em `.guardian/guardian.db`; o servidor mantém `.guardian/` fora do git, exceto `.guardian/baseline.json`, que a CI precisa de ter no repositório. O histórico, as supressões e as baselines ficam associados ao caminho do projeto: mover ou mudar o nome do repositório recomeça-os do zero (as linhas antigas ficam no caminho antigo). Um `guardian.db` que o seu dev-guardian não criou (vindo de um clone ou de um ficheiro compactado — zip ou tar —, ou que esteja no repositório) nunca é aberto. **Ao atualizar a partir da 3.0.0:** o `guardian.db` que já tem também não é considerado fiável automaticamente — até o registar, as análises vão para uma base de dados de recurso do utilizador e o `health_status` indica-o. Se for seu, execute pessoalmente, uma vez, `node <plugin>/cli/dev-guardian.mjs db adopt --project . --yes` (sem `--yes` mostra primeiro o que contém; `--rehome` move também as análises registadas através de uma ligação para o projeto). Ver [SECURITY.md](SECURITY.md).
 
 ## O que cada stack recebe
 
@@ -109,7 +109,7 @@ Os recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://
 
 Para lá da tabela, o `scan_sast` corre o ruleset do registry do Semgrep (`--config=auto`), que escolhe regras para as linguagens que encontrar — Kotlin incluído — e o gitleaks procura segredos em qualquer projeto. Contentores e IaC (Dockerfile, imagens, compose, Terraform, Kubernetes, CloudFormation, Helm, workflows do GitHub Actions) ficam com o `scan_containers` e o `scan_iac`; numa imagem, o `scan_containers` usa ainda o cosign para ver se está assinada e tem proveniência SLSA assinada, e verifica quem a assinou quando lhe indica o signatário. "Só alcançável / desconhecido" quer dizer que a ferramenta nunca afirma que código é inalcançável numa linguagem que resolve código em runtime (autoload, anotações, contentores de DI). O .NET tem ainda quatro ferramentas dedicadas e o WordPress dez. O Trivy lê um lock file do Gradle em qualquer projeto, Kotlin incluído, e um build Gradle que não conseguiu ler é assinalado como lacuna de cobertura; para Kotlin não há regras de bugs nem extração de rotas.
 
-**O Gradle e o Python precisam de um lock file para o Trivy.** O Trivy só lê as dependências do Gradle a partir do `gradle.lockfile`, e as do Python a partir do `poetry.lock`, do `uv.lock`, do `Pipfile.lock` ou de um `requirements.txt` com versões fixadas. Um `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` ou `requirements*.txt` que não conseguiu ler é reportado como lacuna de cobertura (`trivy:gradle`, `trivy:python`, ou `trivy` ignorado quando não leu mais nada), nunca como um scan limpo. Para a fechar, gera o lock file. No Gradle, ativa primeiro `dependencyLocking { lockAllConfigurations() }` no build — sem isso, `gradle dependencies --write-locks` não escreve nada — e só depois corre esse comando. No Python, corre `poetry lock`, `uv lock` ou `pipenv lock`, ou fixa a versão de cada dependência no `requirements.txt`.
+**O Gradle e o Python precisam de um lock file para o Trivy.** O Trivy só lê as dependências do Gradle a partir do `gradle.lockfile`, e as do Python a partir do `poetry.lock`, do `uv.lock`, do `Pipfile.lock` ou de um `requirements.txt` com versões fixadas. Um `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` ou `requirements*.txt` que não conseguiu ler é reportado como lacuna de cobertura (`trivy:gradle`, `trivy:python`, ou `trivy` ignorado quando não leu mais nada), nunca como um scan limpo. Vale para um manifesto em qualquer ponto da árvore — incluindo um `web/package.json` ao lado de um lock file na raiz; só um membro de um workspace fica coberto pelo lock da raiz — e para um `go.mod` que o Trivy não conseguiu interpretar (`trivy:go`). Para a fechar, gera o lock file. No Gradle, ativa primeiro `dependencyLocking { lockAllConfigurations() }` no build — sem isso, `gradle dependencies --write-locks` não escreve nada — e só depois corre esse comando. No Python, corre `poetry lock`, `uv lock` ou `pipenv lock`, ou fixa a versão de cada dependência no `requirements.txt`.
 
 ## Hooks de proteção
 
@@ -129,7 +129,7 @@ Detalhes, configuração e formas de desligar: [docs/hooks.md](docs/hooks.md). O
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline e Claude Desktop recebem o servidor MCP e um ficheiro de regras (sem skills, comandos nem hooks). Clona uma vez e depois corre a CLI **pelo caminho absoluto** a partir do teu projeto:
 
 ```text
-git clone --depth 1 --branch v3.0.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.1.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
@@ -145,11 +145,11 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .      
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-O `ci-init` gera um pipeline com cada action fixada por SHA de commit e cada scanner por versão e checksum. O `scan` termina com 0 quando passa, 1 quando um finding novo face à baseline atinge `--fail-on`, **2 quando um scanner não correu** (nunca leias isso como aprovado) e 3 num erro de utilização. Ver [docs/ci.md](docs/ci.md). Corre-os a partir do teu projeto, com o caminho do teu clone (a cópia do próprio plugin também serve). Para uma vista local: `status` e `dashboard` (uma página HTML autónoma, sem rede).
+O `ci-init` gera um pipeline com cada action fixada por SHA de commit e cada scanner por versão e checksum. O `scan` termina com 0 quando passa, 1 quando um finding novo face à baseline atinge `--fail-on`, **2 quando um scanner não correu** (nunca leias isso como aprovado) e 3 num erro de utilização. Num pull request, o pipeline gerado avalia contra a baseline e as regras Semgrep do commit base (`--baseline-ref`, `--rules-ref`), nunca contra as do próprio pull request. Ver [docs/ci.md](docs/ci.md). Corre-os a partir do teu projeto, com o caminho do teu clone (a cópia do próprio plugin também serve). Para uma vista local: `status` e `dashboard` (uma página HTML autónoma, sem rede).
 
 ## Privacidade e rede
 
-O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à rede — o modo registry do Semgrep (que envia métricas de utilização à Semgrep Inc.; `local_only: true` evita-o) e a sua verificação de versão, a base de dados do Trivy, os feeds NuGet de um projeto .NET (o `scan_sast` restaura-o e compila-o, com ou sem `local_only`), o OSV, os registos de pacotes, CISA KEV / FIRST EPSS, a Wordfence e a verificação de segredos ao vivo, que é opcional. A lista completa, por ferramenta, está no [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` desliga as consultas que o dev-guardian faz por iniciativa própria (informação sobre ameaças, verificação de pacotes, verificação de segredos ao vivo, o feed da Wordfence); todas as variáveis de ambiente estão em [docs/env.md](docs/env.md).
+O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à rede — o modo registry do Semgrep (que envia métricas de utilização à Semgrep Inc.; `local_only: true` evita-o), a base de dados do Trivy, os feeds NuGet de um projeto .NET (o `scan_sast` restaura-o e compila-o, com ou sem `local_only`), o OSV, os registos de pacotes, CISA KEV / FIRST EPSS, a Wordfence e a verificação de segredos ao vivo, que é opcional. A lista completa, por ferramenta, está no [SECURITY.md](SECURITY.md). `GUARDIAN_OFFLINE=1` desliga as consultas que o dev-guardian faz por iniciativa própria (informação sobre ameaças, verificação de pacotes, verificação de segredos ao vivo, o feed da Wordfence); todas as variáveis de ambiente estão em [docs/env.md](docs/env.md).
 
 ## Resolução de problemas
 
@@ -164,7 +164,7 @@ O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à red
 
 **`install_toolchain` com `elevation_allowed: true` falha com "sudo: a terminal is required to read the password".** Os passos de instalação correm destacados, sem terminal, por isso em Linux e macOS a elevação só funciona com sudo sem palavra-passe para esses comandos. Caso contrário, corre tu os comandos listados em `requires_elevation`. O SDK do .NET nunca é instalado automaticamente.
 
-**O Semgrep envia métricas.** O `scan_sast` por omissão usa `--config=auto`, que o Semgrep só permite com métricas ligadas. Passa `local_only: true` (ou `--local-only` na CLI) para correr só as regras em disco com `--metrics=off`.
+**O Semgrep envia métricas.** O `scan_sast` por omissão usa `--config=auto`, que o Semgrep só permite com métricas ligadas. Passa `local_only: true` (ou `--local-only` na CLI) para manter o Semgrep local: só regras em disco — as do projeto e os pacotes do plugin (o pacote para aplicações LLM continua a correr) — com `--metrics=off` e sem descarregar nada do registo. Não quer dizer "nada sai da máquina": o Trivy continua a descarregar a sua base de dados de vulnerabilidades e um projeto .NET continua a ser restaurado a partir dos seus feeds NuGet ([SECURITY.md](SECURITY.md#network-egress)). A verificação de versão do próprio Semgrep está desligada em todas as execuções.
 
 ## Estrutura do repositório
 
@@ -173,7 +173,7 @@ O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à red
 commands/         os 10 comandos slash
 skills/           as 13 skills
 hooks/            hooks.json + guardian-hook.mjs
-cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard)
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt)
 mcp/              o servidor MCP: src/, test/, dist/ (no repositório)
 configs/          packs Semgrep, modelos de CI, configurações gitleaks/Renovate/pre-commit, modelos de compliance
 host-rules/       modelos de regras para outros hosts

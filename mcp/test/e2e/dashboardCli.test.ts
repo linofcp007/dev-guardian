@@ -16,8 +16,9 @@
  * — these commands touch only a local SQLite file, no scanner, no network.
  */
 
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import {
   mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync,
 } from 'node:fs';
@@ -42,13 +43,16 @@ import {
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
+// Above the cap, so a hung CLI is reported by the cap — naming the command —
+// and not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
 let project: string;
 beforeAll(() => { project = mkdtempSync(join(tmpdir(), 'guardian-dash-')); });
 afterAll(() => { rmSync(project, { recursive: true, force: true }); });
 
 function runCli(args: string[]) {
-  const r = spawnSync(process.execPath, [CLI, ...args], {
+  const r = spawnSyncCapped(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     env: { ...process.env, NO_COLOR: '1' },
     timeout: TIMEOUT_MS,
@@ -521,7 +525,10 @@ describe('dev-guardian status — a migrated-but-missing-table database is refus
 
       expect(r.status).toBe(3);
       expect(r.stdout).toBe('');
-      expect(r.stderr).toMatch(/no such table/i);
+      // Since the migration set (Unreleased): the storage layer names the
+      // file and the missing table itself, before `new Storage(db)` runs.
+      expect(r.stderr).toMatch(/is missing table scans/i);
+      expect(r.stderr).toContain(join(dir, '.guardian', 'guardian.db'));
 
       const dbPath = join(dir, '.guardian', 'guardian.db');
       expect(existsSync(dbPath)).toBe(true);
@@ -766,6 +773,31 @@ describe('dev-guardian status / dashboard — the root/home guard every MCP tool
       expect(r.stderr).toBe('');
     } finally {
       rmSync(sub, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('dev-guardian status — a project database git tracks is never read', () => {
+  // The server refuses a committed `.guardian/guardian.db` (SQL inside it can
+  // hide findings); `status` must decide the same way, and stay read-only.
+  it('reports no scan, says why on stderr, and creates no fallback database', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guardian-dash-tracked-'));
+    const fallbackPath = resolveFallbackDbPath(dir);
+    try {
+      expect(spawnSync('git', ['init', '-q'], { cwd: dir }).status).toBe(0);
+      seedCompletedScan(dir);
+      expect(spawnSync('git', ['add', '-f', '.guardian/guardian.db'], { cwd: dir }).status).toBe(0);
+
+      const r = runCli(['status', '--project', dir]);
+
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/No scan yet|dev-guardian scan/);
+      expect(r.stdout).not.toMatch(/1 crit/);
+      expect(r.stderr).toMatch(/git tracks \.guardian\/guardian\.db/);
+      expect(existsSync(fallbackPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(fallbackPath), { recursive: true, force: true });
     }
   });
 });

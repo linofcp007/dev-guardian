@@ -32,10 +32,20 @@
  * caller did not name, exits 2 as before.
  */
 
-import { SEVERITY_ORDER, type Finding, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
+import { SEVERITY_ORDER, type Finding, type RepoSuppression, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { newFindings } from './baseline.js';
-import { CI_EXIT, type BaselineFile, type CiExitCode, type PartialParseRef, type ScanStepResult } from './types.js';
+import { BASELINE_RELATIVE_PATH } from './baseline.js';
+import {
+  CI_EXIT,
+  type BaselineFile,
+  type BaselineSource,
+  type CiExitCode,
+  type ExclusionReset,
+  type PartialParseRef,
+  type RulesSource,
+  type ScanStepResult,
+} from './types.js';
 
 export interface GateInput {
   findings: readonly Finding[];
@@ -67,6 +77,16 @@ export interface GateInput {
    * folding.
    */
   acceptedPartialParses?: readonly string[];
+  /**
+   * Where `baseline` and the scan's rules came from (`--baseline-ref`,
+   * `--rules-ref`; `ci/refConfig.ts`). Visibility only, like
+   * `suppressedByRepoConfig`: carried to every format, never into the exit
+   * code. Omitted: the scanned tree's own.
+   */
+  baselineSource?: BaselineSource;
+  rulesSource?: RulesSource;
+  /** What `--reset-exclusions-from` put back before the scan; omitted: nothing was reset. */
+  exclusionsReset?: ExclusionReset | null;
 }
 
 export interface GateVerdict {
@@ -99,6 +119,26 @@ export interface GateVerdict {
   acceptedGaps: string[];
   /** `--accept-partial-parse` paths no step reported as partly parsed (normalised). */
   unusedPartialParseAcceptances: string[];
+  /**
+   * Findings the scanned repository's own configuration suppressed — its
+   * `.trivyignore` (`ToolRun.suppressed_by_repo_config`), per step and
+   * scanner (round 4, item 2). They left no trace before. Visibility only:
+   * not new findings, not blocking, not a coverage gap — the repository
+   * decided it; the gate says so, in every format.
+   */
+  suppressedByRepoConfig: RepoSuppressionEntry[];
+  /** See `GateInput.baselineSource` — the tree's own when the input said nothing. */
+  baselineSource: BaselineSource;
+  /** See `GateInput.rulesSource`. */
+  rulesSource: RulesSource;
+  /** See `GateInput.exclusionsReset`; null when the flag was not given. */
+  exclusionsReset: ExclusionReset | null;
+}
+
+/** One scanner run's repository-suppressed findings, and the step that ran it. */
+export interface RepoSuppressionEntry extends RepoSuppression {
+  step: string;
+  tool: string;
 }
 
 /**
@@ -230,8 +270,14 @@ export function evaluateGate(input: GateInput): GateVerdict {
   const coverageGaps: string[] = [];
   const acceptedGaps: string[] = [];
 
+  const suppressedByRepoConfig: RepoSuppressionEntry[] = [];
+
   for (const step of steps) {
     allToolsRun.push(...step.tools_run);
+    for (const run of step.tools_run) {
+      const s = run.suppressed_by_repo_config;
+      if (s !== undefined) suppressedByRepoConfig.push({ step: step.tool, tool: run.name, ...s });
+    }
 
     if (!step.ran) {
       allMissingTools.push(step.tool);
@@ -302,5 +348,9 @@ export function evaluateGate(input: GateInput): GateVerdict {
     baselineAbsent: baseline === null,
     acceptedGaps,
     unusedPartialParseAcceptances: [...accepted].filter((path) => !reported.has(path)),
+    suppressedByRepoConfig,
+    baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
+    rulesSource: input.rulesSource ?? { from: 'tree' },
+    exclusionsReset: input.exclusionsReset ?? null,
   };
 }

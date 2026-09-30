@@ -79,6 +79,7 @@ function respond(uri, ctx, keep) {
         coverage: set.coverage,
         sources: set.sources,
         skipped: set.skipped,
+        ...(set.future_dated_note !== undefined ? { future_dated_note: set.future_dated_note } : {}),
     };
 }
 function mcpInvalidParams(message) {

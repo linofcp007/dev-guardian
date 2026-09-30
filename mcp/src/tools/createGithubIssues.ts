@@ -78,8 +78,20 @@ const inputSchema = {
       'Cap on issues filed in one run, highest severity first. Default: 10 — findings beyond ' +
         'the cap are counted in `filtered`, never silently dropped.',
     ),
-  labels: z.array(z.string()).optional(),
-  dry_run: z.boolean().optional(),
+  labels: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Labels for every issue. Missing ones are created; one that cannot be is left off (labels_omitted). ' +
+        'Default: ["dev-guardian", "security"].',
+    ),
+  dry_run: z
+    .boolean()
+    .optional()
+    .describe(
+      'true: list the issues that would be created and call nothing. Default: false — the call FILES REAL ' +
+        'ISSUES on GitHub through the local gh CLI.',
+    ),
 };
 
 const tool: ToolModule = {

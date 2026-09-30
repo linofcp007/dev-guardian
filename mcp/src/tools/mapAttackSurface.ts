@@ -47,7 +47,7 @@
  * toolchain, not a project without routes — nothing is persisted.
  */
 
-import { readFileSync } from 'node:fs';
+import { readProjectBytes } from '../platform/projectFs.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -95,6 +95,7 @@ import type {
 } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
+import { applySemgrepCoverageGaps, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 
 const SAMPLE_SIZE = 20;
 const WEBHOOK_PATTERN = /webhook|callback|hook/i;
@@ -361,9 +362,19 @@ async function handler(
   // Parseable is not scanned: judge the report (exit code, paths.scanned,
   // errors[]) before a single route is believed.
   const judged = judgeSurfaceReport({ run, raw, via, targets, projectPath });
+  // The shared Semgrep coverage gaps (runners/semgrepCoverageGaps.ts): a
+  // route in a file over Semgrep's size limit, or in an initialised
+  // submodule, was never read — named, and the surface is partial.
+  // The CI gate's --rules-ref: the ref's .guardianignore decides what is no gap.
+  const fromRef = ctx.repoConfigFromRef?.root;
+  const gaps = await semgrepCoverageGaps(projectPath, fromRef !== undefined ? { guardianIgnoreFrom: fromRef } : {});
+  const gapped = applySemgrepCoverageGaps(judged.toolRun, gaps, {
+    scannedNothing: judged.verdict === 'scanned_nothing',
+  });
+  const semgrepRun = gapped.toolRun;
   if (judged.verdict === 'scanned_nothing') {
     return degradedResult(
-      [judged.toolRun],
+      [semgrepRun],
       ['semgrep'],
       `Semgrep scanned none of this project's ${targets} file(s) in a routes-pack language, so no ` +
         'surface was mapped and nothing was persisted — an empty result here is a gap, not an ' +
@@ -379,7 +390,7 @@ async function handler(
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
   if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
     return degradedResult(
-      [judged.toolRun, unreadableMatchesToolRun(recovery)],
+      [semgrepRun, unreadableMatchesToolRun(recovery)],
       [],
       unreadableMatchesNote(recovery),
       ctx,
@@ -387,7 +398,7 @@ async function handler(
     );
   }
 
-  const toolsRun = [judged.toolRun, ...recoveryToolRun(recovery)];
+  const toolsRun = [semgrepRun, ...recoveryToolRun(recovery)];
   const snapshot = buildSnapshot(
     recovery.json,
     projectPath,
@@ -402,7 +413,7 @@ async function handler(
   if (judged.verdict === 'failed') {
     return withNote(
       summarize(snapshot, null, toolsRun, ctx, projectPath),
-      `Semgrep did not complete a clean scan (${judged.toolRun.reason ?? 'failed'}). The routes ` +
+      `Semgrep did not complete a clean scan (${semgrepRun.reason ?? 'failed'}). The routes ` +
         'above are what it did read, and they may be incomplete; nothing was persisted, so ' +
         'scan_dast and guardian://surface/latest will not use this run. Fix the error and re-run.',
     );
@@ -428,6 +439,13 @@ async function handler(
     );
   }
 
+  if (gapped.missing) {
+    return withNote(
+      persistAndSummarize({ ...snapshot, missing_tools: ['semgrep'] }, toolsRun),
+      `Part of the project was not read by Semgrep (${semgrepRun.reason ?? 'see tools_run'}): routes there ` +
+        'are missing from this surface, so coverage is partial. Everything else was mapped and persisted.',
+    );
+  }
   return persistAndSummarize(snapshot, toolsRun);
 }
 
@@ -454,18 +472,20 @@ const RECOVERY_STEP = 'semgrep-metavar-recovery';
 function readSources(parsed: unknown, projectPath: string): SourceMap {
   const sources = new Map<string, string>();
   for (const path of collectAllFiles(parsed)) {
-    try {
-      const buffer = readFileSync(isAbsolute(path) ? path : join(projectPath, path));
-      const text = buffer.toString('utf8');
-      // Offsets are byte offsets into the file as it sits on disk. Bytes that
-      // are not valid UTF-8 decode to U+FFFD, which re-encodes to a different
-      // length and shifts every later offset — so a file that does not
-      // round-trip is dropped rather than sliced at the wrong place.
-      if (Buffer.byteLength(text, 'utf8') !== buffer.length) continue;
-      sources.set(path, text);
-    } catch {
-      // Unreadable / deleted since the scan: absent from the map, by design.
-    }
+    // Read contained in the project, bounded, regular files only
+    // (`platform/projectFs.ts`): the path is Semgrep's, but the file is the
+    // repository's. Unreadable, refused or deleted since the scan: absent
+    // from the map, by design.
+    const read = readProjectBytes(projectPath, isAbsolute(path) ? path : join(projectPath, path));
+    if (read.status !== 'ok') continue;
+    const buffer = read.bytes;
+    const text = buffer.toString('utf8');
+    // Offsets are byte offsets into the file as it sits on disk. Bytes that
+    // are not valid UTF-8 decode to U+FFFD, which re-encodes to a different
+    // length and shifts every later offset — so a file that does not
+    // round-trip is dropped rather than sliced at the wrong place.
+    if (Buffer.byteLength(text, 'utf8') !== buffer.length) continue;
+    sources.set(path, text);
   }
   return sources;
 }

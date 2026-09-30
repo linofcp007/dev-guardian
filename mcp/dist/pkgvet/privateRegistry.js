@@ -68,6 +68,12 @@ import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { isRemoteOrDeviceTarget, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
+/** A fresh cache for one call. */
+export function registryCache() {
+    return { reads: new Map(), workspaces: new Map() };
+}
+/** The most directories a workspace walk reads (exported for the warning's wording). */
+export const MAX_WORKSPACE_DIRS = 3000;
 const PUBLIC_HOSTS = {
     npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
     pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -145,15 +151,33 @@ function takeUnread() {
     return unread;
 }
 /**
+ * The first workspace the current `customRegistryFor` call could not read to
+ * its end, and why; reset and read like {@link firstUnread}.
+ */
+let firstUnchecked;
+/** The recorded workspace, cleared for the next call. */
+function takeUnchecked() {
+    const unchecked = firstUnchecked;
+    firstUnchecked = undefined;
+    return unchecked;
+}
+/**
  * A registry configuration file's text, or `undefined`. A link on the way to
  * a network or device path (`\\host\share`, `\\?\…`) — the file itself or a
  * directory above it, below {@link walkRoot} — refuses the file unopened: an
  * open through a link to an unreachable host waits on the network for minutes,
  * and a hook that dies at its 15 s timeout lets the install through unvetted.
- * A refused file is recorded ({@link noteUnread}); an absent one is not.
+ * A refused file is recorded ({@link noteUnread}); an absent one is not — and
+ * so is one read from the call's cache, the same way as the first time.
  */
 function read(path, ctx, under, what = 'configuration') {
-    const r = readSmallText(path, MAX_REGISTRY_CONFIG_BYTES, walkRoot(path, ctx, under));
+    const root = walkRoot(path, ctx, under);
+    const key = `${path}\u0000${root ?? ''}`;
+    let r = ctx.cache?.reads.get(key);
+    if (r === undefined) {
+        r = readSmallText(path, MAX_REGISTRY_CONFIG_BYTES, root);
+        ctx.cache?.reads.set(key, r);
+    }
     if (r.status === 'refused')
         noteUnread(path, what);
     return r.status === 'ok' ? r.text : undefined;
@@ -425,27 +449,50 @@ function npmRegistry(name, ctx) {
 }
 // ─────────────────────────────────────────────────────── workspaces
 const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', 'vendor', 'dist', 'build', 'target']);
-const MAX_SCAN_DIRS = 3000;
+const MAX_SCAN_DIRS = MAX_WORKSPACE_DIRS;
 const MAX_SCAN_DEPTH = 5;
 /**
  * Every `file` under `root` (depth-limited, never into node_modules,
- * vendor, virtualenvs or dot-directories), for which `match` returns true.
+ * vendor, virtualenvs or dot-directories), indexed by the package name
+ * `nameOf` reads from it — the first manifest breadth-first for each name.
  * Glob patterns in the workspace declaration are deliberately NOT
  * interpreted: any manifest under a workspace root with the name counts as
  * local — a false "local" only turns a deny into a warning.
+ *
+ * Built once per root and call (`ctx.cache`), then looked up per package: it
+ * was walked once PER PACKAGE, up to 3000 directories each time (review I4).
+ * A walk that stops early — at {@link MAX_SCAN_DIRS} directories, or at
+ * `ctx.deadlineAt` — says so (`cut`), so a name it did not reach is unknown,
+ * never absent.
  */
-function findManifest(root, file, match, ctx) {
+function workspaceIndex(root, file, nameOf, ctx) {
+    const key = `${file}\u0000${root}`;
+    const cached = ctx.cache?.workspaces.get(key);
+    if (cached !== undefined)
+        return cached;
+    const index = { names: new Map() };
     const queue = [{ dir: root, depth: 0 }];
-    let visited = 0;
-    while (queue.length > 0 && visited < MAX_SCAN_DIRS) {
-        const next = queue.shift();
+    for (let at = 0; at < queue.length; at += 1) {
+        if (at >= MAX_SCAN_DIRS) {
+            index.cut = 'size';
+            break;
+        }
+        if (ctx.deadlineAt !== undefined && Date.now() > ctx.deadlineAt) {
+            index.cut = 'time';
+            break;
+        }
+        const next = queue[at];
         if (next === undefined)
             break;
-        visited += 1;
         const manifest = join(next.dir, file);
-        const text = read(manifest, ctx, root, 'workspace manifest');
-        if (text !== undefined && match(text))
-            return manifest;
+        const r = readSmallText(manifest, MAX_REGISTRY_CONFIG_BYTES, walkRoot(manifest, ctx, root));
+        if (r.status === 'refused')
+            index.unread = index.unread ?? { path: manifest, what: 'workspace manifest' };
+        else if (r.status === 'ok') {
+            const name = nameOf(r.text);
+            if (name !== undefined && !index.names.has(name))
+                index.names.set(name, manifest);
+        }
         if (next.depth >= MAX_SCAN_DEPTH)
             continue;
         let entries = [];
@@ -460,7 +507,36 @@ function findManifest(root, file, match, ctx) {
         for (const e of entries)
             queue.push({ dir: join(next.dir, e), depth: next.depth + 1 });
     }
+    ctx.cache?.workspaces.set(key, index);
+    return index;
+}
+/** The manifest of `wanted` under `root`, or `undefined` — noting what the walk could not read. */
+function findManifest(root, file, nameOf, wanted, ctx) {
+    const index = workspaceIndex(root, file, nameOf, ctx);
+    const hit = index.names.get(wanted);
+    if (hit !== undefined)
+        return hit;
+    if (index.unread !== undefined)
+        noteUnread(index.unread.path, index.unread.what);
+    if (index.cut !== undefined)
+        firstUnchecked = firstUnchecked ?? { root, cut: index.cut };
     return undefined;
+}
+/** A `package.json`'s `name`. */
+function npmManifestName(text) {
+    try {
+        const name = JSON.parse(text).name;
+        return typeof name === 'string' ? name : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+/** A `pyproject.toml`'s `[project] name`, normalised (PEP 503). */
+function pyprojectName(text) {
+    const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text)?.[1] ?? '';
+    const n = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
+    return n === undefined ? undefined : pep503(n);
 }
 function hasWorkspaces(packageJson) {
     if (packageJson === undefined)
@@ -481,14 +557,7 @@ function npmWorkspacePackage(name, ctx) {
         const isRoot = hasWorkspaces(read(join(dir, 'package.json'), ctx, undefined, 'workspace manifest')) || present(join(dir, 'pnpm-workspace.yaml'));
         if (!isRoot)
             continue;
-        const hit = findManifest(dir, 'package.json', (text) => {
-            try {
-                return JSON.parse(text).name === name;
-            }
-            catch {
-                return false;
-            }
-        }, ctx);
+        const hit = findManifest(dir, 'package.json', npmManifestName, name, ctx);
         if (hit !== undefined)
             return hit;
     }
@@ -510,11 +579,7 @@ function uvWorkspacePackage(name, ctx) {
         }
         if (!/^\s*\[tool\.uv\.workspace\]/m.test(text))
             continue;
-        const hit = findManifest(dir, 'pyproject.toml', (t) => {
-            const project = /^\s*\[project\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(t)?.[1] ?? '';
-            const n = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(project)?.[1];
-            return n !== undefined && pep503(n) === wanted;
-        }, ctx);
+        const hit = findManifest(dir, 'pyproject.toml', pyprojectName, wanted, ctx);
         if (hit !== undefined)
             return hit;
     }
@@ -779,6 +844,7 @@ function nugetRegistry(name, ctx) {
  */
 export function customRegistryFor(ecosystem, name, ctx = {}) {
     firstUnread = undefined;
+    firstUnchecked = undefined;
     let found;
     try {
         switch (ecosystem) {
@@ -801,9 +867,15 @@ export function customRegistryFor(ecosystem, name, ctx = {}) {
     catch {
         found = null;
     }
-    // Nothing explains the 404 — unless a configuration that is there could not
-    // be read: it may name a private registry (Part Y fix round 1).
+    // Nothing explains the 404 — unless a workspace was not read to its end (it
+    // may hold the package: review I4), or a configuration that is there could
+    // not be read: it may name a private registry (Part Y fix round 1).
     const unread = takeUnread();
-    return found === null && unread !== undefined ? { kind: 'unreadable', source: unread.path, what: unread.what } : found;
+    const unchecked = takeUnchecked();
+    if (found !== null)
+        return found;
+    if (unchecked !== undefined)
+        return { kind: 'unchecked', source: unchecked.root, cut: unchecked.cut };
+    return unread !== undefined ? { kind: 'unreadable', source: unread.path, what: unread.what } : null;
 }
 //# sourceMappingURL=privateRegistry.js.map

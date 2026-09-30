@@ -26,6 +26,7 @@ import type { FailedRule, PartialParse, ToolRun } from '../types.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
 import { runProcess, type ProcessOutcome } from './processRunner.js';
+import { semgrepSpawn } from './semgrepRun.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import {
   checkSemgrepReport,
@@ -270,14 +271,14 @@ export function semgrepOnFiles(args: {
   };
   return scanFileBatches({
     name: 'semgrep',
-    command: 'semgrep',
+    // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
+    ...semgrepSpawn(args.env),
     args: [...args.configArgs, '--json', '--quiet'],
     reportArgs: (f) => ['--output', f],
     files: args.files,
     cwd: args.cwd,
     reportDir: args.reportDir,
     reportPrefix: 'sast',
-    env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),
     // The shared judge's `partial` verdict is no failure of the batch, and
@@ -310,7 +311,14 @@ export function semgrepOnFiles(args: {
   });
 }
 
-/** `scanFileBatches` for Bandit: `-f json -o <f> -q -- files`. */
+/**
+ * `scanFileBatches` for Bandit: `-f json -o <f> -q [--ini <ini>] -- files`.
+ *
+ * Bandit handed explicit files looks for no `.bandit` at all — its search
+ * walks directory targets only — so a configuration reaches it here only as
+ * `ini`, and the caller that passes one names it (scan_sast passes the one
+ * its whole-project run uses; review_pr passes none).
+ */
 export function banditOnFiles(args: {
   files: readonly string[];
   cwd: string;
@@ -318,11 +326,13 @@ export function banditOnFiles(args: {
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   onLog?: (line: string) => void;
+  /** The `--ini` to read; absent, Bandit reads no configuration file. */
+  ini?: string;
 }): Promise<FileBatchScanResult> {
   return scanFileBatches({
     name: 'bandit',
     command: 'bandit',
-    args: ['-f', 'json', '-q'],
+    args: ['-f', 'json', '-q', ...(args.ini !== undefined ? ['--ini', args.ini] : [])],
     reportArgs: (f) => ['-o', f],
     files: args.files,
     cwd: args.cwd,

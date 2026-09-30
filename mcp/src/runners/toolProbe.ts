@@ -17,6 +17,7 @@
 
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
 import { compareSemver } from '../platform/semverCompare.js';
+import { ensureUserBinOnPath } from '../platform/userBin.js';
 import { runProcess } from './processRunner.js';
 
 export interface VersionProbe {
@@ -30,6 +31,12 @@ export interface VersionProbe {
    * `global.json` pins, and exits non-zero when that one is missing.
    */
   parse?: 'semver' | 'dotnet-sdks';
+  /**
+   * Variables set over the server's environment for the probe — Semgrep's
+   * version check off (`semgrepRun.ts#SEMGREP_NO_VERSION_CHECK_ENV`):
+   * `semgrep --version` asks Semgrep's servers for a newer release too.
+   */
+  env?: Readonly<Record<string, string>>;
 }
 
 export interface ProbeResult {
@@ -79,10 +86,15 @@ export function highestDotnetSdk(text: string): string | null {
 }
 
 export async function runVersionProbe(probe: VersionProbe, cwd: string): Promise<ProbeResult> {
+  // check_toolchain sees what the scans will: the per-user tools directory
+  // the pinned installers write to is on the PATH (`platform/userBin.ts`).
+  ensureUserBinOnPath();
   const r = await runProcess({
     command: probe.command,
     args: probe.args,
     cwd,
+    // Merged over the server's own environment (runProcess extends it).
+    ...(probe.env !== undefined ? { env: { ...probe.env } } : {}),
     timeoutMs: PROBE_TIMEOUT_MS,
     stdoutCapBytes: 256 * 1024,
   });

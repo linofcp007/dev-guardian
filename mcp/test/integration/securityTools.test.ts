@@ -218,6 +218,47 @@ describe('scan_sast (Semgrep)', () => {
     expect(total).toBe(3);
   });
 
+  // Review M2, round 2: the Docker fallback gets the submodule note too. Which
+  // listing Semgrep uses inside the container cannot be checked from here, so
+  // an initialised submodule is named — the safe direction.
+  it('the Docker fallback names an initialised submodule as a gap', async () => {
+    const git = (cwd: string, ...args: string[]) =>
+      execa('git', ['-c', 'protocol.file.allow=always', '-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', ...args], { cwd });
+    const lib = tempProject();
+    await git(lib, 'init', '-q');
+    writeFileSync(join(lib, 'lib.py'), 'x = 1\n', 'utf8');
+    await git(lib, 'add', '-A');
+    await git(lib, 'commit', '-q', '-m', 'lib');
+    const project = tempProject();
+    await git(project, 'init', '-q');
+    writeFileSync(join(project, 'app.py'), 'x = 1\n', 'utf8');
+    await git(project, 'add', '-A');
+    await git(project, 'commit', '-q', '-m', 'app');
+    await git(project, 'submodule', 'add', '-q', `file://${lib.replace(/\\/g, '/')}`, 'vendor/lib');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (containerOut?.startsWith('/src/')) {
+        const hostOut = join(project, containerOut.slice('/src/'.length));
+        mkdirSync(dirname(hostOut), { recursive: true });
+        writeFileSync(hostOut, semgrepFixture(), 'utf8');
+      }
+      return fakeRunSuccess({ exitCode: 1 });
+    });
+    const r = (await getTool('scan_sast').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      tools_run: { name: string; status: string; reason?: string }[];
+      missing_tools: string[];
+    };
+    const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(semgrep?.reason).toMatch(/docker.*submodule contents not scanned: vendor\/lib/i);
+    expect(r.missing_tools).toContain('semgrep');
+    expect(r.coverage).toBe('partial');
+  }, 60_000);
+
   it('reports coverage=none with a loud warning when neither semgrep nor docker exist', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);
@@ -371,7 +412,7 @@ describe('scan_secrets (gitleaks)', () => {
     const commit = (await git('commit-tree', tree, '-m', 'fetched')).stdout.trim();
     await git('update-ref', 'refs/remotes/origin/main', commit);
     expect((await run()).cached).toBeUndefined();
-  });
+  }, 30_000); // Measured in full-suite runs (review 3.0, R7): real git and three scans, 8.7 s under coverage, past 10 s under load.
 
   it('a history pass whose report was never written is failed even on exit 0', async () => {
     const project = tempProject();

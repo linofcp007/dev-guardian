@@ -109,8 +109,8 @@ export const RUN_NAMES = {
     'trivy-image': { measures: [...TRIVY_FS_KEYS, TRIVY_CONFIG], ownTarget: true, onRequest: true },
     'trivy-config': scanner(TRIVY_CONFIG),
     'trivy-dockerfile': scanner(TRIVY_CONFIG),
-    // scan_deps / deps_audit: Trivy ran ok but produced no Result for a root
-    // manifest of this ecosystem (trivy.ts, `assessManifestCoverage`). Listed
+    // scan_deps / deps_audit / scan_wordpress: Trivy ran ok but produced no Result for a
+    // manifest of this ecosystem, anywhere in the tree (trivy.ts, `assessManifestCoverage`). Listed
     // missing, never ok, so each is a gap in exactly its own ecosystem's
     // dependency findings: an older scan's NuGet CVE is not re-measured when
     // packages.lock.json has gone, and an npm CVE beside it still resolves.
@@ -124,6 +124,11 @@ export const RUN_NAMES = {
     'trivy:cargo': scanner(trivyFsKey('cargo')),
     'trivy:gradle': scanner(trivyFsKey('gradle')),
     'trivy:python': scanner(trivyFsKey('python')),
+    'trivy:go': scanner(trivyFsKey('go')),
+    // The manifest walk stopped early (runners/trivyRun.ts#judgeTrivyFs):
+    // coverage cannot be full, but Trivy read the whole tree — no finding of
+    // its is left unmeasured by this, only the check of which manifests it read.
+    'trivy:manifest-walk': scanner(),
     // deps_audit's native auditors, recorded by command: `npm audit`,
     // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's
     // `dotnet list package --vulnerable`, whose findings say
@@ -183,6 +188,9 @@ export const RUN_NAMES = {
     // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
     // requires an exact literal key, so both get their own entry.
     'wordfence-feed:unmatched-version': scanner('wordfence'),
+    // A plugins/themes directory (or component) the inventory could not read — a link out of the
+    // install, a network path, an unlistable directory: not inventoried, so not checked (W2E round 2).
+    'wordfence-feed:not-inventoried': scanner('wordfence'),
     'wp-plugin-api:deadline': scanner('wp-plugin-api'),
     // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
     // also audit_executive's entries for those sub-tools.

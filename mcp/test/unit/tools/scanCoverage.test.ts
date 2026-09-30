@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessCoverage, computeCoverage } from '../../../src/tools/scanCoverage.js';
+import { assessCoverage, computeCoverage, repoSuppressionWarnings } from '../../../src/tools/scanCoverage.js';
 import type { ToolRun } from '../../../src/types.js';
 
 const ok = (name: string): ToolRun => ({ name, status: 'ok' });
@@ -9,6 +9,19 @@ const skipped = (name: string, reason = 'not_installed'): ToolRun => ({
   reason,
 });
 const failed = (name: string): ToolRun => ({ name, status: 'failed' });
+
+describe('assessCoverage — the manifest walk gap (round 2, item 7)', () => {
+  it('trivy ok beside trivy:manifest-walk is partial, worded as a check cut short', () => {
+    const a = assessCoverage(
+      'deps',
+      [{ name: 'trivy', status: 'ok', reason: 'the manifest walk stopped after 20000 directories — manifests below were not checked' }],
+      ['trivy:manifest-walk'],
+    );
+    expect(a.coverage).toBe('partial');
+    expect(a.warning).toMatch(/trivy ran, but the check of which dependency manifests it read stopped early/);
+    expect(a.warning).not.toMatch(/manifest-walk was not covered/);
+  });
+});
 
 describe('computeCoverage', () => {
   it('is full when every attempted scanner ran ok and nothing is missing', () => {
@@ -180,5 +193,100 @@ describe('assessCoverage: rules that did not load are not "install"', () => {
 
   it('control: a crashed scanner (no rule error) keeps the install advice', () => {
     expect(assessCoverage('sast', [failed('semgrep')], []).warning).toMatch(/Install semgrep/);
+  });
+});
+
+/**
+ * Round 4, item 5: a manifest nobody ships (an example, the docs, a test
+ * fixture) is still a gap Trivy did not read — the advice names the way to
+ * say so, `.guardianignore`, rather than excluding such directories blindly.
+ */
+/**
+ * Review 3.0, wave 2 (c): a package.json with only devDependencies beside a
+ * committed lock read "NOTHING was scanned … commit the lock file" — the
+ * lock is there; Trivy skips dev dependencies by default.
+ */
+describe('assessCoverage: a manifest with only devDependencies beside its lock file', () => {
+  const noManifest = skipped('trivy', 'no_supported_manifest');
+
+  it('coverage none: says why (only devDependencies, which Trivy skips), never "commit the lock file"', () => {
+    const { coverage, warning } = assessCoverage('deps', [noManifest], ['trivy'], {
+      manifestGaps: [{ ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] }],
+    });
+    expect(coverage).toBe('none');
+    expect(warning).toContain('npm (package.json): only devDependencies, which Trivy skips by default');
+    expect(warning).not.toMatch(/commit the lock file/);
+    expect(warning).not.toMatch(/has a lock file it can read/);
+    expect(warning).toMatch(/not a clean bill of health/i);
+  });
+
+  it('the old advice still stands for a manifest with no lock file', () => {
+    const { warning } = assessCoverage('deps', [noManifest], ['trivy'], {
+      manifestGaps: [{ ecosystem: 'npm', files: ['package.json'] }],
+    });
+    expect(warning).toMatch(/no dependency manifest here has a lock file it can read/);
+    expect(warning).toContain('npm (package.json): commit the lock file your package manager writes');
+    expect(warning).not.toMatch(/devDependencies/);
+  });
+
+  it('both in one ecosystem: each manifest gets its own advice (none and partial)', () => {
+    const gaps = [{ ecosystem: 'npm', files: ['a/package.json', 'b/package.json'], dev_only: ['b/package.json'] }];
+    for (const [runs, missing] of [
+      [[noManifest], ['trivy']],
+      [[ok('trivy')], ['trivy:npm']],
+    ] as const) {
+      const warning = assessCoverage('deps', runs, missing, { manifestGaps: gaps }).warning ?? '';
+      expect(warning).toContain('npm (a/package.json): commit the lock file your package manager writes');
+      expect(warning).toContain('npm (b/package.json): only devDependencies, which Trivy skips by default');
+    }
+  });
+});
+
+describe('assessCoverage: manifest advice names .guardianignore', () => {
+  it('partial and none both say a manifest that is not shipped can be listed in .guardianignore', () => {
+    const gaps = [{ ecosystem: 'npm', files: ['examples/demo/package.json'] }];
+    const partial = assessCoverage('deps', [ok('trivy')], ['trivy:npm'], { manifestGaps: gaps }).warning ?? '';
+    expect(partial).toMatch(/examples\/demo\/package\.json/);
+    expect(partial).toMatch(/\.guardianignore/);
+    const none = assessCoverage('deps', [skipped('trivy', 'no_supported_manifest')], ['trivy'], { manifestGaps: gaps }).warning ?? '';
+    expect(none).toMatch(/\.guardianignore/);
+  });
+});
+
+/**
+ * Round 4, item 2: findings the repository's own `.trivyignore` suppressed
+ * are named in the scan's warnings — counted, never a coverage gap.
+ */
+describe('repoSuppressionWarnings', () => {
+  it('names each run whose repository configuration suppressed findings; coverage untouched', () => {
+    const runs: ToolRun[] = [
+      {
+        name: 'trivy',
+        status: 'ok',
+        honoured_config: ['.trivyignore'],
+        suppressed_by_repo_config: { file: '.trivyignore', count: 2, ids: ['CVE-2020-8203', 'NSWG-ECO-516'], findings: [] },
+      },
+      {
+        name: 'trivy-config',
+        status: 'ok',
+        honoured_config: ['.trivyignore'],
+        suppressed_by_repo_config: {
+          file: '.trivyignore',
+          count: null,
+          ids: [],
+          findings: [],
+          unlisted_because: 'trivy config has no --show-suppressed',
+        },
+      },
+      ok('semgrep'),
+    ];
+    expect(repoSuppressionWarnings(runs)).toEqual([
+      "trivy: 2 findings suppressed by the repository's .trivyignore: CVE-2020-8203, NSWG-ECO-516 — not reported, " +
+        'not counted; remove the entries to see them',
+      "trivy-config: what the repository's .trivyignore suppressed cannot be listed (trivy config has no " +
+        '--show-suppressed) — its entries are not reported',
+    ]);
+    expect(assessCoverage('deps', runs, []).coverage).toBe('full');
+    expect(repoSuppressionWarnings([ok('trivy')])).toEqual([]);
   });
 });

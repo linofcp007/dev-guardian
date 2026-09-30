@@ -12,10 +12,9 @@
  * package the project must install (`npm i pino`, `pip install structlog`,
  * etc.) — actual install is left to the user / their package manager.
  */
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { describeWriteRefusal, listProjectDir, presentInProject, writeProjectFile } from '../platform/projectFs.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 const tool = {
@@ -50,20 +49,18 @@ async function handler(input, ctx) {
     const skipped = [];
     const failed = [];
     if (apply) {
+        // Create-only, through `platform/projectFs.ts`: an existing file is the
+        // user's and is skipped; a link at the target (a dangling one included)
+        // or a directory on the way that links out of the project is refused,
+        // never written through.
         for (const p of proposals) {
-            const abs = join(projectPath, p.target);
-            if (existsSync(abs)) {
-                skipped.push({ ...p, reason_skipped: 'already_exists' });
-                continue;
-            }
-            try {
-                mkdirSync(dirname(abs), { recursive: true });
-                writeFileSync(abs, p.contents, 'utf8');
+            const w = writeProjectFile(projectPath, p.target, p.contents, { mode: 'create' });
+            if (w.ok)
                 written.push(p);
-            }
-            catch (e) {
-                failed.push({ ...p, error: e.message });
-            }
+            else if (w.reason === 'exists')
+                skipped.push({ ...p, reason_skipped: 'already_exists' });
+            else
+                failed.push({ ...p, error: describeWriteRefusal(w.reason, w.detail) });
         }
     }
     return {
@@ -107,29 +104,24 @@ function inferStack(projectPath, ctx) {
             return 'dotnet';
     }
     // Filesystem fallback.
-    if (existsSync(join(projectPath, 'package.json')))
+    if (presentInProject(projectPath, 'package.json'))
         return 'node';
-    if (existsSync(join(projectPath, 'pyproject.toml')) ||
-        existsSync(join(projectPath, 'requirements.txt')))
+    if (presentInProject(projectPath, 'pyproject.toml') ||
+        presentInProject(projectPath, 'requirements.txt'))
         return 'python';
-    if (existsSync(join(projectPath, 'composer.json')))
+    if (presentInProject(projectPath, 'composer.json'))
         return 'php';
-    if (existsSync(join(projectPath, 'go.mod')))
+    if (presentInProject(projectPath, 'go.mod'))
         return 'go';
-    if (existsSync(join(projectPath, 'Cargo.toml')))
+    if (presentInProject(projectPath, 'Cargo.toml'))
         return 'rust';
-    if (existsSync(join(projectPath, 'pom.xml')) || existsSync(join(projectPath, 'build.gradle')))
+    if (presentInProject(projectPath, 'pom.xml') || presentInProject(projectPath, 'build.gradle'))
         return 'java';
-    if (existsSync(join(projectPath, 'Gemfile')))
+    if (presentInProject(projectPath, 'Gemfile'))
         return 'ruby';
-    try {
-        const entries = readdirSync(projectPath);
-        if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))
-            return 'dotnet';
-    }
-    catch {
-        /* ignore */
-    }
+    const entries = listProjectDir(projectPath, projectPath).map((e) => e.name);
+    if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))
+        return 'dotnet';
     return 'generic';
 }
 function buildProposals(stack) {

@@ -19,24 +19,36 @@
  *
  * Anything else prepares nothing — in both trees alike.
  */
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { presentInProject } from '../platform/projectFs.js';
 import { runProcess } from '../runners/processRunner.js';
+import { GIT_COMMAND } from '../platform/gitSafety.js';
+import { packageManagerEnv } from './testCommandEnv.js';
 /** How long one dependency install may take. */
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
 export async function prepareTestEnvironment(opts) {
     const { treePath, derived } = opts;
     if (derived === null || derived.command !== 'npm')
         return { ok: true, command: null };
-    const hasLock = existsSync(join(treePath, 'package-lock.json')) || existsSync(join(treePath, 'npm-shrinkwrap.json'));
+    const hasLock = presentInProject(treePath, 'package-lock.json') || presentInProject(treePath, 'npm-shrinkwrap.json');
     if (!hasLock)
         return { ok: true, command: null };
     const run = opts.run ?? runProcess;
-    const ignored = await run({ command: 'git', args: ['-C', treePath, 'check-ignore', '-q', 'node_modules'], cwd: treePath });
+    const ignored = await run({ command: GIT_COMMAND, args: ['-C', treePath, 'check-ignore', '-q', 'node_modules'], cwd: treePath });
     if (ignored.outcome !== 'completed')
         return { ok: true, command: null };
     const command = 'npm ci --ignore-scripts';
-    const result = await run({ command: 'npm', args: ['ci', '--ignore-scripts'], cwd: treePath, timeoutMs: INSTALL_TIMEOUT_MS });
+    // A fetch: the package-manager environment, never this server's
+    // (`testCommandEnv.ts#packageManagerEnv`). `--ignore-scripts` stops a
+    // lifecycle script, not where the fetch goes or which token it carries —
+    // that is why the tree's own `.npmrc` is set aside before this runs.
+    const result = await run({
+        command: 'npm',
+        args: ['ci', '--ignore-scripts'],
+        cwd: treePath,
+        env: packageManagerEnv(),
+        extendEnv: false,
+        timeoutMs: INSTALL_TIMEOUT_MS,
+    });
     if (result.outcome !== 'completed') {
         const line = result.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
         return { ok: false, command, reason: `${command} ${result.outcome}${line !== undefined ? `: ${line}` : ''}` };

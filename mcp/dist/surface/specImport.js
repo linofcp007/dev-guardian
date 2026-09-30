@@ -11,7 +11,8 @@
  * but that path is the only one that carries source positions, which is why
  * `line` is `0` for every route pulled from a JSON document (see `parseRoot`).
  */
-import { isMap, isScalar, parseDocument } from 'yaml';
+import { isMap, isScalar } from 'yaml';
+import { describeTooComplex, describeYamlRefusal, JSON_MAX_NODES, parseJsonBounded, parseYamlDocumentBounded, YAML_SPEC_LIMITS, yamlDocumentValue, } from '../platform/boundedParse.js';
 /**
  * `trace` is deliberately absent. It is a recognised OpenAPI/Swagger
  * operation key with no matching `HttpMethod` member — every other key here,
@@ -148,16 +149,40 @@ export function importSpec(file, text) {
  * `doc.errors.length > 0` is the actual signal.
  */
 function parseRoot(text) {
-    try {
-        return { kind: 'ok', root: JSON.parse(text), lineFor: () => 0 };
+    // Both parses bounded by structure, not only by the 5 MiB read cap
+    // (platform/boundedParse.ts): 5 MiB of dense YAML would take
+    // `parseDocument` past the server's heap (review of 3.0, W2E).
+    const json = parseJsonBounded(text, JSON_MAX_NODES);
+    if (json.ok)
+        return { kind: 'ok', root: json.value, lineFor: () => 0 };
+    if (json.reason === 'too-complex') {
+        return { kind: 'parse_error', reason: describeTooComplex(JSON_MAX_NODES, 'JSON values') };
     }
-    catch {
-        // Not JSON — fall through to the YAML parser below.
+    // Not JSON — the YAML parser, bounded by bytes, indicators and depth (duplicate keys not compared
+    // pairwise); a syntax error is a refusal too.
+    const bounded = parseYamlDocumentBounded(text, YAML_SPEC_LIMITS);
+    if (!bounded.ok) {
+        const reason = bounded.reason === 'invalid' ? (bounded.detail ?? 'YAML parse error') : describeYamlRefusal(bounded, YAML_SPEC_LIMITS);
+        return { kind: 'parse_error', reason };
     }
-    const doc = parseDocument(text);
-    if (doc.errors.length > 0) {
-        return { kind: 'parse_error', reason: doc.errors[0]?.message ?? 'YAML parse error' };
-    }
+    const doc = bounded.doc;
+    // A key's line by binary search over the line starts: slicing and splitting the text once per path
+    // was quadratic in a spec with tens of thousands of paths.
+    const lineStarts = [0];
+    for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1))
+        lineStarts.push(i + 1);
+    const lineAt = (offset) => {
+        let lo = 0;
+        let hi = lineStarts.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if ((lineStarts[mid] ?? 0) <= offset)
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        return lo + 1;
+    };
     // `doc.getIn(['paths', p], true)` returns the path item's VALUE node, whose
     // range starts at its first operation — a key on source line 7 would
     // compute to line 8. Reading `item.key.range` off each entry in the
@@ -174,7 +199,7 @@ function parseRoot(text) {
             const range = key.range;
             if (range == null)
                 continue;
-            lineByPath.set(key.value, text.slice(0, range[0]).split('\n').length);
+            lineByPath.set(key.value, lineAt(range[0]));
         }
     }
     // `doc.errors` only reports SYNTAX problems. `yaml` resolves aliases
@@ -188,7 +213,7 @@ function parseRoot(text) {
     try {
         return {
             kind: 'ok',
-            root: doc.toJS(),
+            root: yamlDocumentValue(doc),
             lineFor: (pathKey) => lineByPath.get(pathKey) ?? 0,
         };
     }

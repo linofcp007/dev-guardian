@@ -25,18 +25,28 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { detectOs } from '../../src/platform/osDetect.js';
 import { candidatesFor } from '../../src/platform/shellProbe.js';
 import { isWslLauncher, resolveExecutable } from '../helpers/resolveExecutable.js';
 import { rmDirOrDefer } from '../helpers/tempDir.js';
-import { isInstalled } from '../helpers/toolchain.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
+import { isInstalled, PROBE_TIMEOUT_MS } from '../helpers/toolchain.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
 const ACTIONLINT_INSTALLED = await isInstalled('actionlint');
 const ZIZMOR_INSTALLED = await isInstalled('zizmor');
+/** `GUARDIAN_REQUIRE_LINTERS=1`: a missing actionlint or zizmor fails instead of skipping (docs/env.md). */
+const REQUIRE_LINTERS = process.env['GUARDIAN_REQUIRE_LINTERS'] === '1';
+/** Hang-breakers — nothing asserts by reaching them. actionlint, zizmor and a bash step take a second. */
+const LINTER_TIMEOUT_MS = 30_000;
+const BASH_TIMEOUT_MS = 30_000;
+// Above every cap a test with the default timeout runs under, so a hung
+// child is reported by its cap — naming it — and not by vitest's 10 s
+// default failing the test after the fact (review 3.0, R7-I1).
+vi.setConfig({ testTimeout: timeoutAbove(Math.max(TIMEOUT_MS, LINTER_TIMEOUT_MS, BASH_TIMEOUT_MS)) });
 
 /**
  * A bash that can actually run a script, chosen the way the server chooses one
@@ -61,7 +71,7 @@ const PROBE_BASH: string | null = (() => {
     if (abs === null || (process.platform === 'win32' && isWslLauncher(abs))) continue;
     const r = spawnSync(abs, [...candidate.args_prefix, '-c', 'exit 0'], {
       stdio: 'ignore',
-      timeout: 10_000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     if (r.error === undefined && r.status === 0) return abs;
   }
@@ -94,7 +104,7 @@ afterEach(() => {
 const PINNED_TEST_SHA = 'a'.repeat(40);
 
 function runCli(args: string[], envOverrides: Record<string, string> = {}) {
-  const r = spawnSync(process.execPath, [CLI, ...args], {
+  const r = spawnSyncCapped(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     env: { ...process.env, NO_COLOR: '1', GUARDIAN_CI_INIT_PIN_SHA: PINNED_TEST_SHA, ...envOverrides },
     timeout: TIMEOUT_MS,
@@ -108,7 +118,7 @@ function runCliNoPin(args: string[]) {
   // only checks `!== undefined`) and fail COMMIT_SHA_SHAPE.
   const { GUARDIAN_CI_INIT_PIN_SHA: _unused, ...restEnv } = process.env;
   const env = { ...restEnv, NO_COLOR: '1' };
-  const r = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
+  const r = spawnSyncCapped(process.execPath, [CLI, ...args], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -324,12 +334,16 @@ describe('ci-init fix round 1: the GitHub template is accepted by real actionlin
     }
   });
 
+  it.runIf(REQUIRE_LINTERS)('GUARDIAN_REQUIRE_LINTERS=1 — actionlint and zizmor must both be on PATH', () => {
+    expect({ actionlint: ACTIONLINT_INSTALLED, zizmor: ZIZMOR_INSTALLED }).toEqual({ actionlint: true, zizmor: true });
+  });
+
   it.skipIf(!ACTIONLINT_INSTALLED)('actionlint accepts the rendered GitHub template with zero errors', () => {
     const project = makeProject();
     const r = runCli(['ci-init', 'github', '--project', project, '--write']);
     expect(r.status).toBe(0);
     const workflowPath = join(project, '.github', 'workflows', 'dev-guardian.yml');
-    const result = spawnSync('actionlint', [workflowPath], { encoding: 'utf8' });
+    const result = spawnSyncCapped('actionlint', [workflowPath], { encoding: 'utf8', timeout: LINTER_TIMEOUT_MS });
     expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
   });
 
@@ -338,7 +352,7 @@ describe('ci-init fix round 1: the GitHub template is accepted by real actionlin
     const r = runCli(['ci-init', 'github', '--project', project, '--write']);
     expect(r.status).toBe(0);
     const workflowPath = join(project, '.github', 'workflows', 'dev-guardian.yml');
-    const result = spawnSync('zizmor', ['--format=json', workflowPath], { encoding: 'utf8' });
+    const result = spawnSyncCapped('zizmor', ['--format=json', workflowPath], { encoding: 'utf8', timeout: LINTER_TIMEOUT_MS });
     const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
     expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
   });
@@ -372,11 +386,16 @@ describe('ci-init fix round 1: full-history clone (gitleaks needs commit history
     const doc = parseYaml(renderedBody(project, 'github')) as {
       jobs: Record<string, { steps: Array<{ uses?: string; with?: Record<string, unknown> }> }>;
     };
-    const checkout = Object.values(doc.jobs)
+    // Every checkout, not the first: a shallow one makes `scan` exit 2
+    // (the history pass names its boundary — docs/ci.md).
+    const checkouts = Object.values(doc.jobs)
       .flatMap((j) => j.steps)
-      .find((s) => s.uses?.startsWith('actions/checkout@'));
-    expect(checkout?.with?.['fetch-depth']).toBe(0);
-    expect(checkout?.with?.['persist-credentials']).toBe(false);
+      .filter((s) => s.uses?.startsWith('actions/checkout@'));
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const checkout of checkouts) {
+      expect(checkout.with?.['fetch-depth']).toBe(0);
+      expect(checkout.with?.['persist-credentials']).toBe(false);
+    }
   });
 
   it('gitlab: GIT_DEPTH is "0"', () => {
@@ -441,10 +460,11 @@ describe('ci-init fix round 1: bandit always installed; .NET SDK conditional (gi
       const outputFile = join(project, '.github_output_test');
       // The block is skipped when PROBE_BASH is null; never fall back to a bare `bash`.
       if (PROBE_BASH === null) throw new Error(NO_BASH_REASON);
-      const result = spawnSync(PROBE_BASH, ['-c', script], {
+      const result = spawnSyncCapped(PROBE_BASH, ['-c', script], {
         cwd: project,
         env: { ...process.env, GITHUB_OUTPUT: outputFile },
         encoding: 'utf8',
+        timeout: BASH_TIMEOUT_MS,
       });
       expect(result.status, `probe script failed:\n${script}\nstderr: ${result.stderr}`).toBe(0);
       return readFileSync(outputFile, 'utf8').trim();
@@ -825,11 +845,73 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
   it('the scan step writes the JSON report, and its exit code still gates the job (pipefail)', () => {
     const { doc } = renderGithub(['--attest']);
     const scan = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan');
-    expect(scan?.run).toMatch(/^set -euo pipefail\n/);
+    // After the base-ref arguments (`set --`, see the --baseline-ref tests below).
+    expect(scan?.run).toMatch(/^set --\nif \[ -n "\$BASE_SHA" \][^\n]*\nset -uo pipefail\nset \+e\n/);
     expect(scan?.run).toMatch(/--format json/);
     expect(scan?.run).toMatch(/--sarif dev-guardian-results\.sarif/);
-    expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\s*$/);
+    expect(scan?.run).toMatch(/\| tee dev-guardian-report\.json\nstatus=\$\?\n/);
+    expect(scan?.run).toMatch(/exit "\$status"\s*$/);
   });
+
+  // Review of 3.0.0 (S6): the upload ran on `if: always()`, so an incomplete
+  // scan's SARIF (exit 2: a scanner did not run) reached code scanning, which
+  // closes as "fixed" every alert of a scanner the upload does not contain —
+  // `executionSuccessful: false` notwithstanding. Re-review (M-1): an exit 1
+  // can be incomplete too — a blocking finding outranks a missing scanner —
+  // so the step uploads only exit 0, or exit 1 with coverage full.
+  it.each([[[] as string[]], [['--attest']]])('SARIF is uploaded only for a complete run — argv %j', (argv) => {
+    const { doc } = renderGithub(argv);
+    const steps = (doc.jobs['scan']?.steps ?? []) as Array<{ name?: string; id?: string; run?: string; if?: string }>;
+    const scan = steps.find((s) => s.name === 'dev-guardian scan');
+    expect(scan?.id).toBe('scan');
+    expect(scan?.run).toMatch(
+      /echo "exit-code=\$status" >> "\$GITHUB_OUTPUT"\necho "upload-sarif=\$upload" >> "\$GITHUB_OUTPUT"\nexit "\$status"\s*$/,
+    );
+    const upload = steps.find((s) => s.name === 'Upload SARIF to code scanning');
+    expect(upload?.if).toBe("${{ always() && steps.scan.outputs.upload-sarif == 'true' }}");
+  });
+
+  it.skipIf(PROBE_BASH === null)(`the scan step keeps the scan's exit code and uploads only a complete run's SARIF${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    // Run as GitHub runs it (`bash -e`), with a stand-in `node` for the scan
+    // (exiting 0 to 3) that hands the step's own SARIF check to the real node,
+    // over a SARIF that says the run was, or was not, complete.
+    const sarif = (complete: boolean): string =>
+      JSON.stringify({ version: '2.1.0', runs: [{ invocations: [{ executionSuccessful: complete }], results: [] }] });
+    const cases: Array<[number, boolean, boolean]> = [
+      [0, true, true],
+      [0, false, true],
+      [1, true, true],
+      [1, false, false],
+      [2, true, false],
+      [2, false, false],
+      [3, false, false],
+    ];
+    for (const argv of [[], ['--attest']]) {
+      const { doc } = renderGithub(argv);
+      const script = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan')?.run ?? '';
+      for (const [code, complete, uploads] of cases) {
+        const dir = makeProject();
+        const bin = join(dir, 'bin');
+        mkdirSync(bin);
+        writeFileSync(
+          join(bin, 'node'),
+          `#!/bin/sh\nif [ "$1" = "-e" ]; then exec "$REAL_NODE" "$@"; fi\necho scanning\nexit ${code}\n`,
+          { mode: 0o755 },
+        );
+        writeFileSync(join(dir, 'dev-guardian-results.sarif'), sarif(complete));
+        writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\n${script}`);
+        const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['-e', 'step.sh'], {
+          cwd: dir,
+          encoding: 'utf8',
+          timeout: BASH_TIMEOUT_MS,
+          env: { ...process.env, GITHUB_OUTPUT: join(dir, 'out.txt'), DEV_GUARDIAN_HOME: dir, REAL_NODE: process.execPath },
+        });
+        const label = `${JSON.stringify(argv)} exit ${code}, complete ${complete}`;
+        expect(r.status, `${label}: ${r.stderr}`).toBe(code);
+        expect(readFileSync(join(dir, 'out.txt'), 'utf8'), label).toBe(`exit-code=${code}\nupload-sarif=${uploads}\n`);
+      }
+    }
+  }, 240_000);
 
   it('without --attest nothing of it is rendered', () => {
     const { body } = renderGithub();
@@ -912,7 +994,7 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
       const dir = makeProject();
       for (const [file, content] of Object.entries(files)) writeFileSync(join(dir, file), content);
       writeFileSync(join(dir, 'check.sh'), script);
-      const r = spawnSync(PROBE_BASH ?? 'bash', ['check.sh'], { cwd: dir, encoding: 'utf8', timeout: 30_000 });
+      const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['check.sh'], { cwd: dir, encoding: 'utf8', timeout: BASH_TIMEOUT_MS });
       expect(r.status === 0, `${name}: exit ${r.status}\n${r.stderr}`).toBe(pass);
     }
   }, 120_000); // six bash + node spawns: seconds each on a loaded Windows machine
@@ -942,7 +1024,10 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     const project = makeProject();
     const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
     expect(r.status).toBe(0);
-    const result = spawnSync('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+    const result = spawnSyncCapped('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+      encoding: 'utf8',
+      timeout: LINTER_TIMEOUT_MS,
+    });
     expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
   });
 
@@ -960,7 +1045,10 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
       const project = makeProject();
       const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
       expect(r.status).toBe(0);
-      const result = spawnSync('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      const result = spawnSyncCapped('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+        encoding: 'utf8',
+        timeout: LINTER_TIMEOUT_MS,
+      });
       const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
       expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
     });
@@ -971,7 +1059,10 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
       const project = makeProject();
       const r = runCli(['ci-init', 'github', '--project', project, '--write', ...flags]);
       expect(r.status).toBe(0);
-      const result = spawnSync('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8' });
+      const result = spawnSyncCapped('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+        encoding: 'utf8',
+        timeout: LINTER_TIMEOUT_MS,
+      });
       expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
     });
   });
@@ -989,10 +1080,126 @@ describe('ci-init --attest (GitHub build-provenance attestations of the scan out
     const project = makeProject();
     const r = runCli(['ci-init', 'github', '--project', project, '--write', '--attest']);
     expect(r.status).toBe(0);
-    const result = spawnSync('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], {
+    const result = spawnSyncCapped('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], {
       encoding: 'utf8',
+      timeout: LINTER_TIMEOUT_MS,
     });
     const findings: unknown = JSON.parse(result.stdout.trim().length > 0 ? result.stdout : '[]');
     expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
+  });
+});
+
+/**
+ * A pull request is gated against its base, never its own tree
+ * (`--baseline-ref` / `--rules-ref`, docs/ci.md): each template passes the
+ * base commit on a pull-request pipeline, and nothing on a push. Checked by
+ * running each template's own scan script under bash, with stand-ins for
+ * `node` (which records its arguments) and `git`.
+ */
+describe('ci-init: pull-request pipelines pass the base ref; push pipelines pass nothing', () => {
+  const BASE = 'b'.repeat(40);
+
+  /** The scan script of a rendered template: the one that runs `dev-guardian.mjs" scan`. */
+  function scanScript(target: string, extra: string[] = []): string {
+    const project = makeProject();
+    const r = runCli(['ci-init', target, '--project', project, ...extra]);
+    expect(r.status, r.stderr).toBe(0);
+    const doc = parseYaml(r.stdout.split('\n').slice(2, -2).join('\n')) as Record<string, unknown>;
+    const scripts: unknown[] =
+      target === 'github'
+        ? ((doc as unknown as RenderedWorkflow).jobs['scan']?.steps ?? []).map((s) => s.run)
+        : target === 'gitlab'
+          ? ((doc['dev-guardian'] as { script: unknown[] }).script ?? [])
+          : ((doc['definitions'] as { steps: Array<{ step: { script: unknown[] } }> }).steps[0]?.step.script ?? []);
+    const found = scripts.find((s): s is string => typeof s === 'string' && s.includes('dev-guardian.mjs" scan'));
+    if (found === undefined) throw new Error(`${target}: no scan script`);
+    return found;
+  }
+
+  it('github: the base SHA reaches the step through env, never interpolated into the script', () => {
+    for (const extra of [[], ['--attest']]) {
+      const { doc } = renderGithub(extra);
+      const scan = doc.jobs['scan']?.steps.find((s) => s.name === 'dev-guardian scan') as
+        | { run?: string; env?: Record<string, string> }
+        | undefined;
+      expect(scan?.env, extra.join(' ')).toEqual({ BASE_SHA: '${{ github.event.pull_request.base.sha }}' });
+      expect(scan?.run ?? '', extra.join(' ')).not.toMatch(/\$\{\{/);
+    }
+  });
+
+  it.skipIf(PROBE_BASH === null)(`each template's scan script, run with and without a pull request${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    const cases: Array<{ target: string; extra?: string[]; env: Record<string, string>; expect: string[] }> = [
+      { target: 'github', env: { BASE_SHA: '' }, expect: [] },
+      { target: 'github', env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE] },
+      { target: 'github', extra: ['--attest'], env: { BASE_SHA: BASE }, expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE] },
+      { target: 'gitlab', env: {}, expect: [] },
+      {
+        target: 'gitlab',
+        env: { CI_MERGE_REQUEST_IID: '7', CI_MERGE_REQUEST_DIFF_BASE_SHA: BASE, CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main' },
+        expect: ['--baseline-ref', BASE, '--rules-ref', BASE, '--reset-exclusions-from', BASE],
+      },
+      {
+        // A merged results pipeline: the target branch's own commit wins.
+        target: 'gitlab',
+        env: {
+          CI_MERGE_REQUEST_IID: '7',
+          CI_MERGE_REQUEST_TARGET_BRANCH_SHA: 'c'.repeat(40),
+          CI_MERGE_REQUEST_DIFF_BASE_SHA: BASE,
+          CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'main',
+        },
+        expect: ['--baseline-ref', 'c'.repeat(40), '--rules-ref', 'c'.repeat(40), '--reset-exclusions-from', 'c'.repeat(40)],
+      },
+      { target: 'bitbucket', env: {}, expect: [] },
+      {
+        target: 'bitbucket',
+        env: { BITBUCKET_PR_DESTINATION_BRANCH: 'release/2.x' },
+        expect: ['--baseline-ref', 'origin/release/2.x', '--rules-ref', 'origin/release/2.x', '--reset-exclusions-from', 'origin/release/2.x'],
+      },
+    ];
+    for (const c of cases) {
+      const label = `${c.target} ${JSON.stringify(c.extra ?? [])} ${JSON.stringify(c.env)}`;
+      const dir = makeProject();
+      const bin = join(dir, 'bin');
+      mkdirSync(bin);
+      // node records the scan's arguments after `--sarif <file>`; git records its own.
+      writeFileSync(
+        join(bin, 'node'),
+        '#!/bin/sh\nif [ "$1" = "-e" ]; then exit 0; fi\nshift 10\nfor a in "$@"; do case "$a" in --sarif|dev-guardian-results.sarif) ;; *) printf "%s\\n" "$a" >> args.txt ;; esac; done\n: >> args.txt\nexit 0\n',
+        { mode: 0o755 },
+      );
+      writeFileSync(join(bin, 'git'), '#!/bin/sh\nprintf "%s\\n" "$*" >> git.txt\nexit 0\n', { mode: 0o755 });
+      writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\nset -eu\n${scanScript(c.target, c.extra)}`);
+      const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_OUTPUT: join(dir, 'out.txt'), DEV_GUARDIAN_HOME: dir };
+      for (const key of Object.keys(env)) if (/^(CI_MERGE_REQUEST_|BITBUCKET_PR_|BASE_SHA$)/.test(key)) delete env[key];
+      const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['step.sh'], { cwd: dir, encoding: 'utf8', timeout: BASH_TIMEOUT_MS, env: { ...env, ...c.env } });
+      expect(r.status, `${label}: ${r.stderr}`).toBe(0);
+      const args = readFileSync(join(dir, 'args.txt'), 'utf8').split('\n').filter((l) => l.length > 0);
+      expect(args, label).toEqual(c.expect);
+      if (c.target === 'bitbucket' && c.expect.length > 0) {
+        // Fetched first, so the ref exists in a pull-request clone.
+        expect(readFileSync(join(dir, 'git.txt'), 'utf8'), label).toMatch(
+          /^fetch --quiet --no-tags origin \+refs\/heads\/release\/2\.x:refs\/remotes\/origin\/release\/2\.x$/m,
+        );
+      }
+    }
+  }, 240_000);
+
+  it.skipIf(PROBE_BASH === null)(`gitlab: a merge request pipeline with no base commit stops, never scans against its own tree${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    const dir = makeProject();
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'node'), '#!/bin/sh\necho scanned > scanned.txt\n', { mode: 0o755 });
+    writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\nset -eu\n${scanScript('gitlab')}`);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith('CI_MERGE_REQUEST_')) delete env[key];
+    const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['step.sh'], {
+      cwd: dir,
+      encoding: 'utf8',
+      timeout: BASH_TIMEOUT_MS,
+      env: { ...env, CI_MERGE_REQUEST_IID: '7' },
+    });
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/no base commit to gate against/);
+    expect(existsSync(join(dir, 'scanned.txt'))).toBe(false);
   });
 });

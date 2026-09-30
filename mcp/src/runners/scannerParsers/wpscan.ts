@@ -19,6 +19,7 @@
 import type { Finding, Severity } from '../../types.js';
 import {
   asArray,
+  dependencyTaxonomy,
   getNumber,
   getProp,
   getString,
@@ -110,6 +111,9 @@ function pushVuln(
     snippet: `component:${componentLabel}`,
     // Every CVE of the vulnerability is its own id; the first is the rule id.
     vuln_aliases: cveList,
+    // A known-vulnerable plugin, theme or core is a vulnerable dependency,
+    // classified as every other one: CWE-1395, A03:2025 only.
+    taxonomy: dependencyTaxonomy(),
   });
   findings.push(finding);
 

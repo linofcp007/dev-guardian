@@ -34,11 +34,15 @@
  * registry rule such as `javascript.lang.security.audit.eval-detected` from
  * matching a local rule that happens to be called `eval-detected`.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml } from 'yaml';
+import { parseYamlBounded, YAML_CONFIG_LIMITS } from '../platform/boundedParse.js';
+import { readSmallTextFile } from '../hooks/configFile.js';
 import { yamlFilesUnder } from '../platform/customRules.js';
+/** The largest rule config read back: what may be parsed (1 MiB — the plugin's largest pack is 85 KB). */
+const MAX_RULE_CONFIG_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 /** Does Semgrep's check_id `checkId` name rule `id` of the file `ruleFile`? */
 export function checkIdMatches(checkId, ruleFile, id) {
     if (checkId === id)
@@ -123,13 +127,17 @@ function loadLocalRules(configs) {
             continue;
         }
         for (const file of isDir ? yamlFilesUnder(config) : [config]) {
-            let doc;
-            try {
-                doc = parseYaml(readFileSync(file, 'utf8'));
-            }
-            catch {
+            // A config the originating scan loaded — the project's own Semgrep
+            // config among them — read bounded and regular-files-only.
+            const text = readSmallTextFile(file, MAX_RULE_CONFIG_BYTES);
+            if (text === undefined)
                 continue;
-            }
+            // Bounded by bytes, indicators and depth (platform/boundedParse.ts): the byte cap alone let
+            // an adversarial rules file take this parse past the server's heap.
+            const parsed = parseYamlBounded(text);
+            if (!parsed.ok)
+                continue;
+            const doc = parsed.value;
             const rules = typeof doc === 'object' && doc !== null ? doc['rules'] : undefined;
             if (!Array.isArray(rules))
                 continue;

@@ -64,9 +64,9 @@ npm run dev            # tsx src/server.ts, no build
 ## What happens at startup
 
 1. Refuse to start, with one line on stderr, on a Node without `node:sqlite`.
-2. Open `<project>/.guardian/guardian.db`, the project being the server's working directory. The database gets a busy timeout, WAL and a real write probe; if `.guardian/` is not writable (a file left by `sudo` or Docker, an ACL), it falls back to a user-level location and says so.
-3. Apply the SQL migrations in `src/storage/migrations/`, each under the write lock.
-4. Reap scans left `running` by a process that is gone.
+2. Open `<project>/.guardian/guardian.db`, the project being the server's working directory. The database gets a busy timeout, WAL, `trusted_schema=OFF`, `cell_size_check=ON`, no memory map, and a real write probe. It is used only when it is the user's own: one dev-guardian creates carries a random `db_id`, registered under the per-user data directory (`GUARDIAN_DATA_DIR`, default `%LOCALAPPDATA%\dev-guardian` or `~/.local/share/dev-guardian`) before it is written, and the id is trusted only at the path it was registered for. Nothing else is trusted automatically — not one from 3.0.0 or earlier, not a copy of a registered one: the user registers it with `dev-guardian db adopt --yes` (CLI only), after seeing what it holds. Until then the database is foreign, is left untouched (read only for its id, after the location and git checks), and the per-user fallback is used — `health_status` and every scan say why, what to run, and that the scans made meanwhile stay there. It is not used either when `.guardian/` is not writable (a file left by `sudo` or Docker, an ACL), when git tracks it (`git ls-files -s -- ':(icase).guardian'`, 3 s bound), or when its schema holds anything the migrations never create (a trigger, a view, an unknown table or index, a CHECK or UNIQUE constraint added to a known table). A database a newer build migrated still opens: new tables, non-UNIQUE indexes and columns every insert satisfies are accepted, while a trigger, a view or a UNIQUE index or constraint on a known table is refused from any build. Nothing here stops the server: a file SQLite cannot read that is not the user's registered database is foreign; the user's own one, a registered database the migrations cannot complete, or a per-user data directory that cannot be used (a container user with no home) runs the session on an in-memory database, with a warning naming the file and saying history will not persist.
+3. Apply every SQL migration in `src/storage/migrations/` the database has not recorded in `schema_migrations`, each under the write lock, then check that every table, column and index the code needs is there. A database it cannot use stops the server with one line naming the file and what is missing.
+4. Reap scans left `running` by a process that is gone, and rewrite suppressions and baselines stored under another spelling of a project's path to its canonical one.
 5. Probe a bash — Git Bash, then WSL, then `bash` on `PATH` on Windows; `/bin/bash`, then `PATH` elsewhere — and cache the choice. Nothing but `install_toolchain`'s bundled install scripts and `init_project`'s first-pass status report uses it; without one those report `no_bash_shell` (or skip) and everything else works.
 6. Keep `.guardian/` out of git in the project's `.gitignore` (`**/.guardian/*` plus `!**/.guardian/baseline.json`, so the CI baseline can be committed and a sub-project's `.guardian/` stays out too).
 7. Register the tools and resources and connect stdio. Diagnostics go to stderr only; stdout is the JSON-RPC stream. A client that closes stdout ends the server with exit 0.
@@ -85,17 +85,18 @@ One SQLite file per project, `.guardian/guardian.db`, shared by every process th
 | `baselines` | baselines per project and scan type |
 | `suppressions` | suppressions by identity or fingerprint, per project, with optional expiry |
 | `tree_cache` | tree hash → scan, for the 5-minute scan cache |
-| `stack_snapshots`, `surface_snapshots` | `detect_stack` and `map_attack_surface` results |
+| `stack_snapshots`, `surface_snapshots` | `detect_stack` and `map_attack_surface` results, the newest 10 per project |
 | `finding_validations` | `validate_finding` verdicts |
 | `agent_config_hashes` | `audit_agent_config`'s per-server hashes, to flag a changed MCP entry |
 | `mcp_tool_pins`, `mcp_server_pins` | `audit_mcp_tools`'s per-tool definition hashes, to flag a tool that changed under the same name |
-| `runtime_meta`, `schema_meta` | the cached shell choice and other server state; the migration version |
+| `runtime_meta`, `schema_meta` | the cached shell choice and other server state; the highest migration applied |
+| `schema_migrations` | every migration applied, by number, name and time |
 
-Migrations are numbered, additive and idempotent; a database written by 2.0.0 keeps working.
+Migrations are numbered, additive and idempotent; a database written by 2.0.0 keeps working. What decides whether one runs is the set in `schema_migrations`, not the highest number: migrations written on parallel branches can land in any order.
 
 ## Behaviour every tool shares
 
-- **Per project.** A tool's `project_path` defaults to the server's working directory, and every history reader — the resources included — answers for one project, even though one database may hold several.
+- **Per project.** A tool's `project_path` defaults to the server's working directory, and every history reader — the resources included — answers for one project, even though one database may hold several. A project is its canonical path (`realpath`, upper-case drive letter on Windows). Suppressions and baselines stored under another spelling of the same directory — 2.0.0 stored `c:\…` — are rewritten to it at startup, unless the path goes through a link (its target may be another project by now). Moving or renaming a repository is a new path: its history, suppressions and baselines stay under the old one (`db adopt --yes --rehome` moves only rows filed under a path that still leads to the project — a link, another spelling). A scan dated more than 5 minutes in the future is ignored by every reader, which says how many it passed over (`future_dated_note`).
 - **Coverage is never guessed.** A scanner that is missing, failed or scanned nothing is `skipped` or `failed` with a reason, lands in `missing_tools`, and lowers `coverage` to `partial` or `none`. For Semgrep, `paths.scanned == 0` or a non-empty `errors` array is a failure even on exit 0.
 - **Cache.** A scan-tool call within 5 minutes of an identical one — same project, inputs, tree hash, rule packs and plugin version — is served from the database, but only when the earlier run had full coverage.
 - **Filters are views.** `severity_min`, `categories` and `packages` shape the response; every finding is still recorded, and the response says what it held back.
@@ -106,11 +107,14 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 ## What the server writes
 
 - `<project>/.guardian/` — the database, and raw scanner output and exported reports under `.guardian/reports/`.
+- The per-user data directory (`GUARDIAN_DATA_DIR`), only when the project's database cannot be used — see startup step 2.
 - `<project>/.gitignore` — the two `.guardian` lines above, once.
 - Files you asked for: `init_project` and `observability_setup` with `apply: true`, `precommit_install` (git hooks, through `pre-commit install`), and `scan_sast` / `bug_hunt` / `scan_wordpress` / `security_scan_full` with `auto_fix: true` — which refuses unless git confirms a clean tree or `allow_dirty: true` is passed.
 - `create_fix_pr` works in disposable git worktrees and removes them; only `apply: true` commits, pushes and opens pull requests.
 - `wp_vuln_check_source` caches the Wordfence feed in the user cache directory, never in the project.
-- Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards.
+- `wp_vuln_check` writes its WPScan report under the install's `.guardian/reports/` when the install is on this machine, else under `wp-vuln-check/<site>-<hash>/` in that user cache directory — never the server's working directory. Each site there keeps its newest N reports, N being the scan retention (`GUARDIAN_RETENTION_SCANS`, default 50, `0` keeps all).
+- Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards — and a scan's report directory, `guardian-reports-<tool>-…`, when `.guardian` or `.guardian/reports` in the project is a link (a junction included) or not a directory: reports are never written through one.
+- Every write into the project goes through `src/platform/projectFs.ts`: never through a link or a directory that leads out of the project, always a temp file beside the target renamed into place. Every read of a project file goes through it too — contained in the project, regular files only, bounded — and `test/unit/platform/rawRepoFsSites.test.ts` fails on a raw `fs` call it does not list.
 
 ## Adding a scan tool
 
@@ -118,4 +122,5 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 2. Create `src/tools/<myTool>.ts` with `makeScanTool({...})` from `scanToolFactory.ts` — caching, persistence, identities, coverage, progress, scopes, `.guardianignore` and cancellation come with it.
 3. Import it in `src/registerAll.ts` and add it to `test/integration/toolSurface.test.ts`: the surface is snapshotted on purpose.
 4. Place every bookkeeping name it writes to `tools_run` / `missing_tools` in `src/history/runNames.ts`; the exhaustiveness test fails otherwise.
+   Spawn Trivy only through `src/runners/trivyRun.ts` (never in the project, never its `trivy.yaml`) and Semgrep only through `src/runners/semgrepRun.ts` (Python's UTF-8 mode); a test fails on any other spawn of either.
 5. Keep the description under 1500 characters, add an integration test, run `npm run build`, and commit `dist/` and the regenerated `docs/` with the change.

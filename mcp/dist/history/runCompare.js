@@ -67,7 +67,11 @@
  * An audit_executive row is judged by its sub-scans' own bookkeeping (its
  * own entries only say which sub-tool answered).
  */
+import { join } from 'node:path';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { LLM_RULES_FILE } from '../runners/semgrepConfigs.js';
+import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
+import { pluginPacksDir, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { KNOWN_FINDING_KEYS, findingKey, keysOfRun, runNameEntry } from './runNames.js';
 import { isOrchestratedFullScan, isScriptEraFullScan, scriptEraSlotOfFinding } from './scanRoles.js';
@@ -189,30 +193,64 @@ function measuresKeyOk(run, key) {
     return run.status === 'ok' && (keysOfRun(run.name, true)?.includes(key) ?? false);
 }
 /**
+ * Whether a partial-parse entry is the plugin's LLM pack's own taint timeout
+ * (`runners/semgrepReport.ts#withPluginPackFixpoint`). It is the PACK's gap:
+ * a finding in that file is left unmeasured only when it is one of the
+ * pack's own rules ({@link isPluginPackRule}). Read as the run's gap, a
+ * registry finding fixed in such a file stayed open as "not re-measured".
+ */
+function isPluginPackGap(pp) {
+    return pp.type === FIXPOINT_TIMEOUT_PACK_TYPE;
+}
+let packRuleIds;
+/**
+ * The rule ids the plugin's LLM pack declares (`configs/semgrep/llm.yml`),
+ * as its findings are stored — the pack rule's own id (`localRuleIds.ts`).
+ * Read once. A project-root rule carrying the same id is stored the same
+ * way and is read as the pack's: that can only keep one of its findings
+ * open, never close one.
+ */
+function pluginPackRuleIds() {
+    packRuleIds ??= new Set(ruleIdsInFile(join(pluginPacksDir(), LLM_RULES_FILE)));
+    return packRuleIds;
+}
+function isPluginPackRule(ruleId) {
+    return ruleId !== undefined && pluginPackRuleIds().has(ruleId);
+}
+/**
  * The narrower gaps INSIDE an ok run that measures `key`: files it could
  * only partly parse (`ToolRun.partially_parsed`, the shared Semgrep judge's
  * `partial` verdict) and rules that did not load (`ToolRun.failed_rules`,
  * bug_hunt's broken-rule shape). The rest of that run measured — `ok` AND
  * missing, the retry shape `keyVerdict` reads as measured — but a finding in
- * one of those files, or of one of those rules, was not looked for.
+ * one of those files, or of one of those rules, was not looked for. A file
+ * of the plugin pack's own gap ({@link isPluginPackGap}) is a gap only for
+ * the pack's rules: (file, pack rule) pairs.
  */
 function narrowGapsOf(book, key) {
     const files = new Set();
     const rules = new Set();
+    const pairs = new Map();
     for (const run of book.tools_run) {
         if (!measuresKeyOk(run, key))
             continue;
-        for (const pp of run.partially_parsed ?? [])
-            files.add(pp.file);
+        for (const pp of run.partially_parsed ?? []) {
+            if (isPluginPackGap(pp))
+                pairs.set(pp.file, pluginPackRuleIds());
+            else
+                files.add(pp.file);
+        }
         for (const fr of run.failed_rules ?? [])
             rules.add(fr.rule_id);
     }
-    return { files, rules };
+    for (const f of files)
+        pairs.delete(f);
+    return { files, rules, pairs };
 }
 /**
  * The run measuring `f`'s key that left `f` out — its file only partly
- * parsed, or its rule not loaded — with the label a reader is given, or
- * null.
+ * parsed (by the pack, for a pack rule's finding), or its rule not loaded —
+ * with the label a reader is given, or null.
  */
 function narrowGapOf(book, f) {
     const key = findingKey(f);
@@ -220,8 +258,12 @@ function narrowGapOf(book, f) {
     for (const run of book.tools_run) {
         if (!measuresKeyOk(run, key))
             continue;
-        if (file !== undefined && (run.partially_parsed ?? []).some((pp) => pp.file === file)) {
+        const entries = file === undefined ? [] : (run.partially_parsed ?? []).filter((pp) => pp.file === file);
+        if (entries.some((pp) => !isPluginPackGap(pp))) {
             return { run, label: `${run.name} (partly parsed: ${file})` };
+        }
+        if (entries.length > 0 && isPluginPackRule(f.rule_id)) {
+            return { run, label: `${run.name} (LLM pack partly measured: ${file})` };
         }
         if (f.rule_id !== undefined && (run.failed_rules ?? []).some((fr) => fr.rule_id === f.rule_id)) {
             return { run, label: `${run.name} (rule not loaded: ${f.rule_id})` };
@@ -305,16 +347,22 @@ export function openGapFor(holder, asked, f) {
         return answer.notRun;
     return onRequestPassOf(holder, findingKey(f));
 }
+const NO_PAIRS = new Map();
 const ADMIT_ALL = { all: true };
 const NEVER_SCOPE = { kind: 'never' };
 /** The most (file, rule) pairs an {@link Admit} holds before it widens to the constraint itself (sound: a superset). */
 export const MAX_ADMIT_PAIRS = 10_000;
 function onlyConstraint(c) {
-    return { all: false, files: new Set(c.files), rules: new Set(c.rules), pairs: new Map() };
+    const pairs = new Map();
+    for (const [f, rs] of c.pairs ?? NO_PAIRS)
+        if (!c.files.has(f))
+            pairs.set(f, new Set(rs));
+    return { all: false, files: new Set(c.files), rules: new Set(c.rules), pairs };
 }
 export function meetAdmit(s, c) {
     if (s.all)
         return onlyConstraint(c);
+    const cPairs = c.pairs ?? NO_PAIRS;
     const files = new Set([...s.files].filter((f) => c.files.has(f)));
     const rules = new Set([...s.rules].filter((r) => c.rules.has(r)));
     // Before building any pair: how many could this meet make? Past the bound,
@@ -323,14 +371,21 @@ export function meetAdmit(s, c) {
     for (const rs of s.pairs.values())
         bound += rs.size;
     let filesLeaving = 0;
-    for (const f of s.files)
-        if (!c.files.has(f))
-            filesLeaving += 1;
+    for (const f of s.files) {
+        if (c.files.has(f))
+            continue;
+        filesLeaving += 1;
+        bound += cPairs.get(f)?.size ?? 0;
+    }
     let rulesLeaving = 0;
     for (const r of s.rules)
         if (!c.rules.has(r))
             rulesLeaving += 1;
-    bound += filesLeaving * c.rules.size + rulesLeaving * c.files.size;
+    let cPairCount = 0;
+    if (rulesLeaving > 0)
+        for (const rs of cPairs.values())
+            cPairCount += rs.size;
+    bound += filesLeaving * c.rules.size + rulesLeaving * c.files.size + cPairCount;
     if (bound > MAX_ADMIT_PAIRS)
         return onlyConstraint(c);
     const pairs = new Map();
@@ -344,18 +399,28 @@ export function meetAdmit(s, c) {
         }
         set.add(r);
     };
+    const inCPairs = (f, r) => cPairs.get(f)?.has(r) ?? false;
     for (const [f, rs] of s.pairs)
         for (const r of rs)
-            if (c.files.has(f) || c.rules.has(r))
+            if (c.files.has(f) || c.rules.has(r) || inCPairs(f, r))
                 add(f, r);
-    for (const f of s.files)
-        if (!c.files.has(f))
-            for (const r of c.rules)
+    for (const f of s.files) {
+        if (c.files.has(f))
+            continue;
+        for (const r of c.rules)
+            add(f, r);
+        for (const r of cPairs.get(f) ?? [])
+            add(f, r);
+    }
+    for (const r of s.rules) {
+        if (c.rules.has(r))
+            continue;
+        for (const f of c.files)
+            add(f, r);
+        for (const [f, rs] of cPairs)
+            if (rs.has(r))
                 add(f, r);
-    for (const r of s.rules)
-        if (!c.rules.has(r))
-            for (const f of c.files)
-                add(f, r);
+    }
     return { all: false, files, rules, pairs };
 }
 function admitsNothing(s) {
@@ -562,9 +627,10 @@ export class ChainIndex {
                     c.images.add(`${t.pass}\0${t.ref}`);
             }
             const narrow = narrowGapsOf(asked, key);
-            if (narrow.files.size > 0 || narrow.rules.size > 0) {
+            if (narrow.files.size > 0 || narrow.rules.size > 0 || narrow.pairs.size > 0) {
                 c.narrow = narrow;
-                c.narrowSig = JSON.stringify([[...narrow.files].sort(), [...narrow.rules].sort()]);
+                // The pack's pairs are spelled by file: their rules are the pack's, always the same set.
+                c.narrowSig = JSON.stringify([[...narrow.files].sort(), [...narrow.rules].sort(), [...narrow.pairs.keys()].sort()]);
             }
             idx.at.set(i, c);
             idx.measured.push(i);
@@ -659,7 +725,7 @@ export class StillCarry {
 }
 /** Whether a gap name is a narrower gap inside a run that measured ({@link narrowGapNames}). */
 function isNarrowGapName(name) {
-    return / \((partly parsed|rules not loaded): /.test(name);
+    return / \((partly parsed|rules not loaded|LLM pack partly measured): /.test(name);
 }
 /** How many files a run's narrower-gap name lists before "+N more" ({@link narrowGapNames}). */
 const NARROW_GAP_FILES_NAMED = 5;
@@ -672,16 +738,22 @@ const NARROW_GAP_FILES_NAMED = 5;
  */
 function narrowGapNames(book) {
     const names = [];
+    const named = (files) => {
+        const more = files.length - NARROW_GAP_FILES_NAMED;
+        return [...files.slice(0, NARROW_GAP_FILES_NAMED), ...(more > 0 ? [`+${more} more`] : [])].join(', ');
+    };
     for (const run of book.tools_run) {
         if (run.status !== 'ok')
             continue;
-        const parsed = [...new Set((run.partially_parsed ?? []).map((pp) => pp.file))];
+        const entries = run.partially_parsed ?? [];
+        const parsed = [...new Set(entries.filter((pp) => !isPluginPackGap(pp)).map((pp) => pp.file))];
+        // The plugin pack's own gap, named as the pack's: only its rules' findings there were left unmeasured.
+        const byPack = [...new Set(entries.filter(isPluginPackGap).map((pp) => pp.file))].filter((f) => !parsed.includes(f));
         const failed = run.failed_rules ?? [];
-        if (parsed.length > 0) {
-            const more = parsed.length - NARROW_GAP_FILES_NAMED;
-            const listed = [...parsed.slice(0, NARROW_GAP_FILES_NAMED), ...(more > 0 ? [`+${more} more`] : [])];
-            names.push(`${run.name} (partly parsed: ${listed.join(', ')})`);
-        }
+        if (parsed.length > 0)
+            names.push(`${run.name} (partly parsed: ${named(parsed)})`);
+        if (byPack.length > 0)
+            names.push(`${run.name} (LLM pack partly measured: ${named(byPack)})`);
         if (failed.length > 0)
             names.push(`${run.name} (rules not loaded: ${failed.map((fr) => fr.rule_id).join(', ')})`);
     }

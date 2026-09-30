@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { assessManifestCoverage } from '../../src/runners/scannerParsers/trivy.js';
 import { isInstalled } from '../helpers/toolchain.js';
+import { timeoutAbove } from '../helpers/spawnCap.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -40,6 +41,8 @@ const REQUIRE_TOOLCHAIN = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 /** Trivy may download its vulnerability DB on a first run: far past a warm run's few seconds. */
 const TRIVY_TIMEOUT_MS = 300_000;
+/** Above the Trivy cap: a hung Trivy is reported by execFileSync's own ETIMEDOUT, naming it (R7-I1). */
+const TEST_TIMEOUT_MS = timeoutAbove(TRIVY_TIMEOUT_MS);
 
 const EMPTY_MANIFEST = { name: 'x', version: '1.0.0', private: true };
 const LODASH = { version: '4.17.4', resolved: 'https://registry.npmjs.org/lodash/-/lodash-4.17.4.tgz' };
@@ -76,7 +79,7 @@ describe('assessManifestCoverage on a real Trivy report (npm "declares nothing")
       expect(resultsOf(raw)).toBeUndefined();
       expect(assessManifestCoverage(dir, raw)).toEqual({ gaps: [], sawAnyResults: false });
     },
-    TRIVY_TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!TRIVY_INSTALLED)(
@@ -98,7 +101,36 @@ describe('assessManifestCoverage on a real Trivy report (npm "declares nothing")
       );
       expect(assessManifestCoverage(dir, raw)).toEqual({ gaps: [], sawAnyResults: true });
     },
-    TRIVY_TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
+  );
+
+  // Review 3.0, wave 2 (c): Trivy skips devDependencies by default, so a
+  // lock holding only dev packages gets no Result — measured on 0.69.3, and
+  // `--include-dev-deps` (which dev-guardian does not pass) brings it back.
+  // Still a gap, but the lock file is there: marked dev_only, so the advice
+  // is not "commit the lock file".
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a package.json with only devDependencies beside its lock: no Results, a gap marked dev_only',
+    () => {
+      const manifest = { name: 'x', version: '1.0.0', devDependencies: { lodash: '4.17.4' } };
+      const dir = project({
+        'package.json': manifest,
+        'package-lock.json': {
+          name: 'x',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          requires: true,
+          packages: { '': manifest, 'node_modules/lodash': { ...LODASH, dev: true } },
+        },
+      });
+      const raw = trivyFs(dir);
+      expect(resultsOf(raw)).toBeUndefined();
+      expect(assessManifestCoverage(dir, raw)).toEqual({
+        gaps: [{ ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] }],
+        sawAnyResults: false,
+      });
+    },
+    TEST_TIMEOUT_MS,
   );
 
   it.runIf(REQUIRE_TOOLCHAIN)('GUARDIAN_REQUIRE_SEMGREP=1 — Trivy must be on PATH for this file to mean anything', () => {
@@ -139,7 +171,7 @@ describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', ()
         sawAnyResults: false,
       });
     },
-    TRIVY_TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!TRIVY_INSTALLED)(
@@ -152,7 +184,7 @@ describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', ()
       );
       expect(assessManifestCoverage(dir, raw)).toEqual({ gaps: [], sawAnyResults: true });
     },
-    TRIVY_TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!TRIVY_INSTALLED)(
@@ -166,7 +198,7 @@ describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', ()
         sawAnyResults: false,
       });
     },
-    TRIVY_TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!TRIVY_INSTALLED)(
@@ -183,7 +215,7 @@ describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', ()
         sawAnyResults: false,
       });
     },
-    TRIVY_TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
   );
 
   it.skipIf(!TRIVY_INSTALLED)(
@@ -196,6 +228,6 @@ describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', ()
       );
       expect(assessManifestCoverage(dir, raw)).toEqual({ gaps: [], sawAnyResults: true });
     },
-    TRIVY_TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
   );
 });

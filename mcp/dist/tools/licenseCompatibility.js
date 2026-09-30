@@ -10,7 +10,7 @@
  * Compatibility rules are simplified — full license law is nuanced. The
  * tool reports facts; the model (or a human lawyer) decides.
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { listProjectDir, readProjectJson, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
@@ -108,66 +108,44 @@ function isProprietaryLabel(s) {
     return /^UNLICENSED$/i.test(t) || /^proprietary$/i.test(t) || /^SEE LICENSE IN /i.test(t);
 }
 function detectProjectLicense(projectPath) {
+    // Every source below is the repository's file: read bounded, regular files
+    // only, never through a link out of the project (`platform/projectFs.ts`).
+    const read = (name) => readProjectTextOrUndefined(projectPath, name);
     // Prefer machine-readable sources before LICENSE file headers.
-    try {
-        const pkgPath = join(projectPath, 'package.json');
-        if (existsSync(pkgPath)) {
-            const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-            if (typeof pkg.license === 'string')
-                return pkg.license;
-        }
+    const pkg = readProjectJson(projectPath, 'package.json');
+    if (typeof pkg === 'object' && pkg !== null && typeof pkg.license === 'string')
+        return pkg.license;
+    const pyRaw = read('pyproject.toml');
+    if (pyRaw !== undefined) {
+        const m = /license\s*=\s*["']([^"']+)["']/i.exec(pyRaw) ??
+            /license-expression\s*=\s*["']([^"']+)["']/i.exec(pyRaw);
+        if (m && m[1])
+            return m[1];
     }
-    catch {
-        /* ignore */
+    const cjson = readProjectJson(projectPath, 'composer.json');
+    if (typeof cjson === 'object' && cjson !== null) {
+        if (typeof cjson.license === 'string')
+            return cjson.license;
+        if (Array.isArray(cjson.license) && typeof cjson.license[0] === 'string')
+            return cjson.license[0];
     }
-    try {
-        const pyProject = join(projectPath, 'pyproject.toml');
-        if (existsSync(pyProject)) {
-            const raw = readFileSync(pyProject, 'utf8');
-            const m = /license\s*=\s*["']([^"']+)["']/i.exec(raw) ??
-                /license-expression\s*=\s*["']([^"']+)["']/i.exec(raw);
-            if (m && m[1])
-                return m[1];
-        }
-    }
-    catch {
-        /* ignore */
-    }
-    try {
-        const composer = join(projectPath, 'composer.json');
-        if (existsSync(composer)) {
-            const cjson = JSON.parse(readFileSync(composer, 'utf8'));
-            if (typeof cjson.license === 'string')
-                return cjson.license;
-            if (Array.isArray(cjson.license) && typeof cjson.license[0] === 'string')
-                return cjson.license[0];
-        }
-    }
-    catch {
-        /* ignore */
-    }
-    try {
-        // .NET: `<PackageLicenseExpression>` in the first .csproj found at the
-        // project root — same shallow, root-only scope as every other manifest
-        // check in this function (never a recursive walk).
-        const csproj = findFirstCsproj(projectPath);
-        if (csproj) {
-            const xml = readFileSync(csproj, 'utf8');
-            const m = /<PackageLicenseExpression>([^<]+)<\/PackageLicenseExpression>/i.exec(xml);
-            if (m && m[1])
-                return m[1].trim();
-        }
-    }
-    catch {
-        /* ignore */
+    // .NET: `<PackageLicenseExpression>` in the first .csproj found at the
+    // project root — same shallow, root-only scope as every other manifest
+    // check in this function (never a recursive walk).
+    const csproj = findFirstCsproj(projectPath);
+    const xml = csproj === null ? undefined : read(csproj);
+    if (xml !== undefined) {
+        const m = /<PackageLicenseExpression>([^<]+)<\/PackageLicenseExpression>/i.exec(xml);
+        if (m && m[1])
+            return m[1].trim();
     }
     // Last resort: peek at LICENSE / LICENSE.md / LICENSE.txt header.
     for (const name of ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'COPYING']) {
-        const p = join(projectPath, name);
-        if (!existsSync(p))
+        const text = read(name);
+        if (text === undefined)
             continue;
         try {
-            const head = readFileSync(p, 'utf8').slice(0, 500);
+            const head = text.slice(0, 500);
             if (/MIT License/i.test(head))
                 return 'MIT';
             if (/Apache License,?\s*Version\s*2/i.test(head))
@@ -633,15 +611,11 @@ function normaliseLicense(s) {
 /** First `.csproj` at the project root, in directory listing order — same
  *  shallow, root-only scope as every other manifest check in this file. */
 function findFirstCsproj(projectPath) {
-    try {
-        const name = readdirSync(projectPath)
-            .filter((n) => n.toLowerCase().endsWith('.csproj'))
-            .sort()[0];
-        return name ? join(projectPath, name) : null;
-    }
-    catch {
-        return null;
-    }
+    const name = listProjectDir(projectPath, projectPath)
+        .map((e) => e.name)
+        .filter((n) => n.toLowerCase().endsWith('.csproj'))
+        .sort()[0];
+    return name ? join(projectPath, name) : null;
 }
 function groupByLicense(rows) {
     const out = {};

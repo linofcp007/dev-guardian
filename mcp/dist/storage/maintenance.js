@@ -21,8 +21,10 @@
  * (project_path, scan_type) — `GUARDIAN_RETENTION_SCANS`, default
  * {@link DEFAULT_RETENTION_SCANS}, `0` disables — and deletes the rest with
  * every row that points at them. Scoped scans (`meta.scope`, a single-plugin
- * `wp_vuln_check`) are counted apart from whole-project ones: N of each, so
- * pre-commit runs can never push out the scan the open set reads. What
+ * `wp_vuln_check`) are counted apart from whole-project ones, and scans that
+ * measured nothing (failed, cancelled, coverage `none`) apart from usable
+ * ones: N of each, so neither pre-commit runs nor a run of broken scans can
+ * push out the scan the open set reads. What
  * refers to a scan, per the schema (migrations 001–005), and what happens to
  * it:
  *
@@ -58,12 +60,57 @@
  * future table that references `scans(id)` must be added to the list above,
  * indexed, and deleted in `deleteRows`.
  */
+import { spellingOnlyCanonical } from '../platform/pathSpelling.js';
+import { openSetForProject } from '../history/openSet.js';
+import { STACK_SNAPSHOTS_KEPT } from './stackRepo.js';
 export const DEFAULT_RETENTION_SCANS = 50;
 /**
- * Scans deleted per write transaction. With every referencing column indexed
- * a batch this size holds the write lock for milliseconds, not seconds.
+ * Scans deleted per write transaction, at most. With every referencing column
+ * indexed a batch this size holds the write lock for milliseconds, not
+ * seconds — when its scans are small ({@link PRUNE_BATCH_ROWS}).
  */
 export const PRUNE_BATCH = 50;
+/**
+ * Finding and CVE rows deleted per write transaction, at most: the scans of a
+ * batch are taken while their rows add up to no more than this. Fifty scans
+ * of ~360 findings (~18k rows) held the write lock 1.7–2.6 s in the retention
+ * review — beyond the 1 s budget, and with bigger scans on the way to another
+ * process's 5 s busy timeout. A single scan larger than this is deleted alone:
+ * splitting ONE scan's rows over several transactions would let a reader, or
+ * a baseline set in between, see it half deleted.
+ */
+export const PRUNE_BATCH_ROWS = 5000;
+/**
+ * Takes the next batch off the front of `pending` — oldest first — and
+ * returns it: at most `maxScans` scans whose finding and `scan_cves` rows add
+ * up to at most `maxRows`, and always at least one. The counts are plain,
+ * indexed reads (`findings.scan_id`, `scan_cves.scan_id`), outside the write
+ * transaction.
+ */
+export function takePruneBatch(db, pending, maxScans, maxRows = PRUNE_BATCH_ROWS) {
+    const head = pending.slice(0, Math.max(1, maxScans));
+    if (head.length <= 1)
+        return pending.splice(0, head.length);
+    const list = head.map(() => '?').join(', ');
+    const rows = new Map();
+    for (const table of ['findings', 'scan_cves']) {
+        for (const r of db
+            .prepare(`SELECT scan_id AS id, COUNT(*) AS n FROM ${table} WHERE scan_id IN (${list}) GROUP BY scan_id`)
+            .all(...head)) {
+            rows.set(r.id, (rows.get(r.id) ?? 0) + r.n);
+        }
+    }
+    let total = 0;
+    let take = 0;
+    for (const id of head) {
+        const n = rows.get(id) ?? 0;
+        if (take > 0 && total + n > maxRows)
+            break;
+        total += n;
+        take += 1;
+    }
+    return pending.splice(0, take);
+}
 /** Work (not wall-clock) time retention may spend per server start. */
 export const RETENTION_BUDGET_MS = 1000;
 /** How long after connecting retention starts, so the host's handshake goes first. */
@@ -93,6 +140,26 @@ const SCOPED_SQL = `(CASE WHEN json_valid(meta) THEN
     json_extract(meta, '$.scope') IS NOT NULL
     OR (scan_type = 'wp_vuln_check' AND json_type(meta, '$.slug') IS NOT NULL)
   ELSE 0 END)`;
+// A tools_run / missing_tools column as a JSON array to walk: '[]' for
+// anything else, as `scansRepo.ts#parseJsonArray` reads it in JS (json_each
+// throws on malformed JSON; CASE, not AND, for the same reason as above).
+const jsonArrayOr = (column) => `(CASE WHEN json_valid(${column}) AND json_type(${column}) = 'array' THEN ${column} ELSE '[]' END)`;
+// A row the open set can read — `history/openSet.ts`'s "usable": completed,
+// with coverage (`tools/scanCoverage.ts#computeCoverage`) not `none`. None is
+// "some scanner failed or is missing, and none ran ok". A failed, cancelled
+// or coverage-none scan measured nothing; the open set passes over it to the
+// one before.
+const USABLE_SQL = `(CASE
+    WHEN status <> 'completed' THEN 0
+    WHEN (
+      json_array_length(${jsonArrayOr('missing_tools')}) > 0
+      OR EXISTS (SELECT 1 FROM json_each(${jsonArrayOr('tools_run')}) AS t
+                  WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'failed')
+    ) AND NOT EXISTS (SELECT 1 FROM json_each(${jsonArrayOr('tools_run')}) AS t
+                       WHERE t.type = 'object' AND json_extract(t.value, '$.status') = 'ok')
+    THEN 0
+    ELSE 1
+  END)`;
 // The scans an orchestrated run's baseline stands on besides its own row:
 // the children a baselined parent lists in `meta.child_scans` (what
 // `history/runCompare.ts` reads), the parent a baselined child names in
@@ -153,6 +220,12 @@ const PROTECTED_SQL = `(
  * last whole-project `scan_sast`, and the open set — which skips scoped rows —
  * lost every SAST finding while still reading coverage `full`.
  *
+ * Usable and unusable rows ({@link USABLE_SQL}) are ranked apart for the same
+ * reason, so the newest usable scan of every (project, type, scope) is always
+ * kept: fifty newer runs that measured nothing (a broken Semgrep rule, a
+ * `local_only` run with no rules) pushed out the last scan that did, and its
+ * findings left every reader — risk_score 18 (medium) → 8 (low), open 1 → 0.
+ *
  * `candidates` restricts the ranking to the partitions of that many ids (the
  * `?` placeholders come right after `keep`'s, as `id IN (…)`), for the
  * re-check {@link deleteScans} makes under the write lock.
@@ -172,7 +245,7 @@ function prunableSql(candidates) {
     SELECT id FROM (
       SELECT id, status, meta, started_at, rowid AS rid,
              ROW_NUMBER() OVER (
-               PARTITION BY project_path, scan_type, ${SCOPED_SQL}
+               PARTITION BY project_path, scan_type, ${SCOPED_SQL}, ${USABLE_SQL}
                ORDER BY started_at DESC, rowid DESC
              ) AS rn
       FROM scans
@@ -206,17 +279,19 @@ export function listPrunableScans(db, keep) {
  * (on the scan itself, or on the orchestrated run it belongs to), or a newer
  * row gone. Returns how many scans were deleted.
  */
-export function deletePrunableScans(db, ids, keep) {
+export function deletePrunableScans(db, ids, keep, protect = NOTHING_PROTECTED) {
     if (ids.length === 0 || !(keep > 0))
         return 0;
     return db.transaction(() => {
         const eligible = db
             .prepare(prunableSql(ids.length))
             .all(...ids, keep, ...ids)
-            .map((r) => r.id);
+            .map((r) => r.id)
+            .filter((id) => !protect.has(id));
         return deleteRows(db, eligible);
     })();
 }
+const NOTHING_PROTECTED = new Set();
 /**
  * Deletes `ids` — whatever their rank — and every row that points at them,
  * in ONE short write transaction; for a caller that removes a scan it wrote
@@ -257,7 +332,8 @@ function deleteRows(db, eligible) {
 export function pruneScans(db, keep, budget = {}) {
     const now = budget.now ?? (() => performance.now());
     const started = now();
-    const pending = listPrunableScans(db, keep);
+    const protect = budget.protect ?? NOTHING_PROTECTED;
+    const pending = listPrunableScans(db, keep).filter((id) => !protect.has(id));
     const batchSize = budget.batchSize ?? PRUNE_BATCH;
     let deleted = 0;
     let batches = 0;
@@ -266,10 +342,88 @@ export function pruneScans(db, keep, budget = {}) {
             break;
         if (budget.budgetMs !== undefined && now() - started >= budget.budgetMs)
             break;
-        deleted += deletePrunableScans(db, pending.splice(0, batchSize), keep);
+        deleted += deletePrunableScans(db, takePruneBatch(db, pending, batchSize), keep, protect);
         batches += 1;
     }
     return { deleted, remaining: pending.length, complete: pending.length === 0 };
+}
+/** Stack snapshots {@link pruneStackSnapshots} deletes per call. */
+export const STACK_PRUNE_BATCH = 500;
+/**
+ * Deletes up to `limit` stack snapshots beyond the newest
+ * {@link STACK_SNAPSHOTS_KEPT} per project, in one short write transaction,
+ * and says how many such rows are left. New rows are pruned on insert
+ * (`stackRepo.ts`); this clears what was written before that, a batch per
+ * server start.
+ */
+export function pruneStackSnapshots(db, limit = STACK_PRUNE_BATCH) {
+    return db.transaction(() => {
+        const excess = db
+            .prepare(`SELECT id FROM (
+           SELECT id, ROW_NUMBER() OVER (PARTITION BY project_path ORDER BY captured_at DESC, id DESC) AS rn
+           FROM stack_snapshots
+         ) WHERE rn > ? ORDER BY id`)
+            .all(STACK_SNAPSHOTS_KEPT)
+            .map((r) => r.id);
+        const batch = excess.slice(0, Math.max(0, limit));
+        let deleted = 0;
+        for (let i = 0; i < batch.length; i += 400) {
+            const chunk = batch.slice(i, i + 400);
+            deleted += db
+                .prepare(`DELETE FROM stack_snapshots WHERE id IN (${chunk.map(() => '?').join(', ')})`)
+                .run(...chunk).changes;
+        }
+        return { deleted, remaining: excess.length - deleted };
+    })();
+}
+/**
+ * The scans each project's CURRENT open set reads from (`history/openSet.ts`
+ * `sources`: every slot's source and every older scan it carries findings
+ * forward from), and the orchestrated parent of each — for the projects of
+ * `candidates` only, the prunable scans, so a start with nothing prunable
+ * reads no open set at all.
+ *
+ * Why: ranking alone cannot see a carry. A newer scan that ran PARTLY
+ * (Semgrep failed beside an ok Bandit; Trivy broken beside an ok npm audit;
+ * a security_scan_full whose sast child did) is usable and ranks like any
+ * other, while the open set still reads the older scan for the findings the
+ * newer ones did not measure again. Fifty such runs evicted the only scan
+ * holding them — risk 18 -> 8, open 1 -> 0. Measured cost: see the commit
+ * that added this and CHANGELOG (the open set per candidate project, once
+ * per start, inside retention's work budget).
+ */
+export function openSetSourceIds(storage, candidates) {
+    const protect = new Set();
+    if (candidates.length === 0)
+        return protect;
+    const db = storage.rawHandle();
+    const projects = new Set();
+    for (let i = 0; i < candidates.length; i += 400) {
+        const chunk = candidates.slice(i, i + 400);
+        for (const row of db
+            .prepare(`SELECT DISTINCT project_path AS p FROM scans WHERE id IN (${chunk.map(() => '?').join(', ')})`)
+            .all(...chunk)) {
+            projects.add(row.p);
+        }
+    }
+    for (const project of projects) {
+        for (const source of openSetForProject(storage, project).sources) {
+            protect.add(source.scan_id);
+            const parent = storage.scans.getById(source.scan_id)?.meta?.['parent_scan_id'];
+            if (typeof parent === 'string')
+                protect.add(parent);
+        }
+    }
+    return protect;
+}
+/**
+ * {@link pruneScans} for a whole `Storage`: never deletes a scan the open
+ * set of its project reads from ({@link openSetSourceIds}).
+ */
+export function pruneScansFor(storage, keep, budget = {}) {
+    const db = storage.rawHandle();
+    const protect = openSetSourceIds(storage, listPrunableScans(db, keep));
+    return pruneScans(db, keep, { ...budget, protect });
 }
 /**
  * Fails scans whose owning process died (see `ScansRepo.reapRunning`). Runs
@@ -312,6 +466,7 @@ export function scheduleRetention(storage, log, options = {}) {
     let cancelled = false;
     let cancelNext = () => { };
     let pending;
+    let protect = NOTHING_PROTECTED;
     let spent = 0;
     let deleted = 0;
     const finish = (left) => {
@@ -327,8 +482,24 @@ export function scheduleRetention(storage, log, options = {}) {
         let left;
         try {
             const db = storage.rawHandle();
-            pending ??= listPrunableScans(db, limit.keep);
-            deleted += deletePrunableScans(db, pending.splice(0, batchSize), limit.keep);
+            if (pending === undefined) {
+                // Once per start, in the first tick: the stack snapshots written
+                // before they were pruned on insert, one bounded batch.
+                const stack = pruneStackSnapshots(db);
+                if (stack.deleted > 0) {
+                    log(`pruned ${stack.deleted} stack snapshot(s) beyond the newest ${STACK_SNAPSHOTS_KEPT} per project` +
+                        (stack.remaining > 0 ? `; ${stack.remaining} left for the next start` : ''));
+                }
+            }
+            if (pending === undefined) {
+                // Once per start: what each candidate's project's open set reads
+                // from is never deleted (openSetSourceIds). Re-read per start — a
+                // scan the set stops reading goes at the next one.
+                const listed = listPrunableScans(db, limit.keep);
+                protect = openSetSourceIds(storage, listed);
+                pending = listed.filter((id) => !protect.has(id));
+            }
+            deleted += deletePrunableScans(db, takePruneBatch(db, pending, batchSize), limit.keep, protect);
             left = pending.length;
         }
         catch (error) {
@@ -350,5 +521,66 @@ export function scheduleRetention(storage, log, options = {}) {
 }
 function describe(error) {
     return error instanceof Error ? error.message : String(error);
+}
+// ---- Stored project paths in their canonical spelling ---------------------
+/**
+ * Rewrites `suppressions.project_path` and `baselines.project_path` to the
+ * canonical spelling of the directory they name (`platform/projectPath.ts
+ * #canonicalPath`) — the spelling every scan has been stored under since
+ * 3.0.0. Returns how many rows changed. Idempotent: a second run finds
+ * nothing to do.
+ *
+ * 2.0.0 stored `resolve(input)`: `c:\Users\…`, with the drive letter as the
+ * host typed it. Migration 011 scoped each legacy suppression to the path of
+ * the scan that reported its finding, and 008 each baseline to its scan's:
+ * both got that spelling. Every reader compares a project exactly, so after
+ * the upgrade those suppressions stopped applying and those baselines were
+ * never found (reproduced with the v2.0.0 tag's own storage code seeding
+ * the database).
+ *
+ * A row is rewritten only when its path names an existing directory, the
+ * canonical spelling differs, and NO component of the path is a symbolic
+ * link or junction: case, the drive letter, an 8.3 short name, separators —
+ * spellings of one directory entry that cannot come to mean another. A link
+ * can: `~/work/current` repointed from project A to project B would move A's
+ * suppressions onto B. So no row is ever merged into a different project; a
+ * path that no longer exists, or goes through a link, is left as it is.
+ * Scan rows are not touched (history keeps the spelling it was measured
+ * under), and neither is anything else keyed by project.
+ */
+export function canonicalizeStoredProjectPaths(db) {
+    const stored = db
+        .prepare(`SELECT project_path AS p FROM suppressions WHERE project_path IS NOT NULL
+       UNION
+       SELECT project_path AS p FROM baselines WHERE project_path IS NOT NULL`)
+        .all()
+        .map((r) => r.p);
+    const renames = [];
+    for (const path of stored) {
+        const canonical = spellingOnlyCanonical(path);
+        if (canonical !== null)
+            renames.push([path, canonical]);
+    }
+    if (renames.length === 0)
+        return 0;
+    return db.transaction(() => {
+        let changed = 0;
+        for (const [from, to] of renames) {
+            changed += db.prepare('UPDATE suppressions SET project_path = ? WHERE project_path = ?').run(to, from).changes;
+            changed += db.prepare('UPDATE baselines SET project_path = ? WHERE project_path = ?').run(to, from).changes;
+        }
+        return changed;
+    })();
+}
+/** Runs {@link canonicalizeStoredProjectPaths} at startup; logs, never throws. */
+export function canonicalizeProjectPathsAtStartup(storage, log) {
+    try {
+        const changed = canonicalizeStoredProjectPaths(storage.rawHandle());
+        if (changed > 0)
+            log(`rewrote ${changed} suppression/baseline row(s) to the canonical project path spelling`);
+    }
+    catch (error) {
+        log(`project path spelling step failed (continuing): ${describe(error)}`);
+    }
 }
 //# sourceMappingURL=maintenance.js.map

@@ -36,7 +36,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readProjectText } from '../platform/projectFs.js';
 import { stripProvenanceHeader } from './header.js';
 
 export { stripProvenanceHeader };
@@ -53,17 +53,25 @@ export function hashConfigText(text: string): string {
   return createHash('sha256').update(canonicaliseConfig(text), 'utf8').digest('hex');
 }
 
+/** The largest config file hashed; a real one is a few KB. */
+export const MAX_CONFIG_FILE_BYTES = 1024 * 1024;
+
 /**
- * `hashConfigText` of a file's contents, or `null` when the file is missing
- * or unreadable.
+ * `hashConfigText` of `rel`'s contents below `root` — the project, or the
+ * plugin's `configs/` — or `null` when the file is missing, unreadable, or
+ * refused.
+ *
+ * Both paths can come from `.dev-guardian/configs.json`, a file in the
+ * scanned repository: its `target` and `source` fields are joined to the
+ * project and to `configs/`. So the read is `platform/projectFs.ts`'s,
+ * contained in `root`, bounded, regular files only — `"source":
+ * "../../../../dev/zero"` in a committed manifest would otherwise have been
+ * read without end on every scan.
  *
  * Never throws. Every caller sits on a path — a scan, or `init_project` — that
  * must not fail because a config file was deleted or locked mid-read.
  */
-export function hashConfigFile(path: string): string | null {
-  try {
-    return hashConfigText(readFileSync(path, 'utf8'));
-  } catch {
-    return null;
-  }
+export function hashConfigFile(root: string, rel: string): string | null {
+  const r = readProjectText(root, rel, MAX_CONFIG_FILE_BYTES);
+  return r.status === 'ok' ? hashConfigText(r.text) : null;
 }

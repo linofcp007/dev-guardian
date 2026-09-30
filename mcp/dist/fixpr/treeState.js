@@ -10,6 +10,7 @@
  * A read has no business taking it.
  */
 import { runProcess } from '../runners/processRunner.js';
+import { GIT_COMMAND } from '../platform/gitSafety.js';
 /**
  * The project's place in its repository (`git rev-parse --show-prefix`:
  * `''` at the root, `app/` for a subdirectory — the same subdirectory of any
@@ -20,7 +21,7 @@ import { runProcess } from '../runners/processRunner.js';
  */
 export async function projectTreeState(projectPath, run = runProcess) {
     const prefix = await run({
-        command: 'git',
+        command: GIT_COMMAND,
         args: ['--no-optional-locks', '-C', projectPath, 'rev-parse', '--show-prefix'],
         cwd: projectPath,
     });
@@ -28,8 +29,21 @@ export async function projectTreeState(projectPath, run = runProcess) {
         return { ok: false, reason: `git rev-parse --show-prefix failed: ${prefix.stderr.trim()}` };
     }
     const status = await run({
-        command: 'git',
-        args: ['--no-optional-locks', '-C', projectPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'],
+        command: GIT_COMMAND,
+        // `--ignore-submodules=dirty`: not into a submodule's work tree; a moved
+        // submodule commit is still listed (its path is no file a finding names).
+        args: [
+            '--no-optional-locks',
+            '-C',
+            projectPath,
+            'status',
+            '--porcelain=v1',
+            '-z',
+            '--untracked-files=all',
+            '--ignore-submodules=dirty',
+            '--',
+            '.',
+        ],
         cwd: projectPath,
     });
     if (status.outcome !== 'completed') {

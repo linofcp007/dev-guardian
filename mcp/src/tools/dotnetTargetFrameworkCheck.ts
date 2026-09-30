@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -83,12 +83,10 @@ async function handler(
   }> = [];
 
   for (const file of projects) {
-    let xml: string;
-    try {
-      xml = readFileSync(file, 'utf8');
-    } catch {
-      continue;
-    }
+    // The repository's file: bounded, regular files only, never through a
+    // link out of the project (`platform/projectFs.ts`).
+    const xml = readProjectTextOrUndefined(projectPath, file);
+    if (xml === undefined) continue;
     const tfms = extractTfms(xml);
     if (tfms.length === 0) continue;
     const statuses = tfms.map((tfm) => SUPPORT[tfm] ?? unknownStatus(tfm));
@@ -171,22 +169,12 @@ function collectCsprojFiles(root: string, maxDepth: number): string[] {
   const out: string[] = [];
   function walk(dir: string, depth: number): void {
     if (depth > maxDepth) return;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of entries) {
+    // A directory link is never descended (`platform/projectFs.ts`).
+    for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP_DIRS.has(name)) continue;
       const abs = join(dir, name);
-      try {
-        const s = statSync(abs);
-        if (s.isDirectory()) walk(abs, depth + 1);
-        else if (name.endsWith('.csproj') || name.endsWith('.fsproj')) out.push(abs);
-      } catch {
-        /* skip */
-      }
+      if (kind === 'directory') walk(abs, depth + 1);
+      else if (name.endsWith('.csproj') || name.endsWith('.fsproj')) out.push(abs);
     }
   }
   walk(root, 0);

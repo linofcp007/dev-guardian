@@ -24,6 +24,13 @@
  *                             --accept-partial-parse <path>  repeatable, CLI ARGV
  *                                                      ONLY: accept that Semgrep
  *                                                      only partly parsed <path>
+ *                             --baseline-ref <ref>     read .guardian/baseline.json
+ *                                                      from that commit, never the tree
+ *                             --rules-ref <ref>        read the project's Semgrep rules
+ *                                                      and ignore files from that commit
+ *                             --reset-exclusions-from <ref>  CI only (CI=true), clean checkout:
+ *                                                      put .semgrepignore, .gitleaksignore
+ *                                                      and .gitleaks.toml back to that commit's
  *                             Exit codes: 0 pass, 1 gate failed, 2 incomplete
  *                             scan (a scanner did not run), 3 usage error.
  *   baseline update         Regenerate .guardian/baseline.json from the
@@ -62,6 +69,18 @@
  *                             --project <path>        default: cwd
  *                             --out <path>             default: <project>/.guardian/dashboard.html
  *                             --no-open                never launch a browser
+ *   db adopt                Show what the project's .guardian/guardian.db
+ *                           holds (projects, scans, dates, suppressions,
+ *                           paths) and, with --yes, register it as this
+ *                           user's database — the only way an existing one
+ *                           (from before 3.1.0, a copy) comes to be trusted.
+ *                           CLI only, never an MCP tool.
+ *                             --project <path>        default: cwd
+ *                             --yes                    register it
+ *                             --rehome                 with --yes: move this
+ *                                                      project's rows filed under
+ *                                                      a path that leads to it
+ *                                                      to its canonical path
  *
  *   node cli/dev-guardian.mjs mcp-config <host|all> [--write] [--scope …]
  *   node cli/dev-guardian.mjs check --file path/to/file
@@ -70,6 +89,7 @@
  *   node cli/dev-guardian.mjs baseline update --project .
  *   node cli/dev-guardian.mjs status --project .
  *   node cli/dev-guardian.mjs dashboard --project .
+ *   node cli/dev-guardian.mjs db adopt --project . --yes
  *
  * `--start-command`, and why it may only come from argv:
  *   scan_dast's own MCP tool deliberately has no way to start the app it
@@ -109,17 +129,29 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
 import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
+import { execGitSync } from '../mcp/dist/platform/gitSafety.js';
 import { detectOs } from '../mcp/dist/platform/osDetect.js';
+import { hardenCommandSearch } from '../mcp/dist/platform/binaryPath.js';
 import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
 import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
 import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
+import { decodeText } from '../mcp/dist/hooks/textEncoding.js';
+import { untrustedText } from '../mcp/dist/platform/untrustedText.js';
+import {
+  describeReadRefusal,
+  describeWriteRefusal,
+  isWithinDir,
+  PROJECT_LOCKFILE_MAX_BYTES,
+  readProjectText,
+  writeProjectFile,
+} from '../mcp/dist/platform/projectFs.js';
 
 // `storage/*` and `dashboard/*` are NOT statically imported here (contrast
 // the five imports directly above, which are pure — no `node:sqlite`
@@ -139,6 +171,10 @@ import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
 // `loadCiModules()`'s identical reasoning for `scan`/`baseline update`,
 // just below), so every OTHER subcommand's process never touches
 // `node:sqlite` at all, on any Node version.
+
+// `scan` runs in the project it scans: no spawn by bare name may find a binary
+// there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
+hardenCommandSearch();
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
 const ROOT = resolve(HERE, '..'); // <plugin>
@@ -208,6 +244,7 @@ Usage:
   node cli/dev-guardian.mjs ci-init <github|gitlab|bitbucket> [options]
   node cli/dev-guardian.mjs status [--project <path>]
   node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
+  node cli/dev-guardian.mjs db adopt [--project <path>] [--yes [--rehome]]
 
 mcp-config — wire the MCP server into an AI host
   Hosts: ${[...ALL_HOSTS].join(', ')}, all
@@ -227,15 +264,18 @@ mcp-config — wire the MCP server into an AI host
               2 usage error (e.g. --project with no value)
 
 check — run the guardrail detectors (same engine as the hooks)
-  --file <path>        Scan a file for hard-coded secrets
+  --file <path>        Scan a file for hard-coded secrets (UTF-8, or UTF-16
+                        by byte-order mark or NUL-interleaving)
   --bash "<command>"   Risk-assess a shell command (ok / warn / block)
   --powershell         With --bash: also read it with PowerShell's quoting, as
                         the hook does for the PowerShell tool
-  --min high|medium    Minimum secret confidence to report (default: medium)
+  --min high|medium    With --file: minimum secret confidence (default: medium)
   --json               Machine-readable output
+  One of --file and --bash, never both.
   Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic,
-             2 = usage error (no --file/--bash given) or the --file path does
-             not exist / could not be read
+             2 = usage error (neither or both of --file/--bash, an unknown
+             argument, a bad --min) or the --file path does not exist /
+             could not be read
 
 scan — headless CI: run the scan pipeline, gate against the baseline, report
   --project <path>      Target project directory (default: current directory)
@@ -246,10 +286,16 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          health-check URL when --start-command is given —
                          they are the same origin, so one flag names both.
   --authorized-target   Confirm you are authorized to DAST-test that target
-  --local-only          Semgrep runs only the rules on disk (the project's
-                         .semgrep.yml and registered custom rules) with
-                         --metrics=off: no registry download, no telemetry.
-                         Fewer rules than the default registry ruleset.
+  --local-only          Keeps Semgrep local: only rules on disk — the
+                         project's .semgrep.yml and registered custom rules,
+                         plus the plugin's own packs (the LLM-application
+                         pack still runs) — with --metrics=off and no
+                         registry download. Fewer rules than the default
+                         registry ruleset. It is NOT "nothing leaves the
+                         machine": Trivy still fetches its vulnerability
+                         database and a .NET project is still restored from
+                         its NuGet feeds (SECURITY.md, network egress).
+                         Semgrep's own version check is off on every run.
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan
@@ -272,6 +318,30 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          --base-url, DAST never probed routes in those spans.
                          CLI ARGV ONLY, like --start-command: a repository
                          file declaring it is refused.
+  --baseline-ref <ref>  Read .guardian/baseline.json from the commit <ref> names
+                         (git, never the working tree). For a pull request: its
+                         base (the ci-init pipelines pass it), so the pull request
+                         cannot add its own findings to the baseline it is gated
+                         against. None at <ref> is no baseline; a <ref> that names
+                         no commit (not fetched) is exit 3.
+  --rules-ref <ref>     Read the project's Semgrep rules (.semgrep.yml/.yaml and
+                         those .dev-guardian/configs.json records), .guardianignore,
+                         .trivyignore and .bandit from <ref> instead of the tree:
+                         a pull request cannot delete the rule that catches it.
+                         .semgrepignore, .gitleaks.toml, .gitleaksignore, actionlint
+                         and zizmor configuration and the .NET build's files are
+                         still read from the tree — each one the tree changes
+                         against <ref> is named in the report. See docs/ci.md.
+  --reset-exclusions-from <ref>
+                         In CI only (CI=true, or GITHUB_ACTIONS / GITLAB_CI /
+                         BITBUCKET_BUILD_NUMBER; exit 3 elsewhere — it would
+                         revert your own files): before scanning, put
+                         every .semgrepignore the scan reads, .gitleaksignore and
+                         .gitleaks.toml back to <ref>'s, deleting those <ref>
+                         lacks — no scanner flag reads them from elsewhere. Refused
+                         (exit 3) in a checkout with changes, for one of those
+                         files git does not track, or through a link. The report
+                         names what it reset.
   Never writes .guardian/baseline.json — see \`baseline update\`.
   Leaves .guardian/reports/ in the scanned project either way (security_scan_full
   and map_attack_surface write there, same as interactively) — add the two lines
@@ -385,6 +455,24 @@ dashboard — writes a self-contained HTML report and prints its path
   a multi-week trend. Regenerate it (re-run this command) to see a new scan.
   Exit codes: 0 always, except 3 on a usage error.
 
+db adopt — decide yourself whether the project's .guardian/guardian.db is yours
+  --project <path>      Target project directory (default: current directory)
+  --yes                  Register it as this user's database
+  --rehome               With --yes: move this project's rows filed under
+                         another path that leads to it (a link, macOS /var)
+                         to its canonical path, so their history reads again
+  dev-guardian uses a project's database only when it is yours: created here,
+  or registered here by you. Nothing else is trusted automatically — upgrading
+  from 3.0.0, run this once. It prints what the database holds — first what to
+  weigh (suppressions with no project apply to EVERY project; scans dated in
+  the future), then projects, scans, dates, and every path its rows are filed
+  under with where each leads now — and registers it only with --yes. Run it
+  yourself: it decides whose data dev-guardian trusts. Never one git tracks,
+  one reached through a link, one whose schema holds what dev-guardian's
+  migrations never create, or one holding scans dated in the future.
+  Exit codes: 0 report printed (registered with --yes, or already yours),
+              1 no database, or it cannot be registered, 3 usage error.
+
 Examples:
   node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
   node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
@@ -395,6 +483,7 @@ Examples:
   node cli/dev-guardian.mjs ci-init github --project ../my-app --write
   node cli/dev-guardian.mjs status --project .
   node cli/dev-guardian.mjs dashboard --project . --no-open
+  node cli/dev-guardian.mjs db adopt --project .          # show; add --yes to register
 `);
 }
 
@@ -531,38 +620,83 @@ function cmdMcpConfig(argv) {
   }
 }
 
+/**
+ * `check`'s arguments, or `{ error }` — a usage error, exit 2 (review of
+ * 3.0.0, M3). Every argument is accounted for: `--file` together with
+ * `--bash` used to print the command's verdict and ignore the file (`check
+ * --file short.js --bash ls` read "OK", exit 0), `--min bogus` quietly became
+ * `medium`, and an unknown flag (`--jsn`) or a stray word was accepted.
+ */
 function parseCheckArgs(argv) {
-  const out = { file: undefined, bash: undefined, min: 'medium', json: false, powershell: false };
+  const out = { file: undefined, bash: undefined, min: undefined, json: false, powershell: false };
+  const valued = { '--file': 'file', '--bash': 'bash', '--min': 'min' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--file') out.file = argv[++i];
-    else if (a.startsWith('--file=')) out.file = a.slice('--file='.length);
-    else if (a === '--bash') out.bash = argv[++i];
-    else if (a.startsWith('--bash=')) out.bash = a.slice('--bash='.length);
-    else if (a === '--min') out.min = argv[++i];
-    else if (a.startsWith('--min=')) out.min = a.slice('--min='.length);
-    else if (a === '--json') out.json = true;
+    const eq = a.indexOf('=');
+    const flag = a.startsWith('--') && eq > 0 ? a.slice(0, eq) : a;
+    const key = valued[flag];
+    if (key !== undefined) {
+      let value;
+      if (flag !== a) value = a.slice(eq + 1);
+      else {
+        value = argv[i + 1];
+        i += 1;
+      }
+      if (value === undefined) return { error: `${flag} needs a value` };
+      if (out[key] !== undefined) return { error: `${flag} was given twice` };
+      out[key] = value;
+    } else if (a === '--json') out.json = true;
     else if (a === '--powershell') out.powershell = true;
+    else return { error: `unknown argument: ${a}` };
   }
-  if (out.min !== 'high' && out.min !== 'medium') out.min = 'medium';
-  return out;
+  if (out.file !== undefined && out.bash !== undefined) {
+    return { error: '--file and --bash cannot be combined — run check once for each' };
+  }
+  if (out.min !== undefined && out.min !== 'high' && out.min !== 'medium') {
+    return { error: `--min must be high or medium (got '${out.min}')` };
+  }
+  if (out.min !== undefined && out.bash !== undefined) return { error: '--min applies to --file only' };
+  if (out.powershell && out.file !== undefined) return { error: '--powershell applies to --bash only' };
+  return { value: { ...out, min: out.min ?? 'medium' } };
+}
+
+/** The largest `.guardian/*.json` configuration the CLI reads; a real one is a few KB. */
+const MAX_REPO_CONFIG_BYTES = 1024 * 1024;
+
+/**
+ * A JSON file inside the repository, parsed — or `null` when it is absent,
+ * not JSON, or refused. Read through `platform/projectFs.ts`: bounded,
+ * regular files only, never through a link out of the repository. Every
+ * caller is lenient by design (a missing or broken file is "no config"), and
+ * a checkout a pull request controls can put a FIFO or a `/dev/zero` link at
+ * any of these names — `readFileSync` blocked on the first and read the
+ * second without end, until the CI job's own timeout.
+ */
+function readRepoJson(projectPath, relPath) {
+  const r = readProjectText(projectPath, relPath, MAX_REPO_CONFIG_BYTES);
+  if (r.status !== 'ok') return null;
+  try {
+    return JSON.parse(r.text);
+  } catch {
+    return null;
+  }
 }
 
 function loadAllowlist(projectDir) {
-  try {
-    const p = resolve(projectDir, '.guardian', 'hooks-allowlist.json');
-    if (!existsSync(p)) return [];
-    const data = JSON.parse(readFileSync(p, 'utf8'));
-    if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
-    if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
-  } catch {
-    /* ignore */
-  }
+  const data = readRepoJson(projectDir, join('.guardian', 'hooks-allowlist.json'));
+  if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
+  if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
   return [];
 }
 
 function cmdCheck(argv) {
-  const opts = parseCheckArgs(argv);
+  const parsed = parseCheckArgs(argv);
+  if (parsed.error !== undefined) {
+    process.stderr.write(`check: ${parsed.error}\n\n`);
+    usage();
+    process.exit(2);
+  }
+  const opts = parsed.value;
 
   if (opts.bash != null) {
     const a = assessBashCommand(opts.bash, { shell: opts.powershell ? 'powershell' : 'bash' });
@@ -571,7 +705,7 @@ function cmdCheck(argv) {
     } else {
       const icon = a.level === 'block' ? '⛔' : a.level === 'warn' ? '⚠️ ' : '✅';
       process.stdout.write(`${icon} ${a.level.toUpperCase()}\n`);
-      for (const r of a.reasons) process.stdout.write(`  • ${r}\n`);
+      for (const r of a.reasons) process.stdout.write(`  • ${untrustedText(r)}\n`);
     }
     process.exit(a.level === 'ok' ? 0 : 1);
   }
@@ -584,7 +718,10 @@ function cmdCheck(argv) {
     }
     let text = '';
     try {
-      text = readFileSync(filePath, 'utf8');
+      // UTF-16 by byte-order mark or NUL-interleaving (PowerShell 5.1's `>`
+      // and `Out-File` default), else UTF-8: read as UTF-8, a UTF-16 file
+      // put a NUL between every character and hid every key (review M3).
+      text = decodeText(readFileSync(filePath));
     } catch (e) {
       process.stderr.write(`Cannot read ${filePath}: ${e instanceof Error ? e.message : String(e)}\n`);
       process.exit(2);
@@ -594,11 +731,16 @@ function cmdCheck(argv) {
     if (opts.json) {
       process.stdout.write(JSON.stringify({ file: filePath, hits }) + '\n');
     } else if (hits.length === 0) {
-      process.stdout.write(`✅ No secrets detected in ${opts.file}\n`);
+      process.stdout.write(`✅ No secrets detected in ${untrustedText(opts.file, { multiline: false })}\n`);
     } else {
-      process.stdout.write(`⚠️  ${hits.length} possible secret(s) in ${opts.file}:\n`);
+      // The file's name and what matched in it are the repository's text:
+      // control, bidi and zero-width characters are written as visible
+      // `\u{XXXX}` before they reach the terminal (`platform/untrustedText.ts`).
+      process.stdout.write(`⚠️  ${hits.length} possible secret(s) in ${untrustedText(opts.file, { multiline: false })}:\n`);
       for (const h of hits) {
-        process.stdout.write(`  • ${h.title} (${h.confidence}) — line ${h.line}: ${h.preview}\n`);
+        process.stdout.write(
+          `  • ${untrustedText(h.title)} (${h.confidence}) — line ${h.line}: ${untrustedText(h.preview, { multiline: false })}\n`,
+        );
       }
     }
     process.exit(hits.length > 0 ? 1 : 0);
@@ -645,7 +787,7 @@ async function loadCiModules() {
     );
     process.exit(USAGE_ERROR_EXIT);
   }
-  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types] = await Promise.all([
+  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig] = await Promise.all([
     import('../mcp/dist/ci/types.js'),
     import('../mcp/dist/ci/baseline.js'),
     import('../mcp/dist/ci/gate.js'),
@@ -653,6 +795,7 @@ async function loadCiModules() {
     import('../mcp/dist/ci/runScans.js'),
     import('../mcp/dist/ci/appRunner.js'),
     import('../mcp/dist/types.js'),
+    import('../mcp/dist/ci/refConfig.js'),
   ]);
   return {
     CI_EXIT: ciTypes.CI_EXIT,
@@ -668,6 +811,9 @@ async function loadCiModules() {
     runScans: runScansMod.runScans,
     startApp: appRunner.startApp,
     SEVERITIES: types.SEVERITIES,
+    resolveCiRef: refConfig.resolveCiRef,
+    readBaselineAtRef: refConfig.readBaselineAtRef,
+    resetExclusionsFromRef: refConfig.resetExclusionsFromRef,
   };
 }
 
@@ -682,6 +828,21 @@ async function loadCiModules() {
  * a knob nobody asked for; revisit if a real pipeline needs a slower boot.
  */
 const APP_START_TIMEOUT_MS = 60_000;
+
+/**
+ * `.guardian/baseline.json`'s text, `null` when there is none — or a usage
+ * error when one is there and was refused (a link out of the repository, a
+ * FIFO, a device, or larger than a lockfile may be). Refused is NOT read as
+ * "no baseline": the committed baseline is what the gate subtracts, and a
+ * pull request must not be able to swap in a file from outside the checkout,
+ * nor make the job wait on a FIFO.
+ */
+function readBaselineOrExit(projectPath, relPath) {
+  const r = readProjectText(projectPath, relPath, PROJECT_LOCKFILE_MAX_BYTES);
+  if (r.status === 'ok') return r.text;
+  if (r.status === 'absent') return null;
+  return usageError(`${relPath} was not read: ${describeReadRefusal(r.reason)}`);
+}
 
 /**
  * The pwn-request guard (the design of record). `--start-command` may be supplied
@@ -701,13 +862,7 @@ const APP_START_TIMEOUT_MS = 60_000;
  */
 function findStartCommandInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (!existsSync(configPath)) return null;
-  let data;
-  try {
-    data = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return null;
-  }
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
   if (data && typeof data === 'object' && !Array.isArray(data) && data.start_command) {
     return configPath;
   }
@@ -735,13 +890,7 @@ function startCommandRefusalMessage(configPath) {
  */
 function findAcceptPartialParseInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (!existsSync(configPath)) return null;
-  let data;
-  try {
-    data = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return null;
-  }
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
   if (data && typeof data === 'object' && !Array.isArray(data) && data.accept_partial_parse !== undefined) {
     return configPath;
   }
@@ -874,10 +1023,28 @@ function parseScanArgs(argv) {
     localOnly: false,
     startCommand: undefined,
     acceptPartialParse: [],
+    baselineRef: undefined,
+    rulesRef: undefined,
+    resetExclusionsFrom: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--project') {
+    const ref = refFlag(a);
+    if (ref !== null) {
+      // requireNonEmpty: an unset CI variable (`--baseline-ref "$BASE"`) must
+      // not silently fall back to the tree's own baseline — exit 3 instead.
+      let value;
+      if (a === ref.flag) {
+        const r = takeOperand(argv, i, a, true);
+        if (r.error) return r;
+        value = r.value;
+        i = r.nextIndex;
+      } else {
+        value = a.slice(ref.flag.length + 1);
+        if (isMissingOperand(value, true)) return { error: `${ref.flag} requires a value` };
+      }
+      out[ref.key] = value;
+    } else if (a === '--project') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.project = r.value;
@@ -939,6 +1106,22 @@ function parseScanArgs(argv) {
     } else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
+}
+
+/**
+ * `--baseline-ref` / `--rules-ref` in either spelling (`--x v`, `--x=v`), or
+ * null. Both take a git ref and are read against the scanned project's
+ * repository (`mcp/src/ci/refConfig.ts`).
+ */
+function refFlag(a) {
+  for (const [flag, key] of [
+    ['--baseline-ref', 'baselineRef'],
+    ['--rules-ref', 'rulesRef'],
+    ['--reset-exclusions-from', 'resetExclusionsFrom'],
+  ]) {
+    if (a === flag || a.startsWith(`${flag}=`)) return { flag, key };
+  }
+  return null;
 }
 
 function parseBaselineUpdateArgs(argv) {
@@ -1147,6 +1330,9 @@ async function cmdScan(argv) {
     startApp,
     BASELINE_RELATIVE_PATH,
     SEVERITIES,
+    resolveCiRef,
+    readBaselineAtRef,
+    resetExclusionsFromRef,
   } = ci;
 
   if (!SEVERITIES.includes(opts.failOn)) {
@@ -1162,6 +1348,29 @@ async function cmdScan(argv) {
   // says (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
   if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
+
+  // --baseline-ref / --rules-ref (docs/ci.md): resolved, and the baseline
+  // read, before anything starts or scans — a ref that names no commit, or a
+  // baseline at it too large to read, is a usage error (exit 3), never "no
+  // baseline" and never the tree's own copy.
+  let baselineRef = null;
+  let rulesRef = null;
+  let baselineAtRef = null;
+  let exclusionsReset = null;
+  try {
+    if (opts.baselineRef !== undefined) {
+      baselineRef = await resolveCiRef(projectPath, opts.baselineRef, '--baseline-ref');
+      baselineAtRef = await readBaselineAtRef(projectPath, baselineRef);
+    }
+    if (opts.rulesRef !== undefined) rulesRef = await resolveCiRef(projectPath, opts.rulesRef, '--rules-ref');
+    // Last: it rewrites the checkout, so only once every other flag resolved.
+    if (opts.resetExclusionsFrom !== undefined) {
+      const resetRef = await resolveCiRef(projectPath, opts.resetExclusionsFrom, '--reset-exclusions-from');
+      exclusionsReset = await resetExclusionsFromRef(projectPath, resetRef);
+    }
+  } catch (e) {
+    return usageError(e instanceof Error ? e.message : String(e));
+  }
 
   // `app` (when --start-command was given) must be stopped as soon as
   // runScans() is done with it, success or failure — runScans() (via
@@ -1195,6 +1404,7 @@ async function cmdScan(argv) {
       baseUrl: opts.baseUrl,
       authorizedTarget: opts.authorizedTarget ? true : undefined,
       localOnly: opts.localOnly ? true : undefined,
+      ...(rulesRef !== null ? { rulesRef } : {}),
     });
   } catch (e) {
     pipelineError = e;
@@ -1213,8 +1423,22 @@ async function cmdScan(argv) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
-  const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
-  const baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+  let baselineText;
+  let baselineSource;
+  if (baselineRef !== null && baselineAtRef !== null) {
+    baselineText = baselineAtRef.text;
+    baselineSource = {
+      from: 'ref',
+      path: BASELINE_RELATIVE_PATH,
+      ref: baselineRef.ref,
+      commit: baselineRef.commit,
+      present: baselineAtRef.text !== null,
+      tree_differs: baselineAtRef.treeDiffers,
+    };
+  } else {
+    baselineText = readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH);
+    baselineSource = { from: 'tree', path: BASELINE_RELATIVE_PATH };
+  }
   const parsedBaseline = parseBaseline(baselineText);
 
   const verdict = evaluateGate({
@@ -1225,6 +1449,9 @@ async function cmdScan(argv) {
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
     // argv only — see `findAcceptPartialParseInRepoConfig`.
     acceptedPartialParses: opts.acceptPartialParse,
+    baselineSource,
+    rulesSource: result.rulesSource,
+    exclusionsReset,
   });
 
   // --sarif is independent of --format: a pipeline commonly wants a human
@@ -1329,8 +1556,7 @@ async function cmdBaseline(argv) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
-  const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
-  const baselineText = existsSync(baselinePath) ? readFileSync(baselinePath, 'utf8') : null;
+  const baselineText = readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH);
   const parsedBaseline = parseBaseline(baselineText);
   const previousFile = parsedBaseline ? parsedBaseline.file : null;
 
@@ -1343,8 +1569,18 @@ async function cmdBaseline(argv) {
   // repository too. What is actually true of this write, and not of
   // --sarif's, is that it is IMPLICIT — always `.guardian/baseline.json`,
   // never a path the caller names — where --sarif's is explicit and opt-in.
-  mkdirSync(dirname(baselinePath), { recursive: true });
-  writeFileSync(baselinePath, serialiseBaseline(updated));
+  // Through `platform/projectFs.ts`: a temp file renamed into place, never
+  // written through a link (a dangling one created its target outside the
+  // project) or a `.guardian` directory that links out.
+  const baselinePath = resolve(projectPath, BASELINE_RELATIVE_PATH);
+  const written = writeProjectFile(projectPath, BASELINE_RELATIVE_PATH, serialiseBaseline(updated), {
+    mode: 'replace',
+  });
+  if (!written.ok) {
+    return usageError(
+      `baseline not written to ${BASELINE_RELATIVE_PATH}: ${describeWriteRefusal(written.reason, written.detail)}`,
+    );
+  }
 
   // evaluateGate is reused here ONLY for its `coverage`/`coverageGaps`
   // computation (never re-derived — see scanCoverage.ts's own contract) so
@@ -1383,7 +1619,7 @@ async function cmdBaseline(argv) {
         "and whoever's change triggers that run will look responsible for debt this baseline " +
         'never actually captured. Gaps:\n',
     );
-    for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${gap}\n`);
+    for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${untrustedText(gap)}\n`);
   }
 
   // Never CI_EXIT.GATE_FAILED: this command has no gate. Full coverage is a
@@ -1658,16 +1894,12 @@ function resolveDevGuardianCommitSha(repoUrl, tag) {
  * "unknown".
  */
 function resolveTagLocally(tag) {
-  try {
-    const sha = execFileSync(
-      'git',
-      ['-C', ROOT, 'rev-parse', '--verify', `refs/tags/${tag}^{commit}`],
-      { encoding: 'utf8', timeout: 10_000, windowsHide: true },
-    ).trim();
-    return COMMIT_SHA_SHAPE.test(sha) ? sha : null;
-  } catch {
-    return null;
-  }
+  // Hardened like every git dev-guardian starts (`platform/gitSafety.ts`),
+  // though ROOT is dev-guardian's own checkout.
+  const r = execGitSync(ROOT, ['rev-parse', '--verify', `refs/tags/${tag}^{commit}`], { timeoutMs: 10_000 });
+  if (r.failure !== null || r.status !== 0) return null;
+  const sha = r.stdout.trim();
+  return COMMIT_SHA_SHAPE.test(sha) ? sha : null;
 }
 
 /**
@@ -1686,16 +1918,13 @@ function resolveTagLocally(tag) {
  * answer not shaped like a commit SHA — never throws.
  */
 function resolveTagRemotely(repoUrl, tag) {
-  let out;
-  try {
-    out = execFileSync('git', ['ls-remote', '--tags', repoUrl], {
-      encoding: 'utf8',
-      timeout: 20_000,
-      windowsHide: true,
-    });
-  } catch {
-    return null;
-  }
+  // From the temp directory, not the working directory: `ci-init` runs in the
+  // user's project, whose own git configuration (`url.<x>.insteadOf`, a
+  // credential helper, core.sshCommand) would otherwise apply to this URL.
+  // Hardened as well (`platform/gitSafety.ts`).
+  const r = execGitSync(tmpdir(), ['ls-remote', '--tags', repoUrl], { timeoutMs: 20_000 });
+  if (r.failure !== null || r.status !== 0) return null;
+  const out = r.stdout;
   let plain;
   let peeled;
   for (const line of out.split('\n')) {
@@ -1972,13 +2201,7 @@ function createFile(outPath, content) {
  */
 function findAttestInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (!existsSync(configPath)) return null;
-  let data;
-  try {
-    data = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return null;
-  }
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
   if (data && typeof data === 'object' && !Array.isArray(data) && data.attest !== undefined) return configPath;
   return null;
 }
@@ -2307,14 +2530,29 @@ async function loadDashboardModules() {
   }
 }
 
+/**
+ * The storage layer's `existingOnly` open makes every decision the server
+ * makes — a project database that is not this user's own (no id registered
+ * for its path: one from before 3.1.0 until `db adopt --yes`), one git
+ * tracks or one holding schema objects the migrations never create is
+ * refused; the per-user fallback (no longer the shared temp directory) must
+ * belong to this user — and never creates a database: an empty in-memory one
+ * when neither location has one. The existence checks this function used to
+ * make itself opened a predictable fallback path in the shared temp
+ * directory whenever it existed.
+ */
 function resolveDbHandle(mods, projectPath) {
-  const primaryPath = join(projectPath, '.guardian', 'guardian.db');
-  if (existsSync(primaryPath)) return mods.openDatabase({ projectPath }).db;
-
-  const fallbackPath = mods.resolveFallbackDbPath(projectPath);
-  if (existsSync(fallbackPath)) return mods.openDatabaseAtPath(fallbackPath);
-
-  return mods.openDatabase({ projectPath, inMemory: true }).db;
+  const opened = mods.openDatabase({ projectPath, existingOnly: true });
+  if (opened.unusable) {
+    // The database this command exists to show cannot be read or completed.
+    // The server runs on in memory; a report of an empty in-memory database
+    // would read as "no scan yet", so this refuses with the storage layer's
+    // own line (the file, and what to do) — exit 3, as before.
+    opened.db.close();
+    return usageError(opened.warning ?? `the database '${opened.unusable}' cannot be used`);
+  }
+  if (opened.warning) process.stderr.write(`dev-guardian: ${opened.warning}\n`);
+  return opened.db;
 }
 
 function buildProjectSnapshot(mods, projectPath) {
@@ -2505,8 +2743,21 @@ async function cmdDashboard(argv) {
   // destination directory may not exist yet (a custom --out is not required
   // to sit under the project's own .guardian/, which openDatabase already
   // created).
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, html);
+  //
+  // A destination inside the project — the default `.guardian/dashboard.html`
+  // among them — is the repository's path, which a checkout can make a link:
+  // written through `platform/projectFs.ts` (a temp file renamed into place,
+  // never through a link or a directory that links out). An `--out` outside
+  // the project is the operator's own choice and written as given.
+  if (isWithinDir(projectPath, outPath)) {
+    const written = writeProjectFile(projectPath, outPath, html, { mode: 'replace' });
+    if (!written.ok) {
+      return usageError(`dashboard not written to ${outPath}: ${describeWriteRefusal(written.reason, written.detail)}`);
+    }
+  } else {
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, html);
+  }
 
   process.stdout.write(`${outPath}\n`);
 
@@ -2527,19 +2778,237 @@ async function cmdDashboard(argv) {
 
 /**
  * Last-resort safety net for `cmdScan`/`cmdBaseline`/`cmdStatus`/
- * `cmdDashboard`: each already wraps (or, for the latter two, delegates to
- * `buildProjectSnapshot`'s own try/finally for) its own storage/pipeline
- * work and converts every usage problem to `usageError` (exit 3), so nothing
- * inside them SHOULD reject. This exists so that if one somehow does anyway
- * — an unreadable database file, an --out write failure, anything not
+ * `cmdDashboard`/`cmdDb`: each already wraps (or, for status/dashboard,
+ * delegates to `buildProjectSnapshot`'s own try/finally for) its own
+ * storage/pipeline work and converts every usage problem to `usageError`
+ * (exit 3), so nothing inside them SHOULD reject. This exists so that if one
+ * somehow does anyway — a database the storage layer refuses (printed as
+ * its own message, see `fatalOutcome`), an --out write failure, anything not
  * already caught closer to its source — Node reports one clean line and
  * exits 3, instead of an "unhandled promise rejection" warning on stderr —
  * exactly the kind of stray noise the pristine-output requirement (the
  * design of record, and this task's e2e) exists to keep out of a CI log.
  */
 function fatal(e) {
-  process.stderr.write(`dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(USAGE_ERROR_EXIT);
+  const out = fatalOutcome(e);
+  process.stderr.write(out.text);
+  process.exit(out.exitCode);
+}
+
+/**
+ * What `fatal` prints for `e`, and its exit code — pure, for the tests.
+ *
+ * A `GuardianDbError` (`mcp/src/storage/dbError.ts`) is not an unexpected
+ * error: it is a database dev-guardian cannot use, and its message already
+ * names the file and what to do. Printed after "unexpected error:" it read as
+ * a crash in dev-guardian, so it is printed alone — with exit 3, what
+ * `status`/`dashboard` exit with when they refuse an unusable database
+ * themselves. Recognised by name: the storage layer is loaded lazily from
+ * `mcp/dist`, so this file holds no class to test `instanceof` against.
+ * Anything else is still unexpected, exit 3.
+ */
+export function fatalOutcome(e) {
+  if (e instanceof Error && e.name === 'GuardianDbError') {
+    return { text: `dev-guardian: ${e.message}\n`, exitCode: USAGE_ERROR_EXIT };
+  }
+  return {
+    text: `dev-guardian: unexpected error: ${e instanceof Error ? e.message : String(e)}\n`,
+    exitCode: USAGE_ERROR_EXIT,
+  };
+}
+
+// --- db adopt ---------------------------------------------------------------
+//
+// A project's `.guardian/guardian.db` is used only when it is this user's own
+// (mcp/src/storage/dbProvenance.ts): created here, or registered here by the
+// user. Nothing else is trusted automatically — not a database from before
+// 3.1.0, not a copy of a registered one — because nothing in a file tells its
+// owner from whoever wrote it (round 6 of the 3.0 review defeated every rule
+// that tried). `db adopt` lets the PERSON decide: it prints what the database
+// holds — what to weigh first (suppressions with no project, which apply to
+// every project; scans dated in the future), then its projects, scan counts,
+// dates, and every project path its rows are filed under with where each
+// leads now — and registers it only with --yes. --rehome also moves the rows
+// filed under another path that leads to this project (a link, macOS /var)
+// to the project's canonical path, so its history reads again. A CLI command
+// and never an MCP tool: a model whose context includes the repository must
+// not be the one that vouches for the repository's database.
+
+/** Lazily loads the storage layer (node:sqlite) — see loadDashboardModules. */
+async function loadDbModules() {
+  const marker = resolve(ROOT, 'mcp', 'dist', 'storage', 'db.js');
+  if (!existsSync(marker)) {
+    process.stderr.write(
+      `dev-guardian: MCP server not built (missing ${marker}).\n` +
+        'Run once:  cd mcp && npm install && npm run build\n',
+    );
+    process.exit(USAGE_ERROR_EXIT);
+  }
+  try {
+    return await import('../mcp/dist/storage/db.js');
+  } catch (e) {
+    if (isNodeSqliteUnavailable(e)) {
+      process.stderr.write(
+        `dev-guardian: this command requires Node.js >= 22.13 (built-in node:sqlite support). ` +
+          `Current: ${process.version}.\n`,
+      );
+      process.exit(USAGE_ERROR_EXIT);
+    }
+    throw e;
+  }
+}
+
+function parseDbAdoptArgs(argv) {
+  const out = { project: process.cwd(), yes: false, rehome: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--project') {
+      const r = takeOperand(argv, i, a, true);
+      if (r.error) return r;
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) {
+      const value = a.slice('--project='.length);
+      if (isMissingOperand(value, true)) return { error: '--project requires a value' };
+      out.project = value;
+    } else if (a === '--yes') out.yes = true;
+    else if (a === '--rehome') out.rehome = true;
+    else return { error: `Unknown flag: ${a}` };
+  }
+  return { value: out };
+}
+
+const PATH_TARGET = {
+  canonical: "this project's canonical path",
+  'this-project': 'leads to this project: --rehome moves these rows to its canonical path',
+  elsewhere: 'another directory: never touched',
+  missing: 'does not exist: never touched',
+  unresolved: 'not looked at (a network, device or process-relative path): never touched',
+};
+
+/** The human-readable report `db adopt` prints (stdout). */
+function renderDbReport(report) {
+  const lines = [];
+  for (const w of report.warnings) lines.push(`!! ${w}`);
+  if (report.warnings.length > 0) lines.push('');
+  lines.push(`Database      ${report.db_path}`);
+  const status = {
+    trusted: "this user's database (registered for this location)",
+    foreign: `not used: ${report.why ?? ''}`,
+    none: 'empty: nothing to adopt',
+  }[report.status];
+  lines.push(`Status        ${status}`);
+  const c = report.contents;
+  if (c !== null) {
+    const range = c.first_started !== null ? `, from ${c.first_started} to ${c.last_finished ?? '(unfinished)'}` : '';
+    lines.push(`Scans         ${c.scans} (${c.completed} completed)${range}`);
+    lines.push(`Projects      ${c.projects.length + c.more_projects}`);
+    for (const p of c.projects) {
+      lines.push(`  ${p.project_path}`);
+      lines.push(
+        `    ${p.scans} scan(s), ${p.completed} completed` +
+          (p.first_started !== null ? `, ${p.first_started} .. ${p.last_finished ?? '(unfinished)'}` : ''),
+      );
+    }
+    if (c.more_projects > 0) lines.push(`  … and ${c.more_projects} more`);
+    lines.push(
+      `Suppressions  ${c.suppressions}` +
+        (c.null_scoped_suppressions > 0
+          ? `, of which ${c.null_scoped_suppressions} have no project and apply to EVERY project`
+          : ''),
+    );
+    lines.push(`Baselines     ${c.baselines}`);
+  }
+  if (report.paths.length > 0) {
+    lines.push(`Paths         rows are filed under ${report.paths.length} project path(s); this project is ${report.canonical_project}`);
+    for (const p of report.paths) {
+      lines.push(`  ${p.project_path}`);
+      lines.push(`    ${p.rows} row(s): ${PATH_TARGET[p.target] ?? p.target}`);
+    }
+    lines.push(
+      report.rehome.rows > 0
+        ? `--rehome would move ${report.rehome.rows} row(s) under ${report.rehome.paths} path(s) to ${report.canonical_project}, and nothing else.`
+        : '--rehome would change nothing: no row is filed under another path that leads to this project.',
+    );
+  }
+  if (report.blockers.length > 0) {
+    lines.push('', 'It cannot be registered:');
+    for (const b of report.blockers) lines.push(`  - ${b}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+async function cmdDb(argv) {
+  const [sub, ...rest] = argv;
+  if (sub !== 'adopt') {
+    return usageError(`Unknown db subcommand: '${sub ?? '(none)'}' (only 'adopt' is supported)`);
+  }
+  const parsed = parseDbAdoptArgs(rest);
+  if (parsed.error) return usageError(parsed.error);
+  const opts = parsed.value;
+  const projectPath = resolve(opts.project);
+  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    return usageError(`--project does not exist or is not a directory: ${projectPath}`);
+  }
+  const mods = await loadDbModules();
+
+  let report;
+  try {
+    report = mods.inspectProjectDatabase(projectPath);
+  } catch (e) {
+    process.stderr.write(`dev-guardian: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!report.exists) {
+    process.stderr.write(`dev-guardian: there is no database at '${report.db_path}': nothing to adopt.\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(renderDbReport(report));
+  if (report.blockers.length > 0) {
+    process.exitCode = 1;
+    return;
+  }
+  const trusted = report.status === 'trusted';
+  if (!opts.yes) {
+    process.stdout.write(
+      trusted
+        ? `\nAlready registered.${opts.rehome && report.rehome.rows > 0 ? ' Nothing changed: add --yes to --rehome.' : ''}\n`
+        : '\nNot registered. If this is your database, run the same command with --yes yourself: dev-guardian ' +
+            'then uses it and trusts what it holds' +
+            ((report.contents?.null_scoped_suppressions ?? 0) > 0
+              ? ` — the ${report.contents?.null_scoped_suppressions} suppression(s) that apply to every project included`
+              : '') +
+            '.\n',
+    );
+    process.exitCode = 0;
+    return;
+  }
+  if (trusted && !opts.rehome) {
+    process.stdout.write('\nAlready registered: nothing to do.\n');
+    process.exitCode = 0;
+    return;
+  }
+  try {
+    const done = mods.registerProjectDatabase(projectPath, { rehome: opts.rehome });
+    const lines = [];
+    if (!done.already) {
+      lines.push(`Registered '${done.db_path}' as this user's database (id ${done.db_id}). The server uses it from its next start.`);
+    }
+    if (done.rehomed !== undefined) {
+      lines.push(
+        `Rehomed ${done.rehomed.moved} row(s) from ${done.rehomed.paths} path(s) to ${report.canonical_project}` +
+          (done.rehomed.kept > 0 ? `; ${done.rehomed.kept} row(s) left where they were (the same key exists there already)` : '') +
+          '.',
+      );
+    }
+    process.stdout.write(`\n${lines.join('\n')}\n`);
+    process.exitCode = 0;
+  } catch (e) {
+    process.stderr.write(`dev-guardian: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exitCode = 1;
+  }
 }
 
 const HELP_FLAGS = new Set(['-h', '--help', 'help']);
@@ -2552,12 +3021,40 @@ const HELP_FLAGS = new Set(['-h', '--help', 'help']);
  * for help, not us, and swallowing it would silently skip the scan.
  */
 function asksForHelp(rest) {
-  for (const a of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
     if (a === '--start-command') return false;
+    // A value-taking flag's operand is its value, never a help request:
+    // `scan --baseline-ref --help` used to print the usage and exit 0 without
+    // scanning. The command's own parser then reads it (and a missing or
+    // bad value is exit 3, as for any flag).
+    if (VALUE_FLAGS.has(a)) {
+      i += 1;
+      continue;
+    }
     if (HELP_FLAGS.has(a)) return true;
   }
   return false;
 }
+
+/** Every flag, of every subcommand, that takes its value as the next argument. */
+const VALUE_FLAGS = new Set([
+  '--project',
+  '--fail-on',
+  '--format',
+  '--sarif',
+  '--base-url',
+  '--accept-partial-parse',
+  '--baseline-ref',
+  '--rules-ref',
+  '--reset-exclusions-from',
+  '--scope',
+  '--file',
+  '--bash',
+  '--min',
+  '--branch',
+  '--out',
+]);
 
 function main() {
   const argv = process.argv.slice(2);
@@ -2590,6 +3087,7 @@ function main() {
   }
   if (cmd === 'status') return void cmdStatus(argv.slice(1)).catch(fatal);
   if (cmd === 'dashboard') return void cmdDashboard(argv.slice(1)).catch(fatal);
+  if (cmd === 'db') return void cmdDb(argv.slice(1)).catch(fatal);
 
   process.stderr.write(`Unknown command: ${cmd}\n\n`);
   usage();

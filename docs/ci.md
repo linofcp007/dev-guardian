@@ -30,10 +30,13 @@ node dev-guardian.mjs baseline update --project .
 | `--fail-on <severity>` | `info`, `low`, `medium`, `high` (default) or `critical`: a finding new to the baseline at or above it fails the gate |
 | `--format human\|json` | report on stdout |
 | `--sarif <path>` | also write SARIF 2.1.0 |
-| `--local-only` | Semgrep runs only the rules on disk, with `--metrics=off`: no registry download, no Semgrep metrics, fewer rules. Semgrep's own version check still runs (`SEMGREP_ENABLE_VERSION_CHECK=0` turns it off), and a .NET project is still restored and built, which contacts its NuGet feeds — see [SECURITY.md](../SECURITY.md#network-egress) |
+| `--local-only` | Keeps Semgrep local: only rules on disk — the project's own and the plugin's packs (the LLM-application pack still runs) — with `--metrics=off`: no registry download, no Semgrep metrics, fewer rules. It is not "nothing leaves the machine": Trivy still fetches its vulnerability database and a .NET project is still restored and built, which contacts its NuGet feeds — see [SECURITY.md](../SECURITY.md#network-egress). Semgrep's own version check is off on every run |
 | `--base-url <url>` + `--authorized-target` | include `scan_dast` against a running app you are authorized to test |
 | `--start-command <cmd> [args…]` | start the app for the DAST pass (argv, never a shell) and kill its whole process tree afterwards; requires `--base-url`. **Command line only** — a `start_command` in `.guardian/ci.json` or any other repository file makes the CLI refuse, because a fork's pull request could edit that file and run code on your runner. |
 | `--accept-partial-parse <path>` | repeatable: accept that Semgrep could parse this file only in part — see [below](#files-semgrep-can-only-partly-parse). **Command line only**, like `--start-command`: an `accept_partial_parse` in `.guardian/ci.json` makes the CLI refuse. |
+| `--baseline-ref <ref>` | read `.guardian/baseline.json` from the commit `<ref>` names, never from the checkout — see [below](#a-pull-request-cannot-gate-itself) |
+| `--rules-ref <ref>` | read the project's Semgrep rules, `.guardianignore`, `.trivyignore` and `.bandit` from `<ref>` — see [below](#a-pull-request-cannot-gate-itself) |
+| `--reset-exclusions-from <ref>` | in CI only (`CI=true`): put every `.semgrepignore`, `.gitleaksignore` and `.gitleaks.toml` back to `<ref>`'s before scanning — see [below](#a-pull-request-cannot-gate-itself) |
 
 | Exit code | `scan` | `baseline update` |
 | ---: | --- | --- |
@@ -67,9 +70,77 @@ node dev-guardian.mjs scan --project . --accept-partial-parse wp/rest-controller
 - With `--base-url`, the DAST step's `guardian-dast:partial-surface` gap is accepted with the same files, unless the surface has another gap (its route recovery failed). Accepting it means accepting that **routes in the unparsed spans were never in the inventory, so DAST never probed them** — not only that their static findings may be missing.
 - The findings an earlier scan reported inside an accepted file stay in the open set (`findings/open`, `risk_score`, the dashboard) marked `not_remeasured`: no scan has looked at them again, so none is ever read as fixed.
 
+### A shallow checkout exits 2
+
+Most CI checkouts are shallow by default — GitHub's `actions/checkout` fetches one commit (`fetch-depth: 1`), GitLab uses `GIT_DEPTH: 20` / 50, Bitbucket clones 50 commits. The secrets pass reads git history, and on a shallow clone that history ends at the boundary the checkout fetched: a secret committed before it and removed since is invisible. So `scan` on a shallow checkout names the gap — `gitleaks … history truncated at <commit> — a shallow clone: the commits before it were not scanned` — and **exits 2** (incomplete), never 0.
+
+The fix is to fetch the whole history:
+
+| CI | Setting |
+| --- | --- |
+| GitHub Actions | `actions/checkout` with `fetch-depth: 0` |
+| GitLab CI | `variables: { GIT_DEPTH: "0" }` |
+| Bitbucket Pipelines | `clone: { depth: full }` |
+
+The pipelines `ci-init` writes already do this. With the MCP tools rather than the CLI, a history scan limited to commits you did fetch is complete too: `scan_secrets` with `log_opts: "<base>..HEAD"` reads only that range, and a range that stays above the shallow boundary is not truncated (`--all`, or no `log_opts`, reaches the boundary and is).
+
+### What the repository's `.trivyignore` suppressed
+
+A `.trivyignore` in the scanned repository is honoured — accepted risks are the project's call — but never in silence. Trivy 0.50.0 or newer lists what it suppressed, and the gate names it without counting it:
+
+```text
+suppressed by the repository's own configuration (not counted by the gate):
+  - security_scan_full: trivy: 7 findings suppressed by the repository's .trivyignore: CVE-2020-8203, …
+```
+
+The JSON carries the same under `suppressed_by_repo_config` (step, scanner, file, count, ids and the first findings), and the SARIF carries each suppressed finding as a result with `suppressions: [{ "kind": "external", "justification": "suppressed by the repository's .trivyignore" }]`. They change neither the exit code nor coverage. `trivy config` (the IaC pass) cannot list what it suppressed; the line then says so instead of a count, as it does for a Trivy older than 0.50.0. Review changes to `.trivyignore` like code: `review_pr` warns when a diff edits it.
+
+### A pull request cannot gate itself
+
+A pull request's checkout holds the pull request's own `.guardian/baseline.json` and its own scanner configuration. Read from there, the change under review decides how it is judged: a fork adds its new finding to the baseline, deletes the rule that would catch it from `.semgrep.yml`, or lists the file in `.guardianignore` — and the gate passes. Two flags take those files from a commit the pull request does not control, its base:
+
+```text
+node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA" --reset-exclusions-from "$BASE_SHA"
+```
+
+- `--baseline-ref <ref>` reads `.guardian/baseline.json` with git from the commit `<ref>` names (size-checked first, at most 32 MiB), never from the working tree. None at that commit means no baseline: every finding is new. A `<ref>` that names no commit — a shallow clone, a base branch the checkout never fetched — is exit 3, never "no baseline" and never the checkout's copy. So is an empty value: `--baseline-ref "$BASE"` with `BASE` unset.
+- `--rules-ref <ref>` copies these files from `<ref>` into a temporary directory and hands the scanners that copy; the checkout's are not read. A file the ref does not have is read from nowhere — the scan runs as the project would without it.
+
+  | File | Read by | From the ref as |
+  | --- | --- | --- |
+  | `.semgrep.yml`, `.semgrep.yaml`, and the rule files the ref's `.dev-guardian/configs.json` records | Semgrep (`scan_sast`) | `--config=<copy>`; findings keep the rule id a scan of the checkout stores, so the baseline still matches |
+  | `.guardianignore` | every scan | the ref's patterns, applied to the checkout's files — also for which submodules and oversized files are named as gaps, and which languages the project counts |
+  | `.trivyignore` | Trivy (`scan_deps`, `scan_iac`) | `--ignorefile <copy>` |
+  | `.bandit` | Bandit (`scan_sast`) | `--ini <copy>` (an empty one when the ref has none) |
+
+  A file the ref has but that cannot be copied — over 8 MiB, a directory, a link leaving the repository, a manifest entry outside the project — stops the scan (exit 3): leaving it out would run fewer rules than the ref says. Without Semgrep on `PATH` the Docker fallback is not used (it would read the checkout's rules): Semgrep is a named gap and the scan exits 2.
+
+- **The rest stays the checkout's, and is named.** Some configuration no flag can take from a ref:
+  - `.semgrepignore` — Semgrep reads every one in the tree it scans; the only flags that would change that are marked internal and unstable in Semgrep 1.176.1.
+  - `.gitleaks.toml` and `.gitleaksignore` — gitleaks 8.30.1 does take its config from `--config`, but reads `<source>/.gitleaksignore` whatever `--gitleaks-ignore-path` says (measured). A fingerprint there hides a secret as surely as an allowlist, so taking one file from the ref and not the other would protect nothing.
+  - actionlint's and zizmor's configuration — the workflows they audit are the pull request's own anyway.
+  - the .NET build's `.editorconfig`, `.globalconfig`, `Directory.Build.props`/`.targets` and NuGet configuration — the build reads them from the tree it compiles.
+
+- `--reset-exclusions-from <ref>` closes the first two of those in CI. A pull request adding a `.semgrepignore` (at any depth) or a `.gitleaksignore` otherwise passes: named in the log, nothing else. Since no scanner flag reads them from elsewhere, and a CI checkout is disposable, the files themselves are put back before the scan — every `.semgrepignore` Semgrep reads for the project (below it, and in each directory above it up to the repository root), and the project's `.gitleaksignore` and `.gitleaks.toml` — restored to `<ref>`'s bytes, deleted where `<ref>` has none. The report says what it reset (`exclusions_reset` in the JSON). It rewrites tracked files, so it runs only where the environment says CI — `CI=true` (or `1`), which GitHub Actions, GitLab CI and Bitbucket Pipelines all set, else `GITHUB_ACTIONS=true`, `GITLAB_CI=true` or a `BITBUCKET_BUILD_NUMBER`. Anywhere else it exits 3 before touching anything (`--reset-exclusions-from rewrites tracked files and runs only in CI (CI=true); outside CI, review the PR's exclusion-file changes instead`): on your own clean checkout it would revert your own exclusion files. In CI it still refuses (exit 3) a checkout with any change, one of those files git does not track or ignores (no fresh checkout holds one, and deleting it could not be undone), and a path through a link; an exclusion file that is itself a link is unlinked and replaced, never written through. Never pass it where you work.
+
+  Every one of the files above that the pull request adds, changes or deletes against `<ref>` — a `.gitleaksignore` git ignores included, since gitleaks reads it anyway — is listed under `read from the scanned tree although it differs from <ref>`, and every file of the table above it changes under `changed in the scanned tree, not applied`. Neither changes the exit code: a pull request may legitimately edit its `.editorconfig`, and a reviewer decides.
+
+The report always says where both came from — `baseline:` and `rules and configuration:` lines in the human output, `baseline_source` and `rules_source` in the JSON (with `tree_differences`: path, change, which copy was applied, and which scanners read it). A pull-request run that says `in the scanned tree (no --baseline-ref)` is gating the pull request against itself.
+
+The pipelines `ci-init` writes pass all three on a pull-request pipeline and nothing on a push, where the committed files are the gate:
+
+| CI | Base passed | Fetch |
+| --- | --- | --- |
+| GitHub Actions | `github.event.pull_request.base.sha`, through the step's `env:` | none: `fetch-depth: 0` already fetched the base branch |
+| GitLab CI | `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` in a merged results pipeline, else `CI_MERGE_REQUEST_DIFF_BASE_SHA`; a merge request pipeline with neither stops (exit 3) | the target branch, only when that commit is missing |
+| Bitbucket Pipelines | `origin/$BITBUCKET_PR_DESTINATION_BRANCH` | that branch, first |
+
+**What this does not cover: the pipeline file itself.** GitHub's `pull_request` workflows, GitLab's merge request pipelines and Bitbucket's pull-request pipelines all run the pipeline definition from the pull request's own branch, so a pull request can edit it to drop the flags. Require review of that file (CODEOWNERS on `.github/workflows/`, `.gitlab-ci.yml` or `bitbucket-pipelines.yml`, and a required approval), and read the `baseline:` line of a pull request's report.
+
 ### Things a green pipeline does not tell you
 
 - **SARIF carries one bit of coverage.** `invocation.executionSuccessful` turns `false` when coverage is not full, but SARIF has no field for *which* scanner was missing. That is in exit code 2 and the human/JSON output. Treat an uploaded SARIF with zero results as inconclusive until you have checked the exit code.
+- **An incomplete scan's SARIF is not uploaded.** GitHub code scanning closes as fixed every open alert of a scanner an upload does not contain, whatever `executionSuccessful` says — so after an incomplete scan the missing scanner's findings would read as resolved. That is every exit 2, and an exit 1 too when a blocking finding outranked a scanner that did not run. The generated GitHub workflow uploads after exit 0, or after exit 1 only when every run in the SARIF says `executionSuccessful: true` (coverage full); the scan step records the decision as `steps.scan.outputs.upload-sarif` and the exit code as `exit-code`. A workflow of your own that uploads on `if: always()` should do the same. GitLab and Bitbucket keep the SARIF as a plain artifact, which closes nothing, so their templates keep it either way.
 - **CWE and OWASP tags say what a result is, not what was tested.** A result and its rule carry `external/cwe/cwe-<n>` and `owasp-2025-a<nn>` tags when the scanner named a CWE (Semgrep rule metadata, Trivy, Bandit) or the finding is one weakness by definition (a vulnerable dependency is CWE-1395, a committed secret CWE-798). A result without tags is unmapped, not harmless, and no OWASP category is clean because it has no results: which categories a scan actually tested — judged per source language of the project, since a rule set tests only the languages it has rules for — is in `report_export`'s "OWASP Top 10:2025 coverage" table and in `compliance_evidence` with `framework: "owasp-top10-2025"`.
 - **Code-scanning upload needs a public repository, or GitHub Code Security on a private one.** Otherwise the upload step fails for a reason unrelated to findings; drop it and use `--format json` plus the exit code.
 - **A CI run leaves `.guardian/` in the workspace** (`security_scan_full` and `map_attack_surface` write raw reports under `.guardian/reports/`). The MCP server adds the right `.gitignore` lines whenever it starts in a project; the CLI never does. A project scanned only in CI needs them by hand — and they must let the baseline through:
@@ -97,11 +168,11 @@ Without `--write` the pipeline is printed. `--write` creates the file atomically
 
 What the generated pipeline does:
 
-- checks out the project with **full history** (`fetch-depth: 0` / `GIT_DEPTH: "0"` / `clone: depth: full`), so gitleaks attributes each secret to the commit that introduced it rather than to a shallow boundary that moves on every push; on GitHub with `persist-credentials: false`;
+- checks out the project with **full history** (`fetch-depth: 0` / `GIT_DEPTH: "0"` / `clone: depth: full`), so gitleaks attributes each secret to the commit that introduced it rather than to a shallow boundary that moves on every push; on GitHub with `persist-credentials: false`. A shallow checkout is scanned, but its history pass names the boundary it stopped at and the scan is incomplete (exit 2), never clean;
 - clones dev-guardian at the release tag named in `.claude-plugin/plugin.json`, **resolved to its commit SHA when you ran `ci-init`** and verified again with `git rev-parse HEAD` after cloning — a tag that moved since is refused. The clone goes to `$RUNNER_TEMP` / `/tmp`, outside the checkout, so dev-guardian's own source is never scanned as part of your project; then `npm ci --omit=dev` in its `mcp/`;
 - installs Trivy, gitleaks and actionlint pinned by version and sha256 (verified against each tool's GitHub release), and bandit, Semgrep and zizmor pinned by exact version through pipx — into a scratch directory, never the checkout. Every pinned value lives in [`configs/ci/pinned.json`](../configs/ci/pinned.json); every GitHub Action is pinned by full commit SHA;
 - on GitHub, installs the .NET SDK only when the project has a root `.csproj`, `.fsproj`, `.sln` or `.slnx`; the GitLab and Bitbucket templates document that requirement instead (without the SDK, a .NET project's scan exits 2);
-- runs `dev-guardian scan --fail-on high` against the committed baseline and uploads SARIF to code scanning on GitHub, or keeps it as a build artifact on GitLab and Bitbucket (neither ingests raw SARIF).
+- runs `dev-guardian scan --fail-on high` against the committed baseline — on a pull request, the base commit's baseline and rules ([above](#a-pull-request-cannot-gate-itself)) — and uploads SARIF to code scanning on GitHub — only for a complete run (exit 0, or exit 1 with coverage full), never after an incomplete one — or keeps it as a build artifact on GitLab and Bitbucket (neither ingests raw SARIF).
 
 Resolving the tag needs `git`: from the local checkout's tags when they are there, otherwise over the network with `git ls-remote`.
 

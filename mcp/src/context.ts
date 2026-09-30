@@ -22,8 +22,28 @@ export interface PluginContext {
   scriptsDir: string;
   /** Sends `notifications/progress` over the active transport. */
   progressNotifier: ProgressNotifier;
-  /** Warning surfaced when the DB had to fall back to a temp location. */
+  /**
+   * Set when the project's database was not used (foreign, not writable,
+   * untrusted schema, or no usable per-user data directory): why, and where
+   * the history goes. `health_status.storage_warning` and every scan's
+   * `warnings` carry it.
+   */
   storageWarning?: string;
+  /**
+   * The CI gate's `--rules-ref` only (`ci/runScans.ts`) — never the MCP
+   * server, whose tools' inputs a model fills: the repository configuration
+   * copied from that ref (`ci/refConfig.ts#copyConfigFromRef`). Every scan in
+   * this context reads the project's Semgrep rules, `.guardianignore`,
+   * `.trivyignore` and `.bandit` from `root` instead of the scanned tree
+   * (`InvokeContext.rulesProjectPath` and `configRoot`).
+   */
+  repoConfigFromRef?: {
+    /** The directory holding the copies, at their project-relative paths. */
+    root: string;
+    /** The ref as given, and the commit it named. */
+    ref: string;
+    commit: string;
+  };
 }
 
 export interface ToolContext {

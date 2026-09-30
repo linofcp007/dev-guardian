@@ -77,10 +77,31 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      \`dev-guardian baseline update\`, every existing finding reads as
 #      "new" and this job will very likely fail on its first run — do that
 #      once locally and commit the result before relying on this gate.
-#   9. Uploads the SARIF report to GitHub code scanning. \`if: always()\` so
-#      the upload still runs when step 8 fails the gate (the SARIF file was
-#      still written — dev-guardian's own \`scan\` command never skips
-#      writing it just because the gate failed); \`continue-on-error: true\`
+#      On a pull request the baseline, the project's Semgrep rules and its
+#      .guardianignore/.trivyignore/.bandit are read from the pull request's
+#      BASE commit (\`--baseline-ref\`/\`--rules-ref\`
+#      \`github.event.pull_request.base.sha\`), never from the pull request's
+#      own tree, which could otherwise adopt its own findings or delete the
+#      rule that catches them (docs/ci.md). \`--reset-exclusions-from\` also puts
+#      every .semgrepignore, .gitleaksignore and .gitleaks.toml of this
+#      disposable checkout back to the base's (no scanner flag can read them
+#      from elsewhere) and the report names what it reset. Step 1's \`fetch-depth: 0\` already
+#      fetched the base branch, so that commit is here; on a push nothing is
+#      passed and the committed files are the gate. The workflow file itself
+#      is the pull request's too: protect it (CODEOWNERS, a required review).
+#   9. Uploads the SARIF report to GitHub code scanning — only for a COMPLETE
+#      run: step 8 exited 0 (gate passed), or exited 1 (gate failed) with
+#      every SARIF run's \`executionSuccessful\` true (coverage full). Step 8
+#      decides and records it as the \`upload-sarif\` output (and its exit code
+#      as \`exit-code\`). Exit 2 is an INCOMPLETE scan (a scanner did not run),
+#      and so can an exit 1 be — a blocking finding outranks a missing
+#      scanner — and code scanning closes as "fixed" every open alert of a
+#      scanner an upload does not contain, \`executionSuccessful: false\`
+#      notwithstanding, so uploading it would report the missing scanner's
+#      findings as resolved. Exit 3 (usage or configuration error) wrote no
+#      report worth uploading. A complete run's SARIF is uploaded even when
+#      the gate fails (dev-guardian's own \`scan\` command never skips writing
+#      it just because the gate failed); \`continue-on-error: true\`
 #      because a repository without GitHub Advanced Security enabled must
 #      not fail the whole job over the upload alone — step 8's own gate is
 #      what decides pass/fail here, not this step. \`actions: read\` is in
@@ -89,7 +110,7 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      both without branching the template on repo visibility).
 #  10. (\`ci-init --attest\`) Step 8 writes the JSON report too — \`--format
 #      json\`, kept with \`tee\` so the log still shows it, under \`pipefail\`
-#      so the scan's own exit code still decides the step — and on a push
+#      so the scan's own exit code still decides the step (and step 9) — and on a push
 #      the scan job keeps both reports as the \`dev-guardian-reports\`
 #      artifact. Anyone verifying downloads them from there. On a PUBLIC
 #      repository that exposes them: the full JSON report (every new
@@ -184,10 +205,10 @@ jobs:
       - name: Clone dev-guardian (outside this checkout — see the header comment)
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch "v3.0.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          git clone --depth 1 --branch "v3.1.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
           if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-            echo "dev-guardian clone at v3.0.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            echo "dev-guardian clone at v3.1.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
 
@@ -218,17 +239,51 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: dev-guardian scan
+        id: scan
+        env:
+          # Empty on a push. On a pull request: its base commit, whose baseline
+          # and rules gate it (header, step 8).
+          BASE_SHA: \${{ github.event.pull_request.base.sha }}
         run: |
-          set -euo pipefail
+          set --
+          if [ -n "$BASE_SHA" ]; then set -- --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA" --reset-exclusions-from "$BASE_SHA"; fi
+          set -uo pipefail
+          set +e
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \\
             --project . \\
             --fail-on high \\
             --format json \\
             --sarif dev-guardian-results.sarif \\
+            "$@" \\
             | tee dev-guardian-report.json
+          status=$?
+          # Upload only a complete run's SARIF: exit 0, or exit 1 (the gate
+          # failed) when every SARIF run says executionSuccessful: true
+          # (coverage full). The gate's exit 1 outranks an incomplete scan, so
+          # exit 1 alone does not mean every scanner ran.
+          complete=false
+          if [ "$status" -eq 1 ] && node -e '
+            const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const runs = Array.isArray(s.runs) ? s.runs : [];
+            const ok = runs.length > 0 && runs.every((r) => Array.isArray(r.invocations) && r.invocations.length > 0 &&
+              r.invocations.every((i) => i.executionSuccessful === true));
+            process.exit(ok ? 0 : 1);
+          ' dev-guardian-results.sarif; then
+            complete=true
+          fi
+          upload=false
+          if [ "$status" -eq 0 ] || [ "$complete" = true ]; then upload=true; fi
+          echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+          echo "upload-sarif=$upload" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
+      # Only the SARIF of a complete run (the scan step decides: exit 0, or exit
+      # 1 with coverage full). Exit 2 is an incomplete scan, and an exit 1 can
+      # be one too; code scanning closes as "fixed" every alert of a scanner
+      # that is absent from an upload, whatever \`executionSuccessful: false\`
+      # says.
       - name: Upload SARIF to code scanning
-        if: always()
+        if: \${{ always() && steps.scan.outputs.upload-sarif == 'true' }}
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
@@ -366,6 +421,17 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      \`dev-guardian baseline update\`, every existing finding reads as
 #      "new" and this pipeline will very likely fail on its first run — do
 #      that once locally and commit the result before relying on this gate.
+#      In a pull-request pipeline the baseline, the project's Semgrep rules
+#      and its .guardianignore/.trivyignore/.bandit are read from the
+#      destination branch (\`--baseline-ref\`/\`--rules-ref\`
+#      origin/$BITBUCKET_PR_DESTINATION_BRANCH, fetched first), never from
+#      the pull request's own tree, which could otherwise adopt its own
+#      findings or delete the rule that catches them (docs/ci.md); every
+#      .semgrepignore, .gitleaksignore and .gitleaks.toml of this disposable
+#      checkout is put back to the destination's (\`--reset-exclusions-from\`). On a
+#      branch pipeline nothing is passed and the committed files are the
+#      gate. This file itself is the pull request's too: protect it (a
+#      required reviewer on bitbucket-pipelines.yml).
 #   7. Declares the SARIF report as a Bitbucket artifact, collected whether
 #      the script step succeeds or fails. Bitbucket Pipelines has no native
 #      SARIF/code-scanning ingestion the way GitHub does — this is a plain
@@ -392,11 +458,11 @@ definitions:
           - set -eu
           - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git pipx
           - export DEV_GUARDIAN_HOME=/tmp/dev-guardian
-          - git clone --depth 1 --branch "v3.0.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          - git clone --depth 1 --branch "v3.1.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           - |
             actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
             if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-              echo "dev-guardian clone at v3.0.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+              echo "dev-guardian clone at v3.1.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
               exit 1
             fi
           - npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"
@@ -416,7 +482,14 @@ definitions:
           - pipx install "semgrep==1.178.0"
           - pipx install "zizmor==1.30.1"
           - export PATH="$HOME/.local/bin:$PATH"
-          - node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif
+          - |
+            set --
+            if [ -n "\${BITBUCKET_PR_DESTINATION_BRANCH:-}" ]; then
+              dest="$BITBUCKET_PR_DESTINATION_BRANCH"
+              git fetch --quiet --no-tags origin "+refs/heads/$dest:refs/remotes/origin/$dest"
+              set -- --baseline-ref "origin/$dest" --rules-ref "origin/$dest" --reset-exclusions-from "origin/$dest"
+            fi
+            node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif "$@"
         artifacts:
           - dev-guardian-results.sarif
 
@@ -508,10 +581,31 @@ exports[`ci-init: snapshot of the rendered templates > github renders exactly as
 #      \`dev-guardian baseline update\`, every existing finding reads as
 #      "new" and this job will very likely fail on its first run — do that
 #      once locally and commit the result before relying on this gate.
-#   9. Uploads the SARIF report to GitHub code scanning. \`if: always()\` so
-#      the upload still runs when step 8 fails the gate (the SARIF file was
-#      still written — dev-guardian's own \`scan\` command never skips
-#      writing it just because the gate failed); \`continue-on-error: true\`
+#      On a pull request the baseline, the project's Semgrep rules and its
+#      .guardianignore/.trivyignore/.bandit are read from the pull request's
+#      BASE commit (\`--baseline-ref\`/\`--rules-ref\`
+#      \`github.event.pull_request.base.sha\`), never from the pull request's
+#      own tree, which could otherwise adopt its own findings or delete the
+#      rule that catches them (docs/ci.md). \`--reset-exclusions-from\` also puts
+#      every .semgrepignore, .gitleaksignore and .gitleaks.toml of this
+#      disposable checkout back to the base's (no scanner flag can read them
+#      from elsewhere) and the report names what it reset. Step 1's \`fetch-depth: 0\` already
+#      fetched the base branch, so that commit is here; on a push nothing is
+#      passed and the committed files are the gate. The workflow file itself
+#      is the pull request's too: protect it (CODEOWNERS, a required review).
+#   9. Uploads the SARIF report to GitHub code scanning — only for a COMPLETE
+#      run: step 8 exited 0 (gate passed), or exited 1 (gate failed) with
+#      every SARIF run's \`executionSuccessful\` true (coverage full). Step 8
+#      decides and records it as the \`upload-sarif\` output (and its exit code
+#      as \`exit-code\`). Exit 2 is an INCOMPLETE scan (a scanner did not run),
+#      and so can an exit 1 be — a blocking finding outranks a missing
+#      scanner — and code scanning closes as "fixed" every open alert of a
+#      scanner an upload does not contain, \`executionSuccessful: false\`
+#      notwithstanding, so uploading it would report the missing scanner's
+#      findings as resolved. Exit 3 (usage or configuration error) wrote no
+#      report worth uploading. A complete run's SARIF is uploaded even when
+#      the gate fails (dev-guardian's own \`scan\` command never skips writing
+#      it just because the gate failed); \`continue-on-error: true\`
 #      because a repository without GitHub Advanced Security enabled must
 #      not fail the whole job over the upload alone — step 8's own gate is
 #      what decides pass/fail here, not this step. \`actions: read\` is in
@@ -583,10 +677,10 @@ jobs:
       - name: Clone dev-guardian (outside this checkout — see the header comment)
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch "v3.0.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          git clone --depth 1 --branch "v3.1.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
           if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-            echo "dev-guardian clone at v3.0.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            echo "dev-guardian clone at v3.1.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
 
@@ -617,15 +711,49 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: dev-guardian scan
+        id: scan
+        env:
+          # Empty on a push. On a pull request: its base commit, whose baseline
+          # and rules gate it (header, step 8).
+          BASE_SHA: \${{ github.event.pull_request.base.sha }}
         run: |
+          set --
+          if [ -n "$BASE_SHA" ]; then set -- --baseline-ref "$BASE_SHA" --rules-ref "$BASE_SHA" --reset-exclusions-from "$BASE_SHA"; fi
+          set +e
           node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan \\
             --project . \\
             --fail-on high \\
             --format human \\
-            --sarif dev-guardian-results.sarif
+            --sarif dev-guardian-results.sarif \\
+            "$@"
+          status=$?
+          # Upload only a complete run's SARIF: exit 0, or exit 1 (the gate
+          # failed) when every SARIF run says executionSuccessful: true
+          # (coverage full). The gate's exit 1 outranks an incomplete scan, so
+          # exit 1 alone does not mean every scanner ran.
+          complete=false
+          if [ "$status" -eq 1 ] && node -e '
+            const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const runs = Array.isArray(s.runs) ? s.runs : [];
+            const ok = runs.length > 0 && runs.every((r) => Array.isArray(r.invocations) && r.invocations.length > 0 &&
+              r.invocations.every((i) => i.executionSuccessful === true));
+            process.exit(ok ? 0 : 1);
+          ' dev-guardian-results.sarif; then
+            complete=true
+          fi
+          upload=false
+          if [ "$status" -eq 0 ] || [ "$complete" = true ]; then upload=true; fi
+          echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+          echo "upload-sarif=$upload" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
+      # Only the SARIF of a complete run (the scan step decides: exit 0, or exit
+      # 1 with coverage full). Exit 2 is an incomplete scan, and an exit 1 can
+      # be one too; code scanning closes as "fixed" every alert of a scanner
+      # that is absent from an upload, whatever \`executionSuccessful: false\`
+      # says.
       - name: Upload SARIF to code scanning
-        if: always()
+        if: \${{ always() && steps.scan.outputs.upload-sarif == 'true' }}
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
@@ -702,6 +830,19 @@ exports[`ci-init: snapshot of the rendered templates > gitlab renders exactly as
 #      \`dev-guardian baseline update\`, every existing finding reads as
 #      "new" and this job will very likely fail on its first run — do that
 #      once locally and commit the result before relying on this gate.
+#      In a merge request pipeline the baseline, the project's Semgrep rules
+#      and its .guardianignore/.trivyignore/.bandit are read from the target
+#      branch's commit (\`--baseline-ref\`/\`--rules-ref\`:
+#      CI_MERGE_REQUEST_TARGET_BRANCH_SHA in a merged results pipeline, else
+#      the merge base, CI_MERGE_REQUEST_DIFF_BASE_SHA), never from the merge
+#      request's own tree, which could otherwise adopt its own findings or
+#      delete the rule that catches them (docs/ci.md); every .semgrepignore,
+#      .gitleaksignore and .gitleaks.toml of this disposable checkout is put
+#      back to that commit's (\`--reset-exclusions-from\`). With GIT_DEPTH "0"
+#      that commit is already here; if not, the target branch is fetched.
+#      On a branch pipeline nothing is passed and the committed files are
+#      the gate. The pipeline file itself is the merge request's too:
+#      protect it (CODEOWNERS, a required approval).
 #   7. Archives the SARIF report as a job artifact either way (\`when:
 #      always\`), so it survives a failed gate. Unlike GitHub's code
 #      scanning, GitLab's own Security Dashboard does not ingest a plain
@@ -735,11 +876,11 @@ dev-guardian:
     - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git pipx
   script:
     - set -eu
-    - git clone --depth 1 --branch "v3.0.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+    - git clone --depth 1 --branch "v3.1.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
     - |
       actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
       if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-        echo "dev-guardian clone at v3.0.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+        echo "dev-guardian clone at v3.1.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
         exit 1
       fi
     - npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"
@@ -759,7 +900,18 @@ dev-guardian:
     - pipx install "semgrep==1.178.0"
     - pipx install "zizmor==1.30.1"
     - export PATH="$HOME/.local/bin:$PATH"
-    - node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif
+    - |
+      set --
+      if [ -n "\${CI_MERGE_REQUEST_IID:-}" ]; then
+        base="\${CI_MERGE_REQUEST_TARGET_BRANCH_SHA:-\${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}}"
+        if [ -z "$base" ]; then
+          echo "merge request pipeline without CI_MERGE_REQUEST_DIFF_BASE_SHA: no base commit to gate against" >&2
+          exit 3
+        fi
+        git cat-file -e "$base^{commit}" 2>/dev/null || git fetch --quiet --no-tags origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        set -- --baseline-ref "$base" --rules-ref "$base" --reset-exclusions-from "$base"
+      fi
+      node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" scan --project . --fail-on high --format human --sarif dev-guardian-results.sarif "$@"
   artifacts:
     when: always
     paths:

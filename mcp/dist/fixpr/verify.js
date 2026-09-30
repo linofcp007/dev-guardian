@@ -69,6 +69,7 @@
  */
 import { resolutionKey } from '../fingerprint/findingIdentity.js';
 import { runProcess } from '../runners/processRunner.js';
+import { testCommandEnv } from './testCommandEnv.js';
 /** How many lines of a failing run's output ride along in the verdict —
  *  enough for a reader to recognise which tests broke, not the whole log. */
 const OUTPUT_HEAD_LINES = 20;
@@ -158,10 +159,21 @@ export async function judgeTests(opts) {
     }
     const run = opts.run ?? runProcess;
     const command = [derived.command, ...derived.args].join(' ');
+    // The project's own code (`scripts.test`, `conftest.py`, `build.rs`), on a
+    // dry run too: never with this server's environment, only the allowlisted
+    // one (`testCommandEnv.ts`) — no token or cloud credential reaches it.
+    // Without git hardening (`platform/gitSafety.ts`): this IS the project's
+    // code, which can run anything a git hook could, and git's overrides in its
+    // environment would change how the project's own tests use git — the same
+    // on the base tree and the fix's, so the differential stays fair.
+    const env = testCommandEnv();
     const worktreeResult = await run({
         command: derived.command,
         args: derived.args,
         cwd: worktreePath,
+        env,
+        extendEnv: false,
+        gitHardening: false,
         timeoutMs,
     });
     if (!hasFailed(worktreeResult)) {
@@ -190,6 +202,9 @@ export async function judgeTests(opts) {
             command: derived.command,
             args: derived.args,
             cwd: baseTree.path,
+            env,
+            extendEnv: false,
+            gitHardening: false,
             timeoutMs,
         });
     }

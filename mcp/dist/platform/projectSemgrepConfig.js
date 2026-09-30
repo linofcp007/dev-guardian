@@ -49,18 +49,19 @@
  * a real scan that lost one rule, which `scan_sast` surfaces via Semgrep's
  * exit 2 rather than by refusing the config.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { readSmallText } from '../hooks/configFile.js';
+import { describeReadRefusal, presentInProject, readProjectText } from './projectFs.js';
+import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './boundedParse.js';
 import { readManifest } from '../configdrift/manifest.js';
 /**
  * Filenames Semgrep users conventionally use, probed when the manifest does
  * not name one. `.yml` first so a project carrying both gets the spelling
  * `init_project` installs.
  */
-const CONVENTIONAL_TARGETS = ['.semgrep.yml', '.semgrep.yaml'];
+export const CONVENTIONAL_TARGETS = ['.semgrep.yml', '.semgrep.yaml'];
 /** Manifest entries under this `configs/` prefix are Semgrep rule files. */
-const SEMGREP_SOURCE_PREFIX = 'semgrep/';
+export const SEMGREP_SOURCE_PREFIX = 'semgrep/';
 export function inspectProjectSemgrepConfigs(projectPath) {
     const usable = [];
     const unusable = [];
@@ -74,9 +75,12 @@ export function inspectProjectSemgrepConfigs(projectPath) {
         // A recorded target that is no longer on disk is drift, not breakage —
         // `detectConfigDrift` reports it as `target_missing` and the advisory
         // stays quiet about it, so saying it a second time here would be noise.
-        if (!existsSync(absolute))
+        if (!presentInProject(projectPath, candidate.target))
             continue;
-        const verdict = classify(absolute);
+        // The target is named by the manifest — the repository's file — so it is
+        // read contained in the project (`platform/projectFs.ts`): a target that
+        // climbs out, links out, or is a FIFO is unusable, never handed to Semgrep.
+        const verdict = classifyText(readProjectText(projectPath, candidate.target, MAX_SEMGREP_CONFIG_BYTES));
         if (verdict.ok) {
             usable.push({ path: absolute, target: candidate.target, via: candidate.via });
         }
@@ -99,23 +103,25 @@ export function resolveProjectSemgrepConfigs(projectPath) {
  * to a lost rule (exit 2, everything still scanned) rather than a lost scan.
  */
 export function isLoadableSemgrepConfig(path) {
-    return classify(path).ok;
+    return classifyText(readSmallText(path, MAX_SEMGREP_CONFIG_BYTES)).ok;
 }
-function classify(path) {
-    let text;
-    try {
-        text = readFileSync(path, 'utf8');
-    }
-    catch {
+/** The largest project Semgrep config read: what may be parsed (1 MiB — the plugin's largest pack is 85 KB). */
+const MAX_SEMGREP_CONFIG_BYTES = YAML_CONFIG_LIMITS.maxBytes;
+function classifyText(read) {
+    if (read.status === 'absent')
         return { ok: false, reason: 'unreadable' };
+    if (read.status === 'refused')
+        return { ok: false, reason: describeReadRefusal(read.reason) };
+    // Parsed bounded by bytes, indicators and depth (platform/boundedParse.ts): 16 MiB of `- {}`
+    // under the old byte cap would take this parse past 4 GB of heap.
+    const parsed = parseYamlBounded(read.text);
+    if (!parsed.ok) {
+        return {
+            ok: false,
+            reason: parsed.reason === 'invalid' ? 'not valid YAML' : describeYamlRefusal(parsed),
+        };
     }
-    let doc;
-    try {
-        doc = parseYaml(text);
-    }
-    catch {
-        return { ok: false, reason: 'not valid YAML' };
-    }
+    const doc = parsed.value;
     if (typeof doc !== 'object' || doc === null) {
         return { ok: false, reason: 'no `rules:` list' };
     }

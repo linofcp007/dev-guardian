@@ -66,6 +66,11 @@ import { resolveProjectPath } from '../../src/platform/projectPath.js';
 
 afterAll(cleanupTempDirs);
 
+// Several tests here run the real Semgrep over the LLM pack: 8.9 s in an
+// ordinary full run against the 10 s default, past it under load (review
+// 3.0, R7). A genuine hang is still reported, at 60 s.
+vi.setConfig({ testTimeout: 60_000 });
+
 beforeAll(async () => {
   await import('../../src/tools/scanSast.js');
   await import('../../src/tools/riskScore.js');
@@ -1344,12 +1349,20 @@ describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
       droppedBaselineEntries: 0,
     }).exitCode;
 
-  it("the plugin pack's own fixpoint timeout: ok, full, a named note, plugin_packs.llm partial — and history not re-measured", async () => {
+  it("the plugin pack's own fixpoint timeout: ok, full, a named note, plugin_packs.llm partial — and history not re-measured for the pack's findings only", async () => {
     await import('../../src/tools/diffScans.js');
     const project = makeTempDir('sast-fixpoint-pack-');
     const plugin = makePlugin(project);
     const scanned = { paths: { scanned: ['hooks/bashGuard.ts', 'app.py'] } };
-    mockSemgrepOnPath(1, { ...FIXPOINT_REPORT, ...scanned, results: [hit('hooks/bashGuard.ts')], time: { fixpoint_timeouts: [] } });
+    // A registry finding and one of the pack's own, in the file the pack
+    // later times out on.
+    const packHit = { ...hit('hooks/bashGuard.ts'), check_id: PACK_RULE, extra: { severity: 'ERROR', message: 'llm', lines: 'exec(out)' } };
+    mockSemgrepOnPath(1, {
+      ...FIXPOINT_REPORT,
+      ...scanned,
+      results: [hit('hooks/bashGuard.ts'), packHit],
+      time: { fixpoint_timeouts: [] },
+    });
     await runSast(project, plugin);
     mockSemgrepOnPath(0, {
       ...FIXPOINT_REPORT,
@@ -1367,11 +1380,16 @@ describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
     expect(run.reason).not.toMatch(/^partial|; partial/);
     expect(run.plugin_packs?.['llm']?.status).toBe('partial');
     expect(run.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['hooks/bashGuard.ts', 'Fixpoint timeout (plugin pack)']]);
-    // The file's findings were not all looked for again: not re-measured, never resolved.
-    const diff = okResult<{ summary: Record<string, number> }>(
+    // The pack's own rules were not all looked for again in that file: its
+    // finding is not re-measured, never resolved. The registry ran over the
+    // whole file, so its finding, gone now, is resolved (review of 3.0.0,
+    // S9: it read "not re-measured" and stayed open).
+    const diff = okResult<{ summary: Record<string, number>; resolved_findings: Array<{ rule_id?: string }>; not_remeasured_findings: Array<{ rule_id?: string }> }>(
       await getTool('diff_scans').handler({ project_path: project, scan_type: 'sast' }, plugin),
     );
-    expect(diff.summary).toMatchObject({ resolved: 0, not_remeasured: 1 });
+    expect(diff.summary).toMatchObject({ resolved: 1, not_remeasured: 1 });
+    expect(diff.resolved_findings.map((f) => f.rule_id)).toEqual(['python.lang.security.audit.eval-detected']);
+    expect(diff.not_remeasured_findings.map((f) => f.rule_id)).toEqual(['llm-output-to-interpreter-js']);
   });
 
   // The review's reproduction: local_only on a copy of mcp/src, a trivial

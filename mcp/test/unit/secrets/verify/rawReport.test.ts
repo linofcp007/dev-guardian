@@ -29,6 +29,7 @@ import {
 } from '../../../../src/secrets/verify/rawReport.js';
 import { isVerifiableRule } from '../../../../src/secrets/verify/providers.js';
 import { longSecretReport, longValue } from '../../../helpers/longSecretReport.js';
+import { expectLinear, PERF_STRICT } from '../../../helpers/timing.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../../helpers/tsxNode.js';
 
 const GH = ['ghp', 'Z'.repeat(36)].join('_');
@@ -283,16 +284,33 @@ describe('sanitizeGitleaksReport', () => {
     expect(short[0]?.['Match']).toBe(`x ${REDACTED} y`);
     // The worst case for a search restarted after each occurrence: a long
     // value of one repeated letter, inside a longer run of it, many times.
-    const value = 'a'.repeat(2_000);
-    const items = Array.from({ length: 1_000 }, (_, n) =>
-      item(`rule-${n}`, value, { File: `f${n}.txt`, Match: `k=${'a'.repeat(4_000)};` }),
+    const report = (len: number, count: number): string =>
+      JSON.stringify(
+        Array.from({ length: count }, (_, n) =>
+          item(`rule-${n}`, 'a'.repeat(len), { File: `f${n}.txt`, Match: `k=${'a'.repeat(2 * len)};` }),
+        ),
+      );
+    const out = sanitizeGitleaksReport(report(2_000, 1_000), isVerifiableRule);
+    expect(parse(out?.text).every((i) => i['Match'] === `k=${REDACTED};`)).toBe(true);
+    // Linear: ~40 ms. Restarting the search at every occurrence: ~2000 x 2000
+    // per item — quadratic in the run's length, so eight times the run must
+    // cost well under 22.6 times as much (test/helpers/timing.ts). That ratio
+    // replaced "under 1.5 s", which measured the machine (1.6 s under coverage
+    // on a loaded one, review 3.0 R7); at 4x it read 14.1 for the defect, too
+    // close to its bound of 12. The absolute bound is the next test.
+    const texts = new Map([400, 3_200].map((len) => [len, report(len, 100)]));
+    expectLinear('a self-overlapping value', (len) => sanitizeGitleaksReport(texts.get(len) ?? '', isVerifiableRule), 400);
+  }, 120_000);
+
+  it.runIf(PERF_STRICT)('a self-overlapping value, 1 000 times: under 1.5 s on a quiet machine (GUARDIAN_PERF_STRICT=1)', () => {
+    const text = JSON.stringify(
+      Array.from({ length: 1_000 }, (_, n) =>
+        item(`rule-${n}`, 'a'.repeat(2_000), { File: `f${n}.txt`, Match: `k=${'a'.repeat(4_000)};` }),
+      ),
     );
     const started = performance.now();
-    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
-    const elapsed = performance.now() - started;
-    expect(parse(out?.text).every((i) => i['Match'] === `k=${REDACTED};`)).toBe(true);
-    // Linear: ~40 ms. Restarting the search at every occurrence: ~2000 x 2000 per item.
-    expect(elapsed).toBeLessThan(1_500);
+    sanitizeGitleaksReport(text, isVerifiableRule);
+    expect(performance.now() - started).toBeLessThan(1_500);
   });
 
   it('a Match holding overlapping occurrences of two values keeps no fragment of either', () => {
@@ -355,6 +373,10 @@ describe('sanitizeGitleaksReport', () => {
 });
 
 describe('openPrivateReportDir', () => {
+  // Real I/O in the OS temp directory (a listing of it, a mkdtemp, a write, a
+  // recursive remove): with the CPU at 100%, 20-170 ms in 17 runs of 20 and
+  // 12.7-18.7 s in the other 3 — past vitest's 10 s default, which measured
+  // the machine. What is asserted is the directory's privacy and removal.
   it('creates a private directory and report files, and removes them', () => {
     const dir = openPrivateReportDir();
     const file = dir.pathFor('secrets-history.json');
@@ -369,7 +391,7 @@ describe('openPrivateReportDir', () => {
     expect(readFileSync(file, 'utf8')).toContain(GH);
     expect(dir.remove()).toBeNull();
     expect(existsSync(dir.dir)).toBe(false);
-  });
+  }, 60_000);
 });
 
 describe('sweepStaleReportDirs — what a killed scan left behind', () => {

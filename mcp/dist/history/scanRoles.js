@@ -73,6 +73,13 @@ export const SCAN_TYPE_ROLE = {
 };
 /** Every `'state'` type, in the declaration order above. */
 export const STATE_SCAN_TYPES = Object.keys(SCAN_TYPE_ROLE).filter((t) => SCAN_TYPE_ROLE[t] === 'state');
+/**
+ * Scan types whose `project_path` names the audited TARGET, not a project: a
+ * third-party skill (`scan_skill`) or a live WordPress site's URL
+ * (`wp_rest_audit`). A report of one belongs to whichever project asks for
+ * it — `report_export` refuses another PROJECT's scan, never one of these.
+ */
+export const TARGET_SCAN_TYPES = new Set(['skill_audit', 'wp_rest_audit']);
 export function isStateScanType(type) {
     return STATE_SCAN_TYPES.includes(type);
 }

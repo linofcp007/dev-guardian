@@ -1,21 +1,32 @@
 /**
- * `audit_executive` — sequences security + quality + deps + compliance scans
+ * `audit_executive` — runs security + quality + deps + compliance scans
+ * (and the WordPress / .NET ones the project's stack calls for) CONCURRENTLY,
  * into a single roll-up report.
  *
  * Each sub-tool already persists its own scan record; this tool calls them
- * in sequence through the in-process `TOOLS` registry. After the sub-runs
- * we:
+ * through the in-process `TOOLS` registry. After the sub-runs we:
  *   - insert a parent `audit` scan row,
  *   - aggregate severity counts and top findings across all four,
  *   - compute deltas vs the previous `audit` scan if one exists.
  *
  * The audit scan row links to the children via `meta.sub_scan_ids` so
  * future tools (or a future report exporter) can fan back out.
+ *
+ * **What leaves the machine (review 3.0 I3).** The children reach the Semgrep
+ * registry with usage metrics, Trivy's database, npm and PyPI (pip-audit
+ * installs requirements, building sdists), and a .NET project's NuGet feeds
+ * (`dotnet restore` executes its MSBuild) — none of which the description
+ * said, and it said "in sequence" of what runs concurrently. `local_only` is
+ * passed to every child that takes one (security_scan_full); scan_wordpress,
+ * whose Semgrep packs come from the registry and which has no local-only
+ * mode, is skipped with the reason; and the result's `local_only_gaps` names
+ * what local_only does not stop, as SECURITY.md does.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { z } from 'zod';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import { filterFindings } from '../severity/filter.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -39,6 +50,8 @@ interface SubScanSummary {
   tool: string;
   scan_id?: string;
   ok: boolean;
+  /** Not run, on purpose: why (only under `local_only`). */
+  skipped?: string;
   error?: { code: string; message: string };
   findings_count_by_severity?: FindingsCountBySeverity;
   top_findings?: Finding[];
@@ -51,12 +64,30 @@ const tool: ToolModule = {
   name: 'audit_executive',
   title: 'Executive audit (security + quality + deps + compliance)',
   description:
-    'Run security_scan_full, quality_check, deps_audit, and compliance_check in sequence, ' +
-    'producing one aggregated report with severity counts, top-10 findings, and a delta vs the ' +
-    'previous executive audit (when present).',
+    'Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check ' +
+    'CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + ' +
+    "dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: " +
+    'severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this ' +
+    "project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. " +
+    "(security_scan_full, scan_wordpress); Trivy's vulnerability database and Maven Central for a " +
+    "pom.xml (dev-guardian turns Trivy's version check and telemetry off, and Semgrep's version check); npm audit and PyPI " +
+    "(deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a " +
+    "temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild " +
+    "targets; quality_check runs the project's ESLint config. local_only=true passes local_only to " +
+    'security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no ' +
+    "local-only mode; it does NOT stop Trivy's requests, deps_audit's registry calls or a .NET " +
+    'restore — the result lists those in local_only_gaps.',
   inputSchema: {
     project_path: ProjectPath,
     severity_min: SeverityMin,
+    local_only: z
+      .boolean()
+      .optional()
+      .describe(
+        'Passed to every child that takes it (security_scan_full: Semgrep rules on disk only, --metrics=off). ' +
+          'scan_wordpress, which has no local-only mode, is skipped. Trivy, deps_audit and a .NET restore still ' +
+          'reach the network; local_only_gaps in the result says what did. Default: false.',
+      ),
   },
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
@@ -68,7 +99,8 @@ async function handler(
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; severity_min?: Severity };
+  const inp = input as { project_path?: string; severity_min?: Severity; local_only?: boolean };
+  const localOnly = inp.local_only === true;
 
   let projectPath: string;
   try {
@@ -108,6 +140,10 @@ async function handler(
 
   const subResultsArr = await Promise.all(
     subTools.map(async (toolName) => {
+      const skipped = localOnly ? NO_LOCAL_ONLY_MODE[toolName] : undefined;
+      if (skipped !== undefined) {
+        return [toolName, { tool: toolName, ok: false, skipped } satisfies SubScanSummary] as const;
+      }
       const subTool = TOOLS.find((t) => t.name === toolName);
       if (!subTool) {
         return [
@@ -122,7 +158,9 @@ async function handler(
       // The host's callMeta, so cancelling the audit aborts every sub-scan's
       // scanner processes and their progress reaches the host (the emitter
       // keeps one shared token's progress increasing across all four).
-      const result = await subTool.handler(subInput, ctx, callMeta);
+      const childInput =
+        localOnly && 'local_only' in subTool.inputSchema ? { ...subInput, local_only: true } : subInput;
+      const result = await subTool.handler(childInput, ctx, callMeta);
       if (result.ok) {
         const r = result as unknown as {
           ok: true;
@@ -171,7 +209,7 @@ async function handler(
       status: 'cancelled',
       tools_run: subToolRuns(subTools, subResults),
       missing_tools: [],
-      meta: { sub_scan_ids: subScanIds },
+      meta: { sub_scan_ids: subScanIds, ...(localOnly ? { local_only: true } : {}) },
     });
     return failDomain(
       'cancelled',
@@ -236,6 +274,11 @@ async function handler(
   const coverageList: ScanCoverage[] = [];
   const coverage_warnings: string[] = [];
   for (const summary of Object.values(subResults)) {
+    if (summary.skipped !== undefined) {
+      coverageList.push('partial');
+      coverage_warnings.push(`${summary.tool}: skipped — ${summary.skipped}`);
+      continue;
+    }
     if (!summary.ok) {
       coverageList.push('none');
       coverage_warnings.push(
@@ -251,6 +294,7 @@ async function handler(
     }
   }
   const overallCoverage = worstCoverage(coverageList);
+  const local_only_gaps = localOnly ? localOnlyGaps(subTools) : [];
 
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
@@ -267,6 +311,7 @@ async function handler(
     meta: {
       sub_scan_ids: subScanIds,
       ...(inp.severity_min !== undefined ? { severity_min: inp.severity_min } : {}),
+      ...(localOnly ? { local_only: true } : {}),
     },
   });
 
@@ -278,18 +323,69 @@ async function handler(
     aggregate_counts,
     coverage: overallCoverage,
     ...(coverage_warnings.length > 0 ? { coverage_warnings } : {}),
+    ...(localOnly ? { local_only_gaps } : {}),
     top_findings,
     ...(deltas ? { deltas } : {}),
   };
 }
 
-/** One `tools_run` entry per sub-tool: `ok`, or `failed` with its error code. */
+/**
+ * The children that cannot honour `local_only`, and why each is skipped under
+ * it rather than run: what they would send is exactly what the caller asked
+ * not to send.
+ */
+const NO_LOCAL_ONLY_MODE: Readonly<Record<string, string>> = {
+  scan_wordpress:
+    'it has no local-only mode: its Semgrep packs (p/php, p/wordpress) come from the Semgrep registry, ' +
+    'with usage metrics. Run it without local_only to cover WordPress.',
+};
+
+/**
+ * What `local_only` does not stop, for the children this audit ran — the
+ * rows SECURITY.md lists for them.
+ */
+function localOnlyGaps(subTools: readonly string[]): string[] {
+  const gaps: string[] = [];
+  const ran = new Set(subTools);
+  if (ran.has('security_scan_full')) {
+    gaps.push(
+      "security_scan_full: its scan_deps and scan_iac run Trivy, which downloads its vulnerability database and " +
+        "checks bundle when its cache is stale; on a .NET project its scan_sast runs dotnet restore (the project's " +
+        "NuGet feeds) and dotnet build, which execute the project's MSBuild targets.",
+    );
+  }
+  if (ran.has('deps_audit')) {
+    gaps.push(
+      'deps_audit: npm audit queries the npm registry; pip-audit installs the requirements from PyPI into a ' +
+        "temporary virtualenv (an sdist's build step runs); for .NET, dotnet restore contacts the NuGet feeds and " +
+        "executes the project's MSBuild; Trivy may download its database.",
+    );
+  }
+  // Measured, not assumed (review 3.0 round 2): Trivy 0.69.3 running
+  // compliance_check's exact `fs --scanners license --quiet` against an empty
+  // cache, every proxy variable on a logging proxy, downloaded no
+  // vulnerability database but connected to check.trivy.dev and, for a
+  // pom.xml, repo.maven.apache.org. check.trivy.dev is now turned off for
+  // every Trivy run (runners/trivyRun.ts), so only Maven Central remains.
+  if (ran.has('compliance_check')) {
+    gaps.push(
+      "compliance_check: its Trivy license scan downloads no vulnerability database, but resolves a pom.xml's " +
+        'dependencies from Maven Central (its RGPD Semgrep pack already runs with --metrics=off).',
+    );
+  }
+  // Semgrep's own version check is no gap: every Semgrep run has it off
+  // (runners/semgrepRun.ts, SEMGREP_ENABLE_VERSION_CHECK=0).
+  return gaps;
+}
+
+/** One `tools_run` entry per sub-tool: `ok`, `skipped` with why, or `failed` with its error code. */
 function subToolRuns(
   subTools: readonly string[],
   subResults: Record<string, SubScanSummary>,
 ): ToolRun[] {
   return subTools.map((name) => {
     const sub = subResults[name];
+    if (sub?.skipped !== undefined) return { name, status: 'skipped', reason: sub.skipped };
     const reason = sub?.error?.code;
     return {
       name,

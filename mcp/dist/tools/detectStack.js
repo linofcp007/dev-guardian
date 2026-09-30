@@ -17,7 +17,7 @@
  * `deps_update_plan`, `scan_iac`) read the latest snapshot to drive
  * stack-aware behaviour.
  */
-import { existsSync, readdirSync } from 'node:fs';
+import { listProjectDir, presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { detectStack } from '../runners/stackDetect.js';
@@ -72,17 +72,10 @@ function enrichDotnet(snap, projectPath) {
             return [value];
         return arr.includes(value) ? arr : [...arr, value];
     };
-    const hasFile = (rel) => existsSync(join(projectPath, rel));
+    const hasFile = (rel) => presentInProject(projectPath, rel);
     const anyMatching = (rel, suffix) => {
-        try {
-            const target = rel === '' ? projectPath : join(projectPath, rel);
-            if (!existsSync(target))
-                return false;
-            return readdirSync(target).some((name) => name.endsWith(suffix));
-        }
-        catch {
-            return false;
-        }
+        const target = rel === '' ? projectPath : join(projectPath, rel);
+        return listProjectDir(projectPath, target).some(({ name }) => name.endsWith(suffix));
     };
     const hasCsproj = anyMatching('', '.csproj') || anyDeepMatching(projectPath, '.csproj', 3);
     const hasFsproj = anyMatching('', '.fsproj') || anyDeepMatching(projectPath, '.fsproj', 3);
@@ -120,31 +113,19 @@ function anyDeepMatching(root, suffix, maxDepth) {
         'build',
         'packages',
     ]);
+    // `platform/projectFs.ts`: names only, and a directory link is never
+    // descended — the walk used to list whatever a link pointed at, in or out
+    // of the project.
     function walk(dir, depth) {
         if (depth > maxDepth)
             return false;
-        let entries;
-        try {
-            entries = readdirSync(dir);
-        }
-        catch {
-            return false;
-        }
-        for (const name of entries) {
+        for (const { name, kind } of listProjectDir(root, dir)) {
             if (SKIP.has(name) || name.startsWith('.'))
                 continue;
-            const abs = join(dir, name);
             if (name.endsWith(suffix))
                 return true;
-            try {
-                // Cheap stat → directory descent. We use existsSync on a dirent
-                // path; for an unreadable entry we just continue.
-                if (readdirSync(abs).length >= 0 && walk(abs, depth + 1))
-                    return true;
-            }
-            catch {
-                /* not a directory or unreadable */
-            }
+            if (kind === 'directory' && walk(join(dir, name), depth + 1))
+                return true;
         }
         return false;
     }

@@ -328,7 +328,7 @@ describe('diff_scans', () => {
       resolved_findings: Array<{ fingerprint: string }>;
     };
     expect(r.ok).toBe(true);
-    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1, not_remeasured: 0, not_previously_measured: 0 });
+    expect(r.summary).toEqual({ new: 1, resolved: 1, unchanged: 1, not_remeasured: 0, not_previously_measured: 0, suppressed: 0 });
     expect(r.new_findings[0]?.fingerprint).toBe(fNew.fingerprint);
     expect(r.resolved_findings[0]?.fingerprint).toBe(fOld.fingerprint);
   });
@@ -463,7 +463,7 @@ describe('audit_executive', () => {
     // The audit scan row exists and is completed.
     expect(plugin.storage.scans.getById(r.scan_id)?.status).toBe('completed');
     expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
-  });
+  }, 30_000); // Measured in full-suite runs (review 3.0, R7): a whole audit, 4.3-6.4 s, past 10 s under load.
 
   it('emits deltas on the second consecutive audit', async () => {
     const project = tempProject();
@@ -500,5 +500,5 @@ describe('audit_executive', () => {
     expect(r2.deltas).toBeDefined();
     expect(r2.deltas?.since_audit_scan_id).toBe(r1.scan_id);
     expect(r2.deltas?.resolved_findings).toBeGreaterThan(0);
-  });
+  }, 30_000); // Measured in full-suite runs (review 3.0, R7): two whole audits, 4.9 s under coverage, past 10 s under load.
 });

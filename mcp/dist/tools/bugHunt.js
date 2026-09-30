@@ -106,7 +106,7 @@
  * for exactly this) rather than smuggled through a field every consumer
  * assumes is a bare tool name.
  */
-import { existsSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveBugfixRules } from '../platform/configsDir.js';
@@ -118,7 +118,8 @@ import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
 import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describeRulesNotLoaded } from '../runners/semgrepReport.js';
 import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
-import { runProcess } from '../runners/processRunner.js';
+import { runSemgrep } from '../runners/semgrepRun.js';
+import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { AllowDirty, AutoFix, Force, ProjectPath, SeverityMin, } from '../schemas.js';
 import { computeFingerprint } from '../fingerprint/findingFingerprint.js';
 import { registerToolModule } from './index.js';
@@ -192,7 +193,7 @@ export function languagePacksFor(languages) {
  * was never run); the persisted snapshot is preferred whenever one exists.
  */
 function fallbackLanguages(projectPath) {
-    const has = (name) => existsSync(join(projectPath, name));
+    const has = (name) => presentInProject(projectPath, name);
     const languages = [];
     if (has('package.json')) {
         languages.push('javascript');
@@ -505,8 +506,30 @@ registerToolModule(makeScanTool({
     },
     // The pack choice is recorded on the scan row (meta, via extras) so
     // create_fix_pr can re-scan a fix with the SAME packs that found it.
-    invoke: async (input, ctx) => reportUncoveredLanguages(ctx, recordPackChoice(input, await invokeBugHunt(input, ctx))),
+    invoke: async (input, ctx) => reportUncoveredLanguages(ctx, recordPackChoice(input, await withSemgrepGaps(ctx, await invokeBugHunt(input, ctx)))),
 }));
+/**
+ * The shared Semgrep coverage gaps (`runners/semgrepCoverageGaps.ts`: files
+ * over the size limit, initialised submodules) on the run's `semgrep` entry
+ * — every path of {@link invokeBugHunt} and its scoped twin ends in one such
+ * entry. Not for a Semgrep that never ran (not installed, an empty scope).
+ */
+async function withSemgrepGaps(ctx, inv) {
+    const i = inv.tools_run.findIndex((t) => t.name === 'semgrep');
+    const entry = inv.tools_run[i];
+    if (entry === undefined)
+        return inv;
+    if (entry.status === 'skipped' && (entry.reason === 'not_installed' || /scope holds no file/.test(entry.reason ?? '')))
+        return inv;
+    const gaps = await semgrepCoverageGaps(ctx.projectPath, ctx.scope !== null ? { files: ctx.scope.files } : {});
+    const applied = applySemgrepCoverageGaps(entry, gaps, { scannedNothing: entry.status === 'skipped' });
+    const tools_run = [...inv.tools_run];
+    tools_run[i] = applied.toolRun;
+    const missing_tools = [...inv.missing_tools];
+    if (applied.missing)
+        markMissing(missing_tools, 'semgrep');
+    return { ...inv, tools_run, missing_tools };
+}
 async function invokeBugHunt(input, ctx) {
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'bugs');
     const tools_run = [];
@@ -546,8 +569,9 @@ async function invokeBugHunt(input, ctx) {
         if (input.auto_fix === true)
             args.push('--autofix');
         args.push(ctx.projectPath);
-        return runProcess({
-            command: 'semgrep',
+        // UTF-8 mode (runners/semgrepRun.ts): without it a file named 日本.py
+        // made Semgrep exit 2 without a report on Windows (review M3).
+        return runSemgrep({
             args,
             cwd: ctx.projectPath,
             env: ctx.scriptEnv,

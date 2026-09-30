@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -50,6 +51,16 @@ import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 import { okResult } from '../helpers/toolResult.js';
+
+/**
+ * A spawned command's bare name. The runners spawn the absolute path a name
+ * resolves to on PATH (`platform/binaryPath.ts`), so a mock matching on the
+ * command compares its name: `C:\Program Files\nodejs\npm.cmd` is `npm`.
+ */
+function bare(cmd: unknown): string {
+  const name = String(cmd).split(/[\\/]/).pop() ?? '';
+  return name.replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+}
 
 afterAll(cleanupTempDirs);
 
@@ -154,6 +165,46 @@ describe('scan_deps', () => {
     expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'dotnet', files: ['Test.csproj'] }]);
     expect(Object.values(r.findings_count_by_severity).reduce((a, b) => a + b, 0)).toBe(0);
     expect(r.coverage).not.toBe('full');
+  });
+
+  // Review 3.0, wave 2 (c): Trivy skips devDependencies by default, so a
+  // package.json with only those, beside a committed lock, gets no Result —
+  // and the warning told the user to commit the lock file they had.
+  it.each([
+    ['only devDependencies beside a committed lock', true],
+    ['dependencies and no lock file at all', false],
+  ])('a package.json with %s: the advice fits the case', async (_label, devOnly) => {
+    const project = tempProject();
+    if (devOnly) {
+      writeFileSync(join(project, 'package.json'), '{"name":"x","devDependencies":{"lodash":"4.17.4"}}', 'utf8');
+      writeFileSync(join(project, 'package-lock.json'), '{"lockfileVersion":3}', 'utf8');
+    } else {
+      writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.4"}}', 'utf8');
+    }
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/trivy');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('scan_deps').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      warnings: string[];
+      manifest_coverage_gaps: Array<{ ecosystem: string; files: string[]; dev_only?: string[] }>;
+    };
+    expect(r.coverage).toBe('none');
+    const warning = r.warnings.find((w) => w.includes('NOTHING was scanned')) ?? '';
+    if (devOnly) {
+      expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'], dev_only: ['package.json'] }]);
+      expect(warning).toContain('npm (package.json): only devDependencies, which Trivy skips by default');
+      expect(warning).not.toMatch(/commit the lock file/);
+    } else {
+      expect(r.manifest_coverage_gaps).toEqual([{ ecosystem: 'npm', files: ['package.json'] }]);
+      expect(warning).toContain('npm (package.json): commit the lock file your package manager writes');
+      expect(warning).not.toMatch(/devDependencies/);
+    }
   });
 
   it('item 4: a PARTIAL manifest gap (npm covered, dotnet not) never puts the bare "trivy" name in missing_tools', async () => {
@@ -381,6 +432,75 @@ describe('deps_audit', () => {
     expect(npm?.status).toBe('ok');
     expect(npm?.reason).toMatch(/parsed/i);
     expect(r.coverage).toBe('full');
+  });
+
+  // Self-security review R6-I1: npm audit runs in the project, so the
+  // project's .npmrc picks the server that answers it. Honoured — a private
+  // registry is legitimate — but named, and without the credentials.
+  it("names the registry the project's .npmrc sends npm audit to, never silently", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    writeFileSync(
+      join(project, '.npmrc'),
+      '; a comment\n@acme:registry=https://scoped.example/\nregistry = "https://ci:s3cret@npm.example.internal/repo/"\n',
+      'utf8',
+    );
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        return { outcome: 'completed' as const, exitCode: 1, stdout: npmAuditFx(), stderr: '', truncated: false };
+      }
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.status).toBe('ok');
+    expect(npm?.reason).toContain(
+      "npm audit answered by https://npm.example.internal/repo/ (from the project's .npmrc)",
+    );
+    expect(npm?.reason).not.toContain('s3cret');
+    expect(npm?.honoured_config).toEqual(['.npmrc']);
+  });
+
+  it.each([
+    ['no .npmrc', null],
+    ['the public registry', 'registry=https://registry.npmjs.org/\n'],
+    ['only a scoped registry', '@acme:registry=https://scoped.example/\n'],
+  ])('says nothing about the registry for %s', async (_label, npmrc) => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    if (npmrc !== null) writeFileSync(join(project, '.npmrc'), npmrc, 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') {
+        return { outcome: 'completed' as const, exitCode: 1, stdout: npmAuditFx(), stderr: '', truncated: false };
+      }
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      tools_run: { name: string; reason?: string; honoured_config?: string[] }[];
+    };
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.reason ?? '').not.toMatch(/answered by/);
+    // Round 5, item 2: a project .npmrc is named whenever npm audit read one
+    // (omit=dev or audit-level decide what it reports), whatever its registry.
+    if (npmrc === null) {
+      expect(npm?.honoured_config).toBeUndefined();
+    } else {
+      expect(npm?.honoured_config).toEqual(['.npmrc']);
+      expect(npm?.reason).toMatch(/honoured the project's \.npmrc \(its registry and settings decide what npm audit reads and reports\)/);
+    }
   });
 
   it('dedupes an npm-audit finding for a package Trivy already reported (no double count)', async () => {
@@ -903,6 +1023,211 @@ describe('deps_audit', () => {
     expect([...filePaths].some((p) => p?.includes('dev.txt'))).toBe(true);
   });
 
+  // Review 3.0, wave 2 (b): a requirements file can carry pip's index
+  // options, and pip-audit installs `-r` requirements with pip, which honours
+  // them — so the file decides which index the audited versions come from,
+  // as `.npmrc` decides which registry answers npm audit. Honoured (a private
+  // index is legitimate), never silently.
+  describe('pip-audit: index options in a requirements file are named', () => {
+    async function pipAuditRun(project: string) {
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+        name === 'pip-audit' ? '/fake/bin/pip-audit' : null,
+      );
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        if (opts.command === 'pip-audit') {
+          const path = outputPathFor(opts.args);
+          if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+        }
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      });
+      const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+      };
+      return r.tools_run.find((t) => t.name === 'pip-audit');
+    }
+
+    it('names every requirements file pip-audit read whose index options steer it — an included one too', async () => {
+      const project = tempProject();
+      writeFileSync(
+        join(project, 'requirements.txt'),
+        '--index-url https://ci:s3cret@pypi.example.internal/simple\ndjango==2.0.1\n',
+        'utf8',
+      );
+      writeFileSync(
+        join(project, 'requirements-dev.txt'),
+        '# dev\n--extra-index-url https://extra.example/simple\n-r common/base.txt\nrequests==2.20.0\n',
+        'utf8',
+      );
+      mkdirSync(join(project, 'common'));
+      writeFileSync(join(project, 'common', 'base.txt'), '-i https://third.example/simple\nflask==1.0\n', 'utf8');
+      mkdirSync(join(project, 'requirements'));
+      writeFileSync(join(project, 'requirements', 'test.txt'), 'pytest==7.0.0\n', 'utf8');
+
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.honoured_config).toEqual(['common/base.txt', 'requirements-dev.txt', 'requirements.txt']);
+      expect(run?.reason).toMatch(
+        /honoured the project's common\/base\.txt, requirements-dev\.txt, requirements\.txt \(its package-index options decide which index pip-audit's resolution installs from\)/,
+      );
+      expect(run?.reason).not.toContain('s3cret');
+    });
+
+    it.each([
+      ['--index-url=https://x.example/simple'],
+      ['  -i https://x.example/simple'],
+      ['-ihttps://x.example/simple'],
+      ['--extra-index-url https://x.example/simple'],
+      ['--find-links ./wheels'],
+      ['-f https://x.example/wheels/'],
+      ['--no-index'],
+      ['--trusted-host x.example'],
+    ])('names a requirements file holding `%s`', async (line) => {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), `${line}\ndjango==2.0.1\n`, 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.honoured_config).toEqual(['requirements.txt']);
+    });
+
+    it.each([
+      ['no option at all', 'django==2.0.1\n'],
+      ['an index option in a comment', '# --index-url https://x.example/simple\ndjango==2.0.1\n'],
+      ['a per-requirement hash', 'django==2.0.1 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000\n'],
+      ['an include with no index option', '-r base.txt\ndjango==2.0.1\n'],
+      // pip fails on a missing include: it cannot steer anything.
+      ['an include that is not there', '-r missing.txt\ndjango==2.0.1\n'],
+    ])('names nothing for %s', async (_label, text) => {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), text, 'utf8');
+      writeFileSync(join(project, 'base.txt'), 'flask==1.0\n', 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.honoured_config).toBeUndefined();
+      expect(run?.reason ?? '').not.toMatch(/honoured|not read by dev-guardian/);
+    });
+
+    /**
+     * Review 3.0, wave 2, round 2: an include pip follows but the server
+     * does not read (it reads within the project) was not named, so one line
+     * — `-r https://evil.example/r.txt` — picked pip-audit's index in
+     * silence. Every such include is named now, unread.
+     */
+    function outsideProject(): { project: string; outside: string } {
+      const outside = makeTempDir('deps-tools-outside-');
+      writeFileSync(join(outside, 'idx.txt'), '--index-url https://outside.example/simple\n', 'utf8');
+      const project = join(outside, 'project');
+      mkdirSync(project);
+      symlinkSync(outside, join(project, 'link'), 'junction');
+      return { project, outside };
+    }
+
+    // Review of 3.0, W2E: named through the same fail-closed parser create_fix_pr
+    // refuses by (`deps/pipRequirements.ts`) — the line and what it is, a URL as
+    // `scheme://host` only, never the include as written (it can carry a token).
+    it.each([
+      ['a path out of the project', '../idx.txt', 'line 1: include out of the checkout (../idx.txt)'],
+      ['a path further out', '../../outside/evil.txt', 'line 1: include out of the checkout (../../outside/evil.txt)'],
+      ['a URL', 'https://evil.example/r.txt', 'line 1: include of a URL (https://evil.example)'],
+      ['a link out of the project', 'link/idx.txt', 'line 1: unreadable (link/idx.txt: it resolves outside the project (a link) and was not read)'],
+      ['an environment variable', '${REQS_DIR}/base.txt', 'line 1: environment variable (pip substitutes ${…} from the environment)'],
+    ])('names an include it cannot read: %s', async (_label, target, named) => {
+      const { project } = outsideProject();
+      writeFileSync(join(project, 'requirements.txt'), `-r ${target}\ndjango==2.0.1\n`, 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.reason).toContain(
+        `honoured the project's requirements.txt (pip reads what dev-guardian did not check (${named}) — pip may take its sources from it)`,
+      );
+      expect(run?.honoured_config).toEqual(['requirements.txt']);
+    });
+
+    it('names a constraints include, a token-bearing URL by its host alone, and one found in an included file', async () => {
+      const { project } = outsideProject();
+      mkdirSync(join(project, 'sub'));
+      writeFileSync(
+        join(project, 'requirements.txt'),
+        '-c https://ci:S3CRET@evil.example/c.txt\n--requirement=$HOME/r.txt\n-r sub/base.txt\n',
+        'utf8',
+      );
+      writeFileSync(join(project, 'sub', 'base.txt'), '-r https://evil.example/nested.txt\nflask==1.0\n', 'utf8');
+      const run = await pipAuditRun(project);
+      const reason = run?.reason ?? '';
+      // One wording for both files, so the note names them together.
+      expect(reason).toContain(
+        "honoured the project's requirements.txt, sub/base.txt (pip reads what dev-guardian did not check (line 1: include of a URL (https://evil.example))",
+      );
+      expect(reason).not.toContain('S3CRET');
+      // `$HOME` is not substituted by pip (only `${VAR}` is): a relative path that is not there, which pip fails on.
+      expect(reason).not.toContain('$HOME');
+      expect(run?.honoured_config).toEqual(['requirements.txt', 'sub/base.txt']);
+    });
+
+    it.each([
+      ['a direct reference', 'pkg @ https://deploy:pa@ss-S3CRET@evil.invalid/p.tgz', 'direct reference (line 1 (https://evil.invalid))'],
+      ['a VCS URL', 'git+https://oauth2:glpat-S3CRET@evil.invalid/r.git#egg=x', 'VCS requirement (line 1 (git+https://evil.invalid))'],
+      ['a network path', '\\\\evil.invalid\\share\\pkg-1.0.tar.gz', 'network path (line 1 (\\\\evil.invalid))'],
+      ['an editable requirement', '-e git+https://evil.invalid/r.git#egg=x', 'editable requirement (line 1 (-e, git+https://evil.invalid))'],
+    ])('names %s the way an index option is named, its host alone', async (_label, line, named) => {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), `${line}\ndjango==2.0.1\n`, 'utf8');
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('ok');
+      expect(run?.honoured_config).toEqual(['requirements.txt']);
+      expect(run?.reason).toContain(`honoured the project's requirements.txt (its ${named} decide where pip-audit's resolution fetches from)`);
+      expect(run?.reason).not.toContain('S3CRET');
+    });
+
+    // A `requirements/` that links out of the project is neither listed nor
+    // handed to pip-audit — and that is a gap, named, never a silent skip.
+    it('names a requirements/ that leads out of the project as not audited, and coverage is partial', async () => {
+      const { project, outside } = outsideProject();
+      mkdirSync(join(outside, 'reqs'));
+      writeFileSync(join(outside, 'reqs', 'base.txt'), '--index-url https://outside.example/simple\n', 'utf8');
+      symlinkSync(join(outside, 'reqs'), join(project, 'requirements'), 'junction');
+      writeFileSync(join(project, 'requirements.txt'), 'django==2.0.1\n', 'utf8');
+      const commands: string[][] = [];
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+        name === 'pip-audit' ? '/fake/bin/pip-audit' : null,
+      );
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        if (opts.command === 'pip-audit') {
+          commands.push(opts.args ?? []);
+          const path = outputPathFor(opts.args);
+          if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+        }
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      });
+      const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+        ok: true;
+        coverage: string;
+        missing_tools: string[];
+        tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+      };
+      const run = r.tools_run.find((t) => t.name === 'pip-audit');
+      expect(run?.status).toBe('ok');
+      expect(run?.reason).toContain('requirements/ leads out of the project: not read or audited by dev-guardian');
+      expect(run?.honoured_config).toBeUndefined();
+      expect(commands.flat().some((a) => a.includes('base.txt'))).toBe(false);
+      expect(r.missing_tools.filter((t) => t === 'pip-audit')).toHaveLength(1);
+      expect(r.coverage).toBe('partial');
+    });
+
+    it('names a requirements file that leads out of the project when it is the only candidate', async (ctx) => {
+      const { project, outside } = outsideProject();
+      writeFileSync(join(outside, 'reqs.txt'), 'django==2.0.1\n', 'utf8');
+      try {
+        symlinkSync(join(outside, 'reqs.txt'), join(project, 'requirements.txt'), 'file');
+      } catch {
+        ctx.skip(); // a file symlink needs privilege on Windows; the directory case above runs everywhere
+      }
+      const run = await pipAuditRun(project);
+      expect(run?.status).toBe('skipped');
+      expect(run?.reason).toBe('requirements.txt leads out of the project: not read or audited by dev-guardian');
+    });
+  });
+
   it('runs dotnet SCA for a bare .csproj Trivy could not cover, restoring first', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
@@ -1227,7 +1552,7 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(project);
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1280,7 +1605,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1355,7 +1680,7 @@ describe('deps_update_plan', () => {
       .run(new Date(Date.now() + 60_000).toISOString());
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -1396,7 +1721,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1509,7 +1834,7 @@ describe('deps_update_plan', () => {
     // readNpmDirectDependencies's own module comment) — directness is read
     // from package.json's own `dependencies`, never from this field.
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1548,7 +1873,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1578,7 +1903,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1619,7 +1944,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1676,7 +2001,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1709,7 +2034,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1760,7 +2085,7 @@ describe('deps_update_plan', () => {
     // requests has no active CVE, so it is left alone.
     expect(r.plan.some((s) => s.package_name === 'requests')).toBe(false);
     // Never calls pip or pip-audit against the host.
-    expect(execaSpy.mock.calls.some(([cmd]) => cmd === 'pip' || cmd === 'pip-audit')).toBe(false);
+    expect(execaSpy.mock.calls.some(([cmd]) => bare(cmd) === 'pip' || bare(cmd) === 'pip-audit')).toBe(false);
   });
 
   it('pip: plans from pyproject.toml PEP 621 dependencies when no requirements.txt exists', async () => {
@@ -1816,7 +2141,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({ lodash: { current: '4.17.21', latest: '4.18.1', dependent: 'irrelevant' } }),
@@ -1862,7 +2187,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1905,7 +2230,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
           stdout: JSON.stringify({
@@ -1939,7 +2264,7 @@ describe('deps_update_plan', () => {
     });
 
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         // npm itself agrees nothing newer exists either.
         return {
           exitCode: 1,
@@ -1992,7 +2317,7 @@ describe('deps_update_plan', () => {
     // minimist never appears here at all, unlike the earlier (unrealistic)
     // mocked shape this suite used to rely on.
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'npm' && args[0] === 'outdated') {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return { exitCode: 0, stdout: '', stderr: '' }; // nothing outdated among direct deps
       }
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -2117,7 +2442,7 @@ describe('deps_update_plan', () => {
     });
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
+      calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -2463,11 +2788,11 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(project);
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
-      if (cmd === 'dotnet' && args[0] === 'restore') {
+      calls.push([bare(cmd), ...args].join(' '));
+      if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         return { exitCode: 0, stdout: '', stderr: '' };
       }
-      if (cmd === 'dotnet' && args[0] === 'list') {
+      if (bare(cmd) === 'dotnet' && args[0] === 'list') {
         return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -2497,7 +2822,7 @@ describe('deps_update_plan', () => {
     });
     let listCalled = false;
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'dotnet' && args[0] === 'restore') {
+      if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         return {
           exitCode: 1,
           stdout:
@@ -2505,7 +2830,7 @@ describe('deps_update_plan', () => {
           stderr: '',
         };
       }
-      if (cmd === 'dotnet' && args[0] === 'list') {
+      if (bare(cmd) === 'dotnet' && args[0] === 'list') {
         listCalled = true;
         return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       }
@@ -2538,7 +2863,7 @@ describe('deps_update_plan', () => {
     writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
     const plugin = makePlugin(project);
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'dotnet' && args[0] === 'restore') {
+      if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         return {
           exitCode: 1,
           stdout: '',
@@ -2565,8 +2890,8 @@ describe('deps_update_plan', () => {
     writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
     const plugin = makePlugin(project);
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'dotnet' && args[0] === 'restore') return { exitCode: 0, stdout: '', stderr: '' };
-      if (cmd === 'dotnet' && args[0] === 'list') {
+      if (bare(cmd) === 'dotnet' && args[0] === 'restore') return { exitCode: 0, stdout: '', stderr: '' };
+      if (bare(cmd) === 'dotnet' && args[0] === 'list') {
         return {
           exitCode: 0,
           stdout: JSON.stringify({
@@ -2613,11 +2938,11 @@ describe('deps_update_plan', () => {
     const restoreCalls: string[][] = [];
     const listCalls: string[][] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'dotnet' && args[0] === 'restore') {
+      if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         restoreCalls.push(args);
         return { exitCode: 0, stdout: '', stderr: '' };
       }
-      if (cmd === 'dotnet' && args[0] === 'list') {
+      if (bare(cmd) === 'dotnet' && args[0] === 'list') {
         listCalls.push(args);
         return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       }
@@ -2656,8 +2981,8 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(project);
     const restoreCalls: string[][] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'dotnet' && args[0] === 'restore') restoreCalls.push(args);
-      if (cmd === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
+      if (bare(cmd) === 'dotnet' && args[0] === 'restore') restoreCalls.push(args);
+      if (bare(cmd) === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -2677,7 +3002,7 @@ describe('deps_update_plan', () => {
       { cve_id: 'CVE-GHOST', package_name: 'ghost-lib', installed_version: '1.0.0', fixed_version: '1.0.1' },
     ]);
     vi.mocked(execa).mockImplementation((async (cmd: string) => {
-      if (cmd === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
+      if (bare(cmd) === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -2707,7 +3032,7 @@ describe('deps_update_plan', () => {
     });
     vi.mocked(execa).mockImplementation((async (cmd: string) => {
       // execa with reject:false, command not on PATH: no exit code at all.
-      if (cmd === 'composer') return { exitCode: undefined, failed: true, code: 'ENOENT', shortMessage: 'spawn composer ENOENT', stdout: '', stderr: '' };
+      if (bare(cmd) === 'composer') return { exitCode: undefined, failed: true, code: 'ENOENT', shortMessage: 'spawn composer ENOENT', stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -2839,7 +3164,7 @@ describe('deps_update_plan', () => {
     seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
+      calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ mkdirp: { current: '0.5.1', latest: '3.0.1' } }), stderr: '' };
     }) as unknown as typeof execa);
 
@@ -2848,7 +3173,7 @@ describe('deps_update_plan', () => {
       unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
       unsupported_ecosystems_present: string[];
     }>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c !== 'pnpm --version')).toEqual([]); // asking pnpm its version is allowed (R7-I5)
     expect(r.plan).toEqual([]);
     expect(r.unplanned).toHaveLength(1);
     expect(r.unplanned[0]).toMatchObject({ package_name: 'minimist', ecosystem: 'npm' });
@@ -2881,7 +3206,7 @@ describe('deps_update_plan', () => {
     ]);
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
+      calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -2926,7 +3251,7 @@ describe('deps_update_plan', () => {
       { cve_id: 'CVE-DEV', package_name: 'guzzle/dev-only', installed_version: '1.0.0', fixed_version: '1.0.1' },
     ]);
     vi.mocked(execa).mockImplementation((async (cmd: string) => {
-      if (cmd === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
+      if (bare(cmd) === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -2996,8 +3321,8 @@ describe('deps_update_plan', () => {
     ]);
     // Every runner works and lists nothing outdated; the .NET restore/list succeed.
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      if (cmd === 'cargo') return { exitCode: 0, stdout: JSON.stringify({ dependencies: [] }), stderr: '' };
-      if (cmd === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
+      if (bare(cmd) === 'cargo') return { exitCode: 0, stdout: JSON.stringify({ dependencies: [] }), stderr: '' };
+      if (bare(cmd) === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -3076,7 +3401,7 @@ describe('deps_update_plan', () => {
     ]);
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
+      calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ mkdirp: { current: '0.5.1', latest: '3.0.1' } }), stderr: '' };
     }) as unknown as typeof execa);
 
@@ -3085,7 +3410,7 @@ describe('deps_update_plan', () => {
       unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
       unsupported_ecosystems_present: string[];
     }>(await getTool('deps_update_plan').handler({ project_path: member }, plugin));
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c !== 'pnpm --version')).toEqual([]); // asking pnpm its version is allowed (R7-I5)
     expect(r.plan).toEqual([]);
     expect(r.unsupported_ecosystems_present).toContain('pnpm');
     const minimist = r.unplanned.find((u) => u.package_name === 'minimist');
@@ -3109,7 +3434,7 @@ describe('deps_update_plan', () => {
     seedCve(plugin, member, { cve_id: 'CVE-L', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' });
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
+      calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
 
@@ -3131,7 +3456,7 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(repo);
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
+      calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
     }) as unknown as typeof execa);
 
@@ -3153,7 +3478,7 @@ describe('deps_update_plan', () => {
     seedCve(plugin, project, { cve_id: 'CVE-L', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' });
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
+      calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
     }) as unknown as typeof execa);
     const r = okResult<{ plan: Array<{ upgrade_command: string }>; unplanned: Array<{ reason: string }>; unsupported_ecosystems_present: string[] }>(
@@ -3223,11 +3548,11 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(project);
     const calls: string[] = [];
     vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
-      calls.push([cmd, ...args].join(' '));
-      if (cmd === 'composer' && args.includes('--locked')) {
+      calls.push([bare(cmd), ...args].join(' '));
+      if (bare(cmd) === 'composer' && args.includes('--locked')) {
         return { exitCode: 0, stdout: JSON.stringify({ locked: [{ name: 'psr/log', version: '1.0.0', latest: '3.0.2' }] }), stderr: '' };
       }
-      if (cmd === 'composer') return { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' };
+      if (bare(cmd) === 'composer') return { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' };
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
     const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; latest_version: string }>; runner_failures: unknown[] }>(
@@ -3243,7 +3568,7 @@ describe('deps_update_plan', () => {
     writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
     const plugin = makePlugin(project);
     vi.mocked(execa).mockImplementation((async (cmd: string) =>
-      cmd === 'composer'
+      bare(cmd) === 'composer'
         ? { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' }
         : { exitCode: 0, stdout: '', stderr: '' }) as unknown as typeof execa);
     const r = okResult<{ runner_failures: Array<{ ecosystem: string; reason: string }> }>(
@@ -3257,7 +3582,7 @@ describe('deps_update_plan', () => {
     writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n", 'utf8');
     const plugin = makePlugin(project);
     vi.mocked(execa).mockImplementation((async (cmd: string) => {
-      if (cmd === 'bundle') return { exitCode: 1, stdout: 'rack (newest 3.1.8, installed 2.2.3)\n', stderr: '' };
+      if (bare(cmd) === 'bundle') return { exitCode: 1, stdout: 'rack (newest 3.1.8, installed 2.2.3)\n', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
     }) as unknown as typeof execa);
     const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
@@ -3306,7 +3631,7 @@ describe('deps_update_plan', () => {
     writeFileSync(join(project, 'package.json'), '{"name":"web","dependencies":{"lodash":"4.17.20"}}', 'utf8');
 
     const { calls, r } = await planWithoutGit(project);
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c !== 'pnpm --version')).toEqual([]); // asking pnpm its version is allowed (R7-I5)
     expect(r.plan).toEqual([]);
     expect(r.unsupported_ecosystems_present).toContain('pnpm');
     expect(r.unplanned[0]?.reason).toMatch(/^pnpm project \(\.\.\/\.\.\/pnpm-workspace\.yaml, the workspace root\)|^pnpm project \(\.\.\/\.\.\/pnpm-lock\.yaml, the workspace root\)/);
@@ -3324,5 +3649,97 @@ describe('deps_update_plan', () => {
     expect(calls).toEqual([]);
     expect(r.unsupported_ecosystems_present).toContain('yarn');
     expect(r.unplanned[0]?.reason).toMatch(/^yarn project \(\.\.\/\.\.\/yarn\.lock, the workspace root\)/);
+  });
+
+  /**
+   * Review R7-I5: the advice was always `"pnpm": { "overrides" }` in
+   * package.json, which pnpm 11 and later no longer read — measured with
+   * pnpm 12.8.1: `[WARN] The "pnpm" field in package.json is no longer read
+   * by pnpm. The following keys were ignored: "pnpm.overrides"`, and the
+   * lock kept minimist@0.0.8. The mechanism follows the project's pnpm:
+   *   - pnpm 10.5.0 added `pnpm.*` settings in pnpm-workspace.yaml ("The
+   *     `pnpm.*` settings from `package.json` can now be specified in the
+   *     `pnpm-workspace.yaml` file instead", #9121), and made its `packages`
+   *     field optional — before, a pnpm-workspace.yaml without `packages`
+   *     fails ("packages field missing or empty", measured on 9.15.9 and
+   *     10.4.1);
+   *   - pnpm 11.0.0 stopped reading the "pnpm" field ("pnpm no longer reads
+   *     settings from the `pnpm` field of `package.json`", #10086).
+   */
+  describe('pnpm overrides follow the project’s pnpm version', () => {
+    const LOCK_9 = "lockfileVersion: '9.0'\n\npackages:\n\n  minimist@0.0.8:\n    resolution: {integrity: sha512-x}\n";
+    const LOCK_6 = "lockfileVersion: '6.0'\n\npackages:\n\n  /minimist@0.0.8:\n    resolution: {integrity: sha512-x}\n";
+
+    async function pnpmReason(opts: {
+      packageManager?: string;
+      lock: string;
+      pnpmVersion?: string | null;
+    }): Promise<{ reason: string; calls: string[] }> {
+      const project = tempProject();
+      const manifest: Record<string, unknown> = { name: 'x', dependencies: { mkdirp: '0.5.1' } };
+      if (opts.packageManager !== undefined) manifest['packageManager'] = opts.packageManager;
+      writeFileSync(join(project, 'package.json'), JSON.stringify(manifest), 'utf8');
+      writeFileSync(join(project, 'pnpm-lock.yaml'), opts.lock, 'utf8');
+      const plugin = makePlugin(project);
+      seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
+      const calls: string[] = [];
+      vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+        calls.push([bare(cmd), ...args].join(' '));
+        if (bare(cmd) === 'pnpm' && args[0] === '--version') {
+          return opts.pnpmVersion === undefined || opts.pnpmVersion === null
+            ? { exitCode: 1, stdout: '', stderr: 'pnpm: not found' }
+            : { exitCode: 0, stdout: `${opts.pnpmVersion}\n`, stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: '' };
+      }) as unknown as typeof execa);
+      const r = okResult<{ unplanned: Array<{ package_name: string; reason: string }> }>(
+        await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+      );
+      return { reason: r.unplanned.find((u) => u.package_name === 'minimist')?.reason ?? '', calls };
+    }
+
+    const YAML_FIX = 'add `overrides: { "minimist": "1.2.6" }` to pnpm-workspace.yaml';
+    const JSON_FIX = 'add "pnpm": { "overrides": { "minimist": "1.2.6" } } to package.json';
+
+    it('pnpm 12 from "packageManager": pnpm-workspace.yaml, never the ignored package.json field', async () => {
+      const { reason, calls } = await pnpmReason({ packageManager: 'pnpm@12.8.1+sha512.abc', lock: LOCK_9 });
+      expect(reason).toContain(YAML_FIX);
+      expect(reason).not.toContain('"pnpm": { "overrides"');
+      expect(reason).toContain('pnpm 12.8.1 (package.json "packageManager")');
+      expect(calls.some((c) => c.startsWith('pnpm --version'))).toBe(false);
+    });
+
+    it('pnpm 10.5 or later: pnpm-workspace.yaml', async () => {
+      const { reason } = await pnpmReason({ packageManager: 'pnpm@10.5.0', lock: LOCK_9 });
+      expect(reason).toContain(YAML_FIX);
+    });
+
+    it('pnpm before 10.5 from "packageManager": package.json', async () => {
+      const { reason } = await pnpmReason({ packageManager: 'pnpm@10.4.1', lock: LOCK_9 });
+      expect(reason).toContain(JSON_FIX);
+      expect(reason).not.toContain(YAML_FIX);
+    });
+
+    it('a lockfileVersion 6.0 (pnpm 8) decides without asking pnpm: package.json', async () => {
+      const { reason, calls } = await pnpmReason({ lock: LOCK_6, pnpmVersion: '12.8.1' });
+      expect(reason).toContain(JSON_FIX);
+      expect(reason).toMatch(/pnpm-lock\.yaml lockfileVersion 6\.0/);
+      expect(calls.some((c) => c.startsWith('pnpm --version'))).toBe(false);
+    });
+
+    it('lockfileVersion 9.0 (every pnpm since 9) asks `pnpm --version`', async () => {
+      const { reason, calls } = await pnpmReason({ lock: LOCK_9, pnpmVersion: '12.8.1' });
+      expect(calls).toContain('pnpm --version');
+      expect(reason).toContain(YAML_FIX);
+      expect(reason).toContain('pnpm 12.8.1 (`pnpm --version`)');
+    });
+
+    it('an unknown version names both, and where each applies', async () => {
+      const { reason } = await pnpmReason({ lock: LOCK_9, pnpmVersion: null });
+      expect(reason).toMatch(/pnpm version unknown/);
+      expect(reason).toContain(YAML_FIX);
+      expect(reason).toContain(JSON_FIX);
+      expect(reason).toMatch(/pnpm 10\.5 or later.*before 10\.5/);
+    });
   });
 });

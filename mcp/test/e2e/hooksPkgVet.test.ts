@@ -13,13 +13,15 @@
  * Requires a built `mcp/dist` (`npm run build`).
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
+import { PERF_STRICT } from '../helpers/timing.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '..', '..', '..');
@@ -70,6 +72,24 @@ const CAN_SYMLINK = ((): boolean => {
   }
 })();
 
+/** Hang-breaker for one hook run; the deadlines under test are far below it. */
+const HOOK_TIMEOUT_MS = 20_000;
+// Above the cap, so a hung child is reported by the cap — naming it — and
+// not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: timeoutAbove(HOOK_TIMEOUT_MS) });
+
+/**
+ * The bound on how long the hook takes to answer. What these tests guard is
+ * an answer before Claude Code kills the hook at 15 s — after which the
+ * command runs unassessed — and the defects they were written for took 15 s
+ * to hours (a FIFO read, an unreachable UNC path, 127 statements of the worst
+ * shape, 64 KB of `-c`). So by default the bound is 12 s: under that kill,
+ * far under every defect, and above what a machine at 100% CPU adds (a
+ * 3 s bound measured 3.0 s there, review 3.0 R7 round 2). The tight number,
+ * for a quiet machine, runs with GUARDIAN_PERF_STRICT=1.
+ */
+const answersWithin = (strictMs: number): number => (PERF_STRICT ? strictMs : 12_000);
+
 const LEAKY_ENV =
   /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|NuGetPackageSourceCredentials_|COMPOSER|VIRTUAL_ENV$|CONDA_PREFIX$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
 
@@ -77,7 +97,7 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !LEAKY_ENV.test(k)) base[k] = v;
   const t0 = Date.now();
-  const r = spawnSync(process.execPath, ['--import', PRELOAD, HOOK], {
+  const r = spawnSyncCapped(process.execPath, ['--import', PRELOAD, HOOK], {
     cwd: project,
     input: JSON.stringify({
       hook_event_name: 'PreToolUse',
@@ -86,7 +106,7 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       cwd: project,
     }),
     encoding: 'utf8',
-    timeout: 20_000,
+    timeout: HOOK_TIMEOUT_MS,
     env: {
       ...base,
       HOME: home,
@@ -99,6 +119,9 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       GUARDIAN_OFFLINE: '0',
       GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(routes),
       GUARDIAN_TEST_FETCH_LOG: logFile,
+      // As Claude Code sets it for every hook; and no real config directory.
+      CLAUDE_PROJECT_DIR: project,
+      CLAUDE_CONFIG_DIR: '',
       ...opts.env,
     },
   });
@@ -217,13 +240,23 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     );
   });
 
+  // The 3 s network budget, not the hook's 8 s vetting deadline behind it,
+  // must end the wait: measured as time beyond the same hook answered at once
+  // by the registry (a reference run, so what a loaded machine adds to both
+  // cancels), where a broken budget waits out the deadline — 8 s. 6 s
+  // absolute with GUARDIAN_PERF_STRICT=1.
   it('fails open inside the 3 s budget when the registry never answers', () => {
+    const answered = runHook('npm install express', {
+      'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+      [OSV]: { osv: {} },
+    });
     const r = runHook('npm install express', { 'https://registry.npmjs.org/express': { hang: true }, [OSV]: { hang: true } });
     expect(r.status).toBe(0);
-    expect(r.ms).toBeLessThan(6000);
+    expect(r.ms - answered.ms, `${String(r.ms)} ms against ${String(answered.ms)} ms answered`).toBeLessThan(5000);
+    expect(r.ms).toBeLessThan(answersWithin(6000));
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not vet express.*not verified/s);
-  }, 20_000);
+  });
 
   // Follow-up Part Y (item 4): the registry-context reads were not walked for
   // a network link. A project `.npmrc` linked to an unreachable share held the
@@ -240,7 +273,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
         [OSV]: { osv: {} },
       });
       expect(r.status).toBe(0);
-      expect(r.ms).toBeLessThan(10_000);
+      expect(r.ms).toBeLessThan(answersWithin(10_000));
       // Fix round 1 (controller ruling): a registry configuration that could
       // not be read may name a private registry — UNKNOWN, so a warning, never
       // a deny. The reviewer's repro was exactly this: WARN at 166117a, DENY
@@ -261,7 +294,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       [OSV]: { osv: {} },
     });
     expect(r.status).toBe(0);
-    expect(r.ms).toBeLessThan(5000);
+    expect(r.ms).toBeLessThan(answersWithin(5000));
     expect(r.requests.filter((u) => u.includes('registry.npmjs.org/express'))).toHaveLength(1);
   }, 30_000);
 
@@ -341,7 +374,8 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
           cwd: project,
         }),
       );
-      const code = await new Promise<number | null>((r) => child.on('exit', (c) => r(c)));
+      // 'close', not 'exit': the output streams may still be draining at 'exit'.
+      const code = await new Promise<number | null>((r) => child.on('close', (c) => r(c)));
       expect(stderr).not.toMatch(/Assertion failed/);
       expect(code).toBe(0);
       const out = JSON.parse(stdout) as HookOut['output'];
@@ -349,7 +383,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     } finally {
       server.close();
     }
-  }, 20_000);
+  });
 
   describe('fix round 2 — the reviewer\'s probes through the real hook', () => {
     it.each([
@@ -432,5 +466,82 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(r.requests).toEqual([]);
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/GUARDIAN_OFFLINE/);
+  });
+
+  // Review of 3.0.0, P1: the launchers that download a package and run it
+  // passed with no answer at all.
+  describe('launchers through the real hook (review P1)', () => {
+    it.each(['npx -y react-form-autopilot-helperz', 'pnpm dlx react-form-autopilot-helperz', 'bunx react-form-autopilot-helperz'])(
+      'DENIES %s — a name the registry does not have',
+      (command) => {
+        const r = runHook(command, {
+          'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 },
+          [OSV]: { osv: {} },
+        });
+        expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+        expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/react-form-autopilot-helperz.*does not exist/);
+      },
+    );
+
+    it.each(['uvx pyproject-autopilot-helperz', 'pipx install pyproject-autopilot-helperz'])('DENIES %s', (command) => {
+      const r = runHook(command, { 'https://pypi.org/pypi/pyproject-autopilot-helperz/json': { status: 404 }, [OSV]: { osv: {} } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    });
+
+    it('a popular, clean package through npx stays allowed, silently', () => {
+      const r = runHook('npx -y express --version', { 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: { osv: {} } });
+      expect(r.status).toBe(0);
+      expect(r.output).toBeUndefined();
+    });
+
+    it('a malicious version through npx is denied', () => {
+      const r = runHook('npx -y evil-cli-zz', {
+        'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+        [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+      });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
+    });
+  });
+
+  // Review of 3.0.0, I4: 17 packages in a 3000-directory monorepo took 16.5 s
+  // through the hook with GUARDIAN_OFFLINE=1 — past Claude Code's 15 s, after
+  // which the command runs with no verdict.
+  describe('a 3000-directory monorepo (review I4)', () => {
+    const NAMES = Array.from({ length: 17 }, (_, i) => `zz-no-such-pkg-${String(i).padStart(2, '0')}`);
+    const monorepo = (): void => {
+      mkdirSync(join(project, '.git'));
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }));
+      for (let i = 0; i < 3000; i += 1) {
+        const dir = join(project, 'packages', `p${String(i).padStart(4, '0')}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@mono/p${String(i).padStart(4, '0')}` }));
+      }
+    };
+
+    it('17 packages offline answer well inside the deadline', () => {
+      monorepo();
+      const r = runHook(`npm i ${NAMES.join(' ')}`, {}, { env: { GUARDIAN_OFFLINE: '1' } });
+      expect(r.ms).toBeLessThan(answersWithin(8000));
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/not verified/);
+    }, 120_000);
+
+    it('17 names the registry does not have are all answered, well inside the deadline', () => {
+      monorepo();
+      const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+      for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes);
+      expect(r.ms).toBeLessThan(answersWithin(8000));
+      const said = `${r.output?.hookSpecificOutput?.permissionDecisionReason ?? ''}${r.output?.hookSpecificOutput?.additionalContext ?? ''}`;
+      for (const name of NAMES) expect(said).toContain(name);
+    }, 120_000);
+
+    it('GUARDIAN_PKG_VET_DEADLINE_MS=0: every package reads "time budget", never silence', () => {
+      const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+      for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '0' } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/time budget/);
+    });
   });
 });

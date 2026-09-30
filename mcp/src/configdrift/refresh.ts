@@ -41,9 +41,16 @@
  * refresh, was handed the file, and acted on it.
  */
 
-import { copyFileSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { hashConfigFile } from './hash.js';
+import { join } from 'node:path';
+import {
+  describeReadRefusal,
+  describeWriteRefusal,
+  presentInProject,
+  projectEntryKind,
+  readProjectBytes,
+  writeProjectFile,
+} from '../platform/projectFs.js';
+import { hashConfigFile, MAX_CONFIG_FILE_BYTES } from './hash.js';
 import { buildProvenanceHeader, commentPrefixFor } from './header.js';
 import {
   emptyManifest,
@@ -81,7 +88,13 @@ export type RefreshAction =
   /** Already identical to what we ship; only the manifest record is missing. */
   | 'adopt'
   /** The shipped baseline is unreachable. A broken install, not user drift. */
-  | 'source_missing';
+  | 'source_missing'
+  /**
+   * The target is a link (a junction or a dangling link included) or not a
+   * regular file. It is never read or written through: a link may lead out
+   * of the project, and nothing here can tell whose file is at its end.
+   */
+  | 'refused';
 
 export interface RefreshPlanItem {
   target: string;
@@ -137,8 +150,7 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
   const plan: RefreshPlanItem[] = [];
 
   for (const file of input.files) {
-    const srcPath = join(input.configsDir, file.source);
-    const srcHash = hashConfigFile(srcPath);
+    const srcHash = hashConfigFile(input.configsDir, file.source);
     if (srcHash === null) {
       plan.push({
         ...ids(file),
@@ -148,13 +160,33 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
       continue;
     }
 
-    const dstPath = join(input.projectPath, file.target);
     const entry = findManifestEntry(manifest, file.target);
+    const install = {
+      configsDir: input.configsDir,
+      projectPath: input.projectPath,
+      source: file.source,
+      target: file.target,
+      version: input.currentVersion,
+    };
 
-    if (!existsSync(dstPath)) {
+    // `lstat`, never `existsSync`: a dangling link reads as absent to the
+    // latter, and the create below would have followed it out of the project.
+    const kind = projectEntryKind(join(input.projectPath, file.target));
+    if (kind === 'link' || kind === 'directory' || kind === 'other') {
+      plan.push({
+        ...ids(file),
+        action: 'refused',
+        reason:
+          `${file.target} is ${kind === 'link' ? 'a link (a symlink or a junction)' : 'not a regular file'} — ` +
+          'it is never read or written through. Replace it with a regular file to have it managed.',
+      });
+      continue;
+    }
+
+    if (kind === 'absent') {
       plan.push({ ...ids(file), action: 'create', reason: file.reason });
       if (!input.apply) continue;
-      if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
+      if (installFile({ ...install, mode: 'create' }).ok) {
         manifest = upsertManifestEntry(
           manifest,
           record(file, input.currentVersion, srcHash, srcHash, 'copied'),
@@ -164,7 +196,7 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
       continue;
     }
 
-    const dstHash = hashConfigFile(dstPath);
+    const dstHash = hashConfigFile(input.projectPath, file.target);
     if (dstHash === null) {
       plan.push({
         ...ids(file),
@@ -194,7 +226,6 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
       const delivery = deliverAlongside({
         input,
         file,
-        srcPath,
         srcHash,
         dstHash,
         manifest,
@@ -217,7 +248,7 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
     // stream of `.new` files from piling up for someone who is simply not
     // ready to merge yet. `detectConfigDrift` gives `pending_merge` the same
     // precedence, so the advisory and the plan say the same thing.
-    if (entry.delivered_as !== undefined && existsSync(join(input.projectPath, entry.delivered_as))) {
+    if (entry.delivered_as !== undefined && presentInProject(input.projectPath, entry.delivered_as)) {
       plan.push({
         ...ids(file),
         action: 'pending_merge',
@@ -250,7 +281,7 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
         reason: `untouched since install (plugin v${entry.plugin_version}) — safe to update`,
       });
       if (!input.apply) continue;
-      if (installFile({ srcPath, dstPath, source: file.source, version: input.currentVersion })) {
+      if (installFile({ ...install, mode: 'replace' }).ok) {
         manifest = upsertManifestEntry(
           manifest,
           record(file, input.currentVersion, srcHash, srcHash, entry.provenance),
@@ -263,7 +294,6 @@ export function refreshConfigs(input: RefreshInput): RefreshOutcome {
     const delivery = deliverAlongside({
       input,
       file,
-      srcPath,
       srcHash,
       dstHash,
       manifest,
@@ -300,8 +330,10 @@ export function adoptIdenticalConfigs(input: {
   const adopted: string[] = [];
   for (const file of input.files) {
     if (findManifestEntry(manifest, file.target) !== null) continue;
-    const srcHash = hashConfigFile(join(input.configsDir, file.source));
-    const dstHash = hashConfigFile(join(input.projectPath, file.target));
+    // A link is never adopted: the refresh would refuse to manage it.
+    if (projectEntryKind(join(input.projectPath, file.target)) !== 'file') continue;
+    const srcHash = hashConfigFile(input.configsDir, file.source);
+    const dstHash = hashConfigFile(input.projectPath, file.target);
     if (srcHash === null || dstHash === null || srcHash !== dstHash) continue;
     manifest = upsertManifestEntry(
       manifest,
@@ -315,42 +347,49 @@ export function adoptIdenticalConfigs(input: {
 
 /**
  * Writes a config into the project, stamping the provenance header where the
- * format has comment syntax. Returns whether the write landed.
+ * format has comment syntax, and says whether the write landed and, when it
+ * did not, why.
  *
  * JSON targets are copied byte-for-byte: `renovate.json` is read by Renovate's
  * own strict JSON parser, so a `//` line would break the tool the file
  * configures. That single exception is the reason the manifest, not the
  * header, is the provenance mechanism.
+ *
+ * The write goes through `platform/projectFs.ts`: `create` only where nothing
+ * is at the name, `replace` only over a regular file, through a temp file
+ * renamed into place, and never through a link or a directory that links out
+ * of the project.
  */
 export function installFile(input: {
-  srcPath: string;
-  dstPath: string;
+  /** The plugin's `configs/`. */
+  configsDir: string;
+  /** Path relative to `configsDir`. */
   source: string;
+  projectPath: string;
+  /** Path relative to `projectPath`. */
+  target: string;
   version: string;
+  mode: 'create' | 'replace';
   /**
    * Path whose extension decides the comment syntax. Needed because a
    * delivered baseline is written to `<target>.dev-guardian-<version>.new`,
    * whose own extension is `.new` and says nothing about the format inside.
    */
   formatHint?: string;
-}): boolean {
-  try {
-    mkdirSync(dirname(input.dstPath), { recursive: true });
-    const prefix = commentPrefixFor(input.formatHint ?? input.dstPath);
-    if (prefix === null) {
-      copyFileSync(input.srcPath, input.dstPath);
-      return true;
-    }
-    const header = buildProvenanceHeader({
-      source: input.source,
-      pluginVersion: input.version,
-      prefix,
-    });
-    writeFileSync(input.dstPath, header + readFileSync(input.srcPath, 'utf8'), 'utf8');
-    return true;
-  } catch {
-    return false;
+}): { ok: true } | { ok: false; reason: string } {
+  const src = readProjectBytes(input.configsDir, input.source, MAX_CONFIG_FILE_BYTES);
+  if (src.status !== 'ok') {
+    const why = src.status === 'absent' ? 'not found' : describeReadRefusal(src.reason);
+    return { ok: false, reason: `shipped baseline configs/${input.source}: ${why}` };
   }
+  const prefix = commentPrefixFor(input.formatHint ?? input.target);
+  const content =
+    prefix === null
+      ? src.bytes
+      : buildProvenanceHeader({ source: input.source, pluginVersion: input.version, prefix }) +
+        src.bytes.toString('utf8');
+  const w = writeProjectFile(input.projectPath, input.target, content, { mode: input.mode });
+  return w.ok ? { ok: true } : { ok: false, reason: describeWriteRefusal(w.reason, w.detail) };
 }
 
 function ids(file: ConfigFileSpec): { target: string; source: string } {
@@ -395,7 +434,6 @@ function record(
 function deliverAlongside(args: {
   input: RefreshInput;
   file: ConfigFileSpec;
-  srcPath: string;
   srcHash: string;
   dstHash: string;
   manifest: ConfigManifest;
@@ -403,11 +441,11 @@ function deliverAlongside(args: {
 }): { item: RefreshPlanItem; manifest: ConfigManifest | null } {
   const { input, file, manifest } = args;
   const relativeNew = alongsideName(file.target, input.currentVersion);
-  const newPath = join(input.projectPath, relativeNew);
   const existing = findManifestEntry(manifest, file.target);
   const oursAlready = existing?.delivered_as === relativeNew;
+  const present = presentInProject(input.projectPath, relativeNew);
 
-  if (existsSync(newPath) && !oursAlready) {
+  if (present && !oursAlready) {
     return {
       item: {
         ...ids(file),
@@ -431,13 +469,15 @@ function deliverAlongside(args: {
   if (!input.apply) return { item, manifest: null };
 
   const written = installFile({
-    srcPath: args.srcPath,
-    dstPath: newPath,
+    configsDir: input.configsDir,
     source: file.source,
+    projectPath: input.projectPath,
+    target: relativeNew,
     version: input.currentVersion,
+    mode: present ? 'replace' : 'create',
     formatHint: file.target,
   });
-  if (!written) return { item, manifest: null };
+  if (!written.ok) return { item, manifest: null };
 
   const entry: ConfigManifestEntry = {
     ...record(file, input.currentVersion, args.srcHash, args.dstHash, existing?.provenance ?? 'adopted'),
