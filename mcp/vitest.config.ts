@@ -59,13 +59,19 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       // server.ts = bootstrap, registerAll.ts = side-effect import list only.
       exclude: ['src/**/*.d.ts', 'src/server.ts', 'src/registerAll.ts'],
-      // Floors set just below current (73/68/79/73). Raise as the suite grows;
-      // CI fails if coverage regresses below these.
+      // Floors a few points below what `npm run test:coverage` measured on
+      // Windows at the end of review 3.0 (R7): 91.89 / 82.61 / 96.03 / 94.59
+      // (statements / branches / functions / lines). They were 70/62/72/70
+      // against a suite measuring ~91/82/96/94 — a floor 20 points down lets
+      // a fifth of the tested code go untested before anything notices. The
+      // margin absorbs what differs between machines (the POSIX-only and
+      // Windows-only tests each skip on the other). Raise them as the suite
+      // grows; `npm run test:coverage` fails below them.
       thresholds: {
-        statements: 70,
-        branches: 62,
-        functions: 72,
-        lines: 70,
+        statements: 89,
+        branches: 80,
+        functions: 93,
+        lines: 92,
       },
     },
   },
