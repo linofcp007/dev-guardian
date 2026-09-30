@@ -507,9 +507,12 @@ describe('Part Y — edge shapes, one table', () => {
 // Fix round 3: the PowerShell environment check restarted `[^;\n]*` at every
 // `Set-Item` / `New-Item` — quadratic on every command the hook sees.
 // Review 3.0, R7-I2: this was "250 KB parses in well under 1 s" — a bound that
-// measured the machine and failed the coverage run. The defect was a shape
-// (16x the time for 4x the input), so the assertion is the ratio; the
-// absolute bound runs only on a quiet machine (GUARDIAN_PERF_STRICT=1).
+// measured the machine and failed the coverage run. The defect is a shape, so
+// the assertion is a ratio (test/helpers/timing.ts): eight times as long
+// (875 against 7 000 cmdlets, 8 KB against 63 KB) must cost under 22.6 times
+// as much. At 4x the Set-Item shape read 11 for the defect, under its bound
+// of 12; and at the original 250 KB the defect takes 14 s — a vitest timeout,
+// not an assertion. The absolute bound runs only with GUARDIAN_PERF_STRICT=1.
 describe('parseInstallCommands — linear on the shapes that were not', () => {
   const shapes: Array<[string, (n: number) => string]> = [
     ['Set-Item', (n) => 'Set-Item '.repeat(n)],
@@ -520,9 +523,9 @@ describe('parseInstallCommands — linear on the shapes that were not', () => {
     parseInstallCommands(command, { shell: 'bash' });
     parseInstallCommands(command, { shell: 'powershell' });
   };
-  it.each(shapes)('%s: four times as long costs well under twelve times as much', (label, make) => {
-    expectLinear(label, (n) => parseBoth(make(n)), 7_000);
-  }, 60_000);
+  it.each(shapes)('%s: eight times as long costs well under 22.6 times as much', (label, make) => {
+    expectLinear(label, (n) => parseBoth(make(n)), 875);
+  }, 120_000);
   it.runIf(PERF_STRICT).each(shapes)('250 KB of %s parses in well under 1 s (GUARDIAN_PERF_STRICT=1)', (_label, make) => {
     const command = make(28_000);
     const t0 = performance.now();

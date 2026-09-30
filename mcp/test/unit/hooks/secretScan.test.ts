@@ -1,13 +1,19 @@
 /**
  * `hooks/secretScan.ts`.
  *
- * Timing (review round 3, item 8; review 3.0, R7-I2). Linearity is asserted as
- * a RATIO of best-of times — four times the input must cost well under twelve
- * times as much (linear is ~4×, quadratic ~16×) — which neither a loaded
- * machine nor v8 coverage can skew: both scale the two timings alike. The
- * absolute bounds used to be a "loose ceiling" by default and failed the
- * coverage run; each is now its own test that runs only with
- * `GUARDIAN_PERF_STRICT=1` (a quiet machine) and is a visible skip otherwise.
+ * Timing (review round 3, item 8; review 3.0, R7 rounds 1 and 2) — see
+ * test/helpers/timing.ts. A line is read in 16 KB windows, so a rule that is
+ * quadratic inside a window costs a constant per window and the whole line
+ * stays linear: a ratio of two line lengths cannot see it (the JWT finder's
+ * defect, ~90 ms a window, read 4.09 for 4x and passed). Each shape therefore
+ * gets three measurements: a ratio INSIDE one window (250 against 2 000
+ * characters), a ratio across windows (4 KB against 32 KB, for a scan that
+ * stopped windowing), and a ceiling at 250 KB — eighteen windows — against
+ * the same scan of a benign line of the same length. Each of the three rules
+ * that were quadratic inside a window — jwt, generic-assignment-env,
+ * uri-credentials — reintroduced in the source fails at least one of them by
+ * its assertion. The absolute bounds run only with `GUARDIAN_PERF_STRICT=1`
+ * (a quiet machine).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -17,10 +23,12 @@ import {
   scanForSecrets,
   shannonEntropy,
 } from '../../../src/hooks/secretScan.js';
-import { bestOf, expectLinear, PERF_STRICT } from '../../helpers/timing.js';
+import { costOf, expectLinear, expectNearReference, PERF_STRICT } from '../../helpers/timing.js';
 
-/** The best of five runs, after a warm-up: a quadratic shape is slow every time, a busy scheduler once. */
-const bestOf5 = (run: () => void): number => bestOf(5, run);
+/** A line of `length` characters with nothing a rule starts on twice: the reference of the ceilings. */
+const benignLine = (length: number): string => 'the quick brown fox. '.repeat(Math.ceil(length / 21)).slice(0, length);
+/** The ceiling: a pathological 250 KB line against a benign one. Current code reads 0.6-8.2x at 100% CPU; the defects it catches 308-531x. */
+const MAX_REFERENCE_RATIO = 30;
 
 describe('scanForSecrets — high-confidence provider tokens', () => {
   it('detects an AWS access key id', () => {
@@ -195,17 +203,33 @@ describe('scanForSecrets — task-1: no double-report of an Anthropic key (findi
   });
 });
 
+/**
+ * The timing tests of one line shape, `make(length)` a line of about that many
+ * characters (see the file header): a ratio inside one window, a ratio across
+ * windows, a ceiling at `ceilingLength` against a benign line, and — with
+ * `GUARDIAN_PERF_STRICT=1` only — an absolute bound at that length.
+ */
+function lineShape(label: string, make: (length: number) => string, ceilingLength: number, strictMs: number): void {
+  it(`${label}: inside one window, eight times as long costs well under 22.6 times as much`, () => {
+    expectLinear(`${label} (in a window)`, (n) => scanForSecrets(make(n)), 250);
+  }, 120_000);
+  it(`${label}: across windows, eight times as long costs well under 22.6 times as much`, () => {
+    expectLinear(`${label} (across windows)`, (n) => scanForSecrets(make(n)), 4 * 1024);
+  }, 120_000);
+  it(`${label}: ${String(ceilingLength / 1000)} KB costs at most ${String(MAX_REFERENCE_RATIO)}x a benign line of that length`, () => {
+    expectNearReference(label, () => scanForSecrets(make(ceilingLength)), () => scanForSecrets(benignLine(ceilingLength)), {
+      maxRatio: MAX_REFERENCE_RATIO,
+    });
+  }, 120_000);
+  it.runIf(PERF_STRICT)(`${label}: ${String(ceilingLength / 1000)} KB in under ${String(strictMs)} ms (GUARDIAN_PERF_STRICT=1)`, () => {
+    expect(costOf(() => scanForSecrets(make(ceilingLength)))).toBeLessThan(strictMs);
+  }, 60_000);
+}
+
 /** task-1, finding 9: ReDoS caps — both inputs must resolve in bounded time (see the header on timing). */
 describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
-  // Typical, idle, at 50 000 repeats: under 20 ms.
-  it('a pathological JWT-shaped repeat: four times as long costs well under twelve times as much', () => {
-    expectLinear('eyJ-', (n) => scanForSecrets('eyJ-'.repeat(n)), 12_500);
-  });
-  it.runIf(PERF_STRICT)('a pathological JWT-shaped repeat resolves in under 500 ms (GUARDIAN_PERF_STRICT=1)', () => {
-    const start = performance.now();
-    scanForSecrets('eyJ-'.repeat(50_000));
-    expect(performance.now() - start).toBeLessThan(500);
-  });
+  // Typical, idle, at 50 000 repeats (200 KB): under 20 ms.
+  lineShape('a pathological JWT-shaped repeat', (n) => 'eyJ-'.repeat(Math.ceil(n / 4)), 200_000, 500);
 
   it('a real JWT is still detected after the pattern was bounded', () => {
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -216,14 +240,7 @@ describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
   });
 
   // Typical, idle, at 100 KB: under 5 ms.
-  it('a single long unquoted line: four times as long costs well under twelve times as much', () => {
-    expectLinear('password = "aaa…"', (n) => scanForSecrets(`password = "${'a'.repeat(n)}"`), 25_000);
-  });
-  it.runIf(PERF_STRICT)('a single 100 KB unquoted line resolves in under 500 ms (GUARDIAN_PERF_STRICT=1)', () => {
-    const start = performance.now();
-    scanForSecrets(`password = "${'a'.repeat(100_000)}"`);
-    expect(performance.now() - start).toBeLessThan(500);
-  });
+  lineShape('a single long unquoted line', (n) => `password = "${'a'.repeat(n)}"`, 100_000, 500);
 });
 
 /**
@@ -326,29 +343,18 @@ describe('scanForSecrets — a long line is read to its end (review I3)', () => 
   // would have made a 1 MB line cost tens of seconds.
   describe('the cost is linear in the length of the line', () => {
     const shapes: Array<[string, (n: number) => string]> = [
-      ['eyJ-', (n) => 'eyJ-'.repeat(n / 4)],
-      ['a-', (n) => 'a-'.repeat(n / 2)],
-      ['sk-', (n) => 'sk-'.repeat(n / 3)],
-      ['token= … "', (n) => `${'token='.repeat(n / 6)}"`],
-      ['Token= … "', (n) => `${'xToken='.repeat(n / 7)}"`],
-      ['a://b:', (n) => 'a://b:'.repeat(n / 6)],
+      ['eyJ-', (n) => 'eyJ-'.repeat(Math.ceil(n / 4))],
+      ['a-', (n) => 'a-'.repeat(Math.ceil(n / 2))],
+      ['sk-', (n) => 'sk-'.repeat(Math.ceil(n / 3))],
+      ['token= … "', (n) => `${'token='.repeat(Math.ceil(n / 6))}"`],
+      ['Token= … "', (n) => `${'xToken='.repeat(Math.ceil(n / 7))}"`],
+      ['a://b:', (n) => 'a://b:'.repeat(Math.ceil(n / 6))],
       ['password=" … (unclosed)', (n) => `password="${'q'.repeat(n)}`],
-      ['one minified line', (n) => 'var a=function(b){return b+1};'.repeat(n / 30)],
+      ['one minified line', (n) => 'var a=function(b){return b+1};'.repeat(Math.ceil(n / 30))],
     ];
-    const best = (text: string): number => bestOf5(() => scanForSecrets(text));
-
-    // Typical, idle: 30-140 ms. The ratio below is what catches a quadratic
-    // shape; this bound only pins the absolute cost on a quiet machine.
-    it.runIf(PERF_STRICT).each(shapes)('a 1 MB line of %s is scanned in under 1500 ms (GUARDIAN_PERF_STRICT=1)', (_label, make) => {
-      expect(best(make(1_000_000))).toBeLessThan(1500);
-    }, 60_000);
-
-    it.each(shapes)('%s: four times the length costs well under twelve times as much', (_label, make) => {
-      const small = best(make(250_000));
-      const large = best(make(1_000_000));
-      // Linear is ~4x; quadratic 16x. The floor absorbs timer noise on tiny values.
-      expect(large).toBeLessThan(12 * Math.max(small, 5));
-    }, 60_000);
+    // Typical, idle: 30-140 ms for a 1 MB line of each shape; the ceiling and
+    // the strict bound (400 ms) are at 250 KB.
+    for (const [label, make] of shapes) lineShape(label, make, 250_000, 400);
   });
 });
 
