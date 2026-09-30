@@ -27,7 +27,7 @@ import { type SpawnSyncReturns } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -47,7 +47,7 @@ const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 // Above the usage tests' cap, so a hung CLI is reported by the cap — naming
 // it — and not by vitest's 10 s default after the fact (review 3.0, R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(FAST_TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(FAST_TIMEOUT_MS) });
 
 function runCli(args: string[], timeout = FAST_TIMEOUT_MS): SpawnSyncReturns<string> {
   return spawnSyncCapped(process.execPath, [CLI, ...args], { cwd: REPO_ROOT, encoding: 'utf8', timeout });

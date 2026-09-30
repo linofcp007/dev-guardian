@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { openDatabase, Storage } from '../../src/storage/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
@@ -27,7 +27,7 @@ const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
 // Above the cap, so a hung child is reported by the cap — naming it — and
 // not by vitest's 10 s default failing the test after the fact (R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
 function runStatus(project: string) {
   const r = spawnSyncCapped(process.execPath, [CLI, 'status', '--project', project], {

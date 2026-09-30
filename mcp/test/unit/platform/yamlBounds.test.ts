@@ -39,7 +39,7 @@ import {
 import { inspectProjectSemgrepConfigs } from '../../../src/platform/projectSemgrepConfig.js';
 import { checkCompose } from '../../../src/runners/composeChecks.js';
 import { ruleIdsInFile } from '../../../src/runners/semgrepRuleIds.js';
-import { bestOf, expectLinear, PERF_STRICT } from '../../helpers/timing.js';
+import { costOf, expectLinear, PERF_STRICT } from '../../helpers/timing.js';
 import { mulberry32, randomYaml, YAML_FAMILIES } from '../../helpers/yamlFuzz.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -170,7 +170,7 @@ describe('fuzz: every family at the largest size the character gates admit', () 
       if (r.ok) expect(() => JSON.stringify(r.value)).not.toThrow();
       else expect(['too-large', 'too-complex', 'too-deep', 'too-expanded', 'invalid']).toContain(r.reason);
       // Timed after a warm-up and a full collection: a vitest worker carries every earlier test's heap.
-      if (PERF_STRICT) expect(bestOf(1, () => void parseYamlBounded(text, limits))).toBeLessThan(STRICT_MS);
+      if (PERF_STRICT) expect(costOf(() => void parseYamlBounded(text, limits))).toBeLessThan(STRICT_MS);
     }, 60_000);
   }
 });
@@ -188,7 +188,7 @@ describe('fuzz: a seeded random corpus of block, flow, anchor, alias, merge, tag
         expect(() => JSON.stringify(r.value)).not.toThrow();
         expect(yamlGate(text)).toBeNull();
       }
-      if (PERF_STRICT) expect(bestOf(1, () => void parseYamlBounded(text)), `seed ${seed}`).toBeLessThan(STRICT_MS);
+      if (PERF_STRICT) expect(costOf(() => void parseYamlBounded(text)), `seed ${seed}`).toBeLessThan(STRICT_MS);
     }
     // The corpus reaches every outcome that matters, so a regression in any gate shows.
     expect(Object.keys(outcomes).sort()).toEqual(expect.arrayContaining(['invalid', 'ok', 'too-expanded']));

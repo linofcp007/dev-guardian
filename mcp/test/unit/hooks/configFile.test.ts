@@ -8,7 +8,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -68,25 +68,59 @@ const CAN_SYMLINK = ((): boolean => {
 })();
 
 /**
- * Resolves once no process is left in the process group `pgid` (POSIX), or
- * throws after `boundMs`. SIGKILL is delivered at once, but a process is in
- * the group until it has been reaped — and until then an `ln` killed mid-call
- * may still be completing its link.
+ * How many members of process group `pgid` are still running — zombies not
+ * counted: a zombie has finished every system call it will ever make, so it
+ * cannot put a link back. Read from /proc (Linux); `null` where there is none.
+ */
+function runningGroupMembers(pgid: number): number | null {
+  let entries: string[];
+  try {
+    entries = readdirSync('/proc');
+  } catch {
+    return null;
+  }
+  let running = 0;
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      // `pid (comm) state ppid pgrp …` — comm may hold spaces and parentheses.
+      const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+      const [state, , pgrp] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      if (Number(pgrp) === pgid && state !== 'Z') running += 1;
+    } catch {
+      /* gone between the listing and the read */
+    }
+  }
+  return running;
+}
+
+/**
+ * Resolves once nothing in the process group `pgid` is still running, or
+ * throws after `boundMs`. SIGKILL is delivered at once, but an `ln` killed
+ * mid-call may still be completing its link until it is gone.
+ *
+ * Not "until `kill(-pgid, 0)` says ESRCH": the orphaned `ln` is reparented to
+ * PID 1, and without a PID 1 that reaps (`docker run` without `--init`, where
+ * node itself is PID 1) its zombie stays in the group for good and that wait
+ * never ended (review 3.0, R7 round 2). On Linux the running members are read
+ * from /proc, zombies excluded, so the test holds with or without `--init`;
+ * elsewhere (macOS) PID 1 is launchd, which reaps.
  */
 async function groupGone(pgid: number, boundMs = 5000): Promise<void> {
   const deadline = Date.now() + boundMs;
   for (;;) {
-    try {
-      process.kill(-pgid, 0);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ESRCH') return;
-      throw e;
+    const running = runningGroupMembers(pgid);
+    if (running === 0) return;
+    if (running === null) {
+      try {
+        process.kill(-pgid, 0);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ESRCH') return;
+        throw e;
+      }
     }
     if (Date.now() > deadline) {
-      throw new Error(
-        `process group ${String(pgid)} still has a member ${String(boundMs)} ms after SIGKILL — ` +
-          'an unreaped zombie (a container without --init?) or a process that survived the kill',
-      );
+      throw new Error(`process group ${String(pgid)} still has a running member ${String(boundMs)} ms after SIGKILL`);
     }
     await new Promise((r) => setTimeout(r, 20));
   }

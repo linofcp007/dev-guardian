@@ -17,13 +17,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
 // Above the cap: a hung CLI is reported by the cap, naming it (R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
 /**
  * Fix round 1, item 7 (escalated from minor by the controller, review round

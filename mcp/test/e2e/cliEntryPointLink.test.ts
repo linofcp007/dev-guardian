@@ -38,13 +38,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const REAL_CLI_DIR = resolve(REPO_ROOT, 'cli');
 const TIMEOUT_MS = 15_000;
 // Above the cap: a hung CLI is reported by the cap, naming it (R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
 const sandbox = mkdtempSync(join(tmpdir(), 'guardian-cli-link-'));
 const linkDir = join(sandbox, 'cli-link');

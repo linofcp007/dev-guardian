@@ -293,13 +293,14 @@ describe('sanitizeGitleaksReport', () => {
     const out = sanitizeGitleaksReport(report(2_000, 1_000), isVerifiableRule);
     expect(parse(out?.text).every((i) => i['Match'] === `k=${REDACTED};`)).toBe(true);
     // Linear: ~40 ms. Restarting the search at every occurrence: ~2000 x 2000
-    // per item — quadratic in the run's length, so four times the run must
-    // cost well under twelve times as much. That ratio replaced "under 1.5 s",
-    // which measured the machine (1.6 s under coverage on a loaded one,
-    // review 3.0 R7); the absolute bound is the next test, GUARDIAN_PERF_STRICT=1.
-    const texts = new Map([500, 2_000].map((len) => [len, report(len, 250)]));
-    expectLinear('a self-overlapping value', (len) => sanitizeGitleaksReport(texts.get(len) ?? '', isVerifiableRule), 500);
-  });
+    // per item — quadratic in the run's length, so eight times the run must
+    // cost well under 22.6 times as much (test/helpers/timing.ts). That ratio
+    // replaced "under 1.5 s", which measured the machine (1.6 s under coverage
+    // on a loaded one, review 3.0 R7); at 4x it read 14.1 for the defect, too
+    // close to its bound of 12. The absolute bound is the next test.
+    const texts = new Map([400, 3_200].map((len) => [len, report(len, 100)]));
+    expectLinear('a self-overlapping value', (len) => sanitizeGitleaksReport(texts.get(len) ?? '', isVerifiableRule), 400);
+  }, 120_000);
 
   it.runIf(PERF_STRICT)('a self-overlapping value, 1 000 times: under 1.5 s on a quiet machine (GUARDIAN_PERF_STRICT=1)', () => {
     const text = JSON.stringify(
@@ -372,6 +373,10 @@ describe('sanitizeGitleaksReport', () => {
 });
 
 describe('openPrivateReportDir', () => {
+  // Real I/O in the OS temp directory (a listing of it, a mkdtemp, a write, a
+  // recursive remove): with the CPU at 100%, 20-170 ms in 17 runs of 20 and
+  // 12.7-18.7 s in the other 3 — past vitest's 10 s default, which measured
+  // the machine. What is asserted is the directory's privacy and removal.
   it('creates a private directory and report files, and removes them', () => {
     const dir = openPrivateReportDir();
     const file = dir.pathFor('secrets-history.json');
@@ -386,7 +391,7 @@ describe('openPrivateReportDir', () => {
     expect(readFileSync(file, 'utf8')).toContain(GH);
     expect(dir.remove()).toBeNull();
     expect(existsSync(dir.dir)).toBe(false);
-  });
+  }, 60_000);
 });
 
 describe('sweepStaleReportDirs — what a killed scan left behind', () => {

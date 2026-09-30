@@ -39,14 +39,14 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const REAL_CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const REAL_DIST = resolve(REPO_ROOT, 'mcp', 'dist');
 const TIMEOUT_MS = 15_000;
 // Above the cap: a hung CLI is reported by the cap, naming it (R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
 describe('cli/dev-guardian.mjs — storage/dashboard modules load lazily', () => {
   it('no top-level import names storage/* or dashboard/*', () => {

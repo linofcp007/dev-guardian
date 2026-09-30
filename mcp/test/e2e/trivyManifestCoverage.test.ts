@@ -31,7 +31,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { assessManifestCoverage } from '../../src/runners/scannerParsers/trivy.js';
 import { isInstalled } from '../helpers/toolchain.js';
-import { testTimeoutAbove } from '../helpers/spawnCap.js';
+import { timeoutAbove } from '../helpers/spawnCap.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -42,7 +42,7 @@ const REQUIRE_TOOLCHAIN = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 /** Trivy may download its vulnerability DB on a first run: far past a warm run's few seconds. */
 const TRIVY_TIMEOUT_MS = 300_000;
 /** Above the Trivy cap: a hung Trivy is reported by execFileSync's own ETIMEDOUT, naming it (R7-I1). */
-const TEST_TIMEOUT_MS = testTimeoutAbove(TRIVY_TIMEOUT_MS);
+const TEST_TIMEOUT_MS = timeoutAbove(TRIVY_TIMEOUT_MS);
 
 const EMPTY_MANIFEST = { name: 'x', version: '1.0.0', private: true };
 const LODASH = { version: '4.17.4', resolved: 'https://registry.npmjs.org/lodash/-/lodash-4.17.4.tgz' };

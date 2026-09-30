@@ -18,7 +18,7 @@
 
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import {
   mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync,
 } from 'node:fs';
@@ -45,7 +45,7 @@ const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
 // Above the cap, so a hung CLI is reported by the cap — naming the command —
 // and not by vitest's 10 s default failing the test after the fact (R7-I1).
-vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
+vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
 let project: string;
 beforeAll(() => { project = mkdtempSync(join(tmpdir(), 'guardian-dash-')); });

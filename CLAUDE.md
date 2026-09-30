@@ -87,9 +87,17 @@ when you need to know the rule pack was actually exercised. Only absence skips:
 a Semgrep on `PATH` that fails `--version` fails the rule-pack tests.
 `GUARDIAN_REQUIRE_LINTERS=1` does the same for actionlint and zizmor. The
 suite keeps Semgrep's settings, log and version cache out of your home
-directory (`test/setup/semgrepHome.ts`). Timing tests assert linearity as a
-ratio; their absolute bounds run only with `GUARDIAN_PERF_STRICT=1`
-(`test/helpers/timing.ts`) — see [`docs/env.md`](docs/env.md).
+directory (`test/setup/semgrepHome.ts`). Timing tests assert a shape, not a
+number of milliseconds (`test/helpers/timing.ts`): a ratio of 8x the input,
+and — where a 16 KB cap keeps a slow rule's total linear — a ceiling against
+a benign input of the same size. A new one must fail by its assertion with
+the defect it guards reintroduced in `src/`, and pass under load
+(`GUARDIAN_TEST_TIMING_LOG=<file>` records every reading).
+`GUARDIAN_PERF_STRICT=1` adds or tightens absolute bounds for a quiet machine
+— see [`docs/env.md`](docs/env.md). The FIFO-swap test in
+`test/unit/hooks/configFile.test.ts` reads `/proc` to tell a killed process
+from its zombie, so a POSIX run needs no reaping PID 1; `docker run --init` is
+still the recommended way to run the suite in a container.
 
 ## Ablating a Semgrep rule pack (`npm run ablate`)
 
