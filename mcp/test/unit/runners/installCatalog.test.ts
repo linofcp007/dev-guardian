@@ -13,6 +13,7 @@ import {
   TOOL_CATALOG,
   TRIVY_INSTALL_TAG,
   knownCompromise,
+  pickInstallSpec,
   suggestedInstallCommandString,
 } from '../../../src/runners/installCatalog.js';
 import { COSIGN_MIN_VERSION } from '../../../src/runners/cosignCheck.js';
@@ -274,8 +275,57 @@ describe('pinned release archives: syft, trivy, gitleaks', () => {
     for (const tool of PINNED_TOOLS) {
       const { linux, darwin } = TOOL_CATALOG[tool]?.install ?? { linux: {}, darwin: {} };
       expect(Object.keys(linux), tool).toEqual(['curl']);
-      expect(Object.keys(darwin), tool).toEqual(['brew', 'curl']);
+      // Trivy: the pinned archive first on macOS too (see the next describe).
+      expect(Object.keys(darwin), tool).toEqual(tool === 'trivy' ? ['curl', 'brew'] : ['brew', 'curl']);
     }
+  });
+});
+
+describe('Trivy on macOS: the pinned archive first, homebrew-core after, never the vendor tap', () => {
+  const all = (...names: string[]): Array<{ name: 'brew' | 'curl' | 'pipx' }> =>
+    names.map((name) => ({ name: name as 'brew' | 'curl' | 'pipx' }));
+
+  it('install_toolchain picks the pinned archive though Homebrew is first in the macOS order', () => {
+    const picked = pickInstallSpec('trivy', 'darwin', all('brew', 'pipx', 'curl'));
+    expect(picked?.manager).toBe('curl');
+    expect(picked?.spec.description).toContain(`trivy v${PINNED_RELEASES.trivy.version} release archive (darwin, sha256-checked)`);
+    expect(suggestedInstallCommandString('trivy', 'darwin')).toBe(picked?.spec.description);
+  });
+
+  it("without curl, homebrew-core's own formula — not a tap", () => {
+    const picked = pickInstallSpec('trivy', 'darwin', all('brew'));
+    expect(picked).toEqual({ manager: 'brew', spec: expect.objectContaining({ command: 'brew', args: ['install', 'trivy'] }) });
+  });
+
+  it('the preference is Trivy’s alone: gitleaks and syft keep Homebrew first on macOS', () => {
+    for (const tool of ['gitleaks', 'syft']) expect(pickInstallSpec(tool, 'darwin', all('brew', 'curl'))?.manager, tool).toBe('brew');
+  });
+
+  it('no catalogue entry installs Trivy from a Homebrew tap', () => {
+    const specs = Object.values(TOOL_CATALOG['trivy']?.install ?? {}).flatMap((os) => Object.values(os));
+    for (const spec of specs) expect(spec.args.join(' ')).not.toMatch(/aquasecurity\/trivy\/trivy|\btap\b/);
+  });
+});
+
+describe('install-macos.sh installs the pinned Trivy archive', () => {
+  const script = readFileSync(fileURLToPath(new URL('../../../../scripts/install/install-macos.sh', import.meta.url)), 'utf8');
+  const flat = script.replace(/\\\r?\n\s*/g, ' ').replace(/[ \t]+/g, ' ');
+
+  it('the catalogue’s version, macOS assets and sums, and no brew install of trivy', () => {
+    const r = PINNED_RELEASES.trivy;
+    const amd = r.assets['darwin-amd64'];
+    const arm = r.assets['darwin-arm64'];
+    expect(flat).toContain(`instala_fixado trivy "${r.base}" ${amd.file} ${amd.sha256} ${arm.file} ${arm.sha256}`);
+    expect(script).not.toMatch(/brew_install trivy|aquasecurity\/trivy\/trivy/);
+  });
+
+  it('checks the sum with shasum before unpacking, and every step fails on its own', () => {
+    const fn = script.slice(script.indexOf('instala_fixado() {'), script.indexOf('\n}\n', script.indexOf('instala_fixado() {')));
+    expect(fn).toContain('shasum -a 256 -c -');
+    expect(fn.indexOf('shasum -a 256 -c -')).toBeLessThan(fn.indexOf('tar -xzf'));
+    expect(fn.indexOf('tar -xzf')).toBeLessThan(fn.indexOf('install -m 0755'));
+    expect(fn).toMatch(/\*\) echo "[^"]*" >&2; return 1 ;;/);
+    expect(script).not.toMatch(/releases\/latest/);
   });
 });
 

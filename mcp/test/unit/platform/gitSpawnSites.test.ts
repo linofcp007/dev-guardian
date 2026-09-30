@@ -67,7 +67,6 @@ const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string
     reason: "Git Bash's ps and grep over process tables, and taskkill: no git, no project",
   },
   'mcp/src/runners/trivyRun.ts': { count: 1, kind: 'no-repository', reason: '`trivy --version`: reads no project' },
-  'mcp/src/platform/pkgManagerDetect.ts': { count: 1, kind: 'no-repository', reason: '`where` / `which` for a package manager' },
   'mcp/src/platform/shellProbe.ts': { count: 1, kind: 'no-repository', reason: "a shell's own version probe" },
   'mcp/src/mcpaudit/launch.ts': { count: 1, kind: 'no-repository', reason: '`node -e statSync`: is a command path a file' },
   'mcp/src/skillaudit/ingest.ts': {
@@ -183,7 +182,9 @@ describe('every raw spawn is classified (platform/gitSafety.ts)', () => {
     const runner = src('mcp/src/runners/processRunner.ts');
     expect(runner).toMatch(/gitSafetyFor\(\[options\.cwd, \.\.\.\(options\.gitRepos \?\? \[\]\)\]/);
     expect(runner).toMatch(/env = applyGitSafety\(safety, base\)/);
-    expect(src('mcp/src/tools/depsUpdatePlan.ts')).toMatch(/return execa\([^)]*env: applyGitSafety\(safety, base\), extendEnv: false/);
+    const pm = src('mcp/src/tools/depsUpdatePlan.ts');
+    expect(pm).toMatch(/const env = applyGitSafety\(safety, base\);/);
+    expect(pm).toMatch(/return execa\(commandFor\(command, env\), args, \{[^}]*\benv, extendEnv: false/);
   });
 
   it('the hook and the CLI run git only through the helper they import from dist', () => {

@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
 import { makeProjectDir } from '../platform/projectFs.js';
+import { ensureUserBinOnPath } from '../platform/userBin.js';
 import { resetTrivyVersionCache } from '../runners/trivyRun.js';
 /**
  * Cache of resolved scanner paths. `where`/`which` is cheap but
@@ -41,6 +42,10 @@ export async function scannerAvailable(name) {
     if (hit && (hit.path !== null || Date.now() - hit.at < NEGATIVE_SCANNER_CACHE_TTL_MS)) {
         return hit.path;
     }
+    // The per-user tools directory the pinned installers write to is on this
+    // server's PATH before any lookup (`platform/userBin.ts`): a Trivy
+    // install_toolchain put in %USERPROFILE%\.local\bin was reported missing.
+    ensureUserBinOnPath();
     const resolved = await resolveBinary(name);
     scannerPathCache.set(name, { path: resolved, at: Date.now() });
     return resolved;

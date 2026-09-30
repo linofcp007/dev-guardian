@@ -53,8 +53,8 @@
  * nothing else; a signer needs an image, exactly one identity form and one
  * issuer form, and no control characters.
  */
-import { existsSync, realpathSync } from 'node:fs';
-import { readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { describeTooComplex, YAML_CONFIG_MAX_NODES, yamlTooComplex } from '../platform/boundedParse.js';
+import { presentInProject, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
@@ -160,7 +160,7 @@ const scanContainers = makeScanTool({
             throw new Error(invalid);
         const dockerfile = inp.dockerfile_path !== undefined
             ? resolve(ctx.projectPath, inp.dockerfile_path)
-            : existsSync(join(ctx.projectPath, 'Dockerfile'))
+            : presentInProject(ctx.projectPath, 'Dockerfile')
                 ? join(ctx.projectPath, 'Dockerfile')
                 : undefined;
         // Trivy's own gap is only a gap when there was something for it to
@@ -340,7 +340,14 @@ const scanContainers = makeScanTool({
         const composeFile = findComposeFile(ctx.projectPath);
         if (composeFile) {
             const text = readComposeFileSafe(ctx.projectPath, composeFile);
-            if (text !== null) {
+            if (text !== null && yamlTooComplex(text, YAML_CONFIG_MAX_NODES)) {
+                tools_run.push({
+                    name: 'docker-compose',
+                    status: 'failed',
+                    reason: `the compose file was not checked: ${describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes')}`,
+                });
+            }
+            else if (text !== null) {
                 parser_inputs.push({
                     parser: composeParser,
                     input: { text, filePath: relative(ctx.projectPath, composeFile) },
@@ -392,9 +399,8 @@ registerToolModule(tool);
 /** The first of `COMPOSE_FILE_NAMES` present at the project root, or null. */
 function findComposeFile(projectPath) {
     for (const name of COMPOSE_FILE_NAMES) {
-        const candidate = join(projectPath, name);
-        if (existsSync(candidate))
-            return candidate;
+        if (presentInProject(projectPath, name))
+            return join(projectPath, name);
     }
     return null;
 }
@@ -475,13 +481,8 @@ function isInside(root, candidate) {
     const abs = resolve(root, candidate);
     if (!within(root, abs))
         return false;
-    if (!existsSync(abs))
-        return true;
-    try {
-        return within(realpathSync.native(root), realpathSync.native(abs));
-    }
-    catch {
-        return false;
-    }
+    // Links below the root judged with lstat/readlink first (platform/projectFs.ts):
+    // `existsSync` + `realpath` followed one to a network path and blocked the server.
+    return projectPathKind(root, abs) !== 'outside';
 }
 //# sourceMappingURL=scanContainers.js.map

@@ -209,7 +209,8 @@ describe('Trivy never phones home', () => {
     await runTrivy({ args: ['config'], target: '/p', workDir: work });
     expect(vi.mocked(execa)).toHaveBeenCalledTimes(1);
     const probe = vi.mocked(execa).mock.calls[0];
-    expect(probe?.[0]).toBe('trivy');
+    // By the absolute path `trivy` resolves to on PATH, when it is installed (platform/binaryPath.ts).
+    expect(String(probe?.[0]).split(/[\\/]/).pop()?.replace(/\.exe$/i, '')).toBe('trivy');
     expect(probe?.[1]).toEqual(['--version']);
     for (const c of mockedRun.mock.calls) expect(c[0].args).toEqual(expect.arrayContaining(['--skip-version-check', '--disable-telemetry']));
   });

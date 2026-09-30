@@ -40,7 +40,8 @@
  * The reading side (`resolveCustomSemgrepConfigs`) did not exist at all
  * until 2026-08-18 — see its module comment.
  */
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
+import { projectPathKind } from '../platform/projectFs.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { CUSTOM_RULES_META_KEY, customRulesMetaKey, validateSemgrepRulesFile, yamlFilesUnder, } from '../platform/customRules.js';
@@ -253,7 +254,9 @@ function collectDiscovered(projectPath) {
     const rejected = [];
     for (const dir of ['.semgrep', 'semgrep', 'rules']) {
         const abs = join(projectPath, dir);
-        if (!existsSync(abs))
+        // The repository's: a link out of it — to a network path above all — is never stat'ed by consider().
+        const kind = projectPathKind(projectPath, dir);
+        if (kind !== 'directory' && kind !== 'file')
             continue;
         consider(abs, registered, rejected);
     }

@@ -40,6 +40,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execa } from 'execa';
+import { commandFor } from '../platform/binaryPath.js';
 
 /** Environment variable carrying the per-child token. */
 export const PROC_TREE_ENV = 'GUARDIAN_PROC_TREE_ID';
@@ -223,7 +224,7 @@ async function taskkillTree(roots: readonly number[]): Promise<boolean> {
   const args = ['/F', '/T'];
   for (const root of roots) args.push('/PID', String(root));
   try {
-    const r = await execa('taskkill', args, { reject: false, timeout: TASKKILL_TIMEOUT_MS });
+    const r = await execa(commandFor('taskkill'), args, { reject: false, timeout: TASKKILL_TIMEOUT_MS });
     // 0: every root handled. 128: some root was not found — expected when
     // the MSYS step above already ended it, which is success here too as
     // long as SOMETHING was reported terminated. Anything else: failure.

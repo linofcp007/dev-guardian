@@ -29,6 +29,7 @@
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { commandFor } from '../platform/binaryPath.js';
 import { detectOs, type DetectedOs } from '../platform/osDetect.js';
 import {
   firstWindowsAvailable,
@@ -36,6 +37,7 @@ import {
   type PkgManagerCandidate,
 } from '../platform/pkgManagerDetect.js';
 import { WSL_SHELL } from '../platform/shellProbe.js';
+import { ensureUserBinOnPath, userBinPlacement } from '../platform/userBin.js';
 import { runProcess } from '../runners/processRunner.js';
 import { runShellScript } from '../runners/shellRunner.js';
 import {
@@ -78,6 +80,10 @@ interface InstallEntry {
   manager?: string;
   command?: string;
   needs_elevation?: boolean;
+  /** Where the binary went (or, in a dry run, would go), for an installer that writes into the per-user tools directory. */
+  binary_path?: string;
+  /** Present when that directory is not on the user's own PATH: the server finds the tool there, a terminal will not. */
+  path_note?: string;
 }
 
 interface InstallResult {
@@ -96,9 +102,12 @@ const tool: ToolModule = {
   description:
     'Install missing scanners. Defaults to the standard set; pass `tools=[...]` to limit. ' +
     'Linux/macOS delegate to scripts/install/install-{linux,macos}.sh. Windows uses winget/scoop/' +
-    'choco/WSL. Syft, Trivy and gitleaks are always a pinned release checked against its sha256 ' +
-    '(on Windows a ZIP fetched with PowerShell into %USERPROFILE%\\.local\\bin), or a package ' +
-    'manager asked for that same version — never "latest". dry_run prints commands without executing.',
+    'choco/WSL. Syft, Trivy and gitleaks are a pinned release checked against its sha256 (on Windows ' +
+    'a ZIP fetched with PowerShell), or a package manager asked for that same version — never ' +
+    '"latest" — except on macOS, where Syft and gitleaks come from Homebrew first (Trivy: the pinned ' +
+    'archive first, then homebrew-core). A pinned release goes to ~/.local/bin (%USERPROFILE%\\.local\\bin), ' +
+    'which the server searches itself; the result names where each binary went (binary_path) and says ' +
+    'when a terminal will not find it (path_note). dry_run prints commands without executing.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -153,7 +162,9 @@ async function handler(
 
   // Whatever was installed must be visible to the very next scan: without
   // this, a cached "not installed" from before the install outlived it and
-  // the re-scan still reported `not_installed`.
+  // the re-scan still reported `not_installed`. The per-user tools directory
+  // may only now exist: it joins this server's PATH (platform/userBin.ts).
+  ensureUserBinOnPath();
   resetScannerCache();
   const verification = await runCheckToolchain(ctx);
 
@@ -345,6 +356,9 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
       command: describeSpec(picked.spec),
       needs_elevation: picked.spec.needs_elevation,
     };
+    // A pinned release into ~/.local/bin (%USERPROFILE%\.local\bin): say where,
+    // and whether a terminal will find it (platform/userBin.ts).
+    const placement = picked.spec.user_bin !== undefined ? userBinPlacement(picked.spec.user_bin) : null;
 
     if (picked.spec.needs_elevation && !opts.elevation) {
       opts.result.requires_elevation.push({
@@ -355,7 +369,7 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
     }
 
     if (opts.dryRun) {
-      opts.result.would_install.push(entry);
+      opts.result.would_install.push({ ...entry, ...placement });
       continue;
     }
 
@@ -365,7 +379,7 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
       cwd: opts.ctx.scriptsDir,
     });
     if (r.outcome === 'completed') {
-      opts.result.installed.push(entry);
+      opts.result.installed.push({ ...entry, ...placement });
     } else {
       opts.result.failed.push({
         ...entry,
@@ -459,7 +473,7 @@ async function isWslUsable(): Promise<boolean> {
   if (!wslPath) return false;
   try {
     const { execa } = await import('execa');
-    const r = await execa('wsl', ['-l', '--quiet'], { timeout: 5_000, reject: false });
+    const r = await execa(commandFor('wsl'), ['-l', '--quiet'], { timeout: 5_000, reject: false });
     // `wsl -l --quiet` prints one distro name per line. UTF-16 BOM on
     // Windows means even with a distro, stdout starts with `\x00\x00\x00`
     // bytes — looking for non-whitespace is enough.
@@ -477,7 +491,7 @@ async function ensurePipxOnPath(ctx: PluginContext): Promise<void> {
   const pipx = await resolveBinary('pipx');
   if (!pipx) return;
   const { execa } = await import('execa');
-  await execa('pipx', ['ensurepath'], {
+  await execa(commandFor('pipx'), ['ensurepath'], {
     cwd: ctx.scriptsDir,
     reject: false,
     timeout: 10_000,

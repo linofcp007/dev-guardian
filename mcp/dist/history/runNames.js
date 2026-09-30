@@ -188,6 +188,9 @@ export const RUN_NAMES = {
     // `runNameEntry`'s fallback at runtime, but the exhaustiveness test
     // requires an exact literal key, so both get their own entry.
     'wordfence-feed:unmatched-version': scanner('wordfence'),
+    // A plugins/themes directory (or component) the inventory could not read — a link out of the
+    // install, a network path, an unlistable directory: not inventoried, so not checked (W2E round 2).
+    'wordfence-feed:not-inventoried': scanner('wordfence'),
     'wp-plugin-api:deadline': scanner('wp-plugin-api'),
     // .NET. `scan_dotnet_secrets` and `dotnet_target_framework_check` are
     // also audit_executive's entries for those sub-tools.

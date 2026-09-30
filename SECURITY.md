@@ -224,11 +224,13 @@ their respective projects.
   `.semgrepignore` (root and nested, on a whole-project Semgrep run —
   Semgrep ignores them for files named explicitly), `.npmrc` whenever npm
   audit read one, a `requirements*.txt` (or a file it includes with `-r` /
-  `-c`) whose `--index-url`, `--extra-index-url`, `--find-links`,
-  `--no-index` or `--trusted-host` decides where pip-audit's resolution
-  installs from (an include dev-guardian does not read — a URL, an
-  environment variable, a path or link out of the project — is named as
-  such: pip may take its index from it), `NuGet.config`, the .NET build's `.editorconfig`,
+  `-c`) whose index options decide where pip-audit's resolution installs
+  from, or whose direct, VCS or network references decide where it fetches
+  from (read by the same parser as `create_fix_pr`'s allowlist; whatever it
+  could not check — a URL include, an environment variable, a path or link
+  out of the project — is named as such: pip may take its sources from it),
+  a file at one of these paths that is a link, a FIFO or a directory
+  ("present, not checked"), `NuGet.config`, the .NET build's `.editorconfig`,
   `.globalconfig` and `Directory.Build.props` / `.targets`, and quality_check's
   ruff, jscpd, radon, staticcheck and ESLint configurations. `.guardianignore`
   is named on every run of a scan it shapes.
@@ -260,12 +262,21 @@ their respective projects.
   against the release's checksums file, GitHub's asset digest and an
   independent download) before unpacking it: `sha256sum` / `shasum` into
   `~/.local/bin` on Linux and macOS, `Get-FileHash` in PowerShell into
-  `%USERPROFILE%\.local\bin` on Windows (not added to PATH; a warning says
-  so). A CPU with no pinned archive is refused. On Windows, winget, scoop
-  and choco are a fallback that asks for that same version; on macOS,
-  Homebrew stays first (its bottles are its own) and the pinned archive is
-  the fallback. cosign's installer was already pinned this way. A test
-  holds the Linux script to the catalogue's versions and sums.
+  `%USERPROFILE%\.local\bin` on Windows. The user's PATH is not changed (the
+  Windows installer warns when it lacks the directory); the server appends
+  that directory to its own PATH, after every other entry, so its scans find
+  the tool without shadowing one installed elsewhere, and `install_toolchain`
+  names where each binary went. A CPU with no pinned archive is refused. On
+  Windows, winget, scoop and choco are a fallback that asks for that same
+  version. On macOS, Trivy is the pinned archive first — the per-tool
+  install used to take the vendor's Homebrew tap (`aquasecurity/trivy`),
+  which installs Aqua's own release binaries rather than a Homebrew bottle
+  and was found at 0.69.3 — with homebrew-core's `trivy` formula as the
+  fallback, and `install-macos.sh` takes the same archive; Syft and gitleaks
+  come from Homebrew first (homebrew-core bottles, built by Homebrew, not
+  pinned to a version) with the pinned archive as the fallback. cosign's
+  installer was already pinned this way. A test holds the Linux script and
+  the macOS script's Trivy to the catalogue's versions and sums.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories and user cache
   listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
@@ -288,11 +299,31 @@ their respective projects.
   way is replaced by a fresh temp directory; `precommit_install` refuses a
   `.git`, hooks directory or hook file that would send pre-commit's writes
   elsewhere. A source-scan test lists every raw `fs` call left in `mcp/src`
-  with the reason it is not the repository's. **Not yet converted**, and
-  named there: the repository reads in `runners/` (the Trivy and repository
-  scanner configs, `yarn.lock` and Python manifests read for Trivy's gaps, the
-  stack detector's manifests, the project's Semgrep rule files) and
-  `skillaudit/`, and the `.guardian/guardian.db` the storage layer opens.
+  with the reason it is not the repository's. The last repository reads it
+  named as not yet converted — in `runners/` (the scanner configs, the
+  manifests and lock files read for Trivy's gaps, the stack detector's
+  manifests, the project's Semgrep rule files) and `skillaudit/` — go through
+  it too now: a `package.json` linked to `/dev/zero` had OOM-killed the server
+  through `detect_stack`. Where a refused file would have changed what a tool
+  reports, the result names it (`detect_stack`'s `unread_files`, a warning, a
+  coverage gap). Bytes read are not memory used, so the parsers are bounded
+  too: lines are iterated, never split into an array; a lock file is parsed
+  only below a cap far under the read cap (above it Trivy's coverage gap is
+  kept, "not checked") and a YAML or JSON document is refused by its node
+  count before it is parsed; every walk that reads many files (`detect_stack`,
+  the manifest walk, the IaC walk, the WordPress inventory) shares one byte
+  and file budget, and a file past it is named. Nothing on a repository path
+  is `stat`'ed, `realpath`'ed or tested with `existsSync` before the links on
+  its way are walked with `lstat` — on Windows `existsSync` of a link to
+  `\\host\share` blocked for 157 s and authenticated to the host. A scanner,
+  a package manager and git itself (the hook's too) are spawned by the
+  absolute path the name resolves to on
+  PATH, looked up in-process: never a binary the repository planted in the
+  directory it runs in (`where`, libuv and `cmd.exe` all searched it first,
+  measured), and the server and the CLI set
+  `NoDefaultCurrentDirectoryInExePath` and drop relative PATH entries for
+  every other spawn. **Not converted**: the `.guardian/guardian.db` the
+  storage layer opens.
 - **A scanned repository's own git configuration runs nothing.** A repository
   delivered with its own `.git/` (an archive, a ZIP download, a shared folder)
   names programs git runs: `core.fsmonitor` on `status` and `ls-files`; hooks in
@@ -468,16 +499,50 @@ their respective projects.
   variables, and exactly the variables your own `~/.npmrc` (or the file
   `NPM_CONFIG_USERCONFIG` names), `~/.yarnrc` and `~/.yarnrc.yml` reference
   as `${VAR}` — so a token you configured for your own registry still
-  reaches it, and only it. A fix whose requirements (or a file they include
-  with `-r` / `-c`) set `-i`, `--index-url`, `--extra-index-url`,
-  `--find-links` or `--trusted-host` is refused when it would install from
-  them — a pip step, or any re-scan by `deps_audit` — and so is a Composer
-  fix whose `composer.json` declares `repositories` (the manifest the fix
-  edits cannot be set aside); the planner does not plan Composer there
-  either. Not covered: a lockfile's own `resolved` URLs (npm sends a token
-  only to the host it was configured for), a direct-URL or VCS requirement,
-  and the scans a user runs outside `create_fix_pr`, which keep their
-  environment and the repository's configuration.
+  reaches it, and only it. Python requirements are held to an **allowlist,
+  and it fails closed** (`mcp/src/deps/pipRequirements.ts`): pip installs —
+  a pip step, or any re-scan by `deps_audit`, whose pip-audit installs them
+  — only when every logical line of every requirements file, read the way
+  pip reads it (its BOMs and UTF-16, a `# -*- coding` declaration, every
+  line break `str.splitlines` knows, `\` continuations joined, comments not
+  joined), is blank, a comment, a plain PEP 508 requirement with no URL
+  (a name, extras, versions, markers, `--hash`), or a relative `-r` / `-c`
+  include inside the checkout, which is read the same way (at most 200
+  files). Anything else refuses the fix with the file, the line and the
+  kind named, and a host as `scheme://host` only — never a user name,
+  password, port, path or query: an index option in any spelling pip
+  accepts (`--index`, `-ihttps://…`), an editable, a direct reference, a
+  bare or VCS URL, a local or network path (`\\host\share`,
+  `file://host/…`), an environment variable, a quoted or escaped option,
+  an encoding pip would read differently (UTF-7, UTF-32), an include that
+  leaves the checkout or is a URL, and a file that could not be read. The
+  rule was held to pip 26.2.1's own `RequirementsFileParser`: for every
+  bypass of the regular expressions it replaced — and more — where pip
+  chooses a source, dev-guardian refuses (`test/unit/deps/pipAllowlist.test.ts`).
+  `pyproject.toml` and `setup.cfg` meet the same rule — `[project]`
+  dependencies, optional dependencies, dependency groups and build
+  requirements must be plain, and a tool's own source table (`[tool.uv.sources]`,
+  `[[tool.uv.index]]`, `[[tool.poetry.source]]`, a Poetry `git`/`url`/`path`
+  dependency, `[tool.pdm.source]`, Hatch's `allow-direct-references`,
+  `dependency_links`) refuses; when pip-audit would build the project itself,
+  dependencies the build backend decides (`dynamic`, no `[project]`) refuse
+  too. An npm install is refused when a dependency, an override or a lock
+  entry points at a network path (`file:\\host\…`, `file://host/…`):
+  Windows would authenticate to that host. `deps_audit` itself does not
+  refuse: it names, per file, the index options, the direct, VCS and network
+  references and whatever it could not check, on the run
+  (`honoured_config`). So is a Composer fix whose
+  `composer.json` declares `repositories` (the manifest the fix edits cannot
+  be set aside); the planner does not plan Composer there either. A
+  lockfile's own `resolved` URLs still choose where npm fetches each locked
+  tarball from, but not where your token goes: measured with real npm
+  (11.17.0 on Windows, 10.9.8 in `node:22`) and two local registries, `npm ci` and
+  `npm install` fetched a tarball the lock placed on another host without
+  any `Authorization` header, while the tarball on your own registry carried
+  your token — npm scopes a token to the host it was configured for, and a
+  test holds `create_fix_pr` to it. Not covered: the scans a user runs
+  outside `create_fix_pr`, which keep their environment and the repository's
+  configuration.
 
 ## Network egress
 

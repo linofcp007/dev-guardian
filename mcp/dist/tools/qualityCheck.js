@@ -32,7 +32,7 @@
  * whole project — so a scoped run skips them and says why.
  */
 import { existsSync } from 'node:fs';
-import { readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { isWithinDir, presentInProject, projectEntryKind, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { dirname, join, relative } from 'node:path';
 import { z } from 'zod';
 import { budgetViolationFindings, evaluateQualityBudgets, loadBudgets } from '../budgets/budgets.js';
@@ -136,7 +136,7 @@ registerToolModule(makeScanTool({
         }
         if (!out.cancelled && hasEslintConfig(ctx.projectPath))
             await runEslint(ctx, reportDir, out);
-        if (!out.cancelled && existsSync(join(ctx.projectPath, 'go.mod')))
+        if (!out.cancelled && presentInProject(ctx.projectPath, 'go.mod'))
             await runStaticcheck(ctx, out);
         // Separated step, deliberately: reads the jscpd/radon reports jscpd and
         // radon already wrote above (never re-runs a scanner), and is the only
@@ -447,7 +447,7 @@ async function runOnScope(ctx, reportDir, out, files) {
         }
     }
     const goFiles = files.filter((f) => f.endsWith('.go'));
-    if (!out.cancelled && goFiles.length > 0 && existsSync(join(ctx.projectPath, 'go.mod'))) {
+    if (!out.cancelled && goFiles.length > 0 && presentInProject(ctx.projectPath, 'go.mod')) {
         // staticcheck analyses packages: the directories holding the scoped files.
         const packages = [...new Set(goFiles.map((f) => (f.includes('/') ? `./${f.slice(0, f.lastIndexOf('/'))}` : '.')))].sort();
         await runStaticcheck(ctx, out, packages);
@@ -558,7 +558,7 @@ function couldNotAnalyse(errors) {
     return [`${errors.length} file(s) could not be analysed: ${shown}${errors.length > 5 ? '; …' : ''}`];
 }
 function hasEslintConfig(projectPath) {
-    if (ESLINT_CONFIGS.some((name) => existsSync(join(projectPath, name))))
+    if (ESLINT_CONFIGS.some((name) => presentInProject(projectPath, name)))
         return true;
     try {
         // The repository's file: bounded, never through a link out of the project.
@@ -581,9 +581,10 @@ function hasEslintConfig(projectPath) {
 function localEslint(projectPath) {
     for (let dir = projectPath;; dir = dirname(dir)) {
         const candidate = join(dir, 'node_modules', 'eslint', 'bin', 'eslint.js');
-        if (existsSync(candidate))
+        // Inside the project, never through a link out of it; above it, the user's own directories.
+        if (isWithinDir(projectPath, dir) ? projectPathKind(projectPath, candidate) === 'file' : existsSync(candidate))
             return candidate;
-        if (existsSync(join(dir, '.git')) || dirname(dir) === dir)
+        if (projectEntryKind(join(dir, '.git')) !== 'absent' || dirname(dir) === dir)
             return null;
     }
 }

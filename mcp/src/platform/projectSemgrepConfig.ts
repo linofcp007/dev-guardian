@@ -53,7 +53,7 @@
 import { join } from 'node:path';
 import { readSmallText } from '../hooks/configFile.js';
 import { describeReadRefusal, presentInProject, readProjectText, type ProjectTextRead } from './projectFs.js';
-import { parse as parseYaml } from 'yaml';
+import { describeTooComplex, parseYamlBounded, YAML_CONFIG_MAX_NODES } from './boundedParse.js';
 import { readManifest } from '../configdrift/manifest.js';
 
 export interface ProjectSemgrepConfig {
@@ -147,13 +147,16 @@ const MAX_SEMGREP_CONFIG_BYTES = 16 * 1024 * 1024;
 function classifyText(read: ProjectTextRead): Verdict {
   if (read.status === 'absent') return { ok: false, reason: 'unreadable' };
   if (read.status === 'refused') return { ok: false, reason: describeReadRefusal(read.reason) };
-  const text = read.text;
-  let doc: unknown;
-  try {
-    doc = parseYaml(text);
-  } catch {
-    return { ok: false, reason: 'not valid YAML' };
+  // Parsed under a node bound (platform/boundedParse.ts): 16 MiB of `- {}`
+  // under the byte cap would take this parse past 4 GB of heap.
+  const parsed = parseYamlBounded(read.text);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      reason: parsed.reason === 'too-complex' ? describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes') : 'not valid YAML',
+    };
   }
+  const doc = parsed.value;
   if (typeof doc !== 'object' || doc === null) {
     return { ok: false, reason: 'no `rules:` list' };
   }

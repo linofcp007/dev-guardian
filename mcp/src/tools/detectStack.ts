@@ -18,8 +18,7 @@
  * stack-aware behaviour.
  */
 
-import { existsSync } from 'node:fs';
-import { listProjectDir } from '../platform/projectFs.js';
+import { listProjectDir, presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -95,7 +94,7 @@ function enrichDotnet(snap: StackSnapshot, projectPath: string): void {
     return arr.includes(value) ? arr : [...arr, value];
   };
 
-  const hasFile = (rel: string): boolean => existsSync(join(projectPath, rel));
+  const hasFile = (rel: string): boolean => presentInProject(projectPath, rel);
   const anyMatching = (rel: string, suffix: string): boolean => {
     const target = rel === '' ? projectPath : join(projectPath, rel);
     return listProjectDir(projectPath, target).some(({ name }) => name.endsWith(suffix));

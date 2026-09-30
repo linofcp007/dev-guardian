@@ -37,7 +37,8 @@
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml } from 'yaml';
+import { parseYamlBounded } from '../platform/boundedParse.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { yamlFilesUnder } from '../platform/customRules.js';
 /** The largest rule config read back; the plugin's own largest pack is a few hundred KB. */
@@ -131,13 +132,12 @@ function loadLocalRules(configs) {
             const text = readSmallTextFile(file, MAX_RULE_CONFIG_BYTES);
             if (text === undefined)
                 continue;
-            let doc;
-            try {
-                doc = parseYaml(text);
-            }
-            catch {
+            // Under a node bound (platform/boundedParse.ts): the byte cap alone let
+            // an adversarial rules file take this parse past the server's heap.
+            const parsed = parseYamlBounded(text);
+            if (!parsed.ok)
                 continue;
-            }
+            const doc = parsed.value;
             const rules = typeof doc === 'object' && doc !== null ? doc['rules'] : undefined;
             if (!Array.isArray(rules))
                 continue;

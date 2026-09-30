@@ -19,8 +19,7 @@
  *
  * Anything else prepares nothing — in both trees alike.
  */
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { presentInProject } from '../platform/projectFs.js';
 import { runProcess } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
 import { packageManagerEnv } from './testCommandEnv.js';
@@ -30,7 +29,7 @@ export async function prepareTestEnvironment(opts) {
     const { treePath, derived } = opts;
     if (derived === null || derived.command !== 'npm')
         return { ok: true, command: null };
-    const hasLock = existsSync(join(treePath, 'package-lock.json')) || existsSync(join(treePath, 'npm-shrinkwrap.json'));
+    const hasLock = presentInProject(treePath, 'package-lock.json') || presentInProject(treePath, 'npm-shrinkwrap.json');
     if (!hasLock)
         return { ok: true, command: null };
     const run = opts.run ?? runProcess;

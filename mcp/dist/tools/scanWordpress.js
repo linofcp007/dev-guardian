@@ -12,7 +12,7 @@
  * For live-install audits, use `wp_audit`. For WPScan vuln-DB lookup,
  * use `wp_vuln_check`.
  */
-import { existsSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { historyState } from '../runners/git.js';
@@ -63,10 +63,10 @@ registerToolModule(makeScanTool({
         const parser_inputs = [];
         const inp = input;
         const standard = inp.standard ?? 'WordPress';
-        const looksWp = existsSync(join(ctx.projectPath, 'wp-config.php')) ||
-            existsSync(join(ctx.projectPath, 'wp-config-sample.php')) ||
-            existsSync(join(ctx.projectPath, 'style.css')) || // theme root
-            existsSync(join(ctx.projectPath, 'readme.txt')); // plugin/theme readme
+        const looksWp = presentInProject(ctx.projectPath, 'wp-config.php') ||
+            presentInProject(ctx.projectPath, 'wp-config-sample.php') ||
+            presentInProject(ctx.projectPath, 'style.css') || // theme root
+            presentInProject(ctx.projectPath, 'readme.txt'); // plugin/theme readme
         const warnings = [];
         if (!looksWp) {
             warnings.push('not_a_wordpress_project: no wp-config.php / style.css / readme.txt at the root — running generic PHP scans anyway.');

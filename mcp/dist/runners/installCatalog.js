@@ -14,7 +14,7 @@ import { compareSemver } from '../platform/semverCompare.js';
 import { SEMGREP_NO_VERSION_CHECK_ENV } from './semgrepRun.js';
 /**
  * The Trivy release every Trivy install fetches: the pinned archive in
- * {@link PINNED_RELEASES} on Linux, macOS (after Homebrew) and Windows, and
+ * {@link PINNED_RELEASES} on Linux, macOS (before homebrew-core) and Windows, and
  * the version winget, scoop and choco are asked for. Pinned because the
  * installer used to be piped from the `main` branch into `sh` and then
  * install "latest": on 2026-03-19 "latest" WAS the malicious v0.69.4 (see
@@ -162,8 +162,17 @@ export const TOOL_CATALOG = {
                 winget: wingetInstall('AquaSecurity.Trivy', TRIVY_VERSION),
             },
             linux: { curl: releaseArchiveInstaller('trivy', 'linux') },
-            darwin: { brew: brewInstall('aquasecurity/trivy/trivy'), curl: releaseArchiveInstaller('trivy', 'darwin') },
+            // macOS: the pinned archive FIRST (`prefer` below), then homebrew-core's
+            // own `trivy` formula (built and bottled by Homebrew). Homebrew used to
+            // come first here through the vendor tap `aquasecurity/trivy/trivy`,
+            // which installs Aqua's own release binaries rather than a Homebrew
+            // bottle — found serving 0.69.3 by the 3.0 review, older than the pin
+            // and the route a compromised release would take — while every other
+            // install of Trivy was pinned. `scripts/install/install-macos.sh` takes
+            // the same archive.
+            darwin: { curl: releaseArchiveInstaller('trivy', 'darwin'), brew: brewInstall('trivy') },
         },
+        prefer: { darwin: ['curl'] },
         default: true,
     },
     gitleaks: {
@@ -605,6 +614,7 @@ function cosignReleaseInstaller(os) {
         args: ['-c', script],
         needs_elevation: false,
         description: `cosign v${COSIGN_VERSION} release binary (${os}, sha256-checked) → ~/.local/bin/cosign`,
+        user_bin: 'cosign',
     };
 }
 /**
@@ -640,6 +650,7 @@ function releaseArchiveInstaller(tool, os) {
         args: ['-c', script],
         needs_elevation: false,
         description: `${tool} v${r.version} release archive (${os}, sha256-checked) → ~/.local/bin/${tool}`,
+        user_bin: tool,
     };
 }
 /**
@@ -647,9 +658,11 @@ function releaseArchiveInstaller(tool, os) {
  * release ZIP, downloaded with PowerShell (`powershell.exe`, in every
  * supported Windows), checked with `Get-FileHash` before `Expand-Archive`,
  * and its `<tool>.exe` copied to `%USERPROFILE%\.local\bin` — the per-user
- * directory the POSIX installers use as `~/.local/bin`. It is not added to
- * PATH (a warning says so when it is missing): `check_toolchain` finds the
- * tool once it is. x64 only; any other CPU is refused. Written with single
+ * directory the POSIX installers use as `~/.local/bin`. The user's PATH is
+ * not changed (a warning says when it lacks the directory): the server
+ * appends the directory to its own PATH (`platform/userBin.ts`), so its
+ * scans and `check_toolchain` find the tool, and `install_toolchain` names
+ * where it went. x64 only; any other CPU is refused. Written with single
  * quotes alone, so the Windows command line has no `"` to re-quote.
  */
 function windowsReleaseInstaller(tool) {
@@ -673,7 +686,7 @@ function windowsReleaseInstaller(tool) {
         "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
         '  New-Item -ItemType Directory -Force -Path $bin | Out-Null',
         `  Copy-Item -LiteralPath (Join-Path $tmp 'x\\${tool}.exe') -Destination (Join-Path $bin '${tool}.exe') -Force`,
-        `  if (-not (($env:PATH -split ';') -contains $bin)) { Write-Warning ('${tool}: ' + $bin + ' is not on PATH; add it there for dev-guardian to find ${tool}.exe') }`,
+        `  if (-not (($env:PATH -split ';') -contains $bin)) { Write-Warning ('${tool}: ' + $bin + ' is not on PATH; dev-guardian looks there itself, but add it to PATH for a terminal to find ${tool}.exe') }`,
         '} finally {',
         '  Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue',
         '}',
@@ -683,6 +696,7 @@ function windowsReleaseInstaller(tool) {
         args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
         needs_elevation: false,
         description: `${tool} v${r.version} release archive (windows, sha256-checked) → %USERPROFILE%\\.local\\bin\\${tool}.exe`,
+        user_bin: `${tool}.exe`,
     };
 }
 function uvInstall(pkg) {
@@ -772,8 +786,12 @@ export function pickInstallSpec(toolName, os, availableManagers) {
                 : null;
     if (!candidates)
         return null;
-    for (const { name } of availableManagers) {
-        const spec = candidates[name];
+    const byName = candidates;
+    // The tool's own preference first ({@link ToolMeta.prefer}), then the OS's order.
+    const preferred = os === 'darwin' ? (meta.prefer?.darwin ?? []) : os === 'linux' ? (meta.prefer?.linux ?? []) : [];
+    const available = new Set(availableManagers.map((m) => m.name));
+    for (const name of [...preferred.filter((n) => available.has(n)), ...availableManagers.map((m) => m.name)]) {
+        const spec = byName[name];
         if (spec)
             return { manager: name, spec };
     }

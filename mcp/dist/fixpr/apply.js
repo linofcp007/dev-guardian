@@ -44,9 +44,9 @@
  * verification stays in seconds. `applyGroup` only ever does what
  * `lockfileOnly` says, and only on npm's `install` subcommand.
  */
-import { existsSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { describeReadRefusal, describeWriteRefusal, PROJECT_FILE_MAX_BYTES, readProjectBytes, writeProjectFile, } from '../platform/projectFs.js';
+import { describeReadRefusal, describeWriteRefusal, presentInProject, PROJECT_FILE_MAX_BYTES, readProjectBytes, writeProjectFile, } from '../platform/projectFs.js';
 import { batchArgs } from '../runners/argBatches.js';
 import { runProcess } from '../runners/processRunner.js';
 import { checkSemgrepReport } from '../runners/semgrepReport.js';
@@ -70,7 +70,7 @@ export async function applyGroup(opts) {
 // --------------------------------------------------------------- semgrep
 async function applySemgrepPass(run, worktreePath, timeoutMs, plan) {
     const label = `semgrep --metrics=off --autofix [${plan.configLabels.join('; ')}]`;
-    const missing = plan.files.filter((f) => !existsSync(join(worktreePath, f)));
+    const missing = plan.files.filter((f) => !presentInProject(worktreePath, f));
     if (missing.length > 0) {
         return {
             applied: false,

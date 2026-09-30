@@ -17,8 +17,7 @@
  * `deps_update_plan`, `scan_iac`) read the latest snapshot to drive
  * stack-aware behaviour.
  */
-import { existsSync } from 'node:fs';
-import { listProjectDir } from '../platform/projectFs.js';
+import { listProjectDir, presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { detectStack } from '../runners/stackDetect.js';
@@ -73,7 +72,7 @@ function enrichDotnet(snap, projectPath) {
             return [value];
         return arr.includes(value) ? arr : [...arr, value];
     };
-    const hasFile = (rel) => existsSync(join(projectPath, rel));
+    const hasFile = (rel) => presentInProject(projectPath, rel);
     const anyMatching = (rel, suffix) => {
         const target = rel === '' ? projectPath : join(projectPath, rel);
         return listProjectDir(projectPath, target).some(({ name }) => name.endsWith(suffix));

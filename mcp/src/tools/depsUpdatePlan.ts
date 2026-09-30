@@ -111,18 +111,20 @@
  *      minor, then major).
  */
 
-import { existsSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { execa } from 'execa';
-import { parse as parseYaml } from 'yaml';
+import { parseYamlBounded } from '../platform/boundedParse.js';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { commandFor } from '../platform/binaryPath.js';
 import { applyGitSafety, gitSafetyFor } from '../platform/gitSafety.js';
 import { matchesAny } from '../platform/glob.js';
 import {
   listProjectDir,
+  presentInProject,
   PROJECT_LOCKFILE_MAX_BYTES,
+  projectEntryKind,
   projectPathKind,
   readProjectJson,
   readProjectTextOrUndefined,
@@ -370,17 +372,17 @@ async function handler(
 
 function detectEcosystems(projectPath: string): Array<UpgradeStep['ecosystem']> {
   const out: Array<UpgradeStep['ecosystem']> = [];
-  if (existsSync(join(projectPath, 'package.json'))) out.push('npm');
+  if (presentInProject(projectPath, 'package.json')) out.push('npm');
   if (
-    existsSync(join(projectPath, 'pyproject.toml')) ||
-    existsSync(join(projectPath, 'requirements.txt')) ||
-    existsSync(join(projectPath, 'setup.py'))
+    presentInProject(projectPath, 'pyproject.toml') ||
+    presentInProject(projectPath, 'requirements.txt') ||
+    presentInProject(projectPath, 'setup.py')
   )
     out.push('pip');
-  if (existsSync(join(projectPath, 'composer.json'))) out.push('composer');
-  if (existsSync(join(projectPath, 'Cargo.toml'))) out.push('cargo');
-  if (existsSync(join(projectPath, 'go.mod'))) out.push('go');
-  if (existsSync(join(projectPath, 'Gemfile'))) out.push('rubygems');
+  if (presentInProject(projectPath, 'composer.json')) out.push('composer');
+  if (presentInProject(projectPath, 'Cargo.toml')) out.push('cargo');
+  if (presentInProject(projectPath, 'go.mod')) out.push('go');
+  if (presentInProject(projectPath, 'Gemfile')) out.push('rubygems');
   // The same target discovery `deps_audit` uses (a root solution, else every
   // project file) — a repo whose only .csproj lives under src/ has a .NET
   // stack too.
@@ -393,10 +395,10 @@ function detectUnsupportedEcosystems(projectPath: string): string[] {
   // `gradle dependencyUpdates` output is non-trivial — listed as unsupported
   // pending demand.
   const out: string[] = [];
-  if (existsSync(join(projectPath, 'pom.xml'))) out.push('maven');
+  if (presentInProject(projectPath, 'pom.xml')) out.push('maven');
   if (
-    existsSync(join(projectPath, 'build.gradle')) ||
-    existsSync(join(projectPath, 'build.gradle.kts'))
+    presentInProject(projectPath, 'build.gradle') ||
+    presentInProject(projectPath, 'build.gradle.kts')
   )
     out.push('gradle');
   return out;
@@ -1043,7 +1045,8 @@ function toPosix(p: string): string {
 }
 
 function detectNpmPackageManager(projectPath: string): NpmPackageManager {
-  const has = (dir: string, file: string): boolean => existsSync(join(dir, file));
+  // Each directory is the project or a workspace root above it, up to the git root: the repository's.
+  const has = (dir: string, file: string): boolean => presentInProject(dir, file);
   const at = (dir: string, file: string): string => {
     const rel = toPosix(relative(projectPath, join(dir, file)));
     return dir === projectPath ? file : `${rel}, the workspace root`;
@@ -1083,7 +1086,7 @@ function detectNpmPackageManager(projectPath: string): NpmPackageManager {
       return { name: m[1], evidence: 'package.json "packageManager"', root: projectPath };
     }
   }
-  if (existsSync(join(projectPath, 'node_modules', '.pnpm'))) {
+  if (presentInProject(projectPath, join('node_modules', '.pnpm'))) {
     return { name: 'pnpm', evidence: 'node_modules/.pnpm', root: projectPath };
   }
   return { name: 'npm', evidence: 'default', root: projectPath };
@@ -1093,7 +1096,8 @@ function detectNpmPackageManager(projectPath: string): NpmPackageManager {
  *  a worktree's `.git` file), or null when there is none. */
 function gitRootAbove(start: string): string | null {
   for (let dir = start; ; ) {
-    if (existsSync(join(dir, '.git'))) return dir;
+    // lstat only: `.git` is never followed to find out.
+    if (projectEntryKind(join(dir, '.git')) !== 'absent') return dir;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -1114,7 +1118,9 @@ function workspaceIncludes(root: string, projectPath: string): boolean {
   // are read contained in it (`platform/projectFs.ts`).
   try {
     const text = readProjectTextOrUndefined(root, 'pnpm-workspace.yaml');
-    const doc: unknown = text === undefined ? undefined : parseYaml(text);
+    // Bounded by structure too (platform/boundedParse.ts); too dense reads as no declaration.
+    const parsed = text === undefined ? undefined : parseYamlBounded(text);
+    const doc: unknown = parsed?.ok === true ? parsed.value : undefined;
     const packages = typeof doc === 'object' && doc !== null ? (doc as Record<string, unknown>)['packages'] : undefined;
     if (Array.isArray(packages)) patterns.push(...packages.filter((p): p is string => typeof p === 'string'));
   } catch {
@@ -1576,7 +1582,9 @@ async function execPackageManager(
   const base: NodeJS.ProcessEnv = opts.env ?? ('env' in pm ? pm.env : { ...process.env });
   const safety = await gitSafetyFor([opts.cwd], { env: base });
   if (safety.refused !== null) return { code: 'git_config_refused', shortMessage: safety.refused, stdout: '', stderr: '' };
-  return execa(command, args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env: applyGitSafety(safety, base), extendEnv: false });
+  // By its absolute path on the child's PATH, never the project directory it runs in (platform/binaryPath.ts).
+  const env = applyGitSafety(safety, base);
+  return execa(commandFor(command, env), args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env, extendEnv: false });
 }
 
 function describeExecFailure(

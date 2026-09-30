@@ -56,6 +56,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { storedPathTarget } from '../platform/pathSpelling.js';
@@ -357,7 +358,7 @@ export function openDatabase(options) {
         // exist, we can't write there.
         refusal = `Project path '${projectPath}' is not writable (it is not an existing directory)`;
     }
-    else if (!existingOnly || existsSync(preferredPath)) {
+    else if (!existingOnly || presentInProject(projectPath, preferredPath)) {
         const verdict = judgeProjectDatabase(projectPath, preferredPath);
         if (verdict.kind === 'own-unreadable') {
             return inMemoryInstead(preferredPath, `the database '${preferredPath}' cannot be read (${verdict.detail}).${MOVE_ASIDE}`);
@@ -559,7 +560,7 @@ export function inspectProjectDatabase(projectPath) {
     const report = {
         db_path: dbPath,
         canonical_project: canonicalProject,
-        exists: existsSync(dbPath),
+        exists: presentInProject(project, dbPath),
         status: 'none',
         why: null,
         blockers: [],

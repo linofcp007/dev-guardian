@@ -55,6 +55,18 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Changed
 
+- dev-guardian's per-user data directory is resolved in one place, `hooks/userDataDir.ts`, which the storage
+  module re-exports and the hooks' database-registry guard calls; they held two copies that could drift. It
+  sits under `hooks/` because the CLI's `check` and `--help` load the compiled hooks with `dist/storage/`
+  absent — the first attempt, the hook importing `storage/userData.js`, broke exactly that. A new test walks
+  every compiled module the hook dispatcher loads, and everything they import, and holds each import to a
+  Node built-in or a relative file, and every module under `dist/hooks/` to `dist/hooks/` — the hooks run from
+  `mcp/dist/` with no `node_modules`, and one that cannot load fails open. `docs/env.md` lists
+  `GUARDIAN_DATA_DIR` once, for the server, the CLI and the hooks alike.
+- `.gitignore` stays off the list of files `tools_run` names as deciding what Semgrep scans, now measured
+  rather than assumed (1.176.1): in a git work tree, a file tracked before it was ignored, one under an ignored
+  directory and one force-added were all scanned, and only an untracked ignored file was not; in a plain
+  directory the `.gitignore` was not applied at all. It cannot hide committed code.
 - **An argument a tool does not take is now an error, not a wrong answer.**
   Every tool's input schema was handed to the SDK as a raw shape, which it
   wraps in a *stripping* object: a misspelt or misnamed key was removed
@@ -101,6 +113,14 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Fixed
 
+- **A scanner `install_toolchain` had just installed was reported missing.** The pinned release installers put
+  Syft, Trivy, gitleaks and cosign in `%USERPROFILE%\.local\bin` on Windows (`~/.local/bin` on Linux and macOS),
+  which no default Windows or macOS PATH holds, so the next scan and `check_toolchain` said `not_installed`.
+  The server now appends that directory to its own PATH — at startup, before every scanner lookup and version
+  probe, and after an install — last, so a tool installed anywhere else still wins and nothing is shadowed; the
+  user's PATH is not touched. `install_toolchain` names where each pinned binary went (`binary_path`, in a dry
+  run where it would go) and, when that directory is not on the user's own PATH, says a terminal will not find
+  it there (`path_note`).
 - **Nothing told a model to vet a package before installing it, outside
   Claude Code.** `vet_packages` was named by no skill, command or host rules
   file, and `guardian-deps` said "no tool detects typosquatting; that is your
@@ -943,6 +963,26 @@ them again. Scans made on the fallback meanwhile are not merged back.
   whatever a directory link pointed at (`detect_stack`, the EF Core and target-framework audits,
   `scan_dotnet_secrets`, `compliance_check`, `register_custom_rules`' globs, custom rule directories) no longer
   descend links.
+- **The repository reads that sweep left named are converted too, and none is left.** Measured in `node:22`
+  with 768 MB before the change: `detect_stack` on a project whose `package.json` is a link to `/dev/zero` was
+  OOM-killed in 10 s, taking the whole MCP server with it, and a FIFO at that name hung it; Trivy's
+  manifest-coverage check on a `yarn.lock` linked to `/dev/zero`, the Semgrep rule-id reader on such a
+  `.semgrep.yml`, and `wp_vuln_check_source`'s inventory on such a `wp-includes/version.php` were each
+  OOM-killed, and a `.semgrep.yml` FIFO hung the rule-id reader. `detect_stack`'s manifests and headers, the
+  Trivy manifests, lock files and workspace declarations, the scanner-configuration files `tools_run` names
+  (`repoConfig.ts`, which `stat`ed a file for its size and then read it — a FIFO swapped in between blocked the
+  read), `scan_iac`'s IaC-looking walk, the WordPress inventory, the uncommitted files gitleaks scans, the git
+  shallow file, the submodule listing and `scan_skill`'s files now all go through `platform/projectFs.ts` (a rule
+  file or git's shallow file, which may lie outside the project, through the same bounded, non-blocking reader),
+  each with its own cap: 8 MiB for a manifest, 64 MiB for a lock file, the first 8 KiB of a plugin or theme
+  header and 64 KiB of a YAML head. What a refusal would have hidden is named: `detect_stack`'s snapshot gains
+  `unread_files` (path and why — a `package.json` it could not read still says JavaScript), a WordPress file the
+  inventory could not read is a warning, a configuration file too large to check is still named in
+  `honoured_config` with why it was not checked, a candidate `scan_iac` could not read is named in the
+  `trivy-config` reason, as is a walk that stopped early (that reason was computed and dropped), a file
+  gitleaks' working-tree pass could not read is a named gap, and a file `scan_skill` could not read is a
+  warning. A refused Trivy manifest or lock file reads as "may declare something", so its gap stays. The
+  source-scan test's `repo-deferred` kind is gone.
 - **Repository text reached the model and the terminal with its invisible characters intact.** A rule message, a
   snippet, a file name, a reason or a title from the scanned repository can carry a right-to-left override
   (`invoice<U+202E>sj.exe` reads as `invoiceexe.js`), a zero-width space or ESC; JSON escapes the C0 controls and
@@ -984,6 +1024,136 @@ them again. Scans made on the fallback meanwhile are not merged back.
   `--extra-index-url`, `--find-links`, `--trusted-host`) is refused when pip would install from them (a pip step,
   or a re-scan by `deps_audit`), with the new outcome `refused`; so is a Composer fix whose `composer.json`
   declares `repositories`, which is not planned either.
+- **On macOS, `install_toolchain` installed Trivy from the vendor's Homebrew tap, the one Trivy install left
+  unpinned.** Every other route fetches the pinned, sha256-checked Trivy 0.74.0 archive, but the per-tool macOS
+  install took `brew install aquasecurity/trivy/trivy` first — a tap that installs Aqua's own release binaries
+  rather than a Homebrew-built bottle, and that the review found serving 0.69.3, older than the pin; the route a
+  compromised release takes. The pinned archive now comes first for Trivy on macOS (a per-tool preference, ahead
+  of the general "Homebrew first" order), with homebrew-core's own `trivy` formula as the fallback, and
+  `install-macos.sh` installs the same archive, checked with `shasum -a 256` before it is unpacked, instead of
+  `brew install trivy`; a test holds it to the catalogue's sums. Syft and gitleaks keep Homebrew first on macOS,
+  and the `install_toolchain` description and `SECURITY.md` now say so instead of "always pinned".
+- **`create_fix_pr`: a pip requirement that names its own host is refused like an index.** A direct reference
+  (`name @ https://…`), a bare URL, a VCS URL (`git+…`, `hg+…`, `svn+…`, `bzr+…`, after `-e` too) or an include
+  from a URL (`-r https://…`, which pip downloads and reads) makes pip fetch — and build — from a host the
+  repository chose, as `--index-url` does, and was not looked for. Each is now refused when pip would install
+  from it (a pip step, or a re-scan by `deps_audit`), the note naming the file, what the line is and its
+  `scheme://host` (never its path or credentials). (This denylist was bypassed a dozen ways; the fail-closed
+  allowlist below replaces it, and refuses local and network paths too.) A requirements file in
+  that set that could not be read to check — a FIFO, over 4 MiB, an include that leaves the checkout — is
+  refused too, where it used to read as choosing nothing; includes are now read within the whole checkout, so a
+  monorepo's `-r ../shared/…` is checked rather than skipped. Measured separately, with real npm and two local
+  registries: a `package-lock.json` whose `resolved` URLs point at another host makes `npm ci` and
+  `npm install` fetch those tarballs from it, but without the user's token (npm scopes it to the configured
+  host; the tarball on the user's own registry carried it). A test now holds `create_fix_pr` to that.
+- **Bytes read were not memory used: files under every read cap still took the server down.** The caps bound
+  what is read; nothing bounded what parsing it built. Measured in `node:22` (22.23.2) under
+  `docker run --memory 768m` (a 396 MiB heap), each shape in its own process — before (ada72f20) → after:
+  - a `package-lock.json` of `{},` (under the 64 MiB lock cap), read for Trivy's coverage: 8 MiB took 2.5 s,
+    a 186 MB heap and 333 MiB RSS — and dropped the gap, reading the lock as locking nothing; 30 and 60 MiB
+    ran out of heap. Now 3–5 ms, 67 MiB RSS, the gap kept ("not checked"): a lock is parsed only below
+    256 KiB, the most a lock that locks nothing could be.
+  - the same file of `1,`: 30 MiB took 456 MiB RSS; 60 MiB was OOM-killed. Now 3 ms, 67 MiB.
+  - a `yarn.lock` of newlines, 30 or 60 MiB: out of heap (`.split(/\r?\n/)` made one string per byte; GC
+    saw 659 MB). Now 3–6 ms, 67 MiB: lines are iterated (`platform/textLines.ts`), and a `yarn.lock` is
+    scanned only below 64 KiB.
+  - `detect_stack` on 10, 40 and 80 `requirements-N.txt` of just under 8 MiB: a 247 MB heap, then 646 MB
+    heap / 713 MiB RSS and 1.6 s, then out of heap. Now 264–417 ms, a 24 MB heap and 103 MiB RSS in all
+    three: one 64 MiB / 4 000-file budget per detection, and each file past it named in `unread_files` (3,
+    33, and 50 with `unread_files_more: 23`). Each file is tested on its own, never concatenated.
+  - a project `.semgrep.yml` of dense YAML, 1 or 7 MiB: out of heap. Now 9–26 ms, 70 MiB at most: a YAML
+    or JSON document is refused by its node count before it is parsed (`platform/boundedParse.ts`: 50 000
+    YAML nodes for a configuration, 100 000 for an API spec, 2 000 000 JSON values), and the rule-id reader
+    then reads no id from the file and treats it as one that may hold a taint rule.
+  - an OpenAPI JSON of `[1,…]`, 8 or 30 MiB: 160 and 446 MiB RSS. Now 73 and 116 MiB, reported as a spec
+    too complex to parse.
+
+  The IaC walk, the Trivy manifest walk and the WordPress inventory share one read budget each too, and a
+  file past it is named; the compose, pnpm-workspace, Semgrep-autofix and custom-rule YAML parses are bounded
+  the same way. The reviewer's 203 hostile-file cases (a `/dev/zero`, `/dev/urandom` or `/proc/self/environ`
+  link, a FIFO, a directory, 8 MiB, a link out, a hard link, at every path each reader opens) all return
+  in `node:22` under 768 MB; the one that hung before — a FIFO at `.git/shallow`, 15 s — takes 150 ms.
+- **`create_fix_pr`'s pip refusal was a denylist of regular expressions, and pip reads more than they did.**
+  The adversarial review bypassed it with pip's own grammar: an abbreviated option (`--index`, `--extra-index`,
+  `--find`, `--trusted`, `--edit`, `--requirem`), a glued one (`-ihttps://…`, `-egit+…`), a quoted editable, a
+  line break pip splits on and the reader did not (`\r` alone, form feed, vertical tab, U+2028/2029, U+0085,
+  U+001C), a `\` continuation (`--ind\` + `ex-url …`, and one ending a comment line, which pip does not join),
+  a `# -*- coding: utf-7 -*-` or UTF-16 file, `-e` followed by a tab, `--index-url=…`, and a quoted include;
+  a host was cut at the first `@`, so `deploy:pa@ss-S3CRET@evil.invalid` printed the password's tail. It is
+  now an allowlist that fails closed (`deps/pipRequirements.ts`): every logical line, decoded and joined as
+  pip's `req_file.py` does, must be blank, a comment, a plain PEP 508 requirement with no URL (name, extras,
+  versions, markers, `--hash`), a handful of options that choose no source (`--require-hashes`,
+  `--only-binary`, …) or a relative `-r` / `-c` include inside the checkout (read the same way, at most 200
+  files); anything else refuses the fix, naming the file, the line, the kind and — for a URL — `scheme://host`
+  from a real URL parser, never userinfo, port, path or query. Held to pip itself: a test parses 52 inputs with
+  pip 26.2.1's own `RequirementsFileParser` and `parse_req_from_line` (Python 3.14) and requires that for every
+  one where pip chooses an index, find-links, a trusted host, an editable or a link — or went to the network for
+  an include — dev-guardian refuses, and admits the plain ones, what `pip-compile --generate-hashes` writes included. The same rule
+  covers `pyproject.toml` (`[project]` dependencies, optional dependencies, dependency groups,
+  `[build-system].requires`; `[tool.uv.sources]`, `[[tool.uv.index]]` and uv's index keys,
+  `[[tool.poetry.source]]` and a Poetry `git`/`url`/`path`/`source` dependency, `[tool.pdm.source]`, Hatch's
+  `allow-direct-references`) and `setup.cfg` (`dependency_links`, a non-plain `install_requires` item) — the
+  reviewer's probe had real `pip-audit`, re-scanning a pyproject-only project for `create_fix_pr`, fetch
+  `GET /evilpkg-1.0.tar.gz` from the host `[project].dependencies` named; when pip-audit builds the project
+  itself, `dynamic` dependencies or no `[project]` refuse too. An npm install in `create_fix_pr` (a step, or
+  the test environment's `npm ci`) is refused when `package.json` or the lock points a dependency at a network
+  path (`file:\\host\…`, `file://host/…`, `//host/…`), which Windows would open with the user's credentials.
+  `deps_audit` does not refuse: it names, per requirements file, its index options, its direct, VCS and
+  network references, and what it could not check, with the same parser, and never repeats a credential a
+  URL carries. SECURITY.md said `file:` URLs and local paths pass; on Windows
+  `file://host/share` is a network path, and it no longer passes.
+- **A repository could choose the scanner binary.** Claude Code starts a project's MCP server in the project
+  root, and the scanners run there. `resolveBinary` asked `where`, which searches the current directory before
+  PATH: a repository carrying `nuclei.bat` had it reported as the installed scanner and spawned. The spawns
+  were no better — measured on Windows 11 with `NoDefaultCurrentDirectoryInExePath` unset, a planted
+  `dgplanted.exe` ran from `spawnSync('dgplanted')`, and a planted `trivy.cmd` ran instead of the real
+  `trivy.exe` on PATH (libuv's search and `cmd.exe`'s both start with the current directory); `where`'s 2 s
+  timeout also flaked under load. Binaries are now looked up in-process (`platform/binaryPath.ts`): absolute
+  PATH entries only (an empty, `.`, relative or drive-relative entry is skipped; so is a network entry, which
+  would block the event loop), × PATHEXT on Windows as `where` does, an App Execution Alias counted, never the
+  current directory, no spawn, no timeout. The process runner spawns the absolute path a bare name resolves to
+  on the child's PATH, and does not spawn one found nowhere (the only place left would be the current
+  directory); the direct spawns (`trivy --version`, `npm outdated` and the other package managers, `tar`,
+  `unzip`, `taskkill`, `wsl`, `pipx`) take the resolved path too. For every other spawn — git's among them —
+  the server and the CLI set `NoDefaultCurrentDirectoryInExePath` at startup, which libuv and `cmd.exe` both
+  honour (measured), and drop empty and relative PATH entries (an empty one is the current directory to
+  `execvp`), naming any non-empty one dropped. Tests plant `.bat`, `.cmd` and `.exe` files in a project with the
+  process's current directory set to it, each first proving the plant would run.
+- **`existsSync`, `stat` and `realpath` followed repository links before anything checked where they led.**
+  On Windows `existsSync` of a `package.json` linked to `\\192.0.2.1\share\…` blocked for 157 s (the
+  reviewer's measurement; `lstat` of the same link took 1 ms) — and Windows authenticates to whatever host
+  answers. `detect_stack`, the Trivy coverage check and the Semgrep rule-id reader each had such a call, and
+  so did the startup `.gitignore` upkeep (`.git`), `.guardianignore` matching, the scope checks, the language
+  and ecosystem sniffing of `deps_update_plan`, `observability_setup`, `quality_check`, `scan_sast`,
+  `scan_wordpress`, `bug_hunt`, `wp_audit` and `wp_cron_audit`, `register_custom_rules`' conventional rule
+  directories, `map_attack_surface`'s Dockerfiles, `create_fix_pr`'s target and lock-file checks, the CLI's
+  `status` database lookup, and the .NET restore planner (a `ProjectReference` or solution entry may name any
+  path). Each now walks the links on the way with `lstat` / `readlink` first (`presentInProject`,
+  `projectPathKind`, and `entryKindAnywhere` for a path repository content names anywhere on disk); a .NET
+  restore that would open a network path is not run (`network_path_reference`, named). The source-scan test
+  now tracks `existsSync`, `accessSync` and `realpathSync` (`.native` included) as well, and classifies every
+  one of their 48 remaining sites — none a repository path followed unchecked — with a new `host` kind for
+  PATH directories, `/etc` release markers and the Git for Windows install. A Windows test plants links to
+  `\\192.0.2.1` (RFC 5737) in eleven cases and requires each to return in well under the timeout.
+- **A linked `wp-content/plugins` read as "nothing installed".** `wp_vuln_check_source`'s inventory listed a
+  link as not a directory, so `plugins: []` — and no vulnerability matched. A link that stays inside the
+  install is now followed; one that leaves it, reaches a network path, or a directory that cannot be listed,
+  is named in the inventory's new `not_inventoried`, and the tool's coverage says those were not checked
+  (`wordfence-feed:not-inventoried`). The inventory shares one read budget (64 MiB, 20 000 files).
+- **A configuration a scanner reads could be hidden by making it a link.** The scanner-configuration lookup
+  (`honoured_config`) required a regular file, so a symlinked `.gitleaks.toml` — which gitleaks follows, and
+  whose allowlist then suppressed a planted token — was named nowhere (the reviewer's reproduction). A link is
+  now named "(a link, which the scanner follows)", and a FIFO, a device or a directory at a configuration path
+  "present, not checked"; a directory the nested-configuration walk, the IaC walk or the Trivy manifest walk
+  could not list is named too, where a failed listing used to read as empty.
+- **What a refusal hid is named in every case, not only the first.** `detect_stack` named a refused
+  `package.json` but not a refused `requirements-dev.txt`, root plugin `*.php`, Kubernetes `*.yaml` or nested
+  manifest: a filter on regular files dropped a link or a FIFO before it was read. Every candidate is read now
+  and each refusal named (at most 50, with `unread_files_more` counting the rest), and a directory link out of
+  the project is named as a sub-project not detected. `scan_skill` counts a FIFO, a device or a socket in the
+  skill as skipped, with a warning naming it. A FIFO at `.git/shallow` stalled the gitleaks history scan's
+  shallow check; the path is now judged without opening it, git is asked with a 10 s bound, and when neither
+  answers the scan says whether the history is complete could not be determined, instead of claiming it is.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.

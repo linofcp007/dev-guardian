@@ -11,9 +11,8 @@
  *   - flag events from inactive plugins (we cross-reference `wp plugin
  *     list`).
  */
-import { existsSync } from 'node:fs';
+import { presentInProject } from '../platform/projectFs.js';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
@@ -65,7 +64,7 @@ async function handler(input, ctx) {
     catch (e) {
         return failDomain('not_a_wordpress_install', e.message);
     }
-    if (!existsSync(join(installPath, 'wp-config.php'))) {
+    if (!presentInProject(installPath, 'wp-config.php')) {
         return failDomain('not_a_wordpress_install', `No wp-config.php in ${installPath}`);
     }
     const wpBin = await scannerAvailable('wp');

@@ -12,11 +12,9 @@
  * package the project must install (`npm i pino`, `pip install structlog`,
  * etc.) — actual install is left to the user / their package manager.
  */
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { describeWriteRefusal, listProjectDir, writeProjectFile } from '../platform/projectFs.js';
+import { describeWriteRefusal, listProjectDir, presentInProject, writeProjectFile } from '../platform/projectFs.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 const tool = {
@@ -106,20 +104,20 @@ function inferStack(projectPath, ctx) {
             return 'dotnet';
     }
     // Filesystem fallback.
-    if (existsSync(join(projectPath, 'package.json')))
+    if (presentInProject(projectPath, 'package.json'))
         return 'node';
-    if (existsSync(join(projectPath, 'pyproject.toml')) ||
-        existsSync(join(projectPath, 'requirements.txt')))
+    if (presentInProject(projectPath, 'pyproject.toml') ||
+        presentInProject(projectPath, 'requirements.txt'))
         return 'python';
-    if (existsSync(join(projectPath, 'composer.json')))
+    if (presentInProject(projectPath, 'composer.json'))
         return 'php';
-    if (existsSync(join(projectPath, 'go.mod')))
+    if (presentInProject(projectPath, 'go.mod'))
         return 'go';
-    if (existsSync(join(projectPath, 'Cargo.toml')))
+    if (presentInProject(projectPath, 'Cargo.toml'))
         return 'rust';
-    if (existsSync(join(projectPath, 'pom.xml')) || existsSync(join(projectPath, 'build.gradle')))
+    if (presentInProject(projectPath, 'pom.xml') || presentInProject(projectPath, 'build.gradle'))
         return 'java';
-    if (existsSync(join(projectPath, 'Gemfile')))
+    if (presentInProject(projectPath, 'Gemfile'))
         return 'ruby';
     const entries = listProjectDir(projectPath, projectPath).map((e) => e.name);
     if (entries.some((n) => n.endsWith('.csproj') || n.endsWith('.sln') || n === 'global.json'))

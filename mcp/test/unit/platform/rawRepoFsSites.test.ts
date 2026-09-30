@@ -20,9 +20,21 @@
  *   - `repo-safe` — the repository's, and safe as written: a listing typed
  *     from `Dirent`s that never descends a link, a `stat` that opens nothing,
  *     or a walk already judged link by link.
- *   - `repo-deferred` — the repository's and NOT yet converted, because the
- *     directory is another reviewer's this wave (`runners/`, `skillaudit/`,
- *     `hooks/`). Named so the gap is visible, with what it risks.
+ *   - `host` — the machine's own files, outside any project: PATH directories,
+ *     `/etc` release markers, the Git for Windows install.
+ *
+ * `existsSync`, `accessSync` and `realpathSync` are tracked too (review of 3.0,
+ * W2E, round 2): each follows a link on the way — on Windows a link to
+ * `\\host\share`, which blocked `existsSync` for 157 s and authenticated to
+ * the host. A repository path's presence is `presentInProject`, its kind
+ * `projectPathKind` / `projectEntryKindIn`, and a path repository content names
+ * anywhere on disk `entryKindAnywhere` — each walks the links first.
+ *
+ * There used to be a fourth, `repo-deferred`: the repository's and not yet
+ * converted. Its last ten sites (`runners/` and `skillaudit/`) went through
+ * `platform/projectFs.ts` in review 3.0's W2E — a `package.json` linked to
+ * `/dev/zero` had OOM-killed the server through `detect_stack`, and a FIFO
+ * hung it — so nothing may be added under it again.
  *
  * Counted per file and per `fs` function (`readFileSync`, `statSync`, …), not
  * per line, so an unrelated edit does not move it.
@@ -38,7 +50,7 @@ afterAll(cleanupTempDirs);
 
 const MCP = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-type Kind = 'own' | 'user' | 'repo-safe' | 'repo-deferred';
+type Kind = 'own' | 'user' | 'repo-safe' | 'host';
 
 interface Allowed {
   apis: Record<string, number>;
@@ -81,7 +93,7 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "hooks/ (another reviewer's): a stat of an already-opened path's identity; opens nothing",
   },
   'src/hostsetup/setup.ts': {
-    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1 },
+    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2 },
     kind: 'own',
     reason:
       "the plugin's own legacy templates and host-rules/ template, and a user-scope MCP config in the user's " +
@@ -98,7 +110,11 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'repo-safe',
     reason: 'names only, after walkLinksUnder refused network/device links; the workspace walk descends Dirent directories only',
   },
-  'src/platform/configsDir.ts': { apis: { readdirSync: 1 }, kind: 'own', reason: "the plugin's shipped configs/ directory" },
+  'src/platform/configsDir.ts': {
+    apis: { readdirSync: 1, existsSync: 2 },
+    kind: 'own',
+    reason: "the plugin's shipped configs/ directory, and which of its two install layouts holds it",
+  },
   'src/platform/customRules.ts': {
     apis: { statSync: 2 },
     kind: 'user',
@@ -112,76 +128,44 @@ const ALLOWED: Record<string, Allowed> = {
       'the user); network and device paths are never looked up, and an untrusted database is never read here',
   },
   'src/platform/projectFs.ts': {
-    apis: { readdirSync: 1 },
+    apis: { readdirSync: 1, realpathSync: 2 },
     kind: 'repo-safe',
-    reason: 'listProjectDir itself: lists a directory realpathInProject placed inside the project, Dirent-typed',
+    reason:
+      'listProjectDir itself: lists a directory realpathInProject placed inside the project, Dirent-typed; ' +
+      'every realpath runs after walkLinksUnder refused a network or device link on the way',
   },
   'src/platform/projectPath.ts': {
-    apis: { statSync: 1 },
+    apis: { statSync: 1, existsSync: 1, realpathSync: 1 },
     kind: 'user',
-    reason: 'is-it-a-directory of the project_path argument itself',
+    reason: 'the project_path argument itself: does it exist, is it a directory, its canonical spelling',
   },
   'src/platform/version.ts': { apis: { readFileSync: 1 }, kind: 'own', reason: "the plugin's own plugin.json / package.json" },
-  'src/runners/git.ts': {
-    apis: { readFileSync: 1, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): reads git's shallow file at the path git names, and lists a submodule " +
-      'directory by name; unbounded read of a path inside the git directory',
-  },
   'src/runners/gitleaksScan.ts': {
-    apis: { copyFileSync: 1, writeFileSync: 2 },
-    kind: 'repo-deferred',
+    apis: { writeFileSync: 3 },
+    kind: 'own',
     reason:
-      "runners/ (another reviewer's): copies uncommitted project files (lstat-checked regular files, size-capped) " +
-      'into a temp dir; the two writes are its own temp config and report',
+      'writes into its own mkdtemp directory the uncommitted project files it read through readProjectBytes, ' +
+      'and its own gitleaks config and sanitized report',
   },
   'src/runners/projectFiles.ts': {
     apis: { readdirSync: 1 },
     kind: 'repo-safe',
     reason: "runners/ (another reviewer's): Dirent-typed walk, names only, never descends a link",
   },
-  'src/runners/repoConfig.ts': {
-    apis: { readdirSync: 2, statSync: 1, readFileSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): stat-size check then readFileSync of a repository config — a FIFO " +
-      '(size 0) at that name blocks the read; listings are Dirent-typed',
-  },
-  'src/runners/scannerParsers/trivy.ts': {
-    apis: { readFileSync: 4, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): Trivy's own report (own) and the repository's yarn.lock, Python manifest " +
-      'and workspace manifests, read unbounded',
-  },
   'src/runners/semgrepConfigs.ts': {
-    apis: { readdirSync: 1 },
+    apis: { readdirSync: 1, existsSync: 1 },
     kind: 'repo-safe',
-    reason: "runners/ (another reviewer's): names at the project root only",
+    reason: "runners/ (another reviewer's): names at the project root only; the existsSync is the plugin's own LLM rule pack",
   },
   'src/runners/semgrepRuleIds.ts': {
-    apis: { readFileSync: 2, readdirSync: 2 },
-    kind: 'repo-deferred',
+    apis: { readdirSync: 2 },
+    kind: 'repo-safe',
     reason:
-      "runners/ (another reviewer's): rule files of the packs a scan loads — the plugin's own and the " +
-      "project's Semgrep config — read unbounded",
-  },
-  'src/runners/stackDetect.ts': {
-    apis: { readFileSync: 2, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): /proc/version (system) and readTextSafe of repository manifests, read " +
-      'whole before being cut to maxBytes',
+      "names only, of a rule directory a scan loads (the plugin's own, the project's, or one the user " +
+      'registered): Dirent-typed, never descends a link; each rule file is read with readSmallText (bounded, ' +
+      'non-blocking, regular files only)',
   },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
-  'src/runners/trivyConfig.ts': {
-    apis: { statSync: 1, readFileSync: 1, readdirSync: 1 },
-    kind: 'repo-deferred',
-    reason:
-      "runners/ (another reviewer's): stat-size check then readFileSync of the repository's Trivy config — a " +
-      'FIFO (size 0) at that name blocks the read',
-  },
   'src/runners/trivyRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },
     kind: 'own',
@@ -193,16 +177,21 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'sweeps its own guardian-verify-* directories in the OS temp directory (lstat-checked)',
   },
   'src/skillaudit/ingest.ts': {
-    apis: { statSync: 1, writeFileSync: 1, readdirSync: 1, readFileSync: 1 },
-    kind: 'repo-deferred',
+    apis: { statSync: 1, writeFileSync: 1, readdirSync: 1, existsSync: 1, realpathSync: 2 },
+    kind: 'repo-safe',
     reason:
-      "skillaudit/ (another reviewer's): the skill under review is untrusted by design and ingest has its own " +
-      'lstat/realpath containment and size cap; the write is a download into its own temp directory',
+      'the skill under review is untrusted by design: its walk lists names and lstat-checks every entry before ' +
+      'use, and each file is read through readProjectBytes against the ingestion root; the stat, the existsSync ' +
+      'and the root realpath are of the target the user named, the write a download into its own temp directory; ' +
+      'the other realpath guards an lstat-plain directory only after entryKindAnywhere found no network path',
   },
   'src/storage/db.ts': {
-    apis: { writeFileSync: 1, statSync: 1 },
+    apis: { writeFileSync: 1, statSync: 1, existsSync: 3 },
     kind: 'own',
-    reason: "storage/ (another reviewer's): its own database directory probe and size",
+    reason:
+      "storage/ (another reviewer's): its own database directory probe and size, the per-user fallback's presence, " +
+      'and a project database only after locationProblem lstat-refused a link at .guardian or at the file; ' +
+      'the unjudged project database is looked for with presentInProject',
   },
   'src/storage/dbRegistry.ts': {
     apis: { readdirSync: 2, writeFileSync: 1 },
@@ -210,7 +199,7 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "the user's own database registry under the per-user data directory (0700, owner-checked, temp+rename)",
   },
   'src/storage/migrations/runner.ts': {
-    apis: { readdirSync: 2, readFileSync: 2 },
+    apis: { readdirSync: 2, readFileSync: 2, existsSync: 1 },
     kind: 'own',
     reason: "storage/ (another reviewer's): the plugin's shipped migrations",
   },
@@ -235,20 +224,20 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'scanner output into the report directory ensureReportDir verified or created',
   },
   'src/tools/exportVex.ts': {
-    apis: { writeFileSync: 1, readFileSync: 1 },
+    apis: { writeFileSync: 1, readFileSync: 1, existsSync: 1 },
     kind: 'own',
     reason: 'the VEX document into a verified report directory, and the SBOM generate_sbom itself wrote',
   },
   'src/tools/generateSbom.ts': {
-    apis: { statSync: 1, readFileSync: 1 },
+    apis: { statSync: 1, readFileSync: 1, existsSync: 2 },
     kind: 'own',
     reason: "Syft's output file in a verified report directory",
   },
-  'src/tools/healthStatus.ts': { apis: { statSync: 1 }, kind: 'own', reason: 'the size of its own database file' },
+  'src/tools/healthStatus.ts': { apis: { statSync: 1, existsSync: 1 }, kind: 'own', reason: 'the presence and size of the database this server opened' },
   'src/tools/perfCheck.ts': {
-    apis: { readFileSync: 2, writeFileSync: 1 },
+    apis: { readFileSync: 2, writeFileSync: 1, existsSync: 3 },
     kind: 'own',
-    reason: 'Lighthouse / k6 output in a verified report directory',
+    reason: 'Lighthouse / k6 output in a verified report directory, and the k6_script_path the user named',
   },
   'src/tools/registerCustomRules.ts': {
     apis: { statSync: 3 },
@@ -256,7 +245,7 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'is-it-a-file/directory of the paths the user registers; opens nothing',
   },
   'src/tools/sbomDiff.ts': {
-    apis: { readFileSync: 1 },
+    apis: { readFileSync: 1, existsSync: 1 },
     kind: 'own',
     reason: 'an SBOM file generate_sbom wrote, at the path its own scan row recorded',
   },
@@ -276,14 +265,14 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'the audit report into the directory ensureReportDir verified or created',
   },
   'src/tools/vetPackages.ts': {
-    apis: { statSync: 1 },
+    apis: { statSync: 1, existsSync: 1 },
     kind: 'user',
     reason: 'is-it-a-directory of the project_dir argument itself',
   },
   'src/tools/wpVulnCheck.ts': {
-    apis: { readdirSync: 1, readFileSync: 1, writeFileSync: 1 },
+    apis: { readdirSync: 1, readFileSync: 1, writeFileSync: 1, existsSync: 2 },
     kind: 'own',
-    reason: "WPScan's report in its own cache directory, and pruning that directory",
+    reason: "WPScan's report in its own cache directory, pruning that directory, and whether the wp_install_path the user named is on this machine",
   },
   'src/treeHash/cacheKey.ts': {
     apis: { readdirSync: 1, statSync: 1 },
@@ -299,6 +288,81 @@ const ALLOWED: Record<string, Allowed> = {
     apis: { readFile: 1, writeFileSync: 1 },
     kind: 'own',
     reason: "the vulnerability feed cache in dev-guardian's own data directory",
+  },
+  'src/fingerprint/findingIdentity.ts': {
+    apis: { realpathSync: 1 },
+    kind: 'user',
+    reason: "the project path's canonical spelling, for a finding's identity",
+  },
+  'src/fixpr/worktree.ts': {
+    apis: { existsSync: 1, realpathSync: 1 },
+    kind: 'own',
+    reason: "fixpr/ (another reviewer's): the fix worktree dev-guardian created, and a path git listed for it, compared by real spelling",
+  },
+  'src/platform/binaryPath.ts': {
+    apis: { statSync: 1, accessSync: 1 },
+    kind: 'host',
+    reason: 'candidates on the PATH entries a bare command name is looked up in — absolute, local entries only, never the current directory',
+  },
+  'src/platform/scope.ts': {
+    apis: { realpathSync: 1 },
+    kind: 'repo-safe',
+    reason: "the project path (the user's), and a scoped entry only after entryKindAnywhere found no network path on the way",
+  },
+  'src/platform/scriptsDir.ts': {
+    apis: { existsSync: 2 },
+    kind: 'own',
+    reason: "which of the plugin's two install layouts holds its scripts/",
+  },
+  'src/platform/userBin.ts': {
+    apis: { existsSync: 1 },
+    kind: 'user',
+    reason: "the per-user tools directory in the user's own home",
+  },
+  'src/runners/git.ts': {
+    apis: { existsSync: 1 },
+    kind: 'own',
+    reason: "runners/git.ts (another reviewer's): the detached worktree dev-guardian itself added, after its removal",
+  },
+  'src/runners/stackDetect.ts': {
+    apis: { existsSync: 3 },
+    kind: 'host',
+    reason: "the machine's /etc release markers (which Linux distribution), never the project",
+  },
+  'src/runners/windowsTreeKill.ts': {
+    apis: { existsSync: 2 },
+    kind: 'host',
+    reason: "the Git for Windows install's ps.exe and grep.exe",
+  },
+  'src/storage/dbProvenance.ts': {
+    apis: { existsSync: 1 },
+    kind: 'repo-safe',
+    reason: 'the project database, after the lines above lstat-refused a link or a non-directory at .guardian and a link at the file',
+  },
+  'src/surface/collectors/ports.ts': {
+    apis: { realpathSync: 1 },
+    kind: 'repo-safe',
+    reason: 'a Dockerfile only after projectPathKind placed a regular file inside the project, links walked first',
+  },
+  'src/tools/complianceCheck.ts': {
+    apis: { existsSync: 1 },
+    kind: 'own',
+    reason: "the plugin's shipped RGPD rule pack",
+  },
+  'src/tools/initProject.ts': {
+    apis: { existsSync: 2 },
+    kind: 'own',
+    reason: "the plugin's shipped config templates and its initial-scan script",
+  },
+  'src/tools/qualityCheck.ts': {
+    apis: { existsSync: 1 },
+    kind: 'user',
+    reason: "a local ESLint in the user's directories ABOVE the project; inside it the lookup is projectPathKind",
+  },
+  'src/wordpress/siteKeys.ts': {
+    apis: { existsSync: 1 },
+    kind: 'user',
+    reason: 'whether a wp_install_path the user named is a directory on this machine',
   },
 };
 
@@ -361,9 +425,14 @@ describe('raw fs calls in mcp/src', () => {
         "statSync('c');",
         'const o = { readFileSync: (x: string) => x };',
         "o.readFileSync('d');",
+        "import { existsSync, realpathSync as rp } from 'node:fs';",
+        "import * as fs from 'node:fs';",
+        "existsSync('e');",
+        "rp.native('f');",
+        "fs.realpathSync.native('g');",
       ].join('\n'),
     );
     const found = findFsCallSites(root, join(root, 'src')).map((x) => `${x.api}@${x.line}`);
-    expect(found).toEqual(['readFileSync@5', 'readFile@6', 'statSync@7']);
+    expect(found).toEqual(['readFileSync@5', 'readFile@6', 'statSync@7', 'existsSync@12', 'realpathSync@13', 'realpathSync@14']);
   });
 });

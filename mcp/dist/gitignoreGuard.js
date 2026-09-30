@@ -57,9 +57,8 @@
  * whichever appears first (`dominantEol`). A brand-new file (`created`) has
  * no existing convention to follow and keeps the plain `\n` it always used.
  */
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { describeReadRefusal, describeWriteRefusal, projectEntryKind, readProjectBytes, writeProjectFile, } from './platform/projectFs.js';
+import { describeReadRefusal, describeWriteRefusal, presentInProject, projectEntryKind, readProjectBytes, writeProjectFile, } from './platform/projectFs.js';
 const HEADER = '# dev-guardian outputs';
 const ENTRY = '**/.guardian/*';
 const BASELINE_NEGATION = '!**/.guardian/baseline.json';
@@ -98,7 +97,7 @@ function fromWriteFailure(w) {
  */
 export function ensureGuardianIgnored(projectPath) {
     const gitignorePath = join(projectPath, '.gitignore');
-    if (!existsSync(join(projectPath, '.git'))) {
+    if (!presentInProject(projectPath, '.git')) {
         return { updated: false, reason: 'not_a_repo' };
     }
     const kind = projectEntryKind(gitignorePath);

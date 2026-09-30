@@ -44,11 +44,10 @@
  * subdirectories are not (gitignore's per-directory files are not supported).
  */
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { git, splitNul } from '../runners/git.js';
 import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
-import { describeReadRefusal, readProjectText, readProjectTextOrUndefined } from './projectFs.js';
+import { describeReadRefusal, presentInProject, projectEntryKind, readProjectText, readProjectTextOrUndefined } from './projectFs.js';
 /** The largest `.guardianignore` read; a real one is a few KB. */
 const MAX_GUARDIAN_IGNORE_BYTES = 1024 * 1024;
 export const GUARDIAN_IGNORE_FILE = '.guardianignore';
@@ -325,7 +324,7 @@ export function projectPathTest(projectPath) {
         const key = segments.join('/');
         let v = exists.get(key);
         if (v === undefined) {
-            v = existsSync(join(projectPath, ...segments));
+            v = presentInProject(projectPath, join(...segments));
             exists.set(key, v);
         }
         return v;
@@ -349,7 +348,8 @@ export function projectPathTest(projectPath) {
 /** A `.git` (directory or worktree file) in the project or one of its ancestors. */
 function insideGitWorkTree(projectPath) {
     for (let dir = resolve(projectPath);; dir = dirname(dir)) {
-        if (existsSync(join(dir, '.git')))
+        // lstat only: a `.git` link is never followed to find out.
+        if (projectEntryKind(join(dir, '.git')) !== 'absent')
             return true;
         if (dirname(dir) === dir)
             return false;

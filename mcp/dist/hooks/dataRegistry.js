@@ -8,16 +8,19 @@
  * the directory itself, refused to an assistant's Write / Edit and to the shell
  * writes the shell guard can see, the way the hook configuration is.
  *
- * {@link userDataDir} mirrors the storage module's own (`storage/userData.ts`),
- * which owns the directory and is not a dependency here: the hooks load only
- * the pre-compiled files in `mcp/dist/hooks/`. Node built-ins and
- * `guardedPath.ts` only.
+ * {@link userDataDir} is the one resolution of the directory
+ * (`hooks/userDataDir.ts`), which the storage module that owns it
+ * re-exports; the two used to be separate copies. Node built-ins and sibling
+ * hook modules only: the hooks and the CLI's `check` load `mcp/dist/hooks/`
+ * without the storage layer or `node_modules`
+ * (`test/unit/hooks/hooksDistImports.test.ts` holds that).
  */
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { walkLinksUnder } from './configFile.js';
 import { fileIdentity, guardedPath, hardLinkedTo } from './guardedPath.js';
+import { userDataDir as resolveUserDataDir } from './userDataDir.js';
 function safeHome() {
     try {
         return homedir();
@@ -27,23 +30,12 @@ function safeHome() {
     }
 }
 /**
- * dev-guardian's per-user data directory: `GUARDIAN_DATA_DIR` when set;
- * otherwise `%LOCALAPPDATA%\dev-guardian` on Windows and
- * `$XDG_DATA_HOME/dev-guardian` (an absolute one only) or
- * `~/.local/share/dev-guardian` elsewhere. Pure path arithmetic.
+ * dev-guardian's per-user data directory, as `hooks/userDataDir.ts` resolves
+ * it for the storage module too — except that a missing home is `''` here
+ * rather than a throw: a hook never fails for it.
  */
 export function userDataDir(ctx = {}) {
-    const env = ctx.env ?? process.env;
-    const override = env['GUARDIAN_DATA_DIR']?.trim();
-    if (override !== undefined && override !== '')
-        return resolve(override);
-    const home = ctx.home ?? safeHome();
-    if ((ctx.platform ?? process.platform) === 'win32') {
-        const local = env['LOCALAPPDATA']?.trim();
-        return join(local !== undefined && isAbsolute(local) ? local : join(home, 'AppData', 'Local'), 'dev-guardian');
-    }
-    const xdg = env['XDG_DATA_HOME']?.trim();
-    return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(home, '.local', 'share'), 'dev-guardian');
+    return resolveUserDataDir({ ...ctx, home: ctx.home ?? safeHome() });
 }
 /** The registry directory: `<user data dir>/registry`. */
 export function registryDir(ctx = {}) {

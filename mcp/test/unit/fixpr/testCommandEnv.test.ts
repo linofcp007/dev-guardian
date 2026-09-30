@@ -136,7 +136,9 @@ describe('create_fix_pr — what its description promises', () => {
     expect(tool.description).toMatch(/project's (own )?code/i);
     // Round 2: the repository's package-manager configuration, and what refuses a fix.
     expect(tool.description).toMatch(/\.npmrc\/\.yarnrc[^;]*set aside/);
-    expect(tool.description).toMatch(/pip index or Composer repository refuses the fix/);
+    // W2E round 2: pip installs only plain requirements (an allowlist), npm never from a network path.
+    expect(tool.description).toMatch(/a non-plain pip requirement, an npm network path or a Composer repository refuses the fix/);
+    expect(tool.description.length).toBeLessThanOrEqual(1500);
     const apply = tool.inputSchema['apply']?.description ?? '';
     expect(apply).not.toMatch(/never leaves the machine/);
     expect(apply).toMatch(/test command/);

@@ -26,7 +26,7 @@
  */
 import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { describeTooComplex, parseYamlBounded, YAML_CONFIG_MAX_NODES } from '../platform/boundedParse.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 const PERF_FIELDS = ['lcp_ms', 'inp_ms', 'cls', 'tbt_ms', 'bundle_size_kb'];
 const QUALITY_FIELDS = ['duplication_pct', 'complexity'];
@@ -49,14 +49,17 @@ export function loadBudgets(projectPath) {
     if (read.status === 'refused') {
         return { kind: 'invalid', path, error: `the file was not read: ${describeReadRefusal(read.reason)}` };
     }
-    const text = read.text;
-    let doc;
-    try {
-        doc = parseYaml(text);
+    // Under a node bound (platform/boundedParse.ts): 1 MiB of dense YAML took
+    // `yaml` 6 s and ~500 MB of heap.
+    const parsed = parseYamlBounded(read.text);
+    if (!parsed.ok) {
+        return {
+            kind: 'invalid',
+            path,
+            error: parsed.reason === 'too-complex' ? `the file was not read: ${describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes')}` : `invalid YAML: ${parsed.detail ?? 'unparsable'}`,
+        };
     }
-    catch (e) {
-        return { kind: 'invalid', path, error: `invalid YAML: ${message(e)}` };
-    }
+    const doc = parsed.value;
     if (!isRecord(doc)) {
         return { kind: 'invalid', path, error: 'the document must be a mapping with perf: and/or quality: keys' };
     }
@@ -175,8 +178,5 @@ export function budgetViolationFindings(violations, filePath) {
 }
 function isRecord(v) {
     return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-function message(e) {
-    return e instanceof Error ? e.message : String(e);
 }
 //# sourceMappingURL=budgets.js.map

@@ -58,15 +58,15 @@
  * no existing convention to follow and keeps the plain `\n` it always used.
  */
 
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   describeReadRefusal,
   describeWriteRefusal,
+  presentInProject,
   projectEntryKind,
   readProjectBytes,
-  writeProjectFile,
   type ProjectWriteResult,
+  writeProjectFile,
 } from './platform/projectFs.js';
 
 const HEADER = '# dev-guardian outputs';
@@ -123,7 +123,7 @@ function fromWriteFailure(w: Exclude<ProjectWriteResult, { ok: true }>): Gitigno
  */
 export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult {
   const gitignorePath = join(projectPath, '.gitignore');
-  if (!existsSync(join(projectPath, '.git'))) {
+  if (!presentInProject(projectPath, '.git')) {
     return { updated: false, reason: 'not_a_repo' };
   }
   const kind = projectEntryKind(gitignorePath);

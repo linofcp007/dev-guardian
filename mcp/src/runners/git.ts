@@ -25,9 +25,12 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, parse } from 'node:path';
+import { readSmallText } from '../hooks/configFile.js';
+import { listProjectDir, projectEntryKindIn } from '../platform/projectFs.js';
+import { textLines } from '../platform/textLines.js';
 import { execGit } from '../platform/gitSafety.js';
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -84,27 +87,57 @@ export async function repoState(cwd: string): Promise<RepoState> {
 }
 
 /**
+ * {@link shallowBoundary}'s answer when git could not tell whether the
+ * history is complete — never read as "not shallow".
+ */
+export const SHALLOW_UNDETERMINED = '(undetermined)';
+
+/** The shallowness queries: they read one small file, so a minute is only ever a blocked read. */
+const SHALLOW_QUERY_TIMEOUT_MS = 10_000;
+
+/**
  * The shallow boundary of a shallow clone — the commits whose parents were
  * never fetched (`git rev-parse --git-path shallow` lists them) — or null
  * when the repository is not shallow. A shallow repository whose boundary
  * file cannot be read answers `['(unknown)']`: shallow, boundary unnamed.
+ *
+ * `[SHALLOW_UNDETERMINED]` when it cannot be told at all (review of 3.0,
+ * W2E): git's own `--is-shallow-repository` READS the shallow file, and one
+ * that is a FIFO blocked it until the 60 s timeout — which used to read as
+ * "not shallow", a complete history. Where git keeps the file is asked first
+ * (that reads nothing), and what is there judged with `lstat`: absent is not
+ * shallow, anything but a regular file is undetermined and git is never
+ * pointed at it; a query that fails or runs past 10 s is undetermined too.
  */
 export async function shallowBoundary(cwd: string): Promise<string[] | null> {
-  const shallow = await git(cwd, ['rev-parse', '--is-shallow-repository']);
-  if (shallow.exitCode !== 0 || shallow.stdout.trim() !== 'true') return null;
-  const where = await git(cwd, ['rev-parse', '--git-path', 'shallow']);
+  const where = await git(cwd, ['rev-parse', '--git-path', 'shallow'], SHALLOW_QUERY_TIMEOUT_MS);
   const rel = where.stdout.trim();
-  if (where.exitCode !== 0 || rel === '') return ['(unknown)'];
-  try {
-    const shas = readFileSync(isAbsolute(rel) ? rel : join(cwd, rel), 'utf8')
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => /^[0-9a-f]{40,64}$/.test(l));
-    return shas.length > 0 ? shas : ['(unknown)'];
-  } catch {
-    return ['(unknown)'];
+  if (where.exitCode !== 0 || rel === '') return [SHALLOW_UNDETERMINED];
+  const path = isAbsolute(rel) ? rel : join(cwd, rel);
+  // Every link on the way walked from the filesystem root first: a `.git` link to a
+  // network path must not block this process (the lstat below follows directories).
+  const kind = projectEntryKindIn(parse(path).root, path);
+  if (kind === 'absent') return null;
+  if (kind !== 'file') return [SHALLOW_UNDETERMINED];
+  const shallow = await git(cwd, ['rev-parse', '--is-shallow-repository'], SHALLOW_QUERY_TIMEOUT_MS);
+  if (shallow.exitCode !== 0) return [SHALLOW_UNDETERMINED];
+  if (shallow.stdout.trim() !== 'true') return null;
+  // The path git names (a linked worktree's lies in the main repository's
+  // git directory, outside the project): read bounded, a regular file only,
+  // on a non-blocking descriptor — never a FIFO or `/dev/zero` (W2E) — and
+  // scanned line by line, never split into an array.
+  const read = readSmallText(path, SHALLOW_FILE_MAX_BYTES);
+  if (read.status !== 'ok') return ['(unknown)'];
+  const shas: string[] = [];
+  for (const line of textLines(read.text)) {
+    const sha = line.trim();
+    if (/^[0-9a-f]{40,64}$/.test(sha)) shas.push(sha);
   }
+  return shas.length > 0 ? shas : ['(unknown)'];
 }
+
+/** A shallow file lists one commit per line: 16 MiB is some 250 000 boundary commits. */
+const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * The submodules under `cwd` that are initialised and hold content — the
@@ -127,11 +160,9 @@ export async function initialisedSubmodules(cwd: string): Promise<string[]> {
     const tab = entry.indexOf('\t');
     if (tab < 0 || !entry.startsWith('160000 ')) continue;
     const path = entry.slice(tab + 1);
-    try {
-      if (readdirSync(join(cwd, path)).some((name) => name !== '.git')) out.add(path.split('\\').join('/'));
-    } catch {
-      // Not there on disk: nothing a scan could have read.
-    }
+    // Names only, never through a link out of the project; not there on
+    // disk (or reached through such a link) is nothing a scan could have read.
+    if (listProjectDir(cwd, join(cwd, path)).some(({ name }) => name !== '.git')) out.add(path.split('\\').join('/'));
   }
   return [...out].sort();
 }

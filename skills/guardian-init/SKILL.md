@@ -41,7 +41,7 @@ Pergunta confirmação. Se o utilizador disser "só X e Y", faz só isso.
 
 - Linux e macOS: delega em `scripts/install/install-linux.sh` / `install-macos.sh` (detetam `apt`, `dnf`, `pacman`, `brew`).
 - Windows: winget, scoop ou choco (ou WSL) — funciona nativamente, não é preciso mudar de sistema.
-- O Syft, o Trivy e o gitleaks vêm sempre de uma release fixada, com o sha256 verificado antes de desempacotar — nunca "a mais recente". Em Windows, o ZIP é descarregado pelo PowerShell para `%USERPROFILE%\.local\bin`, que tem de estar no `PATH` (o instalador avisa se não estiver); winget, scoop e choco ficam como alternativa, na mesma versão.
+- O Syft, o Trivy e o gitleaks vêm de uma release fixada, com o sha256 verificado antes de desempacotar — nunca "a mais recente" — exceto no macOS, onde o Syft e o gitleaks vêm primeiro do Homebrew (o Trivy vem sempre primeiro da release fixada). Em Windows, o ZIP é descarregado pelo PowerShell para `%USERPROFILE%\.local\bin`; o dev-guardian procura lá (e em `~/.local/bin`) mesmo fora do `PATH`, e o resultado diz onde ficou cada binário (`binary_path`) e quando um terminal não o vai encontrar (`path_note`). winget, scoop e choco ficam como alternativa, na mesma versão.
 - Passos que precisam de sudo / admin (apt, choco, `npm install -g`) só correm com `elevation_allowed: true`; sem isso aparecem em `requires_elevation`, para o utilizador correr.
 
 ### 5. Configurar o projeto

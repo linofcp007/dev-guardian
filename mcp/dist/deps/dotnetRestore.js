@@ -33,10 +33,10 @@
  * `dotnet restore` evaluates and runs the project's own MSBuild — the same
  * trust boundary both tools' descriptions name.
  */
-import { existsSync, unlinkSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { readSmallTextFile } from '../hooks/configFile.js';
-import { listProjectDir } from '../platform/projectFs.js';
+import { entryKindAnywhere, listProjectDir } from '../platform/projectFs.js';
 /** The largest `.sln` / project / `.props` file read; a real one is well under this. */
 const MAX_DOTNET_FILE_BYTES = 4 * 1024 * 1024;
 const SKIP_DIRS = new Set(['bin', 'obj', 'node_modules', '.git', '.guardian', 'packages', '.vs']);
@@ -99,10 +99,19 @@ function resolveFromFile(file, written) {
  * `/dev/zero` or a FIFO was read without end. NOT contained in the scanned
  * directory: a solution legitimately references projects beside it, and
  * `dotnet restore` follows them whatever this reads — only a regex runs over
- * the text, and none of it is echoed.
+ * the text, and none of it is echoed. A network path — named so, or reached
+ * through a link — is never opened: Windows would authenticate to its host
+ * (`entryKindAnywhere`, review of 3.0, W2E).
  */
 function readText(path) {
+    if (entryKindAnywhere(path) === 'remote')
+        return '';
     return readSmallTextFile(path, MAX_DOTNET_FILE_BYTES) ?? '';
+}
+/** Whether something is at a path a repository file named — never following a link to a network path to find out. */
+function present(path) {
+    const kind = entryKindAnywhere(path);
+    return kind !== 'absent' && kind !== 'remote';
 }
 /** Project files a solution lists — `.sln` `Project(...) = "Name", "path", …`
  *  lines (solution folders, whose "path" is not a project file, are skipped)
@@ -155,7 +164,7 @@ export function projectsForTarget(target) {
             continue;
         seen.add(key);
         out.push(next);
-        if (existsSync(next))
+        if (present(next))
             queue.push(...projectReferences(next));
     }
     return out;
@@ -193,14 +202,24 @@ export function planDotnetRestore(root, target) {
     const withoutLock = [];
     for (const project of projects) {
         const candidates = lockFileCandidates(project);
-        const present = candidates.filter((c) => existsSync(c));
-        lockFiles.push(...present);
-        absentLockCandidates.push(...candidates.filter((c) => !existsSync(c)));
-        if (present.length === 0)
+        const locks = candidates.filter((c) => present(c));
+        lockFiles.push(...locks);
+        absentLockCandidates.push(...candidates.filter((c) => !present(c)));
+        if (locks.length === 0)
             withoutLock.push(project);
     }
     const args = ['restore', target, '--locked-mode', '--nologo', '--verbosity', 'quiet'];
     const plan = { target, projects, lockFiles, args, absentLockCandidates };
+    // A solution entry or a ProjectReference on a network path: `dotnet restore` would open it, and Windows
+    // would authenticate to its host with the user's credentials.
+    const remote = projects.filter((p) => entryKindAnywhere(p) === 'remote');
+    if (remote.length > 0) {
+        plan.blocked = {
+            code: 'network_path_reference',
+            reason: `not restored: ${remote.map((p) => relative(root, p) || p).join(', ')} is on a network path, which dotnet restore would open`,
+        };
+        return plan;
+    }
     if (lockFiles.length === 0) {
         // Nothing to protect, so nothing can fail NU1005 — and this is the one
         // switch that stops an opted-in project from creating a lock file.
@@ -224,7 +243,8 @@ export function planDotnetRestore(root, target) {
 export function removeCreatedLockFiles(plan) {
     const created = [];
     for (const candidate of plan.absentLockCandidates) {
-        if (!existsSync(candidate))
+        const kind = entryKindAnywhere(candidate);
+        if (kind === 'absent' || kind === 'remote')
             continue;
         try {
             unlinkSync(candidate);

@@ -27,7 +27,7 @@
 
 import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { describeTooComplex, parseYamlBounded, YAML_CONFIG_MAX_NODES } from '../platform/boundedParse.js';
 import type { Category, Finding } from '../types.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 
@@ -82,14 +82,17 @@ export function loadBudgets(projectPath: string): BudgetsLoadResult {
   if (read.status === 'refused') {
     return { kind: 'invalid', path, error: `the file was not read: ${describeReadRefusal(read.reason)}` };
   }
-  const text = read.text;
-
-  let doc: unknown;
-  try {
-    doc = parseYaml(text);
-  } catch (e) {
-    return { kind: 'invalid', path, error: `invalid YAML: ${message(e)}` };
+  // Under a node bound (platform/boundedParse.ts): 1 MiB of dense YAML took
+  // `yaml` 6 s and ~500 MB of heap.
+  const parsed = parseYamlBounded(read.text);
+  if (!parsed.ok) {
+    return {
+      kind: 'invalid',
+      path,
+      error: parsed.reason === 'too-complex' ? `the file was not read: ${describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes')}` : `invalid YAML: ${parsed.detail ?? 'unparsable'}`,
+    };
   }
+  const doc = parsed.value;
 
   if (!isRecord(doc)) {
     return { kind: 'invalid', path, error: 'the document must be a mapping with perf: and/or quality: keys' };
@@ -231,8 +234,4 @@ export function budgetViolationFindings(violations: readonly BudgetViolation[], 
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }

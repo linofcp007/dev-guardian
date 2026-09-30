@@ -191,9 +191,11 @@ describe('create_fix_pr — a requirements file that chooses a pip index', () =>
 
       expect(groups).toHaveLength(1);
       expect(groups[0]?.outcome).toBe('refused');
+      // Round 2 (review of 3.0, W2E): the fail-closed allowlist names the line and the host only.
       expect(groups[0]?.note).toBe(
-        "refused: the project's requirements choose a package index (requirements.txt: --index-url); " +
-          "dev-guardian doesn't install from a repository-chosen index",
+        "refused: the project's Python requirements name where pip installs from, or could not be checked " +
+          '(requirements.txt:2: index option (--index-url, http://127.0.0.1)); ' +
+          'dev-guardian installs only plain requirements it has read — a name, extras, versions and markers',
       );
       expect(attacker.seen).toEqual([]);
     },

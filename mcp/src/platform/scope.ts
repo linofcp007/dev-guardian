@@ -36,7 +36,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
+import { entryKindAnywhere, projectEntryKind } from './projectFs.js';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { changedFiles, git, repoState, resolveCommit, splitNul } from '../runners/git.js';
@@ -134,7 +135,8 @@ export function suggestScopeForFile(filePath: string): { project_path: string; s
   const file = resolve(filePath);
   let root = dirname(file);
   for (let dir = root; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, '.git'))) {
+    // lstat only: a `.git` link is never followed to find out.
+    if (projectEntryKind(join(dir, '.git')) !== 'absent') {
       root = dir;
       break;
     }
@@ -337,6 +339,8 @@ function realOrSelf(p: string): string {
  * would rewrite it and gitleaks would copy it.
  */
 function staysInside(abs: string, root: string): boolean {
+  // A link to a network path is never resolved to find out where it leads: it leaves (entryKindAnywhere).
+  if (entryKindAnywhere(abs) === 'remote') return false;
   return !escapes(relative(root, realOrSelf(abs)));
 }
 

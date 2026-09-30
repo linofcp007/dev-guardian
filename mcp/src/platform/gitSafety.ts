@@ -63,11 +63,25 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
+import { findOnPath } from './binaryPath.js';
+import { entryKindAnywhere } from './projectFs.js';
 
 /** The git executable, for callers that describe a git spawn as data (`runProcess`). */
 export const GIT_COMMAND = 'git';
+
+/**
+ * The git this module spawns: the absolute path `git` resolves to on `env`'s
+ * PATH (`platform/binaryPath.ts`: absolute PATH entries only, never the
+ * current directory). A bare `git` would be looked up in the directory the
+ * process runs in first on Windows — the project, for the hook and the server
+ * — so a `git.exe` a repository planted there would run. On no PATH entry,
+ * a path beneath the Node executable that cannot exist: the spawn fails with
+ * ENOENT, which reads as "git is not installed", and nothing is searched.
+ */
+function gitExecutable(env: NodeJS.ProcessEnv): string {
+  return findOnPath(GIT_COMMAND, env) ?? join(dirname(process.execPath), 'no-git-on-path', GIT_COMMAND);
+}
 
 export type ConfigPair = readonly [key: string, value: string];
 
@@ -615,7 +629,7 @@ export async function gitSafetyFor(dirs: readonly string[], opts: GitSafetyOptio
   const problem = countProblem(env, platform);
   if (problem !== null) return { ...staticGitSafety(platform), refused: problem };
   const walk: Walk = {
-    git: opts.git ?? GIT_COMMAND,
+    git: opts.git ?? gitExecutable(env),
     env: probeEnv(env, platform),
     timeoutMs: opts.timeoutMs ?? PROBE_TIMEOUT_MS,
     reuseMs: opts.reuseMs ?? PROBE_REUSE_MS,
@@ -634,7 +648,7 @@ export function gitSafetyForSync(dirs: readonly string[], opts: GitSafetyOptions
   const problem = countProblem(env, platform);
   if (problem !== null) return { ...staticGitSafety(platform), refused: problem };
   const walk: Walk = {
-    git: opts.git ?? GIT_COMMAND,
+    git: opts.git ?? gitExecutable(env),
     env: probeEnv(env, platform),
     timeoutMs: opts.timeoutMs ?? PROBE_TIMEOUT_MS,
     reuseMs: opts.reuseMs ?? PROBE_REUSE_MS,
@@ -751,7 +765,16 @@ function parseGitlinks(dir: string, status: number | null, stdout: Buffer): Gitl
       return { kind: 'refused', message: `${dir} has a submodule whose path is not UTF-8, which dev-guardian cannot follow` };
     }
     const abs = resolve(dir, path);
-    if (!dirs.includes(abs) && existsSync(join(abs, '.git'))) dirs.push(abs);
+    if (dirs.includes(abs)) continue;
+    // Looked at link by link, never followed: `existsSync` follows a link — to a
+    // network path too, which held the server for 157 s on Windows
+    // (platform/projectFs.ts). One that reaches a network path is where git
+    // itself would go on a `status`: refused, never read.
+    const kind = entryKindAnywhere(join(abs, '.git'));
+    if (kind === 'remote') {
+      return { kind: 'refused', message: `${dir} has a submodule (${path}) whose .git reaches a network path through a link, which dev-guardian does not follow` };
+    }
+    if (kind !== 'absent') dirs.push(abs);
   }
   return { kind: 'dirs', dirs };
 }
@@ -1005,7 +1028,7 @@ export async function execGitBuffer(dir: string, args: readonly string[], opts: 
   if (safety.refused !== null) return refusedResult(safety, Buffer.alloc(0));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = await collect(opts.git ?? GIT_COMMAND, ['-C', dir, ...args], {
+  const r = await collect(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     timeoutMs,
     maxBuffer,
@@ -1025,7 +1048,7 @@ export function execGitSync(dir: string, args: readonly string[], opts: GitExecO
   if (safety.refused !== null) return refusedResult(safety, '');
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = spawnSync(opts.git ?? GIT_COMMAND, ['-C', dir, ...args], {
+  const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     encoding: 'utf8',
     timeout: timeoutMs,

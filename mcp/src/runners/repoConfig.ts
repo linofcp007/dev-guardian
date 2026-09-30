@@ -23,10 +23,19 @@
  * excluded `sub/deep/`): every one the scanner would read is found — git's
  * own listing in a work tree (tracked, and untracked files `.gitignore` does
  * not exclude), else a bounded walk — and named.
+ *
+ * Every listing and read goes through `platform/projectFs.ts` (review of
+ * 3.0, W2E): a `when` file used to be `stat`ed for its size and then read,
+ * and a FIFO swapped in between blocked the read. A config that could not be
+ * checked is never treated as absent: one present as a link (which the
+ * scanner follows — a `.gitleaks.toml` link to an allow-everything config
+ * took gitleaks from 1 finding to 0, and was named nowhere), a FIFO or a
+ * directory, one whose `when` file could not be read, and a directory the
+ * nested walk could not list are all named, with why.
  */
 
-import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
+import { describeReadRefusal, listProjectDirOrNull, ReadBudget } from '../platform/projectFs.js';
 import type { ToolRun } from '../types.js';
 import { git, splitNul } from './git.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
@@ -107,6 +116,11 @@ export const REPO_CONFIG: Readonly<Record<RepoConfigRunner, readonly RepoConfigF
     { file: '.github/zizmor.yml', decides: 'its rules can disable or ignore audits' },
   ],
   // A directory target only: explicit file targets ignore it (measured on 1.176.1).
+  // `.gitignore` is not named, because it cannot hide committed code (measured
+  // on 1.176.1, review of 3.0, W2E): in a git work tree a file tracked before
+  // it was ignored, one under an ignored directory and one force-added were
+  // all scanned — only an untracked ignored file was not; in a plain
+  // directory the `.gitignore` was not applied at all.
   semgrep: [{ file: '.semgrepignore', decides: 'its patterns decide which files are scanned', nested: true }],
   // npm audit reads the project's .npmrc (registry, omit=dev, audit-level).
   npm: [{ file: '.npmrc', decides: 'its registry and settings decide what npm audit reads and reports' }],
@@ -191,33 +205,63 @@ const MAX_NAMED = 5;
 const MAX_LISTED = 50;
 /** A file read to test `when` is read up to this size. */
 const MAX_WHEN_BYTES = 1024 * 1024;
+/** What one lookup may read in all, testing `when` files: a repository can hold thousands of `pyproject.toml`. */
+const WHEN_BUDGET_BYTES = 64 * 1024 * 1024;
+const WHEN_BUDGET_FILES = 5_000;
 
-/** Whether `rel` is a regular file whose name matches EXACTLY (case included, on any file system). */
-function existsExactly(projectPath: string, rel: string): boolean {
+/** What is at a config path, typed without following it: a plain file, or what else is there. */
+type ConfigEntry = 'file' | 'link' | 'other' | 'directory';
+
+/**
+ * The entry whose name matches `rel`'s EXACTLY (case included, on any file
+ * system), typed without following it — or null when there is none, or its
+ * directory cannot be listed. A link, a FIFO or a directory under a config's
+ * name is an entry like a file: the scanner may still read it (gitleaks
+ * follows a `.gitleaks.toml` link — measured: 1 finding became 0 with an
+ * allow-everything config behind one), so it is never taken for "absent"
+ * (review of 3.0, W2E).
+ */
+function entryExactly(projectPath: string, rel: string): ConfigEntry | null {
   const parts = rel.split('/');
   const name = parts.pop();
-  if (name === undefined) return false;
-  try {
-    return readdirSync(join(projectPath, ...parts), { withFileTypes: true }).some((e) => e.name === name && e.isFile());
-  } catch {
-    return false;
-  }
+  if (name === undefined) return null;
+  const entries = listProjectDirOrNull(projectPath, join(projectPath, ...parts));
+  return entries?.find((e) => e.name === name)?.kind ?? null;
 }
 
-function matchesWhen(projectPath: string, rel: string, when: RegExp | undefined): boolean {
-  if (when === undefined) return true;
-  try {
-    const abs = join(projectPath, ...rel.split('/'));
-    const st = statSync(abs);
-    if (!st.isFile() || st.size > MAX_WHEN_BYTES) return false;
-    return when.test(readFileSync(abs, 'utf8'));
-  } catch {
-    return false;
-  }
+/** What checking a config found: it applies, it does not, or why it could not be checked. */
+type Verdict = { applies: true } | { applies: false } | { unchecked: string };
+
+/**
+ * Whether the config at `rel` (an entry of `kind`) applies: a plain file
+ * whose `when` matches (or has none); a link, followed only while it stays
+ * inside the project; anything else is present and unchecked.
+ */
+function judge(projectPath: string, rel: string, kind: ConfigEntry, when: RegExp | undefined, budget: ReadBudget): Verdict {
+  if (kind === 'directory') return { unchecked: 'present, not checked: a directory under that name' };
+  if (kind === 'other') return { unchecked: 'present, not checked: not a regular file (a FIFO, a device or a socket)' };
+  if (when === undefined) return { applies: true };
+  const r = budget.readText(projectPath, join(projectPath, ...rel.split('/')), MAX_WHEN_BYTES);
+  if (r.status === 'absent') return kind === 'link' ? { unchecked: 'present, not checked: a dangling link' } : { applies: false };
+  if (r.status === 'refused') return { unchecked: `present, not checked: ${describeReadRefusal(r.reason)}` };
+  return when.test(r.text) ? { applies: true } : { applies: false };
 }
 
-/** Every file named `names` below the project: git's listing in a work tree, else a bounded walk. */
-async function nestedFiles(projectPath: string, names: readonly string[]): Promise<string[]> {
+/** `spec`'s entry for `path`, or null when it does not apply. A link, and a config that could not be checked, say so. */
+function honouredEntry(path: string, decides: string, kind: ConfigEntry, verdict: Verdict): HonouredFile | null {
+  if ('unchecked' in verdict) return { path, decides: `${decides}, if it applies: ${verdict.unchecked}` };
+  if (!verdict.applies) return null;
+  return { path, decides: kind === 'link' ? `${decides} (a link, which the scanner follows)` : decides };
+}
+
+interface NestedFiles {
+  found: Array<{ path: string; kind: ConfigEntry }>;
+  /** Directories the walk could not list, or a note that it stopped — nested configs below were not looked for. */
+  unlooked: HonouredFile[];
+}
+
+/** Every entry named `names` below the project: git's listing in a work tree, else a bounded walk. */
+async function nestedFiles(projectPath: string, names: readonly string[]): Promise<NestedFiles> {
   const listed = await git(projectPath, [
     'ls-files',
     '-z',
@@ -228,31 +272,40 @@ async function nestedFiles(projectPath: string, names: readonly string[]): Promi
     ...names.map((n) => `:(glob)**/${n}`),
   ]);
   if (listed.exitCode === 0) {
-    return splitNul(listed.stdout).filter((rel) => existsExactly(projectPath, rel));
+    const found: NestedFiles['found'] = [];
+    for (const rel of splitNul(listed.stdout)) {
+      const kind = entryExactly(projectPath, rel);
+      if (kind !== null) found.push({ path: rel, kind });
+    }
+    return { found, unlooked: [] };
   }
-  const out: string[] = [];
+  const found: NestedFiles['found'] = [];
+  const unlooked: HonouredFile[] = [];
   const stack: string[] = [''];
   let visited = 0;
-  while (stack.length > 0 && visited < MAX_WALK_DIRS) {
+  while (stack.length > 0) {
+    if (visited >= MAX_WALK_DIRS) {
+      unlooked.push({ path: '.', decides: `the walk stopped after ${MAX_WALK_DIRS} directories: nested configuration in the rest was not looked for` });
+      break;
+    }
     const rel = stack.pop();
     if (rel === undefined) break;
     visited += 1;
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(rel === '' ? projectPath : join(projectPath, ...rel.split('/')), { withFileTypes: true });
-    } catch {
+    const entries = listProjectDirOrNull(projectPath, rel === '' ? projectPath : join(projectPath, ...rel.split('/')));
+    if (entries === null) {
+      unlooked.push({ path: rel === '' ? '.' : `${rel}/`, decides: 'could not be listed: nested configuration below it was not looked for' });
       continue;
     }
     for (const e of entries) {
       const child = rel === '' ? e.name : `${rel}/${e.name}`;
-      if (e.isDirectory()) {
+      if (e.kind === 'directory' && !names.includes(e.name)) {
         if (!PROJECT_WALK_EXCLUDE.has(e.name) && !SCANNER_WALK_EXCLUDE.has(e.name)) stack.push(child);
-      } else if (e.isFile() && names.includes(e.name)) {
-        out.push(child);
+      } else if (names.includes(e.name)) {
+        found.push({ path: child, kind: e.kind });
       }
     }
   }
-  return out;
+  return { found, unlooked };
 }
 
 /** A found file: its project-relative path, and the entry it answers to. */
@@ -264,22 +317,29 @@ export interface HonouredFile {
 /**
  * The files of `runner`'s {@link REPO_CONFIG} entry the project holds: at the
  * root (exact name), or anywhere below it for a `nested` one; a `when` file
- * only when its text matches. Sorted by path.
+ * only when its text matches. A config present as a link, a FIFO or a
+ * directory, or one that could not be read to check its `when`, is named
+ * with why — never taken for absent — and so is a directory the nested walk
+ * could not list. Sorted by path.
  */
 export async function honouredFiles(projectPath: string, runner: RepoConfigRunner): Promise<HonouredFile[]> {
   const specs = REPO_CONFIG[runner].filter((s) => s.handed !== true);
   const out: HonouredFile[] = [];
+  const budget = new ReadBudget(WHEN_BUDGET_BYTES, WHEN_BUDGET_FILES);
   const nested = specs.filter((s) => s.nested === true);
-  const found = nested.length > 0 ? await nestedFiles(projectPath, nested.map((s) => s.file)) : [];
+  const walked = nested.length > 0 ? await nestedFiles(projectPath, nested.map((s) => s.file)) : { found: [], unlooked: [] };
+  out.push(...walked.unlooked);
   for (const spec of specs) {
-    const paths =
-      spec.nested === true
-        ? found.filter((p) => p === spec.file || p.endsWith(`/${spec.file}`))
-        : existsExactly(projectPath, spec.file)
-          ? [spec.file]
-          : [];
-    for (const path of paths) {
-      if (matchesWhen(projectPath, path, spec.when)) out.push({ path, decides: spec.decides });
+    let paths: Array<{ path: string; kind: ConfigEntry }>;
+    if (spec.nested === true) {
+      paths = walked.found.filter((p) => p.path === spec.file || p.path.endsWith(`/${spec.file}`));
+    } else {
+      const kind = entryExactly(projectPath, spec.file);
+      paths = kind === null ? [] : [{ path: spec.file, kind }];
+    }
+    for (const { path, kind } of paths) {
+      const entry = honouredEntry(path, spec.decides, kind, judge(projectPath, path, kind, spec.when, budget));
+      if (entry !== null) out.push(entry);
     }
   }
   return out.sort(byPath);
@@ -291,10 +351,14 @@ function byPath(a: HonouredFile, b: HonouredFile): number {
 
 /** The files at the root only (sync): for a runner none of whose files is `nested`. */
 export function honouredRootFiles(projectPath: string, runner: RepoConfigRunner): HonouredFile[] {
+  const budget = new ReadBudget(WHEN_BUDGET_BYTES, WHEN_BUDGET_FILES);
   return REPO_CONFIG[runner]
     .filter((spec) => spec.handed !== true)
-    .filter((spec) => existsExactly(projectPath, spec.file) && matchesWhen(projectPath, spec.file, spec.when))
-    .map((spec) => ({ path: spec.file, decides: spec.decides }));
+    .flatMap((spec) => {
+      const kind = entryExactly(projectPath, spec.file);
+      if (kind === null) return [];
+      return honouredEntry(spec.file, spec.decides, kind, judge(projectPath, spec.file, kind, spec.when, budget)) ?? [];
+    });
 }
 
 /**
@@ -305,9 +369,15 @@ export function honouredRootFiles(projectPath: string, runner: RepoConfigRunner)
 export function honouredHandedFiles(projectPath: string, runner: RepoConfigRunner, handed: readonly string[]): HonouredFile[] {
   const specs = REPO_CONFIG[runner].filter((s) => s.handed === true);
   const out: HonouredFile[] = [];
+  const budget = new ReadBudget(WHEN_BUDGET_BYTES, WHEN_BUDGET_FILES);
   for (const path of new Set(handed)) {
-    const spec = specs.find((s) => matchesWhen(projectPath, path, s.when));
-    if (spec !== undefined) out.push({ path, decides: spec.decides });
+    const kind = entryExactly(projectPath, path) ?? 'file';
+    for (const spec of specs) {
+      const entry = honouredEntry(path, spec.decides, kind, judge(projectPath, path, kind, spec.when, budget));
+      if (entry === null) continue;
+      out.push(entry);
+      break;
+    }
   }
   return out.sort(byPath);
 }

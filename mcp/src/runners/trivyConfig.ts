@@ -73,9 +73,9 @@
  * keys at column 0 and was num=0 with no error.
  */
 
-import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
+import { describeReadRefusal, directoryLinkOut, listProjectDirOrNull, ReadBudget } from '../platform/projectFs.js';
 import type { ToolRun } from '../types.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
@@ -156,28 +156,16 @@ function isDockerfileName(name: string): boolean {
 
 const TERRAFORM = /\.(tf|tf\.json|tofu|tofu\.json)$/;
 
-function head(abs: string): string | null {
-  let fd: number | null = null;
-  try {
-    fd = openSync(abs, 'r');
-    const buf = Buffer.alloc(SNIFF_BYTES);
-    const n = readSync(fd, buf, 0, SNIFF_BYTES, 0);
-    return buf.subarray(0, n).toString('utf8');
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) {
-      try {
-        closeSync(fd);
-      } catch {
-        /* closing a read-only descriptor: nothing to lose */
-      }
-    }
-  }
-}
-
 /** JSON files larger than this are not parsed to decide (and not counted as IaC-looking). */
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
+/**
+ * What the whole walk may read, and how much of it may go through
+ * `JSON.parse` — 2 MiB of `[{},{},…]` is ~45 MB of heap and a fraction of a
+ * second of a blocked event loop, and a repository can carry thousands
+ * (review of 3.0, W2E). Past either, the files are named as not read.
+ */
+const IAC_BUDGET_BYTES = 64 * 1024 * 1024;
+const IAC_JSON_PARSE_BUDGET = 16 * 1024 * 1024;
 
 /**
  * A JSON document's TOP-LEVEL keys decide (round 4, item 7): the three
@@ -208,16 +196,6 @@ function looksLikeIacJson(text: string): boolean {
   return false;
 }
 
-/** The whole file when it is at most `max` bytes; null otherwise, or unreadable. */
-function whole(abs: string, max: number): string | null {
-  try {
-    if (statSync(abs).size > max) return null;
-    return readFileSync(abs, 'utf8');
-  } catch {
-    return null;
-  }
-}
-
 function looksLikeIacText(text: string): boolean {
   // YAML: top-level keys only (column 0), so a nested `kind:` never counts;
   // all three of Trivy's keys in one document.
@@ -242,16 +220,23 @@ export interface IacFiles {
  * enters them), a chart's `templates/` and `.guardianignore` entries are not
  * entered, symbolic links not followed; a JSON file is parsed only up to
  * 2 MB. A GitHub workflow is walked and never IaC-looking: it has no
- * top-level `apiVersion`/`kind`/`metadata`.
+ * top-level `apiVersion`/`kind`/`metadata`. Every listing and read goes
+ * through `platform/projectFs.ts`; a candidate that could not be read (it
+ * was swapped for a FIFO or a link after the listing, or cannot be opened)
+ * makes the walk `incomplete`, naming it.
  */
 export function iacLookingFiles(
   projectPath: string,
   exclusions: Pick<ProjectExclusions, 'ignores'> | null,
 ): IacFiles {
   const files: string[] = [];
+  const unread: string[] = [];
+  const unlisted: string[] = [];
+  const linksOut: string[] = [];
   const stack: string[] = [''];
+  const budget = new ReadBudget(IAC_BUDGET_BYTES, MAX_SNIFFED);
+  let jsonParsed = 0;
   let visited = 0;
-  let sniffed = 0;
   let incomplete: string | undefined;
   while (stack.length > 0) {
     const rel = stack.pop();
@@ -262,49 +247,68 @@ export function iacLookingFiles(
     }
     visited += 1;
     const abs = rel === '' ? projectPath : join(projectPath, ...rel.split('/'));
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(abs, { withFileTypes: true });
-    } catch {
+    const entries = listProjectDirOrNull(projectPath, abs);
+    if (entries === null) {
+      // Only directories the walk reached as directories are listed: a race or a permission.
+      unlisted.push(rel === '' ? '.' : `${rel}/`);
       continue;
     }
     // A chart's templates are Helm's to render (module comment): one disabled
     // by its values renders nothing and is absent from the report legitimately.
-    const isChart = entries.some((e) => e.isFile() && e.name === 'Chart.yaml');
+    const isChart = entries.some((e) => e.kind === 'file' && e.name === 'Chart.yaml');
     for (const e of entries) {
       const child = rel === '' ? e.name : `${rel}/${e.name}`;
-      if (e.isDirectory()) {
+      if (e.kind === 'directory' || e.kind === 'link') {
         // Hidden directories too (round 5, item 1): Trivy reads `.devcontainer/`, `.k8s/`.
         if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name)) continue;
         if (isChart && e.name === 'templates') continue;
         if (exclusions !== null && exclusions.ignores(child, true)) continue;
+      }
+      if (e.kind === 'directory') {
         stack.push(child);
         continue;
       }
-      if (!e.isFile()) continue;
       if (exclusions !== null && exclusions.ignores(child, false)) continue;
       const lower = e.name.toLowerCase();
+      // By name, whatever is there: a link or a FIFO named like IaC is IaC-looking
+      // too, and if Trivy did not read it the pass says so.
       if (TERRAFORM.test(e.name) || isDockerfileName(e.name)) {
         files.push(child);
         continue;
       }
-      if (!/\.(ya?ml|json|template)$/.test(lower) || lower === 'package.json' || lower.startsWith('docker-compose')) continue;
-      if (sniffed >= MAX_SNIFFED) {
-        incomplete ??= `read the head of ${MAX_SNIFFED} YAML/JSON files at most`;
+      const sniffable = /\.(ya?ml|json|template)$/.test(lower) && lower !== 'package.json' && !lower.startsWith('docker-compose');
+      if (!sniffable) {
+        // A directory link out of the project is not followed (nor by Trivy): named.
+        if (e.kind === 'link' && directoryLinkOut(projectPath, join(abs, e.name))) linksOut.push(`${child}/`);
         continue;
       }
-      sniffed += 1;
-      if (lower.endsWith('.json')) {
-        const text = whole(join(abs, e.name), MAX_JSON_BYTES);
-        if (text !== null && looksLikeIacJson(text)) files.push(child);
+      // Too large to parse is by design (not IaC-looking); anything else refused is named.
+      const isJson = lower.endsWith('.json');
+      let read;
+      if (isJson && jsonParsed >= IAC_JSON_PARSE_BUDGET) read = { status: 'refused', reason: 'read-budget' } as const;
+      else read = isJson ? budget.readText(projectPath, join(abs, e.name), MAX_JSON_BYTES) : budget.readHead(projectPath, join(abs, e.name), SNIFF_BYTES);
+      if (read.status === 'refused') {
+        if (read.reason !== 'too-large') unread.push(`${child} (${describeReadRefusal(read.reason)})`);
         continue;
       }
-      const text = head(join(abs, e.name));
-      if (text !== null && looksLikeIacText(text)) files.push(child);
+      if (read.status !== 'ok') continue;
+      if (isJson) jsonParsed += read.text.length;
+      if (isJson ? looksLikeIacJson(read.text) : looksLikeIacText(read.text)) files.push(child);
     }
   }
   files.sort();
-  return incomplete !== undefined ? { files, incomplete } : { files };
+  const notes: string[] = [];
+  if (incomplete !== undefined) notes.push(incomplete);
+  const list = (items: readonly string[], sepr: string): string =>
+    `${items.slice(0, 3).join(sepr)}${items.length > 3 ? ` and ${items.length - 3} more` : ''}`;
+  if (unread.length > 0) {
+    notes.push(`could not read ${unread.length} YAML/JSON file${unread.length === 1 ? '' : 's'} to tell whether it is IaC: ${list(unread, '; ')}`);
+  }
+  if (unlisted.length > 0) notes.push(`could not list ${list(unlisted, ', ')} — IaC below was not looked for`);
+  if (linksOut.length > 0) {
+    notes.push(`did not follow ${list(linksOut, ', ')} (a directory link out of the project, or unresolvable) — IaC behind it was not looked for`);
+  }
+  return notes.length > 0 ? { files, incomplete: notes.join('; ') } : { files };
 }
 
 // ---------------------------------------------------------------- the judgement
@@ -379,6 +383,13 @@ export function judgeTrivyConfig(args: {
   iacFiles: readonly string[];
   /** The run's target was one file (scan_containers): Trivy names it by its base name. */
   singleFile?: boolean;
+  /**
+   * Why `iacFiles` may be short ({@link IacFiles.incomplete}): named in the
+   * reason, so a walk that stopped early or a candidate it could not read is
+   * never silent. A note, not a gap: it is this cross-check's limit, not
+   * something Trivy was shown to miss.
+   */
+  iacIncomplete?: string;
 }): TrivyConfigJudgement {
   const { name, run, raw, iacFiles } = args;
   if (run.outcome !== 'completed') {
@@ -411,6 +422,11 @@ export function judgeTrivyConfig(args: {
             `${named(unrecognised)} (a templated manifest or a layout Trivy does not read) — not checked`,
     );
   }
-  if (gaps.length === 0) return { toolRun: withHonoured({ name, status: 'ok' }, run), missing: [] };
-  return { toolRun: withHonoured({ name, status: 'ok', reason: gaps.join('; ') }, run), missing: [name] };
+  const note =
+    args.iacIncomplete !== undefined ? [`the check for IaC-looking files Trivy did not read is incomplete: ${args.iacIncomplete}`] : [];
+  if (gaps.length === 0) {
+    const reason = note.length > 0 ? { reason: note.join('; ') } : {};
+    return { toolRun: withHonoured({ name, status: 'ok', ...reason }, run), missing: [] };
+  }
+  return { toolRun: withHonoured({ name, status: 'ok', reason: [...gaps, ...note].join('; ') }, run), missing: [name] };
 }

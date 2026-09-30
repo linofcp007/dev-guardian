@@ -18,27 +18,21 @@
  */
 
 import { chmodSync, lstatSync, mkdirSync, statSync, type Stats } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { userDataDir } from '../hooks/userDataDir.js';
 import { GuardianDbError } from './dbError.js';
 
 /**
  * dev-guardian's per-user data directory: `GUARDIAN_DATA_DIR` when set;
  * otherwise `%LOCALAPPDATA%\dev-guardian` on Windows and
- * `$XDG_DATA_HOME/dev-guardian` (only an absolute XDG_DATA_HOME counts, as
- * the XDG spec says) or `~/.local/share/dev-guardian` elsewhere. Read at call
- * time. Pure path arithmetic, no I/O.
+ * `$XDG_DATA_HOME/dev-guardian` (only an absolute XDG_DATA_HOME counts) or
+ * `~/.local/share/dev-guardian` elsewhere. The one resolution lives in
+ * `hooks/userDataDir.ts`, where the hooks' registry guard can load it
+ * without this storage layer; re-exported here, where the directory is
+ * owned.
  */
-export function userDataDir(): string {
-  const override = process.env['GUARDIAN_DATA_DIR']?.trim();
-  if (override !== undefined && override !== '') return resolve(override);
-  if (process.platform === 'win32') {
-    const local = process.env['LOCALAPPDATA']?.trim();
-    return join(local !== undefined && isAbsolute(local) ? local : join(homedir(), 'AppData', 'Local'), 'dev-guardian');
-  }
-  const xdg = process.env['XDG_DATA_HOME']?.trim();
-  return join(xdg !== undefined && isAbsolute(xdg) ? xdg : join(homedir(), '.local', 'share'), 'dev-guardian');
-}
+export { userDataDir };
+export type { DataDirContext } from '../hooks/userDataDir.js';
 
 /** A {@link GuardianDbError} of kind `data-dir` for a per-user location this user does not own. */
 export function notPrivate(path: string, why: string): GuardianDbError {

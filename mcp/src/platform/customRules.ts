@@ -42,7 +42,7 @@
 
 import { statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { describeTooComplex, parseYamlBounded, YAML_CONFIG_MAX_NODES } from './boundedParse.js';
 import type { PluginContext } from '../context.js';
 import { readSmallText } from '../hooks/configFile.js';
 import { listProjectDir } from './projectFs.js';
@@ -100,13 +100,13 @@ export function validateSemgrepRulesFile(path: string): RulesFileVerdict {
             : 'unreadable',
     };
   }
-  const text = read.text;
-  let doc: unknown;
-  try {
-    doc = parseYaml(text);
-  } catch {
-    return { ok: false, reason: 'not valid YAML' };
+  // Under a node bound (platform/boundedParse.ts): the byte cap alone let a
+  // dense file take the parse past the server's heap.
+  const parsed = parseYamlBounded(read.text);
+  if (!parsed.ok) {
+    return { ok: false, reason: parsed.reason === 'too-complex' ? describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes') : 'not valid YAML' };
   }
+  const doc = parsed.value;
   if (!isRecord(doc)) return { ok: false, reason: 'no `rules:` list' };
   const rules = doc['rules'];
   if (!Array.isArray(rules)) return { ok: false, reason: 'no `rules:` list' };

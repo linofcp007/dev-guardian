@@ -14,6 +14,10 @@
  * `runShellScript` builds on this — direct scanner invocations (Semgrep,
  * Trivy CLI, gitleaks) call `runProcess` straight.
  *
+ * A bare command name is resolved in-process on the child's PATH and the
+ * absolute path is spawned: never a binary the scanned project planted in
+ * `cwd` (`platform/binaryPath.ts`).
+ *
  * ---- Every kill is a TREE kill ----------------------------------------------
  *
  * Timeout, cancellation and the stdout cap all stop the child's whole process
@@ -47,6 +51,7 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { execa } from 'execa';
 import { onExit } from 'signal-exit';
+import { findOnPath, isBareName } from '../platform/binaryPath.js';
 import { applyGitSafety, gitSafetyFor, withoutHooksPath } from '../platform/gitSafety.js';
 import { killWindowsTree, PROC_TREE_ENV } from './windowsTreeKill.js';
 const FIVE_MB = 5 * 1024 * 1024;
@@ -97,9 +102,17 @@ export async function runProcess(options) {
         extendEnv = false;
         gitNotApplied = safety.notApplied;
     }
-    const child = execa(options.command, options.args ?? [], {
+    // A bare name is spawned by the absolute path it resolves to on the CHILD's PATH, looked up here —
+    // never in `cwd`, which is usually the project being scanned (platform/binaryPath.ts). Found on no
+    // PATH entry, the one place left for a spawn to find it is `cwd`: it is not spawned at all.
+    const childEnv = extendEnv ? { ...process.env, ...env } : (env ?? {});
+    const command = isBareName(options.command) ? findOnPath(options.command, childEnv) : options.command;
+    if (command === null) {
+        return { outcome: 'failed', exitCode: null, stdout: '', stderr: `${options.command}: not found on PATH\n`, truncated: false };
+    }
+    const child = execa(command, options.args ?? [], {
         cwd: options.cwd,
-        env: envFor(options.command, env, treeToken),
+        env: envFor(command, env, treeToken),
         extendEnv,
         shell: false,
         encoding: 'utf8',
@@ -116,7 +129,7 @@ export async function runProcess(options) {
         if (stopping)
             return;
         stopping = true;
-        killTree(child, options.command, treeToken, () => settled);
+        killTree(child, command, treeToken, () => settled);
     };
     // execa skips its own exit cleanup for a detached child; supply it.
     const removeExitHook = posixGroup ? onExit(() => signalGroup(child.pid, 'SIGTERM')) : null;

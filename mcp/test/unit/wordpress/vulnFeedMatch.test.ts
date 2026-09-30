@@ -20,6 +20,7 @@ function inventory(over: Partial<WpSourceInventory> = {}): WpSourceInventory {
     plugins: [],
     themes: [],
     mu_plugins: [],
+    not_inventoried: [],
     warnings: [],
     ...over,
   };

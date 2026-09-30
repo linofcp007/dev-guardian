@@ -19,6 +19,13 @@ export const TRACKED_FS_APIS = new Set([
   'opendir',
   'statSync',
   'stat',
+  // Review of 3.0, W2E (round 2): these follow a link on the way too — on Windows
+  // a link to \\host\share, and `existsSync` of it blocked for 157 s.
+  'existsSync',
+  'accessSync',
+  'access',
+  'realpathSync',
+  'realpath',
   'createReadStream',
   // writes
   'writeFileSync',
@@ -89,6 +96,19 @@ export function findFsCallSites(mcpDir: string, srcDir: string): FsCallSite[] {
         const callee = node.expression;
         let api: string | undefined;
         if (ts.isIdentifier(callee)) api = imports.get(callee.text);
+        // `realpathSync.native(…)`, and `fs.realpathSync.native(…)` through a namespace import.
+        else if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'native') {
+          const inner = callee.expression;
+          if (ts.isIdentifier(inner)) api = imports.get(inner.text);
+          else if (
+            ts.isPropertyAccessExpression(inner) &&
+            ts.isIdentifier(inner.expression) &&
+            imports.has(`${inner.expression.text}.*`) &&
+            TRACKED_FS_APIS.has(inner.name.text)
+          ) {
+            api = inner.name.text;
+          }
+        }
         else if (
           ts.isPropertyAccessExpression(callee) &&
           ts.isIdentifier(callee.expression) &&
