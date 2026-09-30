@@ -15,7 +15,8 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 import { CAN_SYMLINK, POSIX } from '../helpers/fsCapabilities.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -25,9 +26,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(here, '..', '..', '..', 'cli', 'dev-guardian.mjs');
 /** A hang-breaker, far above the ~2 s these runs take: reaching it is the failure. */
 const TIMEOUT_MS = 45_000;
+// Above the cap, so a hung child is reported by the cap — naming it — and
+// not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 function cli(args: string[], cwd?: string): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, [CLI, ...args], {
+  return spawnSyncCapped(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     cwd,
     timeout: TIMEOUT_MS,

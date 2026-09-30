@@ -6,6 +6,7 @@ import { execa } from 'execa';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
+import { PERF_STRICT } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -183,8 +184,13 @@ function readPid(pidFile: string): number {
 }
 
 describe('runProcess kills the whole process tree', () => {
+  // The property is that the timeout does not wait for the backgrounded
+  // `sleep 25`: a runner that left it holding the pipes returns after ~25 s.
+  // It was "under 5 s", which measured the machine — 7.8 s under v8 coverage
+  // on a loaded one (review 3.0, R7) — so the bound is now "well before the
+  // sleep would have ended"; the tight one runs with GUARDIAN_PERF_STRICT=1.
   it.skipIf(BASH === null)(
-    "times out `bash -c 'sleep 25 & wait'` in under 5 s",
+    "times out `bash -c 'sleep 25 & wait'` well before the sleep ends",
     async () => {
       const started = Date.now();
       const result = await runProcess({
@@ -195,7 +201,7 @@ describe('runProcess kills the whole process tree', () => {
       });
       const elapsed = Date.now() - started;
       expect(result.outcome).toBe('timed_out');
-      expect(elapsed).toBeLessThan(5_000);
+      expect(elapsed).toBeLessThan(PERF_STRICT ? 5_000 : 15_000);
     },
     30_000,
   );

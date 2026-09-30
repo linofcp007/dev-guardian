@@ -13,13 +13,14 @@
  * Requires a built `mcp/dist` (`npm run build`).
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '..', '..', '..');
@@ -70,6 +71,12 @@ const CAN_SYMLINK = ((): boolean => {
   }
 })();
 
+/** Hang-breaker for one hook run; the deadlines under test are far below it. */
+const HOOK_TIMEOUT_MS = 20_000;
+// Above the cap, so a hung child is reported by the cap — naming it — and
+// not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(HOOK_TIMEOUT_MS) });
+
 const LEAKY_ENV =
   /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|NuGetPackageSourceCredentials_|COMPOSER|VIRTUAL_ENV$|CONDA_PREFIX$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
 
@@ -77,7 +84,7 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !LEAKY_ENV.test(k)) base[k] = v;
   const t0 = Date.now();
-  const r = spawnSync(process.execPath, ['--import', PRELOAD, HOOK], {
+  const r = spawnSyncCapped(process.execPath, ['--import', PRELOAD, HOOK], {
     cwd: project,
     input: JSON.stringify({
       hook_event_name: 'PreToolUse',
@@ -86,7 +93,7 @@ function runHook(command: string, routes: Record<string, Route | Route[]>, opts:
       cwd: project,
     }),
     encoding: 'utf8',
-    timeout: 20_000,
+    timeout: HOOK_TIMEOUT_MS,
     env: {
       ...base,
       HOME: home,
@@ -226,7 +233,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     expect(r.ms).toBeLessThan(6000);
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not vet express.*not verified/s);
-  }, 20_000);
+  });
 
   // Follow-up Part Y (item 4): the registry-context reads were not walked for
   // a network link. A project `.npmrc` linked to an unreachable share held the
@@ -344,7 +351,8 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
           cwd: project,
         }),
       );
-      const code = await new Promise<number | null>((r) => child.on('exit', (c) => r(c)));
+      // 'close', not 'exit': the output streams may still be draining at 'exit'.
+      const code = await new Promise<number | null>((r) => child.on('close', (c) => r(c)));
       expect(stderr).not.toMatch(/Assertion failed/);
       expect(code).toBe(0);
       const out = JSON.parse(stdout) as HookOut['output'];
@@ -352,7 +360,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     } finally {
       server.close();
     }
-  }, 20_000);
+  });
 
   describe('fix round 2 — the reviewer\'s probes through the real hook', () => {
     it.each([

@@ -49,6 +49,10 @@ import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
 
+// "second call within the cache window" measured 8.7 s in an ordinary full
+// run against the 10 s default, past it under load (review 3.0, R7).
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeAll(async () => {
   await import('../../src/tools/securityScanFull.js');
 });

@@ -35,6 +35,11 @@ import { TOOLS } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
+
+// The file's first test pays for loading the tool's module graph: 1.5-1.7 s
+// ordinarily, 10.0 s — past the 10 s default — with the CPU at 100% (other
+// suites running; review 3.0, R7). Scanners are mocked here: nothing can hang.
+vi.setConfig({ testTimeout: 30_000 });
 beforeAll(async () => {
   await import('../../src/tools/scanContainers.js');
 });

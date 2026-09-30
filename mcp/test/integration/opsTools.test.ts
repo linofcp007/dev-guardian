@@ -90,6 +90,18 @@ function tempProject(): string {
   return makeTempDir('ops-tools-');
 }
 
+/**
+ * `<its own temp dir>/scripts`: init_project reads its baselines from the
+ * sibling `configs/`. A bare `makeTempDir()` as the scripts dir put that
+ * sibling at `<os temp>/configs` — one fixed directory every test and every
+ * concurrent run shared, and nothing removed (review 3.0, R7).
+ */
+function pluginScriptsDir(): string {
+  const scriptsDir = join(makeTempDir('init-plugin-'), 'scripts');
+  mkdirSync(scriptsDir, { recursive: true });
+  return scriptsDir;
+}
+
 function getTool(name: string) {
   const t = TOOLS.find((x) => x.name === name);
   if (!t) throw new Error(`Tool '${name}' not registered`);
@@ -182,7 +194,7 @@ describe('init_project', () => {
   it('copies profile configs into the project (idempotent)', async () => {
     const project = tempProject();
     // Build a fake "configs/" alongside scripts/ so initProject can resolve them.
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -245,7 +257,7 @@ describe('init_project', () => {
 
   it('respects apply=false (dry-run)', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -267,7 +279,7 @@ describe('init_project', () => {
   it("reports this project's stack snapshot, never another project's newer one (Task 24)", async () => {
     const project = tempProject();
     const other = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     writeFileSync(join(configsDir, 'gitleaks', 'gitleaks.toml'), '# gl\n', 'utf8');
@@ -307,7 +319,7 @@ describe('init_project', () => {
 
   it('paranoid installs the paranoid gitleaks/renovate variants, not the standard ones', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     makeFullConfigsDir(scriptsDir);
     mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
     writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
@@ -332,7 +344,7 @@ describe('init_project', () => {
 
   it('standard installs the standard gitleaks/renovate files (not the paranoid ones)', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     makeFullConfigsDir(scriptsDir);
     mkdirSync(join(scriptsDir, 'scan'), { recursive: true });
     writeFileSync(join(scriptsDir, 'scan', 'initial-scan.sh'), '#!/bin/sh\necho ok\n', 'utf8');
@@ -358,7 +370,7 @@ describe('init_project', () => {
 
   it("computes the secrets line from gitleaks directly, catching what the shell script's own history-only pass would miss", async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });
@@ -417,7 +429,7 @@ describe('init_project', () => {
 
   it('leaves the shell summary untouched when gitleaks is not installed (nothing to correct it with)', async () => {
     const project = tempProject();
-    const scriptsDir = makeTempDir('init-scripts-');
+    const scriptsDir = pluginScriptsDir();
     const configsDir = join(scriptsDir, '..', 'configs');
     mkdirSync(join(configsDir, 'gitleaks'), { recursive: true });
     mkdirSync(join(configsDir, 'renovate'), { recursive: true });

@@ -17,7 +17,7 @@
  * The existence cases need nothing but the fake registry on 127.0.0.1.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,10 +31,11 @@ import {
 import { runProcess } from '../../src/runners/processRunner.js';
 import { startFakeRegistry, UNTRUSTED_CERT_PEM, type FakeImageOptions } from '../helpers/fakeOciRegistry.js';
 import { startFakeRekor } from '../helpers/fakeRekor.js';
+import { rmDirOrDefer } from '../helpers/tempDir.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'guardian-cosign-e2e-'));
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+afterAll(() => rmDirOrDefer(scratch));
 
 /** cosign's own state kept out of the user's home: its TUF cache, and no registry credentials. */
 const ENV: NodeJS.ProcessEnv = {
@@ -54,8 +55,12 @@ async function cosignReady(): Promise<string | null> {
 
 const REQUIRED = process.env['GUARDIAN_REQUIRE_COSIGN'] === '1';
 const NOT_READY = await cosignReady();
-if (NOT_READY !== null && REQUIRED) {
-  throw new Error(`GUARDIAN_REQUIRE_COSIGN=1 but ${NOT_READY}`);
+if (NOT_READY !== null) {
+  // Every test below is then a skip — or, required, this file fails here —
+  // and vitest runs no afterAll in a file with nothing to run: the scratch
+  // directory goes now or never (review 3.0, R7: one was left per run).
+  rmDirOrDefer(scratch);
+  if (REQUIRED) throw new Error(`GUARDIAN_REQUIRE_COSIGN=1 but ${NOT_READY}`);
 }
 const TUF_READY =
   NOT_READY === null &&
@@ -63,6 +68,7 @@ const TUF_READY =
 // Requiring cosign means requiring the verify cases too: they are the ones
 // that decide a HIGH finding.
 if (NOT_READY === null && !TUF_READY && REQUIRED) {
+  rmDirOrDefer(scratch);
   throw new Error("GUARDIAN_REQUIRE_COSIGN=1 but `cosign initialize` could not fetch Sigstore's TUF trust root (network?)");
 }
 

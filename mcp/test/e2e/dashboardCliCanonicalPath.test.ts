@@ -9,12 +9,12 @@
  * against `mcp/dist`) as a subprocess, like `dashboardCli.test.ts`.
  */
 
-import { spawnSync } from 'node:child_process';
 import { symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { openDatabase, Storage } from '../../src/storage/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
@@ -23,12 +23,17 @@ afterAll(cleanupTempDirs);
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
+/** Hang-breaker for one CLI run; nothing asserts by reaching it. */
+const TIMEOUT_MS = 15_000;
+// Above the cap, so a hung child is reported by the cap — naming it — and
+// not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 function runStatus(project: string) {
-  const r = spawnSync(process.execPath, [CLI, 'status', '--project', project], {
+  const r = spawnSyncCapped(process.execPath, [CLI, 'status', '--project', project], {
     encoding: 'utf8',
     env: { ...process.env, NO_COLOR: '1' },
-    timeout: 15_000,
+    timeout: TIMEOUT_MS,
   });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }

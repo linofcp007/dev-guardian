@@ -34,17 +34,19 @@
  * that one proves the Node-version-message predicate in isolation.
  */
 
-import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const REAL_CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const REAL_DIST = resolve(REPO_ROOT, 'mcp', 'dist');
 const TIMEOUT_MS = 15_000;
+// Above the cap: a hung CLI is reported by the cap, naming it (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 describe('cli/dev-guardian.mjs — storage/dashboard modules load lazily', () => {
   it('no top-level import names storage/* or dashboard/*', () => {
@@ -100,7 +102,7 @@ describe('cli/dev-guardian.mjs — behaves correctly when storage/dashboard are 
   });
 
   function run(args: string[]) {
-    const r = spawnSync(process.execPath, [cli, ...args], {
+    const r = spawnSyncCapped(process.execPath, [cli, ...args], {
       encoding: 'utf8',
       env: { ...process.env, NO_COLOR: '1' },
       timeout: TIMEOUT_MS,

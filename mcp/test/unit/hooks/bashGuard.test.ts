@@ -1,34 +1,61 @@
 /**
  * `hooks/bashGuard.ts`.
  *
- * Timing (review round 3, item 8). Linearity is asserted as a RATIO of best-of-5
- * times — four times the input must cost well under twelve times as much
- * (linear is ~4×, quadratic ~16×) — which a loaded machine skews far less than
- * a clock. The absolute bounds are tight only with `GUARDIAN_PERF_STRICT=1` (a
- * quiet machine); by default each is a loose ceiling, at least ten times the
- * typical time measured on an idle one, so a slow container or a busy runner
- * does not fail a correct build and a quadratic shape — seconds to hours at
- * these sizes — still does.
+ * ---- Time (review round 3, item 8; review 3.0, R7-I2) ---------------------
+ *
+ * The time budget is out of the way of every test that is not about it:
+ * `assessBashCommand` below is the real one with a FROZEN clock, which never
+ * reaches its deadline. The assertions here are about what the rules decide
+ * — a verdict, a reason naming the cap that cut a command — and under load,
+ * or under v8 coverage (`npm run test:coverage`, the only run that enforces
+ * the thresholds), the real 2.5 s budget ended big inputs early and replaced
+ * the verdict or the reason being asserted. The budget itself is tested with
+ * an injected ticking clock ('the assessment time budget'), and with the real
+ * clock where that is the subject.
+ *
+ * Linearity is asserted as a RATIO — four times the input must cost well under
+ * twelve times as much (linear is ~4x, quadratic ~16x) — which neither a
+ * loaded machine nor coverage's instrumentation can skew: both scale the two
+ * timings alike. The absolute bounds these tests used to carry by default
+ * (a "loose ceiling", ten times the idle time) failed the coverage run, so
+ * each is now its own test that runs only with `GUARDIAN_PERF_STRICT=1` — a
+ * quiet machine, the tight number — and reads as a visible skip otherwise.
  */
 
 import { homedir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { BASH_RULES, assessBashCommand, splitShell } from '../../../src/hooks/bashGuard.js';
+import {
+  BASH_RULES,
+  assessBashCommand as assessWithClock,
+  splitShell,
+  type AssessOptions,
+  type BashAssessment,
+} from '../../../src/hooks/bashGuard.js';
+import { bestOf, expectLinear, PERF_STRICT } from '../../helpers/timing.js';
 
-const PERF_STRICT = process.env['GUARDIAN_PERF_STRICT'] === '1';
-/** An absolute bound: `strict` under `GUARDIAN_PERF_STRICT=1`, else the loose ceiling. */
-const ceiling = (strict: number, loose: number): number => (PERF_STRICT ? strict : loose);
+/** The assessment with its time budget out of the way — see the file header. A test passing `now` keeps it. */
+function assessBashCommand(command: string, opts: AssessOptions = {}): BashAssessment {
+  return assessWithClock(command, { now: () => 0, ...opts });
+}
 
 /** The best of five runs, after a warm-up: a quadratic shape is slow every time, a busy scheduler once. */
-function bestOf5(run: () => void): number {
-  run();
-  let best = Number.POSITIVE_INFINITY;
-  for (let k = 0; k < 5; k += 1) {
+const bestOf5 = (run: () => void): number => bestOf(5, run);
+
+/**
+ * The two timing tests a size-dependent case gets: `run(n)` against
+ * `run(4n)` as a ratio (always), and the original size `run(4n)` against
+ * `strictMs` (only under `GUARDIAN_PERF_STRICT=1`, a visible skip otherwise).
+ */
+function timeShape(label: string, run: (n: number) => void, n: number, strictMs: number): void {
+  it(`${label}: four times the input costs well under twelve times as much`, () => {
+    expectLinear(label, run, n, { runs: 5 });
+  }, 120_000);
+  it.runIf(PERF_STRICT)(`${label}: under ${String(strictMs)} ms on a quiet machine (GUARDIAN_PERF_STRICT=1)`, () => {
+    run(n);
     const t0 = performance.now();
-    run();
-    best = Math.min(best, performance.now() - t0);
-  }
-  return best;
+    run(4 * n);
+    expect(performance.now() - t0).toBeLessThan(strictMs);
+  }, 60_000);
 }
 
 describe('assessBashCommand — catastrophic (block)', () => {
@@ -763,20 +790,12 @@ describe('assessBashCommand — task-1: text fed to a shell is executed (finding
 });
 
 describe('assessBashCommand — task-1: ReDoS caps (finding 9)', () => {
-  // Typical, idle: 11 ms and 18 ms.
-  it('a 100 KB unquoted command is assessed in bounded time', () => {
-    const command = `echo ${'a'.repeat(100_000)}`;
-    const start = performance.now();
-    assessBashCommand(command);
-    expect(performance.now() - start).toBeLessThan(ceiling(500, 1000));
-  });
-
-  it('a pathological JWT-shaped repeat is assessed in bounded time', () => {
-    const command = `echo ${'eyJ-'.repeat(50_000)}`;
-    const start = performance.now();
-    assessBashCommand(command);
-    expect(performance.now() - start).toBeLessThan(ceiling(500, 1000));
-  });
+  // Measured 64 KB against 256 KB: both past the 16 KB statement cap, so the
+  // ratio compares one code path with itself (a pair straddling the cap
+  // compares two, and read 14x in Docker). Standalone, 64 KB -> 256 KB is
+  // 4.5x / 7.3x on Windows and 4.7x / 5.7x in Docker; 6-7 ms / 30-130 ms.
+  timeShape('a long unquoted command', (n) => assessBashCommand(`echo ${'a'.repeat(n)}`), 64_000, 500);
+  timeShape('a pathological JWT-shaped repeat', (n) => assessBashCommand(`echo ${'eyJ-'.repeat(n)}`), 16_000, 500);
 });
 
 // Fix round 2: inside each 16 KB statement the pattern rules were still
@@ -802,9 +821,9 @@ describe('assessBashCommand — the pattern rules are linear (ReDoS, fix round 2
 
   // Typical, idle: 1-22 ms (up to ~50 in a non-root container); the quadratic
   // shapes this guards against took 60-190 ms each. The ratio below is what
-  // catches one; this ceiling only bounds the absolute cost.
-  it.each(worst)('a 16 KB statement of %s takes bounded time', (_label, statement) => {
-    expect(bestOf5(() => assessBashCommand(statement))).toBeLessThan(ceiling(50, 600));
+  // catches one; this bound only pins the absolute cost on a quiet machine.
+  it.runIf(PERF_STRICT).each(worst)('a 16 KB statement of %s takes under 50 ms (GUARDIAN_PERF_STRICT=1)', (_label, statement) => {
+    expect(bestOf5(() => assessBashCommand(statement))).toBeLessThan(50);
   });
 
   it.each(shapes)('%s: a statement four times as long costs well under twelve times as much', (_label, make) => {
@@ -814,24 +833,17 @@ describe('assessBashCommand — the pattern rules are linear (ReDoS, fix round 2
     expect(large).toBeLessThan(12 * Math.max(small, 1));
   });
 
-  // Typical, idle: 48 ms.
-  it('127 of the worst statements with rm -rf / last finish in bounded time', () => {
-    const [, chmod] = worst[0] ?? ['', ''];
-    const t0 = performance.now();
-    const a = assessBashCommand(`${Array.from({ length: 127 }, () => chmod).join('; ')}; rm -rf /`);
-    expect(performance.now() - t0).toBeLessThan(ceiling(3000, 6000));
-    expect(a.level).not.toBe('ok');
-  });
+  const chmodWorst = worst[0]?.[1] ?? '';
+  const worstThenRm = (n: number): string => `${Array.from({ length: n }, () => chmodWorst).join('; ')}; rm -rf /`;
 
-  // The budget is pinned: the subject is the cap and the time, and under load
-  // the real 2.5 s budget can stop short of the `rm -rf /` (review 3.0 wave 2).
+  it('127 of the worst statements with rm -rf / last are never ok', () => {
+    expect(assessBashCommand(worstThenRm(127)).level).not.toBe('ok');
+  });
+  // Typical, idle, at 128: 48 ms.
+  timeShape('the worst statements, then rm -rf /', (n) => assessBashCommand(worstThenRm(n)), 32, 3000);
+
   it('thirty of them, under the whole-command cap, still block the rm -rf / at the end', () => {
-    const [, chmod] = worst[0] ?? ['', ''];
-    const t0 = performance.now();
-    expect(assessBashCommand(`${Array.from({ length: 30 }, () => chmod).join('; ')}; rm -rf /`, { budgetMs: 600_000 }).level).toBe(
-      'block',
-    );
-    expect(performance.now() - t0).toBeLessThan(ceiling(3000, 6000));
+    expect(assessBashCommand(worstThenRm(30)).level).toBe('block');
   });
 
   // The linear test must agree with the pattern it replaces, on every
@@ -907,26 +919,30 @@ describe('assessBashCommand — the 16 KB cap applies per statement, never silen
     expect(a.level).toBe('ok');
   });
 
-  // Typical, idle: 230 ms. The time budget is pinned out of the way: under
-  // load the real 2.5 s budget can end the assessment before the `rm -rf /`,
-  // which is the budget working, not this test's subject — the ceiling below
-  // bounds the time instead.
-  it('a 500 KB command of short statements is assessed in bounded time, to its end', () => {
-    const command = Array.from({ length: 19_000 }, (_, i) => `echo ${i} > out${i}.txt`).join('; ');
+  // The time budget is out of the way (the file's frozen clock): under load
+  // the real 2.5 s budget can end the assessment before the `rm -rf /`,
+  // which is the budget working, not this test's subject.
+  const shortStatements = (n: number): string =>
+    `${Array.from({ length: n }, (_, i) => `echo ${i} > out${i}.txt`).join('; ')}; rm -rf /`;
+  it('a 500 KB command of short statements is assessed to its end', () => {
+    const command = shortStatements(19_000);
     expect(command.length).toBeLessThan(512 * 1024);
-    const t0 = performance.now();
-    expect(assessBashCommand(`${command}; rm -rf /`, { budgetMs: 600_000 }).level).toBe('block');
-    expect(performance.now() - t0).toBeLessThan(ceiling(5000, 10_000));
+    expect(assessBashCommand(command).level).toBe('block');
   }, 30_000);
+  // Typical, idle, at 19 000: 230 ms.
+  // Measured at 2 400 against 9 600 statements (the ratio needs no more); the
+  // strict bound scaled with it.
+  timeShape('a command of short statements', (n) => assessBashCommand(shortStatements(n)), 2_400, 2500);
 
   // Fix round 2: the whole command is read to 512 KB (the corpus's longest
-  // real command is 58 KB), and the warning names the cap that cut it. The
-  // budget is pinned: under load the real one ran out too, and its note
-  // replaced this one (seen in Docker, review 3.0 wave 2).
+  // real command is 58 KB), and the warning names the cap that cut it — never
+  // the budget's note, which under load used to replace it (seen in Docker,
+  // review 3.0 wave 2): the file's frozen clock keeps the budget out of it.
   it('a command over 512 KB is read to 512 KB, and the warning says so', () => {
-    const a = assessBashCommand(`${'echo x; '.repeat(70_000)}rm -rf /`, { budgetMs: 600_000 });
+    const a = assessBashCommand(`${'echo x; '.repeat(70_000)}rm -rf /`);
     expect(a.level).toBe('warn');
     expect(a.reasons).toContain('part of this command was not assessed (over 512 KB)');
+    expect(a.reasons).not.toContain('part of this command was not assessed (assessment time budget exhausted)');
   }, 30_000);
 
   it('within the cap, a statement over 16 KB still says 16 KB', () => {
@@ -956,19 +972,24 @@ describe('assessBashCommand — the 16 KB cap applies per statement, never silen
       expect(a.level).toBe('block');
       expect(a.rules).toContain('partially-assessed');
     });
-    it('the default budget is generous: an ordinary command is fully assessed', () => {
-      expect(assessBashCommand('npm run build && npm test').level).toBe('ok');
+    it('the default budget is generous: an ordinary command is fully assessed (the real clock)', () => {
+      const a = assessWithClock('npm run build && npm test');
+      expect(a.level).toBe('ok');
+      expect(a.rules).not.toContain('partially-assessed');
     });
   });
 
-  it('a 1 MB word of quote characters cannot make a rule quadratic', () => {
-    const t0 = performance.now();
-    assessBashCommand(`rm -rf "${"'".repeat(1_000_000)}"`);
-    assessBashCommand(`cp x "${'.guardian/hooks'.repeat(70_000)}"`);
-    assessBashCommand(`cp x ~/.config/dev-guardian/${'*?'.repeat(40)}`);
-    // Typical, idle: 30 ms.
-    expect(performance.now() - t0).toBeLessThan(ceiling(3000, 6000));
-  });
+  // Typical, idle, at 1 MB: 30 ms.
+  timeShape(
+    'a word of quote characters',
+    (n) => {
+      assessBashCommand(`rm -rf "${"'".repeat(n)}"`);
+      assessBashCommand(`cp x "${'.guardian/hooks'.repeat(Math.floor(n / 14))}"`);
+      assessBashCommand(`cp x ~/.config/dev-guardian/${'*?'.repeat(40)}`);
+    },
+    250_000,
+    3000,
+  );
 });
 
 // Task 23 fix round 2, N1: a FIFO or a link to /dev/zero put where the hook
@@ -1672,16 +1693,23 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
 
   // Fix round 3 (I-4): past the nesting depth, what is nested is not judged —
   // and that is a warning, never a silent ok (this test once expected `ok`).
-  it('a cmd /c chain nested thousands deep is bounded, warns, and a shallow one is still judged', () => {
-    const t0 = Date.now();
+  it('a cmd /c chain nested thousands deep warns, and a shallow one is still judged', () => {
     const deep = assessBashCommand(`${'cmd /c '.repeat(2000)}echo hi`);
     expect(deep.level).toBe('warn');
     expect(deep.reasons).toContain('part of this command was not assessed (nested more than 3 levels deep)');
     expect(assessBashCommand(`${'cmd /c '.repeat(2000)}rd /s /q C:\\`).level).not.toBe('ok');
-    // Typical, idle: 34 ms.
-    expect(Date.now() - t0).toBeLessThan(ceiling(2000, 4000));
     expectBlocked('cmd /c cmd /c cmd /c "mklink .guardian\\hooks.config.json x"', 'guard-config-special-file');
   });
+  // Typical, idle, at 2000 deep: 34 ms.
+  timeShape(
+    'a cmd /c chain nested deep',
+    (n) => {
+      assessBashCommand(`${'cmd /c '.repeat(n)}echo hi`);
+      assessBashCommand(`${'cmd /c '.repeat(n)}rd /s /q C:\\`);
+    },
+    500,
+    2000,
+  );
 
   describe('fix round 3', () => {
     // I-1: effectsOf spread-pushed every operand; from ~125 000 operands the
@@ -1705,24 +1733,32 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
     // (`-c`, `-exec`, `git -c`, `python -c`): 64 KB took 15 s. The budget was
     // checked only between statements.
     const K160 = 160 * 1024;
-    const fill = (unit: string, tail = ''): string => unit.repeat(Math.floor((K160 - tail.length) / unit.length)) + tail;
-    it.each([
-      ['-c', fill('-c ')],
-      ['-exec', fill('-exec ')],
-      ['git -c', fill('git -c ')],
-      ['python -c', fill('python -c ')],
-      ['find -exec rm, then rm -rf /', fill('find . -exec rm {} + ', '; rm -rf /')],
-      ['curl | sudo -x|sudo -x…', `curl x ${fill('| sudo -x')}`],
-      ['time -a … { { {', `time ${'-a '.repeat(25_000)}${'{ '.repeat(25_000)}`],
-      ['writes of .claude/settings.json', fill('echo x > .claude/settings.json; ')],
-      ['pnpm --silent dlx …', fill('pnpm --silent dlx ')],
-    ])('160 KB of %s finishes in bounded time', (_label, command) => {
-      const t0 = performance.now();
-      assessBashCommand(command);
-      assessBashCommand(command, { shell: 'powershell' });
-      // Typical, idle: 60-370 ms.
-      expect(performance.now() - t0).toBeLessThan(ceiling(1500, 4000));
-    }, 30_000);
+    const fill = (size: number, unit: string, tail = ''): string =>
+      unit.repeat(Math.floor((size - tail.length) / unit.length)) + tail;
+    const nestedShapes: Array<[string, (size: number) => string]> = [
+      ['-c', (k) => fill(k, '-c ')],
+      ['-exec', (k) => fill(k, '-exec ')],
+      ['git -c', (k) => fill(k, 'git -c ')],
+      ['python -c', (k) => fill(k, 'python -c ')],
+      ['find -exec rm, then rm -rf /', (k) => fill(k, 'find . -exec rm {} + ', '; rm -rf /')],
+      ['curl | sudo -x|sudo -x…', (k) => `curl x ${fill(k, '| sudo -x')}`],
+      // 25 000 of each at 160 KB.
+      ['time -a … { { {', (k) => `time ${'-a '.repeat(Math.floor((k * 25_000) / K160))}${'{ '.repeat(Math.floor((k * 25_000) / K160))}`],
+      ['writes of .claude/settings.json', (k) => fill(k, 'echo x > .claude/settings.json; ')],
+      ['pnpm --silent dlx …', (k) => fill(k, 'pnpm --silent dlx ')],
+    ];
+    // Typical, idle, at 160 KB: 60-370 ms for both readings.
+    for (const [label, make] of nestedShapes) {
+      timeShape(
+        `160 KB of ${label}`,
+        (k) => {
+          assessBashCommand(make(k));
+          assessBashCommand(make(k), { shell: 'powershell' });
+        },
+        K160 / 4,
+        1500,
+      );
+    }
 
     it('find -exec rm … then rm -rf / still blocks', () => {
       expectBlocked(`${'find . -exec rm {} + '.repeat(2000)}; rm -rf /`, 'rm-rf-root');
@@ -1877,14 +1913,18 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
     });
     // Two 512 KB commands, each read twice: about 2 s on an idle machine,
     // 3 s under load. Quadratic, each unclosed opener rescanned the rest —
-    // 170 000 × 512 KB, hours — so 10 s separates the two with room to spare.
-    it('512 KB of unclosed here-string openers stays linear', () => {
-      const t0 = performance.now();
-      ps(`${"@'\n".repeat(170_000)}; rm -rf /`);
-      ps(`${'x @"\n'.repeat(100_000)}`);
-      // Typical, idle: 1.9 s.
-      expect(performance.now() - t0).toBeLessThan(ceiling(10_000, 20_000));
-    }, 60_000);
+    // 170 000 × 512 KB, hours. Measured at an eighth of that (5 300 against
+    // 21 200 openers, ~0.25 s idle): the ratio tells the two shapes apart at
+    // any size, and the strict bound is scaled with it.
+    timeShape(
+      'unclosed here-string openers',
+      (n) => {
+        ps(`${"@'\n".repeat(n)}; rm -rf /`);
+        ps(`${'x @"\n'.repeat(Math.floor((n * 10) / 17))}`);
+      },
+      5_300,
+      1250,
+    );
 
     // Caps that ended in a silent ok.
     it('no cap on runners, launchers or [IO.File] calls hides what follows them', () => {
@@ -2023,13 +2063,14 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
       expect(assessBashCommand('case $1 in (a) echo hi ;; esac # the user\'s note').level).toBe('ok');
     });
 
-    it('nested PowerShell text read at every level stays inside the budget', () => {
-      const t0 = performance.now();
-      const nested = `pwsh -c "pwsh -c 'pwsh -c ${'Get-Item x; '.repeat(40_000)}'"`;
-      assessBashCommand(nested, { shell: 'powershell' });
-      // Typical, idle: 1.1 s.
-      expect(performance.now() - t0).toBeLessThan(ceiling(6000, 12_000));
-    }, 60_000);
+    // Typical, idle, at 40 000 statements: 1.1 s. Measured at an eighth of
+    // that (1 250 against 5 000); the strict bound is scaled with it.
+    timeShape(
+      'nested PowerShell text read at every level',
+      (n) => assessBashCommand(`pwsh -c "pwsh -c 'pwsh -c ${'Get-Item x; '.repeat(n)}'"`, { shell: 'powershell' }),
+      1_250,
+      750,
+    );
   });
 
   // `claude plugin disable` writes the very `enabledPlugins` entry the
@@ -2369,16 +2410,14 @@ describe('assessBashCommand — a POSIX download run on the same command line (r
 
   // Each run is judged in constant time: the latest download per file, and
   // the latest check chained by `&&`, are carried forward — never searched.
-  it.each([
-    ['20 000 verified runs of a download', `curl -o x https://x.test/x && sha256sum -c x.sha256${' && ./x'.repeat(20_000)}`],
-    ['20 000 downloads of one file', `${'curl -o x https://x.test/x; '.repeat(20_000)}echo done`],
-    ['a 16 KB pipeline of cat', 'cat x |'.repeat(16_000 / 7)],
-  ])('%s is assessed in bounded time', (_label, command) => {
-    const t0 = performance.now();
-    assessBashCommand(command);
-    // Typical, idle: 16-350 ms.
-    expect(performance.now() - t0).toBeLessThan(ceiling(2000, 4000));
-  }, 30_000);
+  // Typical, idle, at 20 000 / 2 285: 16-350 ms. Measured at 2 500 against
+  // 10 000 (the strict bound halved with it) and 571 against 2 285.
+  const downloadShapes: Array<[string, (n: number) => string, number]> = [
+    ['verified runs of a download', (n) => `curl -o x https://x.test/x && sha256sum -c x.sha256${' && ./x'.repeat(n)}`, 2_500],
+    ['downloads of one file', (n) => `${'curl -o x https://x.test/x; '.repeat(n)}echo done`, 2_500],
+    ['a pipeline of cat (16 KB)', (n) => 'cat x |'.repeat(n), Math.floor(16_000 / 28)],
+  ];
+  for (const [label, make, n] of downloadShapes) timeShape(label, (size) => assessBashCommand(make(size)), n, 1000);
 });
 
 // Ruling 2: an interpreter that reads its program from stdin, or from a
@@ -3208,13 +3247,14 @@ describe('assessBashCommand — a download extracted into a PATH directory, then
     expect(verdict(command)).toEqual({ command, level: 'ok' });
   });
 
-  it('20 000 extractions, then runs, are assessed in bounded time', () => {
-    const command = `${'curl -s x | tar xz -C /usr/local/bin; '.repeat(10_000)}${'tool; /usr/local/bin/t; '.repeat(10_000)}`;
-    const t0 = performance.now();
-    expect(assessBashCommand(command, { budgetMs: 600_000 }).level).toBe('block');
-    // Typical, idle: under 1 s.
-    expect(performance.now() - t0).toBeLessThan(ceiling(3000, 10_000));
+  const extractThenRun = (n: number): string =>
+    `${'curl -s x | tar xz -C /usr/local/bin; '.repeat(n)}${'tool; /usr/local/bin/t; '.repeat(n)}`;
+  it('20 000 extractions, then runs, are assessed to the end: denied', () => {
+    expect(assessBashCommand(extractThenRun(10_000)).level).toBe('block');
   }, 30_000);
+  // Typical, idle, at 10 000 each: under 1 s. Measured at 1 250 against 5 000
+  // (the strict bound halved with it).
+  timeShape('extractions, then runs', (n) => assessBashCommand(extractThenRun(n)), 1_250, 1500);
 });
 
 // Review of 3.0, wave 2, round 2, item 1(b): the cheap indirect launches of

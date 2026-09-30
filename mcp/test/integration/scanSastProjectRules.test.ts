@@ -66,6 +66,11 @@ import { resolveProjectPath } from '../../src/platform/projectPath.js';
 
 afterAll(cleanupTempDirs);
 
+// Several tests here run the real Semgrep over the LLM pack: 8.9 s in an
+// ordinary full run against the 10 s default, past it under load (review
+// 3.0, R7). A genuine hang is still reported, at 60 s.
+vi.setConfig({ testTimeout: 60_000 });
+
 beforeAll(async () => {
   await import('../../src/tools/scanSast.js');
   await import('../../src/tools/riskScore.js');

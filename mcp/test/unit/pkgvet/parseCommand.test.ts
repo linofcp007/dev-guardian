@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseInstallCommands, parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from '../../../src/pkgvet/types.js';
+import { expectLinear, PERF_STRICT } from '../../helpers/timing.js';
 
 /** `[name, range?]` pairs of every package the command would have vetted. */
 function vetted(command: string): Array<[string, string | undefined]> {
@@ -505,15 +506,27 @@ describe('Part Y — edge shapes, one table', () => {
 
 // Fix round 3: the PowerShell environment check restarted `[^;\n]*` at every
 // `Set-Item` / `New-Item` — quadratic on every command the hook sees.
+// Review 3.0, R7-I2: this was "250 KB parses in well under 1 s" — a bound that
+// measured the machine and failed the coverage run. The defect was a shape
+// (16x the time for 4x the input), so the assertion is the ratio; the
+// absolute bound runs only on a quiet machine (GUARDIAN_PERF_STRICT=1).
 describe('parseInstallCommands — linear on the shapes that were not', () => {
-  it.each([
-    ['Set-Item', 'Set-Item '.repeat(28_000)],
-    ['New-Item', 'New-Item '.repeat(28_000)],
-    ['New-Item … then an install', `${'New-Item '.repeat(28_000)}; npm i lodash`],
-  ])('250 KB of %s parses in well under 1 s', (_label, command) => {
-    const t0 = performance.now();
+  const shapes: Array<[string, (n: number) => string]> = [
+    ['Set-Item', (n) => 'Set-Item '.repeat(n)],
+    ['New-Item', (n) => 'New-Item '.repeat(n)],
+    ['New-Item … then an install', (n) => `${'New-Item '.repeat(n)}; npm i lodash`],
+  ];
+  const parseBoth = (command: string): void => {
     parseInstallCommands(command, { shell: 'bash' });
     parseInstallCommands(command, { shell: 'powershell' });
+  };
+  it.each(shapes)('%s: four times as long costs well under twelve times as much', (label, make) => {
+    expectLinear(label, (n) => parseBoth(make(n)), 7_000);
+  }, 60_000);
+  it.runIf(PERF_STRICT).each(shapes)('250 KB of %s parses in well under 1 s (GUARDIAN_PERF_STRICT=1)', (_label, make) => {
+    const command = make(28_000);
+    const t0 = performance.now();
+    parseBoth(command);
     expect(performance.now() - t0).toBeLessThan(1000);
   });
 

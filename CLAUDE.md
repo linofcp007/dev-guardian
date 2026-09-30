@@ -83,7 +83,13 @@ alone.
 
 Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
 skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
-when you need to know the rule pack was actually exercised.
+when you need to know the rule pack was actually exercised. Only absence skips:
+a Semgrep on `PATH` that fails `--version` fails the rule-pack tests.
+`GUARDIAN_REQUIRE_LINTERS=1` does the same for actionlint and zizmor. The
+suite keeps Semgrep's settings, log and version cache out of your home
+directory (`test/setup/semgrepHome.ts`). Timing tests assert linearity as a
+ratio; their absolute bounds run only with `GUARDIAN_PERF_STRICT=1`
+(`test/helpers/timing.ts`) — see [`docs/env.md`](docs/env.md).
 
 ## Ablating a Semgrep rule pack (`npm run ablate`)
 
@@ -546,6 +552,9 @@ Enforced by the compiler where possible, by review where not:
   gitignored globally *except* `mcp/dist/` (see [`.gitignore`](.gitignore)).
 - **Rebuild before committing TS changes.** A stale `dist/` silently desyncs from
   `src/`. Run `npm run build` and stage `mcp/dist/` in the *same* commit.
+  `test/unit/pluginSurface/distSync.test.ts` fails when the committed `dist/`
+  is not, byte for byte, what the build makes of `src/` (tsc, the bundle,
+  copy-assets — and nothing stale).
 - **Markdownlint stays clean** for `skills/`, `commands/`, the three READMEs
   and `docs/` (config: [`.markdownlint.jsonc`](.markdownlint.jsonc)):
   `npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "docs/**/*.md"`.

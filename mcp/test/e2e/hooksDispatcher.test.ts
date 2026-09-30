@@ -19,7 +19,9 @@ import { cpSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFil
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
+import { PERF_STRICT } from '../helpers/timing.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // mcp/test/e2e -> mcp/test -> mcp -> repo root
@@ -29,6 +31,9 @@ const HOOK = resolve(REPO_ROOT, 'hooks', 'guardian-hook.mjs');
 /** Hang-breaker only; nothing here asserts by reaching it — every case is a
  *  fast, dependency-free regex pass with no real scanner involved. */
 const TIMEOUT_MS = 15_000;
+// Above the cap, so a hung child is reported by the cap — naming it — and
+// not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 /** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
 const CAN_SYMLINK = ((): boolean => {
@@ -57,7 +62,7 @@ function runHook(
   },
 ): HookResult {
   const home = opts.homeDir ?? opts.cwd;
-  const r = spawnSync(process.execPath, [opts.hook ?? HOOK], {
+  const r = spawnSyncCapped(process.execPath, [opts.hook ?? HOOK], {
     cwd: opts.cwd,
     input: JSON.stringify(payload),
     encoding: 'utf8',
@@ -131,14 +136,17 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
 
     // Fix round 2: 127 statements of the worst ReDoS shape with `rm -rf /`
     // last took 27 s through the hook — past its 15 s timeout, after which the
-    // command runs unassessed. It answers in well under 5 s now, and says what
-    // it did not read.
-    it('the worst ReDoS shape answers in well under 5 s, and never silently', () => {
+    // command runs unassessed. It answers in well under 5 s now (0.4 s idle),
+    // and says what it did not read. The bound asserted by default is the one
+    // that matters — before Claude Code's 15 s kill, with room — because 5 s
+    // measured the machine (5.2 s at 100% CPU, review 3.0 R7); the tight one
+    // runs with GUARDIAN_PERF_STRICT=1.
+    it('the worst ReDoS shape answers well inside the hook timeout, and never silently', () => {
       const chmod = `chmod -${'R'.repeat(16_000)} 777 x`;
       const command = `${Array.from({ length: 127 }, () => chmod).join('; ')}; rm -rf /`;
       const t0 = Date.now();
       const r = runHook(preToolUse('Bash', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
-      expect(Date.now() - t0).toBeLessThan(5000);
+      expect(Date.now() - t0).toBeLessThan(PERF_STRICT ? 5000 : 12_000);
       const out = (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput;
       expect(out?.additionalContext).toMatch(/not assessed \(over 512 KB\)/);
     }, 30_000);
@@ -170,7 +178,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const cli = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
       const command = 'Remove-Item "C:\\Users\\" -Recurse -Force';
       const run = (extra: string[]) =>
-        spawnSync(process.execPath, [cli, 'check', '--bash', command, '--json', ...extra], {
+        spawnSyncCapped(process.execPath, [cli, 'check', '--bash', command, '--json', ...extra], {
           encoding: 'utf8',
           timeout: TIMEOUT_MS,
         });
@@ -963,7 +971,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const file = join(projectDir, 'bundle.min.js');
       writeFileSync(file, oneLine);
       const cli = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
-      const r = spawnSync(process.execPath, [cli, 'check', '--file', file, '--min', 'high'], {
+      const r = spawnSyncCapped(process.execPath, [cli, 'check', '--file', file, '--min', 'high'], {
         cwd: projectDir,
         encoding: 'utf8',
         timeout: TIMEOUT_MS,
@@ -1552,7 +1560,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
   });
 
   it('fails open on malformed stdin (finding: preserved existing behaviour)', () => {
-    const r = spawnSync(process.execPath, [HOOK], {
+    const r = spawnSyncCapped(process.execPath, [HOOK], {
       cwd: projectDir,
       input: 'not json at all {{{',
       encoding: 'utf8',

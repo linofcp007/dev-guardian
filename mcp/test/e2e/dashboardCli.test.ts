@@ -16,8 +16,9 @@
  * — these commands touch only a local SQLite file, no scanner, no network.
  */
 
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncCapped, testTimeoutAbove } from '../helpers/spawnCap.js';
 import {
   mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync,
 } from 'node:fs';
@@ -42,13 +43,16 @@ import {
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 const TIMEOUT_MS = 15_000;
+// Above the cap, so a hung CLI is reported by the cap — naming the command —
+// and not by vitest's 10 s default failing the test after the fact (R7-I1).
+vi.setConfig({ testTimeout: testTimeoutAbove(TIMEOUT_MS) });
 
 let project: string;
 beforeAll(() => { project = mkdtempSync(join(tmpdir(), 'guardian-dash-')); });
 afterAll(() => { rmSync(project, { recursive: true, force: true }); });
 
 function runCli(args: string[]) {
-  const r = spawnSync(process.execPath, [CLI, ...args], {
+  const r = spawnSyncCapped(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     env: { ...process.env, NO_COLOR: '1' },
     timeout: TIMEOUT_MS,

@@ -17,6 +17,14 @@ export default defineConfig({
     // override is why those files can run long without needing this default
     // raised for everything else.
     testTimeout: 10_000,
+    // Hooks, unlike tests, get 30 s (review 3.0, R7). Sixty files load the
+    // tool under test in a `beforeAll(async () => { await import(...) })`,
+    // and in the first wave of a coverage run — every worker starting at
+    // once, each import transforming and instrumenting the tool's whole
+    // module graph — two such hooks measured 10.2 s and 10.3 s and failed
+    // their files (55 tests skipped) with nothing wrong. A hook that is
+    // genuinely hung is still reported, 20 s later.
+    hookTimeout: 30_000,
     // Task 19 (EPSS/KEV intel): `intel/enrich.ts` calls the network for any
     // CVE it has not cached in the last 24h, and several PRE-EXISTING tests
     // exercise real trivy-sourced CVEs (e.g. `test/integration/createFixPr.test.ts`'s
@@ -38,23 +46,32 @@ export default defineConfig({
     // canonicalTmpdir.ts: os.tmpdir() in its canonical spelling — see the file.
     // userDataDir.ts: the per-user database fallback goes to a temp directory.
     setupFiles: ['./test/setup/canonicalTmpdir.ts', './test/setup/semgrepSettings.ts', './test/setup/userDataDir.ts'],
-    // Removes, before and after the run, the temp directories a test's
-    // cleanup could not (a timed-out test's process still held them) — see
-    // `LEFTOVERS_FILE` in test/helpers/tempDir.ts.
-    globalSetup: ['./test/setup/tempLeftovers.ts'],
+    // tempLeftovers: removes, before and after the run, the temp directories
+    // a test's cleanup could not (a timed-out test's process still held
+    // them) — see `LEFTOVERS_FILE` in test/helpers/tempDir.ts.
+    // semgrepHome: the run's own directory, Semgrep's log and version cache
+    // pointed into it (never the home directory), and a check at the end that
+    // nothing wrote the real ones — see the file.
+    globalSetup: ['./test/setup/tempLeftovers.ts', './test/setup/semgrepHome.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
       include: ['src/**/*.ts'],
       // server.ts = bootstrap, registerAll.ts = side-effect import list only.
       exclude: ['src/**/*.d.ts', 'src/server.ts', 'src/registerAll.ts'],
-      // Floors set just below current (73/68/79/73). Raise as the suite grows;
-      // CI fails if coverage regresses below these.
+      // Floors a few points below what `npm run test:coverage` measured on
+      // Windows at the end of review 3.0 (R7): 91.89 / 82.61 / 96.03 / 94.59
+      // (statements / branches / functions / lines). They were 70/62/72/70
+      // against a suite measuring ~91/82/96/94 — a floor 20 points down lets
+      // a fifth of the tested code go untested before anything notices. The
+      // margin absorbs what differs between machines (the POSIX-only and
+      // Windows-only tests each skip on the other). Raise them as the suite
+      // grows; `npm run test:coverage` fails below them.
       thresholds: {
-        statements: 70,
-        branches: 62,
-        functions: 72,
-        lines: 70,
+        statements: 89,
+        branches: 80,
+        functions: 93,
+        lines: 92,
       },
     },
   },
