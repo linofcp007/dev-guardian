@@ -9,27 +9,36 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('execa', () => ({ execa: vi.fn() }));
+vi.mock('../../../src/platform/gitSafety.js', () => ({ execGit: vi.fn() }));
 
-import { execa } from 'execa';
+import { execGit, type GitExecResult } from '../../../src/platform/gitSafety.js';
 import { ingestTarget } from '../../../src/skillaudit/ingest.js';
 
-const execaMock = vi.mocked(execa);
+const execGitMock = vi.mocked(execGit);
 
 afterEach(() => {
-  execaMock.mockReset();
+  execGitMock.mockReset();
 });
 
+/** A clone git refused — what the tests below answer every call with. */
+const refused: GitExecResult<string> = {
+  status: 128,
+  stdout: '',
+  stderr: 'fatal: clone refused',
+  failure: null,
+  notApplied: [],
+};
+
 function cloneArgv(): string[] {
-  const call = execaMock.mock.calls.find((c) => c[0] === 'git');
+  // execGit(dir, args, …): the clone runs, hardened, through platform/gitSafety.ts.
+  const call = execGitMock.mock.calls.find((c) => c[1][0] === 'clone');
   expect(call).toBeDefined();
-  const args = call?.[1];
-  return Array.isArray(args) ? args.map(String) : [];
+  return call === undefined ? [] : [...call[1]];
 }
 
 describe('ingestTarget — git clone argv', () => {
   it('puts `--` between the options and a URL that looks like an option', async () => {
-    execaMock.mockRejectedValue(new Error('clone refused'));
+    execGitMock.mockResolvedValue(refused);
     const target = '--upload-pack=touch pwned;.git';
     const r = await ingestTarget(target);
     expect(r.ok).toBe(false);
@@ -42,7 +51,7 @@ describe('ingestTarget — git clone argv', () => {
   });
 
   it('keeps `--` for an ordinary https repository URL too', async () => {
-    execaMock.mockRejectedValue(new Error('offline'));
+    execGitMock.mockResolvedValue(refused);
     await ingestTarget('https://github.com/acme/skill');
     const argv = cloneArgv();
     const sep = argv.indexOf('--');

@@ -17,16 +17,18 @@
  * `--end-of-options` means a ref spelt like an option (`--output=x`) is only
  * ever a ref.
  *
- * Runs `git` through execa directly, like `tools/gitState.ts`: these are quick
- * local queries, not scanner runs, and must not share the scan runner's
- * limits (or its test doubles).
+ * Runs `git` directly through `platform/gitSafety.ts#execGit`, like
+ * `tools/gitState.ts`: these are quick local queries, not scanner runs, and
+ * must not share the scan runner's limits (or its test doubles). That helper
+ * is also what keeps the scanned repository's own git configuration from
+ * running anything (`core.fsmonitor`, hooks, filter and textconv drivers).
  */
 
-import { execa } from 'execa';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { execGit } from '../platform/gitSafety.js';
 
 const GIT_TIMEOUT_MS = 60_000;
 /** A checkout writes the whole tree: a large repository needs longer than a query. */
@@ -36,27 +38,25 @@ export interface GitResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * Keys of the repository's own git configuration this run overrode
+   * (`platform/gitSafety.ts`) — absent for almost every repository.
+   */
+  notApplied?: readonly string[];
 }
 
-/** `git -C cwd …args`, never throwing; a missing git reads as exit 127. */
+/**
+ * `git -C cwd …args`, never throwing; a missing git reads as exit 127. A
+ * repository whose git configuration could not be read safely is not run at
+ * all: exit 126, with the reason in stderr.
+ */
 export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<GitResult> {
-  try {
-    const r = await execa('git', ['-C', cwd, ...args], {
-      reject: false,
-      timeout: timeoutMs,
-      encoding: 'utf8',
-      stripFinalNewline: false,
-    });
-    // No exit code: git could not be started (not on PATH) or was killed.
-    if (r.exitCode === undefined) return { exitCode: 127, stdout: '', stderr: 'git could not be run' };
-    return {
-      exitCode: r.exitCode,
-      stdout: typeof r.stdout === 'string' ? r.stdout : '',
-      stderr: typeof r.stderr === 'string' ? r.stderr : '',
-    };
-  } catch (e) {
-    return { exitCode: 127, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
-  }
+  const r = await execGit(cwd, args, { timeoutMs });
+  const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
+  if (r.failure?.code === 'refused') return { exitCode: 126, stdout: '', stderr: r.stderr, ...notApplied };
+  // No exit code: git could not be started (not on PATH) or was killed.
+  if (r.status === null) return { exitCode: 127, stdout: '', stderr: r.failure?.message ?? 'git could not be run', ...notApplied };
+  return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
 }
 
 /** Split `-z` output into its entries. */
@@ -224,8 +224,10 @@ export async function uncommittedFiles(
   if (untracked.exitCode !== 0) {
     throw new Error(`git ls-files failed: ${firstLine(untracked.stderr) || `exit ${untracked.exitCode}`}`);
   }
+  // `--ignore-submodules=dirty`: not into a submodule's work tree (a moved
+  // submodule commit is still listed — as a directory, which no caller reads).
   const tracked = hasCommits
-    ? await git(cwd, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', 'HEAD', '--'])
+    ? await git(cwd, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', '--ignore-submodules=dirty', 'HEAD', '--'])
     : await git(cwd, ['ls-files', '-z', '--cached']);
   if (tracked.exitCode !== 0) {
     throw new Error(`git failed listing changed files: ${firstLine(tracked.stderr) || `exit ${tracked.exitCode}`}`);
@@ -260,20 +262,43 @@ export interface MaterialisedTree {
   root: string;
   /** Removes the checkout and git's record of it. Never throws; says what it could not remove. */
   remove: () => Promise<string | null>;
+  /**
+   * Keys of the repository's own git configuration the checkout overrode — a
+   * filter driver's `smudge` among them means files were written as stored
+   * in git, not as that driver would have written them.
+   */
+  notApplied: readonly string[];
 }
 
 /**
  * Check out commit `sha` into a new temporary directory with `git worktree
  * add --detach`, so its files can be scanned without touching the user's
- * working tree. Hooks are disabled for the checkout (a `post-checkout` hook
- * is the repository's code, and scanning must not run it). The caller must
- * call `remove()` — in a `finally`.
+ * working tree. No hook runs (a `post-checkout` hook is the repository's
+ * code, and scanning must not run it), nor any filter driver the
+ * repository's own configuration names (`platform/gitSafety.ts`).
+ *
+ * In two steps — `worktree add --no-checkout`, then `reset --hard` INSIDE
+ * the new worktree — which is what `worktree add` does itself, in a child
+ * git started there. The split is for that child's configuration: an
+ * `includeIf "gitdir:…"` can match the new worktree's git directory and not
+ * the project's, so the configuration is read, and neutralised, where the
+ * checkout actually runs. The caller must call `remove()` — in a `finally`.
  */
 export async function materialiseCommit(cwd: string, sha: string): Promise<MaterialisedTree> {
   const holder = mkdtempSync(join(tmpdir(), 'guardian-review-'));
   const root = join(holder, 'head');
   const noHooks = join(holder, 'no-hooks');
-  const r = await git(cwd, ['-c', `core.hooksPath=${noHooks}`, 'worktree', 'add', '--detach', '--quiet', root, sha], CHECKOUT_TIMEOUT_MS);
+  const add = await git(
+    cwd,
+    ['-c', `core.hooksPath=${noHooks}`, 'worktree', 'add', '--detach', '--no-checkout', '--quiet', root, sha],
+    CHECKOUT_TIMEOUT_MS,
+  );
+  // `--no-recurse-submodules`, as `worktree add`'s own reset passes: with the
+  // user's `submodule.recurse=true` (or the repository's), a reset in a
+  // `--no-checkout` worktree goes into submodules whose git directories it
+  // was never given, and dies (review of W2E-git, measured).
+  const r = add.exitCode === 0 ? await git(root, ['reset', '--hard', '--quiet', '--no-recurse-submodules'], CHECKOUT_TIMEOUT_MS) : add;
+  const notApplied = [...new Set([...(add.notApplied ?? []), ...(r === add ? [] : (r.notApplied ?? []))])].sort();
   const remove = async (): Promise<string | null> => {
     const problems: string[] = [];
     const rm = await git(cwd, ['worktree', 'remove', '--force', root]);
@@ -288,9 +313,10 @@ export async function materialiseCommit(cwd: string, sha: string): Promise<Mater
   };
   if (r.exitCode !== 0) {
     await remove();
-    throw new Error(`git worktree add ${sha.slice(0, 12)} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+    const step = r === add ? 'git worktree add' : 'git reset --hard (the checkout)';
+    throw new Error(`${step} ${sha.slice(0, 12)} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
   }
-  return { root, remove };
+  return { root, remove, notApplied };
 }
 
 function firstLine(text: string): string {

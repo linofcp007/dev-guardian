@@ -28,7 +28,6 @@
  *     (`GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`).
  */
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -43,6 +42,7 @@ const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
 const PLUGIN_ROOT = resolve(HERE, '..'); // <plugin>
 const DIST_HOOKS = join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks');
 const DIST_PKGVET = join(PLUGIN_ROOT, 'mcp', 'dist', 'pkgvet');
+const DIST_PLATFORM = join(PLUGIN_ROOT, 'mcp', 'dist', 'platform');
 const POPULAR_DIR = join(PLUGIN_ROOT, 'configs', 'popular-packages');
 
 const DEBUG = process.env.GUARDIAN_HOOKS_DEBUG === '1';
@@ -370,14 +370,30 @@ function relativeTime(ms) {
   return `~${d}d ago`;
 }
 
-function git(cwd, args) {
+/**
+ * `execGitSync` from `mcp/dist/platform/gitSafety.js`: git hardened against
+ * the project's own git configuration (review 3.0, W2E-git). SessionStart's
+ * `git status` in a project opened for the first time — an archive, a
+ * download — used to run that project's `core.fsmonitor` and
+ * `post-index-change` hook. Until it is loaded, and if it cannot be, no git
+ * runs at all: the briefing loses its branch line, never its safety.
+ */
+let execGitSync = null;
+
+async function loadGitSafety() {
   try {
-    return execFileSync('git', args, {
-      cwd,
-      encoding: 'utf8',
-      timeout: 2000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const mod = await import(pathToFileURL(join(DIST_PLATFORM, 'gitSafety.js')).href);
+    if (typeof mod.execGitSync === 'function') execGitSync = mod.execGitSync;
+  } catch (err) {
+    debug(`git hardening unavailable — git not run: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function git(cwd, args) {
+  if (execGitSync === null) return '';
+  try {
+    const r = execGitSync(cwd, args, { timeoutMs: 2000 });
+    return r.failure === null && r.status === 0 ? r.stdout.trim() : '';
   } catch {
     return '';
   }
@@ -642,8 +658,12 @@ async function handleSessionStart(root, cfg) {
   // way it once held the config read. Walked first, with lstat + readlink only.
   const reachable = walkLinksUnder(root, dbPath).ok;
   const initialized = reachable ? existsSync(guardianDir) : true;
+  await loadGitSafety();
   const branch = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const status = git(root, ['status', '--porcelain']);
+  // `--ignore-submodules=dirty`: the count does not go into a submodule's
+  // work tree, where that submodule's own drivers would run (they are also
+  // neutralised by gitSafety); a submodule whose commit moved still counts.
+  const status = git(root, ['status', '--porcelain', '--ignore-submodules=dirty']);
   const changed = status ? status.split('\n').filter(Boolean).length : 0;
 
   const state = guardsOff ? 'running with guards OFF (see below)' : 'active';

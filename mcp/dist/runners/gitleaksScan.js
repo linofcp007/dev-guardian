@@ -82,6 +82,7 @@ import { honouredRootFiles, withProjectConfig } from './repoConfig.js';
 import { openPrivateReportDir, sanitizeGitleaksReport } from '../secrets/verify/rawReport.js';
 import { scannerAvailable, readJsonSafe } from '../tools/scanHelpers.js';
 import { changedFiles, countCommits, describeSubmodules, git, gitlinksAmong, initialisedSubmodules, repoState, resolveCommit, shallowBoundary, uncommittedFiles, } from './git.js';
+import { describeNotApplied } from '../platform/gitSafety.js';
 import { runProcess } from './processRunner.js';
 import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
@@ -366,6 +367,11 @@ projectPrefix) {
         reasons.push(truncation);
         result.missing_tools.push(GITLEAKS_HISTORY);
     }
+    // `git log -p` ran without the repository's own textconv driver (or gpg
+    // program, …): gitleaks read the history as stored, which is named.
+    const notApplied = describeNotApplied(run.gitNotApplied ?? []);
+    if (notApplied !== null)
+        reasons.push(notApplied);
     result.tools_run.push({
         name: GITLEAKS_HISTORY,
         status: problems.length === 0 ? 'ok' : 'failed',

@@ -29,6 +29,9 @@ Set them where the process that reads them starts: in the `env` block of the MCP
 | --- | --- | --- |
 | `GUARDIAN_SCAN_ID` | environment of the scripts a scan runs | the id of the scan row the run belongs to |
 | `GUARDIAN_PROC_TREE_ID` | every child process on Windows | a per-run token the runner uses to find and kill the whole process tree, including MSYS descendants `taskkill` cannot see |
+| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` | every process dev-guardian starts — git, the scanners, the package managers, the scripts — except the test command `create_fix_pr` runs and the DAST application | git configuration overrides that keep a scanned repository's own git configuration and hooks from running anything ([SECURITY.md](../SECURITY.md#hardening-posture)). Appended after the entries your own environment sets, which are kept. |
+| `GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR` | the same processes | `cat`, `:`, `:` — git's own "no pager" and "no editor". |
+| `GIT_PROXY_COMMAND`, `GIT_NO_LAZY_FETCH` | the same processes, only in a repository that sets `core.gitProxy` or a `remote.<name>.uploadpack` | empty (no proxy command — unless you set one, which is kept) and `1` (no lazy fetch). |
 
 ## Developer tooling
 
@@ -61,4 +64,8 @@ The suite itself runs with `GUARDIAN_OFFLINE=1` (`mcp/vitest.config.ts`); a test
 | `CLAUDE_CONFIG_DIR` | `audit_agent_config`, `audit_mcp_tools` (with `include_user_config`), hooks | Where Claude Code keeps its global `.claude.json` and `settings.json`, read from there instead of `~/.claude.json` and `~/.claude/settings.json`, as Claude Code does. The hooks guard `settings.json` / `settings.local.json` there like `~/.claude/settings*.json`. |
 | `CLAUDE_PROJECT_DIR` | hooks | Set by Claude Code for every hook: the project whose `.guardian/` configuration applies, wherever the session has `cd`-ed to (without it, the nearest ancestor holding `.guardian` or `.git`, never the home directory, its ancestors or the temp directory). |
 | `NO_COLOR` | `dev-guardian status` | Disables colour in the terminal summary. |
+| `GIT_CONFIG_COUNT` | every git dev-guardian starts | Your own configuration entries: dev-guardian's overrides are appended after them. A value git would refuse ("bogus count") makes dev-guardian refuse to run git or any process in a repository, naming it. |
+| `GIT_SSH` | `create_fix_pr`'s push | Used, quoted, as `core.sshCommand` when the repository sets its own `core.sshCommand` (which is never used) and your configuration sets none. |
+| `https_proxy`, `HTTPS_PROXY`, `http_proxy`, `all_proxy`, `ALL_PROXY` | every git dev-guardian starts | When the repository sets its own `http.proxy`, `http.<url>.proxy` or `remote.<name>.proxy` (never used) and your configuration sets none: the proxy git uses instead — as git would have read these variables without the repository's setting — or none. |
+| `GIT_CONFIG` | every git dev-guardian starts | Removed from the one `git config` read of the repository's configuration: it would make that read, and only that one, look at another file. |
 | `npm_config_*registry*`, `NPM_CONFIG_REGISTRY`, `NPM_CONFIG_USERCONFIG`, `NPM_CONFIG_GLOBALCONFIG`, `NPM_CONFIG_PREFIX`, `YARN_NPM_REGISTRY_SERVER`, `YARN_REGISTRY`, `BUN_CONFIG_REGISTRY`, `PIP_*INDEX*`, `PIP_FIND_LINKS`, `PIP_NO_INDEX`, `PIP_CONFIG_FILE`, `VIRTUAL_ENV`, `UV_*INDEX*`, `UV_FIND_LINKS`, `UV_CONFIG_FILE`, `CONDA_PREFIX`, `COMPOSER_HOME`, `NUGET_*SOURCE*`, `NUGET_*FEED*`, `NUGET_*CONFIG*`, `NuGetPackageSourceCredentials_*`, `ProgramFiles(x86)` | `vet_packages`, the install hook | Evidence of a private registry: a name missing from the public registry is then `unknown`, never denied. See [hooks.md](hooks.md#install-time-package-vetting). |

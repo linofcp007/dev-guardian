@@ -88,6 +88,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { classifyRestoreFailure, findDotnetTargets, planDotnetRestore, projectsForTarget, removeCreatedLockFiles, } from '../deps/dotnetRestore.js';
+import { gitSafetyFor } from '../platform/gitSafety.js';
 import { banditExcludeArgs, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
@@ -294,6 +295,7 @@ async function runSemgrep(args) {
             configs: [...dockerConfigs, ...packConfigs],
             metricsOff: localOnly,
             ...(packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}),
+            git: await gitSafetyFor([ctx.projectPath]),
         }),
         cwd: ctx.projectPath,
         env: ctx.scriptEnv,

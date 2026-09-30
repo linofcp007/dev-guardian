@@ -32,10 +32,10 @@
  * Two identical project trees on different machines produce the same hash.
  */
 
-import { execa } from 'execa';
 import { createHash } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
+import { execGit } from '../platform/gitSafety.js';
 import { hashProjectFile } from '../platform/projectFs.js';
 
 export interface TreeHashOptions {
@@ -101,24 +101,20 @@ const TOOL_OUTPUT_DIR = '.guardian';
 
 async function tryGitListFiles(root: string): Promise<string[] | null> {
   const excludes = [...FS_EXCLUDE].map((dir) => `--exclude=${dir}/`);
-  try {
-    const result = await execa(
-      'git',
-      ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', ...excludes],
-      { reject: false, timeout: 30_000 },
-    );
-    if (result.exitCode !== 0) return null;
-    // A Set: an unmerged path is listed once per conflict stage.
-    const files = new Set<string>();
-    for (const entry of result.stdout.split('\0')) {
-      if (entry.length === 0) continue;
-      if (entry.split('/').includes(TOOL_OUTPUT_DIR)) continue;
-      files.add(entry);
-    }
-    return [...files];
-  } catch {
-    return null;
+  // Hardened (`platform/gitSafety.ts`): `ls-files` is where a repository's own
+  // core.fsmonitor runs. Refused or failed, the walk below lists the files.
+  const result = await execGit(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', ...excludes], {
+    timeoutMs: 30_000,
+  });
+  if (result.failure !== null || result.status !== 0) return null;
+  // A Set: an unmerged path is listed once per conflict stage.
+  const files = new Set<string>();
+  for (const entry of result.stdout.split('\0')) {
+    if (entry.length === 0) continue;
+    if (entry.split('/').includes(TOOL_OUTPUT_DIR)) continue;
+    files.add(entry);
   }
+  return [...files];
 }
 
 async function walkFiles(root: string): Promise<string[]> {

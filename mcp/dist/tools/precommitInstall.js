@@ -50,11 +50,15 @@ async function handler(input, _ctx) {
     if (!bin) {
         return failDomain('missing_scanner', 'pre-commit is not installed. Run install_toolchain with tools=["pre-commit"].');
     }
+    // Hardened for git like every child (`platform/gitSafety.ts`) — all but
+    // the core.hooksPath redirect: installing hooks where git says they go is
+    // this tool's job, and pre-commit refuses to install with core.hooksPath set.
     const result = await runProcess({
         command: 'pre-commit',
         args: ['install'],
         cwd: projectPath,
         timeoutMs: 60_000,
+        gitHardening: 'except-hooks-path',
     });
     if (result.outcome !== 'completed') {
         return failDomain('scanner_failed', `pre-commit install failed: ${result.stderr.split(/\r?\n/)[0] ?? '(no stderr)'}`);
@@ -71,6 +75,7 @@ async function handler(input, _ctx) {
             args: ['install', '--hook-type', stage],
             cwd: projectPath,
             timeoutMs: 30_000,
+            gitHardening: 'except-hooks-path',
         });
         if (r.outcome === 'completed') {
             stagesInstalled.push(stage);

@@ -172,7 +172,8 @@ describe('openPr', () => {
     });
     await openPr({ ...base, run });
     const statusCall = calls.find((c) => c[0] === 'git' && c[1] === 'status');
-    expect(statusCall).toEqual(['git', 'status', '--porcelain', '--', EXCLUDE_GUARDIAN_DIR]);
+    // `--ignore-submodules=dirty`: git stays out of any submodule work tree (W2E-git round 2).
+    expect(statusCall).toEqual(['git', 'status', '--porcelain', '--ignore-submodules=dirty', '--', EXCLUDE_GUARDIAN_DIR]);
   });
 });
 
@@ -312,10 +313,73 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
       ['gh', 'pr', 'list'],
       ['git', 'status', '--porcelain'],
       ['git', 'add', '-A'],
-      ['git', 'commit', '-m'],
-      ['git', 'push', '-u'],
+      ['git', 'commit', '--no-verify'],
+      // Where the push goes (review 3.0, W2E-git): a repository on this machine
+      // gets a hardened receive-pack, and a URL the repository's own
+      // configuration rewrites is refused. Both read config; they run nothing.
+      ['git', 'remote', 'get-url'],
+      ['git', 'config', '--show-scope'],
+      ['git', 'push', '--no-verify'],
       ['gh', 'pr', 'create'],
     ]);
+  });
+
+  it("pushes with git's own receive-pack to a network origin, whatever the repository's remote.origin.receivepack says", async () => {
+    const { run, calls } = fakeRunWithCwd({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'git remote': { outcome: 'completed', exitCode: 0, stdout: 'git@github.com:o/r.git\nhttps://github.com/o/r.git\n' },
+      'gh pr create': { outcome: 'completed', exitCode: 0, stdout: 'https://github.com/o/r/pull/9\n' },
+    });
+    await openPr({ ...base, run });
+    const push = calls.find((c) => c.command === 'git' && c.args[0] === 'push');
+    expect(push?.args).toEqual(['push', '--no-verify', '--receive-pack=git-receive-pack', '-u', 'origin', base.branch]);
+  });
+
+  it("refuses, and names the key, a push the repository's OWN url.<base>.insteadOf rewrites to another host", async () => {
+    const { run, calls } = fakeRunWithCwd({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'git remote': { outcome: 'completed', exitCode: 0, stdout: 'https://evil.invalid/o/r.git\n' },
+      'git config': {
+        outcome: 'completed',
+        exitCode: 0,
+        stdout: 'local\0remote.origin.url\nhttps://github.com/o/r.git\0local\0url.https://evil.invalid/.insteadof\nhttps://github.com/\0',
+      },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('push_failed');
+    expect(r.detail).toMatch(/url\.https:\/\/evil\.invalid\/\.insteadof = https:\/\/github\.com\/ turns https:\/\/github\.com\/o\/r\.git into https:\/\/evil\.invalid\/o\/r\.git/);
+    expect(calls.some((c) => c.command === 'git' && c.args[0] === 'push')).toBe(false);
+  });
+
+  it("pushes where the user's OWN rewrite (global scope) sends it", async () => {
+    const { run, calls } = fakeRunWithCwd({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'git remote': { outcome: 'completed', exitCode: 0, stdout: 'git@github.com:o/r.git\n' },
+      'git config': {
+        outcome: 'completed',
+        exitCode: 0,
+        stdout: 'global\0url.git@github.com:.pushinsteadof\nhttps://github.com/\0local\0remote.origin.url\nhttps://github.com/o/r.git\0',
+      },
+      'gh pr create': { outcome: 'completed', exitCode: 0, stdout: 'https://github.com/o/r/pull/9\n' },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('created');
+    expect(calls.some((c) => c.command === 'git' && c.args[0] === 'push')).toBe(true);
+  });
+
+  it('refuses, and names why, a push to origin that goes both to this machine and over the network', async () => {
+    const { run, calls } = fakeRunWithCwd({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'git remote': { outcome: 'completed', exitCode: 0, stdout: '../local.git\nhttps://github.com/o/r.git\n' },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('push_failed');
+    expect(r.detail).toMatch(/both to a repository on this machine and over the network/);
+    expect(calls.some((c) => c.command === 'git' && c.args[0] === 'push')).toBe(false);
   });
 
   it('runs the existence check and pr create in projectPath, and status/add/commit/push in the worktree', async () => {
@@ -391,7 +455,9 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     });
     await openPr({ ...base, title: 'Bump lodash', body: 'Resolves CVE-1234', run });
     const commitCall = calls.find((c) => c.command === 'git' && c.args[0] === 'commit');
-    expect(commitCall?.args).toEqual(['commit', '-m', 'Bump lodash']);
+    // `--no-verify`: no pre-commit or commit-msg hook of the repository's (the
+    // rest are kept from running by core.hooksPath, platform/gitSafety.ts).
+    expect(commitCall?.args).toEqual(['commit', '--no-verify', '-m', 'Bump lodash']);
     const createCall = calls.find((c) => c.command === 'gh' && c.args[1] === 'create');
     expect(createCall?.args).toEqual(['pr', 'create', '--head', base.branch,
       '--title', 'Bump lodash', '--body', 'Resolves CVE-1234']);

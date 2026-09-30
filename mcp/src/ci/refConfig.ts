@@ -90,10 +90,10 @@
  * a link is unlinked and replaced, never written through.
  */
 
-import { execa } from 'execa';
 import { lstatSync, mkdirSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { MANIFEST_RELATIVE_PATH, readManifest } from '../configdrift/manifest.js';
+import { execGitBuffer } from '../platform/gitSafety.js';
 import { readProjectText } from '../platform/projectFs.js';
 import { CONVENTIONAL_TARGETS, SEMGREP_SOURCE_PREFIX } from '../platform/projectSemgrepConfig.js';
 import { git, repoState, resolveCommit, showPrefix, splitNul } from '../runners/git.js';
@@ -237,23 +237,12 @@ async function blobBytes(cwd: string, object: string, maxBytes: number, label: s
   const n = Number(size.stdout.trim());
   if (size.exitCode !== 0 || !Number.isInteger(n)) throw new CiRefError(`${label}: git cat-file -s failed: ${firstLine(size.stderr)}`);
   if (n > maxBytes) throw new CiRefError(`${label} is ${n} bytes, over the ${maxBytes}-byte limit — not read`);
-  try {
-    const r = await execa('git', ['-C', cwd, 'cat-file', 'blob', object], {
-      encoding: 'buffer',
-      // The bytes as git stored them: execa would drop a final newline.
-      stripFinalNewline: false,
-      reject: false,
-      timeout: 60_000,
-      maxBuffer: maxBytes + 1,
-    });
-    if (r.exitCode !== 0 || !(r.stdout instanceof Uint8Array)) {
-      throw new CiRefError(`${label}: git cat-file blob failed`);
-    }
-    return Buffer.from(r.stdout);
-  } catch (e) {
-    if (e instanceof CiRefError) throw e;
-    throw new CiRefError(`${label}: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  // The bytes as git stored them — `cat-file blob` runs no filter or
+  // textconv driver — hardened like every git (`platform/gitSafety.ts`).
+  const r = await execGitBuffer(cwd, ['cat-file', 'blob', object], { timeoutMs: 60_000, maxBuffer: maxBytes + 1 });
+  if (r.failure !== null) throw new CiRefError(`${label}: ${r.failure.message}`);
+  if (r.status !== 0) throw new CiRefError(`${label}: git cat-file blob failed`);
+  return r.stdout;
 }
 
 /**
@@ -371,7 +360,17 @@ async function changedAgainst(
 ): Promise<Map<string, ConfigDifference['change']>> {
   const out = new Map<string, ConfigDifference['change']>();
   if (pathspecs.length === 0) return out;
-  const diff = await git(projectPath, ['diff', '--name-status', '-z', '--no-renames', '--relative', at.commit, '--', ...pathspecs]);
+  const diff = await git(projectPath, [
+    'diff',
+    '--name-status',
+    '-z',
+    '--no-renames',
+    '--relative',
+    '--ignore-submodules=dirty',
+    at.commit,
+    '--',
+    ...pathspecs,
+  ]);
   if (diff.exitCode !== 0) throw new CiRefError(`git diff ${at.ref} failed: ${firstLine(diff.stderr)}`);
   const fields = splitNul(diff.stdout);
   for (let i = 0; i + 1 < fields.length; i += 2) {

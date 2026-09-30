@@ -116,6 +116,7 @@ import { execa } from 'execa';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { applyGitSafety, gitSafetyFor } from '../platform/gitSafety.js';
 import { matchesAny } from '../platform/glob.js';
 import { listProjectDir, PROJECT_LOCKFILE_MAX_BYTES, projectPathKind, readProjectJson, readProjectTextOrUndefined, } from '../platform/projectFs.js';
 import { compareSemver } from '../platform/semverCompare.js';
@@ -607,12 +608,7 @@ async function runNpmOutdated(projectPath, cves) {
     const manager = detectNpmPackageManager(projectPath);
     if (manager.name !== 'npm')
         return planForNonNpmManager(projectPath, cves, manager);
-    const result = await execa('npm', ['outdated', '--json'], {
-        ...packageManagerEnvOptions(),
-        cwd: projectPath,
-        reject: false,
-        timeout: 60_000,
-    });
+    const result = await execPackageManager('npm', ['outdated', '--json'], { cwd: projectPath, timeout: 60_000 });
     const steps = [];
     const unplanned = [];
     const failures = [];
@@ -1060,10 +1056,8 @@ async function pnpmVersionOf(root) {
         }
     }
     try {
-        const r = await execa('pnpm', ['--version'], {
-            ...packageManagerEnvOptions(),
+        const r = await execPackageManager('pnpm', ['--version'], {
             cwd: root,
-            reject: false,
             timeout: 15_000,
             env: { ...process.env, COREPACK_ENABLE_NETWORK: '0', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' },
         });
@@ -1319,10 +1313,25 @@ function buildOverrideStep(input) {
         follow_up_command: 'npm install --ignore-scripts',
     };
 }
-/** What an `execa(…, { reject: false })` result says about a runner that
- *  could not do its job: the command could not start at all (no exit code —
- *  not installed, not on PATH), or it exited with a code outside `okCodes`.
- *  `null` when the exit code is one the caller treats as success. */
+/**
+ * A package manager run in `cwd` — `npm outdated`, `go list -m`, `bundle
+ * outdated`, `dotnet restore` … — hardened for git (`platform/gitSafety.ts`):
+ * each of them may run git itself (a git dependency, a VCS module, a
+ * Bundler git source), and none of those gits may run a command the
+ * project's own git configuration or hooks name. In create_fix_pr's
+ * package-manager environment when inside one (`fixpr/childEnv.ts`), this
+ * server's otherwise, or `env` when the caller names one. A repository whose
+ * configuration cannot be read safely is not run: `code:
+ * 'git_config_refused'`, which `describeExecFailure` reports.
+ */
+async function execPackageManager(command, args, opts) {
+    const pm = packageManagerEnvOptions();
+    const base = opts.env ?? ('env' in pm ? pm.env : { ...process.env });
+    const safety = await gitSafetyFor([opts.cwd], { env: base });
+    if (safety.refused !== null)
+        return { code: 'git_config_refused', shortMessage: safety.refused, stdout: '', stderr: '' };
+    return execa(command, args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env: applyGitSafety(safety, base), extendEnv: false });
+}
 function describeExecFailure(label, result, okCodes) {
     if (typeof result.exitCode === 'number') {
         if (okCodes.includes(result.exitCode))
@@ -1686,12 +1695,7 @@ async function runComposerOutdated(projectPath, cves) {
     // step vanished; `--locked` lists the lock's packages with their latest.
     // It is also the right source: the lock is what the fix edits and what CI
     // installs from.
-    const result = await execa('composer', ['outdated', '--locked', '--format=json'], {
-        ...packageManagerEnvOptions(),
-        cwd: projectPath,
-        reject: false,
-        timeout: 90_000,
-    });
+    const result = await execPackageManager('composer', ['outdated', '--locked', '--format=json'], { cwd: projectPath, timeout: 90_000 });
     const failures = [];
     const exitFailure = describeExecFailure('composer outdated --locked', result, [0]);
     if (exitFailure)
@@ -1739,12 +1743,7 @@ async function runComposerOutdated(projectPath, cves) {
 }
 async function runCargoOutdated(projectPath, cves) {
     // Requires `cargo install cargo-outdated`.
-    const result = await execa('cargo', ['outdated', '--format', 'json'], {
-        ...packageManagerEnvOptions(),
-        cwd: projectPath,
-        reject: false,
-        timeout: 90_000,
-    });
+    const result = await execPackageManager('cargo', ['outdated', '--format', 'json'], { cwd: projectPath, timeout: 90_000 });
     const failures = [];
     const exitFailure = describeExecFailure('cargo outdated (needs cargo-outdated)', result, [0]);
     if (exitFailure)
@@ -1780,12 +1779,7 @@ async function runCargoOutdated(projectPath, cves) {
 }
 async function runGoOutdated(projectPath, cves) {
     // `go list -m -u -json all` emits one JSON object per line.
-    const result = await execa('go', ['list', '-m', '-u', '-json', 'all'], {
-        ...packageManagerEnvOptions(),
-        cwd: projectPath,
-        reject: false,
-        timeout: 90_000,
-    });
+    const result = await execPackageManager('go', ['list', '-m', '-u', '-json', 'all'], { cwd: projectPath, timeout: 90_000 });
     const exitFailure = describeExecFailure('go list -m -u -json all', result, [0]);
     if (exitFailure)
         return { steps: [], unplanned: [], failures: [{ ecosystem: 'go', ...exitFailure }] };
@@ -1824,12 +1818,7 @@ async function runGoOutdated(projectPath, cves) {
 async function runBundlerOutdated(projectPath, cves) {
     // `bundle outdated --parseable` emits machine-friendly lines:
     // gem-name (newest 1.2.3, installed 1.2.0)
-    const result = await execa('bundle', ['outdated', '--parseable'], {
-        ...packageManagerEnvOptions(),
-        cwd: projectPath,
-        reject: false,
-        timeout: 90_000,
-    });
+    const result = await execPackageManager('bundle', ['outdated', '--parseable'], { cwd: projectPath, timeout: 90_000 });
     // `bundle outdated` exits 1 when anything is outdated, so only a command
     // that could not run, or a non-zero exit with nothing parseable, is a
     // failure.
@@ -1891,12 +1880,7 @@ async function runDotnetOutdated(projectPath, cves) {
             failures.push({ ecosystem: 'dotnet', target: rel, code: plan.blocked.code, reason: plan.blocked.reason });
             continue;
         }
-        const restore = await execa('dotnet', plan.args, {
-            ...packageManagerEnvOptions(),
-            cwd: projectPath,
-            reject: false,
-            timeout: 5 * 60_000,
-        });
+        const restore = await execPackageManager('dotnet', plan.args, { cwd: projectPath, timeout: 5 * 60_000 });
         const created = removeCreatedLockFiles(plan);
         if (created.length > 0) {
             failures.push({
@@ -1916,10 +1900,8 @@ async function runDotnetOutdated(projectPath, cves) {
             failures.push({ ecosystem: 'dotnet', target: rel, code: failure.code, reason: failure.reason });
             continue;
         }
-        const r = await execa('dotnet', ['list', target, 'package', '--outdated', '--format', 'json', '--no-restore'], {
-            ...packageManagerEnvOptions(),
+        const r = await execPackageManager('dotnet', ['list', target, 'package', '--outdated', '--format', 'json', '--no-restore'], {
             cwd: projectPath,
-            reject: false,
             timeout: 90_000,
         });
         const listed = typeof r.stdout === 'string' ? r.stdout : '';
@@ -1929,10 +1911,8 @@ async function runDotnetOutdated(projectPath, cves) {
             steps.push(...parseDotnetJson(listed, cves));
             continue;
         }
-        const fallback = await execa('dotnet', ['list', target, 'package', '--outdated', '--no-restore'], {
-            ...packageManagerEnvOptions(),
+        const fallback = await execPackageManager('dotnet', ['list', target, 'package', '--outdated', '--no-restore'], {
             cwd: projectPath,
-            reject: false,
             timeout: 90_000,
         });
         const text = typeof fallback.stdout === 'string' ? fallback.stdout : '';

@@ -494,6 +494,58 @@ them again. Scans made on the fallback meanwhile are not merged back.
 
 ### Security
 
+- **A scanned repository's own git configuration ran commands (review W2E-git).** A repository
+  delivered with its own `.git/` — an archive, a ZIP download, a shared folder — names programs
+  git runs, and dev-guardian's git ran them. Reproduced: `scan_sast` ran the repository's
+  `core.fsmonitor` five times through Semgrep 1.176.1's own `git ls-files`; `scan_secrets` ran its
+  textconv driver through gitleaks 8.30.1's `git log -p` (and `gpg.program`, for a signed commit,
+  under `log.showSignature`); the SessionStart hook ran `core.fsmonitor`, a clean filter and the
+  `post-index-change` hook when a session merely opened the project; `review_pr`'s and
+  `create_fix_pr`'s checkouts ran smudge filters and `post-checkout`; `create_fix_pr`'s commit ran
+  `prepare-commit-msg` and `post-commit`, and its push `core.sshCommand`,
+  `remote.origin.receivepack` and — for a local origin — the destination's own hooks. Every git
+  dev-guardian starts, directly or inside a scanner, a package manager or a script, now runs with
+  configuration overrides in its environment (`GIT_CONFIG_COUNT`, appended after the user's own
+  entries): `core.fsmonitor` off, `core.hooksPath` where no hook can exist, `ext::` refused, no
+  signature checks by `git log`, no automatic gc, no pager or editor — and, read first from the
+  repository with `git config --get-regexp`, its own filter, textconv, external-diff and merge
+  drivers, `core.sshCommand`, `core.askPass`, `core.gitProxy`, credential helpers, gpg programs,
+  aliases and `core.alternateRefsCommand` neutralised (the user's own value for a key wins; each
+  neutral value measured — an EMPTY textconv makes git die, so it is `cat`). The commit passes
+  `--no-verify`; the push passes `--no-verify --receive-pack=git-receive-pack`, and to a
+  repository on this machine `git -c … receive-pack` with that destination's overrides (git
+  strips `GIT_CONFIG_COUNT` from a local receive-pack). Checkouts are `worktree add
+  --no-checkout` then `reset --hard` inside the new worktree, so an `includeIf` matching it is
+  neutralised too. One reading serves every git started in the same directory and environment
+  for up to 2 s (measured: a `review_pr` made 5 readings for 26 git calls, instead of one per
+  call). A configuration that cannot be read safely — or a git older than 2.31, which
+  ignores `GIT_CONFIG_COUNT` — is refused and named, never run on hope; what a run did not apply
+  is named in `review_pr`'s warnings, the gitleaks history reason and `create_fix_pr`'s
+  `git_config_not_applied`. `precommit_install` keeps everything but the hooks redirect (its
+  job), and the project's own test command and DAST application are unchanged: they are the
+  project's code. The limits are listed in SECURITY.md. Measured with real git — a fixture
+  repository armed with every vector, whose markers plain git writes and dev-guardian does not —
+  on git 2.52.0.windows.1 and on git 2.39.5 in `node:22`.
+  - **Submodules too (review round 2).** A superproject `git status` goes into each initialised
+    submodule, whose own configuration names its own drivers — measured: clean filters defined only
+    in an absorbed submodule, in a submodule of it and in an old-style in-tree one all ran, through
+    SessionStart and through the auto_fix guard, which then answered "clean". Every initialised
+    submodule's configuration is now read and neutralised with the superproject's (capped at 64, 8
+    levels deep, else refused and named); queries that need nothing inside a submodule's work tree
+    pass `--ignore-submodules=dirty`; `diff.submodule=short` keeps `git log -p` out of them. The
+    auto_fix guard still calls a tree with uncommitted work inside a submodule, or a moved
+    submodule commit, dirty.
+  - **`submodule.recurse=true` broke the two-step checkout (review round 2).** With it in the
+    user's configuration, `review_pr`'s head checkout and `create_fix_pr`'s worktrees died on any
+    repository with a submodule; the reset now passes `--no-recurse-submodules`, as `worktree add`'s
+    own does.
+  - **Credentials over HTTP (review round 2).** A repository's own `http[.<url>].extraHeader`,
+    `.proxy`, `remote.<name>.proxy`, `.sslVerify`, `.sslCAInfo`, `.sslCAPath`, `.cookieFile`,
+    `.saveCookies` and `.followRedirects` are overridden for every git dev-guardian starts (measured
+    against local servers: a plain git sent the repository's header, went through its proxy,
+    trusted its certificate authority, sent cookies from its file and wrote a cookie jar to the path
+    it chose); `create_fix_pr` refuses to push, naming the key, when the repository's own
+    `url.<base>.insteadOf` / `pushInsteadOf` rewrites origin.
 - **A pull request could gate itself.** `dev-guardian scan` read `.guardian/baseline.json`, the
   project's Semgrep rules and its `.guardianignore` from the checkout it scanned — on a pull
   request, the pull request's own. A fork adopted its new finding into the baseline, or deleted

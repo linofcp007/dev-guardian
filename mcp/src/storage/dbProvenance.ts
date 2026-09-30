@@ -36,15 +36,16 @@
  *     `core.ignorecase` — and `.guardian` is not a gitlink ({@link gitProblem}).
  * Then its id is read, read-only ({@link probeDatabase}).
  *
- * Git runs with a 3 s bound, `core.fsmonitor` off (a repository's own config
- * could name a program to run), GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE
- * dropped from its environment, in the C locale.
+ * Git runs with a 3 s bound, hardened (`platform/gitSafety.ts`: no
+ * `core.fsmonitor`, hook or other command a repository's own configuration
+ * names), GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE dropped from its
+ * environment, in the C locale.
  */
 
-import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, lstatSync, type Stats } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
+import { execGitSync } from '../platform/gitSafety.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { GuardianDbError } from './dbError.js';
 import { DB_ID_KEY, DB_ID_SHAPE } from './dbRegistry.js';
@@ -80,26 +81,20 @@ export interface GitOptions {
  * throws.
  */
 export function gitIndexAt(projectPath: string, opts: GitOptions = {}): GitIndexAnswer {
-  const r = spawnSync(
-    opts.git ?? 'git',
-    ['-c', 'core.fsmonitor=false', '-c', 'core.quotepath=off', 'ls-files', '-s', '-z', '--', ':(icase).guardian'],
-    {
-      cwd: projectPath,
-      encoding: 'utf8',
-      timeout: opts.timeoutMs ?? GIT_TIMEOUT_MS,
-      windowsHide: true,
-      env: gitEnvironment(),
-      maxBuffer: 4 * 1024 * 1024,
-    },
-  );
-  if (r.error !== undefined) {
-    const code = (r.error as NodeJS.ErrnoException).code;
+  const timeoutMs = opts.timeoutMs ?? GIT_TIMEOUT_MS;
+  const r = execGitSync(projectPath, ['-c', 'core.fsmonitor=false', '-c', 'core.quotepath=off', 'ls-files', '-s', '-z', '--', ':(icase).guardian'], {
+    timeoutMs,
+    env: gitEnvironment(),
+    maxBuffer: 4 * 1024 * 1024,
+    ...(opts.git !== undefined ? { git: opts.git } : {}),
+  });
+  if (r.failure !== null) {
     const detail =
-      code === 'ENOENT'
+      r.failure.code === 'not-found'
         ? 'git is not installed'
-        : code === 'ETIMEDOUT'
-          ? `git took longer than ${opts.timeoutMs ?? GIT_TIMEOUT_MS} ms`
-          : `git failed to run (${code ?? r.error.message})`;
+        : r.failure.code === 'timeout'
+          ? `git took longer than ${timeoutMs} ms`
+          : r.failure.message;
     return { state: 'unavailable', tracked: [], gitlink: false, detail };
   }
   const stderr = typeof r.stderr === 'string' ? r.stderr : '';

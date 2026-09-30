@@ -31,10 +31,10 @@
  * The hash is order-independent: file paths are sorted before being joined.
  * Two identical project trees on different machines produce the same hash.
  */
-import { execa } from 'execa';
 import { createHash } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
+import { execGit } from '../platform/gitSafety.js';
 import { hashProjectFile } from '../platform/projectFs.js';
 /**
  * Directories excluded from filesystem walks. Exported so other modules that
@@ -83,24 +83,23 @@ export async function computeTreeHash(projectPath, options = {}) {
 const TOOL_OUTPUT_DIR = '.guardian';
 async function tryGitListFiles(root) {
     const excludes = [...FS_EXCLUDE].map((dir) => `--exclude=${dir}/`);
-    try {
-        const result = await execa('git', ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', ...excludes], { reject: false, timeout: 30_000 });
-        if (result.exitCode !== 0)
-            return null;
-        // A Set: an unmerged path is listed once per conflict stage.
-        const files = new Set();
-        for (const entry of result.stdout.split('\0')) {
-            if (entry.length === 0)
-                continue;
-            if (entry.split('/').includes(TOOL_OUTPUT_DIR))
-                continue;
-            files.add(entry);
-        }
-        return [...files];
-    }
-    catch {
+    // Hardened (`platform/gitSafety.ts`): `ls-files` is where a repository's own
+    // core.fsmonitor runs. Refused or failed, the walk below lists the files.
+    const result = await execGit(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', ...excludes], {
+        timeoutMs: 30_000,
+    });
+    if (result.failure !== null || result.status !== 0)
         return null;
+    // A Set: an unmerged path is listed once per conflict stage.
+    const files = new Set();
+    for (const entry of result.stdout.split('\0')) {
+        if (entry.length === 0)
+            continue;
+        if (entry.split('/').includes(TOOL_OUTPUT_DIR))
+            continue;
+        files.add(entry);
     }
+    return [...files];
 }
 async function walkFiles(root) {
     const out = [];

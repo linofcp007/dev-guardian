@@ -513,8 +513,22 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
       ? await listZ(projectPath, ['diff', '-z', '--name-only', '--relative', '--cached', '--diff-filter=ACMR', '--no-renames', 'HEAD', '--'])
       : await listZ(projectPath, ['ls-files', '-z', '--cached']);
   } else {
+    // `--ignore-submodules=dirty`: git does not go into a submodule's work
+    // tree (where the submodule's own drivers would run — they are also
+    // neutralised, platform/gitSafety.ts); a moved submodule commit is still
+    // listed. Either way only regular files become targets (`onDisk`).
     tracked = hasCommits
-      ? await listZ(projectPath, ['diff', '-z', '--name-only', '--relative', '--diff-filter=d', '--no-renames', 'HEAD', '--'])
+      ? await listZ(projectPath, [
+          'diff',
+          '-z',
+          '--name-only',
+          '--relative',
+          '--diff-filter=d',
+          '--no-renames',
+          '--ignore-submodules=dirty',
+          'HEAD',
+          '--',
+        ])
       : await listZ(projectPath, ['ls-files', '-z', '--cached']);
   }
   const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];
