@@ -73,7 +73,7 @@
  * keys at column 0 and was num=0 with no error.
  */
 import { join } from 'node:path';
-import { describeReadRefusal, directoryLinkOut, listProjectDirOrNull, ReadBudget } from '../platform/projectFs.js';
+import { describeReadRefusal, linkNotFollowed, listProjectDirOrNull, ReadBudget } from '../platform/projectFs.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { withHonoured } from './trivyRun.js';
@@ -258,8 +258,9 @@ export function iacLookingFiles(projectPath, exclusions) {
             const sniffable = /\.(ya?ml|json|template)$/.test(lower) && lower !== 'package.json' && !lower.startsWith('docker-compose');
             if (!sniffable) {
                 // A directory link out of the project is not followed (nor by Trivy): named.
-                if (e.kind === 'link' && directoryLinkOut(projectPath, join(abs, e.name)))
-                    linksOut.push(`${child}/`);
+                const out = e.kind === 'link' ? linkNotFollowed(projectPath, join(abs, e.name)) : null;
+                if (out !== null)
+                    linksOut.push(`${child}${out.kind === 'directory' ? '/' : ''} (${out.says})`);
                 continue;
             }
             // Too large to parse is by design (not IaC-looking); anything else refused is named.
@@ -293,7 +294,7 @@ export function iacLookingFiles(projectPath, exclusions) {
     if (unlisted.length > 0)
         notes.push(`could not list ${list(unlisted, ', ')} — IaC below was not looked for`);
     if (linksOut.length > 0) {
-        notes.push(`did not follow ${list(linksOut, ', ')} (a directory link out of the project, or unresolvable) — IaC behind it was not looked for`);
+        notes.push(`did not follow ${list(linksOut, ', ')} — IaC behind it was not looked for`);
     }
     return notes.length > 0 ? { files, incomplete: notes.join('; ') } : { files };
 }

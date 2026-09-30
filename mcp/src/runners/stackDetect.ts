@@ -51,7 +51,7 @@ import { join, relative, sep } from 'node:path';
 import { readSmallText } from '../hooks/configFile.js';
 import {
   describeReadRefusal,
-  directoryLinkOut,
+  linkNotFollowed,
   listProjectDirOrNull,
   presentInProject,
   PROJECT_FILE_MAX_BYTES,
@@ -311,8 +311,9 @@ function walkManifestDirs(io: ReadCtx): ManifestDir[] {
       if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith('.')) continue;
       const abs = join(cur.abs, e.name);
       if (e.kind === 'link') {
-        if (directoryLinkOut(io.root, abs)) {
-          noteUnread(io, abs, 'a directory link out of the project (or to a network path), not followed: a sub-project behind it was not detected');
+        const out = linkNotFollowed(io.root, abs);
+        if (out !== null) {
+          noteUnread(io, abs, out.kind === 'directory' ? `${out.says}: a sub-project behind it was not detected` : out.says);
         }
         continue;
       }

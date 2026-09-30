@@ -144,8 +144,8 @@ import { withPackageManagerEnv } from '../fixpr/childEnv.js';
 import {
   composerChoosesRepository,
   installRefusal,
-  npmNetworkPaths,
-  npmNetworkRefusal,
+  checkNpmSources,
+  npmSourcesRefusal,
   setAsidePackageConfig,
   type SetAside,
 } from '../fixpr/repoPackageConfig.js';
@@ -581,11 +581,12 @@ async function fetchUpgradeSteps(
       planFailures.push({ ecosystem: 'composer', code: 'repository_chosen_by_project', reason: composerRefused });
     }
     // `npm outdated` opens a `file:` dependency — on a network path, Windows
-    // sends the user's credentials to its host. Not planned (review of 3.0, W2E).
-    const npmNetwork = npmNetworkPaths(planDir, created.worktree.path);
-    if (npmNetwork.length > 0) {
+    // sends the user's credentials to its host. Not planned, and neither is a
+    // project whose npm files could not all be checked (review of 3.0, W2E).
+    const npmRefused = npmSourcesRefusal(checkNpmSources(planDir, created.worktree.path));
+    if (npmRefused !== null) {
       rmSync(join(planDir, 'package.json'), { force: true });
-      planFailures.push({ ecosystem: 'npm', code: 'network_path_chosen_by_project', reason: npmNetworkRefusal(npmNetwork) });
+      planFailures.push({ ecosystem: 'npm', code: 'network_path_chosen_by_project', reason: npmRefused });
     }
     const result = await withPackageManagerEnv(packageManagerEnv(), () =>
       depsPlanTool.handler({ project_path: planDir }, ctx, meta),

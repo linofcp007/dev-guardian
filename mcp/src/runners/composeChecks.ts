@@ -17,11 +17,14 @@ export const COMPOSE_TOOL_NAME = 'docker-compose';
 const CATEGORY: Category = 'security';
 
 export function checkCompose(text: string, filePath: string): Finding[] {
-  // Under a node bound: scan_containers names a compose file too complex to
-  // parse (platform/boundedParse.ts) before it ever reaches here.
+  // Bounded (platform/boundedParse.ts); scan_containers parses once itself and
+  // names a file it could not parse, then hands the value to checkComposeValue.
   const parsed = parseYamlBounded(text);
-  if (!parsed.ok) return [];
-  const doc = parsed.value;
+  return parsed.ok ? checkComposeValue(parsed.value, filePath) : [];
+}
+
+/** The checks on an already-parsed compose document. */
+export function checkComposeValue(doc: unknown, filePath: string): Finding[] {
   const services = getServices(doc);
   if (services === null) return [];
 

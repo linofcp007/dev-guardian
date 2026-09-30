@@ -86,6 +86,8 @@ describe('detect_stack — a hostile manifest never hangs or crashes the server,
     const snap = fast(() => detectStack(p));
     expect(snap.languages).toContain('javascript');
     expect(snap.unread_files?.map((u) => u.path)).toEqual(['package.json']);
+    // Round 3 (a): named by what it leads to — a file link to a device is no "directory link".
+    expect(snap.unread_files?.[0]?.reason).not.toMatch(/directory/);
   });
 
   it.skipIf(!POSIX)('a FIFO package.json, pyproject.toml, requirements-dev.txt and deploy.yaml never wait for a writer, and each is named (POSIX)', () => {

@@ -38,11 +38,11 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import { parseYamlBounded } from '../platform/boundedParse.js';
+import { parseYamlBounded, YAML_CONFIG_LIMITS } from '../platform/boundedParse.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { yamlFilesUnder } from '../platform/customRules.js';
-/** The largest rule config read back; the plugin's own largest pack is a few hundred KB. */
-const MAX_RULE_CONFIG_BYTES = 16 * 1024 * 1024;
+/** The largest rule config read back: what may be parsed (1 MiB — the plugin's largest pack is 85 KB). */
+const MAX_RULE_CONFIG_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 /** Does Semgrep's check_id `checkId` name rule `id` of the file `ruleFile`? */
 export function checkIdMatches(checkId, ruleFile, id) {
     if (checkId === id)
@@ -132,7 +132,7 @@ function loadLocalRules(configs) {
             const text = readSmallTextFile(file, MAX_RULE_CONFIG_BYTES);
             if (text === undefined)
                 continue;
-            // Under a node bound (platform/boundedParse.ts): the byte cap alone let
+            // Bounded by bytes, indicators and depth (platform/boundedParse.ts): the byte cap alone let
             // an adversarial rules file take this parse past the server's heap.
             const parsed = parseYamlBounded(text);
             if (!parsed.ok)

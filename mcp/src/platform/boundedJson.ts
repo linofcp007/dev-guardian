@@ -5,7 +5,9 @@
  * without importing a package.
  */
 
-export type BoundedParse = { ok: true; value: unknown } | { ok: false; reason: 'too-complex' | 'invalid'; detail?: string };
+export type BoundedParse =
+  | { ok: true; value: unknown }
+  | { ok: false; reason: 'too-complex' | 'too-large' | 'too-deep' | 'too-expanded' | 'invalid'; detail?: string };
 
 /**
  * JSON values a parsed file may hold, counted as its `{`, `[` and `,`: a

@@ -27,7 +27,7 @@
 
 import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
-import { describeTooComplex, parseYamlBounded, YAML_CONFIG_MAX_NODES } from '../platform/boundedParse.js';
+import { describeYamlRefusal, parseYamlBounded } from '../platform/boundedParse.js';
 import type { Category, Finding } from '../types.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 
@@ -82,14 +82,14 @@ export function loadBudgets(projectPath: string): BudgetsLoadResult {
   if (read.status === 'refused') {
     return { kind: 'invalid', path, error: `the file was not read: ${describeReadRefusal(read.reason)}` };
   }
-  // Under a node bound (platform/boundedParse.ts): 1 MiB of dense YAML took
+  // Bounded by bytes, indicators and depth (platform/boundedParse.ts): 1 MiB of dense YAML took
   // `yaml` 6 s and ~500 MB of heap.
   const parsed = parseYamlBounded(read.text);
   if (!parsed.ok) {
     return {
       kind: 'invalid',
       path,
-      error: parsed.reason === 'too-complex' ? `the file was not read: ${describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes')}` : `invalid YAML: ${parsed.detail ?? 'unparsable'}`,
+      error: parsed.reason === 'invalid' ? `invalid YAML: ${parsed.detail ?? 'unparsable'}` : `the file was not read: ${describeYamlRefusal(parsed)}`,
     };
   }
   const doc = parsed.value;

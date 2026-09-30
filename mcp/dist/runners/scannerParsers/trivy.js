@@ -20,7 +20,7 @@
  */
 import { dirname, join, relative, sep } from 'node:path';
 import { parseYamlBounded } from '../../platform/boundedParse.js';
-import { listProjectDirOrNull, presentInProject, PROJECT_FILE_MAX_BYTES, directoryLinkOut, ReadBudget, } from '../../platform/projectFs.js';
+import { listProjectDirOrNull, presentInProject, PROJECT_FILE_MAX_BYTES, linkNotFollowed, ReadBudget, } from '../../platform/projectFs.js';
 import { textLines } from '../../platform/textLines.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from '../projectFiles.js';
 import { asArray, dependencyTaxonomy, getNumber, getProp, getString, makeFinding, SECRET_CWE, normalizeSeverity, parseInputAsJson, toRelativeIfPossible, } from './index.js';
@@ -587,8 +587,9 @@ function walkManifests(projectPath, opts) {
                 found.push({ rel: child, dir: rel, abs: join(abs, e.name), eco });
                 continue;
             }
-            if (e.kind === 'link' && directoryLinkOut(projectPath, join(abs, e.name)))
-                linksOut.push(`${child}/`);
+            const out = e.kind === 'link' ? linkNotFollowed(projectPath, join(abs, e.name)) : null;
+            if (out !== null)
+                linksOut.push(`${child}${out.kind === 'directory' ? '/' : ''} (${out.says})`);
         }
     }
     if (!rootRead)
@@ -600,8 +601,7 @@ function walkManifests(projectPath, opts) {
     }
     if (linksOut.length > 0) {
         const shown = linksOut.slice(0, 3).join(', ');
-        parts.push(`did not follow ${shown}${linksOut.length > 3 ? ` and ${linksOut.length - 3} more` : ''} ` +
-            '(a directory link out of the project, or unresolvable)');
+        parts.push(`did not follow ${shown}${linksOut.length > 3 ? ` and ${linksOut.length - 3} more` : ''}`);
     }
     return parts.length > 0 ? { found, incomplete: parts.join('; ') } : { found };
 }

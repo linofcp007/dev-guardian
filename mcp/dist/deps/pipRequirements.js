@@ -39,7 +39,7 @@
  * own parser on a corpus of bypasses: every input where pip sees an index,
  * find-links, trusted host, URL, VCS or editable requirement is refused.
  */
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { describeReadRefusal, isWithinDir, readProjectBytes } from '../platform/projectFs.js';
 /** Files one check follows, includes included. */
 export const MAX_REQUIREMENT_FILES = 200;
@@ -280,8 +280,15 @@ function judgeLine(text) {
         .find((t) => /^(?:\\\\|\/\/)[^\\/]/.test(t));
     if (unc !== undefined)
         return { ok: false, refusal: { kind: 'network path', host: urlHost(unc) } };
-    if (/["'\\]/.test(optionText))
+    if (/["']/.test(optionText))
         return { ok: false, refusal: { kind: 'quoted or escaped option' } };
+    if (optionText.includes('\\')) {
+        // Measured with pip 26.2.1: `-r reqs\base.txt` opens `reqsbase.txt` — its shlex takes the backslash as an escape.
+        return {
+            ok: false,
+            refusal: { kind: 'quoted or escaped option', detail: 'pip reads a backslash here as an escape, so the file it opens is not the one written' },
+        };
+    }
     const opts = optionText.split(/[ \t]+/).filter((t) => t !== '');
     if (args.trim() !== '') {
         const bad = judgeRequirement(args);
@@ -305,7 +312,8 @@ function judgeLine(text) {
         const t = opts[i] ?? '';
         if (t === '--require-hashes' || t === '--pre' || t === '--prefer-binary')
             continue;
-        const valued = /^(--only-binary|--no-binary|--requirement|--constraint)=(.*)$/.exec(t);
+        // `-rreqs/base.txt`: pip's optparse takes a value glued to a short option (measured: it opens reqs/base.txt).
+        const valued = /^(--only-binary|--no-binary|--requirement|--constraint)=(.*)$/.exec(t) ?? /^(-r|-c)(.+)$/.exec(t);
         const name = valued?.[1] ?? t;
         if (['--only-binary', '--no-binary', '--requirement', '--constraint', '-r', '-c'].includes(name)) {
             const value = valued?.[2] ?? opts[i + 1];
@@ -354,7 +362,12 @@ function judgeInclude(target) {
         return { kind: 'network path', host: urlHost(target) };
     if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[A-Za-z]:[\\/]/.test(target))
         return { kind: 'include of a URL', host: urlHost(target) };
-    if (isAbsolute(target) || /^[A-Za-z]:/.test(target) || target.startsWith('~'))
+    // An absolute path is opened as written (measured: `-r C:/…/reqs/base.txt` reads that file) — followed, and
+    // held to the checkout like any other include. A drive-relative `C:x`, a rooted `/x` on Windows (on whichever
+    // drive is current) and `~` are paths this check cannot place.
+    if (/^[A-Za-z]:(?![\\/])/.test(target) || target.startsWith('~'))
+        return { kind: 'include out of the checkout' };
+    if (process.platform === 'win32' && /^[\\/](?![\\/])/.test(target))
         return { kind: 'include out of the checkout' };
     return null;
 }

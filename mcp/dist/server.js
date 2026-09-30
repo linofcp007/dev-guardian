@@ -48,9 +48,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/codegen/code.js
+// node_modules/ajv/dist/compile/codegen/code.js
 var require_code = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/codegen/code.js"(exports) {
+  "node_modules/ajv/dist/compile/codegen/code.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
@@ -202,9 +202,9 @@ var require_code = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/codegen/scope.js
+// node_modules/ajv/dist/compile/codegen/scope.js
 var require_scope = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/codegen/scope.js"(exports) {
+  "node_modules/ajv/dist/compile/codegen/scope.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ValueScope = exports.ValueScopeName = exports.Scope = exports.varKinds = exports.UsedValueState = void 0;
@@ -347,9 +347,9 @@ var require_scope = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/codegen/index.js
+// node_modules/ajv/dist/compile/codegen/index.js
 var require_codegen = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/codegen/index.js"(exports) {
+  "node_modules/ajv/dist/compile/codegen/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.or = exports.and = exports.not = exports.CodeGen = exports.operators = exports.varKinds = exports.ValueScopeName = exports.ValueScope = exports.Scope = exports.Name = exports.regexpCode = exports.stringify = exports.getProperty = exports.nil = exports.strConcat = exports.str = exports._ = void 0;
@@ -1067,9 +1067,9 @@ var require_codegen = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/util.js
+// node_modules/ajv/dist/compile/util.js
 var require_util = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/util.js"(exports) {
+  "node_modules/ajv/dist/compile/util.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = void 0;
@@ -1234,9 +1234,9 @@ var require_util = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/names.js
+// node_modules/ajv/dist/compile/names.js
 var require_names = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/names.js"(exports) {
+  "node_modules/ajv/dist/compile/names.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -1273,9 +1273,9 @@ var require_names = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/errors.js
+// node_modules/ajv/dist/compile/errors.js
 var require_errors = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/errors.js"(exports) {
+  "node_modules/ajv/dist/compile/errors.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendErrors = exports.resetErrorsCount = exports.reportExtraError = exports.reportError = exports.keyword$DataError = exports.keywordError = void 0;
@@ -1395,9 +1395,9 @@ var require_errors = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/boolSchema.js
+// node_modules/ajv/dist/compile/validate/boolSchema.js
 var require_boolSchema = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/boolSchema.js"(exports) {
+  "node_modules/ajv/dist/compile/validate/boolSchema.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.boolOrEmptySchema = exports.topBoolOrEmptySchema = void 0;
@@ -1446,9 +1446,9 @@ var require_boolSchema = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/rules.js
+// node_modules/ajv/dist/compile/rules.js
 var require_rules = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/rules.js"(exports) {
+  "node_modules/ajv/dist/compile/rules.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getRules = exports.isJSONType = void 0;
@@ -1477,9 +1477,9 @@ var require_rules = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/applicability.js
+// node_modules/ajv/dist/compile/validate/applicability.js
 var require_applicability = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/applicability.js"(exports) {
+  "node_modules/ajv/dist/compile/validate/applicability.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shouldUseRule = exports.shouldUseGroup = exports.schemaHasRulesForType = void 0;
@@ -1500,9 +1500,9 @@ var require_applicability = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/dataType.js
+// node_modules/ajv/dist/compile/validate/dataType.js
 var require_dataType = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/dataType.js"(exports) {
+  "node_modules/ajv/dist/compile/validate/dataType.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.reportTypeError = exports.checkDataTypes = exports.checkDataType = exports.coerceAndCheckDataType = exports.getJSONTypes = exports.getSchemaTypes = exports.DataType = void 0;
@@ -1684,9 +1684,9 @@ var require_dataType = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/defaults.js
+// node_modules/ajv/dist/compile/validate/defaults.js
 var require_defaults = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/defaults.js"(exports) {
+  "node_modules/ajv/dist/compile/validate/defaults.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.assignDefaults = void 0;
@@ -1721,9 +1721,9 @@ var require_defaults = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/code.js
+// node_modules/ajv/dist/vocabularies/code.js
 var require_code2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/code.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/code.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateUnion = exports.validateArray = exports.usePattern = exports.callValidateCode = exports.schemaProperties = exports.allSchemaProperties = exports.noPropertyInData = exports.propertyInData = exports.isOwnProperty = exports.hasPropFunc = exports.reportMissingProp = exports.checkMissingProp = exports.checkReportMissingProp = void 0;
@@ -1854,9 +1854,9 @@ var require_code2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/keyword.js
+// node_modules/ajv/dist/compile/validate/keyword.js
 var require_keyword = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/keyword.js"(exports) {
+  "node_modules/ajv/dist/compile/validate/keyword.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateKeywordUsage = exports.validSchemaType = exports.funcKeywordCode = exports.macroKeywordCode = void 0;
@@ -1972,9 +1972,9 @@ var require_keyword = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/subschema.js
+// node_modules/ajv/dist/compile/validate/subschema.js
 var require_subschema = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/subschema.js"(exports) {
+  "node_modules/ajv/dist/compile/validate/subschema.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendSubschemaMode = exports.extendSubschemaData = exports.getSubschema = void 0;
@@ -2055,9 +2055,9 @@ var require_subschema = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-deep-equal/index.js
+// node_modules/fast-deep-equal/index.js
 var require_fast_deep_equal = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-deep-equal/index.js"(exports, module) {
+  "node_modules/fast-deep-equal/index.js"(exports, module) {
     "use strict";
     module.exports = function equal(a2, b) {
       if (a2 === b) return true;
@@ -2090,9 +2090,9 @@ var require_fast_deep_equal = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/json-schema-traverse/index.js
+// node_modules/json-schema-traverse/index.js
 var require_json_schema_traverse = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/json-schema-traverse/index.js"(exports, module) {
+  "node_modules/json-schema-traverse/index.js"(exports, module) {
     "use strict";
     var traverse = module.exports = function(schema, opts, cb) {
       if (typeof opts == "function") {
@@ -2178,9 +2178,9 @@ var require_json_schema_traverse = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/resolve.js
+// node_modules/ajv/dist/compile/resolve.js
 var require_resolve = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/resolve.js"(exports) {
+  "node_modules/ajv/dist/compile/resolve.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getSchemaRefs = exports.resolveUrl = exports.normalizeId = exports._getFullPath = exports.getFullPath = exports.inlineRef = void 0;
@@ -2334,9 +2334,9 @@ var require_resolve = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/index.js
+// node_modules/ajv/dist/compile/validate/index.js
 var require_validate = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/validate/index.js"(exports) {
+  "node_modules/ajv/dist/compile/validate/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getData = exports.KeywordCxt = exports.validateFunctionCode = void 0;
@@ -2842,9 +2842,9 @@ var require_validate = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/validation_error.js
+// node_modules/ajv/dist/runtime/validation_error.js
 var require_validation_error = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/validation_error.js"(exports) {
+  "node_modules/ajv/dist/runtime/validation_error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var ValidationError = class extends Error {
@@ -2858,9 +2858,9 @@ var require_validation_error = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/ref_error.js
+// node_modules/ajv/dist/compile/ref_error.js
 var require_ref_error = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/ref_error.js"(exports) {
+  "node_modules/ajv/dist/compile/ref_error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var resolve_1 = require_resolve();
@@ -2875,9 +2875,9 @@ var require_ref_error = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/index.js
+// node_modules/ajv/dist/compile/index.js
 var require_compile = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/compile/index.js"(exports) {
+  "node_modules/ajv/dist/compile/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.resolveSchema = exports.getCompilingSchema = exports.resolveRef = exports.compileSchema = exports.SchemaEnv = void 0;
@@ -3099,9 +3099,9 @@ var require_compile = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/refs/data.json
+// node_modules/ajv/dist/refs/data.json
 var require_data = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/refs/data.json"(exports, module) {
+  "node_modules/ajv/dist/refs/data.json"(exports, module) {
     module.exports = {
       $id: "https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#",
       description: "Meta-schema for $data reference (JSON AnySchema extension proposal)",
@@ -3118,9 +3118,9 @@ var require_data = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-uri/lib/utils.js
+// node_modules/fast-uri/lib/utils.js
 var require_utils = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-uri/lib/utils.js"(exports, module) {
+  "node_modules/fast-uri/lib/utils.js"(exports, module) {
     "use strict";
     var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
     var isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
@@ -3620,9 +3620,9 @@ var require_utils = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-uri/lib/schemes.js
+// node_modules/fast-uri/lib/schemes.js
 var require_schemes = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-uri/lib/schemes.js"(exports, module) {
+  "node_modules/fast-uri/lib/schemes.js"(exports, module) {
     "use strict";
     var { isUUID } = require_utils();
     var URN_REG = /^([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-./:;=@]|%[\da-f]{2})+)$/iu;
@@ -3831,9 +3831,9 @@ var require_schemes = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-uri/index.js
+// node_modules/fast-uri/index.js
 var require_fast_uri = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/fast-uri/index.js"(exports, module) {
+  "node_modules/fast-uri/index.js"(exports, module) {
     "use strict";
     var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, serializePathEncoding, normalizeQueryFragmentEncoding, encodeQuery, encodeFragment, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
     var { SCHEMES, getSchemeHandler } = require_schemes();
@@ -4237,9 +4237,9 @@ var require_fast_uri = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/uri.js
+// node_modules/ajv/dist/runtime/uri.js
 var require_uri = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/uri.js"(exports) {
+  "node_modules/ajv/dist/runtime/uri.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var uri = require_fast_uri();
@@ -4248,9 +4248,9 @@ var require_uri = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/core.js
+// node_modules/ajv/dist/core.js
 var require_core = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/core.js"(exports) {
+  "node_modules/ajv/dist/core.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = void 0;
@@ -4859,9 +4859,9 @@ var require_core = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/core/id.js
+// node_modules/ajv/dist/vocabularies/core/id.js
 var require_id = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/core/id.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/core/id.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var def = {
@@ -4874,9 +4874,9 @@ var require_id = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/core/ref.js
+// node_modules/ajv/dist/vocabularies/core/ref.js
 var require_ref = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/core/ref.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/core/ref.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.callRef = exports.getValidate = void 0;
@@ -4996,9 +4996,9 @@ var require_ref = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/core/index.js
+// node_modules/ajv/dist/vocabularies/core/index.js
 var require_core2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/core/index.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/core/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var id_1 = require_id();
@@ -5017,9 +5017,9 @@ var require_core2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitNumber.js
+// node_modules/ajv/dist/vocabularies/validation/limitNumber.js
 var require_limitNumber = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5049,9 +5049,9 @@ var require_limitNumber = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/multipleOf.js
+// node_modules/ajv/dist/vocabularies/validation/multipleOf.js
 var require_multipleOf = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5077,9 +5077,9 @@ var require_multipleOf = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/ucs2length.js
+// node_modules/ajv/dist/runtime/ucs2length.js
 var require_ucs2length = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
+  "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     function ucs2length(str7) {
@@ -5103,9 +5103,9 @@ var require_ucs2length = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitLength.js
+// node_modules/ajv/dist/vocabularies/validation/limitLength.js
 var require_limitLength = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5135,9 +5135,9 @@ var require_limitLength = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/pattern.js
+// node_modules/ajv/dist/vocabularies/validation/pattern.js
 var require_pattern = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5172,9 +5172,9 @@ var require_pattern = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitProperties.js
+// node_modules/ajv/dist/vocabularies/validation/limitProperties.js
 var require_limitProperties = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5201,9 +5201,9 @@ var require_limitProperties = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/required.js
+// node_modules/ajv/dist/vocabularies/validation/required.js
 var require_required = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/required.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/required.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5283,9 +5283,9 @@ var require_required = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitItems.js
+// node_modules/ajv/dist/vocabularies/validation/limitItems.js
 var require_limitItems = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5312,9 +5312,9 @@ var require_limitItems = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/equal.js
+// node_modules/ajv/dist/runtime/equal.js
 var require_equal = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/runtime/equal.js"(exports) {
+  "node_modules/ajv/dist/runtime/equal.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var equal = require_fast_deep_equal();
@@ -5323,9 +5323,9 @@ var require_equal = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
+// node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
 var require_uniqueItems = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var dataType_1 = require_dataType();
@@ -5390,9 +5390,9 @@ var require_uniqueItems = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/const.js
+// node_modules/ajv/dist/vocabularies/validation/const.js
 var require_const = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/const.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/const.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5419,9 +5419,9 @@ var require_const = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/enum.js
+// node_modules/ajv/dist/vocabularies/validation/enum.js
 var require_enum = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/enum.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/enum.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5468,9 +5468,9 @@ var require_enum = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/index.js
+// node_modules/ajv/dist/vocabularies/validation/index.js
 var require_validation = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/validation/index.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/validation/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var limitNumber_1 = require_limitNumber();
@@ -5506,9 +5506,9 @@ var require_validation = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
+// node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
 var require_additionalItems = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateAdditionalItems = void 0;
@@ -5559,9 +5559,9 @@ var require_additionalItems = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/items.js
+// node_modules/ajv/dist/vocabularies/applicator/items.js
 var require_items = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/items.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/items.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateTuple = void 0;
@@ -5616,9 +5616,9 @@ var require_items = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
+// node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
 var require_prefixItems = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var items_1 = require_items();
@@ -5633,9 +5633,9 @@ var require_prefixItems = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/items2020.js
+// node_modules/ajv/dist/vocabularies/applicator/items2020.js
 var require_items2020 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5668,9 +5668,9 @@ var require_items2020 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/contains.js
+// node_modules/ajv/dist/vocabularies/applicator/contains.js
 var require_contains = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5762,9 +5762,9 @@ var require_contains = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/dependencies.js
+// node_modules/ajv/dist/vocabularies/applicator/dependencies.js
 var require_dependencies = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateSchemaDeps = exports.validatePropertyDeps = exports.error = void 0;
@@ -5856,9 +5856,9 @@ var require_dependencies = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
+// node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
 var require_propertyNames = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5899,9 +5899,9 @@ var require_propertyNames = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
+// node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
 var require_additionalProperties = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -6005,9 +6005,9 @@ var require_additionalProperties = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/properties.js
+// node_modules/ajv/dist/vocabularies/applicator/properties.js
 var require_properties = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var validate_1 = require_validate();
@@ -6063,9 +6063,9 @@ var require_properties = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
+// node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
 var require_patternProperties = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -6137,9 +6137,9 @@ var require_patternProperties = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/not.js
+// node_modules/ajv/dist/vocabularies/applicator/not.js
 var require_not = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/not.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/not.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6168,9 +6168,9 @@ var require_not = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/anyOf.js
+// node_modules/ajv/dist/vocabularies/applicator/anyOf.js
 var require_anyOf = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -6185,9 +6185,9 @@ var require_anyOf = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/oneOf.js
+// node_modules/ajv/dist/vocabularies/applicator/oneOf.js
 var require_oneOf = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6243,9 +6243,9 @@ var require_oneOf = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/allOf.js
+// node_modules/ajv/dist/vocabularies/applicator/allOf.js
 var require_allOf = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6270,9 +6270,9 @@ var require_allOf = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/if.js
+// node_modules/ajv/dist/vocabularies/applicator/if.js
 var require_if = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/if.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/if.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6339,9 +6339,9 @@ var require_if = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/thenElse.js
+// node_modules/ajv/dist/vocabularies/applicator/thenElse.js
 var require_thenElse = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6357,9 +6357,9 @@ var require_thenElse = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/index.js
+// node_modules/ajv/dist/vocabularies/applicator/index.js
 var require_applicator = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/applicator/index.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/applicator/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var additionalItems_1 = require_additionalItems();
@@ -6405,9 +6405,9 @@ var require_applicator = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/format/format.js
+// node_modules/ajv/dist/vocabularies/format/format.js
 var require_format = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/format/format.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/format/format.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6495,9 +6495,9 @@ var require_format = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/format/index.js
+// node_modules/ajv/dist/vocabularies/format/index.js
 var require_format2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/format/index.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/format/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var format_1 = require_format();
@@ -6506,9 +6506,9 @@ var require_format2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/metadata.js
+// node_modules/ajv/dist/vocabularies/metadata.js
 var require_metadata = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/metadata.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/metadata.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.contentVocabulary = exports.metadataVocabulary = void 0;
@@ -6529,9 +6529,9 @@ var require_metadata = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/draft7.js
+// node_modules/ajv/dist/vocabularies/draft7.js
 var require_draft7 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/draft7.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/draft7.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var core_1 = require_core2();
@@ -6551,9 +6551,9 @@ var require_draft7 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/discriminator/types.js
+// node_modules/ajv/dist/vocabularies/discriminator/types.js
 var require_types = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DiscrError = void 0;
@@ -6565,9 +6565,9 @@ var require_types = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/discriminator/index.js
+// node_modules/ajv/dist/vocabularies/discriminator/index.js
 var require_discriminator = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports) {
+  "node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6670,9 +6670,9 @@ var require_discriminator = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/refs/json-schema-draft-07.json
+// node_modules/ajv/dist/refs/json-schema-draft-07.json
 var require_json_schema_draft_07 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports, module) {
+  "node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports, module) {
     module.exports = {
       $schema: "http://json-schema.org/draft-07/schema#",
       $id: "http://json-schema.org/draft-07/schema#",
@@ -6827,9 +6827,9 @@ var require_json_schema_draft_07 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/ajv.js
+// node_modules/ajv/dist/ajv.js
 var require_ajv = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv/dist/ajv.js"(exports, module) {
+  "node_modules/ajv/dist/ajv.js"(exports, module) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = exports.Ajv = void 0;
@@ -6897,9 +6897,9 @@ var require_ajv = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv-formats/dist/formats.js
+// node_modules/ajv-formats/dist/formats.js
 var require_formats = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv-formats/dist/formats.js"(exports) {
+  "node_modules/ajv-formats/dist/formats.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.formatNames = exports.fastFormats = exports.fullFormats = void 0;
@@ -7100,9 +7100,9 @@ var require_formats = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv-formats/dist/limit.js
+// node_modules/ajv-formats/dist/limit.js
 var require_limit = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv-formats/dist/limit.js"(exports) {
+  "node_modules/ajv-formats/dist/limit.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.formatLimitDefinition = void 0;
@@ -7172,9 +7172,9 @@ var require_limit = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv-formats/dist/index.js
+// node_modules/ajv-formats/dist/index.js
 var require_dist = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/ajv-formats/dist/index.js"(exports, module) {
+  "node_modules/ajv-formats/dist/index.js"(exports, module) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var formats_1 = require_formats();
@@ -7214,7 +7214,7 @@ var require_dist = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/is-plain-obj/index.js
+// node_modules/is-plain-obj/index.js
 function isPlainObject3(value) {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -7223,15 +7223,15 @@ function isPlainObject3(value) {
   return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(Symbol.toStringTag in value) && !(Symbol.iterator in value);
 }
 var init_is_plain_obj = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/is-plain-obj/index.js"() {
+  "node_modules/is-plain-obj/index.js"() {
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/file-url.js
+// node_modules/execa/lib/arguments/file-url.js
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var safeNormalizeFileUrl, normalizeDenoExecPath, isDenoExecPath, normalizeFileUrl;
 var init_file_url = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/file-url.js"() {
+  "node_modules/execa/lib/arguments/file-url.js"() {
     safeNormalizeFileUrl = (file, name) => {
       const fileString = normalizeFileUrl(normalizeDenoExecPath(file));
       if (typeof fileString !== "string") {
@@ -7245,10 +7245,10 @@ var init_file_url = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/parameters.js
+// node_modules/execa/lib/methods/parameters.js
 var normalizeParameters;
 var init_parameters = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/parameters.js"() {
+  "node_modules/execa/lib/methods/parameters.js"() {
     init_is_plain_obj();
     init_file_url();
     normalizeParameters = (rawFile, rawArguments = [], rawOptions = {}) => {
@@ -7273,11 +7273,11 @@ var init_parameters = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/uint-array.js
+// node_modules/execa/lib/utils/uint-array.js
 import { StringDecoder } from "node:string_decoder";
 var objectToString, isArrayBuffer, isUint8Array, bufferToUint8Array, textEncoder, stringToUint8Array, textDecoder, uint8ArrayToString, joinToString, uint8ArraysToStrings, joinToUint8Array, stringsToUint8Arrays, concatUint8Arrays, getJoinLength;
 var init_uint_array = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/uint-array.js"() {
+  "node_modules/execa/lib/utils/uint-array.js"() {
     ({ toString: objectToString } = Object.prototype);
     isArrayBuffer = (value) => objectToString.call(value) === "[object ArrayBuffer]";
     isUint8Array = (value) => objectToString.call(value) === "[object Uint8Array]";
@@ -7325,11 +7325,11 @@ var init_uint_array = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/template.js
+// node_modules/execa/lib/methods/template.js
 import { ChildProcess } from "node:child_process";
 var isTemplateString, parseTemplates, parseTemplate, splitByWhitespaces, DELIMITERS, ESCAPE_LENGTH, concatTokens, parseExpression, getSubprocessResult;
 var init_template = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/template.js"() {
+  "node_modules/execa/lib/methods/template.js"() {
     init_is_plain_obj();
     init_uint_array();
     isTemplateString = (templates) => Array.isArray(templates) && Array.isArray(templates.raw);
@@ -7433,11 +7433,11 @@ var init_template = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/standard-stream.js
+// node_modules/execa/lib/utils/standard-stream.js
 import process3 from "node:process";
 var isStandardStream, STANDARD_STREAMS, STANDARD_STREAMS_ALIASES, getStreamName;
 var init_standard_stream = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/standard-stream.js"() {
+  "node_modules/execa/lib/utils/standard-stream.js"() {
     isStandardStream = (stream) => STANDARD_STREAMS.includes(stream);
     STANDARD_STREAMS = [process3.stdin, process3.stdout, process3.stderr];
     STANDARD_STREAMS_ALIASES = ["stdin", "stdout", "stderr"];
@@ -7445,11 +7445,11 @@ var init_standard_stream = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/specific.js
+// node_modules/execa/lib/arguments/specific.js
 import { debuglog } from "node:util";
 var normalizeFdSpecificOptions, normalizeFdSpecificOption, getStdioLength, normalizeFdSpecificValue, normalizeOptionObject, compareFdName, getFdNameOrder, parseFdName, parseFd, FD_REGEXP, addDefaultValue, verboseDefault, DEFAULT_OPTIONS, FD_SPECIFIC_OPTIONS, getFdSpecificValue;
 var init_specific = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/specific.js"() {
+  "node_modules/execa/lib/arguments/specific.js"() {
     init_is_plain_obj();
     init_standard_stream();
     normalizeFdSpecificOptions = (options) => {
@@ -7523,10 +7523,10 @@ Please set the "stdio" option to ensure that file descriptor exists.`);
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/values.js
+// node_modules/execa/lib/verbose/values.js
 var isVerbose, isFullVerbose, getVerboseFunction, getFdVerbose, getFdGenericVerbose, isVerboseFunction, VERBOSE_VALUES;
 var init_values = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/values.js"() {
+  "node_modules/execa/lib/verbose/values.js"() {
     init_specific();
     isVerbose = ({ verbose }, fdNumber) => getFdVerbose(verbose, fdNumber) !== "none";
     isFullVerbose = ({ verbose }, fdNumber) => !["none", "short"].includes(getFdVerbose(verbose, fdNumber));
@@ -7541,12 +7541,12 @@ var init_values = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/escape.js
+// node_modules/execa/lib/arguments/escape.js
 import { platform } from "node:process";
 import { stripVTControlCharacters } from "node:util";
 var joinCommand, escapeLines, escapeControlCharacters, escapeControlCharacter, getSpecialCharRegExp, SPECIAL_CHAR_REGEXP, COMMON_ESCAPES, ASTRAL_START, quoteString, NO_ESCAPE_REGEXP;
 var init_escape = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/escape.js"() {
+  "node_modules/execa/lib/arguments/escape.js"() {
     joinCommand = (filePath, rawArguments) => {
       const fileAndArguments = [filePath, ...rawArguments];
       const command = fileAndArguments.join(" ");
@@ -7591,7 +7591,7 @@ var init_escape = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/is-unicode-supported/index.js
+// node_modules/is-unicode-supported/index.js
 import process4 from "node:process";
 function isUnicodeSupported() {
   const { env } = process4;
@@ -7602,14 +7602,14 @@ function isUnicodeSupported() {
   return Boolean(env.WT_SESSION) || Boolean(env.TERMINUS_SUBLIME) || env.ConEmuTask === "{cmd::Cmder}" || TERM_PROGRAM === "Terminus-Sublime" || TERM_PROGRAM === "vscode" || TERM === "xterm-256color" || TERM === "alacritty" || TERM === "rxvt-unicode" || TERM === "rxvt-unicode-256color" || env.TERMINAL_EMULATOR === "JetBrains-JediTerm";
 }
 var init_is_unicode_supported = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/is-unicode-supported/index.js"() {
+  "node_modules/is-unicode-supported/index.js"() {
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/figures/index.js
+// node_modules/figures/index.js
 var common, specialMainSymbols, specialFallbackSymbols, mainSymbols, fallbackSymbols, shouldUseMain, figures, figures_default, replacements;
 var init_figures = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/figures/index.js"() {
+  "node_modules/figures/index.js"() {
     init_is_unicode_supported();
     common = {
       circleQuestionMark: "(?)",
@@ -7888,11 +7888,11 @@ var init_figures = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yoctocolors/base.js
+// node_modules/yoctocolors/base.js
 import tty from "node:tty";
 var hasColors, format, reset, bold, dim, italic, underline, underlineDouble, underlineCurly, underlineDotted, underlineDashed, overline, inverse, hidden, strikethrough, black, red, green, yellow, blue, magenta, cyan, white, gray, bgBlack, bgRed, bgGreen, bgYellow, bgBlue, bgMagenta, bgCyan, bgWhite, bgGray, redBright, greenBright, yellowBright, blueBright, magentaBright, cyanBright, whiteBright, bgRedBright, bgGreenBright, bgYellowBright, bgBlueBright, bgMagentaBright, bgCyanBright, bgWhiteBright, underlineBlack, underlineRed, underlineGreen, underlineYellow, underlineBlue, underlineMagenta, underlineCyan, underlineWhite, underlineGray, underlineRedBright, underlineGreenBright, underlineYellowBright, underlineBlueBright, underlineMagentaBright, underlineCyanBright, underlineWhiteBright;
 var init_base = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yoctocolors/base.js"() {
+  "node_modules/yoctocolors/base.js"() {
     hasColors = tty?.WriteStream?.prototype?.hasColors?.() ?? false;
     format = (open, close) => {
       if (!hasColors) {
@@ -7983,18 +7983,18 @@ var init_base = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yoctocolors/index.js
+// node_modules/yoctocolors/index.js
 var init_yoctocolors = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yoctocolors/index.js"() {
+  "node_modules/yoctocolors/index.js"() {
     init_base();
     init_base();
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/default.js
+// node_modules/execa/lib/verbose/default.js
 var defaultVerboseFunction, serializeTimestamp, padField, getFinalIcon, ICONS, identity, COLORS;
 var init_default = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/default.js"() {
+  "node_modules/execa/lib/verbose/default.js"() {
     init_figures();
     init_yoctocolors();
     defaultVerboseFunction = ({
@@ -8037,10 +8037,10 @@ var init_default = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/custom.js
+// node_modules/execa/lib/verbose/custom.js
 var applyVerboseOnLines, applyVerboseFunction, appendNewline;
 var init_custom = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/custom.js"() {
+  "node_modules/execa/lib/verbose/custom.js"() {
     init_values();
     applyVerboseOnLines = (printedLines, verboseInfo, fdNumber) => {
       const verboseFunction = getVerboseFunction(verboseInfo, fdNumber);
@@ -8060,11 +8060,11 @@ var init_custom = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/log.js
+// node_modules/execa/lib/verbose/log.js
 import { inspect } from "node:util";
 var verboseLog, getVerboseObject, getPrintedLines, getPrintedLine, serializeVerboseMessage, TAB_SIZE;
 var init_log = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/log.js"() {
+  "node_modules/execa/lib/verbose/log.js"() {
     init_escape();
     init_default();
     init_custom();
@@ -8103,10 +8103,10 @@ var init_log = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/start.js
+// node_modules/execa/lib/verbose/start.js
 var logCommand;
 var init_start = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/start.js"() {
+  "node_modules/execa/lib/verbose/start.js"() {
     init_values();
     init_log();
     logCommand = (escapedCommand, verboseInfo) => {
@@ -8122,10 +8122,10 @@ var init_start = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/info.js
+// node_modules/execa/lib/verbose/info.js
 var getVerboseInfo, getCommandId, COMMAND_ID, validateVerbose;
 var init_info = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/info.js"() {
+  "node_modules/execa/lib/verbose/info.js"() {
     init_values();
     getVerboseInfo = (verbose, escapedCommand, rawOptions) => {
       validateVerbose(verbose);
@@ -8156,20 +8156,20 @@ var init_info = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/duration.js
+// node_modules/execa/lib/return/duration.js
 import { hrtime } from "node:process";
 var getStartTime, getDurationMs;
 var init_duration = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/duration.js"() {
+  "node_modules/execa/lib/return/duration.js"() {
     getStartTime = () => hrtime.bigint();
     getDurationMs = (startTime) => Number(hrtime.bigint() - startTime) / 1e6;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/command.js
+// node_modules/execa/lib/arguments/command.js
 var handleCommand;
 var init_command = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/command.js"() {
+  "node_modules/execa/lib/arguments/command.js"() {
     init_start();
     init_info();
     init_duration();
@@ -8191,9 +8191,9 @@ var init_command = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/isexe/windows.js
+// node_modules/isexe/windows.js
 var require_windows = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/isexe/windows.js"(exports, module) {
+  "node_modules/isexe/windows.js"(exports, module) {
     module.exports = isexe;
     isexe.sync = sync;
     var fs = __require("fs");
@@ -8231,9 +8231,9 @@ var require_windows = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/isexe/mode.js
+// node_modules/isexe/mode.js
 var require_mode = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/isexe/mode.js"(exports, module) {
+  "node_modules/isexe/mode.js"(exports, module) {
     module.exports = isexe;
     isexe.sync = sync;
     var fs = __require("fs");
@@ -8264,9 +8264,9 @@ var require_mode = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/isexe/index.js
+// node_modules/isexe/index.js
 var require_isexe = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/isexe/index.js"(exports, module) {
+  "node_modules/isexe/index.js"(exports, module) {
     var fs = __require("fs");
     var core;
     if (process.platform === "win32" || global.TESTING_WINDOWS) {
@@ -8319,9 +8319,9 @@ var require_isexe = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/which/which.js
+// node_modules/which/which.js
 var require_which = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/which/which.js"(exports, module) {
+  "node_modules/which/which.js"(exports, module) {
     var isWindows = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
     var path8 = __require("path");
     var COLON = isWindows ? ";" : ":";
@@ -8415,9 +8415,9 @@ var require_which = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/path-key/index.js
+// node_modules/path-key/index.js
 var require_path_key = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/path-key/index.js"(exports, module) {
+  "node_modules/path-key/index.js"(exports, module) {
     "use strict";
     var pathKey2 = (options = {}) => {
       const environment = options.env || process.env;
@@ -8432,9 +8432,9 @@ var require_path_key = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/util/resolveCommand.js
+// node_modules/cross-spawn/lib/util/resolveCommand.js
 var require_resolveCommand = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/util/resolveCommand.js"(exports, module) {
+  "node_modules/cross-spawn/lib/util/resolveCommand.js"(exports, module) {
     "use strict";
     var path8 = __require("path");
     var which = require_which();
@@ -8474,9 +8474,9 @@ var require_resolveCommand = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/util/escape.js
+// node_modules/cross-spawn/lib/util/escape.js
 var require_escape = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/util/escape.js"(exports, module) {
+  "node_modules/cross-spawn/lib/util/escape.js"(exports, module) {
     "use strict";
     var metaCharsRegExp = /([()\][%!^"`<>&|;, *?])/g;
     function escapeCommand(arg) {
@@ -8499,17 +8499,17 @@ var require_escape = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/shebang-regex/index.js
+// node_modules/shebang-regex/index.js
 var require_shebang_regex = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/shebang-regex/index.js"(exports, module) {
+  "node_modules/shebang-regex/index.js"(exports, module) {
     "use strict";
     module.exports = /^#!(.*)/;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/shebang-command/index.js
+// node_modules/shebang-command/index.js
 var require_shebang_command = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/shebang-command/index.js"(exports, module) {
+  "node_modules/shebang-command/index.js"(exports, module) {
     "use strict";
     var shebangRegex = require_shebang_regex();
     module.exports = (string4 = "") => {
@@ -8527,9 +8527,9 @@ var require_shebang_command = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/util/readShebang.js
+// node_modules/cross-spawn/lib/util/readShebang.js
 var require_readShebang = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/util/readShebang.js"(exports, module) {
+  "node_modules/cross-spawn/lib/util/readShebang.js"(exports, module) {
     "use strict";
     var fs = __require("fs");
     var shebangCommand = require_shebang_command();
@@ -8549,9 +8549,9 @@ var require_readShebang = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/parse.js
+// node_modules/cross-spawn/lib/parse.js
 var require_parse = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/parse.js"(exports, module) {
+  "node_modules/cross-spawn/lib/parse.js"(exports, module) {
     "use strict";
     var path8 = __require("path");
     var resolveCommand2 = require_resolveCommand();
@@ -8611,9 +8611,9 @@ var require_parse = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/enoent.js
+// node_modules/cross-spawn/lib/enoent.js
 var require_enoent = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/lib/enoent.js"(exports, module) {
+  "node_modules/cross-spawn/lib/enoent.js"(exports, module) {
     "use strict";
     var isWin = process.platform === "win32";
     function notFoundError(original, syscall) {
@@ -8661,9 +8661,9 @@ var require_enoent = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/index.js
+// node_modules/cross-spawn/index.js
 var require_cross_spawn = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/cross-spawn/index.js"(exports, module) {
+  "node_modules/cross-spawn/index.js"(exports, module) {
     "use strict";
     var cp = __require("child_process");
     var parse11 = require_parse();
@@ -8688,7 +8688,7 @@ var require_cross_spawn = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/npm-run-path/node_modules/path-key/index.js
+// node_modules/npm-run-path/node_modules/path-key/index.js
 function pathKey(options = {}) {
   const {
     env = process.env,
@@ -8700,17 +8700,17 @@ function pathKey(options = {}) {
   return Object.keys(env).reverse().find((key) => key.toUpperCase() === "PATH") || "Path";
 }
 var init_path_key = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/npm-run-path/node_modules/path-key/index.js"() {
+  "node_modules/npm-run-path/node_modules/path-key/index.js"() {
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/unicorn-magic/default.js
+// node_modules/unicorn-magic/default.js
 var init_default2 = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/unicorn-magic/default.js"() {
+  "node_modules/unicorn-magic/default.js"() {
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/unicorn-magic/node.js
+// node_modules/unicorn-magic/node.js
 import { promisify } from "node:util";
 import { execFile as execFileCallback, execFileSync as execFileSyncOriginal } from "node:child_process";
 import path from "node:path";
@@ -8733,19 +8733,19 @@ function traversePathUp(startPath) {
 }
 var execFileOriginal, TEN_MEGABYTES_IN_BYTES;
 var init_node = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/unicorn-magic/node.js"() {
+  "node_modules/unicorn-magic/node.js"() {
     init_default2();
     execFileOriginal = promisify(execFileCallback);
     TEN_MEGABYTES_IN_BYTES = 10 * 1024 * 1024;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/npm-run-path/index.js
+// node_modules/npm-run-path/index.js
 import process5 from "node:process";
 import path2 from "node:path";
 var npmRunPath, applyPreferLocal, applyExecPath, npmRunPathEnv;
 var init_npm_run_path = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/npm-run-path/index.js"() {
+  "node_modules/npm-run-path/index.js"() {
     init_path_key();
     init_node();
     npmRunPath = ({
@@ -8790,10 +8790,10 @@ var init_npm_run_path = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/final-error.js
+// node_modules/execa/lib/return/final-error.js
 var getFinalError, DiscardedError, setErrorName, isExecaError, execaErrorSymbol, isErrorInstance, ExecaError, ExecaSyncError;
 var init_final_error = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/final-error.js"() {
+  "node_modules/execa/lib/return/final-error.js"() {
     getFinalError = (originalError, message2, isSync) => {
       const ErrorClass = isSync ? ExecaSyncError : ExecaError;
       const options = originalError instanceof DiscardedError ? {} : { cause: originalError };
@@ -8827,10 +8827,10 @@ var init_final_error = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/realtime.js
+// node_modules/human-signals/build/src/realtime.js
 var getRealtimeSignals, getRealtimeSignal, SIGRTMIN, SIGRTMAX;
 var init_realtime = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/realtime.js"() {
+  "node_modules/human-signals/build/src/realtime.js"() {
     getRealtimeSignals = () => {
       const length = SIGRTMAX - SIGRTMIN + 1;
       return Array.from({ length }, getRealtimeSignal);
@@ -8847,10 +8847,10 @@ var init_realtime = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/core.js
+// node_modules/human-signals/build/src/core.js
 var SIGNALS;
 var init_core = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/core.js"() {
+  "node_modules/human-signals/build/src/core.js"() {
     SIGNALS = [
       {
         name: "SIGHUP",
@@ -9125,11 +9125,11 @@ var init_core = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/signals.js
+// node_modules/human-signals/build/src/signals.js
 import { constants as constants4 } from "node:os";
 var getSignals, normalizeSignal;
 var init_signals = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/signals.js"() {
+  "node_modules/human-signals/build/src/signals.js"() {
     init_core();
     init_realtime();
     getSignals = () => {
@@ -9155,11 +9155,11 @@ var init_signals = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/main.js
+// node_modules/human-signals/build/src/main.js
 import { constants as constants5 } from "node:os";
 var getSignalsByName, getSignalByName, signalsByName, getSignalsByNumber, getSignalByNumber, findSignalByNumber, signalsByNumber;
 var init_main = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/human-signals/build/src/main.js"() {
+  "node_modules/human-signals/build/src/main.js"() {
     init_realtime();
     init_signals();
     getSignalsByName = () => {
@@ -9214,11 +9214,11 @@ var init_main = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/signal.js
+// node_modules/execa/lib/terminate/signal.js
 import { constants as constants6 } from "node:os";
 var normalizeKillSignal, normalizeSignalArgument, normalizeSignal2, normalizeSignalInteger, getSignalsIntegerToName, signalsIntegerToName, normalizeSignalName, getAvailableSignals, getAvailableSignalNames, getAvailableSignalIntegers, getSignalDescription;
 var init_signal = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/signal.js"() {
+  "node_modules/execa/lib/terminate/signal.js"() {
     init_main();
     normalizeKillSignal = (killSignal) => {
       const optionName2 = "option `killSignal`";
@@ -9265,11 +9265,11 @@ Available signal numbers: ${getAvailableSignalIntegers()}.`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/kill.js
+// node_modules/execa/lib/terminate/kill.js
 import { setTimeout as setTimeout2 } from "node:timers/promises";
 var normalizeForceKillAfterDelay, DEFAULT_FORCE_KILL_TIMEOUT, subprocessKill, parseKillArguments, emitKillError, setKillTimeout, killOnTimeout;
 var init_kill = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/kill.js"() {
+  "node_modules/execa/lib/terminate/kill.js"() {
     init_final_error();
     init_signal();
     normalizeForceKillAfterDelay = (forceKillAfterDelay) => {
@@ -9340,11 +9340,11 @@ var init_kill = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/abort-signal.js
+// node_modules/execa/lib/utils/abort-signal.js
 import { once } from "node:events";
 var onAbortedSignal;
 var init_abort_signal = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/abort-signal.js"() {
+  "node_modules/execa/lib/utils/abort-signal.js"() {
     onAbortedSignal = async (mainSignal, stopSignal) => {
       if (!mainSignal.aborted) {
         await once(mainSignal, "abort", { signal: stopSignal });
@@ -9353,10 +9353,10 @@ var init_abort_signal = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/cancel.js
+// node_modules/execa/lib/terminate/cancel.js
 var validateCancelSignal, throwOnCancel, terminateOnCancel;
 var init_cancel = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/cancel.js"() {
+  "node_modules/execa/lib/terminate/cancel.js"() {
     init_abort_signal();
     validateCancelSignal = ({ cancelSignal }) => {
       if (cancelSignal !== void 0 && Object.prototype.toString.call(cancelSignal) !== "[object AbortSignal]") {
@@ -9373,10 +9373,10 @@ var init_cancel = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/validation.js
+// node_modules/execa/lib/ipc/validation.js
 var validateIpcMethod, validateIpcOption, validateConnection, throwOnEarlyDisconnect, throwOnStrictDeadlockError, getStrictResponseError, throwOnMissingStrict, throwOnStrictDisconnect, getAbortDisconnectError, throwOnMissingParent, handleEpipeError, handleSerializationError, isSerializationError, SERIALIZATION_ERROR_CODES, SERIALIZATION_ERROR_MESSAGES, getMethodName, getNamespaceName, getOtherProcessName, disconnect;
 var init_validation = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/validation.js"() {
+  "node_modules/execa/lib/ipc/validation.js"() {
     validateIpcMethod = ({ methodName, isSubprocess, ipc, isConnected: isConnected2 }) => {
       validateIpcOption(methodName, isSubprocess, ipc);
       validateConnection(methodName, isSubprocess, isConnected2);
@@ -9450,10 +9450,10 @@ const [receivedMessage] = await Promise.all([
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/deferred.js
+// node_modules/execa/lib/utils/deferred.js
 var createDeferred;
 var init_deferred = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/deferred.js"() {
+  "node_modules/execa/lib/utils/deferred.js"() {
     createDeferred = () => {
       const methods = {};
       const promise = new Promise((resolve34, reject) => {
@@ -9464,10 +9464,10 @@ var init_deferred = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/fd-options.js
+// node_modules/execa/lib/arguments/fd-options.js
 var getToStream, getFromStream, SUBPROCESS_OPTIONS, getFdNumber, parseFdNumber, validateFdNumber, getInvalidStdioOptionMessage, getInvalidStdioOption, getUsedDescriptor, getOptionName, serializeOptionValue;
 var init_fd_options = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/fd-options.js"() {
+  "node_modules/execa/lib/arguments/fd-options.js"() {
     init_specific();
     getToStream = (destination, to = "stdin") => {
       const isWritable = true;
@@ -9550,11 +9550,11 @@ Please set this option with "pipe" instead.`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/max-listeners.js
+// node_modules/execa/lib/utils/max-listeners.js
 import { addAbortListener } from "node:events";
 var incrementMaxListeners;
 var init_max_listeners = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/utils/max-listeners.js"() {
+  "node_modules/execa/lib/utils/max-listeners.js"() {
     incrementMaxListeners = (eventEmitter, maxListenersIncrement, signal) => {
       const maxListeners = eventEmitter.getMaxListeners();
       if (maxListeners === 0 || maxListeners === Number.POSITIVE_INFINITY) {
@@ -9568,10 +9568,10 @@ var init_max_listeners = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/reference.js
+// node_modules/execa/lib/ipc/reference.js
 var addReference, addReferenceCount, removeReference, removeReferenceCount, undoAddedReferences, redoAddedReferences;
 var init_reference = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/reference.js"() {
+  "node_modules/execa/lib/ipc/reference.js"() {
     addReference = (channel, reference) => {
       if (reference) {
         addReferenceCount(channel);
@@ -9603,12 +9603,12 @@ var init_reference = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/incoming.js
+// node_modules/execa/lib/ipc/incoming.js
 import { once as once2 } from "node:events";
 import { scheduler } from "node:timers/promises";
 var onMessage, onDisconnect, INCOMING_MESSAGES;
 var init_incoming = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/incoming.js"() {
+  "node_modules/execa/lib/ipc/incoming.js"() {
     init_outgoing();
     init_reference();
     init_strict();
@@ -9655,11 +9655,11 @@ var init_incoming = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/forward.js
+// node_modules/execa/lib/ipc/forward.js
 import { EventEmitter } from "node:events";
 var getIpcEmitter, IPC_EMITTERS, forwardEvents, isConnected;
 var init_forward = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/forward.js"() {
+  "node_modules/execa/lib/ipc/forward.js"() {
     init_incoming();
     init_reference();
     getIpcEmitter = (anyProcess, channel, isSubprocess) => {
@@ -9702,11 +9702,11 @@ var init_forward = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/strict.js
+// node_modules/execa/lib/ipc/strict.js
 import { once as once3 } from "node:events";
 var handleSendStrict, count, validateStrictDeadlock, handleStrictRequest, handleStrictResponse, waitForStrictResponse, STRICT_RESPONSES, throwOnDisconnect, REQUEST_TYPE, RESPONSE_TYPE;
 var init_strict = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/strict.js"() {
+  "node_modules/execa/lib/ipc/strict.js"() {
     init_deferred();
     init_max_listeners();
     init_send();
@@ -9797,10 +9797,10 @@ var init_strict = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/outgoing.js
+// node_modules/execa/lib/ipc/outgoing.js
 var startSendMessage, endSendMessage, waitForOutgoingMessages, OUTGOING_MESSAGES, hasMessageListeners, getMinListenerCount;
 var init_outgoing = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/outgoing.js"() {
+  "node_modules/execa/lib/ipc/outgoing.js"() {
     init_deferred();
     init_specific();
     init_fd_options();
@@ -9833,11 +9833,11 @@ var init_outgoing = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/send.js
+// node_modules/execa/lib/ipc/send.js
 import { promisify as promisify2 } from "node:util";
 var sendMessage, sendMessageAsync, sendOneMessage, getSendMethod, PROCESS_SEND_METHODS;
 var init_send = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/send.js"() {
+  "node_modules/execa/lib/ipc/send.js"() {
     init_validation();
     init_outgoing();
     init_strict();
@@ -9912,11 +9912,11 @@ var init_send = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/graceful.js
+// node_modules/execa/lib/ipc/graceful.js
 import { scheduler as scheduler2 } from "node:timers/promises";
 var sendAbort, getCancelSignal, startIpc, cancelListening, handleAbort, GRACEFUL_CANCEL_TYPE, abortOnDisconnect, cancelController;
 var init_graceful = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/graceful.js"() {
+  "node_modules/execa/lib/ipc/graceful.js"() {
     init_send();
     init_forward();
     init_validation();
@@ -9972,10 +9972,10 @@ var init_graceful = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/graceful.js
+// node_modules/execa/lib/terminate/graceful.js
 var validateGracefulCancel, throwOnGracefulCancel, sendOnAbort, getReason;
 var init_graceful2 = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/graceful.js"() {
+  "node_modules/execa/lib/terminate/graceful.js"() {
     init_abort_signal();
     init_graceful();
     init_kill();
@@ -10036,11 +10036,11 @@ var init_graceful2 = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/timeout.js
+// node_modules/execa/lib/terminate/timeout.js
 import { setTimeout as setTimeout3 } from "node:timers/promises";
 var validateTimeout, throwOnTimeout, killAfterTimeout;
 var init_timeout = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/timeout.js"() {
+  "node_modules/execa/lib/terminate/timeout.js"() {
     init_final_error();
     validateTimeout = ({ timeout }) => {
       if (timeout !== void 0 && (!Number.isFinite(timeout) || timeout < 0)) {
@@ -10057,12 +10057,12 @@ var init_timeout = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/node.js
+// node_modules/execa/lib/methods/node.js
 import { execPath, execArgv } from "node:process";
 import path3 from "node:path";
 var mapNode, handleNodeOption;
 var init_node2 = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/node.js"() {
+  "node_modules/execa/lib/methods/node.js"() {
     init_file_url();
     mapNode = ({ options }) => {
       if (options.node === false) {
@@ -10104,11 +10104,11 @@ var init_node2 = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/ipc-input.js
+// node_modules/execa/lib/ipc/ipc-input.js
 import { serialize } from "node:v8";
 var validateIpcInputOption, validateAdvancedInput, validateJsonInput, validateIpcInput, sendIpcInput;
 var init_ipc_input = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/ipc-input.js"() {
+  "node_modules/execa/lib/ipc/ipc-input.js"() {
     validateIpcInputOption = ({ ipcInput, ipc, serialization }) => {
       if (ipcInput === void 0) {
         return;
@@ -10145,10 +10145,10 @@ var init_ipc_input = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/encoding-option.js
+// node_modules/execa/lib/arguments/encoding-option.js
 var validateEncoding, TEXT_ENCODINGS, BINARY_ENCODINGS, ENCODINGS, getCorrectEncoding, ENCODING_ALIASES, serializeEncoding;
 var init_encoding_option = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/encoding-option.js"() {
+  "node_modules/execa/lib/arguments/encoding-option.js"() {
     validateEncoding = ({ encoding }) => {
       if (ENCODINGS.has(encoding)) {
         return;
@@ -10192,13 +10192,13 @@ Please rename it to one of: ${correctEncodings}.`);
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/cwd.js
+// node_modules/execa/lib/arguments/cwd.js
 import { statSync as statSync2 } from "node:fs";
 import path4 from "node:path";
 import process6 from "node:process";
 var normalizeCwd, getDefaultCwd, fixCwdError;
 var init_cwd = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/cwd.js"() {
+  "node_modules/execa/lib/arguments/cwd.js"() {
     init_file_url();
     normalizeCwd = (cwd = getDefaultCwd()) => {
       const cwdString = safeNormalizeFileUrl(cwd, 'The "cwd" option');
@@ -10234,12 +10234,12 @@ ${originalMessage}`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/options.js
+// node_modules/execa/lib/arguments/options.js
 import path5 from "node:path";
 import process7 from "node:process";
 var import_cross_spawn, normalizeOptions, addDefaultOptions, getEnv;
 var init_options = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/options.js"() {
+  "node_modules/execa/lib/arguments/options.js"() {
     import_cross_spawn = __toESM(require_cross_spawn(), 1);
     init_npm_run_path();
     init_kill();
@@ -10325,15 +10325,15 @@ var init_options = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/shell.js
+// node_modules/execa/lib/arguments/shell.js
 var concatenateShell;
 var init_shell = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/arguments/shell.js"() {
+  "node_modules/execa/lib/arguments/shell.js"() {
     concatenateShell = (file, commandArguments, options) => options.shell && commandArguments.length > 0 ? [[file, ...commandArguments].join(" "), [], options] : [file, commandArguments, options];
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/strip-final-newline/index.js
+// node_modules/strip-final-newline/index.js
 function stripFinalNewline(input) {
   if (typeof input === "string") {
     return stripFinalNewlineString(input);
@@ -10345,7 +10345,7 @@ function stripFinalNewline(input) {
 }
 var stripFinalNewlineString, stripFinalNewlineBinary, LF, LF_BINARY, CR, CR_BINARY;
 var init_strip_final_newline = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/strip-final-newline/index.js"() {
+  "node_modules/strip-final-newline/index.js"() {
     stripFinalNewlineString = (input) => input.at(-1) === LF ? input.slice(0, input.at(-2) === CR ? -2 : -1) : input;
     stripFinalNewlineBinary = (input) => input.at(-1) === LF_BINARY ? input.subarray(0, input.at(-2) === CR_BINARY ? -2 : -1) : input;
     LF = "\n";
@@ -10355,7 +10355,7 @@ var init_strip_final_newline = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/is-stream/index.js
+// node_modules/is-stream/index.js
 function isStream(stream, { checkOpen = true } = {}) {
   return stream !== null && typeof stream === "object" && (stream.writable || stream.readable || !checkOpen || stream.writable === void 0 && stream.readable === void 0) && typeof stream.pipe === "function";
 }
@@ -10369,11 +10369,11 @@ function isDuplexStream(stream, options) {
   return isWritableStream(stream, options) && isReadableStream(stream, options);
 }
 var init_is_stream = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/is-stream/index.js"() {
+  "node_modules/is-stream/index.js"() {
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sec-ant/readable-stream/dist/ponyfill/asyncIterator.js
+// node_modules/@sec-ant/readable-stream/dist/ponyfill/asyncIterator.js
 function i() {
   return this[n].next();
 }
@@ -10389,7 +10389,7 @@ function h({ preventCancel: r = false } = {}) {
 }
 var a, c, n, u;
 var init_asyncIterator = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sec-ant/readable-stream/dist/ponyfill/asyncIterator.js"() {
+  "node_modules/@sec-ant/readable-stream/dist/ponyfill/asyncIterator.js"() {
     a = Object.getPrototypeOf(
       Object.getPrototypeOf(
         /* istanbul ignore next */
@@ -10466,24 +10466,24 @@ var init_asyncIterator = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sec-ant/readable-stream/dist/ponyfill/fromAnyIterable.js
+// node_modules/@sec-ant/readable-stream/dist/ponyfill/fromAnyIterable.js
 var init_fromAnyIterable = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sec-ant/readable-stream/dist/ponyfill/fromAnyIterable.js"() {
+  "node_modules/@sec-ant/readable-stream/dist/ponyfill/fromAnyIterable.js"() {
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sec-ant/readable-stream/dist/ponyfill/index.js
+// node_modules/@sec-ant/readable-stream/dist/ponyfill/index.js
 var init_ponyfill = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sec-ant/readable-stream/dist/ponyfill/index.js"() {
+  "node_modules/@sec-ant/readable-stream/dist/ponyfill/index.js"() {
     init_asyncIterator();
     init_fromAnyIterable();
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/stream.js
+// node_modules/get-stream/source/stream.js
 var getAsyncIterable, toString, getStreamIterable, handleStreamEnd, nodeImports;
 var init_stream = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/stream.js"() {
+  "node_modules/get-stream/source/stream.js"() {
     init_is_stream();
     init_ponyfill();
     getAsyncIterable = (stream) => {
@@ -10535,10 +10535,10 @@ var init_stream = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/contents.js
+// node_modules/get-stream/source/contents.js
 var getStreamContents, appendFinalChunk, appendChunk, addNewChunk, getChunkType, objectToString2, MaxBufferError;
 var init_contents = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/contents.js"() {
+  "node_modules/get-stream/source/contents.js"() {
     init_stream();
     getStreamContents = async (stream, { init, convertChunk, getSize, truncateChunk, addChunk, getFinalChunk, finalize: finalize2 }, { maxBuffer = Number.POSITIVE_INFINITY } = {}) => {
       const asyncIterable = getAsyncIterable(stream);
@@ -10636,10 +10636,10 @@ var init_contents = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/utils.js
+// node_modules/get-stream/source/utils.js
 var identity2, noop, getContentsProperty, throwObjectStream, getLengthProperty;
 var init_utils = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/utils.js"() {
+  "node_modules/get-stream/source/utils.js"() {
     identity2 = (value) => value;
     noop = () => void 0;
     getContentsProperty = ({ contents }) => contents;
@@ -10650,13 +10650,13 @@ var init_utils = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/array.js
+// node_modules/get-stream/source/array.js
 async function getStreamAsArray(stream, options) {
   return getStreamContents(stream, arrayMethods, options);
 }
 var initArray, increment, addArrayChunk, arrayMethods;
 var init_array = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/array.js"() {
+  "node_modules/get-stream/source/array.js"() {
     init_contents();
     init_utils();
     initArray = () => ({ contents: [] });
@@ -10684,13 +10684,13 @@ var init_array = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/array-buffer.js
+// node_modules/get-stream/source/array-buffer.js
 async function getStreamAsArrayBuffer(stream, options) {
   return getStreamContents(stream, arrayBufferMethods, options);
 }
 var initArrayBuffer, useTextEncoder, textEncoder2, useUint8Array, useUint8ArrayWithOffset, truncateArrayBufferChunk, addArrayBufferChunk, resizeArrayBufferSlow, resizeArrayBuffer, getNewContentsLength, SCALE_FACTOR, finalizeArrayBuffer, hasArrayBufferResize, arrayBufferMethods;
 var init_array_buffer = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/array-buffer.js"() {
+  "node_modules/get-stream/source/array-buffer.js"() {
     init_contents();
     init_utils();
     initArrayBuffer = () => ({ contents: new ArrayBuffer(0) });
@@ -10744,13 +10744,13 @@ var init_array_buffer = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/string.js
+// node_modules/get-stream/source/string.js
 async function getStreamAsString(stream, options) {
   return getStreamContents(stream, stringMethods, options);
 }
 var initString, useTextDecoder, addStringChunk, truncateStringChunk, getFinalStringChunk, stringMethods;
 var init_string = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/string.js"() {
+  "node_modules/get-stream/source/string.js"() {
     init_contents();
     init_utils();
     initString = () => ({ contents: "", textDecoder: new TextDecoder() });
@@ -10780,9 +10780,9 @@ var init_string = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/exports.js
+// node_modules/get-stream/source/exports.js
 var init_exports = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/exports.js"() {
+  "node_modules/get-stream/source/exports.js"() {
     init_array();
     init_array_buffer();
     init_string();
@@ -10790,21 +10790,21 @@ var init_exports = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/index.js
+// node_modules/get-stream/source/index.js
 import { on } from "node:events";
 import { finished } from "node:stream/promises";
 var init_source = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/get-stream/source/index.js"() {
+  "node_modules/get-stream/source/index.js"() {
     init_stream();
     init_exports();
     Object.assign(nodeImports, { on, finished });
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/max-buffer.js
+// node_modules/execa/lib/io/max-buffer.js
 var handleMaxBuffer, getMaxBufferUnit, checkIpcMaxBuffer, getMaxBufferMessage, getMaxBufferInfo, isMaxBufferSync, truncateMaxBufferSync, getMaxBufferSync;
 var init_max_buffer = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/max-buffer.js"() {
+  "node_modules/execa/lib/io/max-buffer.js"() {
     init_source();
     init_standard_stream();
     init_specific();
@@ -10868,11 +10868,11 @@ var init_max_buffer = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/message.js
+// node_modules/execa/lib/return/message.js
 import { inspect as inspect2 } from "node:util";
 var createMessages, getErrorPrefix, getForcefulSuffix, getOriginalMessage, serializeIpcMessage, serializeMessagePart, serializeMessageItem;
 var init_message = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/message.js"() {
+  "node_modules/execa/lib/return/message.js"() {
     init_strip_final_newline();
     init_uint_array();
     init_cwd();
@@ -10999,10 +10999,10 @@ ${originalMessage}`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/result.js
+// node_modules/execa/lib/return/result.js
 var makeSuccessResult, makeEarlyError, makeError, getErrorProperties, omitUndefinedProperties, normalizeExitPayload;
 var init_result = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/result.js"() {
+  "node_modules/execa/lib/return/result.js"() {
     init_signal();
     init_duration();
     init_final_error();
@@ -11181,7 +11181,7 @@ var init_result = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/parse-ms/index.js
+// node_modules/parse-ms/index.js
 function parseNumber(milliseconds) {
   return {
     days: Math.trunc(milliseconds / 864e5),
@@ -11220,12 +11220,12 @@ function parseMilliseconds(milliseconds) {
 }
 var toZeroIfInfinity;
 var init_parse_ms = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/parse-ms/index.js"() {
+  "node_modules/parse-ms/index.js"() {
     toZeroIfInfinity = (value) => Number.isFinite(value) ? value : 0;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/pretty-ms/index.js
+// node_modules/pretty-ms/index.js
 function prettyMilliseconds(milliseconds, options) {
   const isBigInt = typeof milliseconds === "bigint";
   if (!isBigInt && !Number.isFinite(milliseconds)) {
@@ -11322,7 +11322,7 @@ function prettyMilliseconds(milliseconds, options) {
 }
 var isZero, pluralize, SECOND_ROUNDING_EPSILON, ONE_DAY_IN_MILLISECONDS;
 var init_pretty_ms = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/pretty-ms/index.js"() {
+  "node_modules/pretty-ms/index.js"() {
     init_parse_ms();
     isZero = (value) => value === 0 || value === 0n;
     pluralize = (word, count2) => count2 === 1 || count2 === 1n ? word : `${word}s`;
@@ -11331,10 +11331,10 @@ var init_pretty_ms = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/error.js
+// node_modules/execa/lib/verbose/error.js
 var logError;
 var init_error = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/error.js"() {
+  "node_modules/execa/lib/verbose/error.js"() {
     init_log();
     logError = (result, verboseInfo) => {
       if (result.failed) {
@@ -11349,10 +11349,10 @@ var init_error = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/complete.js
+// node_modules/execa/lib/verbose/complete.js
 var logResult, logDuration;
 var init_complete = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/complete.js"() {
+  "node_modules/execa/lib/verbose/complete.js"() {
     init_pretty_ms();
     init_values();
     init_log();
@@ -11376,10 +11376,10 @@ var init_complete = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/reject.js
+// node_modules/execa/lib/return/reject.js
 var handleResult2;
 var init_reject = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/reject.js"() {
+  "node_modules/execa/lib/return/reject.js"() {
     init_complete();
     handleResult2 = (result, verboseInfo, { reject }) => {
       logResult(result, verboseInfo);
@@ -11391,10 +11391,10 @@ var init_reject = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/type.js
+// node_modules/execa/lib/stdio/type.js
 var getStdioItemType, getTransformObjectType, getDuplexType, getTransformStreamType, validateNonGeneratorType, checkUndefinedOption, getGeneratorObjectType, checkBooleanOption, isGenerator, isAsyncGenerator, isSyncGenerator, isTransformOptions, isUrl, isRegularUrl, isFilePathObject, FILE_PATH_KEYS, isFilePathString, isUnknownStdioString, KNOWN_STDIO_STRINGS, isReadableStream2, isWritableStream2, isWebStream, isTransformStream, isAsyncIterableObject, isIterableObject, isObject2, TRANSFORM_TYPES, FILE_TYPES, SPECIAL_DUPLICATE_TYPES_SYNC, SPECIAL_DUPLICATE_TYPES, FORBID_DUPLICATE_TYPES, TYPE_TO_MESSAGE;
 var init_type = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/type.js"() {
+  "node_modules/execa/lib/stdio/type.js"() {
     init_is_stream();
     init_is_plain_obj();
     init_uint_array();
@@ -11525,10 +11525,10 @@ var init_type = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/object-mode.js
+// node_modules/execa/lib/transform/object-mode.js
 var getTransformObjectModes, getOutputObjectModes, getInputObjectModes, getFdObjectMode;
 var init_object_mode = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/object-mode.js"() {
+  "node_modules/execa/lib/transform/object-mode.js"() {
     init_type();
     getTransformObjectModes = (objectMode, index, newTransforms, direction) => direction === "output" ? getOutputObjectModes(objectMode, index, newTransforms) : getInputObjectModes(objectMode, index, newTransforms);
     getOutputObjectModes = (objectMode, index, newTransforms) => {
@@ -11551,10 +11551,10 @@ var init_object_mode = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/normalize.js
+// node_modules/execa/lib/transform/normalize.js
 var normalizeTransforms, getTransforms, normalizeTransform, normalizeDuplex, normalizeTransformStream, normalizeGenerator, sortTransforms;
 var init_normalize = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/normalize.js"() {
+  "node_modules/execa/lib/transform/normalize.js"() {
     init_is_plain_obj();
     init_encoding_option();
     init_type();
@@ -11654,11 +11654,11 @@ var init_normalize = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/direction.js
+// node_modules/execa/lib/stdio/direction.js
 import process8 from "node:process";
 var getStreamDirection, getStdioItemDirection, KNOWN_DIRECTIONS, anyDirection, alwaysInput, guessStreamDirection, getStandardStreamDirection, DEFAULT_DIRECTION;
 var init_direction = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/direction.js"() {
+  "node_modules/execa/lib/stdio/direction.js"() {
     init_is_stream();
     init_type();
     getStreamDirection = (stdioItems, fdNumber, optionName2) => {
@@ -11711,18 +11711,18 @@ var init_direction = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/array.js
+// node_modules/execa/lib/ipc/array.js
 var normalizeIpcStdioArray;
 var init_array2 = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/array.js"() {
+  "node_modules/execa/lib/ipc/array.js"() {
     normalizeIpcStdioArray = (stdioArray, ipc) => ipc && !stdioArray.includes("ipc") ? [...stdioArray, "ipc"] : stdioArray;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/stdio-option.js
+// node_modules/execa/lib/stdio/stdio-option.js
 var normalizeStdioOption, getStdioArray, hasAlias, addDefaultValue2, normalizeStdioSync, isOutputPipeOnly;
 var init_stdio_option = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/stdio-option.js"() {
+  "node_modules/execa/lib/stdio/stdio-option.js"() {
     init_standard_stream();
     init_array2();
     init_values();
@@ -11761,12 +11761,12 @@ var init_stdio_option = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/native.js
+// node_modules/execa/lib/stdio/native.js
 import { readFileSync } from "node:fs";
 import tty2 from "node:tty";
 var handleNativeStream, handleNativeStreamSync, getTargetFd, getTargetFdNumber, handleNativeStreamAsync, getStandardStream;
 var init_native = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/native.js"() {
+  "node_modules/execa/lib/stdio/native.js"() {
     init_is_stream();
     init_standard_stream();
     init_uint_array();
@@ -11839,10 +11839,10 @@ var init_native = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/input-option.js
+// node_modules/execa/lib/stdio/input-option.js
 var handleInputOptions, handleInputOption, getInputType, handleInputFileOption, getInputFileType;
 var init_input_option = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/input-option.js"() {
+  "node_modules/execa/lib/stdio/input-option.js"() {
     init_is_stream();
     init_uint_array();
     init_type();
@@ -11883,10 +11883,10 @@ var init_input_option = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/duplicate.js
+// node_modules/execa/lib/stdio/duplicate.js
 var filterDuplicates, getDuplicateStream, getOtherStdioItems, validateDuplicateStreamSync, getDuplicateStreamInstance, hasSameValue, validateDuplicateTransform, throwOnDuplicateStream;
 var init_duplicate = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/duplicate.js"() {
+  "node_modules/execa/lib/stdio/duplicate.js"() {
     init_type();
     filterDuplicates = (stdioItems) => stdioItems.filter((stdioItemOne, indexOne) => stdioItems.every((stdioItemTwo, indexTwo) => stdioItemOne.value !== stdioItemTwo.value || indexOne >= indexTwo || stdioItemOne.type === "generator" || stdioItemOne.type === "asyncGenerator"));
     getDuplicateStream = ({ stdioItem: { type, value, optionName: optionName2 }, direction, fileDescriptors, isSync }) => {
@@ -11964,10 +11964,10 @@ var init_duplicate = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/handle.js
+// node_modules/execa/lib/stdio/handle.js
 var handleStdio, getFileDescriptor, initializeStdioItems, initializeStdioItem, validateStdioArray, INVALID_STDIO_ARRAY_OPTIONS, validateStreams, validateFileStdio, validateFileObjectMode, getFinalFileDescriptors, getFinalFileDescriptor, addStreamProperties, cleanupCustomStreams, forwardStdio;
 var init_handle = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/handle.js"() {
+  "node_modules/execa/lib/stdio/handle.js"() {
     init_standard_stream();
     init_normalize();
     init_object_mode();
@@ -12138,11 +12138,11 @@ For example, you can use the \`pathToFileURL()\` method of the \`url\` core modu
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/handle-sync.js
+// node_modules/execa/lib/stdio/handle-sync.js
 import { readFileSync as readFileSync2 } from "node:fs";
 var handleStdioSync, forbiddenIfSync, forbiddenNativeIfSync, throwInvalidSyncValue, addProperties, addPropertiesSync;
 var init_handle_sync = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/handle-sync.js"() {
+  "node_modules/execa/lib/stdio/handle-sync.js"() {
     init_uint_array();
     init_handle();
     init_type();
@@ -12193,20 +12193,20 @@ var init_handle_sync = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/strip-newline.js
+// node_modules/execa/lib/io/strip-newline.js
 var stripNewline, getStripFinalNewline;
 var init_strip_newline = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/strip-newline.js"() {
+  "node_modules/execa/lib/io/strip-newline.js"() {
     init_strip_final_newline();
     stripNewline = (value, { stripFinalNewline: stripFinalNewline2 }, fdNumber) => getStripFinalNewline(stripFinalNewline2, fdNumber) && value !== void 0 && !Array.isArray(value) ? stripFinalNewline(value) : value;
     getStripFinalNewline = (stripFinalNewline2, fdNumber) => fdNumber === "all" ? stripFinalNewline2[1] || stripFinalNewline2[2] : stripFinalNewline2[fdNumber];
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/split.js
+// node_modules/execa/lib/transform/split.js
 var getSplitLinesGenerator, splitLinesSync, splitLinesItemSync, initializeSplitLines, splitGenerator, getNewlineLength, linesFinal, getAppendNewlineGenerator, appendNewlineGenerator, concatString, linesStringInfo, concatUint8Array, linesUint8ArrayInfo;
 var init_split = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/split.js"() {
+  "node_modules/execa/lib/transform/split.js"() {
     getSplitLinesGenerator = (binary, preserveNewlines, skipped2, state) => binary || skipped2 ? void 0 : initializeSplitLines(preserveNewlines, state);
     splitLinesSync = (chunk, preserveNewlines, objectMode) => objectMode ? chunk.flatMap((item) => splitLinesItemSync(item, preserveNewlines)) : splitLinesItemSync(chunk, preserveNewlines);
     splitLinesItemSync = (chunk, preserveNewlines) => {
@@ -12288,11 +12288,11 @@ var init_split = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/validate.js
+// node_modules/execa/lib/transform/validate.js
 import { Buffer as Buffer2 } from "node:buffer";
 var getValidateTransformInput, validateStringTransformInput, getValidateTransformReturn, validateObjectTransformReturn, validateStringTransformReturn, validateEmptyReturn;
 var init_validate = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/validate.js"() {
+  "node_modules/execa/lib/transform/validate.js"() {
     init_uint_array();
     getValidateTransformInput = (writableObjectMode, optionName2) => writableObjectMode ? void 0 : validateStringTransformInput.bind(void 0, optionName2);
     validateStringTransformInput = function* (optionName2, chunk) {
@@ -12323,12 +12323,12 @@ Instead, \`yield\` should either be called with a value, or not be called at all
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/encoding-transform.js
+// node_modules/execa/lib/transform/encoding-transform.js
 import { Buffer as Buffer3 } from "node:buffer";
 import { StringDecoder as StringDecoder2 } from "node:string_decoder";
 var getEncodingTransformGenerator, encodingUint8ArrayGenerator, encodingStringGenerator, encodingStringFinal;
 var init_encoding_transform = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/encoding-transform.js"() {
+  "node_modules/execa/lib/transform/encoding-transform.js"() {
     init_uint_array();
     getEncodingTransformGenerator = (binary, encoding, skipped2) => {
       if (skipped2) {
@@ -12364,11 +12364,11 @@ var init_encoding_transform = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/run-async.js
+// node_modules/execa/lib/transform/run-async.js
 import { callbackify } from "node:util";
 var pushChunks, transformChunk, finalChunks, generatorFinalChunks, destroyTransform, identityGenerator;
 var init_run_async = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/run-async.js"() {
+  "node_modules/execa/lib/transform/run-async.js"() {
     pushChunks = callbackify(async (getChunks, state, getChunksArguments, transformStream) => {
       state.currentIterable = getChunks(...getChunksArguments);
       try {
@@ -12417,10 +12417,10 @@ var init_run_async = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/run-sync.js
+// node_modules/execa/lib/transform/run-sync.js
 var pushChunksSync, runTransformSync, transformChunkSync, finalChunksSync, generatorFinalChunksSync, identityGenerator2;
 var init_run_sync = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/run-sync.js"() {
+  "node_modules/execa/lib/transform/run-sync.js"() {
     pushChunksSync = (getChunksSync, getChunksArguments, transformStream, done) => {
       try {
         for (const chunk of getChunksSync(...getChunksArguments)) {
@@ -12464,11 +12464,11 @@ var init_run_sync = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/generator.js
+// node_modules/execa/lib/transform/generator.js
 import { Transform, getDefaultHighWaterMark } from "node:stream";
 var generatorToStream, runGeneratorsSync, addInternalGenerators;
 var init_generator = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/transform/generator.js"() {
+  "node_modules/execa/lib/transform/generator.js"() {
     init_type();
     init_split();
     init_validate();
@@ -12530,10 +12530,10 @@ var init_generator = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/input-sync.js
+// node_modules/execa/lib/io/input-sync.js
 var addInputOptionsSync, getInputFdNumbers, addInputOptionSync, applySingleInputGeneratorsSync, validateSerializable;
 var init_input_sync = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/input-sync.js"() {
+  "node_modules/execa/lib/io/input-sync.js"() {
     init_generator();
     init_uint_array();
     init_type();
@@ -12571,10 +12571,10 @@ var init_input_sync = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/output.js
+// node_modules/execa/lib/verbose/output.js
 var shouldLogOutput, fdUsesVerbose, PIPED_STDIO_VALUES, logLines, logLinesSync, isPipingStream, logLine;
 var init_output = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/output.js"() {
+  "node_modules/execa/lib/verbose/output.js"() {
     init_encoding_option();
     init_type();
     init_log();
@@ -12607,11 +12607,11 @@ var init_output = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/output-sync.js
+// node_modules/execa/lib/io/output-sync.js
 import { writeFileSync, appendFileSync } from "node:fs";
 var transformOutputSync, transformOutputResultSync, runOutputGeneratorsSync, serializeChunks, logOutputSync, writeToFiles;
 var init_output_sync = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/output-sync.js"() {
+  "node_modules/execa/lib/io/output-sync.js"() {
     init_output();
     init_generator();
     init_split();
@@ -12722,10 +12722,10 @@ var init_output_sync = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/all-sync.js
+// node_modules/execa/lib/resolve/all-sync.js
 var getAllSync;
 var init_all_sync = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/all-sync.js"() {
+  "node_modules/execa/lib/resolve/all-sync.js"() {
     init_uint_array();
     init_strip_newline();
     getAllSync = ([, stdout, stderr], options) => {
@@ -12752,11 +12752,11 @@ var init_all_sync = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/exit-async.js
+// node_modules/execa/lib/resolve/exit-async.js
 import { once as once4 } from "node:events";
 var waitForExit, waitForExitOrError, waitForSubprocessExit, waitForSuccessfulExit, isSubprocessErrorExit, isFailedExit;
 var init_exit_async = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/exit-async.js"() {
+  "node_modules/execa/lib/resolve/exit-async.js"() {
     init_final_error();
     waitForExit = async (subprocess, context) => {
       const [exitCode, signal] = await waitForExitOrError(subprocess);
@@ -12792,10 +12792,10 @@ var init_exit_async = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/exit-sync.js
+// node_modules/execa/lib/resolve/exit-sync.js
 var getExitResultSync, getResultError;
 var init_exit_sync = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/exit-sync.js"() {
+  "node_modules/execa/lib/resolve/exit-sync.js"() {
     init_final_error();
     init_max_buffer();
     init_exit_async();
@@ -12820,11 +12820,11 @@ var init_exit_sync = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/main-sync.js
+// node_modules/execa/lib/methods/main-sync.js
 import { spawnSync } from "node:child_process";
 var execaCoreSync, handleSyncArguments, normalizeSyncOptions, validateSyncOptions, throwInvalidSyncOption, spawnSubprocessSync, runSubprocessSync, normalizeSpawnSyncOptions, getSyncResult;
 var init_main_sync = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/main-sync.js"() {
+  "node_modules/execa/lib/methods/main-sync.js"() {
     init_command();
     init_options();
     init_shell();
@@ -12970,11 +12970,11 @@ var init_main_sync = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/get-one.js
+// node_modules/execa/lib/ipc/get-one.js
 import { once as once5, on as on2 } from "node:events";
 var getOneMessage, getOneMessageAsync, getMessage, throwOnDisconnect2, throwOnStrictError;
 var init_get_one = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/get-one.js"() {
+  "node_modules/execa/lib/ipc/get-one.js"() {
     init_validation();
     init_forward();
     init_reference();
@@ -13033,11 +13033,11 @@ var init_get_one = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/get-each.js
+// node_modules/execa/lib/ipc/get-each.js
 import { once as once6, on as on3 } from "node:events";
 var getEachMessage, loopOnMessages, stopOnDisconnect, abortOnStrictError, iterateOnMessages, throwIfStrictError;
 var init_get_each = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/get-each.js"() {
+  "node_modules/execa/lib/ipc/get-each.js"() {
     init_validation();
     init_forward();
     init_reference();
@@ -13120,11 +13120,11 @@ var init_get_each = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/methods.js
+// node_modules/execa/lib/ipc/methods.js
 import process9 from "node:process";
 var addIpcMethods, getIpcExport, getIpcMethods;
 var init_methods = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/methods.js"() {
+  "node_modules/execa/lib/ipc/methods.js"() {
     init_send();
     init_get_one();
     init_get_each();
@@ -13169,7 +13169,7 @@ var init_methods = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/early-error.js
+// node_modules/execa/lib/return/early-error.js
 import { ChildProcess as ChildProcess2 } from "node:child_process";
 import {
   PassThrough,
@@ -13179,7 +13179,7 @@ import {
 } from "node:stream";
 var handleEarlyError, createDummyStreams, createDummyStream, readable, writable, duplex, handleDummyPromise;
 var init_early_error = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/return/early-error.js"() {
+  "node_modules/execa/lib/return/early-error.js"() {
     init_handle();
     init_result();
     init_reject();
@@ -13231,13 +13231,13 @@ var init_early_error = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/handle-async.js
+// node_modules/execa/lib/stdio/handle-async.js
 import { createReadStream, createWriteStream } from "node:fs";
 import { Buffer as Buffer4 } from "node:buffer";
 import { Readable as Readable2, Writable as Writable2, Duplex as Duplex2 } from "node:stream";
 var handleStdioAsync, forbiddenIfAsync, addProperties2, addPropertiesAsync;
 var init_handle_async = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/stdio/handle-async.js"() {
+  "node_modules/execa/lib/stdio/handle-async.js"() {
     init_generator();
     init_handle();
     init_type();
@@ -13284,7 +13284,7 @@ var init_handle_async = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sindresorhus/merge-streams/index.js
+// node_modules/@sindresorhus/merge-streams/index.js
 import { on as on4, once as once7 } from "node:events";
 import { PassThrough as PassThroughStream, getDefaultHighWaterMark as getDefaultHighWaterMark2 } from "node:stream";
 import { finished as finished2 } from "node:stream/promises";
@@ -13309,7 +13309,7 @@ function mergeStreams(streams) {
 }
 var getHighWaterMark, MergedStream, onMergedStreamFinished, onMergedStreamEnd, onInputStreamsUnpipe, validateStream, endWhenStreamsDone, afterMergedStreamFinished, onInputStreamEnd, onInputStreamUnpipe, endStream, errorOrAbortStream, isAbortError, abortStream, errorStream, noop2, updateMaxListeners, PASSTHROUGH_LISTENERS_COUNT, PASSTHROUGH_LISTENERS_PER_STREAM;
 var init_merge_streams = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@sindresorhus/merge-streams/index.js"() {
+  "node_modules/@sindresorhus/merge-streams/index.js"() {
     getHighWaterMark = (streams, objectMode) => {
       if (streams.length === 0) {
         return getDefaultHighWaterMark2(objectMode);
@@ -13506,11 +13506,11 @@ var init_merge_streams = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/pipeline.js
+// node_modules/execa/lib/io/pipeline.js
 import { finished as finished3 } from "node:stream/promises";
 var pipeStreams, onSourceFinish, endDestinationStream, onDestinationFinish, abortSourceStream;
 var init_pipeline = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/pipeline.js"() {
+  "node_modules/execa/lib/io/pipeline.js"() {
     init_standard_stream();
     pipeStreams = (source, destination) => {
       source.pipe(destination);
@@ -13550,10 +13550,10 @@ var init_pipeline = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/output-async.js
+// node_modules/execa/lib/io/output-async.js
 var pipeOutputAsync, pipeTransform, SUBPROCESS_STREAM_PROPERTIES, pipeStdioItem, setStandardStreamMaxListeners, MAX_LISTENERS_INCREMENT;
 var init_output_async = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/output-async.js"() {
+  "node_modules/execa/lib/io/output-async.js"() {
     init_merge_streams();
     init_standard_stream();
     init_max_listeners();
@@ -13612,10 +13612,10 @@ var init_output_async = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/signal-exit/dist/mjs/signals.js
+// node_modules/signal-exit/dist/mjs/signals.js
 var signals;
 var init_signals2 = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/signal-exit/dist/mjs/signals.js"() {
+  "node_modules/signal-exit/dist/mjs/signals.js"() {
     signals = [];
     signals.push("SIGHUP", "SIGINT", "SIGTERM");
     if (process.platform !== "win32") {
@@ -13641,10 +13641,10 @@ var init_signals2 = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/signal-exit/dist/mjs/index.js
+// node_modules/signal-exit/dist/mjs/index.js
 var processOk, kExitEmitter, global2, ObjectDefineProperty, Emitter, SignalExitBase, signalExitWrap, SignalExitFallback, SignalExit, process10, onExit, load, unload;
 var init_mjs = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/signal-exit/dist/mjs/index.js"() {
+  "node_modules/signal-exit/dist/mjs/index.js"() {
     init_signals2();
     processOk = (process12) => !!process12 && typeof process12 === "object" && typeof process12.removeListener === "function" && typeof process12.emit === "function" && typeof process12.reallyExit === "function" && typeof process12.listeners === "function" && typeof process12.kill === "function" && typeof process12.pid === "number" && typeof process12.on === "function";
     kExitEmitter = /* @__PURE__ */ Symbol.for("signal-exit emitter");
@@ -13880,11 +13880,11 @@ var init_mjs = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/cleanup.js
+// node_modules/execa/lib/terminate/cleanup.js
 import { addAbortListener as addAbortListener2 } from "node:events";
 var cleanupOnExit;
 var init_cleanup = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/terminate/cleanup.js"() {
+  "node_modules/execa/lib/terminate/cleanup.js"() {
     init_mjs();
     cleanupOnExit = (subprocess, { cleanup, detached }, { signal }) => {
       if (!cleanup || detached) {
@@ -13900,10 +13900,10 @@ var init_cleanup = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/pipe-arguments.js
+// node_modules/execa/lib/pipe/pipe-arguments.js
 var normalizePipeArguments, getDestinationStream, getDestination, mapDestinationArguments, getSourceStream;
 var init_pipe_arguments = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/pipe-arguments.js"() {
+  "node_modules/execa/lib/pipe/pipe-arguments.js"() {
     init_parameters();
     init_duration();
     init_fd_options();
@@ -13982,10 +13982,10 @@ var init_pipe_arguments = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/throw.js
+// node_modules/execa/lib/pipe/throw.js
 var handlePipeArgumentsError, getPipeArgumentsError, createNonCommandError, PIPE_COMMAND_MESSAGE;
 var init_throw = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/throw.js"() {
+  "node_modules/execa/lib/pipe/throw.js"() {
     init_result();
     init_pipeline();
     handlePipeArgumentsError = ({
@@ -14038,10 +14038,10 @@ var init_throw = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/sequence.js
+// node_modules/execa/lib/pipe/sequence.js
 var waitForBothSubprocesses;
 var init_sequence = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/sequence.js"() {
+  "node_modules/execa/lib/pipe/sequence.js"() {
     waitForBothSubprocesses = async (subprocessPromises) => {
       const [
         { status: sourceStatus, reason: sourceReason, value: sourceResult = sourceReason },
@@ -14061,11 +14061,11 @@ var init_sequence = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/streaming.js
+// node_modules/execa/lib/pipe/streaming.js
 import { finished as finished4 } from "node:stream/promises";
 var pipeSubprocessStream, pipeFirstSubprocessStream, pipeMoreSubprocessStream, cleanupMergedStreamsMap, MERGED_STREAMS, SOURCE_LISTENERS_PER_PIPE, DESTINATION_LISTENERS_PER_PIPE;
 var init_streaming = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/streaming.js"() {
+  "node_modules/execa/lib/pipe/streaming.js"() {
     init_merge_streams();
     init_max_listeners();
     init_pipeline();
@@ -14100,11 +14100,11 @@ var init_streaming = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/abort.js
+// node_modules/execa/lib/pipe/abort.js
 import { aborted as aborted2 } from "node:util";
 var unpipeOnAbort, unpipeOnSignalAbort;
 var init_abort = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/abort.js"() {
+  "node_modules/execa/lib/pipe/abort.js"() {
     init_throw();
     unpipeOnAbort = (unpipeSignal, unpipeContext) => unpipeSignal === void 0 ? [] : [unpipeOnSignalAbort(unpipeSignal, unpipeContext)];
     unpipeOnSignalAbort = async (unpipeSignal, { sourceStream, mergedStream, fileDescriptors, sourceOptions, startTime }) => {
@@ -14121,10 +14121,10 @@ var init_abort = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/setup.js
+// node_modules/execa/lib/pipe/setup.js
 var pipeToSubprocess, handlePipePromise, getSubprocessPromises;
 var init_setup = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/pipe/setup.js"() {
+  "node_modules/execa/lib/pipe/setup.js"() {
     init_is_plain_obj();
     init_pipe_arguments();
     init_throw();
@@ -14191,12 +14191,12 @@ var init_setup = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/iterate.js
+// node_modules/execa/lib/io/iterate.js
 import { on as on5 } from "node:events";
 import { getDefaultHighWaterMark as getDefaultHighWaterMark3 } from "node:stream";
 var iterateOnSubprocessStream, stopReadingOnExit, iterateForResult, stopReadingOnStreamEnd, iterateOnStream, DEFAULT_OBJECT_HIGH_WATER_MARK, HIGH_WATER_MARK, iterateOnData, getGenerators;
 var init_iterate = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/iterate.js"() {
+  "node_modules/execa/lib/io/iterate.js"() {
     init_encoding_transform();
     init_split();
     init_run_sync();
@@ -14292,11 +14292,11 @@ var init_iterate = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/contents.js
+// node_modules/execa/lib/io/contents.js
 import { setImmediate as setImmediate2 } from "node:timers/promises";
 var getStreamOutput, logOutputAsync, resumeStream, getStreamContents2, getBufferedData, handleBufferedData;
 var init_contents2 = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/io/contents.js"() {
+  "node_modules/execa/lib/io/contents.js"() {
     init_source();
     init_uint_array();
     init_output();
@@ -14395,11 +14395,11 @@ var init_contents2 = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/wait-stream.js
+// node_modules/execa/lib/resolve/wait-stream.js
 import { finished as finished5 } from "node:stream/promises";
 var waitForStream, handleStdinDestroy, spyOnStdinDestroy, setStdinCleanedUp, handleStreamError, shouldIgnoreStreamError, isInputFileDescriptor, isStreamAbort, isStreamEpipe;
 var init_wait_stream = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/wait-stream.js"() {
+  "node_modules/execa/lib/resolve/wait-stream.js"() {
     waitForStream = async (stream, fdNumber, streamInfo, { isSameDirection, stopOnExit = false } = {}) => {
       const state = handleStdinDestroy(stream, streamInfo);
       const abortController = new AbortController();
@@ -14453,10 +14453,10 @@ var init_wait_stream = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/stdio.js
+// node_modules/execa/lib/resolve/stdio.js
 var waitForStdioStreams, waitForSubprocessStream;
 var init_stdio = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/stdio.js"() {
+  "node_modules/execa/lib/resolve/stdio.js"() {
     init_contents2();
     init_wait_stream();
     waitForStdioStreams = ({ subprocess, encoding, buffer, maxBuffer, lines, stripFinalNewline: stripFinalNewline2, verboseInfo, streamInfo }) => subprocess.stdio.map((stream, fdNumber) => waitForSubprocessStream({
@@ -14501,10 +14501,10 @@ var init_stdio = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/all-async.js
+// node_modules/execa/lib/resolve/all-async.js
 var makeAllStream, waitForAllStream, getAllStream, getAllMixed;
 var init_all_async = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/all-async.js"() {
+  "node_modules/execa/lib/resolve/all-async.js"() {
     init_merge_streams();
     init_stdio();
     makeAllStream = ({ stdout, stderr }, { all }) => all && (stdout || stderr) ? mergeStreams([stdout, stderr].filter(Boolean)) : void 0;
@@ -14536,10 +14536,10 @@ var init_all_async = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/ipc.js
+// node_modules/execa/lib/verbose/ipc.js
 var shouldLogIpc, logIpcOutput;
 var init_ipc = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/verbose/ipc.js"() {
+  "node_modules/execa/lib/verbose/ipc.js"() {
     init_log();
     init_values();
     shouldLogIpc = (verboseInfo) => isFullVerbose(verboseInfo, "ipc");
@@ -14555,10 +14555,10 @@ var init_ipc = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/buffer-messages.js
+// node_modules/execa/lib/ipc/buffer-messages.js
 var waitForIpcOutput, getBufferedIpcOutput;
 var init_buffer_messages = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/ipc/buffer-messages.js"() {
+  "node_modules/execa/lib/ipc/buffer-messages.js"() {
     init_max_buffer();
     init_ipc();
     init_specific();
@@ -14602,11 +14602,11 @@ var init_buffer_messages = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/wait-subprocess.js
+// node_modules/execa/lib/resolve/wait-subprocess.js
 import { once as once8 } from "node:events";
 var waitForSubprocessResult, waitForOriginalStreams, waitForCustomStreamsEnd, throwOnSubprocessError;
 var init_wait_subprocess = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/resolve/wait-subprocess.js"() {
+  "node_modules/execa/lib/resolve/wait-subprocess.js"() {
     init_is_stream();
     init_timeout();
     init_cancel();
@@ -14737,10 +14737,10 @@ var init_wait_subprocess = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/concurrent.js
+// node_modules/execa/lib/convert/concurrent.js
 var initializeConcurrentStreams, addConcurrentStream, waitForConcurrentStreams;
 var init_concurrent = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/concurrent.js"() {
+  "node_modules/execa/lib/convert/concurrent.js"() {
     init_deferred();
     initializeConcurrentStreams = () => ({
       readableDestroy: /* @__PURE__ */ new WeakMap(),
@@ -14769,11 +14769,11 @@ var init_concurrent = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/shared.js
+// node_modules/execa/lib/convert/shared.js
 import { finished as finished6 } from "node:stream/promises";
 var safeWaitForSubprocessStdin, safeWaitForSubprocessStdout, waitForSubprocessStdin, waitForSubprocessStdout, waitForSubprocess, destroyOtherStream;
 var init_shared = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/shared.js"() {
+  "node_modules/execa/lib/convert/shared.js"() {
     init_wait_stream();
     safeWaitForSubprocessStdin = async (subprocessStdin) => {
       if (subprocessStdin === void 0) {
@@ -14815,12 +14815,12 @@ var init_shared = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/readable.js
+// node_modules/execa/lib/convert/readable.js
 import { Readable as Readable3 } from "node:stream";
 import { callbackify as callbackify2 } from "node:util";
 var createReadable, getSubprocessStdout, getReadableOptions, getReadableMethods, onRead, onStdoutFinished, onReadableDestroy, destroyOtherReadable;
 var init_readable = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/readable.js"() {
+  "node_modules/execa/lib/convert/readable.js"() {
     init_encoding_option();
     init_fd_options();
     init_iterate();
@@ -14913,12 +14913,12 @@ var init_readable = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/writable.js
+// node_modules/execa/lib/convert/writable.js
 import { Writable as Writable3 } from "node:stream";
 import { callbackify as callbackify3 } from "node:util";
 var createWritable, getSubprocessStdin, getWritableMethods, onWrite, onWritableFinal, onStdinFinished, onWritableDestroy, destroyOtherWritable;
 var init_writable = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/writable.js"() {
+  "node_modules/execa/lib/convert/writable.js"() {
     init_fd_options();
     init_concurrent();
     init_shared();
@@ -14987,12 +14987,12 @@ var init_writable = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/duplex.js
+// node_modules/execa/lib/convert/duplex.js
 import { Duplex as Duplex3 } from "node:stream";
 import { callbackify as callbackify4 } from "node:util";
 var createDuplex, onDuplexDestroy;
 var init_duplex = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/duplex.js"() {
+  "node_modules/execa/lib/convert/duplex.js"() {
     init_encoding_option();
     init_readable();
     init_writable();
@@ -15049,10 +15049,10 @@ var init_duplex = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/iterable.js
+// node_modules/execa/lib/convert/iterable.js
 var createIterable, iterateOnStdoutData;
 var init_iterable = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/iterable.js"() {
+  "node_modules/execa/lib/convert/iterable.js"() {
     init_encoding_option();
     init_fd_options();
     init_iterate();
@@ -15086,10 +15086,10 @@ var init_iterable = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/add.js
+// node_modules/execa/lib/convert/add.js
 var addConvertedStreams;
 var init_add = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/convert/add.js"() {
+  "node_modules/execa/lib/convert/add.js"() {
     init_concurrent();
     init_readable();
     init_writable();
@@ -15106,10 +15106,10 @@ var init_add = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/promise.js
+// node_modules/execa/lib/methods/promise.js
 var mergePromise, nativePromisePrototype, descriptors;
 var init_promise = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/promise.js"() {
+  "node_modules/execa/lib/methods/promise.js"() {
     mergePromise = (subprocess, promise) => {
       for (const [property, descriptor] of descriptors) {
         const value = descriptor.value.bind(promise);
@@ -15125,12 +15125,12 @@ var init_promise = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/main-async.js
+// node_modules/execa/lib/methods/main-async.js
 import { setMaxListeners } from "node:events";
 import { spawn } from "node:child_process";
 var execaCoreAsync, handleAsyncArguments, handleAsyncOptions, spawnSubprocessAsync, handlePromise, getAsyncResult;
 var init_main_async = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/main-async.js"() {
+  "node_modules/execa/lib/methods/main-async.js"() {
     init_source();
     init_command();
     init_options();
@@ -15307,10 +15307,10 @@ var init_main_async = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/bind.js
+// node_modules/execa/lib/methods/bind.js
 var mergeOptions, mergeOption, DEEP_OPTIONS;
 var init_bind = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/bind.js"() {
+  "node_modules/execa/lib/methods/bind.js"() {
     init_is_plain_obj();
     init_specific();
     mergeOptions = (boundOptions, options) => {
@@ -15332,10 +15332,10 @@ var init_bind = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/create.js
+// node_modules/execa/lib/methods/create.js
 var createExeca, callBoundExeca, parseArguments;
 var init_create = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/create.js"() {
+  "node_modules/execa/lib/methods/create.js"() {
     init_is_plain_obj();
     init_parameters();
     init_template();
@@ -15389,10 +15389,10 @@ var init_create = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/command.js
+// node_modules/execa/lib/methods/command.js
 var mapCommandAsync, mapCommandSync, parseCommand, parseCommandString, SPACES_REGEXP;
 var init_command2 = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/command.js"() {
+  "node_modules/execa/lib/methods/command.js"() {
     mapCommandAsync = ({ file, commandArguments }) => parseCommand(file, commandArguments);
     mapCommandSync = ({ file, commandArguments }) => ({ ...parseCommand(file, commandArguments), isSync: true });
     parseCommand = (command, unusedArguments) => {
@@ -15425,10 +15425,10 @@ var init_command2 = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/script.js
+// node_modules/execa/lib/methods/script.js
 var setScriptSync, mapScriptAsync, mapScriptSync, getScriptOptions, getScriptStdinOption, deepScriptOptions;
 var init_script = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/lib/methods/script.js"() {
+  "node_modules/execa/lib/methods/script.js"() {
     setScriptSync = (boundExeca, createNested, boundOptions) => {
       boundExeca.sync = createNested(mapScriptSync, boundOptions);
       boundExeca.s = boundExeca.sync;
@@ -15441,7 +15441,7 @@ var init_script = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/index.js
+// node_modules/execa/index.js
 var execa_exports = {};
 __export(execa_exports, {
   $: () => $,
@@ -15460,7 +15460,7 @@ __export(execa_exports, {
 });
 var execa, execaSync, execaCommand, execaCommandSync, execaNode, $, sendMessage2, getOneMessage2, getEachMessage2, getCancelSignal2;
 var init_execa = __esm({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/execa/index.js"() {
+  "node_modules/execa/index.js"() {
     init_create();
     init_command2();
     init_node2();
@@ -15483,9 +15483,9 @@ var init_execa = __esm({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/identity.js
+// node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/identity.js"(exports) {
+  "node_modules/yaml/dist/nodes/identity.js"(exports) {
     "use strict";
     var ALIAS = /* @__PURE__ */ Symbol.for("yaml.alias");
     var DOC = /* @__PURE__ */ Symbol.for("yaml.document");
@@ -15494,13 +15494,13 @@ var require_identity = __commonJS({
     var SCALAR = /* @__PURE__ */ Symbol.for("yaml.scalar");
     var SEQ = /* @__PURE__ */ Symbol.for("yaml.seq");
     var NODE_TYPE = /* @__PURE__ */ Symbol.for("yaml.node.type");
-    var isAlias = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === ALIAS;
+    var isAlias2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === ALIAS;
     var isDocument = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === DOC;
     var isMap2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
-    var isPair = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
+    var isPair2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
     var isScalar2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
     var isSeq = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
-    function isCollection(node) {
+    function isCollection2(node) {
       if (node && typeof node === "object")
         switch (node[NODE_TYPE]) {
           case MAP:
@@ -15520,7 +15520,7 @@ var require_identity = __commonJS({
         }
       return false;
     }
-    var hasAnchor = (node) => (isScalar2(node) || isCollection(node)) && !!node.anchor;
+    var hasAnchor = (node) => (isScalar2(node) || isCollection2(node)) && !!node.anchor;
     exports.ALIAS = ALIAS;
     exports.DOC = DOC;
     exports.MAP = MAP;
@@ -15529,20 +15529,20 @@ var require_identity = __commonJS({
     exports.SCALAR = SCALAR;
     exports.SEQ = SEQ;
     exports.hasAnchor = hasAnchor;
-    exports.isAlias = isAlias;
-    exports.isCollection = isCollection;
+    exports.isAlias = isAlias2;
+    exports.isCollection = isCollection2;
     exports.isDocument = isDocument;
     exports.isMap = isMap2;
     exports.isNode = isNode;
-    exports.isPair = isPair;
+    exports.isPair = isPair2;
     exports.isScalar = isScalar2;
     exports.isSeq = isSeq;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/visit.js
+// node_modules/yaml/dist/visit.js
 var require_visit = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/visit.js"(exports) {
+  "node_modules/yaml/dist/visit.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var BREAK = /* @__PURE__ */ Symbol("break visit");
@@ -15698,9 +15698,9 @@ var require_visit = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/directives.js
+// node_modules/yaml/dist/doc/directives.js
 var require_directives = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/directives.js"(exports) {
+  "node_modules/yaml/dist/doc/directives.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var visit = require_visit();
@@ -15869,9 +15869,9 @@ var require_directives = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/anchors.js
+// node_modules/yaml/dist/doc/anchors.js
 var require_anchors = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/anchors.js"(exports) {
+  "node_modules/yaml/dist/doc/anchors.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var visit = require_visit();
@@ -15939,9 +15939,9 @@ var require_anchors = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/applyReviver.js
+// node_modules/yaml/dist/doc/applyReviver.js
 var require_applyReviver = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/applyReviver.js"(exports) {
+  "node_modules/yaml/dist/doc/applyReviver.js"(exports) {
     "use strict";
     function applyReviver(reviver, obj, key, val) {
       if (val && typeof val === "object") {
@@ -15989,9 +15989,9 @@ var require_applyReviver = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/toJS.js
+// node_modules/yaml/dist/nodes/toJS.js
 var require_toJS = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/toJS.js"(exports) {
+  "node_modules/yaml/dist/nodes/toJS.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     function toJS(value, arg, ctx) {
@@ -16019,9 +16019,9 @@ var require_toJS = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Node.js
+// node_modules/yaml/dist/nodes/Node.js
 var require_Node = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Node.js"(exports) {
+  "node_modules/yaml/dist/nodes/Node.js"(exports) {
     "use strict";
     var applyReviver = require_applyReviver();
     var identity3 = require_identity();
@@ -16060,9 +16060,9 @@ var require_Node = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Alias.js
+// node_modules/yaml/dist/nodes/Alias.js
 var require_Alias = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Alias.js"(exports) {
+  "node_modules/yaml/dist/nodes/Alias.js"(exports) {
     "use strict";
     var anchors = require_anchors();
     var visit = require_visit();
@@ -16178,9 +16178,9 @@ var require_Alias = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Scalar.js
+// node_modules/yaml/dist/nodes/Scalar.js
 var require_Scalar = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Scalar.js"(exports) {
+  "node_modules/yaml/dist/nodes/Scalar.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Node = require_Node();
@@ -16208,9 +16208,9 @@ var require_Scalar = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/createNode.js
+// node_modules/yaml/dist/doc/createNode.js
 var require_createNode = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/createNode.js"(exports) {
+  "node_modules/yaml/dist/doc/createNode.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var identity3 = require_identity();
@@ -16283,9 +16283,9 @@ var require_createNode = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Collection.js
+// node_modules/yaml/dist/nodes/Collection.js
 var require_Collection = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Collection.js"(exports) {
+  "node_modules/yaml/dist/nodes/Collection.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var identity3 = require_identity();
@@ -16426,9 +16426,9 @@ var require_Collection = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyComment.js
+// node_modules/yaml/dist/stringify/stringifyComment.js
 var require_stringifyComment = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
+  "node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
     "use strict";
     var stringifyComment = (str7) => str7.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
@@ -16443,9 +16443,9 @@ var require_stringifyComment = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/foldFlowLines.js
+// node_modules/yaml/dist/stringify/foldFlowLines.js
 var require_foldFlowLines = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/foldFlowLines.js"(exports) {
+  "node_modules/yaml/dist/stringify/foldFlowLines.js"(exports) {
     "use strict";
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
@@ -16579,9 +16579,9 @@ ${indent}${text2.slice(fold + 1, end2)}`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyString.js
+// node_modules/yaml/dist/stringify/stringifyString.js
 var require_stringifyString = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyString.js"(exports) {
+  "node_modules/yaml/dist/stringify/stringifyString.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var foldFlowLines = require_foldFlowLines();
@@ -16862,9 +16862,9 @@ ${indent}`);
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringify.js
+// node_modules/yaml/dist/stringify/stringify.js
 var require_stringify = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringify.js"(exports) {
+  "node_modules/yaml/dist/stringify/stringify.js"(exports) {
     "use strict";
     var anchors = require_anchors();
     var identity3 = require_identity();
@@ -16986,9 +16986,9 @@ ${ctx.indent}${str7}`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyPair.js
+// node_modules/yaml/dist/stringify/stringifyPair.js
 var require_stringifyPair = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyPair.js"(exports) {
+  "node_modules/yaml/dist/stringify/stringifyPair.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -17119,9 +17119,9 @@ ${ctx.indent}`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/log.js
+// node_modules/yaml/dist/log.js
 var require_log = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/log.js"(exports) {
+  "node_modules/yaml/dist/log.js"(exports) {
     "use strict";
     var node_process = __require("process");
     function debug(logLevel, ...messages) {
@@ -17141,9 +17141,9 @@ var require_log = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/merge.js
+// node_modules/yaml/dist/schema/yaml-1.1/merge.js
 var require_merge = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -17201,9 +17201,9 @@ var require_merge = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/addPairToJSMap.js
+// node_modules/yaml/dist/nodes/addPairToJSMap.js
 var require_addPairToJSMap = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports) {
+  "node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports) {
     "use strict";
     var log = require_log();
     var merge2 = require_merge();
@@ -17265,9 +17265,9 @@ var require_addPairToJSMap = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Pair.js
+// node_modules/yaml/dist/nodes/Pair.js
 var require_Pair = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/Pair.js"(exports) {
+  "node_modules/yaml/dist/nodes/Pair.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var stringifyPair = require_stringifyPair();
@@ -17305,9 +17305,9 @@ var require_Pair = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyCollection.js
+// node_modules/yaml/dist/stringify/stringifyCollection.js
 var require_stringifyCollection = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
+  "node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var stringify = require_stringify();
@@ -17456,9 +17456,9 @@ ${indent}${end}`;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/YAMLMap.js
+// node_modules/yaml/dist/nodes/YAMLMap.js
 var require_YAMLMap = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/YAMLMap.js"(exports) {
+  "node_modules/yaml/dist/nodes/YAMLMap.js"(exports) {
     "use strict";
     var stringifyCollection = require_stringifyCollection();
     var addPairToJSMap = require_addPairToJSMap();
@@ -17600,9 +17600,9 @@ var require_YAMLMap = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/map.js
+// node_modules/yaml/dist/schema/common/map.js
 var require_map = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/map.js"(exports) {
+  "node_modules/yaml/dist/schema/common/map.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var YAMLMap = require_YAMLMap();
@@ -17622,9 +17622,9 @@ var require_map = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/YAMLSeq.js
+// node_modules/yaml/dist/nodes/YAMLSeq.js
 var require_YAMLSeq = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/nodes/YAMLSeq.js"(exports) {
+  "node_modules/yaml/dist/nodes/YAMLSeq.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var stringifyCollection = require_stringifyCollection();
@@ -17738,9 +17738,9 @@ var require_YAMLSeq = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/seq.js
+// node_modules/yaml/dist/schema/common/seq.js
 var require_seq = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/seq.js"(exports) {
+  "node_modules/yaml/dist/schema/common/seq.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var YAMLSeq = require_YAMLSeq();
@@ -17760,9 +17760,9 @@ var require_seq = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/string.js
+// node_modules/yaml/dist/schema/common/string.js
 var require_string = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/string.js"(exports) {
+  "node_modules/yaml/dist/schema/common/string.js"(exports) {
     "use strict";
     var stringifyString = require_stringifyString();
     var string4 = {
@@ -17779,9 +17779,9 @@ var require_string = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/null.js
+// node_modules/yaml/dist/schema/common/null.js
 var require_null = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/common/null.js"(exports) {
+  "node_modules/yaml/dist/schema/common/null.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var nullTag = {
@@ -17797,9 +17797,9 @@ var require_null = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/bool.js
+// node_modules/yaml/dist/schema/core/bool.js
 var require_bool = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/bool.js"(exports) {
+  "node_modules/yaml/dist/schema/core/bool.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var boolTag = {
@@ -17821,9 +17821,9 @@ var require_bool = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyNumber.js
+// node_modules/yaml/dist/stringify/stringifyNumber.js
 var require_stringifyNumber = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyNumber.js"(exports) {
+  "node_modules/yaml/dist/stringify/stringifyNumber.js"(exports) {
     "use strict";
     function stringifyNumber({ format: format2, minFractionDigits, tag, value }) {
       if (typeof value === "bigint")
@@ -17848,9 +17848,9 @@ var require_stringifyNumber = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/float.js
+// node_modules/yaml/dist/schema/core/float.js
 var require_float = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/float.js"(exports) {
+  "node_modules/yaml/dist/schema/core/float.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -17894,9 +17894,9 @@ var require_float = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/int.js
+// node_modules/yaml/dist/schema/core/int.js
 var require_int = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/int.js"(exports) {
+  "node_modules/yaml/dist/schema/core/int.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -17939,9 +17939,9 @@ var require_int = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/schema.js
+// node_modules/yaml/dist/schema/core/schema.js
 var require_schema = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/core/schema.js"(exports) {
+  "node_modules/yaml/dist/schema/core/schema.js"(exports) {
     "use strict";
     var map = require_map();
     var _null4 = require_null();
@@ -17967,9 +17967,9 @@ var require_schema = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/json/schema.js
+// node_modules/yaml/dist/schema/json/schema.js
 var require_schema2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/json/schema.js"(exports) {
+  "node_modules/yaml/dist/schema/json/schema.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var map = require_map();
@@ -18034,9 +18034,9 @@ var require_schema2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/binary.js
+// node_modules/yaml/dist/schema/yaml-1.1/binary.js
 var require_binary = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports) {
     "use strict";
     var node_buffer = __require("buffer");
     var Scalar = require_Scalar();
@@ -18100,9 +18100,9 @@ var require_binary = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
+// node_modules/yaml/dist/schema/yaml-1.1/pairs.js
 var require_pairs = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Pair = require_Pair();
@@ -18178,9 +18178,9 @@ ${cn.comment}` : item.comment;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/omap.js
+// node_modules/yaml/dist/schema/yaml-1.1/omap.js
 var require_omap = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var toJS = require_toJS();
@@ -18256,9 +18256,9 @@ var require_omap = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/bool.js
+// node_modules/yaml/dist/schema/yaml-1.1/bool.js
 var require_bool2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     function boolStringify({ value, source }, ctx) {
@@ -18288,9 +18288,9 @@ var require_bool2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/float.js
+// node_modules/yaml/dist/schema/yaml-1.1/float.js
 var require_float2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -18337,9 +18337,9 @@ var require_float2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/int.js
+// node_modules/yaml/dist/schema/yaml-1.1/int.js
 var require_int2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -18416,9 +18416,9 @@ var require_int2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/set.js
+// node_modules/yaml/dist/schema/yaml-1.1/set.js
 var require_set = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Pair = require_Pair();
@@ -18505,9 +18505,9 @@ var require_set = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
+// node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
 var require_timestamp = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     function parseSexagesimal(str7, asBigInt) {
@@ -18593,9 +18593,9 @@ var require_timestamp = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/schema.js
+// node_modules/yaml/dist/schema/yaml-1.1/schema.js
 var require_schema3 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports) {
+  "node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports) {
     "use strict";
     var map = require_map();
     var _null4 = require_null();
@@ -18637,9 +18637,9 @@ var require_schema3 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/tags.js
+// node_modules/yaml/dist/schema/tags.js
 var require_tags = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/tags.js"(exports) {
+  "node_modules/yaml/dist/schema/tags.js"(exports) {
     "use strict";
     var map = require_map();
     var _null4 = require_null();
@@ -18731,9 +18731,9 @@ var require_tags = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/Schema.js
+// node_modules/yaml/dist/schema/Schema.js
 var require_Schema = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/schema/Schema.js"(exports) {
+  "node_modules/yaml/dist/schema/Schema.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var map = require_map();
@@ -18763,9 +18763,9 @@ var require_Schema = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyDocument.js
+// node_modules/yaml/dist/stringify/stringifyDocument.js
 var require_stringifyDocument = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
+  "node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var stringify = require_stringify();
@@ -18843,9 +18843,9 @@ var require_stringifyDocument = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/Document.js
+// node_modules/yaml/dist/doc/Document.js
 var require_Document = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/doc/Document.js"(exports) {
+  "node_modules/yaml/dist/doc/Document.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var Collection = require_Collection();
@@ -19152,9 +19152,9 @@ var require_Document = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/errors.js
+// node_modules/yaml/dist/errors.js
 var require_errors2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/errors.js"(exports) {
+  "node_modules/yaml/dist/errors.js"(exports) {
     "use strict";
     var YAMLError = class extends Error {
       constructor(name, pos, code, message2) {
@@ -19217,9 +19217,9 @@ ${pointer}
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-props.js
+// node_modules/yaml/dist/compose/resolve-props.js
 var require_resolve_props = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-props.js"(exports) {
+  "node_modules/yaml/dist/compose/resolve-props.js"(exports) {
     "use strict";
     function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
@@ -19351,9 +19351,9 @@ var require_resolve_props = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-contains-newline.js
+// node_modules/yaml/dist/compose/util-contains-newline.js
 var require_util_contains_newline = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-contains-newline.js"(exports) {
+  "node_modules/yaml/dist/compose/util-contains-newline.js"(exports) {
     "use strict";
     function containsNewline(key) {
       if (!key)
@@ -19393,9 +19393,9 @@ var require_util_contains_newline = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-flow-indent-check.js
+// node_modules/yaml/dist/compose/util-flow-indent-check.js
 var require_util_flow_indent_check = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports) {
+  "node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports) {
     "use strict";
     var utilContainsNewline = require_util_contains_newline();
     function flowIndentCheck(indent, fc, onError) {
@@ -19411,9 +19411,9 @@ var require_util_flow_indent_check = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-map-includes.js
+// node_modules/yaml/dist/compose/util-map-includes.js
 var require_util_map_includes = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
+  "node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     function mapIncludes(ctx, items, search2) {
@@ -19427,9 +19427,9 @@ var require_util_map_includes = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-block-map.js
+// node_modules/yaml/dist/compose/resolve-block-map.js
 var require_resolve_block_map = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-block-map.js"(exports) {
+  "node_modules/yaml/dist/compose/resolve-block-map.js"(exports) {
     "use strict";
     var Pair = require_Pair();
     var YAMLMap = require_YAMLMap();
@@ -19535,9 +19535,9 @@ var require_resolve_block_map = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-block-seq.js
+// node_modules/yaml/dist/compose/resolve-block-seq.js
 var require_resolve_block_seq = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-block-seq.js"(exports) {
+  "node_modules/yaml/dist/compose/resolve-block-seq.js"(exports) {
     "use strict";
     var YAMLSeq = require_YAMLSeq();
     var resolveProps = require_resolve_props();
@@ -19586,9 +19586,9 @@ var require_resolve_block_seq = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-end.js
+// node_modules/yaml/dist/compose/resolve-end.js
 var require_resolve_end = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-end.js"(exports) {
+  "node_modules/yaml/dist/compose/resolve-end.js"(exports) {
     "use strict";
     function resolveEnd(end, offset, reqSpace, onError) {
       let comment = "";
@@ -19629,9 +19629,9 @@ var require_resolve_end = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-flow-collection.js
+// node_modules/yaml/dist/compose/resolve-flow-collection.js
 var require_resolve_flow_collection = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports) {
+  "node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Pair = require_Pair();
@@ -19823,9 +19823,9 @@ var require_resolve_flow_collection = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-collection.js
+// node_modules/yaml/dist/compose/compose-collection.js
 var require_compose_collection = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-collection.js"(exports) {
+  "node_modules/yaml/dist/compose/compose-collection.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -19888,9 +19888,9 @@ var require_compose_collection = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-block-scalar.js
+// node_modules/yaml/dist/compose/resolve-block-scalar.js
 var require_resolve_block_scalar = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports) {
+  "node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     function resolveBlockScalar(ctx, scalar, onError) {
@@ -20071,9 +20071,9 @@ var require_resolve_block_scalar = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-flow-scalar.js
+// node_modules/yaml/dist/compose/resolve-flow-scalar.js
 var require_resolve_flow_scalar = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports) {
+  "node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var resolveEnd = require_resolve_end();
@@ -20292,9 +20292,9 @@ var require_resolve_flow_scalar = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-scalar.js
+// node_modules/yaml/dist/compose/compose-scalar.js
 var require_compose_scalar = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-scalar.js"(exports) {
+  "node_modules/yaml/dist/compose/compose-scalar.js"(exports) {
     "use strict";
     var identity3 = require_identity();
     var Scalar = require_Scalar();
@@ -20373,9 +20373,9 @@ var require_compose_scalar = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-empty-scalar-position.js
+// node_modules/yaml/dist/compose/util-empty-scalar-position.js
 var require_util_empty_scalar_position = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports) {
+  "node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports) {
     "use strict";
     function emptyScalarPosition(offset, before, pos) {
       if (before) {
@@ -20403,9 +20403,9 @@ var require_util_empty_scalar_position = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-node.js
+// node_modules/yaml/dist/compose/compose-node.js
 var require_compose_node = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-node.js"(exports) {
+  "node_modules/yaml/dist/compose/compose-node.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var identity3 = require_identity();
@@ -20509,9 +20509,9 @@ var require_compose_node = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-doc.js
+// node_modules/yaml/dist/compose/compose-doc.js
 var require_compose_doc = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/compose-doc.js"(exports) {
+  "node_modules/yaml/dist/compose/compose-doc.js"(exports) {
     "use strict";
     var Document = require_Document();
     var composeNode = require_compose_node();
@@ -20552,9 +20552,9 @@ var require_compose_doc = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/composer.js
+// node_modules/yaml/dist/compose/composer.js
 var require_composer = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/compose/composer.js"(exports) {
+  "node_modules/yaml/dist/compose/composer.js"(exports) {
     "use strict";
     var node_process = __require("process");
     var directives = require_directives();
@@ -20596,7 +20596,7 @@ var require_composer = __commonJS({
       }
       return { comment, afterEmptyLine };
     }
-    var Composer = class {
+    var Composer2 = class {
       constructor(options = {}) {
         this.doc = null;
         this.atDirectives = false;
@@ -20756,13 +20756,13 @@ ${end.comment}` : end.comment;
         }
       }
     };
-    exports.Composer = Composer;
+    exports.Composer = Composer2;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst-scalar.js
+// node_modules/yaml/dist/parse/cst-scalar.js
 var require_cst_scalar = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst-scalar.js"(exports) {
+  "node_modules/yaml/dist/parse/cst-scalar.js"(exports) {
     "use strict";
     var resolveBlockScalar = require_resolve_block_scalar();
     var resolveFlowScalar = require_resolve_flow_scalar();
@@ -20945,9 +20945,9 @@ var require_cst_scalar = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst-stringify.js
+// node_modules/yaml/dist/parse/cst-stringify.js
 var require_cst_stringify = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
+  "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
     var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
@@ -21006,9 +21006,9 @@ var require_cst_stringify = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst-visit.js
+// node_modules/yaml/dist/parse/cst-visit.js
 var require_cst_visit = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst-visit.js"(exports) {
+  "node_modules/yaml/dist/parse/cst-visit.js"(exports) {
     "use strict";
     var BREAK = /* @__PURE__ */ Symbol("break visit");
     var SKIP = /* @__PURE__ */ Symbol("skip children");
@@ -21068,9 +21068,9 @@ var require_cst_visit = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst.js
+// node_modules/yaml/dist/parse/cst.js
 var require_cst = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/cst.js"(exports) {
+  "node_modules/yaml/dist/parse/cst.js"(exports) {
     "use strict";
     var cstScalar = require_cst_scalar();
     var cstStringify = require_cst_stringify();
@@ -21079,7 +21079,7 @@ var require_cst = __commonJS({
     var DOCUMENT = "";
     var FLOW_END = "";
     var SCALAR = "";
-    var isCollection = (token) => !!token && "items" in token;
+    var isCollection2 = (token) => !!token && "items" in token;
     var isScalar2 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
@@ -21163,16 +21163,16 @@ var require_cst = __commonJS({
     exports.DOCUMENT = DOCUMENT;
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
-    exports.isCollection = isCollection;
+    exports.isCollection = isCollection2;
     exports.isScalar = isScalar2;
     exports.prettyToken = prettyToken;
     exports.tokenType = tokenType;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/lexer.js
+// node_modules/yaml/dist/parse/lexer.js
 var require_lexer = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/lexer.js"(exports) {
+  "node_modules/yaml/dist/parse/lexer.js"(exports) {
     "use strict";
     var cst = require_cst();
     function isEmpty(ch) {
@@ -21759,9 +21759,9 @@ var require_lexer = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/line-counter.js
+// node_modules/yaml/dist/parse/line-counter.js
 var require_line_counter = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/line-counter.js"(exports) {
+  "node_modules/yaml/dist/parse/line-counter.js"(exports) {
     "use strict";
     var LineCounter = class {
       constructor() {
@@ -21790,9 +21790,9 @@ var require_line_counter = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/parser.js
+// node_modules/yaml/dist/parse/parser.js
 var require_parser = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/parse/parser.js"(exports) {
+  "node_modules/yaml/dist/parse/parser.js"(exports) {
     "use strict";
     var node_process = __require("process");
     var cst = require_cst();
@@ -21887,7 +21887,7 @@ var require_parser = __commonJS({
         }
       }
     }
-    var Parser = class {
+    var Parser2 = class {
       /**
        * @param onNewLine - If defined, called separately with the start position of
        *   each new line (in `parse()`, including the start of input).
@@ -22660,13 +22660,13 @@ var require_parser = __commonJS({
         }
       }
     };
-    exports.Parser = Parser;
+    exports.Parser = Parser2;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/public-api.js
+// node_modules/yaml/dist/public-api.js
 var require_public_api = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/public-api.js"(exports) {
+  "node_modules/yaml/dist/public-api.js"(exports) {
     "use strict";
     var composer = require_composer();
     var Document = require_Document();
@@ -22694,7 +22694,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument2(source, options = {}) {
+    function parseDocument(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -22720,7 +22720,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument2(src, options);
+      const doc = parseDocument(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log.warn(doc.options.logLevel, warning));
@@ -22756,14 +22756,14 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse11;
     exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument2;
+    exports.parseDocument = parseDocument;
     exports.stringify = stringify;
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/index.js
+// node_modules/yaml/dist/index.js
 var require_dist2 = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/yaml/dist/index.js"(exports) {
+  "node_modules/yaml/dist/index.js"(exports) {
     "use strict";
     var composer = require_composer();
     var Document = require_Document();
@@ -22813,9 +22813,9 @@ var require_dist2 = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/content-type/index.js
+// node_modules/content-type/index.js
 var require_content_type = __commonJS({
-  "../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/content-type/index.js"(exports) {
+  "node_modules/content-type/index.js"(exports) {
     "use strict";
     var PARAM_REGEXP = /; *([!#$%&'*+.^_`|~0-9A-Za-z-]+) *= *("(?:[\u000b\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\u000b\u0020-\u00ff])*"|[!#$%&'*+.^_`|~0-9A-Za-z-]+) */g;
     var TEXT_REGEXP = /^[\u000b\u0020-\u007e\u0080-\u00ff]+$/;
@@ -22917,7 +22917,7 @@ var require_content_type = __commonJS({
   }
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/external.js
+// node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
   BRAND: () => BRAND,
@@ -23029,7 +23029,7 @@ __export(external_exports, {
   void: () => voidType
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/helpers/util.js
+// node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {
@@ -23163,7 +23163,7 @@ var getParsedType = (data) => {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/ZodError.js
+// node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -23281,7 +23281,7 @@ ZodError.create = (issues) => {
   return error2;
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/locales/en.js
+// node_modules/zod/v3/locales/en.js
 var errorMap = (issue2, _ctx) => {
   let message2;
   switch (issue2.code) {
@@ -23384,7 +23384,7 @@ var errorMap = (issue2, _ctx) => {
 };
 var en_default = errorMap;
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/errors.js
+// node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -23393,7 +23393,7 @@ function getErrorMap() {
   return overrideErrorMap;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/helpers/parseUtil.js
+// node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path: path8, errorMaps, issueData } = params;
   const fullPath = [...path8, ...issueData.path || []];
@@ -23503,14 +23503,14 @@ var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/helpers/errorUtil.js
+// node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message2) => typeof message2 === "string" ? { message: message2 } : message2 || {};
   errorUtil2.toString = (message2) => typeof message2 === "string" ? message2 : message2?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v3/types.js
+// node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
   constructor(parent, value, path8, key) {
     this._cachedPath = [];
@@ -26958,7 +26958,7 @@ var coerce = {
 };
 var NEVER = INVALID;
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/core.js
+// node_modules/zod/v4/core/core.js
 var NEVER2 = Object.freeze({
   status: "aborted"
 });
@@ -27017,7 +27017,7 @@ function config(newConfig) {
   return globalConfig;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/util.js
+// node_modules/zod/v4/core/util.js
 var util_exports = {};
 __export(util_exports, {
   BIGINT_FORMAT_RANGES: () => BIGINT_FORMAT_RANGES,
@@ -27538,7 +27538,7 @@ var Class = class {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/errors.js
+// node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -27613,7 +27613,7 @@ function formatError(error2, _mapper) {
   return fieldErrors;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/parse.js
+// node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -27665,7 +27665,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/regexes.js
+// node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -27724,7 +27724,7 @@ var _null = /null/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/checks.js
+// node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -28109,7 +28109,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/doc.js
+// node_modules/zod/v4/core/doc.js
 var Doc = class {
   constructor(args = []) {
     this.content = [];
@@ -28145,14 +28145,14 @@ var Doc = class {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/versions.js
+// node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 0,
   patch: 0
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/schemas.js
+// node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -29438,7 +29438,7 @@ function handleRefineResult(result, payload, input, inst) {
   }
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/locales/en.js
+// node_modules/zod/v4/locales/en.js
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -29556,7 +29556,7 @@ function en_default2() {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/registries.js
+// node_modules/zod/v4/core/registries.js
 var $ZodRegistry = class {
   constructor() {
     this._map = /* @__PURE__ */ new Map();
@@ -29604,7 +29604,7 @@ function registry() {
 }
 var globalRegistry = /* @__PURE__ */ registry();
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/api.js
+// node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -30084,7 +30084,7 @@ function _refine(Class2, fn, _params) {
   return schema;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/core/to-json-schema.js
+// node_modules/zod/v4/core/to-json-schema.js
 var JSONSchemaGenerator = class {
   constructor(params) {
     this.counter = 0;
@@ -30851,7 +30851,7 @@ function isTransforming(_schema, _ctx) {
   throw new Error(`Unknown schema type: ${def.type}`);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/mini/schemas.js
+// node_modules/zod/v4/mini/schemas.js
 var ZodMiniType = /* @__PURE__ */ $constructor("ZodMiniType", (inst, def) => {
   if (!inst._zod)
     throw new Error("Uninitialized schema in ZodMiniType.");
@@ -30897,7 +30897,7 @@ function object(shape, params) {
   return new ZodMiniObject(def);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
 function isZ4Schema(s) {
   const schema = s;
   return !!schema._zod;
@@ -31057,7 +31057,7 @@ function getLiteralValue(schema) {
   return void 0;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/classic/iso.js
+// node_modules/zod/v4/classic/iso.js
 var iso_exports2 = {};
 __export(iso_exports2, {
   ZodISODate: () => ZodISODate,
@@ -31098,7 +31098,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/classic/errors.js
+// node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -31132,13 +31132,13 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/classic/parse.js
+// node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse3 = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync3 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/classic/schemas.js
+// node_modules/zod/v4/classic/schemas.js
 var ZodType2 = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   inst.def = def;
@@ -31789,7 +31789,7 @@ function preprocess(fn, schema) {
   return pipe(transform(fn), schema);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/classic/compat.js
+// node_modules/zod/v4/classic/compat.js
 var ZodIssueCode2 = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -31804,7 +31804,7 @@ var ZodIssueCode2 = {
   custom: "custom"
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/classic/coerce.js
+// node_modules/zod/v4/classic/coerce.js
 var coerce_exports2 = {};
 __export(coerce_exports2, {
   bigint: () => bigint2,
@@ -31829,10 +31829,10 @@ function date3(params) {
   return _coercedDate(ZodDate2, params);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod/v4/classic/external.js
+// node_modules/zod/v4/classic/external.js
 config(en_default2());
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/types.js
 var LATEST_PROTOCOL_VERSION = "2025-11-25";
 var SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
 var RELATED_TASK_META_KEY = "io.modelcontextprotocol/related-task";
@@ -33364,12 +33364,12 @@ var UrlElicitationRequiredError = class extends McpError {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
 function isTerminal(status) {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/Options.js
+// node_modules/zod-to-json-schema/dist/esm/Options.js
 var ignoreOverride = /* @__PURE__ */ Symbol("Let zodToJsonSchema decide on which parser to use");
 var defaultOptions = {
   name: void 0,
@@ -33403,7 +33403,7 @@ var getDefaultOptions = (options) => typeof options === "string" ? {
   ...options
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/Refs.js
+// node_modules/zod-to-json-schema/dist/esm/Refs.js
 var getRefs = (options) => {
   const _options = getDefaultOptions(options);
   const currentPath = _options.name !== void 0 ? [..._options.basePath, _options.definitionPath, _options.name] : _options.basePath;
@@ -33424,7 +33424,7 @@ var getRefs = (options) => {
   };
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/errorMessages.js
+// node_modules/zod-to-json-schema/dist/esm/errorMessages.js
 function addErrorMessage(res, key, errorMessage5, refs) {
   if (!refs?.errorMessages)
     return;
@@ -33440,7 +33440,7 @@ function setResponseValueAndErrors(res, key, value, errorMessage5, refs) {
   addErrorMessage(res, key, errorMessage5, refs);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
+// node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
 var getRelativePath = (pathA, pathB) => {
   let i2 = 0;
   for (; i2 < pathA.length && i2 < pathB.length; i2++) {
@@ -33450,7 +33450,7 @@ var getRelativePath = (pathA, pathB) => {
   return [(pathA.length - i2).toString(), ...pathB.slice(i2)].join("/");
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/any.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/any.js
 function parseAnyDef(refs) {
   if (refs.target !== "openAi") {
     return {};
@@ -33466,7 +33466,7 @@ function parseAnyDef(refs) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/array.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/array.js
 function parseArrayDef(def, refs) {
   const res = {
     type: "array"
@@ -33490,7 +33490,7 @@ function parseArrayDef(def, refs) {
   return res;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/bigint.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/bigint.js
 function parseBigintDef(def, refs) {
   const res = {
     type: "integer",
@@ -33536,24 +33536,24 @@ function parseBigintDef(def, refs) {
   return res;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/boolean.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/boolean.js
 function parseBooleanDef() {
   return {
     type: "boolean"
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/branded.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/branded.js
 function parseBrandedDef(_def, refs) {
   return parseDef(_def.type._def, refs);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/catch.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/catch.js
 var parseCatchDef = (def, refs) => {
   return parseDef(def.innerType._def, refs);
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/date.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/date.js
 function parseDateDef(def, refs, overrideDateStrategy) {
   const strategy = overrideDateStrategy ?? refs.dateStrategy;
   if (Array.isArray(strategy)) {
@@ -33612,7 +33612,7 @@ var integerDateParser = (def, refs) => {
   return res;
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/default.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/default.js
 function parseDefaultDef(_def, refs) {
   return {
     ...parseDef(_def.innerType._def, refs),
@@ -33620,12 +33620,12 @@ function parseDefaultDef(_def, refs) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/effects.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/effects.js
 function parseEffectsDef(_def, refs) {
   return refs.effectStrategy === "input" ? parseDef(_def.schema._def, refs) : parseAnyDef(refs);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/enum.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/enum.js
 function parseEnumDef(def) {
   return {
     type: "string",
@@ -33633,7 +33633,7 @@ function parseEnumDef(def) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/intersection.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/intersection.js
 var isJsonSchema7AllOfType = (type) => {
   if ("type" in type && type.type === "string")
     return false;
@@ -33675,7 +33675,7 @@ function parseIntersectionDef(def, refs) {
   } : void 0;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/literal.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/literal.js
 function parseLiteralDef(def, refs) {
   const parsedType2 = typeof def.value;
   if (parsedType2 !== "bigint" && parsedType2 !== "number" && parsedType2 !== "boolean" && parsedType2 !== "string") {
@@ -33695,7 +33695,7 @@ function parseLiteralDef(def, refs) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/string.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/string.js
 var emojiRegex2 = void 0;
 var zodPatterns = {
   /**
@@ -34020,7 +34020,7 @@ function stringifyRegExpWithFlags(regex, refs) {
   return pattern;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/record.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/record.js
 function parseRecordDef(def, refs) {
   if (refs.target === "openAi") {
     console.warn("Warning: OpenAI may not support records in schemas! Try an array of key-value pairs instead.");
@@ -34072,7 +34072,7 @@ function parseRecordDef(def, refs) {
   return schema;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/map.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/map.js
 function parseMapDef(def, refs) {
   if (refs.mapStrategy === "record") {
     return parseRecordDef(def, refs);
@@ -34097,7 +34097,7 @@ function parseMapDef(def, refs) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/nativeEnum.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/nativeEnum.js
 function parseNativeEnumDef(def) {
   const object3 = def.values;
   const actualKeys = Object.keys(def.values).filter((key) => {
@@ -34111,7 +34111,7 @@ function parseNativeEnumDef(def) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/never.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/never.js
 function parseNeverDef(refs) {
   return refs.target === "openAi" ? void 0 : {
     not: parseAnyDef({
@@ -34121,7 +34121,7 @@ function parseNeverDef(refs) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/null.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/null.js
 function parseNullDef(refs) {
   return refs.target === "openApi3" ? {
     enum: ["null"],
@@ -34131,7 +34131,7 @@ function parseNullDef(refs) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/union.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/union.js
 var primitiveMappings = {
   ZodString: "string",
   ZodNumber: "number",
@@ -34199,7 +34199,7 @@ var asAnyOf = (def, refs) => {
   return anyOf2.length ? { anyOf: anyOf2 } : void 0;
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
 function parseNullableDef(def, refs) {
   if (["ZodString", "ZodNumber", "ZodBigInt", "ZodBoolean", "ZodNull"].includes(def.innerType._def.typeName) && (!def.innerType._def.checks || !def.innerType._def.checks.length)) {
     if (refs.target === "openApi3") {
@@ -34231,7 +34231,7 @@ function parseNullableDef(def, refs) {
   return base && { anyOf: [base, { type: "null" }] };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/number.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/number.js
 function parseNumberDef(def, refs) {
   const res = {
     type: "number"
@@ -34280,7 +34280,7 @@ function parseNumberDef(def, refs) {
   return res;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/object.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/object.js
 function parseObjectDef(def, refs) {
   const forceOptionalIntoNullable = refs.target === "openAi";
   const result = {
@@ -34350,7 +34350,7 @@ function safeIsOptional(schema) {
   }
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/optional.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/optional.js
 var parseOptionalDef = (def, refs) => {
   if (refs.currentPath.toString() === refs.propertyPath?.toString()) {
     return parseDef(def.innerType._def, refs);
@@ -34369,7 +34369,7 @@ var parseOptionalDef = (def, refs) => {
   } : parseAnyDef(refs);
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/pipeline.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/pipeline.js
 var parsePipelineDef = (def, refs) => {
   if (refs.pipeStrategy === "input") {
     return parseDef(def.in._def, refs);
@@ -34389,12 +34389,12 @@ var parsePipelineDef = (def, refs) => {
   };
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/promise.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/promise.js
 function parsePromiseDef(def, refs) {
   return parseDef(def.type._def, refs);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/set.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/set.js
 function parseSetDef(def, refs) {
   const items = parseDef(def.valueType._def, {
     ...refs,
@@ -34414,7 +34414,7 @@ function parseSetDef(def, refs) {
   return schema;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/tuple.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/tuple.js
 function parseTupleDef(def, refs) {
   if (def.rest) {
     return {
@@ -34442,24 +34442,24 @@ function parseTupleDef(def, refs) {
   }
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/undefined.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/undefined.js
 function parseUndefinedDef(refs) {
   return {
     not: parseAnyDef(refs)
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/unknown.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/unknown.js
 function parseUnknownDef(refs) {
   return parseAnyDef(refs);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parsers/readonly.js
+// node_modules/zod-to-json-schema/dist/esm/parsers/readonly.js
 var parseReadonlyDef = (def, refs) => {
   return parseDef(def.innerType._def, refs);
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/selectParser.js
+// node_modules/zod-to-json-schema/dist/esm/selectParser.js
 var selectParser = (def, typeName, refs) => {
   switch (typeName) {
     case ZodFirstPartyTypeKind.ZodString:
@@ -34535,7 +34535,7 @@ var selectParser = (def, typeName, refs) => {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/parseDef.js
+// node_modules/zod-to-json-schema/dist/esm/parseDef.js
 function parseDef(def, refs, forceResolution = false) {
   const seenItem = refs.seen.get(def);
   if (refs.override) {
@@ -34591,7 +34591,7 @@ var addMeta = (def, refs, jsonSchema) => {
   return jsonSchema;
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/zod-to-json-schema/dist/esm/zodToJsonSchema.js
+// node_modules/zod-to-json-schema/dist/esm/zodToJsonSchema.js
 var zodToJsonSchema = (schema, options) => {
   const refs = getRefs(options);
   let definitions = typeof options === "object" && options.definitions ? Object.entries(options.definitions).reduce((acc, [name2, schema2]) => ({
@@ -34653,7 +34653,7 @@ var zodToJsonSchema = (schema, options) => {
   return combined;
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js
 function mapMiniTarget(t) {
   if (!t)
     return "draft-7";
@@ -34695,7 +34695,7 @@ function parseWithCompat(schema, data) {
   return result.data;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
 var DEFAULT_REQUEST_TIMEOUT_MSEC = 6e4;
 var Protocol = class {
   constructor(_options) {
@@ -35649,7 +35649,7 @@ function mergeCapabilities(base, additional) {
   return result;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js
 var import_ajv = __toESM(require_ajv(), 1);
 var import_ajv_formats = __toESM(require_dist(), 1);
 function createDefaultAjvInstance() {
@@ -35717,7 +35717,7 @@ var AjvJsonSchemaValidator = class {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js
 var ExperimentalServerTasks = class {
   constructor(_server) {
     this._server = _server;
@@ -35930,7 +35930,7 @@ var ExperimentalServerTasks = class {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js
 function assertToolsCallTaskCapability(requests, method, entityName) {
   if (!requests) {
     throw new Error(`${entityName} does not support task creation (required for ${method})`);
@@ -35965,7 +35965,7 @@ function assertClientRequestTaskCapability(requests, method, entityName) {
   }
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js
 var Server = class extends Protocol {
   /**
    * Initializes this server with the given name and version information.
@@ -36336,7 +36336,7 @@ var Server = class extends Protocol {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.js
 var COMPLETABLE_SYMBOL = /* @__PURE__ */ Symbol.for("mcp.completable");
 function isCompletable(schema) {
   return !!schema && typeof schema === "object" && COMPLETABLE_SYMBOL in schema;
@@ -36350,7 +36350,7 @@ var McpZodTypeKind;
   McpZodTypeKind2["Completable"] = "McpCompletable";
 })(McpZodTypeKind || (McpZodTypeKind = {}));
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.js
 var MAX_TEMPLATE_LENGTH = 1e6;
 var MAX_VARIABLE_LENGTH = 1e6;
 var MAX_TEMPLATE_EXPRESSIONS = 1e4;
@@ -36572,7 +36572,7 @@ var UriTemplate = class _UriTemplate {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.js
 var TOOL_NAME_REGEX = /^[A-Za-z0-9._-]{1,128}$/;
 function validateToolName(name) {
   const warnings = [];
@@ -36630,7 +36630,7 @@ function validateAndWarnToolName(name) {
   return result.isValid;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.js
 var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
@@ -36645,7 +36645,7 @@ var ExperimentalMcpServerTasks = class {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js
 var McpServer = class {
   constructor(serverInfo, options) {
     this._registeredResources = {};
@@ -37461,10 +37461,10 @@ var EMPTY_COMPLETION_RESULT = {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
 import process2 from "node:process";
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
 var STDIO_DEFAULT_MAX_BUFFER_SIZE = 10 * 1024 * 1024;
 var ReadBuffer = class {
   constructor(options) {
@@ -37501,7 +37501,7 @@ function serializeMessage(message2) {
   return JSON.stringify(message2) + "\n";
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
 var StdioServerTransport = class {
   constructor(_stdin = process2.stdin, _stdout = process2.stdout, options) {
     this._stdin = _stdin;
@@ -38077,11 +38077,14 @@ function linkTargetKind(root, path8) {
     return "absent";
   }
 }
-function directoryLinkOut(root, path8) {
-  const kind = projectPathKind(root, path8);
-  if (kind !== "outside" && kind !== "other") return false;
+function linkNotFollowed(root, path8) {
+  const where = projectPathKind(root, path8);
+  if (where !== "outside" && where !== "other") return null;
   const target = linkTargetKind(root, path8);
-  return target === "directory" || target === "remote" || target === "other";
+  if (target === "directory") return { kind: "directory", says: "a directory link out of the project, not followed" };
+  if (target === "remote") return { kind: "remote", says: "a link to a network path, never followed" };
+  if (target === "other") return { kind: "other", says: "a link to a device, a pipe or a path that cannot be resolved, never followed" };
+  return null;
 }
 function listProjectDir(root, dir) {
   return listProjectDirOrNull(root, dir) ?? [];
@@ -39980,18 +39983,164 @@ import path6 from "node:path";
 
 // src/platform/boundedParse.ts
 var import_yaml = __toESM(require_dist2(), 1);
-var YAML_CONFIG_MAX_NODES = 5e4;
-var YAML_SPEC_MAX_NODES = 1e5;
-var YAML_NODE_CHARS = /* @__PURE__ */ new Set([10, 123, 91, 44]);
-function yamlTooComplex(text2, maxNodes = YAML_CONFIG_MAX_NODES) {
-  return exceedsCount(text2, YAML_NODE_CHARS, maxNodes);
+var YAML_CONFIG_LIMITS = { maxBytes: 1024 * 1024, maxNodes: 5e4, maxDepth: 64, maxExpanded: 5e5, maxAliases: 1e3 };
+var YAML_SPEC_LIMITS = { maxBytes: 5 * 1024 * 1024, maxNodes: 1e5, maxDepth: 64, maxExpanded: 1e6, maxAliases: 1e3 };
+var YAML_CONFIG_MAX_NODES = YAML_CONFIG_LIMITS.maxNodes;
+var YAML_SPEC_MAX_NODES = YAML_SPEC_LIMITS.maxNodes;
+var YAML_INDICATORS = new Set([..."\n-?:,[]{}&*!|>'\"%@`#"].map((c3) => c3.charCodeAt(0)));
+function preGate(text2, limits) {
+  if (text2.length > limits.maxBytes) return "too-large";
+  if (exceedsCount(text2, YAML_INDICATORS, limits.maxNodes)) return "too-complex";
+  return null;
 }
-function parseYamlBounded(text2, maxNodes = YAML_CONFIG_MAX_NODES) {
-  if (yamlTooComplex(text2, maxNodes)) return { ok: false, reason: "too-complex" };
+function cstDepth(tokens, limit) {
+  const stack = tokens.map((t) => [t, 0]);
+  let max = 0;
+  while (stack.length > 0) {
+    const top = stack.pop();
+    if (top === void 0) break;
+    const [t, depth] = top;
+    if (typeof t !== "object" || t === null) continue;
+    const tok = t;
+    if (tok.type === "block-map" || tok.type === "block-seq" || tok.type === "flow-collection") {
+      const d = depth + 1;
+      if (d > max) max = d;
+      if (max > limit) return max;
+      for (const item of tok.items ?? []) {
+        if (item.key !== void 0 && item.key !== null) stack.push([item.key, d]);
+        if (item.value !== void 0 && item.value !== null) stack.push([item.value, d]);
+      }
+    } else if (tok.type === "document" && tok.value !== void 0) {
+      stack.push([tok.value, depth]);
+    }
+  }
+  return max;
+}
+function gate(text2, limits) {
+  const refused2 = preGate(text2, limits);
+  if (refused2 !== null) return { refused: { ok: false, reason: refused2 } };
   try {
-    return { ok: true, value: (0, import_yaml.parse)(text2) };
+    const tokens = Array.from(new import_yaml.Parser().parse(text2));
+    if (tokens.filter((t) => t.type === "document").length > 1) {
+      return { refused: { ok: false, reason: "invalid", detail: "the file holds more than one YAML document" } };
+    }
+    if (cstDepth(tokens, limits.maxDepth) > limits.maxDepth) return { refused: { ok: false, reason: "too-deep" } };
+    return { tokens };
+  } catch (e) {
+    return { refused: { ok: false, reason: "invalid", detail: e instanceof Error ? e.message : String(e) } };
+  }
+}
+function childrenOf(n2) {
+  if ((0, import_yaml.isPair)(n2)) return [n2.key, n2.value];
+  if ((0, import_yaml.isCollection)(n2)) return n2.items;
+  return [];
+}
+function expandedSize(doc, max, maxAliases) {
+  const targets = /* @__PURE__ */ new Map();
+  const anchors = /* @__PURE__ */ new Map();
+  let aliases = 0;
+  const pending = [doc.contents];
+  while (pending.length > 0) {
+    const n2 = pending.pop();
+    if (typeof n2 !== "object" || n2 === null) continue;
+    if ((0, import_yaml.isAlias)(n2)) {
+      aliases += 1;
+      if (aliases > maxAliases) return "aliases";
+      const t = anchors.get(n2.source);
+      if (t !== void 0) targets.set(n2, t);
+      continue;
+    }
+    const anchor = n2.anchor;
+    if (typeof anchor === "string") anchors.set(anchor, n2);
+    const kids = childrenOf(n2);
+    for (let i2 = kids.length - 1; i2 >= 0; i2--) pending.push(kids[i2]);
+  }
+  const sizes = /* @__PURE__ */ new Map();
+  const onPath = /* @__PURE__ */ new Set();
+  const stack = [];
+  const enter = (child) => {
+    if (typeof child !== "object" || child === null) return 1;
+    let node = child;
+    if ((0, import_yaml.isAlias)(node)) {
+      const t = targets.get(node);
+      if (t === void 0) return 1;
+      node = t;
+    }
+    if (onPath.has(node)) return "cycle";
+    const known = sizes.get(node);
+    if (known !== void 0) return known;
+    onPath.add(node);
+    stack.push({ node, kids: childrenOf(node), next: 0, sum: 1 });
+    return void 0;
+  };
+  const first = enter(doc.contents);
+  if (first !== void 0) return first;
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame === void 0) break;
+    if (frame.next < frame.kids.length) {
+      const got = enter(frame.kids[frame.next]);
+      frame.next += 1;
+      if (got === "cycle") return "cycle";
+      if (got !== void 0) {
+        frame.sum += got;
+        if (frame.sum > max) return max + 1;
+      }
+      continue;
+    }
+    stack.pop();
+    onPath.delete(frame.node);
+    sizes.set(frame.node, frame.sum);
+    const parent = stack[stack.length - 1];
+    if (parent === void 0) return frame.sum;
+    parent.sum += frame.sum;
+    if (parent.sum > max) return max + 1;
+  }
+  return 0;
+}
+function parseYamlDocumentBounded(text2, limits = YAML_CONFIG_LIMITS) {
+  const gated = gate(text2, limits);
+  if ("refused" in gated) return gated.refused;
+  let docs;
+  try {
+    docs = Array.from(new import_yaml.Composer({ uniqueKeys: false }).compose(gated.tokens, true, text2.length));
   } catch (e) {
     return { ok: false, reason: "invalid", detail: e instanceof Error ? e.message : String(e) };
+  }
+  if (docs.length > 1) return { ok: false, reason: "invalid", detail: "the file holds more than one YAML document" };
+  const doc = docs[0];
+  if (doc === void 0) return { ok: false, reason: "invalid", detail: "no YAML document" };
+  const error2 = doc.errors[0];
+  if (error2 !== void 0) return { ok: false, reason: "invalid", detail: error2.message };
+  const expanded = expandedSize(doc, limits.maxExpanded, limits.maxAliases);
+  if (expanded === "cycle") return { ok: false, reason: "invalid", detail: "an alias refers to the node that holds it" };
+  if (expanded === "aliases" || expanded > limits.maxExpanded) return { ok: false, reason: "too-expanded" };
+  return { ok: true, doc };
+}
+function yamlDocumentValue(doc) {
+  return doc.toJS({ maxAliasCount: -1 });
+}
+function parseYamlBounded(text2, limits = YAML_CONFIG_LIMITS) {
+  const parsed = parseYamlDocumentBounded(text2, limits);
+  if (!parsed.ok) return parsed.detail === void 0 ? { ok: false, reason: parsed.reason } : { ok: false, reason: parsed.reason, detail: parsed.detail };
+  try {
+    return { ok: true, value: yamlDocumentValue(parsed.doc) };
+  } catch (e) {
+    return { ok: false, reason: "invalid", detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+function describeYamlRefusal(parsed, limits = YAML_CONFIG_LIMITS) {
+  switch (parsed.reason) {
+    case "too-large":
+      return `it is larger than the ${Math.round(limits.maxBytes / 1024)} KiB dev-guardian parses as YAML, and was not read`;
+    case "too-complex":
+      return `it holds more than ${limits.maxNodes} YAML indicators (a bound on its nodes), more than dev-guardian parses \u2014 a parse that large can exhaust the server's memory \u2014 and was not read`;
+    case "too-deep":
+      return `it nests collections more than ${limits.maxDepth} deep, more than dev-guardian parses, and was not read`;
+    case "too-expanded":
+      return `it holds more than ${limits.maxAliases} aliases, or its aliases expand it to more than ${limits.maxExpanded} nodes \u2014 more than dev-guardian parses \u2014 and it was not read`;
+    default:
+      return `not valid YAML${parsed.detail !== void 0 ? ` (${parsed.detail.split("\n")[0] ?? ""})` : ""}`;
   }
 }
 
@@ -40025,7 +40174,7 @@ function resolveBugfixRules() {
 }
 
 // src/runners/semgrepRuleIds.ts
-var RULE_FILE_MAX_BYTES = 8 * 1024 * 1024;
+var RULE_FILE_MAX_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 function readRuleFile(file) {
   const r = readSmallText(file, RULE_FILE_MAX_BYTES, path6.parse(path6.resolve(file)).root);
   return r.status === "ok" ? r.text : null;
@@ -44209,7 +44358,8 @@ function walkManifests(projectPath, opts) {
         found2.push({ rel: child, dir: rel2, abs: join18(abs, e.name), eco });
         continue;
       }
-      if (e.kind === "link" && directoryLinkOut(projectPath, join18(abs, e.name))) linksOut.push(`${child}/`);
+      const out = e.kind === "link" ? linkNotFollowed(projectPath, join18(abs, e.name)) : null;
+      if (out !== null) linksOut.push(`${child}${out.kind === "directory" ? "/" : ""} (${out.says})`);
     }
   }
   if (!rootRead) return null;
@@ -44221,7 +44371,7 @@ function walkManifests(projectPath, opts) {
   if (linksOut.length > 0) {
     const shown = linksOut.slice(0, 3).join(", ");
     parts.push(
-      `did not follow ${shown}${linksOut.length > 3 ? ` and ${linksOut.length - 3} more` : ""} (a directory link out of the project, or unresolvable)`
+      `did not follow ${shown}${linksOut.length > 3 ? ` and ${linksOut.length - 3} more` : ""}`
     );
   }
   return parts.length > 0 ? { found: found2, incomplete: parts.join("; ") } : { found: found2 };
@@ -45642,7 +45792,7 @@ import { join as join25 } from "node:path";
 // src/platform/customRules.ts
 import { statSync as statSync7 } from "node:fs";
 import { isAbsolute as isAbsolute8, join as join23, relative as relative8, sep as sep6 } from "node:path";
-var MAX_RULES_FILE_BYTES = 16 * 1024 * 1024;
+var MAX_RULES_FILE_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 var CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
 function customRulesMetaKey(projectPath) {
   return `${CUSTOM_RULES_META_KEY}:${projectPath}`;
@@ -45663,12 +45813,12 @@ function validateSemgrepRulesFile(path8) {
   if (read3.status === "refused") {
     return {
       ok: false,
-      reason: read3.reason === "too-large" ? `larger than ${MAX_RULES_FILE_BYTES / (1024 * 1024)} MiB` : read3.reason === "not-a-regular-file" ? "not a regular file" : "unreadable"
+      reason: read3.reason === "too-large" ? `larger than ${MAX_RULES_FILE_BYTES / 1024} KiB, the most dev-guardian parses as YAML` : read3.reason === "not-a-regular-file" ? "not a regular file" : "unreadable"
     };
   }
   const parsed = parseYamlBounded(read3.text);
   if (!parsed.ok) {
-    return { ok: false, reason: parsed.reason === "too-complex" ? describeTooComplex(YAML_CONFIG_MAX_NODES, "YAML nodes") : "not valid YAML" };
+    return { ok: false, reason: parsed.reason === "invalid" ? "not valid YAML" : describeYamlRefusal(parsed) };
   }
   const doc = parsed.value;
   if (!isRecord(doc)) return { ok: false, reason: "no `rules:` list" };
@@ -45865,7 +46015,7 @@ function inspectProjectSemgrepConfigs(projectPath) {
   }
   return { usable, unusable };
 }
-var MAX_SEMGREP_CONFIG_BYTES = 16 * 1024 * 1024;
+var MAX_SEMGREP_CONFIG_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 function classifyText(read3) {
   if (read3.status === "absent") return { ok: false, reason: "unreadable" };
   if (read3.status === "refused") return { ok: false, reason: describeReadRefusal(read3.reason) };
@@ -45873,7 +46023,7 @@ function classifyText(read3) {
   if (!parsed.ok) {
     return {
       ok: false,
-      reason: parsed.reason === "too-complex" ? describeTooComplex(YAML_CONFIG_MAX_NODES, "YAML nodes") : "not valid YAML"
+      reason: parsed.reason === "invalid" ? "not valid YAML" : describeYamlRefusal(parsed)
     };
   }
   const doc = parsed.value;
@@ -46529,7 +46679,7 @@ var COMPLETE_COMPARISON = {
   gapsByTo: [],
   notMeasuredByFrom: []
 };
-function childrenOf(storage, parent) {
+function childrenOf2(storage, parent) {
   const listed = parent.meta?.["child_scans"];
   if (!Array.isArray(listed)) return [];
   const out = [];
@@ -46973,7 +47123,7 @@ function narrowGapNames(book) {
 }
 function typeResolver(storage, scan2) {
   if (isOrchestratedFullScan(scan2)) {
-    const indexed = childrenOf(storage, scan2).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
+    const indexed = childrenOf2(storage, scan2).filter((c3) => c3.row !== null).map((c3) => ({ type: c3.type, index: indexFindings(storage.findings.listByScan(c3.row.scan_id)) }));
     return (f) => indexed.find((c3) => c3.index.has(f))?.type ?? null;
   }
   if (isScriptEraFullScan(scan2)) {
@@ -46990,7 +47140,7 @@ function booksOf(storage, scan2) {
     const book = bookkeepingOf(storage, scan2);
     return () => book;
   }
-  const children = childrenOf(storage, scan2);
+  const children = childrenOf2(storage, scan2);
   return (fType) => {
     if (fType === null) return scan2;
     const child = children.find((c3) => c3.type === fType);
@@ -47081,7 +47231,7 @@ function notMeasured(storage, scan2, scope = "any") {
     gapsOf(bookkeepingOf(storage, scan2), scan2.scan_type);
     return out;
   }
-  for (const child of childrenOf(storage, scan2)) {
+  for (const child of childrenOf2(storage, scan2)) {
     if (!usableChild(child)) add(child.type);
     else gapsOf(child.row, child.type);
   }
@@ -54445,7 +54595,8 @@ function iacLookingFiles(projectPath, exclusions) {
       }
       const sniffable = /\.(ya?ml|json|template)$/.test(lower) && lower !== "package.json" && !lower.startsWith("docker-compose");
       if (!sniffable) {
-        if (e.kind === "link" && directoryLinkOut(projectPath, join40(abs, e.name))) linksOut.push(`${child}/`);
+        const out = e.kind === "link" ? linkNotFollowed(projectPath, join40(abs, e.name)) : null;
+        if (out !== null) linksOut.push(`${child}${out.kind === "directory" ? "/" : ""} (${out.says})`);
         continue;
       }
       const isJson = lower.endsWith(".json");
@@ -54470,7 +54621,7 @@ function iacLookingFiles(projectPath, exclusions) {
   }
   if (unlisted.length > 0) notes.push(`could not list ${list2(unlisted, ", ")} \u2014 IaC below was not looked for`);
   if (linksOut.length > 0) {
-    notes.push(`did not follow ${list2(linksOut, ", ")} (a directory link out of the project, or unresolvable) \u2014 IaC behind it was not looked for`);
+    notes.push(`did not follow ${list2(linksOut, ", ")} \u2014 IaC behind it was not looked for`);
   }
   return notes.length > 0 ? { files, incomplete: notes.join("; ") } : { files };
 }
@@ -54863,10 +55014,7 @@ import { isAbsolute as isAbsolute11, join as join42, relative as relative16, res
 // src/runners/composeChecks.ts
 var COMPOSE_TOOL_NAME = "docker-compose";
 var CATEGORY = "security";
-function checkCompose(text2, filePath) {
-  const parsed = parseYamlBounded(text2);
-  if (!parsed.ok) return [];
-  const doc = parsed.value;
+function checkComposeValue(doc, filePath) {
   const services = getServices(doc);
   if (services === null) return [];
   const findings = [];
@@ -55904,8 +56052,8 @@ var COMPOSE_FILE_NAMES = ["docker-compose.yml", "compose.yml", "docker-compose.y
 var composeParser = {
   name: "docker-compose",
   parse(input) {
-    const { text: text2, filePath } = input;
-    return { findings: checkCompose(text2, filePath), cves: [] };
+    const { value, filePath } = input;
+    return { findings: checkComposeValue(value, filePath), cves: [] };
   }
 };
 var cosignParser = {
@@ -56088,16 +56236,17 @@ var scanContainers = makeScanTool({
     const composeFile = findComposeFile(ctx.projectPath);
     if (composeFile) {
       const text2 = readComposeFileSafe(ctx.projectPath, composeFile);
-      if (text2 !== null && yamlTooComplex(text2, YAML_CONFIG_MAX_NODES)) {
+      const parsed = text2 === null ? null : parseYamlBounded(text2);
+      if (parsed !== null && !parsed.ok) {
         tools_run.push({
           name: "docker-compose",
           status: "failed",
-          reason: `the compose file was not checked: ${describeTooComplex(YAML_CONFIG_MAX_NODES, "YAML nodes")}`
+          reason: `the compose file was not checked: ${describeYamlRefusal(parsed)}`
         });
-      } else if (text2 !== null) {
+      } else if (parsed !== null) {
         parser_inputs.push({
           parser: composeParser,
-          input: { text: text2, filePath: relative16(ctx.projectPath, composeFile) }
+          input: { value: parsed.value, filePath: relative16(ctx.projectPath, composeFile) }
         });
         tools_run.push({ name: "docker-compose", status: "ok" });
       } else {
@@ -56755,7 +56904,7 @@ function loadBudgets(projectPath) {
     return {
       kind: "invalid",
       path: path8,
-      error: parsed.reason === "too-complex" ? `the file was not read: ${describeTooComplex(YAML_CONFIG_MAX_NODES, "YAML nodes")}` : `invalid YAML: ${parsed.detail ?? "unparsable"}`
+      error: parsed.reason === "invalid" ? `invalid YAML: ${parsed.detail ?? "unparsable"}` : `the file was not read: ${describeYamlRefusal(parsed)}`
     };
   }
   const doc = parsed.value;
@@ -58321,7 +58470,7 @@ function stringArray2(value) {
 }
 
 // src/deps/pipRequirements.ts
-import { dirname as dirname16, isAbsolute as isAbsolute12, relative as relative18, resolve as resolve18, sep as sep12 } from "node:path";
+import { dirname as dirname16, relative as relative18, resolve as resolve18, sep as sep12 } from "node:path";
 var MAX_REQUIREMENT_FILES = 200;
 var MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
 function describePipRefusal(r) {
@@ -58483,7 +58632,13 @@ function judgeLine(text2) {
   const optionText = firstOption < 0 ? "" : tokens.slice(firstOption).join(" ");
   const unc = optionText.split(/[ \t=]+/).map((t) => t.replace(/^["']+/, "")).find((t) => /^(?:\\\\|\/\/)[^\\/]/.test(t));
   if (unc !== void 0) return { ok: false, refusal: { kind: "network path", host: urlHost(unc) } };
-  if (/["'\\]/.test(optionText)) return { ok: false, refusal: { kind: "quoted or escaped option" } };
+  if (/["']/.test(optionText)) return { ok: false, refusal: { kind: "quoted or escaped option" } };
+  if (optionText.includes("\\")) {
+    return {
+      ok: false,
+      refusal: { kind: "quoted or escaped option", detail: "pip reads a backslash here as an escape, so the file it opens is not the one written" }
+    };
+  }
   const opts = optionText.split(/[ \t]+/).filter((t) => t !== "");
   if (args.trim() !== "") {
     const bad = judgeRequirement(args);
@@ -58503,7 +58658,7 @@ function judgeLine(text2) {
   for (let i2 = 0; i2 < opts.length; i2++) {
     const t = opts[i2] ?? "";
     if (t === "--require-hashes" || t === "--pre" || t === "--prefer-binary") continue;
-    const valued = /^(--only-binary|--no-binary|--requirement|--constraint)=(.*)$/.exec(t);
+    const valued = /^(--only-binary|--no-binary|--requirement|--constraint)=(.*)$/.exec(t) ?? /^(-r|-c)(.+)$/.exec(t);
     const name = valued?.[1] ?? t;
     if (["--only-binary", "--no-binary", "--requirement", "--constraint", "-r", "-c"].includes(name)) {
       const value = valued?.[2] ?? opts[i2 + 1];
@@ -58536,7 +58691,8 @@ function refusedOption(opts, i2) {
 function judgeInclude(target) {
   if (/^(?:\\\\|\/\/)/.test(target)) return { kind: "network path", host: urlHost(target) };
   if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[A-Za-z]:[\\/]/.test(target)) return { kind: "include of a URL", host: urlHost(target) };
-  if (isAbsolute12(target) || /^[A-Za-z]:/.test(target) || target.startsWith("~")) return { kind: "include out of the checkout" };
+  if (/^[A-Za-z]:(?![\\/])/.test(target) || target.startsWith("~")) return { kind: "include out of the checkout" };
+  if (process.platform === "win32" && /^[\\/](?![\\/])/.test(target)) return { kind: "include out of the checkout" };
   return null;
 }
 var MAX_REFUSALS = 50;
@@ -61176,8 +61332,9 @@ function walkManifestDirs(io) {
       if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith(".")) continue;
       const abs = join53(cur.abs, e.name);
       if (e.kind === "link") {
-        if (directoryLinkOut(io.root, abs)) {
-          noteUnread(io, abs, "a directory link out of the project (or to a network path), not followed: a sub-project behind it was not detected");
+        const out = linkNotFollowed(io.root, abs);
+        if (out !== null) {
+          noteUnread(io, abs, out.kind === "directory" ? `${out.says}: a sub-project behind it was not detected` : out.says);
         }
         continue;
       }
@@ -67100,7 +67257,7 @@ function toBucket(f, reason) {
 
 // src/platform/hookInstallTarget.ts
 import { lstatSync as lstatSync13 } from "node:fs";
-import { dirname as dirname18, isAbsolute as isAbsolute13, join as join60, resolve as resolve19 } from "node:path";
+import { dirname as dirname18, isAbsolute as isAbsolute12, join as join60, resolve as resolve19 } from "node:path";
 var PRECOMMIT_HOOK_NAMES = ["pre-commit", "commit-msg", "pre-push"];
 var MAX_GIT_POINTER_BYTES = 64 * 1024;
 function lstatOrNull2(p) {
@@ -67136,7 +67293,7 @@ function gitDirFromFile(projectPath) {
   }
   return {
     ok: false,
-    reason: `.git is a file naming ${isAbsolute13(named2) ? named2 : gitDir}, which is neither a worktree of that repository (its gitdir file does not point back here) nor a submodule of one enclosing this project \u2014 pre-commit would install hooks into another repository`
+    reason: `.git is a file naming ${isAbsolute12(named2) ? named2 : gitDir}, which is neither a worktree of that repository (its gitdir file does not point back here) nor a submodule of one enclosing this project \u2014 pre-commit would install hooks into another repository`
   };
 }
 function hookInstallTarget(projectPath) {
@@ -67263,7 +67420,7 @@ function failDomain15(code, message2) {
 
 // src/tools/registerCustomRules.ts
 import { statSync as statSync10 } from "node:fs";
-import { isAbsolute as isAbsolute14, join as join61, resolve as resolve20 } from "node:path";
+import { isAbsolute as isAbsolute13, join as join61, resolve as resolve20 } from "node:path";
 
 // src/runners/semgrepValidate.ts
 var SEMGREP_VALIDATE_TIMEOUT_MS = 6e4;
@@ -67438,7 +67595,7 @@ function collectExplicit(projectPath, paths) {
   const rejected = [];
   for (const raw of paths) {
     if (hasGlobMagic(raw)) {
-      if (isAbsolute14(raw)) {
+      if (isAbsolute13(raw)) {
         rejected.push({ path: raw, reason: "a glob must be relative to the project" });
         continue;
       }
@@ -69678,7 +69835,7 @@ function severityFromVuln(raw) {
 
 // src/wordpress/siteKeys.ts
 import { existsSync as existsSync19 } from "node:fs";
-import { isAbsolute as isAbsolute15, resolve as resolve21 } from "node:path";
+import { isAbsolute as isAbsolute14, resolve as resolve21 } from "node:path";
 function wpSiteKey(url2) {
   return url2.replace(/\/$/, "");
 }
@@ -69692,7 +69849,7 @@ function wpInstallKeys(canonical2, raw) {
   return unique3(keys);
 }
 function namesOneInstall(raw) {
-  return isAbsolute15(raw) || existsSync19(raw);
+  return isAbsolute14(raw) || existsSync19(raw);
 }
 function wpSiteKeys(url2) {
   const key = wpSiteKey(url2);
@@ -74749,7 +74906,7 @@ import {
   writeFileSync as writeFileSync13
 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename6, dirname as dirname20, isAbsolute as isAbsolute16, join as join72, relative as relative27, resolve as resolve22 } from "node:path";
+import { basename as basename6, dirname as dirname20, isAbsolute as isAbsolute15, join as join72, relative as relative27, resolve as resolve22 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
 var MAX_FILE_BYTES3 = 2 * 1024 * 1024;
@@ -75017,7 +75174,7 @@ async function tryExtract(zipPath, destDir) {
 }
 function isPathWithinRoot(candidate, root) {
   const rel2 = relative27(root, candidate);
-  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute16(rel2);
+  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute15(rel2);
 }
 function collectDir(root) {
   const files = [];
@@ -75342,7 +75499,7 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
-import { isAbsolute as isAbsolute17, join as join77, resolve as resolve24 } from "node:path";
+import { isAbsolute as isAbsolute16, join as join77, resolve as resolve24 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -76457,13 +76614,24 @@ function parseRoot(text2) {
   if (json.reason === "too-complex") {
     return { kind: "parse_error", reason: describeTooComplex(JSON_MAX_NODES, "JSON values") };
   }
-  if (yamlTooComplex(text2, YAML_SPEC_MAX_NODES)) {
-    return { kind: "parse_error", reason: describeTooComplex(YAML_SPEC_MAX_NODES, "YAML nodes") };
+  const bounded = parseYamlDocumentBounded(text2, YAML_SPEC_LIMITS);
+  if (!bounded.ok) {
+    const reason = bounded.reason === "invalid" ? bounded.detail ?? "YAML parse error" : describeYamlRefusal(bounded, YAML_SPEC_LIMITS);
+    return { kind: "parse_error", reason };
   }
-  const doc = (0, import_yaml2.parseDocument)(text2);
-  if (doc.errors.length > 0) {
-    return { kind: "parse_error", reason: doc.errors[0]?.message ?? "YAML parse error" };
-  }
+  const doc = bounded.doc;
+  const lineStarts = [0];
+  for (let i2 = text2.indexOf("\n"); i2 >= 0; i2 = text2.indexOf("\n", i2 + 1)) lineStarts.push(i2 + 1);
+  const lineAt = (offset) => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = lo + hi + 1 >> 1;
+      if ((lineStarts[mid] ?? 0) <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
   const lineByPath = /* @__PURE__ */ new Map();
   const pathsNode = doc.get("paths", true);
   if ((0, import_yaml2.isMap)(pathsNode)) {
@@ -76472,13 +76640,13 @@ function parseRoot(text2) {
       if (!(0, import_yaml2.isScalar)(key) || typeof key.value !== "string") continue;
       const range = key.range;
       if (range == null) continue;
-      lineByPath.set(key.value, text2.slice(0, range[0]).split("\n").length);
+      lineByPath.set(key.value, lineAt(range[0]));
     }
   }
   try {
     return {
       kind: "ok",
-      root: doc.toJS(),
+      root: yamlDocumentValue(doc),
       lineFor: (pathKey2) => lineByPath.get(pathKey2) ?? 0
     };
   } catch (err) {
@@ -76786,7 +76954,7 @@ var RECOVERY_STEP = "semgrep-metavar-recovery";
 function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path8 of collectAllFiles(parsed)) {
-    const read3 = readProjectBytes(projectPath, isAbsolute17(path8) ? path8 : join77(projectPath, path8));
+    const read3 = readProjectBytes(projectPath, isAbsolute16(path8) ? path8 : join77(projectPath, path8));
     if (read3.status !== "ok") continue;
     const buffer = read3.bytes;
     const text2 = buffer.toString("utf8");
@@ -76933,7 +77101,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path8) {
-  return resolve24(isAbsolute17(path8) ? path8 : join77(projectPath, path8));
+  return resolve24(isAbsolute16(path8) ? path8 : join77(projectPath, path8));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -79202,11 +79370,11 @@ function collectAnonymousExposures(ctx, projectPath) {
 
 // src/tools/createFixPr.ts
 import { rmSync as rmSync14 } from "node:fs";
-import { isAbsolute as isAbsolute19, join as join86, relative as relative31 } from "node:path";
+import { isAbsolute as isAbsolute18, join as join86, relative as relative31 } from "node:path";
 
 // src/fixpr/apply.ts
 import { rmSync as rmSync10 } from "node:fs";
-import { isAbsolute as isAbsolute18, join as join82, relative as relative29, resolve as resolve25, sep as sep17 } from "node:path";
+import { isAbsolute as isAbsolute17, join as join82, relative as relative29, resolve as resolve25, sep as sep17 } from "node:path";
 
 // src/fixpr/testCommandEnv.ts
 import { homedir as homedir5 } from "node:os";
@@ -79483,7 +79651,7 @@ function editPipPin(worktreePath, step) {
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
   const target = resolve25(worktreePath, file);
   const rel2 = relative29(worktreePath, target);
-  if (isAbsolute18(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep17}`) || isAbsolute18(rel2)) {
+  if (isAbsolute17(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep17}`) || isAbsolute17(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
   }
   const read3 = readProjectBytes(worktreePath, file, PROJECT_FILE_MAX_BYTES);
@@ -80011,7 +80179,7 @@ var import_yaml3 = __toESM(require_dist2(), 1);
 import { mkdirSync as mkdirSync10, mkdtempSync as mkdtempSync7, rmSync as rmSync11, statSync as statSync13, writeFileSync as writeFileSync16 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { basename as basename8, dirname as dirname22, join as join83 } from "node:path";
-var MAX_RULE_CONFIG_BYTES = 16 * 1024 * 1024;
+var MAX_RULE_CONFIG_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
@@ -80283,38 +80451,146 @@ function npmSpecNetworkHost(spec) {
   }
   return null;
 }
-function npmNetworkPaths(projectDir, checkoutRoot = projectDir) {
-  const out = [];
-  const walk5 = (file, where, v, depth) => {
-    if (depth > 6 || out.length >= 10) return;
+var MAX_NPM_NAMED = 10;
+var MAX_WORKSPACE_DIRS = 5e3;
+var MAX_WORKSPACE_DEPTH = 8;
+function readJsonObject(checkoutRoot, path8, maxBytes) {
+  const r = readProjectText(checkoutRoot, path8, maxBytes);
+  if (r.status === "absent") return { status: "absent" };
+  if (r.status === "refused") return { status: "unchecked", why: describeReadRefusal(r.reason) };
+  const parsed = parseJsonBounded(r.text);
+  if (!parsed.ok) {
+    return { status: "unchecked", why: parsed.reason === "too-complex" ? describeTooComplex(JSON_MAX_NODES, "JSON values") : "it is not valid JSON" };
+  }
+  if (typeof parsed.value !== "object" || parsed.value === null || Array.isArray(parsed.value)) {
+    return { status: "unchecked", why: "it is not a JSON object" };
+  }
+  return { status: "ok", value: parsed.value };
+}
+function scanNetwork(file, value, prefix, out) {
+  const entriesOf = (v) => Array.isArray(v) ? v.map((x, i2) => [`[${i2}]`, x]) : typeof v === "object" && v !== null ? Object.entries(v) : [];
+  const stack = [{ entries: [[prefix, value]], next: 0, path: "" }];
+  while (stack.length > 0 && out.length < MAX_NPM_NAMED) {
+    const frame = stack[stack.length - 1];
+    if (frame === void 0) break;
+    const entry = frame.entries[frame.next];
+    if (entry === void 0) {
+      stack.pop();
+      continue;
+    }
+    frame.next += 1;
+    const [key, v] = entry;
+    const path8 = frame.path === "" ? key : key.startsWith("[") ? `${frame.path}${key}` : `${frame.path}.${key}`;
     if (typeof v === "string") {
       const host = npmSpecNetworkHost(v);
-      if (host !== null) out.push(`${file}: ${where} (${host})`);
+      if (host !== null) out.push(`${file}: ${path8 || "(root)"} (${host})`);
+    } else if (typeof v === "object" && v !== null) {
+      stack.push({ entries: entriesOf(v), next: 0, path: path8 });
+    }
+  }
+}
+function scanTextLock(file, text2, out) {
+  const re = /(?:^|[\s"'@,:]|(?:file|link|portal|git\+file):)(\\\\[^\\/\s"',]+|\/\/[^/\s"',]+)/gim;
+  let line = 1;
+  let last = 0;
+  for (const m of text2.matchAll(re)) {
+    const spec = m[1] ?? "";
+    const at = (m.index ?? 0) + m[0].length - spec.length;
+    const before = text2.slice(Math.max(0, at - 16), at);
+    if (/[a-z][a-z0-9+.-]*:$/i.test(before) && !/(?:^|[^a-z0-9+.-])(?:file|link|portal|git\+file):$/i.test(before)) continue;
+    if (/^\/\/localhost(?:\/|$)/i.test(spec)) continue;
+    for (let i2 = text2.indexOf("\n", last); i2 >= 0 && i2 < at; i2 = text2.indexOf("\n", i2 + 1)) line += 1;
+    last = at;
+    out.push(`${file}:${line} (${urlHost(spec)})`);
+    if (out.length >= MAX_NPM_NAMED) return;
+  }
+}
+function workspacePatterns(pkg) {
+  const ws = pkg["workspaces"];
+  if (ws === void 0) return [];
+  if (!Array.isArray(ws) && (typeof ws !== "object" || ws === null)) return null;
+  const list2 = Array.isArray(ws) ? ws : ws["packages"];
+  if (list2 === void 0) return [];
+  if (!Array.isArray(list2) || !list2.every((p) => typeof p === "string")) return null;
+  return list2;
+}
+function workspaceMembers(projectDir, checkoutRoot, patterns) {
+  const members = [];
+  const unchecked = [];
+  const positive = patterns.filter((p) => !p.startsWith("!"));
+  if (positive.length === 0) return { members, unchecked };
+  const stack = [{ abs: projectDir, rel: "", depth: 0 }];
+  let listed = 0;
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (cur === void 0) break;
+    if (listed >= MAX_WORKSPACE_DIRS) {
+      unchecked.push(`workspace members (the walk stopped after ${MAX_WORKSPACE_DIRS} directories)`);
+      break;
+    }
+    listed += 1;
+    const entries2 = listProjectDirOrNull(checkoutRoot, cur.abs);
+    if (entries2 === null) {
+      unchecked.push(`${cur.rel || "."} (could not be listed, and workspace members may be below it)`);
+      continue;
+    }
+    for (const e of entries2) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const rel2 = cur.rel === "" ? e.name : `${cur.rel}/${e.name}`;
+      const matched = matchesAny(rel2, patterns);
+      if (e.kind === "link" && matched) unchecked.push(`${rel2} (a link a workspace pattern matches, not followed)`);
+      if (e.kind !== "directory") continue;
+      if (matched) members.push(rel2);
+      if (cur.depth + 1 < MAX_WORKSPACE_DEPTH) stack.push({ abs: join84(cur.abs, e.name), rel: rel2, depth: cur.depth + 1 });
+      else if (patterns.some((p) => p.includes("**"))) unchecked.push(`workspace members below ${rel2} (deeper than ${MAX_WORKSPACE_DEPTH} directories)`);
+    }
+  }
+  return { members: members.sort(), unchecked };
+}
+function checkNpmSources(projectDir, checkoutRoot = projectDir) {
+  const network = [];
+  const unchecked = [];
+  const manifest = (rel2) => {
+    const r = readJsonObject(checkoutRoot, join84(projectDir, rel2), PROJECT_FILE_MAX_BYTES);
+    if (r.status === "unchecked") unchecked.push(`${rel2} (${r.why})`);
+    if (r.status !== "ok") return;
+    for (const field2 of NPM_SPEC_FIELDS) if (r.value[field2] !== void 0) scanNetwork(rel2, r.value[field2], field2, network);
+    if (rel2 !== "package.json") return;
+    const patterns = workspacePatterns(r.value);
+    if (patterns === null) {
+      unchecked.push('package.json (its "workspaces" is not a list of patterns)');
       return;
     }
-    if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-      for (const [k, inner] of Object.entries(v)) walk5(file, where === "" ? k : `${where}.${k}`, inner, depth + 1);
+    const ws = workspaceMembers(projectDir, checkoutRoot, patterns);
+    unchecked.push(...ws.unchecked);
+    for (const member of ws.members) {
+      const m = readJsonObject(checkoutRoot, join84(projectDir, ...member.split("/"), "package.json"), PROJECT_FILE_MAX_BYTES);
+      if (m.status === "unchecked") unchecked.push(`${member}/package.json (${m.why})`);
+      if (m.status === "ok") {
+        for (const field2 of NPM_SPEC_FIELDS) if (m.value[field2] !== void 0) scanNetwork(`${member}/package.json`, m.value[field2], field2, network);
+      }
     }
   };
-  const pkg = readProjectJson(checkoutRoot, join84(projectDir, "package.json"));
-  if (typeof pkg === "object" && pkg !== null) {
-    for (const field2 of NPM_SPEC_FIELDS) walk5("package.json", field2, pkg[field2], 0);
+  manifest("package.json");
+  for (const lock of ["package-lock.json", "npm-shrinkwrap.json"]) {
+    const r = readJsonObject(checkoutRoot, join84(projectDir, lock), PROJECT_LOCKFILE_MAX_BYTES);
+    if (r.status === "unchecked") unchecked.push(`${lock} (${r.why})`);
+    if (r.status === "ok") scanNetwork(lock, r.value, "", network);
   }
-  const lock = readProjectJson(checkoutRoot, join84(projectDir, "package-lock.json"), PROJECT_LOCKFILE_MAX_BYTES);
-  const packages = typeof lock === "object" && lock !== null ? lock["packages"] : void 0;
-  if (typeof packages === "object" && packages !== null) {
-    for (const [key, entry] of Object.entries(packages)) {
-      if (out.length >= 10) break;
-      const resolved = typeof entry === "object" && entry !== null ? entry["resolved"] : void 0;
-      if (typeof resolved === "string") walk5("package-lock.json", `packages.${key || "(root)"}.resolved`, resolved, 0);
-    }
-  }
-  return out;
+  const yarn = readProjectText(checkoutRoot, join84(projectDir, "yarn.lock"), PROJECT_LOCKFILE_MAX_BYTES);
+  if (yarn.status === "refused") unchecked.push(`yarn.lock (${describeReadRefusal(yarn.reason)})`);
+  if (yarn.status === "ok") scanTextLock("yarn.lock", yarn.text, network);
+  return { network, unchecked };
 }
-function npmNetworkRefusal(where) {
-  const shown = where.slice(0, 3).join("; ");
-  const more = where.length > 3 ? `; and ${where.length - 3} more` : "";
-  return `the project's npm dependencies point at a network path (${shown}${more}); dev-guardian doesn't install from a network path`;
+function npmSourcesRefusal(check2) {
+  const name = (items) => `${items.slice(0, 3).join("; ")}${items.length > 3 ? `; and ${items.length - 3} more` : ""}`;
+  if (check2.network.length > 0) {
+    return `the project's npm dependencies point at a network path (${name(check2.network)}); dev-guardian doesn't install from a network path`;
+  }
+  if (check2.unchecked.length > 0) {
+    return `npm reads files dev-guardian could not check for a network path (${name(check2.unchecked)}); dev-guardian doesn't install what it has not checked`;
+  }
+  return null;
 }
 function installRefusal(opts) {
   const root = opts.checkoutRoot ?? opts.projectDir;
@@ -80331,8 +80607,8 @@ function installRefusal(opts) {
     if (refusals.length > 0) return pipInstallRefusal(refusals);
   }
   if (opts.npmInstalls === true || opts.stepEcosystems.includes("npm")) {
-    const network = npmNetworkPaths(opts.projectDir, root);
-    if (network.length > 0) return npmNetworkRefusal(network);
+    const npm2 = npmSourcesRefusal(checkNpmSources(opts.projectDir, root));
+    if (npm2 !== null) return npm2;
   }
   return null;
 }
@@ -80903,10 +81179,10 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
       rmSync14(join86(planDir, "composer.json"), { force: true });
       planFailures.push({ ecosystem: "composer", code: "repository_chosen_by_project", reason: composerRefused });
     }
-    const npmNetwork = npmNetworkPaths(planDir, created.worktree.path);
-    if (npmNetwork.length > 0) {
+    const npmRefused = npmSourcesRefusal(checkNpmSources(planDir, created.worktree.path));
+    if (npmRefused !== null) {
       rmSync14(join86(planDir, "package.json"), { force: true });
-      planFailures.push({ ecosystem: "npm", code: "network_path_chosen_by_project", reason: npmNetworkRefusal(npmNetwork) });
+      planFailures.push({ ecosystem: "npm", code: "network_path_chosen_by_project", reason: npmRefused });
     }
     const result = await withPackageManagerEnv(
       packageManagerEnv(),
@@ -80938,7 +81214,7 @@ function inWorktree(root, prefix) {
   return join86(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
-  const rel2 = isAbsolute19(filePath) ? relative31(projectPath, filePath) : filePath;
+  const rel2 = isAbsolute18(filePath) ? relative31(projectPath, filePath) : filePath;
   return rel2.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
 }
 async function processGroup(opts) {
@@ -82218,7 +82494,7 @@ function analyzeAgentConfig(sources, previousHashes) {
 
 // src/agentaudit/configSources.ts
 import { homedir as homedir6 } from "node:os";
-import { dirname as dirname24, isAbsolute as isAbsolute20, join as join88, relative as relative32 } from "node:path";
+import { dirname as dirname24, isAbsolute as isAbsolute19, join as join88, relative as relative32 } from "node:path";
 
 // src/hostsetup/mcpConfig.ts
 import { join as join87, resolve as resolve29 } from "node:path";
@@ -82460,7 +82736,7 @@ function refusalMessage(reason, cap) {
 }
 function isWithin(root, path8) {
   const rel2 = relative32(root, path8);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute20(rel2);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute19(rel2);
 }
 function walkRoot(kind, projectPath, path8) {
   if (kind === "project") return projectPath;
@@ -83920,7 +84196,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js
 var ExperimentalClientTasks = class {
   constructor(_client) {
     this._client = _client;
@@ -84074,7 +84350,7 @@ var ExperimentalClientTasks = class {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js
 function applyElicitationDefaults(schema, data) {
   if (!schema || data === null || typeof data !== "object")
     return;
@@ -84585,7 +84861,7 @@ var Client = class extends Protocol {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/eventsource-parser/dist/index.js
+// node_modules/eventsource-parser/dist/index.js
 var ParseError = class extends Error {
   constructor(message2, options) {
     super(message2), this.name = "ParseError", this.type = options.type, this.field = options.field, this.value = options.value, this.line = options.line;
@@ -84761,7 +85037,7 @@ function isEventPrefix(chunk, i2, firstCharCode) {
   return firstCharCode === 101 && chunk.charCodeAt(i2 + 1) === 118 && chunk.charCodeAt(i2 + 2) === 101 && chunk.charCodeAt(i2 + 3) === 110 && chunk.charCodeAt(i2 + 4) === 116 && chunk.charCodeAt(i2 + 5) === 58;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/eventsource/dist/index.js
+// node_modules/eventsource/dist/index.js
 var ErrorEvent = class extends Event {
   /**
    * Constructs a new `ErrorEvent` instance. This is typically not called directly,
@@ -85058,7 +85334,7 @@ function getBaseURL() {
   return doc && typeof doc == "object" && "baseURI" in doc && typeof doc.baseURI == "string" ? doc.baseURI : void 0;
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js
 function normalizeHeaders(headers) {
   if (!headers)
     return {};
@@ -85085,7 +85361,7 @@ function createFetchWithInit(baseFetch = fetch, baseInit) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/pkce-challenge/dist/index.node.js
+// node_modules/pkce-challenge/dist/index.node.js
 var crypto;
 crypto = globalThis.crypto?.webcrypto ?? // Node.js [18-16] REPL
 globalThis.crypto ?? // Node.js >18
@@ -85128,7 +85404,7 @@ async function pkceChallenge(length) {
   };
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js
 var SafeUrlSchema = url().superRefine((val, ctx) => {
   if (!URL.canParse(val)) {
     ctx.addIssue({
@@ -85272,7 +85548,7 @@ var OAuthTokenRevocationRequestSchema = object2({
   token_type_hint: string2().optional()
 }).strip();
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js
 function resourceUrlFromServerUrl(url2) {
   const resourceURL = typeof url2 === "string" ? new URL(url2) : new URL(url2.href);
   resourceURL.hash = "";
@@ -85292,7 +85568,7 @@ function checkResourceAllowed({ requestedResource, configuredResource }) {
   return requestedPath.startsWith(configuredPath);
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js
 var OAuthError = class extends Error {
   constructor(message2, errorUri) {
     super(message2);
@@ -85387,7 +85663,7 @@ var OAUTH_ERRORS = {
   [InvalidTargetError.errorCode]: InvalidTargetError
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js
 var UnauthorizedError = class extends Error {
   constructor(message2) {
     super(message2 ?? "Unauthorized");
@@ -85932,7 +86208,7 @@ async function registerClient(authorizationServerUrl, { metadata, clientMetadata
   return OAuthClientInformationFullSchema.parse(await response.json());
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js
 var SseError = class extends Error {
   constructor(code, message2, event) {
     super(`SSE error: ${message2}`);
@@ -86123,7 +86399,7 @@ var SSEClientTransport = class {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js
 var import_content_type = __toESM(require_content_type(), 1);
 function mediaTypeEssence(header) {
   if (!header) {
@@ -86140,7 +86416,7 @@ function mediaTypeEssence(header) {
   }
 }
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/eventsource-parser/dist/stream.js
+// node_modules/eventsource-parser/dist/stream.js
 var EventSourceParserStream = class extends TransformStream {
   constructor({ onError, onRetry, onComment, maxBufferSize } = {}) {
     let parser;
@@ -86165,7 +86441,7 @@ var EventSourceParserStream = class extends TransformStream {
   }
 };
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js
 var DEFAULT_STREAMABLE_HTTP_RECONNECTION_OPTIONS = {
   initialReconnectionDelay: 1e3,
   maxReconnectionDelay: 3e4,
@@ -86565,7 +86841,7 @@ var StreamableHTTPClientTransport = class {
 // src/mcpaudit/launch.ts
 import { spawn as spawn3 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
-import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute21, resolve as resolve30 } from "node:path";
+import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute20, resolve as resolve30 } from "node:path";
 var SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
 var ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
 var URL_END = /[\s"'<>|`]/;
@@ -86757,7 +87033,7 @@ async function resolveCommand(command, env, cwd, deadline) {
   const withExts = (base) => extname3(base) !== "" ? [base, ...exts.map((e) => base + e)] : exts.map((e) => base + e);
   let candidates2;
   const skipped2 = [];
-  if (/[\\/]/.test(command) || isAbsolute21(command)) {
+  if (/[\\/]/.test(command) || isAbsolute20(command)) {
     candidates2 = withExts(resolve30(cwd, command));
   } else {
     const dirs = (envValue3(env, "PATH") ?? "").split(delimiter2).filter((d) => d !== "");
@@ -86788,7 +87064,7 @@ async function resolveCommand(command, env, cwd, deadline) {
 // src/mcpaudit/stdioTransport.ts
 import { randomUUID as randomUUID19 } from "node:crypto";
 
-// ../../../../../Desktop/CLAUDE SKILLS/dev-guardian/mcp/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js
 var import_cross_spawn2 = __toESM(require_cross_spawn(), 1);
 import process11 from "node:process";
 var DEFAULT_INHERITED_ENV_VARS = process11.platform === "win32" ? [
@@ -88966,11 +89242,11 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync16, readdirSync as readdirSync14 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { dirname as dirname25, isAbsolute as isAbsolute22, join as join90, parse as parse9, relative as relative33, resolve as resolve31 } from "node:path";
+import { dirname as dirname25, isAbsolute as isAbsolute21, join as join90, parse as parse9, relative as relative33, resolve as resolve31 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
-var MAX_WORKSPACE_DIRS = 3e3;
+var MAX_WORKSPACE_DIRS2 = 3e3;
 var PUBLIC_HOSTS = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
@@ -88986,7 +89262,7 @@ function isPublicRegistryUrl(ecosystem, url2) {
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside3(dir, path8) {
   const rel2 = relative33(dir, path8);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute22(rel2);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute21(rel2);
 }
 function walkRoot2(path8, ctx, under) {
   const abs = resolve31(path8);
@@ -89231,7 +89507,7 @@ function npmRegistry(name, ctx) {
   return local === void 0 ? null : { kind: "workspace", source: local };
 }
 var SKIP_DIRS6 = /* @__PURE__ */ new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", "target"]);
-var MAX_SCAN_DIRS = MAX_WORKSPACE_DIRS;
+var MAX_SCAN_DIRS = MAX_WORKSPACE_DIRS2;
 var MAX_SCAN_DEPTH = 5;
 function workspaceIndex(root, file, nameOf2, ctx) {
   const key = `${file}\0${root}`;
@@ -90147,7 +90423,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const custom3 = w.custom ?? null;
     if (custom3 !== null) {
       const where = `${custom3.source}${custom3.url !== void 0 ? `: ${custom3.url}` : ""}`;
-      const why = custom3.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : custom3.kind === "workspace" ? `it is a local workspace package (${where})` : custom3.kind === "unchecked" ? custom3.cut === "time" ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})` : `the workspace at ${custom3.source} has more than ${MAX_WORKSPACE_DIRS} directories and was not read to its end \u2014 it may hold the package` : custom3.kind === "unreadable" ? custom3.what === "workspace manifest" ? `workspace manifest at ${custom3.source} could not be read \u2014 possibly a local workspace package` : custom3.what === "directory" ? `directory ${custom3.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${custom3.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
+      const why = custom3.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : custom3.kind === "workspace" ? `it is a local workspace package (${where})` : custom3.kind === "unchecked" ? custom3.cut === "time" ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})` : `the workspace at ${custom3.source} has more than ${MAX_WORKSPACE_DIRS2} directories and was not read to its end \u2014 it may hold the package` : custom3.kind === "unreadable" ? custom3.what === "workspace manifest" ? `workspace manifest at ${custom3.source} could not be read \u2014 possibly a local workspace package` : custom3.what === "directory" ? `directory ${custom3.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${custom3.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown3(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {
       exists = fail3(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);

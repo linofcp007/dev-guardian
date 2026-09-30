@@ -42,13 +42,14 @@
 
 import { statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { describeTooComplex, parseYamlBounded, YAML_CONFIG_MAX_NODES } from './boundedParse.js';
+import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './boundedParse.js';
 import type { PluginContext } from '../context.js';
 import { readSmallText } from '../hooks/configFile.js';
 import { listProjectDir } from './projectFs.js';
 
 /** The largest Semgrep rules file validated; the plugin's own largest pack is a few hundred KB. */
-const MAX_RULES_FILE_BYTES = 16 * 1024 * 1024;
+/** No more than a rules file may be to be parsed (platform/boundedParse.ts). */
+const MAX_RULES_FILE_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 
 /**
  * The 2.0.x GLOBAL `runtime_meta` key. Still read (see the module comment),
@@ -94,17 +95,17 @@ export function validateSemgrepRulesFile(path: string): RulesFileVerdict {
       ok: false,
       reason:
         read.reason === 'too-large'
-          ? `larger than ${MAX_RULES_FILE_BYTES / (1024 * 1024)} MiB`
+          ? `larger than ${MAX_RULES_FILE_BYTES / 1024} KiB, the most dev-guardian parses as YAML`
           : read.reason === 'not-a-regular-file'
             ? 'not a regular file'
             : 'unreadable',
     };
   }
-  // Under a node bound (platform/boundedParse.ts): the byte cap alone let a
+  // Bounded by bytes, indicators and depth (platform/boundedParse.ts): the byte cap alone let a
   // dense file take the parse past the server's heap.
   const parsed = parseYamlBounded(read.text);
   if (!parsed.ok) {
-    return { ok: false, reason: parsed.reason === 'too-complex' ? describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes') : 'not valid YAML' };
+    return { ok: false, reason: parsed.reason === 'invalid' ? 'not valid YAML' : describeYamlRefusal(parsed) };
   }
   const doc = parsed.value;
   if (!isRecord(doc)) return { ok: false, reason: 'no `rules:` list' };

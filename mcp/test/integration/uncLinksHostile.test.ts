@@ -90,8 +90,10 @@ describe.runIf(CAN_LINK)('Windows — links to \\\\192.0.2.1 (RFC 5737) are neve
     const p = makeTempDir('dg-unc-');
     writeFileSync(join(p, 'package.json'), '{"name":"x","dependencies":{"a":"1"}}');
     fileLink(p, 'yarn.lock');
-    const { ms } = await timed(() => assessManifestCoverage(p, '{"Results":[]}'));
+    const { ms, value } = await timed(() => assessManifestCoverage(p, '{"Results":[]}'));
     expect(ms).toBeLessThan(BOUND_MS);
+    // Round 3 (a): named as what it is — it read "yarn.lock/ (a directory link …)".
+    expect(value.walkIncomplete).toBe('did not follow yarn.lock (a link to a network path, never followed)');
   });
 
   it("the scanner-config naming: a requirements file linked to a share, handed to pip-audit", async () => {

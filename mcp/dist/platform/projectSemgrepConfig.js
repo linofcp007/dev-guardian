@@ -52,7 +52,7 @@
 import { join } from 'node:path';
 import { readSmallText } from '../hooks/configFile.js';
 import { describeReadRefusal, presentInProject, readProjectText } from './projectFs.js';
-import { describeTooComplex, parseYamlBounded, YAML_CONFIG_MAX_NODES } from './boundedParse.js';
+import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './boundedParse.js';
 import { readManifest } from '../configdrift/manifest.js';
 /**
  * Filenames Semgrep users conventionally use, probed when the manifest does
@@ -105,20 +105,20 @@ export function resolveProjectSemgrepConfigs(projectPath) {
 export function isLoadableSemgrepConfig(path) {
     return classifyText(readSmallText(path, MAX_SEMGREP_CONFIG_BYTES)).ok;
 }
-/** The largest project Semgrep config read; the plugin's own largest pack is a few hundred KB. */
-const MAX_SEMGREP_CONFIG_BYTES = 16 * 1024 * 1024;
+/** The largest project Semgrep config read: what may be parsed (1 MiB — the plugin's largest pack is 85 KB). */
+const MAX_SEMGREP_CONFIG_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 function classifyText(read) {
     if (read.status === 'absent')
         return { ok: false, reason: 'unreadable' };
     if (read.status === 'refused')
         return { ok: false, reason: describeReadRefusal(read.reason) };
-    // Parsed under a node bound (platform/boundedParse.ts): 16 MiB of `- {}`
-    // under the byte cap would take this parse past 4 GB of heap.
+    // Parsed bounded by bytes, indicators and depth (platform/boundedParse.ts): 16 MiB of `- {}`
+    // under the old byte cap would take this parse past 4 GB of heap.
     const parsed = parseYamlBounded(read.text);
     if (!parsed.ok) {
         return {
             ok: false,
-            reason: parsed.reason === 'too-complex' ? describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes') : 'not valid YAML',
+            reason: parsed.reason === 'invalid' ? 'not valid YAML' : describeYamlRefusal(parsed),
         };
     }
     const doc = parsed.value;

@@ -53,12 +53,12 @@
  * nothing else; a signer needs an image, exactly one identity form and one
  * issuer form, and no control characters.
  */
-import { describeTooComplex, YAML_CONFIG_MAX_NODES, yamlTooComplex } from '../platform/boundedParse.js';
+import { describeYamlRefusal, parseYamlBounded } from '../platform/boundedParse.js';
 import { presentInProject, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
-import { checkCompose } from '../runners/composeChecks.js';
+import { checkComposeValue } from '../runners/composeChecks.js';
 import { UNSAFE_CHARS, UNSAFE_CHAR_CLASS, cosignReadiness, escapeUnsafe, detectImageSupplyChain, skippedSummary, unanchoredSignerRegexps, verifyImage, } from '../runners/cosignCheck.js';
 import { hadolintParser } from '../runners/scannerParsers/hadolint.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -76,8 +76,8 @@ const COMPOSE_FILE_NAMES = ['docker-compose.yml', 'compose.yml', 'docker-compose
 const composeParser = {
     name: 'docker-compose',
     parse(input) {
-        const { text, filePath } = input;
-        return { findings: checkCompose(text, filePath), cves: [] };
+        const { value, filePath } = input;
+        return { findings: checkComposeValue(value, filePath), cves: [] };
     },
 };
 /** Hands the cosign check's findings (already built) to the same `parser_inputs` pipeline. */
@@ -340,17 +340,19 @@ const scanContainers = makeScanTool({
         const composeFile = findComposeFile(ctx.projectPath);
         if (composeFile) {
             const text = readComposeFileSafe(ctx.projectPath, composeFile);
-            if (text !== null && yamlTooComplex(text, YAML_CONFIG_MAX_NODES)) {
+            // Parsed once, bounded (platform/boundedParse.ts); a file it could not parse is named, never 'ok'.
+            const parsed = text === null ? null : parseYamlBounded(text);
+            if (parsed !== null && !parsed.ok) {
                 tools_run.push({
                     name: 'docker-compose',
                     status: 'failed',
-                    reason: `the compose file was not checked: ${describeTooComplex(YAML_CONFIG_MAX_NODES, 'YAML nodes')}`,
+                    reason: `the compose file was not checked: ${describeYamlRefusal(parsed)}`,
                 });
             }
-            else if (text !== null) {
+            else if (parsed !== null) {
                 parser_inputs.push({
                     parser: composeParser,
-                    input: { text, filePath: relative(ctx.projectPath, composeFile) },
+                    input: { value: parsed.value, filePath: relative(ctx.projectPath, composeFile) },
                 });
                 tools_run.push({ name: 'docker-compose', status: 'ok' });
             }

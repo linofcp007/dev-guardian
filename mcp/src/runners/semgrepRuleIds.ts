@@ -45,7 +45,7 @@
 import { readdirSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 import { readSmallText } from '../hooks/configFile.js';
-import { parseYamlBounded } from '../platform/boundedParse.js';
+import { parseYamlBounded, YAML_CONFIG_LIMITS } from '../platform/boundedParse.js';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 
 /**
@@ -58,12 +58,13 @@ import { resolveConfigsDir } from '../platform/configsDir.js';
  * it), every link on its path walked first from the filesystem root so one
  * to a network or device path is refused before anything is opened (a
  * `.semgrep.yml` link to `\\host\share\…` blocked the server for 158 s on
- * Windows). It is parsed only under `platform/boundedParse.ts`'s node bound:
- * 8 MiB of `- {}` would take `yaml` past 1.9 GB. One that is refused, or too
- * complex to parse, reads as "cannot be told": no ids, and "may hold a taint
- * rule".
+ * Windows). It is parsed only under `platform/boundedParse.ts`'s bounds (1 MiB,
+ * an indicator count, a nesting depth): 8 MiB of `- {}` would take `yaml` past
+ * 1.9 GB, and a million levels of `- - - …` on one line past 768 MB. One that
+ * is refused, or too complex to parse, reads as "cannot be told": no ids, and
+ * "may hold a taint rule".
  */
-const RULE_FILE_MAX_BYTES = 8 * 1024 * 1024;
+const RULE_FILE_MAX_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 
 /** A rule file's text, or null when it is absent or was refused. */
 function readRuleFile(file: string): string | null {

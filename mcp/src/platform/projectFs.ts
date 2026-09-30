@@ -538,17 +538,23 @@ export function linkTargetKind(root: string, path: string): 'directory' | 'file'
 }
 
 /**
- * Whether the link at `path` is one a directory walk should name as not
- * entered: it leads out of the project (or cannot be resolved) and names a
- * directory — or a network or device path, whose kind is never asked. A link
- * that stays inside is walked in its own place; a file link is read where it
- * is found, and named if refused.
+ * A link a directory walk does not follow, named by what it leads to — or
+ * null for one it need not name: a link that stays inside is walked in its
+ * own place, and a file link out is read where it is found and named by that
+ * read. A link to a network path or to a device, a pipe or something that
+ * cannot be resolved is never asked what it is (on Windows the question
+ * itself reaches the host), so it is named as such, never as "a directory"
+ * (round 3 of the review: a `yarn.lock` linked to `\\host\share` read as
+ * "a directory link").
  */
-export function directoryLinkOut(root: string, path: string): boolean {
-  const kind = projectPathKind(root, path);
-  if (kind !== 'outside' && kind !== 'other') return false;
+export function linkNotFollowed(root: string, path: string): { kind: 'directory' | 'remote' | 'other'; says: string } | null {
+  const where = projectPathKind(root, path);
+  if (where !== 'outside' && where !== 'other') return null;
   const target = linkTargetKind(root, path);
-  return target === 'directory' || target === 'remote' || target === 'other';
+  if (target === 'directory') return { kind: 'directory', says: 'a directory link out of the project, not followed' };
+  if (target === 'remote') return { kind: 'remote', says: 'a link to a network path, never followed' };
+  if (target === 'other') return { kind: 'other', says: 'a link to a device, a pipe or a path that cannot be resolved, never followed' };
+  return null;
 }
 
 /** A directory entry, typed WITHOUT following it: a link is `link`, whatever it names. */

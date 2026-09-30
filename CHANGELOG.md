@@ -1154,6 +1154,50 @@ them again. Scans made on the fallback meanwhile are not merged back.
   skill as skipped, with a warning naming it. A FIFO at `.git/shallow` stalled the gitleaks history scan's
   shallow check; the path is now judged without opening it, git is asked with a 10 s bound, and when neither
   answers the scan says whether the history is complete could not be determined, instead of claiming it is.
+- **The YAML bound counted only line breaks and flow brackets, so nesting written on one line passed it.**
+  `- - - … x` — a million levels on ONE line, 2 MB — went through the 50 000-node check and ran the server out
+  of heap under 768 MB through `scan_sast`'s project rule check, the rule-id reader and `scan_containers`'
+  compose check; 500 KB of it took 2.6–3.7 s and 215 MB (measured on a655dcf6 in `node:22`). A YAML
+  document now passes four gates before a value is built (`platform/boundedParse.ts`): its size (1 MiB for a
+  configuration — the largest rule pack shipped is 85 KB, the largest compose file measured 8 KB — and 5 MiB
+  for an API spec; the Semgrep rule files' read caps drop from 8–16 MiB to the same 1 MiB); a count of
+  every character that can open, separate or decorate a node (`\n - ? : , [ ] { } & * ! | > ' " % @` and
+  more), which over-counts and never under-counts; the nesting depth on the parser's own syntax tree, walked
+  without recursion (64; the real packs nest 7–18); and the size of the value once aliases are followed (at
+  most 1 000 aliases, 500 000 nodes, and no alias inside what it names — `toJS` built a circular value from
+  one). Two quadratic paths in the parser itself are gone: its duplicate-key check (one map of 50 000 keys took
+  more than 60 s; the check is off and a later duplicate wins, as Docker Compose and Semgrep refuse such files
+  anyway) and its alias counter (a chain of anchored collections holding aliases took 49 s to be refused).
+  Held by a fuzz of 33 adversarial shapes, each sized to the largest the gates admit, plus 400 seeded random
+  documents: in `node:22` under `--memory 768m` every admitted parse took at most 0.54 s and 62 MB of heap at
+  the configuration bounds, 1.2 s and 112 MB at the spec bounds, and 0.91 s and 101 MB over the random
+  corpus; the reviewer's 2 MB and 500 KB lines are refused in 56–142 ms at under 90 MiB RSS. A spec's paths
+  are also placed on their lines by binary search now: slicing the text once per path was quadratic.
+- **`create_fix_pr`'s npm network-path check failed open.** A `package-lock.json` whose `resolved` is
+  `file://192.0.2.1/share/p-1.0.0.tgz` was found; the same lock padded past the 2 000 000-value parse bound, or
+  over the size cap, or not parsing, read as "nothing found" and the install went ahead — npm parses it anyway.
+  The `package.json` walk also stopped silently six levels down, and no workspace member's `package.json` was
+  read. It now fails closed like the pip side (`checkNpmSources`): every string at any depth of
+  `package-lock.json` and `npm-shrinkwrap.json`, the dependency, override and resolution fields of
+  `package.json` and of every workspace member's (`workspaces` in either form, globs followed), and
+  `yarn.lock`'s text are checked, and any of those files present but not fully read and checked — the padded
+  lock (refused in 28 ms at 96 MiB RSS), a 60 MiB lock (144 ms, 187 MiB), one that is not JSON, a FIFO, a link
+  out, a member behind a link, a walk that stopped — refuses the install, named with why.
+- Link notes name what a link leads to. `detect_stack` named a FILE link to `/dev/zero`, a device, a pipe or
+  `\\host\share` "a directory link out of the project … a sub-project behind it was not detected", and the
+  Trivy and IaC walks "did not follow yarn.lock/ (a directory link …)": a link to a network path, or to a
+  device, a pipe or something that cannot be resolved, is now named as that, and only a link to a directory
+  as a directory.
+- Two costs of the pip allowlist are gone, measured with pip 26.2.1's parser: a value glued to `-r` / `-c`
+  (`-rreqs/base.txt`) and an absolute include inside the checkout open the same file as `-r reqs/base.txt`,
+  and are followed like it. `-r reqs\base.txt` stays refused, and now says why: pip opens `reqsbase.txt`. The
+  remaining fail-closed costs are listed in SECURITY.md.
+- A directory link that leaves the project in Trivy's manifest walk now lands in `missing_tools` as
+  `trivy:manifest-walk`, with the note naming it, where it used to leave the walk silently short.
+- The PATH hardening is process-wide, so it reaches every child: the server and the CLI set
+  `NoDefaultCurrentDirectoryInExePath=1` and drop empty and relative PATH entries, and a scanner, a package
+  manager or the project's own test command inherits both — a script that ran something from `.` on PATH no
+  longer finds it.
 - `scan_skill` no longer hands its target to `git clone` as a possible option. A target is cloned when it merely
   ends in `.git`, so `--upload-pack=<command>;.git` reached git as `--upload-pack`, the temporary directory after it
   became the repository, and git ran the command to fetch from it. The URL now follows `--`.

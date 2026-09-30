@@ -33,7 +33,18 @@
 
 import { mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { isWithinDir, listProjectDir, PROJECT_LOCKFILE_MAX_BYTES, readProjectJson } from '../platform/projectFs.js';
+import { describeTooComplex, JSON_MAX_NODES, parseJsonBounded } from '../platform/boundedJson.js';
+import { matchesAny } from '../platform/glob.js';
+import {
+  describeReadRefusal,
+  isWithinDir,
+  listProjectDir,
+  listProjectDirOrNull,
+  PROJECT_FILE_MAX_BYTES,
+  PROJECT_LOCKFILE_MAX_BYTES,
+  readProjectJson,
+  readProjectText,
+} from '../platform/projectFs.js';
 import { checkRequirements, describePipRefusal, urlHost, type PipRefusal } from '../deps/pipRequirements.js';
 import { checkPyproject, checkSetupCfg } from '../deps/pythonProject.js';
 
@@ -206,44 +217,198 @@ export function npmSpecNetworkHost(spec: string): string | null {
   return null;
 }
 
-/**
- * Dependency specs in `package.json` (and lock-file `resolved` entries) that
- * reach a network path, as `<file>: <field>.<name> (\\host)` — or empty.
- */
-export function npmNetworkPaths(projectDir: string, checkoutRoot: string = projectDir): string[] {
-  const out: string[] = [];
-  const walk = (file: string, where: string, v: unknown, depth: number): void => {
-    if (depth > 6 || out.length >= 10) return;
-    if (typeof v === 'string') {
-      const host = npmSpecNetworkHost(v);
-      if (host !== null) out.push(`${file}: ${where} (${host})`);
-      return;
-    }
-    if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
-      for (const [k, inner] of Object.entries(v)) walk(file, where === '' ? k : `${where}.${k}`, inner, depth + 1);
-    }
-  };
-  const pkg = readProjectJson(checkoutRoot, join(projectDir, 'package.json'));
-  if (typeof pkg === 'object' && pkg !== null) {
-    for (const field of NPM_SPEC_FIELDS) walk('package.json', field, (pkg as Record<string, unknown>)[field], 0);
-  }
-  const lock = readProjectJson(checkoutRoot, join(projectDir, 'package-lock.json'), PROJECT_LOCKFILE_MAX_BYTES);
-  const packages = typeof lock === 'object' && lock !== null ? (lock as Record<string, unknown>)['packages'] : undefined;
-  if (typeof packages === 'object' && packages !== null) {
-    for (const [key, entry] of Object.entries(packages)) {
-      if (out.length >= 10) break;
-      const resolved = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>)['resolved'] : undefined;
-      if (typeof resolved === 'string') walk('package-lock.json', `packages.${key || '(root)'}.resolved`, resolved, 0);
-    }
-  }
-  return out;
+/** A network path found, or a file that could not be checked: both refuse an npm install. */
+export interface NpmSourceCheck {
+  /** `<file>: <where> (\\host)` — a dependency, override or lock entry on a network path. */
+  network: string[];
+  /** `<file> (<why>)` — present, and not fully read and checked. */
+  unchecked: string[];
 }
 
-/** The refusal reason for an npm install that would reach a network path. */
-export function npmNetworkRefusal(where: readonly string[]): string {
-  const shown = where.slice(0, 3).join('; ');
-  const more = where.length > 3 ? `; and ${where.length - 3} more` : '';
-  return `the project's npm dependencies point at a network path (${shown}${more}); dev-guardian doesn't install from a network path`;
+/** A lock or manifest is named at most this many times; the refusal needs one. */
+const MAX_NPM_NAMED = 10;
+/** Directories the workspace-member walk lists, and how deep it goes. */
+const MAX_WORKSPACE_DIRS = 5_000;
+const MAX_WORKSPACE_DEPTH = 8;
+
+type JsonRead = { status: 'absent' } | { status: 'ok'; value: Record<string, unknown> } | { status: 'unchecked'; why: string };
+
+/** A JSON object file, or why it is not one this check has read. */
+function readJsonObject(checkoutRoot: string, path: string, maxBytes: number): JsonRead {
+  const r = readProjectText(checkoutRoot, path, maxBytes);
+  if (r.status === 'absent') return { status: 'absent' };
+  if (r.status === 'refused') return { status: 'unchecked', why: describeReadRefusal(r.reason) };
+  const parsed = parseJsonBounded(r.text);
+  if (!parsed.ok) {
+    return { status: 'unchecked', why: parsed.reason === 'too-complex' ? describeTooComplex(JSON_MAX_NODES, 'JSON values') : 'it is not valid JSON' };
+  }
+  if (typeof parsed.value !== 'object' || parsed.value === null || Array.isArray(parsed.value)) {
+    return { status: 'unchecked', why: 'it is not a JSON object' };
+  }
+  return { status: 'ok', value: parsed.value as Record<string, unknown> };
+}
+
+/**
+ * Every string under `value`, at any depth, whose text is a network path
+ * ({@link npmSpecNetworkHost}), named by its key path. Iterative: a lock file
+ * nests as deep as its dependency tree, and a depth cap was a way past this.
+ */
+function scanNetwork(file: string, value: unknown, prefix: string, out: string[]): void {
+  type Frame = { entries: Array<[string, unknown]>; next: number; path: string };
+  const entriesOf = (v: unknown): Array<[string, unknown]> =>
+    Array.isArray(v) ? v.map((x, i): [string, unknown] => [`[${i}]`, x]) : typeof v === 'object' && v !== null ? Object.entries(v) : [];
+  const stack: Frame[] = [{ entries: [[prefix, value]], next: 0, path: '' }];
+  while (stack.length > 0 && out.length < MAX_NPM_NAMED) {
+    const frame = stack[stack.length - 1];
+    if (frame === undefined) break;
+    const entry = frame.entries[frame.next];
+    if (entry === undefined) {
+      stack.pop();
+      continue;
+    }
+    frame.next += 1;
+    const [key, v] = entry;
+    const path = frame.path === '' ? key : key.startsWith('[') ? `${frame.path}${key}` : `${frame.path}.${key}`;
+    if (typeof v === 'string') {
+      const host = npmSpecNetworkHost(v);
+      if (host !== null) out.push(`${file}: ${path || '(root)'} (${host})`);
+    } else if (typeof v === 'object' && v !== null) {
+      stack.push({ entries: entriesOf(v), next: 0, path });
+    }
+  }
+}
+
+/**
+ * A text lock (`yarn.lock`, which npm consults when it installs) scanned for
+ * a network path: every `\\host` or `//host` not part of an `https://`-style
+ * URL — at a line's start, after whitespace, a quote, `@`, `,` or `:`, or
+ * after `file:`, `link:`, `portal:`, `git+file:`.
+ */
+function scanTextLock(file: string, text: string, out: string[]): void {
+  const re = /(?:^|[\s"'@,:]|(?:file|link|portal|git\+file):)(\\\\[^\\/\s"',]+|\/\/[^/\s"',]+)/gim;
+  let line = 1;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const spec = m[1] ?? '';
+    const at = (m.index ?? 0) + m[0].length - spec.length;
+    const before = text.slice(Math.max(0, at - 16), at);
+    // `https://host`, `git+ssh://host`: a URL's scheme, not a path — unless the scheme is file-like.
+    if (/[a-z][a-z0-9+.-]*:$/i.test(before) && !/(?:^|[^a-z0-9+.-])(?:file|link|portal|git\+file):$/i.test(before)) continue;
+    if (/^\/\/localhost(?:\/|$)/i.test(spec)) continue;
+    for (let i = text.indexOf('\n', last); i >= 0 && i < at; i = text.indexOf('\n', i + 1)) line += 1;
+    last = at;
+    out.push(`${file}:${line} (${urlHost(spec)})`);
+    if (out.length >= MAX_NPM_NAMED) return;
+  }
+}
+
+/** The workspace patterns `package.json` declares, `[]` for none, or null when they are not a list of strings. */
+function workspacePatterns(pkg: Record<string, unknown>): string[] | null {
+  const ws = pkg['workspaces'];
+  if (ws === undefined) return [];
+  if (!Array.isArray(ws) && (typeof ws !== 'object' || ws === null)) return null;
+  const list = Array.isArray(ws) ? ws : (ws as Record<string, unknown>)['packages'];
+  if (list === undefined) return [];
+  if (!Array.isArray(list) || !list.every((p): p is string => typeof p === 'string')) return null;
+  return list;
+}
+
+/** The workspace members' directories (project-relative, `/`), or why the list may be short. */
+function workspaceMembers(projectDir: string, checkoutRoot: string, patterns: readonly string[]): { members: string[]; unchecked: string[] } {
+  const members: string[] = [];
+  const unchecked: string[] = [];
+  const positive = patterns.filter((p) => !p.startsWith('!'));
+  if (positive.length === 0) return { members, unchecked };
+  const stack: Array<{ abs: string; rel: string; depth: number }> = [{ abs: projectDir, rel: '', depth: 0 }];
+  let listed = 0;
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (cur === undefined) break;
+    if (listed >= MAX_WORKSPACE_DIRS) {
+      unchecked.push(`workspace members (the walk stopped after ${MAX_WORKSPACE_DIRS} directories)`);
+      break;
+    }
+    listed += 1;
+    const entries = listProjectDirOrNull(checkoutRoot, cur.abs);
+    if (entries === null) {
+      unchecked.push(`${cur.rel || '.'} (could not be listed, and workspace members may be below it)`);
+      continue;
+    }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const rel = cur.rel === '' ? e.name : `${cur.rel}/${e.name}`;
+      const matched = matchesAny(rel, patterns);
+      if (e.kind === 'link' && matched) unchecked.push(`${rel} (a link a workspace pattern matches, not followed)`);
+      if (e.kind !== 'directory') continue;
+      if (matched) members.push(rel);
+      if (cur.depth + 1 < MAX_WORKSPACE_DEPTH) stack.push({ abs: join(cur.abs, e.name), rel, depth: cur.depth + 1 });
+      else if (patterns.some((p) => p.includes('**'))) unchecked.push(`workspace members below ${rel} (deeper than ${MAX_WORKSPACE_DEPTH} directories)`);
+    }
+  }
+  return { members: members.sort(), unchecked };
+}
+
+/**
+ * What npm reads in `projectDir` that could send it to a network path, read
+ * FAIL CLOSED (review of 3.0, W2E round 3): `package.json`'s dependency,
+ * override and resolution fields, every string in `package-lock.json` and
+ * `npm-shrinkwrap.json` at any depth, `yarn.lock`'s text, and each workspace
+ * member's `package.json`. A file that is present and could not be fully read
+ * and checked — too large, too complex to parse, not JSON, a link out, a
+ * FIFO, a workspace list that is not one, a member the walk could not reach —
+ * is named as unchecked, and refuses the install exactly as a network path
+ * does: npm itself reads what this check could not. The reviewer's lock with
+ * `resolved: file://192.0.2.1/share/p-1.0.0.tgz`, padded past 2 000 000 JSON
+ * values, used to read as "nothing found".
+ */
+export function checkNpmSources(projectDir: string, checkoutRoot: string = projectDir): NpmSourceCheck {
+  const network: string[] = [];
+  const unchecked: string[] = [];
+  const manifest = (rel: string): void => {
+    const r = readJsonObject(checkoutRoot, join(projectDir, rel), PROJECT_FILE_MAX_BYTES);
+    if (r.status === 'unchecked') unchecked.push(`${rel} (${r.why})`);
+    if (r.status !== 'ok') return;
+    for (const field of NPM_SPEC_FIELDS) if (r.value[field] !== undefined) scanNetwork(rel, r.value[field], field, network);
+    if (rel !== 'package.json') return;
+    const patterns = workspacePatterns(r.value);
+    if (patterns === null) {
+      unchecked.push('package.json (its "workspaces" is not a list of patterns)');
+      return;
+    }
+    const ws = workspaceMembers(projectDir, checkoutRoot, patterns);
+    unchecked.push(...ws.unchecked);
+    for (const member of ws.members) {
+      const m = readJsonObject(checkoutRoot, join(projectDir, ...member.split('/'), 'package.json'), PROJECT_FILE_MAX_BYTES);
+      if (m.status === 'unchecked') unchecked.push(`${member}/package.json (${m.why})`);
+      if (m.status === 'ok') for (const field of NPM_SPEC_FIELDS) if (m.value[field] !== undefined) scanNetwork(`${member}/package.json`, m.value[field], field, network);
+    }
+  };
+  manifest('package.json');
+  for (const lock of ['package-lock.json', 'npm-shrinkwrap.json']) {
+    const r = readJsonObject(checkoutRoot, join(projectDir, lock), PROJECT_LOCKFILE_MAX_BYTES);
+    if (r.status === 'unchecked') unchecked.push(`${lock} (${r.why})`);
+    if (r.status === 'ok') scanNetwork(lock, r.value, '', network);
+  }
+  const yarn = readProjectText(checkoutRoot, join(projectDir, 'yarn.lock'), PROJECT_LOCKFILE_MAX_BYTES);
+  if (yarn.status === 'refused') unchecked.push(`yarn.lock (${describeReadRefusal(yarn.reason)})`);
+  if (yarn.status === 'ok') scanTextLock('yarn.lock', yarn.text, network);
+  return { network, unchecked };
+}
+
+/** The refusal reason for an npm install {@link checkNpmSources} does not clear, or null. */
+export function npmSourcesRefusal(check: NpmSourceCheck): string | null {
+  const name = (items: readonly string[]): string =>
+    `${items.slice(0, 3).join('; ')}${items.length > 3 ? `; and ${items.length - 3} more` : ''}`;
+  if (check.network.length > 0) {
+    return `the project's npm dependencies point at a network path (${name(check.network)}); dev-guardian doesn't install from a network path`;
+  }
+  if (check.unchecked.length > 0) {
+    return (
+      `npm reads files dev-guardian could not check for a network path (${name(check.unchecked)}); ` +
+      "dev-guardian doesn't install what it has not checked"
+    );
+  }
+  return null;
 }
 
 /**
@@ -256,7 +421,8 @@ export function npmNetworkRefusal(where: readonly string[]): string {
  *     fetches), where the project's Python requirements are not all plain
  *     requirements this server has read ({@link pythonInstallRefusals});
  *   - an npm install — a step, or the test environment's `npm ci` — where a
- *     dependency points at a network path ({@link npmNetworkPaths}).
+ *     dependency points at a network path, or a file npm reads could not be
+ *     checked ({@link checkNpmSources}).
  *
  * `checkoutRoot`: the whole checkout `projectDir` sits in, which every file
  * is read within.
@@ -284,8 +450,8 @@ export function installRefusal(opts: {
     if (refusals.length > 0) return pipInstallRefusal(refusals);
   }
   if (opts.npmInstalls === true || opts.stepEcosystems.includes('npm')) {
-    const network = npmNetworkPaths(opts.projectDir, root);
-    if (network.length > 0) return npmNetworkRefusal(network);
+    const npm = npmSourcesRefusal(checkNpmSources(opts.projectDir, root));
+    if (npm !== null) return npm;
   }
   return null;
 }

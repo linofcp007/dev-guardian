@@ -48,7 +48,7 @@
 import { existsSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { readSmallText } from '../hooks/configFile.js';
-import { describeReadRefusal, directoryLinkOut, listProjectDirOrNull, presentInProject, PROJECT_FILE_MAX_BYTES, ReadBudget, } from '../platform/projectFs.js';
+import { describeReadRefusal, linkNotFollowed, listProjectDirOrNull, presentInProject, PROJECT_FILE_MAX_BYTES, ReadBudget, } from '../platform/projectFs.js';
 import { hasFileWithExtension, PROJECT_WALK_EXCLUDE } from './projectFiles.js';
 /** How many directories below the project root the manifest walk descends. */
 const MAX_MANIFEST_DEPTH = 3;
@@ -274,8 +274,9 @@ function walkManifestDirs(io) {
                 continue;
             const abs = join(cur.abs, e.name);
             if (e.kind === 'link') {
-                if (directoryLinkOut(io.root, abs)) {
-                    noteUnread(io, abs, 'a directory link out of the project (or to a network path), not followed: a sub-project behind it was not detected');
+                const out = linkNotFollowed(io.root, abs);
+                if (out !== null) {
+                    noteUnread(io, abs, out.kind === 'directory' ? `${out.says}: a sub-project behind it was not detected` : out.says);
                 }
                 continue;
             }

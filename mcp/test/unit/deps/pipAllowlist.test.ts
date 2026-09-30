@@ -95,13 +95,16 @@ const CORPUS: Record<string, Buffer> = {
   ),
   plain_comments: Buffer.from('# a comment with https://example.invalid in it\nrequests==2.31.0  # pinned\n\n'),
   plain_include: Buffer.from('-r base.txt\n-c constraints.txt\n--require-hashes\n--only-binary :all:\n'),
+  // Round 3 (b): a value glued to -r / -c is read as pip reads it, the included file checked like any other.
+  plain_glued: Buffer.from('-rbase.txt\n-cconstraints.txt\n'),
+  glued_include_index: Buffer.from('-rextra.txt\n'),
 };
 const INCLUDES: Record<string, string> = {
   'extra.txt': '--index-url https://evil.invalid/simple\n',
   'base.txt': 'django==3.2.0\n',
   'constraints.txt': 'django<4\n',
 };
-const PLAIN = new Set(['plain', 'plain_hashes', 'plain_comments', 'plain_include']);
+const PLAIN = new Set(['plain', 'plain_hashes', 'plain_comments', 'plain_include', 'plain_glued']);
 
 /** One directory per case, so a relative include resolves as pip resolves it. */
 function corpusDir(): string {
@@ -268,6 +271,41 @@ describe('what a refusal says', () => {
       expect(Date.now() - t0).toBeLessThan(3_000);
       expect(got.map((r) => r.kind)).toEqual(['unreadable']);
     }
+  });
+
+  // Round 3 (b): fail-closed costs pip does not share, measured with pip 26.2.1's parser — a glued short include and an
+  // absolute path open the same file as `-r reqs/base.txt`; `-r reqs\base.txt` opens `reqsbase.txt`.
+  it('a glued short include (-rreqs/base.txt, -creqs/base.txt) is followed, as pip follows it', () => {
+    const dir = makeTempDir('pip-glued-');
+    mkdirSync(join(dir, 'reqs'));
+    writeFileSync(join(dir, 'reqs', 'base.txt'), '--index-url https://evil.invalid/simple\n');
+    for (const line of ['-rreqs/base.txt', '-creqs/base.txt']) {
+      writeFileSync(join(dir, 'requirements.txt'), `${line}\n`);
+      expect(checkRequirements(dir, ['requirements.txt'], dir).refusals.map(describePipRefusal)).toEqual([
+        'reqs/base.txt:1: index option (--index-url, https://evil.invalid)',
+      ]);
+    }
+    writeFileSync(join(dir, 'reqs', 'base.txt'), 'django==4.2\n');
+    expect(checkRequirements(dir, ['requirements.txt'], dir).refusals).toEqual([]);
+  });
+
+  it('an absolute include inside the checkout is followed; one outside it is refused', () => {
+    const dir = makeTempDir('pip-abs-');
+    mkdirSync(join(dir, 'reqs'));
+    writeFileSync(join(dir, 'reqs', 'base.txt'), 'django==4.2\n');
+    const inside = join(dir, 'reqs', 'base.txt').split('\\').join('/');
+    writeFileSync(join(dir, 'requirements.txt'), `-r ${inside}\n`);
+    expect(checkRequirements(dir, ['requirements.txt'], dir).refusals).toEqual([]);
+    const outside = makeTempDir('pip-abs-out-');
+    writeFileSync(join(outside, 'x.txt'), 'django==4.2\n');
+    writeFileSync(join(dir, 'requirements.txt'), `-r ${join(outside, 'x.txt').split('\\').join('/')}\n`);
+    expect(checkRequirements(dir, ['requirements.txt'], dir).refusals.map((r) => r.kind)).toEqual(['include out of the checkout']);
+  });
+
+  it('a backslash in an include is refused, saying pip opens a different file', () => {
+    expect(one('-r reqs\\base.txt\n')).toEqual([
+      'requirements.txt:1: quoted or escaped option (pip reads a backslash here as an escape, so the file it opens is not the one written)',
+    ]);
   });
 
   it('an include out of the checkout, or through a link out of it, is refused', () => {

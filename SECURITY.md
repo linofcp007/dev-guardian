@@ -309,8 +309,16 @@ their respective projects.
   coverage gap). Bytes read are not memory used, so the parsers are bounded
   too: lines are iterated, never split into an array; a lock file is parsed
   only below a cap far under the read cap (above it Trivy's coverage gap is
-  kept, "not checked") and a YAML or JSON document is refused by its node
-  count before it is parsed; every walk that reads many files (`detect_stack`,
+  kept, "not checked") and a JSON document is refused by its value count
+  before it is parsed. A YAML document passes four gates first
+  (`mcp/src/platform/boundedParse.ts`): its size (1 MiB for a configuration —
+  twelve times the largest rule pack shipped here — 5 MiB for an API spec), a
+  count of every character that can open, separate or decorate a node (so
+  nesting written on one line, `- - - … x`, counts), its nesting depth on the
+  parser's own syntax tree (64), and the size of its value once aliases are
+  followed (a "billion laughs", or an alias inside what it names, is refused);
+  a fuzz of adversarial shapes sized to those gates holds every admitted parse
+  under a second in `node:22 --memory 768m`; every walk that reads many files (`detect_stack`,
   the manifest walk, the IaC walk, the WordPress inventory) shares one byte
   and file budget, and a file past it is named. Nothing on a repository path
   is `stat`'ed, `realpath`'ed or tested with `existsSync` before the links on
@@ -322,8 +330,12 @@ their respective projects.
   directory it runs in (`where`, libuv and `cmd.exe` all searched it first,
   measured), and the server and the CLI set
   `NoDefaultCurrentDirectoryInExePath` and drop relative PATH entries for
-  every other spawn. **Not converted**: the `.guardian/guardian.db` the
-  storage layer opens.
+  every other spawn. Both changes are to the process's own environment, so
+  every child — a scanner, a package manager, the project's own test command —
+  inherits them: `NoDefaultCurrentDirectoryInExePath=1`, and a PATH with no
+  empty or relative entry (a script that relied on `.` in PATH no longer
+  finds what it ran from there). **Not converted**: the `.guardian/guardian.db`
+  the storage layer opens.
 - **A scanned repository's own git configuration runs nothing.** A repository
   delivered with its own `.git/` (an archive, a ZIP download, a shared folder)
   names programs git runs: `core.fsmonitor` on `status` and `ls-files`; hooks in
@@ -506,9 +518,10 @@ their respective projects.
   pip reads it (its BOMs and UTF-16, a `# -*- coding` declaration, every
   line break `str.splitlines` knows, `\` continuations joined, comments not
   joined), is blank, a comment, a plain PEP 508 requirement with no URL
-  (a name, extras, versions, markers, `--hash`), or a relative `-r` / `-c`
-  include inside the checkout, which is read the same way (at most 200
-  files). Anything else refuses the fix with the file, the line and the
+  (a name, extras, versions, markers, `--hash`), or a `-r` / `-c` include
+  (`-rbase.txt` glued, `--requirement=…`, or an absolute path) that stays
+  inside the checkout, which is read the same way (at most 200 files).
+  Anything else refuses the fix with the file, the line and the
   kind named, and a host as `scheme://host` only — never a user name,
   password, port, path or query: an index option in any spelling pip
   accepts (`--index`, `-ihttps://…`), an editable, a direct reference, a
@@ -526,9 +539,25 @@ their respective projects.
   dependency, `[tool.pdm.source]`, Hatch's `allow-direct-references`,
   `dependency_links`) refuses; when pip-audit would build the project itself,
   dependencies the build backend decides (`dynamic`, no `[project]`) refuse
-  too. An npm install is refused when a dependency, an override or a lock
-  entry points at a network path (`file:\\host\…`, `file://host/…`):
-  Windows would authenticate to that host. `deps_audit` itself does not
+  too. Failing closed has costs, and these are the known ones: an
+  abbreviated or quoted option pip would accept (`--requirem`, `-r "a.txt"`),
+  an include written with a backslash (pip's parser reads `-r reqs\base.txt`
+  as `reqsbase.txt` — measured — so the refusal says pip would open a
+  different file), a `~`, drive-relative or rootless-on-Windows include, a
+  chain past 200 requirements files, an environment variable anywhere, a
+  UTF-7 or UTF-32 file, and a local or `file:` requirement inside the checkout
+  are all refused although some are harmless; `requirements.in`-style
+  indirection is followed only through plain includes. An npm install —
+  `create_fix_pr`'s planning, its npm steps, and its test environment's
+  `npm ci` — also **fails closed**: it is refused when a dependency, an
+  override, a resolution or any lock entry points at a network path
+  (`file:\\host\…`, `file://host/…`), and when any file npm reads could not
+  be fully read and checked — `package.json`, `package-lock.json`,
+  `npm-shrinkwrap.json`, `yarn.lock` and every workspace member's
+  `package.json` (a lock past the parse bound or the size cap, one that is
+  not JSON, a FIFO, a link out, a member the walk could not reach): Windows
+  would authenticate to the host, and npm reads what this check could not.
+  `deps_audit` itself does not
   refuse: it names, per file, the index options, the direct, VCS and network
   references and whatever it could not check, on the run
   (`honoured_config`). So is a Composer fix whose
