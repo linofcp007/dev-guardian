@@ -115,11 +115,9 @@ function run(input: Record<string, unknown>, ctx: PluginContext): Result {
     ? readProjectText(projectPath, logPath, LOG_MAX_BYTES)
     : readSmallText(logPath, LOG_MAX_BYTES);
   if (read.status === 'absent') return fail('not_found', 'No file exists at sarif_path.');
-  if (read.status === 'refused') {
-    return read.reason === 'outside-project'
-      ? fail('outside_project', 'The log resolves outside the project (through a link). Pass allow_outside_project: true to import it from there.')
-      : fail('refused_file', refusalText(read.reason));
-  }
+  // The path is lexically inside here, so an 'outside-project' refusal is a link that leads out of
+  // the project (to a log, a device, a FIFO): the file is refused, whatever it is, not the location.
+  if (read.status === 'refused') return fail('refused_file', refusalText(read.reason));
 
   let imported: ReturnType<typeof importSarif>;
   try {
@@ -216,6 +214,8 @@ function refusalText(reason: string): string {
       return 'The log is larger than 50 MiB and was not read.';
     case 'not-a-regular-file':
       return 'sarif_path is not a regular file (a directory, FIFO or device) and was not read.';
+    case 'outside-project':
+      return 'sarif_path is a link that leads outside the project and was not read.';
     case 'remote-link':
       return 'sarif_path reaches a network or device path through a link and was not read.';
     default:
