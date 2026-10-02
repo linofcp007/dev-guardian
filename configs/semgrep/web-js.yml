@@ -15,6 +15,10 @@
 #   |                       |         | envio de ficheiro; sanitizers:            |
 #   |                       |         | `path.basename` e `startsWith` sobre o     |
 #   |                       |         | caminho resolvido                         |
+#   | web-js-ssrf           | CWE-918 | taint na mesma função: `req.query|params|  |
+#   |                       |         | body` até ao URL de fetch, axios, got,    |
+#   |                       |         | http(s).request/get; sanitizer: o URL     |
+#   |                       |         | comparado com uma lista exata             |
 #
 # O QUE CADA REGRA NAO VÊ (lacunas conhecidas, medidas ou desenhadas):
 #
@@ -66,6 +70,29 @@
 #     NÃO limpam: o valor continua tainted e dispara.
 #   - Só as fontes `req.*` com esse nome de parâmetro; `request.query`,
 #     `ctx.query` e `event.queryStringParameters` não são vistos.
+#
+# web-js-ssrf
+#   - SSRF ARMAZENADO não é visto, de propósito: o URL vem de uma linha da
+#     base de dados (um endereço de pager guardado por um administrador e
+#     chamado mais tarde), não do pedido em curso, e nenhuma regra que siga
+#     `req.*` dentro de uma função o alcança (o S05 da app sintética do
+#     spike). Fica para o `llm-scan`; o ficheiro misses/ssrf-stored.ts fixa
+#     que a regra não finge o contrário.
+#   - Taint INTRA-procedimento, como a de path traversal: o URL que atravessa
+#     um ficheiro (o serviço recebe-o por parâmetro) não é visto.
+#   - Sinks: o 1.º argumento de `fetch`, `axios(...)`, `axios.get|post|...`,
+#     `got(...)`, `got.get|...`, `http.request|get` e `https.request|get`. O
+#     corpo do pedido (`axios.post(url, req.body)`) não é o URL e não dispara.
+#     `axios.request({ url })`, `new URL(...)` guardado e clientes próprios
+#     (`this.http.get`, `request(...)`, `superagent`, `node-fetch` importado
+#     com outro nome) não são vistos.
+#   - Sanitizer: `LISTA.includes(url)` e `LISTA.has(url)` limpam `url` por
+#     efeito lateral (comparação EXATA com uma lista de valores permitidos).
+#     Um `startsWith` ou uma regex sobre o host NÃO limpam: não são uma
+#     comparação exata e deixam passar `https://permitido.example.evil.com`.
+#   - Um valor do pedido no CAMINHO de um URL de host fixo
+#     (`fetch(\`${BASE}/users/${req.params.id}\`)`) dispara como o resto: o
+#     taint não distingue o host do caminho. É um falso positivo medido.
 #
 # Fixtures em mcp/test/fixtures/web-js/{hits,misses}/ (hits/ com uma linha
 # `// BUG: <id-da-regra>` por achado), `mcp/test/e2e/webJsPack.test.ts`.
@@ -193,3 +220,47 @@ rules:
               - pattern: res.download($P, ...)
           - pattern-not: 'res.sendFile($P, {root: ...}, ...)'
           - focus-metavariable: $P
+
+  # Taint intra-procedimento: só o 1.º argumento (o URL) é o sink; o corpo do
+  # pedido não decide onde o servidor liga. O sanitizer é a comparação exata
+  # com uma lista (US-3.AC-2).
+  - id: web-js-ssrf
+    metadata:
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Um valor do pedido HTTP (`req.query`, `req.params` ou `req.body`) chega,
+      na mesma função, ao URL de um pedido de saída: o servidor liga ao que o
+      chamador indicar, serviços internos e metadados de cloud incluídos
+      (CWE-918). Comparar o URL com uma lista exata de destinos permitidos
+      (`includes`/`has`) antes de o usar, ou construir o URL no servidor e
+      aceitar do pedido só um identificador.
+    mode: taint
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.params
+      - pattern: req.body
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: $L.includes($U)
+              - pattern: $L.has($U)
+          - focus-metavariable: $U
+        by-side-effect: true
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fetch($U, ...)
+              - pattern: axios($U, ...)
+              - pattern: axios.$M($U, ...)
+              - pattern: got($U, ...)
+              - pattern: got.$M($U, ...)
+              - pattern: http.request($U, ...)
+              - pattern: https.request($U, ...)
+              - pattern: http.get($U, ...)
+              - pattern: https.get($U, ...)
+          - focus-metavariable: $U
