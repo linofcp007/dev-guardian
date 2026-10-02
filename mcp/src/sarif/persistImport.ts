@@ -25,12 +25,17 @@ export interface PersistSarifImportOptions {
  * What the import left out, as the `missing_tools` entries that make the scan's
  * coverage partial (`tools/scanCoverage.ts#computeCoverage`) — the mechanism
  * every native scan uses for "a part of what was asked was not scanned".
+ *
+ * A result with no location inside the project is not one: it was imported
+ * whole, only its place is unknown, and `counts.without_location` says how
+ * many. Counting it as a gap made every later diff of that tool read absent
+ * findings as unmeasured rather than resolved — always, for a log whose URIs
+ * all point outside the root, as an image scan's do.
  */
 export function importCoverageGaps(counts: SarifImportRun['counts']): string[] {
   const gaps: string[] = [];
   if (counts.skipped.length > 0) gaps.push('sarif:skipped_results');
   if (counts.truncated > 0) gaps.push('sarif:results_over_limit');
-  if (counts.without_location > 0) gaps.push('sarif:results_without_location');
   return gaps;
 }
 
