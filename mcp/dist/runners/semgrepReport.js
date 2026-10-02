@@ -37,10 +37,18 @@
  *     there were targets — a gap, `skipped`.
  *   - `failed`: everything fatal — an unclean exit, a run that did not
  *     finish, no or unparseable report, an error that is not tied to one
- *     target file (a rule or config error, an entry naming no file, one
- *     naming a YAML file, which cannot be told from the rule pack by name —
- *     a broken YAML target stays `failed`, the conservative reading), or
- *     per-file errors on a run that scanned nothing.
+ *     target file (a rule or config error — told by its TYPE, whatever path
+ *     it names — or an entry naming no file), or per-file errors on a run
+ *     that scanned nothing.
+ *
+ *     A YAML file named by a per-file type is a target like any other. It used
+ *     to be refused on its extension ("cannot be told from the rule pack by
+ *     name"), and every repository with a GitHub Actions workflow a bash
+ *     sub-pattern could not read went `failed` — OWASP Juice Shop's scan_sast
+ *     reported coverage `none` over 969 files read and 68 results. Measured on
+ *     1.176.1: a broken rule pack is `SemgrepError` (exit 7) or `Rule parse
+ *     error` (exit 2), with no path and nothing scanned; a workflow target is a
+ *     warn-level `PartialParsing` with its path, on exit 0, results intact.
  *
  * `ok` stays true only for the first, so a caller that reads nothing else
  * (`fixpr/apply.ts`, `compliance_check`) keeps treating a partial run as
@@ -389,17 +397,17 @@ function errorType(entry) {
 }
 /**
  * One `errors[]` entry as a per-file problem, or null when it is not: a
- * config/rule error type, no target file named, or the file named is a YAML
- * file (it cannot be told from a rule pack by its name). The file comes from
- * the entry's `path`, else its first span, else the location list inside a
- * `["PartialParsing", [...]]` type. The message is its first line.
+ * config/rule error type (whatever file it names — the module comment), or
+ * no target file named. The file comes from the entry's `path`, else its
+ * first span, else the location list inside a `["PartialParsing", [...]]`
+ * type. The message is its first line.
  */
 function perFileError(entry) {
     const type = errorType(entry);
     if (type === null || CONFIG_ERROR_TYPE.test(type))
         return null;
     const file = targetFileOf(entry, getProp(entry, 'type'));
-    if (file === null || /\.ya?ml$/i.test(file))
+    if (file === null)
         return null;
     const message = getString(entry, 'message') ?? type;
     return { file, type, message: message.split(/\r?\n/)[0] ?? message };

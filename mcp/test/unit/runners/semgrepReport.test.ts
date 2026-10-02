@@ -144,7 +144,9 @@ describe('checkSemgrepReport verdicts: ok, partial, scanned_nothing, failed', ()
     ['an invalid rule schema', { level: 'error', type: 'InvalidRuleSchemaError', message: '' }],
     ['a SemgrepError', { level: 'error', type: 'SemgrepError', message: 'invalid configuration file found' }],
     ['an error tied to no target file', { level: 'warn', type: 'Timeout', message: 'rule timed out' }],
-    ['an error naming a YAML file (it cannot be told from the rule pack)', { level: 'warn', type: 'Other syntax error', message: 'x', path: 'rules.yml' }],
+    // T-03: a configuration type stays fatal when it names a YAML file — the type decides, not the extension.
+    ['T-03 an invalid rule schema naming a YAML file', { level: 'error', type: 'InvalidRuleSchemaError', message: 'missing key', path: 'rules.yml' }],
+    ['T-03 an invalid YAML configuration naming a YAML file', { level: 'error', type: 'SemgrepError', message: 'Invalid YAML file', path: '.semgrep.yml' }],
   ])('failed: %s is fatal, even beside a per-file one', (_label, fatal) => {
     const r = check({ paths: { scanned: ['rest-controller.php'] }, errors: [WORDPRESS_WARNING, fatal] });
     expect(r.verdict).toBe('failed');
@@ -161,6 +163,40 @@ describe('checkSemgrepReport verdicts: ok, partial, scanned_nothing, failed', ()
       targets: 1,
     });
     expect(timedOut.verdict).toBe('failed');
+  });
+
+  // Bugfix sast-partial-parse-as-failed. Measured on Semgrep 1.176.1
+  // (2026-10-02): a GitHub Actions workflow whose `run:` block a bash
+  // sub-pattern cannot read (`typescript@${{ env.X }}`) is reported as this
+  // warn-level PartialParsing on the TARGET, on exit 0, with the run's
+  // results intact — 12 of the 55 errors that made scan_sast `failed`, with
+  // coverage `none`, on OWASP Juice Shop. A broken rule pack is reported
+  // differently: `SemgrepError` (exit 7) or `Rule parse error` (exit 2), with
+  // no path and nothing scanned — so the extension never told them apart.
+  const WORKFLOW = '.github/workflows/ci.yml';
+  const WORKFLOW_WARNING = {
+    level: 'warn',
+    type: ['PartialParsing', [{ path: WORKFLOW, start: { line: 281, col: 41, offset: 13569 }, end: { line: 281, col: 44, offset: 13572 } }]],
+    message: `Syntax error at line ${WORKFLOW}:281:`,
+    path: WORKFLOW,
+    spans: [{ file: WORKFLOW, start: { line: 281, col: 41, offset: 13569 }, end: { line: 281, col: 44, offset: 13572 } }],
+  };
+
+  it('T-01 partial: a warn-level PartialParsing on a YAML target (a workflow) — the file named, never failed', () => {
+    // Semgrep repeats the entry per rule: one per (file, type) (EC-2).
+    const r = check({ paths: { scanned: [WORKFLOW, 'routes/login.ts'] }, errors: [WORKFLOW_WARNING, WORKFLOW_WARNING, WORDPRESS_WARNING] }, 1);
+    expect(r.verdict).toBe('partial');
+    expect(r.partial).toEqual([
+      { file: WORKFLOW, type: 'PartialParsing', message: `Syntax error at line ${WORKFLOW}:281:` },
+      { file: 'rest-controller.php', type: 'PartialParsing', message: 'Syntax error at line rest-controller.php:20:' },
+    ]);
+    // What the old rule held fatal ("a YAML file cannot be told from the rule
+    // pack") is a target too: a per-file type, a path, a clean exit, files read.
+    const old = check({ paths: { scanned: ['rules.yml'] }, errors: [{ level: 'warn', type: 'Other syntax error', message: 'x', path: 'rules.yml' }] });
+    expect(old.verdict).toBe('partial');
+    // The project's own rules file scanned as a target (EC-3): its rules loaded.
+    const own = check({ paths: { scanned: ['.semgrep.yml'] }, errors: [{ ...WORKFLOW_WARNING, path: '.semgrep.yml', type: ['PartialParsing', []], spans: [] }] });
+    expect(own.verdict).toBe('partial');
   });
 });
 

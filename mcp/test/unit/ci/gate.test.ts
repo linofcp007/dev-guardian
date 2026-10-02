@@ -474,6 +474,21 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
     }
   });
 
+  it('T-05 a Bandit syntax-error gap is accepted like a Semgrep parse gap; a Bandit error of another kind is not', () => {
+    const banditStep = (type: string): ScanStepResult =>
+      step({
+        tool: 'security_scan_full',
+        tools_run: [{ name: 'bandit', status: 'ok', partially_parsed: [{ file: 'test/files/broken.py', type, message: 'x' }] }],
+        missing_tools: ['bandit'],
+        partial_parses: { bandit: [{ file: 'test/files/broken.py', type }] },
+      });
+    const syntax = evaluateGate(input({ steps: [banditStep('Syntax error')], acceptedPartialParses: ['test/files/broken.py'] }));
+    expect(syntax.exitCode).toBe(CI_EXIT.PASS);
+    expect(syntax.coverage).toBe('partial');
+    const other = evaluateGate(input({ steps: [banditStep('Bandit error')], acceptedPartialParses: ['test/files/broken.py'] }));
+    expect(other.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+  });
+
   it('accepts per step: the SAST and the surface step each need their files accepted', () => {
     const steps = [partialStep(), partialStep(['app/routes.php'], { tool: 'map_attack_surface' })];
     expect(evaluateGate(input({ steps, acceptedPartialParses: [WP] })).exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);

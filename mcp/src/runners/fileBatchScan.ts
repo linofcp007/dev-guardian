@@ -347,8 +347,15 @@ export function banditOnFiles(args: {
 
 /**
  * Bandit exits 0 (clean) or 1 (issues); its report lists files it could not
- * analyse under `errors`, which — like Semgrep's — means the run did not
- * cover what it was given.
+ * analyse under `errors`. Judged as Semgrep's per-file errors are
+ * (`semgrepReport.ts`): on a clean exit whose report analysed files, an error
+ * that names its file is a PARTIAL gap — `ok`, the file in `partial`, type
+ * `Syntax error` for Bandit's "syntax error while parsing AST from file"
+ * (what the CI gate's `--accept-partial-parse` accepts) and `Bandit error`
+ * for any other reason. Measured on OWASP Juice Shop: two Python test
+ * fixtures with syntax errors made the whole run `failed`, and scan_sast
+ * reported coverage `none`. An error naming no file, a run that analysed
+ * nothing, an unclean exit or no report stays a failure.
  */
 export function checkBanditReport(args: {
   raw: string | null;
@@ -361,9 +368,22 @@ export function checkBanditReport(args: {
   if (args.exitCode !== 0 && args.exitCode !== 1) return { ok: false, reason: `exit ${String(args.exitCode)}` };
   const root = args.raw === null ? null : parseInputAsJson(args.raw);
   if (root === null || typeof root !== 'object') return { ok: false, reason: 'bandit wrote no JSON report' };
-  const errors = asArray(getProp(root, 'errors')).map(
-    (e) => `${getString(e, 'filename') ?? '?'}: ${getString(e, 'reason') ?? 'error'}`,
-  );
-  if (errors.length > 0) return { ok: false, reason: `${errors.length} file(s) not analysed: ${errors.join('; ')}` };
-  return { ok: true };
+  const metrics = getProp(root, 'metrics');
+  const scanned =
+    metrics !== null && typeof metrics === 'object' ? Object.keys(metrics).filter((k) => k !== '_totals').length : 0;
+  const entries = asArray(getProp(root, 'errors'));
+  if (entries.length === 0) return { ok: true, scanned };
+  const everyErrorNamesAFile = entries.every((e) => (getString(e, 'filename') ?? '').length > 0);
+  if (scanned === 0 || !everyErrorNamesAFile) {
+    const errors = entries.map((e) => `${getString(e, 'filename') ?? '?'}: ${getString(e, 'reason') ?? 'error'}`);
+    return { ok: false, scanned, reason: `${errors.length} file(s) not analysed: ${errors.join('; ')}` };
+  }
+  const partial: PartialParse[] = [];
+  for (const e of entries) {
+    const file = getString(e, 'filename') ?? '';
+    const reason = getString(e, 'reason') ?? 'error';
+    const type = /syntax error/i.test(reason) ? 'Syntax error' : 'Bandit error';
+    if (!partial.some((p) => p.file === file && p.type === type)) partial.push({ file, type, message: reason });
+  }
+  return { ok: true, scanned, partial };
 }

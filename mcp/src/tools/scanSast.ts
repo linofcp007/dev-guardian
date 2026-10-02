@@ -100,6 +100,7 @@ import { banditExcludeArgs, semgrepExcludeArgs } from '../platform/guardianIgnor
 import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
+import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
@@ -621,9 +622,23 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   });
   const raw = readJsonSafe(outFile);
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
-  // Exit 0 (clean) or 1 (issues) AND a report with no unanalysed files.
+  // Exit 0 (clean) or 1 (issues) AND a report with no unanalysed files —
+  // or, when every unanalysed file is named, a partial run: `ok` AND missing,
+  // the files named (project-relative) for the CI gate's
+  // --accept-partial-parse, exactly as a partial Semgrep run.
   const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
-  const run: ToolRun = check.ok ? { name: 'bandit', status: 'ok' } : { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' };
+  const partial = (check.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
+  const run: ToolRun = !check.ok
+    ? { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' }
+    : partial.length > 0
+      ? {
+          name: 'bandit',
+          status: 'ok',
+          reason: describePartialParse(partial, 'findings in the unparsed files may be missing'),
+          partially_parsed: partial,
+        }
+      : { name: 'bandit', status: 'ok' };
+  if (partial.length > 0 && check.ok) missing_tools.push('bandit');
   // The root .bandit only — the one passed with --ini (`runners/repoConfig.ts`).
   tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, 'bandit') : run);
 }

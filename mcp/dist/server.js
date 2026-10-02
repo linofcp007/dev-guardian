@@ -46265,7 +46265,7 @@ function perFileError(entry) {
   const type = errorType(entry);
   if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
   const file = targetFileOf(entry, getProp(entry, "type"));
-  if (file === null || /\.ya?ml$/i.test(file)) return null;
+  if (file === null) return null;
   const message2 = getString(entry, "message") ?? type;
   return { file, type, message: message2.split(/\r?\n/)[0] ?? message2 };
 }
@@ -51668,11 +51668,23 @@ function checkBanditReport(args) {
   if (args.exitCode !== 0 && args.exitCode !== 1) return { ok: false, reason: `exit ${String(args.exitCode)}` };
   const root = args.raw === null ? null : parseInputAsJson(args.raw);
   if (root === null || typeof root !== "object") return { ok: false, reason: "bandit wrote no JSON report" };
-  const errors = asArray(getProp(root, "errors")).map(
-    (e) => `${getString(e, "filename") ?? "?"}: ${getString(e, "reason") ?? "error"}`
-  );
-  if (errors.length > 0) return { ok: false, reason: `${errors.length} file(s) not analysed: ${errors.join("; ")}` };
-  return { ok: true };
+  const metrics = getProp(root, "metrics");
+  const scanned = metrics !== null && typeof metrics === "object" ? Object.keys(metrics).filter((k) => k !== "_totals").length : 0;
+  const entries2 = asArray(getProp(root, "errors"));
+  if (entries2.length === 0) return { ok: true, scanned };
+  const everyErrorNamesAFile = entries2.every((e) => (getString(e, "filename") ?? "").length > 0);
+  if (scanned === 0 || !everyErrorNamesAFile) {
+    const errors = entries2.map((e) => `${getString(e, "filename") ?? "?"}: ${getString(e, "reason") ?? "error"}`);
+    return { ok: false, scanned, reason: `${errors.length} file(s) not analysed: ${errors.join("; ")}` };
+  }
+  const partial3 = [];
+  for (const e of entries2) {
+    const file = getString(e, "filename") ?? "";
+    const reason = getString(e, "reason") ?? "error";
+    const type = /syntax error/i.test(reason) ? "Syntax error" : "Bandit error";
+    if (!partial3.some((p) => p.file === file && p.type === type)) partial3.push({ file, type, message: reason });
+  }
+  return { ok: true, scanned, partial: partial3 };
 }
 
 // src/runners/scannerParsers/bandit.ts
@@ -52389,7 +52401,14 @@ async function runBandit(args) {
   const raw = readJsonSafe(outFile);
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
   const check2 = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
-  const run = check2.ok ? { name: "bandit", status: "ok" } : { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" };
+  const partial3 = (check2.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
+  const run = !check2.ok ? { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" } : partial3.length > 0 ? {
+    name: "bandit",
+    status: "ok",
+    reason: describePartialParse(partial3, "findings in the unparsed files may be missing"),
+    partially_parsed: partial3
+  } : { name: "bandit", status: "ok" };
+  if (partial3.length > 0 && check2.ok) missing_tools.push("bandit");
   tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, "bandit") : run);
 }
 function ignoreFrom(ctx) {
