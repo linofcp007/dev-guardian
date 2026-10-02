@@ -11,6 +11,11 @@
  * kept only for callers that have no project in scope; every reader that
  * has one uses `getActiveForProject`.
  *
+ * An imported SARIF log adds a third coordinate (migration 016): `slot`, the
+ * open-set slot of the baseline's scan — `sarif_import:<source tool>` — so a
+ * baseline of CodeQL's import is not replaced by Snyk's. Every other scan
+ * type leaves it NULL and keeps its per-(project, type) baseline.
+ *
  * Rows an older build inserts without the two columns are read through the
  * baseline's scan (`COALESCE` over the join), so they still belong to their
  * project.
@@ -18,6 +23,7 @@
 
 import type { DB, Statement } from './db.js';
 import type { Baseline, ScanType } from '../types.js';
+import { sarifSlotOfScan } from '../history/scanRoles.js';
 import { nowIso } from './repoUtil.js';
 
 interface BaselineRow {
@@ -27,6 +33,7 @@ interface BaselineRow {
   note: string | null;
   project_path: string | null;
   scan_type: string | null;
+  slot: string | null;
 }
 
 export interface SetBaselineInput {
@@ -39,29 +46,33 @@ export interface ProjectBaseline extends Baseline {
   /** Null only when the scan row itself is gone. */
   project_path: string | null;
   scan_type: ScanType | null;
+  /** `sarif_import:<source tool>` for an imported log's baseline; absent otherwise. */
+  slot?: string;
 }
 
 const SELECT_SCOPED = `
   SELECT b.id, b.scan_id, b.set_at, b.note,
          COALESCE(b.project_path, s.project_path) AS project_path,
-         COALESCE(b.scan_type, s.scan_type) AS scan_type
+         COALESCE(b.scan_type, s.scan_type) AS scan_type,
+         b.slot AS slot
   FROM baselines b LEFT JOIN scans s ON s.id = b.scan_id
 `;
 
 export class BaselinesRepo {
-  private readonly scanScopeStmt: Statement<[string], { project_path: string; scan_type: string }>;
-  private readonly insertStmt: Statement<[string, string, string | null, string | null, string | null]>;
+  private readonly scanScopeStmt: Statement<[string], { project_path: string; scan_type: string; meta: string }>;
+  private readonly insertStmt: Statement<[string, string, string | null, string | null, string | null, string | null]>;
   private readonly getActiveStmt: Statement<[], BaselineRow>;
   private readonly getActiveForProjectStmt: Statement<[string], BaselineRow>;
   private readonly getActiveForProjectTypeStmt: Statement<[string, string], BaselineRow>;
+  private readonly getActiveForProjectSlotStmt: Statement<[string, string, string], BaselineRow>;
   private readonly listAllStmt: Statement<[], BaselineRow>;
 
   constructor(db: DB) {
-    this.scanScopeStmt = db.prepare<[string], { project_path: string; scan_type: string }>(
-      `SELECT project_path, scan_type FROM scans WHERE id = ?`,
+    this.scanScopeStmt = db.prepare<[string], { project_path: string; scan_type: string; meta: string }>(
+      `SELECT project_path, scan_type, meta FROM scans WHERE id = ?`,
     );
     this.insertStmt = db.prepare(`
-      INSERT INTO baselines (scan_id, set_at, note, project_path, scan_type) VALUES (?, ?, ?, ?, ?)
+      INSERT INTO baselines (scan_id, set_at, note, project_path, scan_type, slot) VALUES (?, ?, ?, ?, ?, ?)
     `);
     this.getActiveStmt = db.prepare<[], BaselineRow>(`${SELECT_SCOPED} ORDER BY b.id DESC LIMIT 1`);
     this.getActiveForProjectStmt = db.prepare<[string], BaselineRow>(`
@@ -74,6 +85,11 @@ export class BaselinesRepo {
       WHERE COALESCE(b.project_path, s.project_path) = ? AND COALESCE(b.scan_type, s.scan_type) = ?
       ORDER BY b.id DESC LIMIT 1
     `);
+    this.getActiveForProjectSlotStmt = db.prepare<[string, string, string], BaselineRow>(`
+      ${SELECT_SCOPED}
+      WHERE COALESCE(b.project_path, s.project_path) = ? AND COALESCE(b.scan_type, s.scan_type) = ? AND b.slot = ?
+      ORDER BY b.id DESC LIMIT 1
+    `);
     this.listAllStmt = db.prepare<[], BaselineRow>(`${SELECT_SCOPED} ORDER BY b.id DESC`);
   }
 
@@ -83,12 +99,14 @@ export class BaselinesRepo {
     const scope = this.scanScopeStmt.get(input.scan_id);
     // An unknown scan_id still reaches the INSERT, where the foreign key
     // rejects it — the same error this method always raised.
+    const slot = scope?.scan_type === 'sarif_import' ? sarifSlotOfScan({ meta: parseMeta(scope.meta) }) : null;
     const info = this.insertStmt.run(
       input.scan_id,
       setAt,
       input.note ?? null,
       scope?.project_path ?? null,
       scope?.scan_type ?? null,
+      slot,
     );
     const b: ProjectBaseline = {
       id: Number(info.lastInsertRowid),
@@ -98,6 +116,7 @@ export class BaselinesRepo {
       scan_type: (scope?.scan_type ?? null) as ScanType | null,
     };
     if (input.note !== undefined) b.note = input.note;
+    if (slot !== null) b.slot = slot;
     return b;
   }
 
@@ -107,12 +126,17 @@ export class BaselinesRepo {
     return row ? rowToBaseline(row) : null;
   }
 
-  /** The newest baseline of one project — of one scan type, when given. */
-  getActiveForProject(projectPath: string, scanType?: ScanType): ProjectBaseline | null {
+  /**
+   * The newest baseline of one project — of one scan type, when given; of one
+   * slot of that type (an import's source tool, `sarif_import:<tool>`), when given too.
+   */
+  getActiveForProject(projectPath: string, scanType?: ScanType, slot?: string): ProjectBaseline | null {
     const row =
       scanType === undefined
         ? this.getActiveForProjectStmt.get(projectPath)
-        : this.getActiveForProjectTypeStmt.get(projectPath, scanType);
+        : slot === undefined
+          ? this.getActiveForProjectTypeStmt.get(projectPath, scanType)
+          : this.getActiveForProjectSlotStmt.get(projectPath, scanType, slot);
     return row ? rowToBaseline(row) : null;
   }
 
@@ -130,5 +154,15 @@ function rowToBaseline(row: BaselineRow): ProjectBaseline {
     scan_type: row.scan_type as ScanType | null,
   };
   if (row.note !== null) b.note = row.note;
+  if (row.slot !== null) b.slot = row.slot;
   return b;
+}
+
+function parseMeta(text: string): Record<string, unknown> | undefined {
+  try {
+    const v: unknown = JSON.parse(text);
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined; // a scan whose meta is unreadable has no source tool: the empty-name slot
+  }
 }

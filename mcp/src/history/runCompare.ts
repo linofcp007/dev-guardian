@@ -77,7 +77,7 @@ import type { Storage } from '../storage/index.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import type { Finding, PartialParse, ScanRecord, ToolRun } from '../types.js';
 import { KNOWN_FINDING_KEYS, findingKey, keysOfRun, runNameEntry } from './runNames.js';
-import { isOrchestratedFullScan, isScriptEraFullScan, scriptEraSlotOfFinding } from './scanRoles.js';
+import { isOrchestratedFullScan, isScriptEraFullScan, sameImportSlot, scriptEraSlotOfFinding } from './scanRoles.js';
 
 export interface ScanComparison {
   /** Whether `f`, a finding of `from`, was not measured again by `to` — a gap, or not run. */
@@ -1128,13 +1128,21 @@ export function compareScansFor(storage: Storage, from: ScanRecord, to: ScanReco
   const typeOfTo = typeResolver(storage, to);
   const fromBooks = booksOf(storage, from);
   const toBooks = booksOf(storage, to);
+  // An import's findings are named by the tool that wrote the log, which no
+  // bookkeeping name knows: "no gap anywhere" would let ANY full scan resolve
+  // them. Only an import of the same source tool measures them (and an import
+  // measures nothing a native scan found).
+  const crossSlot = !sameImportSlot(from, to);
+  const notLookedAt = (f: Finding): Answer => ({ verdict: 'not_run', notRun: f.tool, byTarget: false });
   /** `to`'s answer for a finding of `from`. */
   const inTo = (f: Finding): Answer => {
+    if (crossSlot) return notLookedAt(f);
     const t = typeOfFrom(f);
     return answerFor(fromBooks(t), toBooks(t), f);
   };
   /** `from`'s answer for a finding of `to`. */
   const inFrom = (f: Finding): Answer => {
+    if (crossSlot) return notLookedAt(f);
     const t = typeOfTo(f);
     return answerFor(toBooks(t), fromBooks(t), f);
   };

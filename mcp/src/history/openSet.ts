@@ -103,6 +103,9 @@ import {
   isOrchestratedFullScan,
   isScopedScan,
   isScriptEraFullScan,
+  isSarifSlot,
+  sarifSlot,
+  sarifSlotOfScan,
   slotView,
   sourceTypesOf,
   type OpenSetSlot,
@@ -316,10 +319,18 @@ export function latestStateScan(
   storage: Storage,
   projectPath: string,
   scanType?: ScanType,
-  opts: Pick<FindUsableOptions, 'beforeScanId'> = {},
+  opts: Pick<FindUsableOptions, 'beforeScanId'> & { sourceTool?: string } = {},
 ): UsableScan {
-  const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES;
-  const found = findLatestUsable(storage, projectPath, types, opts);
+  // An import is never "the latest scan" of a reader that did not ask for
+  // one, and when asked it is one source tool's: the slot of the open set.
+  const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
+  const { sourceTool, ...usable } = opts;
+  const found = findLatestUsable(storage, projectPath, types, {
+    ...usable,
+    ...(scanType === 'sarif_import' && sourceTool !== undefined
+      ? { slot: sarifSlot(sourceTool), predicate: (s: ScanRecord) => sarifSlotOfScan(s) === sarifSlot(sourceTool) }
+      : {}),
+  });
   if (scanType !== undefined || found.scan === null) return found;
   // Any type: an orchestrated run is one scan to its reader. Its children
   // start after the parent, so the newest row is whichever child started
@@ -513,6 +524,16 @@ function slotSources(
   // The residual slot: only what a script-era row could not route.
   if (slot === 'security_full') {
     const r = search(storage, projectPath, ['security_full'], { slot, ...scriptEra });
+    return { picks: pick(r), hits: r.hits };
+  }
+
+  // One source tool's imports: its newest, whole — a new import replaces it
+  // and nothing carries forward from the older one.
+  if (isSarifSlot(slot)) {
+    const r = search(storage, projectPath, ['sarif_import'], {
+      slot,
+      predicate: (scan) => sarifSlotOfScan(scan) === slot,
+    });
     return { picks: pick(r), hits: r.hits };
   }
 
@@ -727,6 +748,18 @@ function scannersOfGap(gap: string): string[] {
   return head.split(', ').filter((name) => name.length > 0);
 }
 
+/** Every slot of the open set: one per state type, `sarif_import` split by source tool. */
+function openSetSlots(storage: Storage, projectPath: string): OpenSetSlot[] {
+  const slots: OpenSetSlot[] = STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
+  const imports = new Set<OpenSetSlot>();
+  for (let offset = 0; ; offset += PAGE) {
+    const page = storage.scans.listCompletedOfTypes(projectPath, ['sarif_import'], { limit: PAGE, offset });
+    for (const scan of page) imports.add(sarifSlotOfScan(scan));
+    if (page.length < PAGE) break;
+  }
+  return [...slots, ...[...imports].sort()];
+}
+
 export function openSetForProject(
   storage: Storage,
   projectPath: string,
@@ -737,7 +770,7 @@ export function openSetForProject(
   const picked: Array<{ slot: OpenSetSlot } & SlotPick> = [];
   const hits: SkipHit[] = [];
   const considered = new Map<string, ScanRecord>();
-  for (const slot of STATE_SCAN_TYPES) {
+  for (const slot of openSetSlots(storage, projectPath)) {
     const found = slotSources(storage, projectPath, slot);
     for (const h of found.hits) {
       hits.push(h);
