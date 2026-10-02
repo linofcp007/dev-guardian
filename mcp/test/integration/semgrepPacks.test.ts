@@ -191,6 +191,12 @@ describe('every Semgrep rule pack', () => {
     ]));
   });
 
+  // js-sink-rules: the web-js pack is held to the same encoding check and
+  // `semgrep --validate` as every pack — it only has to be on disk for that.
+  it('T-08 the web-js pack is among the packs every check here covers', () => {
+    expect(packs, 'configs/semgrep/web-js.yml exists').toContain('web-js.yml');
+  });
+
   it('contains no byte the locale codec cannot decode', () => {
     expect(renderOffences(packs.flatMap(scanPack))).toBe('');
   });
