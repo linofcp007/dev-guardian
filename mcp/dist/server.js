@@ -68322,8 +68322,11 @@ function toSarif(findings, opts = {}) {
         }
       ];
     }
-    if (f.fingerprint) {
-      result.partialFingerprints = { devGuardian: f.fingerprint };
+    if (f.fingerprint || f.identity) {
+      result.partialFingerprints = {
+        ...f.fingerprint ? { devGuardian: f.fingerprint } : {},
+        ...f.identity ? { devGuardianIdentity: f.identity } : {}
+      };
     }
     return result;
   };
