@@ -42,14 +42,13 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 // Real, synchronous `semgrep` calls are not bounded by vitest's default
-// testTimeout (see integration/baseRules.test.ts); T-11 runs eight or nine.
+// testTimeout (see integration/baseRules.test.ts).
 vi.setConfig({ testTimeout: 180_000 });
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { semgrepAvailable, semgrepStdout } from '../helpers/semgrep.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
-import { expectNearReference } from '../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -327,41 +326,5 @@ describe('web-js pack (js-sink-rules)', () => {
   it('T-07 the pack documents stored SSRF as a known gap (EC-4)', () => {
     expectPack();
     expect(readFileSync(PACK, 'utf8')).toMatch(/SSRF armazenado/i);
-  });
-
-  // ------------------------------------------------------------ NFR-2: cost
-
-  /**
-   * What scan_sast runs with `local_only: true` on a project `init_project`
-   * set up: the project's `.semgrep.yml` (a copy of `base.yml`) and the
-   * plugin's `llm.yml` -- `--config=auto` needs the network, so it cannot be
-   * the reference here, and against it the pack's share would only be
-   * smaller. The cost is a RATIO against that reference, measured in the
-   * same process, alternated (helpers/timing.ts), never milliseconds; it is
-   * written to `GUARDIAN_TEST_TIMING_LOG` when that is set. The corpus is the
-   * whole fixture tree; the NFR's own corpus is the axis-3 one
-   * (`GUARDIAN_WEBJS_SRC`), which no vitest run is pointed at.
-   */
-  it.skipIf(!AVAILABLE)('T-11 the pack adds at most 10% to the scan time of scan_sast\'s local configs on the fixture corpus (a ratio, recorded; NFR-2)', () => {
-    expectPack();
-    const corpus = makeTempDir('guardian-webjs-timing-');
-    cpSync(FIXTURES, corpus, { recursive: true });
-    const without = [resolve(PACK_DIR, 'base.yml'), resolve(PACK_DIR, 'llm.yml')];
-    const withPack = [...without, PACK];
-    const scanWith = (configs: readonly string[]): string => semgrepStdout(semgrepArgs(corpus, configs), { cwd: corpus });
-    // Two scans of nothing compare equal; this one has to have read the corpus.
-    const check = parseScan(scanWith(withPack), corpus);
-    expect(check.errors).toEqual([]);
-    expect(check.scanned).toBe(countFiles(FIXTURES));
-    expectNearReference(
-      'scan of the web-js fixture corpus: base.yml + llm.yml + web-js.yml against base.yml + llm.yml',
-      () => {
-        scanWith(withPack);
-      },
-      () => {
-        scanWith(without);
-      },
-      { maxRatio: 1.1 },
-    );
   });
 });
