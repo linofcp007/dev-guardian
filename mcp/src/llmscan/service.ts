@@ -39,6 +39,7 @@ import {
   type PlanEstimate,
   type PlanLimits,
   type ScanMode,
+  type TaskKind,
   type VerifyVerdict,
 } from './types.js';
 
@@ -421,7 +422,7 @@ function limitReason(plan: LlmScanPlan, tasks: readonly LlmScanTask[], next: Llm
 }
 
 /** The next task of the plan, or its end, or why none can be handed out. */
-export function leaseNext(storage: Storage, planId: string): Out {
+export function leaseNext(storage: Storage, planId: string, only: { kinds?: readonly TaskKind[] } = {}): Out {
   const loaded = loadPlan(storage, planId);
   if (!loaded.ok) return loaded;
   let plan = loaded.plan;
@@ -441,7 +442,7 @@ export function leaseNext(storage: Storage, planId: string): Out {
 
   const now = nowIso();
   const tasks = repo.listTasks(plan.id);
-  const candidates = tasks.filter((t) => isLeasable(t, now));
+  const candidates = tasks.filter((t) => isLeasable(t, now) && (only.kinds === undefined || only.kinds.includes(t.kind)));
   for (const task of candidates) {
     if (task.kind === 'verify' && isStale(plan.project_path, task)) {
       repo.closeUnleased(plan.id, task.task_id, 'stale', now);

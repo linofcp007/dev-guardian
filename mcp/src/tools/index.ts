@@ -9,6 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z, type ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
+import type { SamplingFn } from '../llmscan/types.js';
 import type { ToolResult } from '../types.js';
 import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
@@ -32,6 +33,11 @@ export interface ToolCallMeta {
    * SIGTERM the child process tree.
    */
   signal?: AbortSignal;
+  /**
+   * MCP sampling (`sampling/createMessage` to the client). Present only when
+   * the client declared the `sampling` capability at initialize.
+   */
+  sampling?: SamplingFn;
   /**
    * Set only by an orchestrator (`security_scan_full`) running this tool as
    * one of its children: the scan-tool factory records it in the child's
@@ -132,6 +138,9 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
         }
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
+        }
+        if (server.server.getClientCapabilities()?.sampling !== undefined) {
+          callMeta.sampling = (params, options) => server.server.createMessage(params, options);
         }
         const result = await tool.handler(input as Record<string, unknown>, ctx, callMeta);
         return toCallToolResult(result, tool.contentOnlyKeys ?? []);

@@ -7,7 +7,8 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { fail, leaseNext } from '../llmscan/service.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { runSampling, samplingUnavailable } from '../llmscan/sampling.js';
+import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
 
 const inputSchema = {
   plan_id: z.string().min(1).max(100).describe('The plan from llm_scan_start.'),
@@ -38,22 +39,15 @@ const tool: ToolModule = {
 
 registerToolModule(tool);
 
-async function handler(input: Record<string, unknown>, ctx: PluginContext, meta?: object) {
+async function handler(input: Record<string, unknown>, ctx: PluginContext, meta?: ToolCallMeta) {
   const parsed = parser.safeParse(input);
   if (!parsed.success) {
     return fail('invalid_input', `Invalid input: ${parsed.error.issues.map((i) => `${i.path.join('.') || '$'}: ${i.message}`).join('; ')}`);
   }
   if (parsed.data.execute === 'sampling') {
-    // TODO(llm-scan task 7): run the plan's tasks through `meta.sampling`
-    // (US-3.AC-2, US-3.AC-3). Until then sampling is never available and
-    // nothing is handed out.
-    const offered = meta !== undefined && 'sampling' in meta && typeof meta.sampling === 'function';
-    return fail(
-      'sampling_unavailable',
-      offered
-        ? 'Running tasks through MCP sampling is not implemented in this build; use execute: "host" (the default).'
-        : 'This client did not declare the MCP sampling capability; use execute: "host" (the default) and run the briefs in subagents.',
-    );
+    // `meta.sampling` exists only when the client declared the capability.
+    if (meta?.sampling === undefined) return samplingUnavailable();
+    return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling);
   }
   return leaseNext(ctx.storage, parsed.data.plan_id);
 }
