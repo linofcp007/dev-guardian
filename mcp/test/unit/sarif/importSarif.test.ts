@@ -859,3 +859,76 @@ describe('T-18 no log content in errors or diagnostics (US-1.AC-18) — property
     expect(JSON.stringify(out)).not.toContain(marker);
   });
 });
+
+// ---------------------------------------------------------------------------
+describe('review round 1 — hardening of the reader', () => {
+  it('T-16 a log that names itself gitleaks, with a credential rule id and no CWE, keeps no snippet', () => {
+    const run = runOf(
+      logOf(
+        [plain({ ruleId: 'generic-api-key', uri: 'config/aws.ini', startLine: 4, snippet: `key=${AWS_KEY}`, contextSnippet: `key=${AWS_KEY}` })],
+        { tool: 'gitleaks' },
+      ),
+    );
+    const f = single(run);
+    expect(f.snippet).toBeUndefined();
+    expect(JSON.stringify(run)).not.toContain(AWS_KEY);
+  });
+
+  it('T-16 a credential rule id from another tool keeps no snippet either', () => {
+    const run = runOf(logOf([plain({ ruleId: 'aws-access-key', snippet: `key=${AWS_KEY}` })], { tool: 'Other' }));
+    expect(single(run).snippet).toBeUndefined();
+  });
+
+  it('T-03 CWE from rule.relationships[].target and rule.taxa; a CWE-798 there drops the snippet', () => {
+    const rel = runOf(
+      logOf([plain({ snippet: `k=${AWS_KEY}` })], {
+        rules: [sarifRule('r1', { relationships: [{ target: { id: '798', toolComponent: { name: 'CWE' } }, kinds: ['superset'] }] })],
+      }),
+    );
+    expect(single(rel).cwe).toEqual(['CWE-798']);
+    expect(single(rel).snippet).toBeUndefined();
+    const taxa = runOf(logOf([plain()], { rules: [sarifRule('r1', { taxa: [{ id: 'CWE-79', toolComponent: { name: 'CWE' } }] })] }));
+    expect(single(taxa).cwe).toEqual(['CWE-79']);
+  });
+
+  it('T-12 ruleIndex -1 is "absent": a result with a message and no ruleId is imported; an index >= 0 that does not resolve is skipped', () => {
+    const run = runOf(
+      logOf(
+        [sarifResult({ ruleIndex: -1, message: 'sentinel', uri: 'src/a.js', startLine: 1 }), sarifResult({ ruleIndex: 3, message: 'dangling', uri: 'src/a.js', startLine: 2 })],
+        { rules: [sarifRule('only')] },
+      ),
+    );
+    expect(run.findings.flatMap(messageOf)).toContain('sentinel');
+    expect(run.counts.skipped.map((s) => s.index)).toEqual([1]);
+  });
+
+  it('T-04 a devGuardianIdentity that is not the shape of a native identity is ignored; a native one is kept', () => {
+    const native = 'a'.repeat(64);
+    const forged = runOf(logOf([plain({ partialFingerprints: { devGuardianIdentity: 'forged-identity' } })]));
+    expect(single(forged).identity).toBeUndefined();
+    const kept = runOf(logOf([plain({ partialFingerprints: { devGuardianIdentity: native } })]));
+    expect(single(kept).identity).toBe(native);
+  });
+
+  it.each([['0x10'], ['1e1'], ['-5'], ['11'], [11], [-1]])('T-02 security-severity %s is not a score: level decides', (score) => {
+    const run = runOf(logOf([plain({ level: 'note' })], { rules: [sarifRule('r1', { properties: { 'security-severity': score } })] }));
+    expect(single(run).severity).toBe('info');
+  });
+
+  it.each([['src/a%00.js'], ['src/a%0A.js'], ['src/a%7F.js'], ['src/a\u0001.js']])(
+    'T-11 a path with a control character (%j) is without_location',
+    (uri) => {
+      const run = runOf(logOf([plain({ uri, startLine: 2 })]));
+      expect(single(run).file_path).toBeUndefined();
+      expect(run.counts.without_location).toBe(1);
+    },
+  );
+
+  it('T-17 maxResults is clamped to 200 000', () => {
+    const results = Array.from({ length: 200_001 }, (_, i) => `{"message":{"text":"m${String(i)}"}}`);
+    const text = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Bulk"}},"results":[${results.join(',')}]}]}`;
+    const run = importSarif(text, { projectPath: ROOT, maxResults: 1_000_000 }).runs[0];
+    expect(run?.findings).toHaveLength(200_000);
+    expect(run?.counts.truncated).toBe(1);
+  }, 120_000);
+});

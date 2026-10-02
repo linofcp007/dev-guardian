@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { parseJsonBounded } from '../platform/boundedJson.js';
 import {
   asArray,
@@ -89,6 +90,7 @@ export class SarifImportError extends Error {
 }
 
 const DEFAULT_MAX_RESULTS = 50_000;
+const MAX_RESULTS_CEILING = 200_000;
 const MESSAGE_MAX_BYTES = 4096;
 const TITLE_MAX_CHARS = 140;
 const TOOL_NAME_MAX = 100;
@@ -104,7 +106,7 @@ const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnPropert
 
 export function importSarif(text: string, ctx: SarifImportContext): SarifImportResult {
   const runs = parseLog(text);
-  const maxResults = ctx.maxResults ?? DEFAULT_MAX_RESULTS;
+  const maxResults = Math.min(ctx.maxResults ?? DEFAULT_MAX_RESULTS, MAX_RESULTS_CEILING);
   return { runs: runs.map((run) => readRun(run, ctx.projectPath, maxResults)) };
 }
 
@@ -209,7 +211,9 @@ function readRun(run: Obj, projectPath: string, maxResults: number): SarifImport
 /** The rule a result points at: by its reference (index, extension), else by its id. */
 function resolveRule(result: Obj, rc: RunContext): { rule?: Obj; id?: string; danglingRef: boolean } {
   const ref = getProp(result, 'rule');
-  const index = getNumber(result, 'ruleIndex') ?? getNumber(ref, 'index');
+  // -1 is SARIF's "absent" sentinel, not an index.
+  const rawIndex = getNumber(result, 'ruleIndex') ?? getNumber(ref, 'index');
+  const index = rawIndex !== undefined && rawIndex >= 0 ? rawIndex : undefined;
   const component = getProp(ref, 'toolComponent');
   let pool = rc.driverRules;
   const componentIndex = getNumber(component, 'index');
@@ -240,8 +244,16 @@ function buildFinding(result: Obj, rc: RunContext): { finding: Finding; dedupeKe
   }
 
   const props = [getProp(result, 'properties'), getProp(rule, 'properties')];
-  const cwe = cweOf(result, props);
-  const secret = isSecretRule(cwe, props);
+  const cwe = cweOf(result, rule, props);
+  // Whatever the tool calls itself: a credential rule never keeps its snippet.
+  const secret =
+    isSecretRule(cwe, props) ||
+    // Every gitleaks result is a secret, though its ids (`aws-access-token`) may name none.
+    rc.tool.toLowerCase() === 'gitleaks' ||
+    isCredentialFinding({
+      ...(ruleId !== undefined ? { rule_id: ruleId } : {}),
+      subcategory: props.map((p) => getString(p, 'subcategory')).find((v) => v !== undefined) ?? '',
+    });
   const where = locate(result, rc);
   const message = messageText !== undefined ? truncateBytes(messageText) : undefined;
   const title = (message ?? getString(getProp(rule, 'shortDescription'), 'text') ?? ruleId ?? 'finding').slice(
@@ -301,8 +313,8 @@ function severityOf(result: Obj, rule: Obj | undefined, props: unknown[]): Sever
   }
   for (const p of props) {
     const raw = getProp(p, 'security-severity');
-    const score = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
-    if (Number.isFinite(score)) {
+    const score = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d+(\.\d+)?$/.test(raw.trim()) ? Number(raw) : NaN;
+    if (Number.isFinite(score) && score >= 0 && score <= 10) {
       if (score >= 9) return 'critical';
       if (score >= 7) return 'high';
       if (score >= 4) return 'medium';
@@ -327,7 +339,7 @@ function categoryOf(props: unknown[]): Category {
 /** `external/cwe/cwe-089`, `CWE-798: Use of hard-coded credentials` (Semgrep), `cwe-79`. */
 const CWE_TEXT = /^(?:external\/cwe\/)?cwe[-_ ]?0*(\d+)(?!\d)/i;
 
-function cweOf(result: Obj, props: unknown[]): string[] {
+function cweOf(result: Obj, rule: Obj | undefined, props: unknown[]): string[] {
   const found = new Set<string>();
   const add = (raw: unknown, bare: boolean): void => {
     if (typeof raw !== 'string') return;
@@ -340,10 +352,13 @@ function cweOf(result: Obj, props: unknown[]): string[] {
     const cwe = getProp(p, 'cwe');
     for (const c of Array.isArray(cwe) ? cwe : [cwe]) add(typeof c === 'number' ? String(c) : c, true);
   }
-  for (const taxon of asArray(getProp(result, 'taxa'))) {
+  const addTaxon = (taxon: unknown): void => {
     const name = getString(getProp(taxon, 'toolComponent'), 'name') ?? '';
     add(getString(taxon, 'id'), /cwe/i.test(name));
-  }
+  };
+  asArray(getProp(result, 'taxa')).forEach(addTaxon);
+  asArray(getProp(rule, 'taxa')).forEach(addTaxon);
+  for (const rel of asArray(getProp(rule, 'relationships'))) addTaxon(getProp(rel, 'target'));
   return [...found];
 }
 
@@ -361,6 +376,8 @@ function usableFingerprints(bag: unknown): Array<[string, string]> {
     .sort()
     .flatMap((k): Array<[string, string]> => {
       const v = bag[k];
+      // A devGuardianIdentity that was not accepted as one is not a fingerprint either.
+      if (k === 'devGuardianIdentity') return [];
       return typeof v === 'string' && v !== '' && !PLACEHOLDER_FINGERPRINT.test(v.trim()) ? [[k, v]] : [];
     });
 }
@@ -368,7 +385,8 @@ function usableFingerprints(bag: unknown): Array<[string, string]> {
 function identityOf(result: Obj, tool: string, ruleId: string | undefined): string | undefined {
   const partial = getProp(result, 'partialFingerprints');
   const own = getString(partial, 'devGuardianIdentity');
-  if (own !== undefined && own !== '') return own;
+  // Only the shape of a native identity: a log cannot choose any other string.
+  if (own !== undefined && /^[0-9a-f]{64}$/.test(own)) return own;
   let key = usableFingerprints(partial);
   if (key.length === 0) key = usableFingerprints(getProp(result, 'fingerprints'));
   if (key.length === 0) return undefined;
@@ -446,7 +464,11 @@ function relativeInProject(uri: string, baseId: string | undefined, rc: RunConte
     const native = nativePath(uri);
     return native === undefined ? undefined : insideRoot(resolve(native), root);
   }
-  const rel = decode(uri).replace(/\\/g, '/');
+  const decoded = decode(uri);
+  // A NUL or other control character is never part of a path the project holds.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(decoded)) return undefined;
+  const rel = decoded.replace(/\\/g, '/');
   if (rel.startsWith('/')) return insideRoot(resolve(rel), root);
   return insideRoot(resolve(baseDirectory(baseId, rc, root), rel), root);
 }
