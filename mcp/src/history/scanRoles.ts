@@ -32,7 +32,10 @@
  * runs) is never a state scan — see {@link isScopedScan}.
  */
 
+import { isSarifSlot, sarifSlotOfMeta, type SarifSlot } from '../storage/slots.js';
 import type { Finding, ScanRecord, ScanType, ToolRun } from '../types.js';
+
+export { isSarifSlot, sarifSlot, type SarifSlot } from '../storage/slots.js';
 
 export type ScanTypeRole = 'state' | 'never';
 
@@ -166,26 +169,9 @@ export function scriptEraSlotOfFinding(f: Pick<Finding, 'tool' | 'category' | 's
   }
 }
 
-/**
- * The open-set slot of one source tool's imports: `sarif_import:<tool>`. One
- * `sarif_import` slot for every tool would let an import of CodeQL's log
- * replace what Snyk's had opened.
- */
-export type SarifSlot = `sarif_import:${string}`;
-
-/** The slot of `tool`'s imports. A scan with no `meta.source_tool` is the slot of the empty name. */
-export function sarifSlot(tool: string): SarifSlot {
-  return `sarif_import:${tool}`;
-}
-
 /** The slot a `sarif_import` scan belongs to, by its `meta.source_tool`. */
 export function sarifSlotOfScan(scan: Pick<ScanRecord, 'meta'>): SarifSlot {
-  const tool = scan.meta?.['source_tool'];
-  return sarifSlot(typeof tool === 'string' ? tool : '');
-}
-
-export function isSarifSlot(slot: string): slot is SarifSlot {
-  return slot.startsWith('sarif_import:');
+  return sarifSlotOfMeta(scan.meta);
 }
 
 /**

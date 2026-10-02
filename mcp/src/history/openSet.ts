@@ -110,6 +110,7 @@ import {
   sourceTypesOf,
   type OpenSetSlot,
 } from './scanRoles.js';
+import { sarifToolOfSlot } from '../storage/slots.js';
 
 /** Rows fetched per query while looking past skipped scans. */
 const PAGE = 25;
@@ -324,7 +325,13 @@ export function latestStateScan(
   // An import is never "the latest scan" of a reader that did not ask for
   // one, and when asked it is one source tool's: the slot of the open set.
   const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
-  const { sourceTool, ...usable } = opts;
+  const { sourceTool: askedTool, ...usable } = opts;
+  // "The previous import" is the previous import of the SAME tool: with no
+  // tool named, the one `beforeScanId` was imported by.
+  const before = scanType === 'sarif_import' && askedTool === undefined && opts.beforeScanId !== undefined
+    ? storage.scans.getById(opts.beforeScanId)
+    : null;
+  const sourceTool = askedTool ?? (before !== null && before.scan_type === 'sarif_import' ? sarifToolOfSlot(sarifSlotOfScan(before)) : undefined);
   const found = findLatestUsable(storage, projectPath, types, {
     ...usable,
     ...(scanType === 'sarif_import' && sourceTool !== undefined
@@ -751,13 +758,8 @@ function scannersOfGap(gap: string): string[] {
 /** Every slot of the open set: one per state type, `sarif_import` split by source tool. */
 function openSetSlots(storage: Storage, projectPath: string): OpenSetSlot[] {
   const slots: OpenSetSlot[] = STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
-  const imports = new Set<OpenSetSlot>();
-  for (let offset = 0; ; offset += PAGE) {
-    const page = storage.scans.listCompletedOfTypes(projectPath, ['sarif_import'], { limit: PAGE, offset });
-    for (const scan of page) imports.add(sarifSlotOfScan(scan));
-    if (page.length < PAGE) break;
-  }
-  return [...slots, ...[...imports].sort()];
+  const imports = storage.scans.sarifSourceTools(projectPath).map(sarifSlot);
+  return [...slots, ...imports.sort()];
 }
 
 export function openSetForProject(

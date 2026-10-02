@@ -7,6 +7,11 @@
  * SAST scan is never measured against a secrets baseline. Older rows are
  * kept for audit/history.
  *
+ * Asked for no type, `getActive` and `getActiveForProject` answer with native
+ * baselines only (`slot IS NULL`): an imported log's baseline is read by
+ * asking for its type and slot, so baselining an import never changes what
+ * the readers that name no type (risk score, dashboard, resources) see.
+ *
  * `getActive()` — the newest row in the whole database, any project — is
  * kept only for callers that have no project in scope; every reader that
  * has one uses `getActiveForProject`.
@@ -23,7 +28,7 @@
 
 import type { DB, Statement } from './db.js';
 import type { Baseline, ScanType } from '../types.js';
-import { sarifSlotOfScan } from '../history/scanRoles.js';
+import { sarifSlotOfMeta } from './slots.js';
 import { nowIso } from './repoUtil.js';
 
 interface BaselineRow {
@@ -74,10 +79,10 @@ export class BaselinesRepo {
     this.insertStmt = db.prepare(`
       INSERT INTO baselines (scan_id, set_at, note, project_path, scan_type, slot) VALUES (?, ?, ?, ?, ?, ?)
     `);
-    this.getActiveStmt = db.prepare<[], BaselineRow>(`${SELECT_SCOPED} ORDER BY b.id DESC LIMIT 1`);
+    this.getActiveStmt = db.prepare<[], BaselineRow>(`${SELECT_SCOPED} WHERE b.slot IS NULL ORDER BY b.id DESC LIMIT 1`);
     this.getActiveForProjectStmt = db.prepare<[string], BaselineRow>(`
       ${SELECT_SCOPED}
-      WHERE COALESCE(b.project_path, s.project_path) = ?
+      WHERE COALESCE(b.project_path, s.project_path) = ? AND b.slot IS NULL
       ORDER BY b.id DESC LIMIT 1
     `);
     this.getActiveForProjectTypeStmt = db.prepare<[string, string], BaselineRow>(`
@@ -99,7 +104,7 @@ export class BaselinesRepo {
     const scope = this.scanScopeStmt.get(input.scan_id);
     // An unknown scan_id still reaches the INSERT, where the foreign key
     // rejects it — the same error this method always raised.
-    const slot = scope?.scan_type === 'sarif_import' ? sarifSlotOfScan({ meta: parseMeta(scope.meta) }) : null;
+    const slot = scope?.scan_type === 'sarif_import' ? sarifSlotOfMeta(parseMeta(scope.meta)) : null;
     const info = this.insertStmt.run(
       input.scan_id,
       setAt,

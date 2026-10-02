@@ -62,6 +62,7 @@ import {
   type Severity,
   type Suppression,
 } from '../types.js';
+import { isSarifSlot, sarifToolOfSlot } from '../storage/slots.js';
 import { compareFindings } from './delta.js';
 import { rankFiles } from './hotspots.js';
 import { scoreRisk } from './risk.js';
@@ -436,7 +437,13 @@ function buildSinceBaseline(
 ): FindingDelta | null {
   const baselineType = baseline.scan_type ?? storage.scans.getById(baseline.scan_id)?.scan_type;
   if (baselineType === undefined) return null;
-  const target = latestStateScan(storage, projectPath, baselineType).scan;
+  // An imported log's baseline is one source tool's: its "latest" is too.
+  const target = latestStateScan(
+    storage,
+    projectPath,
+    baselineType,
+    baseline.slot !== undefined && isSarifSlot(baseline.slot) ? { sourceTool: sarifToolOfSlot(baseline.slot) } : {},
+  ).scan;
   const baselineScan = storage.scans.getById(baseline.scan_id);
   if (target === null || baselineScan === null) return null;
   return compareScans(storage, baselineScan, target, isSuppressed, truncation, 'deltas.since_baseline.new_findings');
