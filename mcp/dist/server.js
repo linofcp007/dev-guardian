@@ -46104,7 +46104,7 @@ import { join as join26 } from "node:path";
 
 // src/runners/semgrepConfigs.ts
 import { existsSync as existsSync10, readdirSync as readdirSync7 } from "node:fs";
-import { join as join25 } from "node:path";
+import { basename as basename2, join as join25 } from "node:path";
 
 // src/platform/customRules.ts
 import { statSync as statSync7 } from "node:fs";
@@ -46641,8 +46641,10 @@ function pythonUtf8Env(env) {
 
 // src/runners/semgrepConfigs.ts
 var LLM_RULES_FILE = "llm.yml";
-function llmRulesPath() {
-  return join25(pluginPacksDir(), LLM_RULES_FILE);
+var WEBJS_RULES_FILE = "web-js.yml";
+var PLUGIN_PACK_FILES = [LLM_RULES_FILE, WEBJS_RULES_FILE];
+function pluginPackPath(file) {
+  return join25(pluginPacksDir(), file);
 }
 var CONTAINER_PACKS_ROOT = "/guardian-packs";
 var LLM_PACK_MEASURED_SEMGREP = "1.176.1";
@@ -46683,8 +46685,9 @@ function planSemgrepConfigs(projectPath, plugin, localOnly, scannedPath = projec
   const projectConfigs = inspection.usable.map((c3) => c3.path);
   const local = [...projectConfigs, ...custom3.usable];
   const registry2 = localOnly ? [] : ["auto", ...hasDotnetProject(scannedPath) ? ["p/csharp"] : []];
-  const llmPack = llmRulesPath();
-  const pluginPacks = existsSync10(llmPack) ? [llmPack] : [];
+  const packPaths = PLUGIN_PACK_FILES.map(pluginPackPath);
+  const pluginPacks = packPaths.filter((p) => existsSync10(p));
+  const missingPacks = packPaths.filter((p) => !pluginPacks.includes(p));
   const rulePacks = [...registry2, ...local, ...pluginPacks];
   return {
     args: [...localOnly ? ["--metrics=off"] : [], ...rulePacks.map((c3) => `--config=${c3}`)],
@@ -46693,13 +46696,13 @@ function planSemgrepConfigs(projectPath, plugin, localOnly, scannedPath = projec
     projectConfigs,
     pluginPacks,
     pluginPacksDir: pluginPacksDir(),
-    packMissing: pluginPacks.length === 0,
+    packMissing: missingPacks.length > 0,
     ruleConfigs: [...registry2, ...local],
     notes: [
       ...inspection.unusable.map((u2) => `${u2.target} not loaded (${u2.reason})`),
       ...custom3.unusable.map((u2) => `${u2.path} not loaded (${u2.reason})`),
       ...legacy !== null ? [legacy] : [],
-      ...pluginPacks.length === 0 ? [`the plugin's LLM-application pack was not found at ${llmPack} \u2014 its rules did not run`] : []
+      ...missingPacks.map((p) => `the plugin's pack ${basename2(p)} was not found at ${p} \u2014 its rules did not run`)
     ],
     nothingToRun: registry2.length === 0 && local.length === 0
   };
@@ -47106,7 +47109,7 @@ function isPluginPackGap(pp) {
 }
 var packRuleIds;
 function pluginPackRuleIds() {
-  packRuleIds ??= new Set(ruleIdsInFile(join26(pluginPacksDir(), LLM_RULES_FILE)));
+  packRuleIds ??= new Set(PLUGIN_PACK_FILES.flatMap((file) => ruleIdsInFile(join26(pluginPacksDir(), file))));
   return packRuleIds;
 }
 function isPluginPackRule(ruleId) {
@@ -51601,11 +51604,11 @@ function failDomain(code, message2, retry_with) {
 // src/tools/scanSast.ts
 import { lstatSync as lstatSync9, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync3, readdirSync as readdirSync9, readFileSync as readFileSync6, rmSync as rmSync5, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { basename as basename3, dirname as dirname13, join as join36, relative as relative13, resolve as resolve15, sep as sep10 } from "node:path";
+import { basename as basename4, dirname as dirname13, join as join36, relative as relative13, resolve as resolve15, sep as sep10 } from "node:path";
 
 // src/deps/dotnetRestore.ts
 import { unlinkSync as unlinkSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname12, extname as extname2, isAbsolute as isAbsolute11, join as join32, relative as relative12, resolve as resolve14 } from "node:path";
+import { basename as basename3, dirname as dirname12, extname as extname2, isAbsolute as isAbsolute11, join as join32, relative as relative12, resolve as resolve14 } from "node:path";
 var MAX_DOTNET_FILE_BYTES = 4 * 1024 * 1024;
 var SKIP_DIRS2 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 var PROJECT_WALK_MAX_DEPTH = 8;
@@ -51681,7 +51684,7 @@ function projectsForTarget(target) {
 }
 function lockFileCandidates(project) {
   const dir = dirname12(project);
-  const name = basename2(project, extname2(project));
+  const name = basename3(project, extname2(project));
   const names = /* @__PURE__ */ new Set(["packages.lock.json", `packages.${name}.lock.json`, `packages.${name.replace(/ /g, "_")}.lock.json`]);
   return [...names].map((n2) => join32(dir, n2));
 }
@@ -52446,7 +52449,7 @@ registerToolModule(
   makeScanTool({
     name: "scan_sast",
     title: "SAST scan (Semgrep)",
-    description: "Static analysis with Semgrep: the registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records), rules registered with register_custom_rules, and the plugin's LLM-application pack (configs/semgrep/llm.yml: model output reaching eval/shell/SQL, trust_remote_code, request data in a system prompt, \u2026; a pack that ran only in part: `tools_run[].plugin_packs`, its own gap). Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced) \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed, or a rule that did not load, is partial coverage, named; so are the project files that decided a run (`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to .guardian/reports/sast-<scan>/. PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
+    description: "Static analysis with Semgrep: the registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records), rules registered with register_custom_rules, and the plugin's packs: web-js.yml (Node/Express: SQL by interpolation, request paths and URLs) and llm.yml (model output reaching eval/shell/SQL, trust_remote_code, \u2026); a pack that ran only in part: `tools_run[].plugin_packs`. Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced) \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed, or a rule that did not load, is partial coverage, named; so are the project files that decided a run (`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to .guardian/reports/sast-<scan>/. PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
     scan_type: "sast",
     category: "security",
     supportsScope: true,
@@ -52467,7 +52470,7 @@ registerToolModule(
       allow_dirty: AllowDirty,
       force: Force,
       local_only: external_exports.boolean().optional().describe(
-        "Run only rules already on disk (the project's own Semgrep config, anything registered with register_custom_rules, and the plugin's LLM-application pack), skip the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer rules than the default. When the project has no rules of its own the scan is reported as skipped rather than as a clean result. Default: false."
+        "Run only rules already on disk (the project's own Semgrep config, anything registered with register_custom_rules, and the plugin's own packs), skip the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer rules than the default. When the project has no rules of its own the scan is reported as skipped rather than as a clean result. Default: false."
       ),
       scope: ScanScopeInput
     },
@@ -52510,7 +52513,7 @@ async function runSemgrep2(args) {
     tools_run.push({
       name: "semgrep",
       status: "skipped",
-      reason: `local_only=true but this project has no local Semgrep rules \u2014 no .semgrep.yml, nothing registered with register_custom_rules (the plugin's LLM-application pack, ${LLM_RULES_FILE}, is an addition and not run alone as a SAST scan). Run init_project, or drop local_only to use the Semgrep registry.`
+      reason: `local_only=true but this project has no local Semgrep rules \u2014 no .semgrep.yml, nothing registered with register_custom_rules (the plugin's own packs, ${PLUGIN_PACK_FILES.join(", ")} are an addition and not run alone as a SAST scan). Run init_project, or drop local_only to use the Semgrep registry.`
     });
     missing_tools.push("semgrep");
     return;
@@ -52574,7 +52577,7 @@ async function runSemgrep2(args) {
     return;
   }
   const loadedFrom = [...dockerConfigs];
-  const packConfigs = plan.pluginPacks.map((p) => `${CONTAINER_PACKS_ROOT}/${basename3(p)}`);
+  const packConfigs = plan.pluginPacks.map((p) => `${CONTAINER_PACKS_ROOT}/${basename4(p)}`);
   const result = await runProcess({
     command: "docker",
     args: buildSemgrepDockerArgs({
@@ -52919,7 +52922,7 @@ async function runDotnetAnalyzers(args) {
   let reports = 0;
   try {
     for (const target of findDotnetTargets(ctx.projectPath)) {
-      const rel2 = relative13(ctx.projectPath, target) || basename3(target);
+      const rel2 = relative13(ctx.projectPath, target) || basename4(target);
       const plan = planDotnetRestore(ctx.projectPath, target);
       if (plan.blocked) {
         failures.push(`${rel2}: ${plan.blocked.reason}`);
@@ -53069,7 +53072,7 @@ function projectReferencesScs(projectPath) {
 // src/runners/gitleaksScan.ts
 import { lstatSync as lstatSync11, mkdirSync as mkdirSync6, mkdtempSync as mkdtempSync5, rmSync as rmSync7, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { basename as basename4, dirname as dirname14, join as join38, relative as relative14, resolve as resolve16 } from "node:path";
+import { basename as basename5, dirname as dirname14, join as join38, relative as relative14, resolve as resolve16 } from "node:path";
 
 // src/secrets/verify/rawReport.ts
 import { chmodSync as chmodSync2, closeSync as closeSync4, lstatSync as lstatSync10, mkdtempSync as mkdtempSync4, openSync as openSync4, readdirSync as readdirSync10, rmSync as rmSync6 } from "node:fs";
@@ -53821,7 +53824,7 @@ function recordFilesRun(result, name, run2, report, location, okReason, gaps, no
 var WITHHELD_REPORT = JSON.stringify("gitleaks report withheld: not a JSON array, and it may hold unredacted values");
 function reportTarget(opts, outFile) {
   if (opts.raw === null) return { path: outFile, redact: ["--redact"] };
-  return { path: opts.raw.pathFor(basename4(outFile)), redact: [] };
+  return { path: opts.raw.pathFor(basename5(outFile)), redact: [] };
 }
 function takeReport(opts, written, outFile) {
   if (opts.raw === null) return { text: readJsonSafe(written), secrets: null };
@@ -55284,7 +55287,7 @@ registerToolModule(
       auto_fix: AutoFix,
       allow_dirty: AllowDirty,
       local_only: external_exports.boolean().optional().describe(
-        "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the plugin's LLM-application pack) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet feeds. Default: false."
+        "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the plugin's LLM-application and web-JS sink packs) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet feeds. Default: false."
       ),
       force: Force
     },
@@ -58160,7 +58163,7 @@ function qualityCategoriesView(categories, findings, scanId) {
 
 // src/tools/reviewPr.ts
 import { lstatSync as lstatSync12 } from "node:fs";
-import { basename as basename5, join as join46 } from "node:path";
+import { basename as basename6, join as join46 } from "node:path";
 var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|composer\.(json|lock)|Gemfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|.*\.csproj|packages\.lock\.json|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile)$/;
 var reviewPr = makeScanTool({
   name: "review_pr",
@@ -58175,7 +58178,7 @@ var reviewPr = makeScanTool({
     base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
     head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
     local_only: external_exports.boolean().optional().describe(
-      "Semgrep runs only rules on disk \u2014 the project's own, registered custom rules and the plugin's LLM-application pack \u2014 with --metrics=off. Trivy (run when a manifest changed) may still download its database. Default: false."
+      "Semgrep runs only rules on disk \u2014 the project's own, registered custom rules and the plugin's LLM-application and web-JS sink packs \u2014 with --metrics=off. Trivy (run when a manifest changed) may still download its database. Default: false."
     ),
     severity_min: SeverityMin,
     force: Force
@@ -58270,7 +58273,7 @@ var reviewPr = makeScanTool({
   }
 });
 var isPython2 = (f) => f.toLowerCase().endsWith(".py");
-var isManifest = (f) => MANIFEST_RE.test(basename5(f));
+var isManifest = (f) => MANIFEST_RE.test(basename6(f));
 async function runSemgrep3(ctx, input, out, args) {
   const withGaps = async (scannedNothing2) => {
     const at = out.tools_run.length - 1;
@@ -68907,7 +68910,7 @@ function failDomain17(code, message2) {
 }
 
 // src/tools/importSarif.ts
-import { basename as basename6, relative as relative24, resolve as resolve22, sep as sep15 } from "node:path";
+import { basename as basename7, relative as relative24, resolve as resolve22, sep as sep15 } from "node:path";
 
 // src/sarif/importSarif.ts
 import { createHash as createHash11 } from "node:crypto";
@@ -69348,7 +69351,7 @@ function run(input, ctx) {
     if (e instanceof SarifImportError) return fail("invalid_sarif", e.message);
     throw e;
   }
-  const sourceFile = inside ? relative24(projectPath, logPath).split(sep15).join("/") : basename6(logPath);
+  const sourceFile = inside ? relative24(projectPath, logPath).split(sep15).join("/") : basename7(logPath);
   const scans = persistSarifImport(ctx.storage, projectPath, imported, { sourceFile });
   const runs = scans.map(({ scan_id }, i2) => {
     const counts = imported.runs[i2]?.counts;
@@ -75873,7 +75876,7 @@ import {
   writeFileSync as writeFileSync13
 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename7, dirname as dirname20, isAbsolute as isAbsolute17, join as join72, relative as relative29, resolve as resolve24 } from "node:path";
+import { basename as basename8, dirname as dirname20, isAbsolute as isAbsolute17, join as join72, relative as relative29, resolve as resolve24 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
 var MAX_FILE_BYTES3 = 2 * 1024 * 1024;
@@ -76009,7 +76012,7 @@ async function ingestTarget(targetRaw) {
   if (st.isFile()) {
     if (extOf(target) === ".zip") return ingestZip(target, false);
     const real = safeRealpath(target) ?? target;
-    const read3 = readOne(dirname20(real), real, basename7(target));
+    const read3 = readOne(dirname20(real), real, basename8(target));
     if (read3.kind !== "ok") {
       const why = read3.kind === "refused" ? describeReadRefusal(read3.reason) : "it is binary";
       return { ok: false, code: "unsupported_target", message: `File not reviewed: ${why}.` };
@@ -76060,7 +76063,7 @@ async function ingestUrl(url2) {
   }
   const dir = mkdtempSync6(join72(tmpdir6(), "guardian-scanskill-url-"));
   const isZip = /\.zip($|\?)/i.test(url2);
-  const fileName = isZip ? "download.zip" : basename7(url2.split("?")[0] ?? "download") || "download";
+  const fileName = isZip ? "download.zip" : basename8(url2.split("?")[0] ?? "download") || "download";
   const dest = join72(dir, fileName);
   try {
     const controller = new AbortController();
@@ -76246,7 +76249,7 @@ function safeRealpath(abs) {
 function rel(root, abs) {
   let r = abs.slice(root.length).replace(/\\/g, "/");
   if (r.startsWith("/")) r = r.slice(1);
-  return r || basename7(abs);
+  return r || basename8(abs);
 }
 function readOne(root, abs, relPath) {
   const read3 = readProjectBytes(root, resolve24(abs), MAX_FILE_BYTES3);
@@ -76255,7 +76258,7 @@ function readOne(root, abs, relPath) {
   const raw = read3.bytes;
   if (looksBinary(raw)) return { kind: "binary" };
   const content = raw.toString("utf8");
-  const name = basename7(abs);
+  const name = basename8(abs);
   const ext = extOf(name);
   const shebang = content.startsWith("#!");
   const isCode = CODE_EXT.has(ext) || (DOC_EXT.has(ext) ? false : shebang);
@@ -76503,7 +76506,7 @@ function numProp(value, key) {
 
 // src/surface/collectors/ports.ts
 import { realpathSync as realpathSync6 } from "node:fs";
-import { basename as basename8, join as join74 } from "node:path";
+import { basename as basename9, join as join74 } from "node:path";
 var DOCKERFILES = ["Dockerfile", "dockerfile"];
 var COMPOSE_FILES = [
   "docker-compose.yml",
@@ -76528,7 +76531,7 @@ function collectPorts(projectPath) {
     if (canonical2 === void 0) continue;
     if (seenDockerfiles.has(canonical2)) continue;
     seenDockerfiles.add(canonical2);
-    const source = basename8(canonical2);
+    const source = basename9(canonical2);
     for (const line of readLines(projectPath, canonical2)) {
       const match = /^\s*EXPOSE\s+(.+)$/i.exec(line);
       if (match?.[1] === void 0) continue;
@@ -81154,13 +81157,13 @@ function errorMessage2(e) {
 var import_yaml3 = __toESM(require_dist2(), 1);
 import { mkdirSync as mkdirSync10, mkdtempSync as mkdtempSync7, rmSync as rmSync11, statSync as statSync13, writeFileSync as writeFileSync16 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { basename as basename9, dirname as dirname22, join as join83 } from "node:path";
+import { basename as basename10, dirname as dirname22, join as join83 } from "node:path";
 var MAX_RULE_CONFIG_BYTES = YAML_CONFIG_LIMITS.maxBytes;
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
   const prefix = checkId.slice(0, checkId.length - id.length - 1);
-  const tail = basename9(dirname22(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
+  const tail = basename10(dirname22(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
   return tail.length > 0 && (prefix === tail || prefix.endsWith(`.${tail}`));
 }
 function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
@@ -81202,10 +81205,10 @@ function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
   for (const [file, picked] of byFile) {
     const sub = join83(dir, `rules-${String(n2++).padStart(3, "0")}`);
     mkdirSync10(sub);
-    const copy = join83(sub, basename9(file));
+    const copy = join83(sub, basename10(file));
     writeFileSync16(copy, (0, import_yaml3.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
-    configLabels.push(`${[...picked.keys()].join(", ")} from ${basename9(file)}`);
+    configLabels.push(`${[...picked.keys()].join(", ")} from ${basename10(file)}`);
   }
   for (const id of [...registry2].sort()) {
     configs.push(`r/${id}`);
@@ -91660,7 +91663,7 @@ async function handler46(input, _ctx, callMeta) {
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID22 } from "node:crypto";
 import { existsSync as existsSync24, readFileSync as readFileSync12, writeFileSync as writeFileSync17 } from "node:fs";
-import { basename as basename10, join as join91, posix, win32 } from "node:path";
+import { basename as basename11, join as join91, posix, win32 } from "node:path";
 
 // src/vex/render.ts
 var OPENVEX_CONTEXT = "https://openvex.dev/ns/v0.2.0";
@@ -91985,7 +91988,7 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
   };
 }
 function productOf(projectPath, sbom) {
-  const directory = basename10(projectPath);
+  const directory = basename11(projectPath);
   const sbomName = sbom?.product_name ?? null;
   const name = sbomName === null ? directory : isAbsolutePath(sbomName) ? win32.basename(sbomName) || directory : sbomName;
   const productPurl = sbom?.product_purl ?? null;

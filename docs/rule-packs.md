@@ -19,7 +19,7 @@ dev-guardian ships **154 rules in 12 packs** under [`configs/semgrep/`](../confi
 | [`llm`](#llm) | `scan_sast` (and so `security_scan_full` and `review_pr`), on every Semgrep run, the Docker fallback included | 9 | 8 | 1 | javascript, python, typescript | 4 LOW, 5 WARNING |
 | [`rgpd`](#rgpd) | `compliance_check` | 8 | 8 | 0 | csharp, generic, javascript, php, python, typescript | 8 WARNING |
 | [`routes`](#routes) | `map_attack_surface` (and so `scan_dast` and `validate_finding`) | 64 | 44 | 20 | csharp, go, java, javascript, php, python, ruby, rust, typescript | 64 INFO |
-| [`web-js`](#web-js) | — | 3 | 3 | 0 | javascript, typescript | 3 ERROR |
+| [`web-js`](#web-js) | `scan_sast` (and so `security_scan_full` and `review_pr`), on every Semgrep run, the Docker fallback included | 3 | 3 | 0 | javascript, typescript | 3 ERROR |
 | **total** | | **154** | **124** | **30** | | |
 
 ## base
@@ -252,7 +252,7 @@ dev-guardian ships **154 rules in 12 packs** under [`configs/semgrep/`](../confi
 
 ## web-js
 
-[`configs/semgrep/web-js.yml`](../configs/semgrep/web-js.yml) — run by —.
+[`configs/semgrep/web-js.yml`](../configs/semgrep/web-js.yml) — run by `scan_sast` (and so `security_scan_full` and `review_pr`), on every Semgrep run, the Docker fallback included.
 
 | Rule | Severity | Languages | Ablatable clauses |
 | --- | --- | --- | --- |

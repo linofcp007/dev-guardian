@@ -69,7 +69,7 @@
  */
 import { join } from 'node:path';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
-import { LLM_RULES_FILE } from '../runners/semgrepConfigs.js';
+import { PLUGIN_PACK_FILES } from '../runners/semgrepConfigs.js';
 import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
 import { pluginPacksDir, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
@@ -204,14 +204,14 @@ function isPluginPackGap(pp) {
 }
 let packRuleIds;
 /**
- * The rule ids the plugin's LLM pack declares (`configs/semgrep/llm.yml`),
+ * The rule ids the plugin's packs declare (`configs/semgrep/llm.yml`, `web-js.yml`),
  * as its findings are stored — the pack rule's own id (`localRuleIds.ts`).
  * Read once. A project-root rule carrying the same id is stored the same
  * way and is read as the pack's: that can only keep one of its findings
  * open, never close one.
  */
 function pluginPackRuleIds() {
-    packRuleIds ??= new Set(ruleIdsInFile(join(pluginPacksDir(), LLM_RULES_FILE)));
+    packRuleIds ??= new Set(PLUGIN_PACK_FILES.flatMap((file) => ruleIdsInFile(join(pluginPacksDir(), file))));
     return packRuleIds;
 }
 function isPluginPackRule(ruleId) {

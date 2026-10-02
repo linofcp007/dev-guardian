@@ -263,7 +263,7 @@ export const PACK_CONSUMERS: Readonly<Record<string, string>> = {
   'bugfix-rs.yml': '`bug_hunt`',
   'llm.yml': '`scan_sast` (and so `security_scan_full` and `review_pr`), on every Semgrep run, the Docker fallback included',
   'web-js.yml': '`scan_sast` (and so `security_scan_full` and `review_pr`), on every Semgrep run, the Docker fallback included',
-  'rgpd.yml':'`compliance_check`',
+  'rgpd.yml': '`compliance_check`',
   'routes.yml': '`map_attack_surface` (and so `scan_dast` and `validate_finding`)',
 };
 
