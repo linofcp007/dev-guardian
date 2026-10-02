@@ -197,6 +197,50 @@ describe('LlmScanRepo — atomic lease (D-2), two servers on one database file',
   });
 });
 
+describe('LlmScanRepo — closing undelivered work, two servers on one database file', () => {
+  it('closeUnleased: an open task closes; a live lease held by the other server does not; an expired one does; a closed row is untouched', () => {
+    const [a, b] = twoServers();
+    seed(a, 'scan-1', {}, [task(), task({ task_id: 't-0002' }), task({ task_id: 't-0003' }), task({ task_id: 't-0004' })]);
+    a.llmScan.claimTask('p-1', 't-0002', 'tok-a', at(60_000), at(0));
+    a.llmScan.claimTask('p-1', 't-0003', 'tok-a', at(10_000), at(0));
+    a.llmScan.claimTask('p-1', 't-0004', 'tok-a', at(60_000), at(0));
+    a.llmScan.closeTask('p-1', 't-0004', 'tok-a', OUTCOME, at(1_000));
+    const closedRow = a.llmScan.getTask('p-1', 't-0004');
+    const activity = activityOf(a, 'p-1');
+    const now = at(30_000);
+
+    expect(b.llmScan.closeUnleased('p-1', 't-0001', 'not_delivered', now)).toBe(true);
+    expect(b.llmScan.closeUnleased('p-1', 't-0002', 'not_delivered', now)).toBe(false);
+    expect(b.llmScan.closeUnleased('p-1', 't-0003', 'stale', now)).toBe(true);
+    expect(b.llmScan.closeUnleased('p-1', 't-0004', 'stale', now)).toBe(false);
+
+    expect(a.llmScan.getTask('p-1', 't-0001')).toMatchObject({ status: 'closed', closed_reason: 'not_delivered', closed_at: now, lease_token: null });
+    expect(a.llmScan.getTask('p-1', 't-0002')).toMatchObject({ status: 'leased', lease_token: 'tok-a' });
+    expect(a.llmScan.getTask('p-1', 't-0003')).toMatchObject({ status: 'closed', closed_reason: 'stale', lease_token: null });
+    expect(a.llmScan.getTask('p-1', 't-0004')).toEqual(closedRow);
+    expect(activityOf(a, 'p-1')).toBe(activity);
+    // the holder of a closed-by-expiry lease can no longer submit
+    expect(a.llmScan.closeTask('p-1', 't-0003', 'tok-a', OUTCOME, now)).toBe(false);
+  });
+
+  it('closeAllUnleased closes every open or expired task and leaves live leases and closed rows', () => {
+    const [a, b] = twoServers();
+    seed(a, 'scan-1', {}, [task(), task({ task_id: 't-0002' }), task({ task_id: 't-0003' }), task({ task_id: 't-0004' })]);
+    a.llmScan.claimTask('p-1', 't-0002', 'tok-a', at(60_000), at(0));
+    a.llmScan.claimTask('p-1', 't-0003', 'tok-a', at(10_000), at(0));
+    a.llmScan.claimTask('p-1', 't-0004', 'tok-a', at(60_000), at(0));
+    a.llmScan.closeTask('p-1', 't-0004', 'tok-a', OUTCOME, at(1_000));
+    expect(b.llmScan.closeAllUnleased('p-1', 'not_delivered', at(30_000))).toBe(2);
+    expect(a.llmScan.listTasks('p-1').map((t) => [t.task_id, t.status, t.closed_reason])).toEqual([
+      ['t-0001', 'closed', 'not_delivered'],
+      ['t-0002', 'leased', null],
+      ['t-0003', 'closed', 'not_delivered'],
+      ['t-0004', 'closed', 'valid'],
+    ]);
+    expect(a.llmScan.closeAllUnleased('p-1', 'not_delivered', at(30_000))).toBe(0);
+  });
+});
+
 describe('LlmScanRepo — inactive plans (D-2), with an injected clock', () => {
   it('the constants are named: 7 days to leave the limit, 30 to be abandoned', () => {
     expect([PLAN_INACTIVE_DAYS, PLAN_ABANDON_DAYS]).toEqual([7, 30]);

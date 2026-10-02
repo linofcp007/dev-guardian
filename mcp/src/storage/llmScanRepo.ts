@@ -314,6 +314,36 @@ export class LlmScanRepo {
     })();
   }
 
+  /**
+   * Closes a task nobody holds: `open`, or `leased` with an expired lease —
+   * never a live lease, never a closed row. Clears the lease token. Does NOT
+   * bump the plan's activity: closing undelivered work at plan end is not use.
+   */
+  closeUnleased(planId: string, taskId: string, reason: 'not_delivered' | 'stale', now: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `UPDATE llm_scan_tasks
+              SET status = 'closed', closed_reason = @reason, closed_at = @now, lease_token = NULL,
+                  lease_expires_at = NULL
+            WHERE plan_id = @planId AND task_id = @taskId AND ${LEASABLE_SQL}`,
+        )
+        .run({ planId, taskId, reason, now }).changes === 1
+    );
+  }
+
+  /** {@link closeUnleased} for every such task of the plan at once (limit reached, plan complete). Returns how many closed. */
+  closeAllUnleased(planId: string, reason: 'not_delivered' | 'stale', now: string): number {
+    return this.db
+      .prepare(
+        `UPDATE llm_scan_tasks
+            SET status = 'closed', closed_reason = @reason, closed_at = @now, lease_token = NULL,
+                lease_expires_at = NULL
+          WHERE plan_id = @planId AND ${LEASABLE_SQL}`,
+      )
+      .run({ planId, reason, now }).changes;
+  }
+
   /** Records that an `open` plan was used just now. */
   touchPlan(planId: string, now: string): void {
     this.db
