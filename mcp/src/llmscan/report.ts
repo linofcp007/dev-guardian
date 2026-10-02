@@ -11,7 +11,7 @@
 
 import { OVER_LIMIT_REASON_PREFIX } from './plan.js';
 import type { ScanCoverage } from '../types.js';
-import type { Independence, LlmScanPlan, LlmScanTask, LlmVerdict, TaskKind, VerifyVerdict } from './types.js';
+import type { HuntResult, Independence, LlmScanPlan, LlmScanTask, LlmVerdict, TaskKind, VerifyVerdict } from './types.js';
 
 export interface EntryPointAccount {
   entry_point: string;
@@ -66,6 +66,7 @@ const STORED: Record<VerifyVerdict['verdict'], LlmVerdict> = {
 };
 
 const isVerify = (r: LlmScanTask['result']): r is VerifyVerdict => r !== null && 'verdict' in r;
+const isHunt = (r: LlmScanTask['result']): r is HuntResult => r !== null && 'findings' in r;
 
 /** Closed with a valid answer — the only way a task counts toward coverage. */
 const answered = (t: LlmScanTask): boolean => t.status === 'closed' && t.closed_reason === 'valid';
@@ -89,6 +90,13 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
     }
   };
 
+  // EC-4: every closed hunt task that reported a finding is one of its sources.
+  const reportedBy = new Map<string, Set<string>>();
+  for (const t of tasks) {
+    if (t.kind === 'verify' || !answered(t) || !isHunt(t.result)) continue;
+    for (const fp of t.result.fingerprints ?? []) reportedBy.set(fp, new Set([...(reportedBy.get(fp) ?? []), t.task_id]));
+  }
+
   for (const t of tasks) {
     counts.by_kind[t.kind] += 1;
     if (answered(t) && t.independence !== null) counts.by_independence[t.independence] += 1;
@@ -103,6 +111,9 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
           });
         }
       }
+      // A verify task that took three invalid answers closed undetermined (US-1.AC-4);
+      // it stays missing — nothing was established — but it is counted as what it is.
+      if (t.status === 'closed' && t.closed_reason === 'invalid_submissions') counts.by_verdict.undetermined += 1;
       const fp = t.target.fingerprint;
       if (t.target.origin_task_id !== undefined && fp !== undefined) {
         const prior = huntFindings.get(fp);
@@ -110,7 +121,7 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
           fingerprint: fp,
           status: verdict ?? prior?.status ?? 'unverified',
           independent: verdict === null ? (prior?.independent ?? null) : t.independence !== null && t.independence !== 'same_context',
-          sources: [...new Set([...(prior?.sources ?? []), t.target.origin_task_id])],
+          sources: [...new Set([...(prior?.sources ?? []), t.target.origin_task_id, ...(reportedBy.get(fp) ?? [])])],
           verify_task_id: t.task_id,
         });
       }
@@ -134,7 +145,10 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
   const not_visited = entry_points.filter((e) => e.status !== 'visited').map((e) => e.entry_point);
 
   const missing = tasks.filter((t) => !answered(t)).map((t) => t.task_id);
-  const not_planned = plan.not_eligible.filter((n) => n.reason.startsWith(OVER_LIMIT_REASON_PREFIX)).map((n) => n.fingerprint);
+  // The typed flag first; the reason prefix stays as the fallback for a plan stored before the flag existed.
+  const not_planned = plan.not_eligible
+    .filter((n) => n.overflow === true || n.reason.startsWith(OVER_LIMIT_REASON_PREFIX))
+    .map((n) => n.fingerprint);
   const taskCounts = {
     planned: tasks.length,
     closed: tasks.filter((t) => t.status === 'closed' && !neverDelivered(t)).length,

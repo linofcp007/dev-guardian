@@ -26,7 +26,7 @@ import type { Finding, RouteRecord } from '../types.js';
 import { HUNT_CLASSES } from './classes.js';
 import { entryPointId } from './plan.js';
 import { MAX_EVIDENCE_WORDS, MAX_HUNT_FINDINGS, MAX_REASONING_WORDS, MAX_TITLE_CHARS, type ProjectReader } from './submission.js';
-import type { LlmScanTask } from './types.js';
+import type { LlmScanTask, TaskKind } from './types.js';
 
 /** US-1.AC-2, US-3.AC-3 */
 export const MAX_BRIEF_TOKENS = 25_000;
@@ -88,6 +88,11 @@ export function randomBoundary(): string {
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+/** The JSON schema a task's answer must follow, as handed to the host with the brief. */
+export function responseSchema(kind: TaskKind): unknown {
+  return JSON.parse(kind === 'verify' ? VERIFY_SCHEMA : HUNT_SCHEMA) as unknown;
 }
 
 // ---- templates -------------------------------------------------------------

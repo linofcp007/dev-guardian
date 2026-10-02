@@ -83,6 +83,10 @@ import './tools/auditMcpTools.js';
 import './tools/vetPackages.js';
 // VEX export (3.0 additions, part C):
 import './tools/exportVex.js';
+// LLM-assisted scan: the host's model verifies findings and hunts; the server plans, validates and counts.
+import './tools/llmScanStart.js';
+import './tools/llmScanTask.js';
+import './tools/llmScanSubmit.js';
 
 // Resources:
 import './resources/scans.js';

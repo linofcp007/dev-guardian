@@ -780,6 +780,20 @@ export const DOMAIN_ERROR_CODES = [
   'outside_project',
   'refused_file',
   'not_found',
+  // llm_scan_start / llm_scan_task / llm_scan_submit (tools/llmScan*.ts).
+  'invalid_input',
+  'needs_surface',
+  'too_many_open_plans',
+  'nothing_to_plan',
+  'plan_abandoned',
+  'plan_corrupt',
+  'needs_confirm',
+  'limit_reached',
+  'sampling_unavailable',
+  'already_closed',
+  'bad_lease',
+  'too_large',
+  'store_failed',
 ] as const;
 export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
 

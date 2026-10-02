@@ -63,10 +63,10 @@ export interface LlmScanPlan {
   /** US-4.AC-1 */
   confirmed: boolean;
   status: 'open' | 'complete' | 'abandoned';
-  /** EC-1 */
-  not_eligible: Array<{ fingerprint: string; reason: string }>;
-  /** US-2.AC-6 */
-  set_aside: Array<{ entry_point: string; reason: string }>;
+  /** EC-1. `overflow`: left out only because the plan was full (it could have been verified). */
+  not_eligible: Array<{ fingerprint: string; reason: string; overflow?: true }>;
+  /** US-2.AC-6. `overflow`: as for `not_eligible`. */
+  set_aside: Array<{ entry_point: string; reason: string; overflow?: true }>;
   created_at: string;
   updated_at: string;
 }
@@ -134,6 +134,12 @@ export interface HuntFinding {
 export interface HuntResult {
   entry_points_reviewed: string[];
   findings: HuntFinding[];
+  /**
+   * Set by the server when it stores the result, never sent by a model: the
+   * fingerprints of the findings this task reported (EC-4 — the report names
+   * every task that reported one).
+   */
+  fingerprints?: string[];
 }
 
 /**
