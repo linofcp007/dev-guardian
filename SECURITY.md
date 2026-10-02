@@ -9,8 +9,8 @@ upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 3.0.x   | ✅        |
-| < 3.0   | ❌        |
+| 3.1.x   | ✅        |
+| < 3.1   | ❌        |
 
 ## Reporting a vulnerability
 
