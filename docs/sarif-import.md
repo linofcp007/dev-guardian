@@ -69,7 +69,7 @@ A finding's identity decides what a diff calls new, resolved or unchanged.
 | no `security-severity`: `level` `error` | high |
 | `level` `warning` | medium |
 | `level` `note` | info |
-| `level` `none` | info |
+| `level` `none` on a result with `kind: fail` | info (with no `kind`, `level: none` is not a finding) |
 | `properties.severity` valid, from a dev-guardian export | that value |
 
 ## Counts
@@ -82,7 +82,7 @@ The response and the scan's `meta.counts` carry, per run (and `counts_total` for
 | `without_location` | Findings stored with no file: the result has no physical location inside the project (a Trivy image layer, say). |
 | `skipped` | Results that could not be read, with the index and a fixed reason. |
 | `suppressed_at_source` | Results whose `suppressions` hold an `accepted` entry: counted, not imported. |
-| `not_findings` | Results that are not findings (`kind` of `pass`, `notApplicable`, `informational`, `open`, `review`, `fail` excepted). |
+| `not_findings` | Results that are not findings: a `kind` other than `fail` (`pass`, `notApplicable`, `informational`, `open`, `review`), or `level: none` with no `kind`. |
 | `duplicates` | Results with an identity already seen in the run. |
 | `truncated` | Results left out past `max_results`. |
 | `identity_computed` | Findings whose identity was computed rather than taken from the log. |
