@@ -94,6 +94,7 @@ function readRun(run, projectPath, maxResults) {
     };
     const findings = [];
     const seen = new Set();
+    const keys = [];
     const results = asArray(getProp(run, 'results'));
     const limit = Math.min(results.length, maxResults);
     counts.truncated = results.length - limit;
@@ -129,9 +130,28 @@ function readRun(run, projectPath, maxResults) {
         if (finding.identity === undefined)
             counts.identity_computed += 1;
         findings.push(finding);
+        keys.push(dedupeKey);
         counts.imported += 1;
     }
+    separateSharedFingerprints(findings, keys);
     return { source_tool: tool, ...(version !== undefined ? { source_version: version } : {}), findings, counts };
+}
+/**
+ * A finding's fingerprint is rule, file and line, and a scan stores one row
+ * per fingerprint: two results on the same line (another message, another
+ * log fingerprint) would collapse into one. Every member of such a group takes
+ * a fingerprint of its own, derived from what told it apart — the same for
+ * the same result on every import, whichever of its neighbours came first.
+ */
+function separateSharedFingerprints(findings, keys) {
+    const uses = new Map();
+    for (const f of findings)
+        uses.set(f.fingerprint, (uses.get(f.fingerprint) ?? 0) + 1);
+    findings.forEach((f, i) => {
+        if ((uses.get(f.fingerprint) ?? 0) < 2)
+            return;
+        f.fingerprint = createHash('sha256').update(JSON.stringify(['sarif-fp-v1', f.fingerprint, keys[i] ?? ''])).digest('hex');
+    });
 }
 /** The rule a result points at: by its reference (index, extension), else by its id. */
 function resolveRule(result, rc) {
@@ -181,7 +201,9 @@ function buildFinding(result, rc) {
         });
     const where = locate(result, rc);
     const message = messageText !== undefined ? truncateBytes(messageText) : undefined;
-    const title = (message ?? getString(getProp(rule, 'shortDescription'), 'text') ?? ruleId ?? 'finding').slice(0, TITLE_MAX_CHARS);
+    // The rule's own short description names the finding; the result's message is the detail, so the
+    // title repeats it only when the rule has no description.
+    const title = (getString(getProp(rule, 'shortDescription'), 'text') ?? message ?? ruleId ?? 'finding').slice(0, TITLE_MAX_CHARS);
     const input = {
         tool: rc.tool,
         severity: severityOf(result, rule, props),

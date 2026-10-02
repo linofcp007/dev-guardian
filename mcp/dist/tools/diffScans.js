@@ -40,7 +40,9 @@ import { z } from 'zod';
 import { latestStateScan, partitionSuppressed, summarizeSkipped, suppressedOfEither, } from '../history/openSet.js';
 import { classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { sameImportSlot, sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
+import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES } from '../types.js';
 import { registerToolModule } from './index.js';
 /** Items returned per bucket; the counts in `summary` are never capped. */
@@ -53,6 +55,7 @@ const inputSchema = {
         .enum(SCAN_TYPES)
         .optional()
         .describe("With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type."),
+    source_tool: SourceToolInput,
     from_scan_id: z
         .string()
         .uuid()
@@ -84,7 +87,8 @@ const tool = {
         "project's baseline of the same scan type. A finding under an active suppression is listed apart " +
         '(`summary.suppressed`, `suppressed_findings`), never as new, resolved or unchanged. An explicit ' +
         'scan id of another project (from: or of another scan type), or of a scan that did not complete ' +
-        '(running, failed, cancelled), is refused with unknown_scan_id, never diffed.',
+        '(running, failed, cancelled), is refused with unknown_scan_id, never diffed. For scan_type sarif_import ' +
+        "(import_sarif) source_tool names the tool whose imports are compared; imports of two tools are never diffed.",
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -155,6 +159,9 @@ async function handler(input, ctx) {
     };
 }
 function resolveTo(inp, ctx, skipHits) {
+    if (inp.to_scan_id && inp.source_tool !== undefined) {
+        return { ok: false, err: failDomain('unsupported_target', SOURCE_TOOL_WITH_SCAN_ID) };
+    }
     if (inp.to_scan_id) {
         const scan = ctx.storage.scans.getById(inp.to_scan_id);
         if (!scan)
@@ -191,7 +198,10 @@ function resolveTo(inp, ctx, skipHits) {
         return { ok: false, err: failDomain('not_a_git_repo', e.message) };
     }
     // Default: this project's newest usable state scan.
-    const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
+    const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
+    if (!choice.ok)
+        return { ok: false, err: failDomain('unsupported_target', choice.message) };
+    const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type, choice.sourceTool !== undefined ? { sourceTool: choice.sourceTool } : {});
     skipHits.push(...latest.hits);
     if (!latest.scan) {
         return {
@@ -217,14 +227,18 @@ function resolveFrom(inp, toScan, ctx, skipHits) {
                 ? `from scan '${scan.scan_id}' is a '${scan.scan_type}' scan and to scan '${toScan.scan_id}' is ` +
                     `'${toScan.scan_type}': findings of different scan types come from different rule families, ` +
                     'so a diff compares scans of one type.'
-                : incompleteReason(scan, 'from');
+                : !sameImportSlot(scan, toScan)
+                    ? `from scan '${scan.scan_id}' and to scan '${toScan.scan_id}' are SARIF imports of different tools: ` +
+                        'a diff compares the imports of one tool.'
+                    : incompleteReason(scan, 'from');
         if (refusal !== null)
             return { ok: false, err: failDomain('unknown_scan_id', refusal) };
         return { ok: true, value: inp.from_scan_id };
     }
     const mode = inp.from ?? 'previous';
     if (mode === 'baseline') {
-        const baseline = ctx.storage.baselines.getActiveForProject(toScan.project_path, toScan.scan_type);
+        // An import's baseline is its source tool's.
+        const baseline = ctx.storage.baselines.getActiveForProject(toScan.project_path, toScan.scan_type, toScan.scan_type === 'sarif_import' ? sarifSlotOfScan(toScan) : undefined);
         if (!baseline)
             return {
                 ok: false,

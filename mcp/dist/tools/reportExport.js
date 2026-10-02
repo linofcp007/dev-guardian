@@ -35,6 +35,7 @@ import { escapeHtml, markdownToSafeHtml, renderHtmlDocument, severityBar, severi
 import { owaspCoverageHtml, owaspCoverageMarkdown, taxonomyCell } from '../report/owaspCoverage.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
+import { SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { CVE_SOURCE_SCAN_TYPES, } from '../types.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
@@ -44,6 +45,7 @@ const inputSchema = {
         .uuid()
         .optional()
         .describe("Scan to export. Defaults to project_path's newest usable finding-producing scan."),
+    source_tool: SourceToolInput.describe("Without scan_id: export the newest SARIF import of this source tool (an import's driver name) instead of the newest scan."),
     format: z
         .enum(['html', 'sarif', 'markdown', 'json'])
         .optional()
@@ -77,6 +79,7 @@ const tool = {
         'external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per ' +
         'source language of the project. An explicit scan_id must be a scan of project_path (another ' +
         "project's is refused, with retry_with naming its project) and not still running. " +
+        "source_tool exports that tool's newest SARIF import (import_sarif). " +
         'Local file only — no external services, no web fonts.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
@@ -122,7 +125,14 @@ async function handler(input, ctx) {
     // Scan mode. Default: THIS project's newest usable state scan — not the
     // newest completed scan in the whole database, which exported another
     // project's scan (or an SBOM) into this project's reports directory.
-    const latest = inp.scan_id === undefined ? latestStateScan(ctx.storage, projectPath) : null;
+    if (inp.scan_id !== undefined && inp.source_tool !== undefined)
+        return failDomain('unsupported_target', SOURCE_TOOL_WITH_SCAN_ID);
+    // source_tool alone names a tool's imports: this tool has no scan_type.
+    const latest = inp.scan_id !== undefined
+        ? null
+        : inp.source_tool !== undefined
+            ? latestStateScan(ctx.storage, projectPath, 'sarif_import', { sourceTool: inp.source_tool })
+            : latestStateScan(ctx.storage, projectPath);
     const scanId = inp.scan_id ?? latest?.scan?.scan_id;
     if (!scanId) {
         return failDomain('unknown_scan_id', `No usable completed scan of ${projectPath} to export.` +
