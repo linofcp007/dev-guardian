@@ -36,7 +36,7 @@ export const MAX_EVIDENCE_WORDS = 60;
 export const MAX_TITLE_CHARS = 200;
 
 /** The contained reader's signature (`readProjectText`). */
-export type ProjectReader = (root: string, path: string) => ProjectTextRead;
+export type ProjectReader = (root: string, path: string, maxBytes?: number) => ProjectTextRead;
 
 export interface SubmissionContext {
   /** Canonical project root. */
@@ -70,7 +70,12 @@ const FINDING_KEYS = ['file', 'line', 'class', 'title', 'attacker', 'evidence'] 
 const MAX_ENTRY_POINTS = 200;
 const MAX_ENTRY_POINT_CHARS = 300;
 const MAX_EVIDENCE_REFS = 10;
-const MAX_FIELD_NAME_CHARS = 64;
+/** A cited file larger than this reads as "could not be read": a citation never needs more. */
+export const MAX_CITED_FILE_BYTES = 1024 * 1024;
+/** Distinct files one submission may make the server read; further citations are rejected unread. */
+export const MAX_CITED_FILES = 100;
+/** A key echoed in an error must look like a plain identifier of at most this many characters. */
+const MAX_ECHOED_KEY_CHARS = 32;
 
 const CLASS_SET: ReadonlySet<string> = new Set(HUNT_CLASSES);
 
@@ -100,8 +105,14 @@ function sizeGate(payload: unknown): SubmissionCheck<never> | null {
 }
 
 function unknownKeys(obj: Record<string, unknown>, allowed: readonly string[], prefix: string, errors: Errors): void {
+  let index = 0;
   for (const key of Object.keys(obj)) {
-    if (!allowed.includes(key)) errors.push({ path: `${prefix}${key.slice(0, MAX_FIELD_NAME_CHARS)}`, problem: 'unknown field' });
+    if (allowed.includes(key)) continue;
+    // The path is fixed; only a short identifier-shaped key is named in the
+    // problem, anything else is never reproduced.
+    const named = key.length <= MAX_ECHOED_KEY_CHARS && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+    errors.push({ path: `${prefix}[unknown field #${index}]`, problem: named ? `unknown field ${key}` : 'unknown field' });
+    index += 1;
   }
 }
 
@@ -124,20 +135,34 @@ function textField(obj: Record<string, unknown>, key: string, prefix: string, er
  * out after normalisation). Judged BEFORE any read: an outside path is never
  * handed to the reader (US-1.AC-14).
  */
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
 function containedPath(raw: string): string | null {
   if (raw === '' || raw.includes('\0')) return null;
   const slashed = raw.replace(/\\/g, '/');
   if (slashed.startsWith('/') || /^[A-Za-z]:/.test(slashed)) return null;
+  // A colon past the drive check is a Windows alternate data stream.
+  if (slashed.includes(':')) return null;
   const normal = posix.normalize(slashed);
   if (normal === '..' || normal.startsWith('../') || normal === '.') return null;
+  // Reserved device names open a device, not a file, in any segment and any case.
+  if (normal.split('/').some((seg) => WINDOWS_DEVICE.test(seg))) return null;
   return normal;
 }
 
-type LineProblem = 'not inside the project' | 'file not found' | 'file could not be read' | 'line outside the file';
+type LineProblem =
+  | 'not inside the project'
+  | 'file not found'
+  | 'file could not be read'
+  | 'line outside the file'
+  | 'too many distinct files cited';
+
+/** What is kept of a read: never its text. */
+type Looked = { status: 'ok'; lines: number } | { status: 'absent' } | { status: 'refused' };
 
 /** Looks one `file:line` up on disk through the contained reader, once per file. */
 class CitationChecker {
-  private readonly texts = new Map<string, ProjectTextRead>();
+  private readonly looked = new Map<string, Looked>();
   constructor(private readonly ctx: SubmissionContext) {}
 
   /** The reason a citation does not hold, or null when it does. */
@@ -145,15 +170,22 @@ class CitationChecker {
     const path = containedPath(file);
     if (path === null) return 'not inside the project';
     if (!Number.isSafeInteger(line) || line < 1) return 'line outside the file';
-    let read = this.texts.get(path);
-    if (read === undefined) {
-      read = this.ctx.reader(this.ctx.root, path);
-      this.texts.set(path, read);
+    let seen = this.looked.get(path);
+    if (seen === undefined) {
+      if (this.looked.size >= MAX_CITED_FILES) return 'too many distinct files cited';
+      seen = this.look(path);
+      this.looked.set(path, seen);
     }
-    if (read.status === 'absent') return 'file not found';
-    if (read.status === 'refused') return 'file could not be read';
-    const body = read.text === '' ? [] : read.text.replace(/\r?\n$/, '').split(/\r?\n/);
-    return line > body.length ? 'line outside the file' : null;
+    if (seen.status === 'absent') return 'file not found';
+    if (seen.status === 'refused') return 'file could not be read';
+    return line > seen.lines ? 'line outside the file' : null;
+  }
+
+  private look(path: string): Looked {
+    const read = this.ctx.reader(this.ctx.root, path, MAX_CITED_FILE_BYTES);
+    if (read.status !== 'ok') return { status: read.status };
+    // Lines, not counting the empty "line" after a final newline.
+    return { status: 'ok', lines: read.text === '' ? 0 : read.text.replace(/\r?\n$/, '').split(/\r?\n/).length };
   }
 }
 
