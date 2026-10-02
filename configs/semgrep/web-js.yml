@@ -42,17 +42,24 @@
 #     (`buildWhere(filter)`) não e visto: so o valor interpolado na própria
 #     chamada, ou numa variável atribuída no mesmo bloco.
 #   - Excluídos por forma (o valor só pode ser um de vários literais), lidos
-#     no TEXTO do valor e, para uma variável, na atribuição do mesmo bloco:
-#     um literal, um ternário entre literais, `Number`/`parseInt`/`parseFloat`,
-#     `new Date(...).toISOString()`, `x.length`, marcadores gerados
-#     (`Array(n).fill('?').join(',')`, `.map(() => '?').join(',')`), um acesso
-#     a um objeto de NOME CONSTANTE (`SORT_COLUMNS[k]`, com ou sem `?? OUTRO`)
-#     e um identificador em MAIUSCULAS (`BATCH_SIZE`). A convenção do nome
-#     substitui "declarado const": confirmar a declaração custava uma
-#     sequência por ficheiro, medido como timeouts. Fica de fora: o acesso a um
-#     objeto em minúsculas, mesmo constante, dispara; e o `.join(...)` de um
-#     array local de literais SEM nenhum `push` de um valor interpolado
-#     (a decoy D01) é tratado como seguro só em linha.
+#     no TEXTO do valor: um literal, um ternário entre literais,
+#     `Number`/`parseInt`/`parseFloat`, `new Date(...).toISOString()`,
+#     `x.length`, marcadores gerados (`Array(n).fill('?').join(',')`,
+#     `.map(() => '?').join(',')`, com o separador LITERAL) e um acesso a um
+#     objeto de NOME CONSTANTE (`SORT_COLUMNS[k]`, `COLUNAS.titulo`, com ou sem
+#     `?? OUTRO`). A convenção do nome só vale para acessos a um objeto:
+#     substitui "declarado const", que custava segundos por ficheiro grande
+#     (timeouts, medido). Um identificador isolado (`SORT`, `TABLE`) é
+#     excluído só se for um `const` com um destes valores à direita, no mesmo
+#     bloco ou num bloco que o envolva (um `const` de módulo usado dentro de
+#     uma função: sondado). Um `let`/`var` NUNCA é excluído: pode ser
+#     reatribuído com dados do pedido, e a regra não segue a ordem das
+#     atribuições. Preço medido: um `let direction = x ? 'ASC' : 'DESC'` dispara
+#     (falso positivo). Outro preço: uma constante importada
+#     (`import { PREFIX } from './x'`) interpolada dispara, a regra não a vê.
+#     Fica de fora: o acesso a um objeto em minúsculas, mesmo constante, dispara;
+#     e o `.join(...)` de um array local de literais SEM nenhum `push` de um
+#     valor interpolado (a decoy D01) é tratado como seguro só em linha.
 #
 # web-js-path-traversal
 #   - Taint INTRA-procedimento: a fonte (`req.query`, `req.params`, `req.body`)
@@ -70,6 +77,10 @@
 #     diretório base: uma comparação com um prefixo qualquer também limpa.
 #     `path.normalize`, `path.relative`, `includes('..')` e um `realpath`
 #     NÃO limpam: o valor continua tainted e dispara.
+#   - Sinks: o valor do pedido que chega DIRETO ao ficheiro lido ou enviado
+#     (`res.sendFile(req.query.f)`) também dispara, não só através de
+#     `path.join`/`path.resolve`: mais largo que o US-2.AC-1, de propósito (é
+#     o mesmo traversal).
 #   - Só as fontes `req.*` com esse nome de parâmetro; `request.query`,
 #     `ctx.query` e `event.queryStringParameters` não são vistos.
 #
@@ -99,6 +110,45 @@
 #   - Um valor do pedido no CAMINHO de um URL de host fixo
 #     (`fetch(\`${BASE}/users/${req.params.id}\`)`) dispara como o resto: o
 #     taint não distingue o host do caminho. É um falso positivo medido.
+#
+# CORPUS REAL (SC-002, US-3.AC-5). Medido com `semgrep --config
+# configs/semgrep/web-js.yml --json --metrics=off --jobs 2` (Semgrep 1.176.1)
+# sobre três aplicações Node de código aberto, nos commits
+#   uptime-kuma  e7420f8fa5 (master, 3.0.0-beta.0)
+#   actual       7e683249a9 (master)
+#   outline      aaab59d8ca (main, 1.10.1)
+# 4933 ficheiros JS/TS lidos pelo Semgrep (`paths.scanned`: js, mjs, cjs, jsx,
+# ts, tsx) e 711 103 LINHAS (todas as linhas físicas desses ficheiros, brancos e
+# comentários incluídos: uptime-kuma 339 ficheiros / 38 824 linhas, actual
+# 2 061 / 319 326, outline 2 533 / 352 953). Contagem por regra e veredicto de
+# CADA achado (FP = o padrão casa mas o valor não é controlado por um atacante):
+#   web-js-sql-template   14 achados
+#     actual/packages/loot-core/src/server/budget/actions.ts:89  FP: `table` vem de getBudgetTable(), nomes fixos
+#     actual/.../budget/statements.ts:19  FP: GOAL/TEMPLATE_PREFIX, constantes importadas
+#     actual/.../budget/statements.ts:20  FP: idem
+#     actual/.../budget/statements.ts:22  FP: `scopeClause` é um fragmento montado na própria função
+#     outline/server/queues/tasks/UpdateDocumentsPopularityScoreTask.ts:180  FP: `this.workingTable`, nome gerado pela tarefa
+#     ...:298, :449, :466, :469, :523  FP: o mesmo `this.workingTable` (5 achados)
+#     ...:509  FP: `tablename` lido de pg_tables
+#     uptime-kuma/server/database.js:375  FP: o nome da base passou por SqlString.escapeId
+#     uptime-kuma/server/database.js:1060  FP: `sqlHourOffset` vem de Database.sqlHourOffset(), texto por dialeto
+#     uptime-kuma/server/jobs/clear-old-data.js:44  FP: o mesmo `sqlHourOffset`
+#     (32 achados em outline/server/migrations/ ficam de fora por `paths.exclude`:
+#     eram todos FP, nomes de tabela e ids lidos da base)
+#   web-js-path-traversal  0 achados (o corpus quase não tem leituras ou envios
+#     de ficheiros com valores do pedido: o recall mede-se só pelos fixtures)
+#   web-js-ssrf             1 achado
+#     actual/packages/sync-server/src/app-cors-proxy.js:207  FP: o URL do pedido
+#     é validado antes por isUrlAllowed(), função própria, que a regra não
+#     reconhece como lista exata
+# Verdictos lidos no código, não inferidos: actions.ts, statements.ts,
+# database.js:375/1060, o proxy; nos restantes pela origem do valor.
+# SC-002: 15 achados em 711 103 linhas = 0,04 por 2 000 linhas, contra o
+# orçamento de 1 por 2 000 (355 achados): cumprido. Verdadeiros positivos:
+# 0 de 15; a regra SQL é ruidosa por desenho (decide pela forma do texto).
+# NFR-2 (rácio de tempo do scan com/sem este pack): a medir na tarefa 6, sobre
+# o corpus do eixo 3 (GUARDIAN_WEBJS_SRC); sem número aqui até lá.
+# Eixos 0 a 3 do harness de ablação: tarefa 4.
 #
 # Fixtures em mcp/test/fixtures/web-js/{hits,misses}/ (hits/ com uma linha
 # `// BUG: <id-da-regra>` por achado), `mcp/test/e2e/webJsPack.test.ts`.
@@ -171,15 +221,15 @@ rules:
       # (regex sobre o texto do valor) e através de uma variável do mesmo bloco.
       - metavariable-regex:
           metavariable: $X
-          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*\[[^\]]*\](?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\([^)]*\)|.+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\([^)]*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length|[A-Z][A-Z0-9_]*)$).+'
+          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$).+'
       - pattern-not-inside:
           patterns:
             - pattern: |
-                $X = $V;
+                const $X = $V;
                 ...
             - metavariable-regex:
                 metavariable: $V
-                regex: '(?s)^(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*\[[^\]]*\](?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\([^)]*\)|.+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\([^)]*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length|[A-Z][A-Z0-9_]*)$'
+                regex: '(?s)^(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$'
       - pattern-not:
           patterns:
             - pattern: $W.join(...)
