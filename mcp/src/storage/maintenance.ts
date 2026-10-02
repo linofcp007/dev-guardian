@@ -225,6 +225,7 @@ const BASELINED_RUN_MEMBERS_SQL = `
 const PROTECTED_SQL = `(
   status = 'running'
   OR id IN (SELECT scan_id FROM baselines)
+  OR id IN (SELECT scan_id FROM llm_scan_plans WHERE status = 'open')
   OR EXISTS (
     SELECT 1 FROM baselines b
      WHERE b.scan_id = (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.parent_scan_id') END)
@@ -348,6 +349,11 @@ export function deleteScans(db: DB, ids: readonly string[]): number {
 function deleteRows(db: DB, eligible: readonly string[]): number {
   if (eligible.length === 0) return 0;
   const del = eligible.map(() => '?').join(', ');
+  // A closed plan goes with its scan; an open plan holds the scan back (PROTECTED_SQL).
+  db.prepare<string[]>(
+    `DELETE FROM llm_scan_tasks WHERE plan_id IN (SELECT id FROM llm_scan_plans WHERE scan_id IN (${del}))`,
+  ).run(...eligible);
+  db.prepare<string[]>(`DELETE FROM llm_scan_plans WHERE scan_id IN (${del})`).run(...eligible);
   db.prepare<string[]>(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
   db.prepare<string[]>(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
   db.prepare<string[]>(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);

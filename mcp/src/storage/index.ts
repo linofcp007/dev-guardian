@@ -12,6 +12,7 @@ import { BaselinesRepo } from './baselinesRepo.js';
 import { CveIntelRepo } from './cveIntelRepo.js';
 import { CvesRepo } from './cvesRepo.js';
 import { FindingsRepo } from './findingsRepo.js';
+import { LlmScanRepo } from './llmScanRepo.js';
 import { McpToolPinsRepo } from './mcpToolPinsRepo.js';
 import { RuntimeMetaRepo } from './runtimeMetaRepo.js';
 import { ScansRepo } from './scansRepo.js';
@@ -33,6 +34,7 @@ export class Storage {
   readonly validations: ValidationsRepo;
   readonly agentAudit: AgentAuditRepo;
   readonly mcpToolPins: McpToolPinsRepo;
+  readonly llmScan: LlmScanRepo;
 
   constructor(private readonly db: DB) {
     this.scans = new ScansRepo(db);
@@ -47,6 +49,7 @@ export class Storage {
     this.validations = new ValidationsRepo(db);
     this.agentAudit = new AgentAuditRepo(db);
     this.mcpToolPins = new McpToolPinsRepo(db);
+    this.llmScan = new LlmScanRepo(db);
   }
 
   close(): void {

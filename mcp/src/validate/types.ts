@@ -13,7 +13,15 @@
 export const VERDICTS = ['unreachable', 'reachable', 'imported', 'confirmed', 'unknown'] as const;
 export type Verdict = (typeof VERDICTS)[number];
 
-export const PROVIDERS = ['static', 'runtime', 'dependency'] as const;
+/**
+ * What provider `llm` stores (llm-scan). Kept apart from {@link VERDICTS}:
+ * those are the verdicts the evidence providers give, and `validate_finding`'s
+ * summary counts exactly them.
+ */
+export const LLM_VERDICTS = ['exploitable', 'not_exploitable', 'undetermined'] as const;
+export type LlmStoredVerdict = (typeof LLM_VERDICTS)[number];
+
+export const PROVIDERS = ['static', 'runtime', 'dependency', 'llm'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 /** The providers this version implements, in the order they run and report. */
@@ -27,7 +35,7 @@ export interface ValidationEvidence {
 
 export interface FindingValidation {
   fingerprint: string;
-  verdict: Verdict;
+  verdict: Verdict | LlmStoredVerdict;
   confidence: 'high' | 'medium' | 'low';
   provider: Provider;
   evidence: ValidationEvidence[];

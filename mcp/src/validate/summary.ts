@@ -176,7 +176,8 @@ function countByVerdict(validations: readonly FindingValidation[]): Record<Verdi
   // than absent. A missing key reads as "not measured"; this one means "not
   // producible by the provider that ran".
   const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0])) as Record<Verdict, number>;
-  for (const v of validations) counts[v.verdict] += 1;
+  // Provider `llm` verdicts have their own vocabulary (LLM_VERDICTS) and are never counted here.
+  for (const v of validations) if (Object.hasOwn(counts, v.verdict)) counts[v.verdict as Verdict] += 1;
   return counts;
 }
 

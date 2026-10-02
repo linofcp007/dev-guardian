@@ -67,6 +67,8 @@ export const SCAN_TYPE_ROLE = {
   dotnet_efcore_audit: 'state',
   // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
   sarif_import: 'state',
+  // The plan's hunt findings; the open set shows them only after an independent `exploitable` verdict.
+  llm_scan: 'state',
 
   sbom: 'never',
   detect_stack: 'never',

@@ -270,6 +270,7 @@ export const PROJECT_KEYED_TABLES = [
   'agent_config_hashes',
   'mcp_tool_pins',
   'mcp_server_pins',
+  'llm_scan_plans',
 ] as const;
 
 /**
