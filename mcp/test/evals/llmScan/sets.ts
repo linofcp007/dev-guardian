@@ -27,6 +27,7 @@ import type { HuntClass } from '../../../src/llmscan/classes.js';
 import { HUNT_CLASSES } from '../../../src/llmscan/classes.js';
 import type { Severity } from '../../../src/types.js';
 import { composition, isSampleFile, type BenchmarkSampleFile } from './benchmarkSample.js';
+import { blindPathOf } from './blind.js';
 import type { CorpusId } from './corpora.js';
 import { classesDocument } from './families.js';
 import type { KeyLocation, Truth } from './grade.js';
@@ -74,12 +75,19 @@ export const APP_S_CLASS: Readonly<Record<string, HuntClass>> = {
 };
 
 /**
- * Lines the app-s key's description names besides its own location column —
- * only where the description gives a file AND lines (S03's "update statement
- * in src/repositories/users.ts" names no line and is not guessed). Each is
- * checked against the description when the key is read.
+ * Lines the app-s key names besides its own location column. Either the
+ * description gives another file AND its lines (S03's "update statement in
+ * src/repositories/users.ts" names no line and is not guessed), or — S04 —
+ * the description names the construct the listed lines are only part of:
+ * "shift free-text search (q param) interpolates term directly into the SQL
+ * string" is the whole `search()` function, 62–66 (signature taking the
+ * term, the SQL string, its execution), of which the column lists 63–64.
+ * Without the rest, a correct S04 finding at line 60 was nearer the decoy
+ * D01 (55–58) than S04 and was credited to the decoy (review round 1).
+ * Each extra file must be the key's own file or one the description names.
  */
 export const APP_S_ALSO: Readonly<Record<string, KeyLocation[]>> = {
+  S04: [{ file: 'src/repositories/shifts.ts', lines: [62, 65, 66] }],
   S05: [{ file: 'src/routes/clinics.ts', lines: [40, 41, 42, 43, 44, 45, 46, 47] }],
   S07: [{ file: 'src/app.ts', lines: [25] }],
   S09: [{ file: 'src/routes/admin.ts', lines: [18] }],
@@ -100,7 +108,9 @@ export function parseAppSKey(tsv: string): HuntItem[] {
     if (nums.length === 0 || nums.some((n) => !Number.isInteger(n) || n < 1)) throw new Error(`app-s key: bad lines "${lines}" for ${id}`);
     const also = APP_S_ALSO[id] ?? [];
     for (const loc of also) {
-      if (!(description ?? '').includes(loc.file)) throw new Error(`app-s key: ${id}'s description no longer names ${loc.file}`);
+      if (loc.file !== file && !(description ?? '').includes(loc.file)) {
+        throw new Error(`app-s key: ${id}'s description no longer names ${loc.file}`);
+      }
     }
     out.push({
       id: `GH-${id}`,
@@ -508,6 +518,7 @@ export function specDocuments(sets: EvalSets): Record<'golden.json' | 'adversari
           corpus: v.corpus,
           language: v.language,
           file: v.file,
+          ...(blindPathOf(v.corpus, v.file) !== v.file ? { blind_file: blindPathOf(v.corpus, v.file) } : {}),
           line: v.line,
           class: v.class,
           truth: v.truth,

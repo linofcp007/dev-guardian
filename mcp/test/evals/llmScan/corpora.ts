@@ -28,7 +28,8 @@ import { rmDir } from '../../helpers/tempDir.js';
 import {
   BENCHMARK_PY_ROOTS,
   VAMPI_FILES,
-  blindBenchmarkPyText,
+  benchmarkBlindPath,
+  blindBenchmarkText,
   blindDvwaText,
   blindJuiceText,
   blindVampiText,
@@ -37,6 +38,7 @@ import {
   juiceAliases,
   juiceOutPath,
 } from './blind.js';
+import { fileKindOf, findTells, type Tell } from './tells.js';
 
 export type CorpusId = 'app-s' | 'vampi' | 'juice-shop' | 'dvwa' | 'benchmark-python';
 export const CORPUS_IDS: readonly CorpusId[] = ['app-s', 'vampi', 'juice-shop', 'dvwa', 'benchmark-python'];
@@ -186,53 +188,88 @@ function copyBytes(srcRoot: string, rel: string, destRoot: string, outRel: strin
   copyFileSync(join(srcRoot, ...rel.split('/')), to);
 }
 
-/**
- * Builds the blind copy of corpus `id` (source `src`) at `dest`, which must
- * not exist yet. Returns the number of files written.
- */
-export function buildBlindCopy(id: CorpusId, src: string, dest: string): number {
-  if (existsSync(dest)) throw new Error(`blind copy target already exists: ${dest}`);
-  mkdirSync(dest, { recursive: true });
+/** One file of a blind copy: where it comes from, where it goes, and how its text changes (null: copied as bytes). */
+interface PlannedFile {
+  from: string;
+  to: string;
+  transform: ((text: string) => string) | null;
+}
+
+function planCopy(id: CorpusId, src: string): PlannedFile[] {
   const read = (rel: string): string => readFileSync(join(src, ...rel.split('/')), 'utf8');
   switch (id) {
-    case 'app-s': {
-      const files = walkFiles(src);
-      for (const rel of files) copyBytes(src, rel, dest);
-      return files.length;
-    }
-    case 'vampi': {
-      for (const rel of VAMPI_FILES) writeText(dest, rel, blindVampiText(rel, read(rel)));
-      return VAMPI_FILES.length;
-    }
+    case 'app-s':
+      return walkFiles(src).map((rel) => ({ from: rel, to: rel, transform: null }));
+    case 'vampi':
+      return VAMPI_FILES.map((rel) => ({ from: rel, to: rel, transform: (t: string) => blindVampiText(rel, t) }));
     case 'juice-shop': {
       const rels = ['server.ts', 'app.ts']
         .concat(...['routes', 'lib', 'models'].map((d) => walkFiles(join(src, d)).map((r) => `${d}/${r}`)))
         .filter(isJuiceFile);
-      const texts = new Map(rels.map((r) => [r, read(r)]));
-      const alias = juiceAliases([...texts.values()].join('\n'));
-      for (const [rel, text] of texts) writeText(dest, juiceOutPath(rel), blindJuiceText(rel, text, alias));
-      return rels.length;
+      const alias = juiceAliases(rels.map(read).join('\n'));
+      return rels.map((rel) => ({ from: rel, to: juiceOutPath(rel), transform: (t: string) => blindJuiceText(rel, t, alias) }));
     }
-    case 'dvwa': {
-      const files = dvwaFiles();
-      for (const f of files) writeText(dest, f.out, blindDvwaText(f.source, read(f.source)));
-      return files.length;
-    }
-    case 'benchmark-python': {
-      let n = 0;
-      for (const top of BENCHMARK_PY_ROOTS) {
+    case 'dvwa':
+      return dvwaFiles().map((f) => ({ from: f.source, to: f.out, transform: (t: string) => blindDvwaText(f.source, t) }));
+    case 'benchmark-python':
+      return BENCHMARK_PY_ROOTS.flatMap((top) => {
         const abs = join(src, top);
-        if (!existsSync(abs)) continue;
+        if (!existsSync(abs)) return [];
         const rels = statSync(abs).isDirectory() ? walkFiles(abs).map((r) => `${top}/${r}`) : [top];
-        for (const rel of rels) {
-          if (rel.endsWith('.py')) writeText(dest, rel, blindBenchmarkPyText(rel, read(rel)));
-          else copyBytes(src, rel, dest);
-          n += 1;
-        }
-      }
-      return n;
-    }
+        return rels.map((rel) => ({
+          from: rel,
+          to: benchmarkBlindPath(rel),
+          transform: fileKindOf(rel) === 'binary' ? null : (t: string) => blindBenchmarkText(rel, t),
+        }));
+      });
   }
+}
+
+export interface LocatedTell extends Tell {
+  file: string;
+}
+
+export interface BlindCopyReport {
+  files: number;
+  /** Tells in the files the copy is made of, before blinding (paths included). */
+  tells_before: number;
+  /** Tells in the finished copy — always empty: a copy with any is refused. */
+  tells_after: LocatedTell[];
+}
+
+/**
+ * Builds the blind copy of corpus `id` (source `src`) at `dest`, which must
+ * not exist yet, then greps the finished copy for tells (`tells.ts`) and
+ * THROWS when any survives: a copy that tells the model what it is looking
+ * at measures recall, not reasoning.
+ */
+export function buildBlindCopy(id: CorpusId, src: string, dest: string): BlindCopyReport {
+  if (existsSync(dest)) throw new Error(`blind copy target already exists: ${dest}`);
+  mkdirSync(dest, { recursive: true });
+  const plan = planCopy(id, src);
+  let before = 0;
+  const after: LocatedTell[] = [];
+  for (const f of plan) {
+    const binary = fileKindOf(f.from) === 'binary';
+    const original = binary ? null : readFileSync(join(src, ...f.from.split('/')), 'utf8');
+    before += findTells(f.from, original).length;
+    if (original === null || f.transform === null) {
+      copyBytes(src, f.from, dest, f.to);
+      after.push(...findTells(f.to, original).map((t) => ({ ...t, file: f.to })));
+      continue;
+    }
+    const blinded = f.transform(original);
+    writeText(dest, f.to, blinded);
+    after.push(...findTells(f.to, blinded).map((t) => ({ ...t, file: f.to })));
+  }
+  if (after.length > 0) {
+    const shown = after
+      .slice(0, 20)
+      .map((t) => `${t.file}:${t.line} [${t.where}] ${t.tell}`)
+      .join('\n  ');
+    throw new Error(`the blind copy of ${id} still carries ${after.length} tell(s); refusing to run on it:\n  ${shown}`);
+  }
+  return { files: plan.length, tells_before: before, tells_after: after };
 }
 
 /**
@@ -243,6 +280,8 @@ export function buildBlindCopy(id: CorpusId, src: string, dest: string): number 
 export class Workspace {
   readonly root: string;
   private readonly bases = new Map<CorpusId, string>();
+  /** What each blind copy built so far held before and after blinding. */
+  readonly reports = new Map<CorpusId, BlindCopyReport>();
   private variants = 0;
 
   constructor(private readonly corpora: Readonly<Record<CorpusId, CorpusState>>) {
@@ -256,7 +295,7 @@ export class Workspace {
     const state = this.corpora[id];
     if (!state.available) return undefined;
     const dest = join(this.root, CORPORA[id].blindName);
-    buildBlindCopy(id, state.dir, dest);
+    this.reports.set(id, buildBlindCopy(id, state.dir, dest));
     const canonical = canonicalPath(dest);
     this.bases.set(id, canonical);
     return canonical;

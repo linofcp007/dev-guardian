@@ -183,6 +183,11 @@ describe('the spec gate\'s descriptors', () => {
       for (const k of ['id', 'set', 'corpus', 'file', 'class', 'truth', 'source']) expect(i, `${String(i['id'])}.${k}`).toHaveProperty(k);
       expect('line' in i || 'lines' in i).toBe(true);
     }
+    // review round 1: a BenchmarkPython item names its key path and where the blind copy holds it
+    const bp = golden.items.find((i) => i['id'] === 'GV-B01');
+    expect(bp?.['file']).toMatch(/^testcode\/BenchmarkTest\d{5}\.py$/);
+    expect(bp?.['blind_file']).toMatch(/^testcode\/View\d{5}\.py$/);
+    expect(golden.items.find((i) => i['id'] === 'GV-C05')).not.toHaveProperty('blind_file');
     expect((docs['adversarial.json'] as { items: unknown[] }).items).toHaveLength(20);
     expect((docs['regression.json'] as { items: unknown[] }).items).toHaveLength(5);
   });

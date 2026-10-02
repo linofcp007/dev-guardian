@@ -3,13 +3,24 @@
  * public, deliberately vulnerable corpus WITHOUT moving a single line, so a
  * key's `file:line` in the original is the same `file:line` in the copy.
  *
- * A faithful port of the spike's `tools/blind.cjs` (2026-10-02): the same
- * file lists, the same regular expressions in the same order, and the same
- * app-d layout (recorded in the spike's `answer-keys/blind-map.tsv` and
- * fixed here, because the C-items of the verification set name those
- * paths). Only the I/O lives elsewhere (`corpora.ts`); everything here is
- * unit-tested for line preservation (`test/unit/evals/llmScanBlind.test.ts`).
+ * Built on the spike's `tools/blind.cjs` (2026-10-02): the same file lists,
+ * the same regular expressions in the same order, and the same app-d layout
+ * (recorded in the spike's `answer-keys/blind-map.tsv` and fixed here,
+ * because the C-items of the verification set name those paths). Review
+ * round 1 found what `blind.cjs` left behind, so on top of it:
+ *   - every comment that carries a tell (`tells.ts`) is emptied first, on the
+ *     ORIGINAL text — "intentionally vulnerable to XXE" must be recognised
+ *     before `\bvuln` → `item` turns it into "itemerable";
+ *   - app-j loses the CTF vocabulary, "Hacking Instructor" and its author's
+ *     address; app-b (BenchmarkPython, which `blind.cjs` never covered) is
+ *     blinded in file names and contents alike.
+ * `corpora.ts` then greps every finished copy for tells and refuses it if
+ * any survives. Only the I/O lives there; everything here is unit-tested for
+ * line preservation (`test/unit/evals/llmScanBlind.test.ts`).
  */
+
+import type { CorpusId } from './corpora.js';
+import { neutraliseTellComments } from './tells.js';
 
 /** Throws when a transform changed the number of lines — every key line would be off. */
 export function assertSameLineCount(before: string, after: string, where: string): void {
@@ -93,7 +104,10 @@ export function juiceAliases(allText: string): Map<string, string> {
 }
 
 export function blindJuiceText(rel: string, orig: string, alias: ReadonlyMap<string, string>): string {
-  let t = orig.replace(/[ \t]*\/\/ vuln-code-snippet.*$/gm, '');
+  // Comments that state a flaw, name the project or its author (every licence
+  // header): emptied on the original text, before any rename can mangle them.
+  let t = neutraliseTellComments(orig, 'js').text;
+  t = t.replace(/[ \t]*\/\/ vuln-code-snippet.*$/gm, '');
   t = t.replace(/\b([a-z][A-Za-z0-9]*Challenge)\b/g, (m) => alias.get(m) ?? m);
   t = t
     .replace(/challengeUtils/g, 'telemetry')
@@ -120,7 +134,14 @@ export function blindJuiceText(rel: string, orig: string, alias: ReadonlyMap<str
     .replace(/abused_ssrf_bug/g, 'flag_b')
     .replace(/isUnintendedRedirect/g, 'isOtherTarget')
     .replace(/xssBonusPayload/g, 'bonusText')
-    .replace(/hackingInstructor/gi, 'tutorial');
+    .replace(/hacking[\s_-]?instructor/gi, 'tutorial')
+    // review round 1: the CTF vocabulary (config keys, the flag key file, log lines) and the author's address
+    .replace(/CTF/g, 'SCORE')
+    .replace(/Ctf/g, 'Score')
+    .replace(/ctf/g, 'score')
+    .replace(/bjoern\.kimminich/gi, 'shop.owner')
+    .replace(/kimminich/gi, 'owner')
+    .replace(/\bpwning\b/gi, 'docs');
   assertSameLineCount(orig, t, `app-j/${rel}`);
   return t;
 }
@@ -163,7 +184,8 @@ export function dvwaFiles(): Array<{ source: string; out: string; level: DvwaLev
 }
 
 export function blindDvwaText(rel: string, orig: string): string {
-  let t = orig.replace(/dvwa/gi, (m) => (m === m.toUpperCase() ? 'APP' : m[0] === 'D' ? 'App' : 'app'));
+  let t = neutraliseTellComments(orig, 'php').text;
+  t = t.replace(/dvwa/gi, (m) => (m === m.toUpperCase() ? 'APP' : m[0] === 'D' ? 'App' : 'app'));
   t = t.replace(/(impossible|low|medium|high)\.php/gi, 'variant.php');
   assertSameLineCount(orig, t, `app-d/${rel}`);
   return t;
@@ -179,28 +201,100 @@ export function blindDvwaText(rel: string, orig: string): string {
 export const BENCHMARK_PY_ROOTS: readonly string[] = ['app.py', 'requirements.txt', 'helpers', 'testcode', 'testfiles'];
 
 /**
- * Every `.py` file opens with a `'''` docstring naming the OWASP Benchmark
- * and its licence. Its inner lines become blank (the quotes stay), so the
- * copy no longer announces itself as a benchmark; nothing else changes.
+ * A test case's number in app-b: an affine bijection on 0–99999 (7919 is
+ * prime to 100000), so `BenchmarkTest00432` does not survive as `View00432`.
  */
-export function blindBenchmarkPyText(rel: string, orig: string): string {
-  if (!rel.endsWith('.py')) return orig;
-  const lines = orig.split('\n');
-  const bare = (l: string | undefined): string => (l ?? '').replace(/\r$/, '').trim();
-  if (bare(lines[0]) !== "'''") return orig;
-  let close = -1;
-  for (let i = 1; i < lines.length; i += 1) {
-    if (bare(lines[i]) === "'''") {
-      close = i;
-      break;
+export function benchmarkViewNumber(n: number): string {
+  return String((n * 7919 + 1237) % 100000).padStart(5, '0');
+}
+
+/** The test-case categories, as route and template paths spell them (`/xss-00/`). */
+const BENCHMARK_CATEGORIES = [
+  'cmdi', 'codeinj', 'deserialization', 'hash', 'ldapi', 'pathtraver', 'redirect',
+  'securecookie', 'sqli', 'trustbound', 'weakrand', 'xpathi', 'xss', 'xxe',
+];
+const CATEGORY_SEGMENT = new RegExp(`/(?:${BENCHMARK_CATEGORIES.join('|')})-(\\d\\d)/`, 'g');
+
+/**
+ * The renames app-b applies to file NAMES and file CONTENTS alike — so every
+ * file a test case opens by name is still there, under its new name: the
+ * test-case names, the project's own name, the two `testfiles/` names that
+ * say which branch runs ("This should never happen"), the XXE resource and
+ * the "insecure" command script.
+ */
+export function benchmarkRenames(s: string): string {
+  return s
+    .replace(/BenchmarkTest(\d{5})/g, (_m, n: string) => `View${benchmarkViewNumber(Number(n))}`)
+    .replace(/BenchmarkTest/g, 'View')
+    .replace(/Benchmark/g, 'View')
+    .replace(/BENCHMARK/g, 'SITE')
+    .replace(/benchmark/gi, 'site')
+    .replace(/This should never happen/g, 'fixed value b')
+    .replace(/This_should_always_happen/g, 'fixed_value_a')
+    .replace(/xxe\.txt/g, 'entity.txt')
+    .replace(/insecureCmd/g, 'runCmd');
+}
+
+/**
+ * The benchmark's verdict-hinting constants and what they become. Some of
+ * them are also the names of `testfiles/` (a path-traversal case opens
+ * `testfiles/moresafe`), so file names follow the same map.
+ */
+export const BENCHMARK_HINT_NAMES: Readonly<Record<string, string>> = {
+  safe: 'value_a',
+  moresafe: 'value_b',
+  alsosafe: 'value_c',
+  'safe!': 'value_d!',
+};
+
+/** A BenchmarkPython path → its path in app-b. */
+export function benchmarkBlindPath(rel: string): string {
+  const renamed = benchmarkRenames(rel);
+  const slash = renamed.lastIndexOf('/');
+  const hint = BENCHMARK_HINT_NAMES[renamed.slice(slash + 1)];
+  return hint === undefined ? renamed : `${renamed.slice(0, slash + 1)}${hint}`;
+}
+
+/**
+ * One app-b file. Python files lose the licence docstring that opens each of
+ * them (OWASP Benchmark, GPL notice — the quotes stay) and every comment
+ * carrying a tell. Every text file then gets {@link benchmarkRenames}, the
+ * route and template category segments (`/xss-00/` → `/pages-00/`), and —
+ * the semantic hints the benchmark plants in its constants — `'safe'`,
+ * `'moresafe'`, `'alsosafe'`, `'safe!'`, `'_SafeStuff'`, `'SafeToby{num}'`
+ * become neutral names. Every one is a constant renamed consistently in every
+ * file, so the code does what it did; only the words that hint at the
+ * verdict go.
+ */
+export function blindBenchmarkText(rel: string, orig: string): string {
+  let t = orig;
+  if (rel.endsWith('.py')) {
+    const lines = t.split('\n');
+    const bare = (l: string | undefined): string => (l ?? '').replace(/\r$/, '').trim();
+    if (bare(lines[0]) === "'''") {
+      const close = lines.findIndex((l, i) => i > 0 && bare(l) === "'''");
+      for (let i = 1; i < close; i += 1) lines[i] = (lines[i] ?? '').endsWith('\r') ? '\r' : '';
+      t = lines.join('\n');
     }
+    t = neutraliseTellComments(t, 'python').text;
+    t = t
+      .replace(/(['"])(safe!?|moresafe|alsosafe)\1/g, (_m, q: string, name: string) => `${q}${BENCHMARK_HINT_NAMES[name] ?? name}${q}`)
+      .replace(/_SafeStuff/g, '_Stuff')
+      .replace(/\bSafe([A-Z][a-z]+)\{/g, '$1{')
+      .replace(/\bpwned\b/g, 'redirected');
   }
-  if (close === -1) return orig;
-  for (let i = 1; i < close; i += 1) {
-    const l = lines[i] ?? '';
-    lines[i] = l.endsWith('\r') ? '\r' : '';
-  }
-  const t = lines.join('\n');
+  t = benchmarkRenames(t)
+    .replace(CATEGORY_SEGMENT, '/pages-$1/')
+    .replace(/XXE Attack SUCCESSFUL-U_R_L33T!/g, 'entity resolved');
   assertSameLineCount(orig, t, `app-b/${rel}`);
   return t;
+}
+
+// ---------- every corpus ----------
+
+/** Where a corpus file is in its blind copy (the C-items of app-j and app-d already name blind paths). */
+export function blindPathOf(corpus: CorpusId, rel: string): string {
+  if (corpus === 'benchmark-python') return benchmarkBlindPath(rel);
+  if (corpus === 'juice-shop') return juiceOutPath(rel);
+  return rel;
 }

@@ -13,12 +13,18 @@ import {
   addUsage,
   childEnv,
   claudeArgs,
+  driveTask,
   extractAnswer,
+  extractAnswerDetailed,
   insideRoot,
+  isolationProblem,
   outOfBriefCalls,
   parseClaudeOutput,
   pool,
   usageOf,
+  type AnswerCheck,
+  type ClaudeRun,
+  type DriverOptions,
 } from '../../evals/llmScan/driver.js';
 
 const valueAfter = (args: readonly string[], flag: string): string | undefined => {
@@ -128,6 +134,72 @@ describe('the JSON answer in the final message', () => {
     expect(extractAnswer('[1, 2]')).toBeUndefined();
     expect(extractAnswer('{ broken')).toBeUndefined();
   });
+
+  it('review round 1: says when the answer needed leniency the product\'s submit does not have', () => {
+    expect(extractAnswerDetailed('{"verdict":"real"}').lenient).toBe(false);
+    expect(extractAnswerDetailed('  {"verdict":"real"}\n').lenient).toBe(false);
+    expect(extractAnswerDetailed('```json\n{"verdict":"real"}\n```').lenient).toBe(true);
+    expect(extractAnswerDetailed('Verdict:\n{"verdict":"real"}').lenient).toBe(true);
+    expect(extractAnswerDetailed('{"plan_id":"p","payload":{"verdict":"real"}}')).toEqual({ value: { verdict: 'real' }, lenient: true });
+    expect(extractAnswerDetailed('no json')).toEqual({ value: undefined, lenient: false });
+  });
+});
+
+describe('review round 1: isolation is verified on every session', () => {
+  it('the init event must offer exactly the mode\'s tools, and must be there', () => {
+    expect(isolationProblem(['Glob', 'Grep', 'Read'], 'subagent')).toBeNull();
+    expect(isolationProblem([], 'brief-only')).toBeNull();
+    expect(isolationProblem(['Glob', 'Grep', 'Read', 'Bash'], 'subagent')).toMatch(/Bash/);
+    expect(isolationProblem(['Read', 'mcp__dev-guardian__suppress_finding'], 'subagent')).toMatch(/mcp__dev-guardian__suppress_finding/);
+    expect(isolationProblem(['Read'], 'brief-only')).toMatch(/brief-only mode: Read/);
+    expect(isolationProblem(null, 'subagent')).toMatch(/init event was not seen/);
+  });
+
+  const opts: DriverOptions & { retries: number } = { mode: 'subagent', model: 'sonnet', bin: 'claude', timeoutMs: 1000, retries: 2 };
+  const run = (tools: string[] | null, finalText: string): ClaudeRun => ({
+    final_text: finalText,
+    tool_calls: [],
+    available_tools: tools,
+    usage: usageOf({ input_tokens: 1 }),
+    num_turns: 1,
+    cost_usd: 0,
+    is_error: false,
+    subtype: 'success',
+    ok: true,
+    error: null,
+    exit_code: 0,
+    duration_ms: 1,
+    stderr_tail: '',
+  });
+  const accept = (seen: unknown[]) => (a: unknown): AnswerCheck<unknown> => {
+    seen.push(a);
+    return { ok: true, value: a };
+  };
+
+  it('a session offered Bash or an MCP tool makes the task invalid at once: the answer is not read, nothing is retried', async () => {
+    for (const tools of [['Glob', 'Grep', 'Read', 'Bash'], ['Read', 'mcp__srv__x'], null]) {
+      const seen: unknown[] = [];
+      let calls = 0;
+      const d = await driveTask('brief', '/tmp/x', opts, accept(seen), async () => {
+        calls += 1;
+        return run(tools, '{"verdict":"real"}');
+      });
+      expect(d.failure).toBe('invalid');
+      expect(d.value).toBeNull();
+      expect(d.isolation).not.toBeNull();
+      expect(seen).toEqual([]);
+      expect(calls).toBe(1);
+    }
+  });
+
+  it('an isolated session is read as before, and a lenient answer is counted', async () => {
+    const seen: unknown[] = [];
+    const d = await driveTask('brief', '/tmp/x', opts, accept(seen), async () => run(['Glob', 'Grep', 'Read'], '```json\n{"verdict":"real"}\n```'));
+    expect(d.failure).toBeNull();
+    expect(d.isolation).toBeNull();
+    expect(d.value).toEqual({ verdict: 'real' });
+    expect(d.lenient_extractions).toBe(1);
+  });
 });
 
 describe('tool calls outside the brief', () => {
@@ -147,6 +219,18 @@ describe('tool calls outside the brief', () => {
     const out = outOfBriefCalls(calls, MODE_TOOLS.subagent, root);
     expect(out.map((o) => o.name)).toEqual(['Read', 'Grep', 'Glob', 'mcp__dev-guardian__suppress_finding', 'Bash']);
     expect(outOfBriefCalls(calls.slice(0, 2), MODE_TOOLS['brief-only'], root)).toHaveLength(2);
+  });
+
+  it('review round 1: Grep\'s glob filter is inspected too', () => {
+    const calls = [
+      { id: '1', name: 'Grep', input: { pattern: 'x', glob: '*.py' } },
+      { id: '2', name: 'Grep', input: { pattern: 'x', glob: '../**/*.tsv' } },
+      { id: '3', name: 'Grep', input: { pattern: 'x', glob: resolve('/tmp/ws-x/answer-keys/*.tsv') } },
+      { id: '4', name: 'Grep', input: { pattern: 'x', glob: join(root, 'models', '*.py') } },
+    ];
+    const out = outOfBriefCalls(calls, MODE_TOOLS.subagent, root);
+    expect(out).toHaveLength(2);
+    expect(out.every((o) => o.name === 'Grep' && o.why.startsWith('glob outside the project'))).toBe(true);
   });
 
   it('insideRoot', () => {

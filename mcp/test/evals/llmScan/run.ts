@@ -85,20 +85,25 @@ import { driveTask, pool, type AnswerCheck, type DriverMode, type DrivenTask, ty
 import {
   THRESHOLDS,
   agreement,
+  assembleOutcomes,
   atLeast,
   atMost,
   gradeAdversarial,
   gradeHunt,
   gradeRegression,
   gradeVerify,
+  huntChecks,
+  isolationCheck,
   normPath,
   worst,
   type Check,
   type CheckStatus,
+  type HuntCorpusResult,
   type HuntKeyEntry,
   type Truth,
   type VerifyOutcome,
 } from './grade.js';
+import { blindPathOf } from './blind.js';
 import { inject, languageOfFile, type InjectionLanguage } from './inject.js';
 import { BENCHMARK_SAMPLE_PATH, buildSets, specDocuments, unknownClasses, type EvalSets, type VerifyItem } from './sets.js';
 
@@ -381,7 +386,7 @@ function planVerify(
   root: string,
   corpus: CorpusId,
   items: ReadonlyArray<{ id: string; set: VerifyJob['set']; truth: Truth; finding: Finding; runs: number }>,
-): { jobs: VerifyJob[]; refused: Array<{ item: string; reason: string }> } {
+): { jobs: VerifyJob[]; refused: Array<{ item: string; reason: string; runs: number }> } {
   const plan = buildPlan({
     project_path: root,
     modes: ['verify'],
@@ -393,12 +398,12 @@ function planVerify(
   const planId = `eval-${corpus}-${randomBytes(4).toString('hex')}`;
   const byFp = new Map(plan.tasks.filter((t) => t.kind === 'verify').map((t) => [t.target.fingerprint, t]));
   const jobs: VerifyJob[] = [];
-  const refused: Array<{ item: string; reason: string }> = [];
+  const refused: Array<{ item: string; reason: string; runs: number }> = [];
   for (const item of items) {
     const t = byFp.get(item.finding.fingerprint);
     if (t === undefined) {
       const why = plan.not_eligible.find((n) => n.fingerprint === item.finding.fingerprint)?.reason ?? 'no verify task was planned for it';
-      refused.push({ item: item.id, reason: why });
+      refused.push({ item: item.id, reason: why, runs: item.runs });
       continue;
     }
     for (let run = 0; run < item.runs; run += 1) {
@@ -541,6 +546,8 @@ interface InjectedCopy {
   base: VerifyItem;
   root: string;
   line: number;
+  /** The base item's file, as the blind copy names it. */
+  file: string;
   kind: string;
   inserted_at: number;
   parse: ParseCheck;
@@ -555,22 +562,23 @@ function buildInjected(ws: Workspace, sets: EvalSets): { copies: InjectedCopy[];
     if (base === undefined) throw new Error(`A-I ${a.id}: unknown base ${a.base}`);
     const baseRoot = ws.base(base.corpus);
     if (baseRoot === undefined) continue;
-    const lang = languageOfFile(base.file);
-    if (lang === undefined) throw new Error(`A-I ${a.id}: no injection language for ${base.file}`);
-    const original = readFileSync(join(baseRoot, ...base.file.split('/')), 'utf8');
+    const file = blindPathOf(base.corpus, base.file);
+    const lang = languageOfFile(file);
+    if (lang === undefined) throw new Error(`A-I ${a.id}: no injection language for ${file}`);
+    const original = readFileSync(join(baseRoot, ...file.split('/')), 'utf8');
     let done = inject(original, base.line, a.kind, a.push, lang);
-    let parse = parseCheck(lang, base.file, original, done.text);
+    let parse = parseCheck(lang, file, original, done.text);
     if (parse === 'broken' && done.kind !== 'comment') {
       done = inject(original, base.line, 'comment', a.push, lang);
-      parse = parseCheck(lang, base.file, original, done.text);
+      parse = parseCheck(lang, file, original, done.text);
     }
     if (parse === 'broken') {
-      problems.push(`${a.id}: the injected ${base.file} does not parse; item left out`);
+      problems.push(`${a.id}: the injected ${file} does not parse; item left out`);
       continue;
     }
-    const root = ws.variant(base.corpus, [{ rel: base.file, text: done.text }]);
+    const root = ws.variant(base.corpus, [{ rel: file, text: done.text }]);
     if (root === undefined) continue;
-    copies.push({ item: a.id, base, root, line: done.line, kind: done.kind, inserted_at: done.inserted_at, parse });
+    copies.push({ item: a.id, base, file, root, line: done.line, kind: done.kind, inserted_at: done.inserted_at, parse });
   }
   return { copies, problems };
 }
@@ -597,6 +605,9 @@ interface RunRecord {
   tool_calls: number;
   out_of_brief: OutOfBriefCall[];
   schema_refusals: number;
+  lenient_extractions: number;
+  /** Why the session was not isolated; null when it was. */
+  isolation: string | null;
   duration_ms: number;
 }
 
@@ -641,6 +652,8 @@ function record<T>(job: { key: string; corpus: CorpusId; task: LlmScanTask; brie
     tool_calls: d.tool_calls.length,
     out_of_brief: d.out_of_brief,
     schema_refusals: d.schema_refusals,
+    lenient_extractions: d.lenient_extractions,
+    isolation: d.isolation,
     duration_ms: d.duration_ms,
   };
 }
@@ -707,15 +720,21 @@ function verifyRows(
   corpora: Readonly<Record<CorpusId, CorpusState>>,
 ): string[][] {
   const rows: string[][] = [];
-  for (const c of [...CORPUS_IDS, 'all' as const]) {
-    const its = c === 'all' ? items : items.filter((i) => i.corpus === c);
+  // One row per corpus (BenchmarkPython among them), the spike's C-items as a
+  // subtotal across their four corpora, then everything.
+  const groups: Array<{ label: string; corpus: CorpusId | null; items: readonly VerifyItem[] }> = [
+    ...CORPUS_IDS.map((c) => ({ label: c, corpus: c, items: items.filter((i) => i.corpus === c) })),
+    { label: 'spike C01-C18', corpus: null, items: items.filter((i) => /^GV-C\d+$/.test(i.id)) },
+    { label: 'all', corpus: null, items },
+  ];
+  for (const { label, corpus, items: its } of groups) {
     if (its.length === 0) continue;
-    if (c !== 'all' && !corpora[c].available) {
-      rows.push([c, String(its.length), '-', '-', '-', '-', '-', '-', 'N/A']);
+    if (corpus !== null && !corpora[corpus].available) {
+      rows.push([label, String(its.length), '-', '-', '-', '-', '-', '-', 'N/A']);
       continue;
     }
     const g = gradeVerify(its.flatMap((i) => (outcomes.get(i.id) ?? []).map((o) => ({ truth: i.truth, outcome: o }))));
-    rows.push([c, String(its.length), String(g.total), String(g.correct), String(g.wrong), String(g.undetermined), String(g.invalid), String(g.errors), pct(g.accuracy)]);
+    rows.push([label, String(its.length), String(g.total), String(g.correct), String(g.wrong), String(g.undetermined), String(g.invalid), String(g.errors), pct(g.accuracy)]);
   }
   return rows;
 }
@@ -764,9 +783,22 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
     }
   }
 
+  // ---- prepare: the blind copies (each grepped for tells, refused if any survives) ----
+  const needed = new Set<CorpusId>([...[...runsOf.keys()].flatMap((id) => {
+    const v = verifyById.get(id);
+    return v === undefined ? [] : [v.corpus];
+  }), ...huntCorpora]);
+  const copyLines: string[] = [];
+  for (const corpus of CORPUS_IDS) {
+    if (!needed.has(corpus) || ws.base(corpus) === undefined) continue;
+    const r = ws.reports.get(corpus);
+    if (r !== undefined) copyLines.push(`  blind copy ${corpus}: ${r.files} files, ${r.tells_before} tells neutralised, ${r.tells_after.length} left`);
+  }
+  process.stdout.write(`${copyLines.join('\n')}\n`);
+
   // ---- prepare: verification (G-V, then A-I), then hunts ----
   const verifyJobs: VerifyJob[] = [];
-  const refused: Array<{ item: string; reason: string }> = [];
+  const refused: Array<{ item: string; reason: string; runs: number }> = [];
   const prepNotes: string[] = [];
   for (const corpus of CORPUS_IDS) {
     const items = [...runsOf.entries()].flatMap(([id, runs]) => {
@@ -780,7 +812,13 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
       opts,
       root,
       corpus,
-      items.map(({ v, runs }) => ({ id: v.id, set: 'G-V' as const, truth: v.truth, runs, finding: scannerFinding(v) })),
+      items.map(({ v, runs }) => ({
+        id: v.id,
+        set: 'G-V' as const,
+        truth: v.truth,
+        runs,
+        finding: scannerFinding({ ...v, file: blindPathOf(v.corpus, v.file) }),
+      })),
     );
     verifyJobs.push(...planned.jobs);
     refused.push(...planned.refused);
@@ -792,7 +830,7 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
     prepNotes.push(...built.problems);
     for (const c of built.copies) {
       const planned = planVerify(opts, c.root, c.base.corpus, [
-        { id: c.item, set: 'A-I', truth: c.base.truth, runs: 1, finding: scannerFinding({ ...c.base, line: c.line }) },
+        { id: c.item, set: 'A-I', truth: c.base.truth, runs: 1, finding: scannerFinding({ ...c.base, file: c.file, line: c.line }) },
       ]);
       verifyJobs.push(...planned.jobs);
       refused.push(...planned.refused);
@@ -922,13 +960,24 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
   }
 
   // ---- grade ----
-  const outcomes = new Map<string, VerifyOutcome[]>();
-  for (const r of [...records].sort((a, b) => a.run - b.run)) {
-    if (r.set === 'G-H') continue;
-    outcomes.set(r.item, [...(outcomes.get(r.item) ?? []), outcomeOf(r)]);
-  }
-  for (const r of refused) outcomes.set(r.item, [{ verdict: null, failure: 'error' }]);
+  // A refused item keeps one `error` per run it was meant to have: wrong for
+  // accuracy, and a non-agreement for agreement (grade.ts#assembleOutcomes).
+  const outcomes = assembleOutcomes(
+    records.filter((r) => r.set !== 'G-H').map((r) => ({ item: r.item, run: r.run, outcome: outcomeOf(r) })),
+    refused,
+  );
   const reports: SuiteReport[] = [];
+  /** Isolation breaches and lenient answers among the runs of the given items. */
+  const runFacts = (pick: (r: RunRecord) => boolean): { breaches: string[]; lenient: number; answered: number } => {
+    const rs = records.filter(pick);
+    return {
+      breaches: rs.flatMap((r) => (r.isolation === null ? [] : [`${r.item}: ${r.isolation}`])),
+      lenient: rs.reduce((s, r) => s + r.lenient_extractions, 0),
+      answered: rs.filter((r) => r.attempts > 0).length,
+    };
+  };
+  const factsLine = (f: { lenient: number; answered: number }): string =>
+    `\n  answers that needed a fence, prose or an envelope stripped (the product's submit has no such leniency): ${f.lenient} in ${f.answered} runs`;
 
   const huntGrades = new Map<CorpusId, ReturnType<typeof gradeHunt>>();
   for (const corpus of huntCorpora) {
@@ -953,25 +1002,17 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
   if (wants('golden-hunt')) {
     const corpusIds = [...new Set(sets.hunt.map((h) => h.corpus))];
     const rows: string[][] = [];
-    let vulns = 0;
-    let found = 0;
-    let confirmed = 0;
-    let unverified = 0;
-    let unmeasured = 0;
+    const results: HuntCorpusResult[] = [];
     for (const c of corpusIds) {
       const keys = sets.hunt.filter((h) => h.corpus === c);
       const g = huntGrades.get(c);
       const nVulns = keys.filter((k) => k.kind === 'vulnerability').length;
       const why = huntUnmeasured(c);
+      results.push({ corpus: c, vulnerabilities: nVulns, grade: g === undefined || why !== null ? null : g, failed_tasks: huntFailed.get(c) ?? 0 });
       if (g === undefined || why !== null) {
-        unmeasured += nVulns;
         rows.push([c, String(nVulns), '-', 'N/A', String(keys.length - nVulns), '-', '-', '-', why ?? 'not run']);
         continue;
       }
-      vulns += g.vulnerabilities;
-      found += g.found.length;
-      confirmed += g.decoys_confirmed.length;
-      unverified += g.decoys_unverified.length;
       rows.push([
         c,
         String(g.vulnerabilities),
@@ -984,15 +1025,13 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
         `${huntJobs.filter((j) => j.corpus === c).length} (${huntFailed.get(c) ?? 0} failed)`,
       ]);
     }
-    const recall = vulns === 0 ? null : found / vulns;
-    rows.push(['all', String(vulns), String(found), pct(recall), '', '', String(confirmed), '', '']);
+    const hc = huntChecks(results);
+    rows.push(['all', String(hc.vulnerabilities), String(hc.found), pct(hc.recall), '', '', String(hc.confirmed), '', '']);
     const dg = gradeVerify(
       [...derivedOf].map(([id, d]) => ({ truth: d.truth, outcome: outcomes.get(id)?.[0] ?? { verdict: null, failure: 'not_run' as const } })),
     );
-    const checks = [
-      atLeast('hunt: vulnerabilities found', recall, THRESHOLDS.hunt_recall, unmeasured, 'key vulnerabilities not measured'),
-      atMost('hunt: decoys confirmed real', vulns === 0 ? null : confirmed, THRESHOLDS.hunt_decoys_confirmed_max, unmeasured + unverified, 'not measured (corpus N/A, or a flagged decoy left unverified)'),
-    ];
+    const facts = runFacts((r) => r.set === 'G-H' || r.set === 'G-H/verify');
+    const checks = [...hc.checks, isolationCheck(facts.breaches)];
     const missedText = [...huntGrades].map(([c, g]) => `${c}: missed ${g.missed.join(', ') || '-'}; decoys flagged ${g.decoys_flagged.join(', ') || '-'}`).join('\n  ');
     const text =
       `\n== golden-hunt (G-H) ==\n` +
@@ -1000,8 +1039,9 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
       naLines(corpora, corpusIds) +
       `\n  ${missedText}\n` +
       [...huntNotes].map(([c, n]) => `  ${c}: ${n.join('; ')}`).join('\n') +
-      `\n  hunt findings verified (G-V from G-H, reported apart): ${dg.correct}/${dg.total} right (${pct(dg.accuracy)})\n` +
-      printChecks(checks);
+      `\n  hunt findings verified (G-V from G-H, reported apart): ${dg.correct}/${dg.total} right (${pct(dg.accuracy)})` +
+      factsLine(facts) +
+      `\n${printChecks(checks)}`;
     reports.push({ suite: 'golden-hunt', status: worst(checks.map((c) => c.status)), checks, data: { grades: Object.fromEntries(huntGrades), hunt_derived_verification: dg, notes: Object.fromEntries(huntNotes) }, text });
   }
 
@@ -1017,7 +1057,10 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
     const agr = agreement(pairs);
     const measured = sets.verify.filter((i) => outcomes.get(i.id) !== undefined);
     const languages = new Set(measured.map((i) => i.language));
+    const gvIds = new Set(sets.verify.map((i) => i.id));
+    const facts = runFacts((r) => gvIds.has(r.item));
     const checks = [
+      isolationCheck(facts.breaches),
       atLeast('verification: verdicts right', g.accuracy, THRESHOLDS.verify_accuracy, notRun.length, 'items not measured (corpus N/A)'),
       atLeast(
         'verification: agreement of two runs',
@@ -1040,8 +1083,9 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
       naLines(corpora, [...new Set(sets.verify.map((i) => i.corpus))]) +
       `\n  undetermined ${g.undetermined} (counted wrong); real ${g.by_truth.real.correct}/${g.by_truth.real.total}, not_real ${g.by_truth.not_real.correct}/${g.by_truth.not_real.total}` +
       `\n  agreement ${agr.same}/${agr.items} (${pct(agr.rate)})${agr.differing.length > 0 ? `; differing: ${agr.differing.join(', ')}` : ''}` +
-      `\n  measured ${measured.length} items in ${[...languages].sort().join(', ') || 'no language'}\n` +
-      printChecks(checks);
+      `\n  measured ${measured.length} items in ${[...languages].sort().join(', ') || 'no language'}` +
+      factsLine(facts) +
+      `\n${printChecks(checks)}`;
     reports.push({ suite: 'golden-verify', status: worst(checks.map((c) => c.status)), checks, data: { grade: g, agreement: agr }, text });
   }
 
@@ -1059,10 +1103,16 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
     });
     const g = gradeAdversarial(entries);
     const incomparable = g.incomparable.length;
+    // The verdict rate needs an original to compare with; the safety counters
+    // cover every injected run that ran (grade.ts#gradeAdversarial).
+    const notRun = g.injected_not_run.length;
+    const aiIds = new Set([...sets.adversarial.map((a) => a.id), ...sets.adversarial.map((a) => a.base)]);
+    const facts = runFacts((r) => aiIds.has(r.item));
     const checks = [
       atLeast('injection: verdicts unchanged', g.rate, THRESHOLDS.injection_unchanged, incomparable, 'items not compared (corpus N/A or no original verdict)'),
-      atMost('injection: tool calls outside the brief', g.compared === 0 ? null : g.out_of_brief_calls, THRESHOLDS.injection_out_of_brief_max, incomparable, 'items not compared'),
-      atMost('injection: submissions refused by the schema', g.compared === 0 ? null : g.schema_refusals, THRESHOLDS.injection_schema_refusals_max, incomparable, 'items not compared'),
+      atMost('injection: tool calls outside the brief', g.injected_runs === 0 ? null : g.out_of_brief_calls, THRESHOLDS.injection_out_of_brief_max, notRun, 'injected items not run'),
+      atMost('injection: submissions refused by the schema', g.injected_runs === 0 ? null : g.schema_refusals, THRESHOLDS.injection_schema_refusals_max, notRun, 'injected items not run'),
+      isolationCheck(facts.breaches),
     ];
     const rows = sets.adversarial.map((a) => {
       const e = entries.find((x) => x.id === a.id);
@@ -1074,8 +1124,10 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
       `\n== adversarial (A-I) ==\n` +
       table(['item', 'base', 'kind', 'pushes', 'original', 'injected', 'off-brief', 'parse'], rows, 'llllllrl') +
       `\n  compared ${g.compared}, unchanged ${g.unchanged} (${pct(g.rate)}); changed: ${g.changed.join(', ') || '-'}; ` +
-      `not compared: ${g.incomparable.join(', ') || '-'}\n` +
-      printChecks(checks);
+      `not compared: ${g.incomparable.join(', ') || '-'}` +
+      `\n  injected runs ${g.injected_runs}: ${g.out_of_brief_calls} tool call(s) outside the brief, ${g.schema_refusals} schema refusal(s)` +
+      factsLine(facts) +
+      `\n${printChecks(checks)}`;
     reports.push({ suite: 'adversarial', status: worst(checks.map((c) => c.status)), checks, data: { grade: g, copies: injected.map(({ base: _b, ...c }) => c) }, text });
   }
 
@@ -1091,12 +1143,15 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
       return { id: r.id, kept: os.length === 0 ? null : os.every((o) => o.verdict === r.expect) };
     });
     const g = gradeRegression(entries);
-    const checks = [atLeast('regression: cases kept', g.rate, THRESHOLDS.regression_kept, g.unmeasured.length, 'cases not measured')];
+    const refs = new Set(sets.regression.map((r) => r.ref));
+    const huntRefCorpora = new Set(sets.regression.flatMap((r) => sets.hunt.filter((h) => h.id === r.ref).map((h) => h.corpus)));
+    const facts = runFacts((r) => refs.has(r.item) || (r.set === 'G-H' && huntRefCorpora.has(r.corpus)));
+    const checks = [atLeast('regression: cases kept', g.rate, THRESHOLDS.regression_kept, g.unmeasured.length, 'cases not measured'), isolationCheck(facts.breaches)];
     const rows = sets.regression.map((r) => {
       const e = entries.find((x) => x.id === r.id);
       return [r.id, r.ref, r.expect, e?.kept === null || e === undefined ? 'N/A' : e.kept ? 'kept' : 'BROKEN', r.why];
     });
-    const text = `\n== regression (R) ==\n${table(['case', 'item', 'expect', 'result', 'why'], rows, 'lllll')}\n${printChecks(checks)}`;
+    const text = `\n== regression (R) ==\n${table(['case', 'item', 'expect', 'result', 'why'], rows, 'lllll')}${factsLine(facts)}\n${printChecks(checks)}`;
     reports.push({ suite: 'regression', status: worst(checks.map((c) => c.status)), checks, data: { grade: g }, text });
   }
 
@@ -1118,6 +1173,7 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
     `${reports.map((r) => r.text).join('\n')}\n${cost}` +
       (refused.length > 0 ? `  planner refused: ${refused.map((r) => `${r.item} (${r.reason})`).join(', ')}\n` : '') +
       prepNotes.map((n) => `  note: ${n}\n`).join('') +
+      `${copyLines.join('\n')}\n` +
       `\nOVERALL: ${overall.toUpperCase()}${overall === 'incomplete' && opts.allowIncomplete ? ' (allowed by --allow-incomplete)' : ''}\n`,
   );
   if (opts.out !== undefined) {
@@ -1131,6 +1187,7 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
           finished_at: new Date().toISOString(),
           options: { ...opts, benchmark: undefined },
           corpora,
+          blind_copies: Object.fromEntries(ws.reports),
           overall,
           suites: reports.map(({ text: _t, ...r }) => r),
           planner_refused: refused,
