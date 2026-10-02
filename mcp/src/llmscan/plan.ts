@@ -54,6 +54,13 @@ export interface PlanResult {
   nothing_to_plan: string | null;
 }
 
+/**
+ * Reason prefix of a finding left out only because the plan is full. Unlike
+ * the EC-1 reasons (no file, no line, outside the project), these could have
+ * been verified: the report counts them as missing, never as full coverage.
+ */
+export const OVER_LIMIT_REASON_PREFIX = "over the plan's max_tasks limit";
+
 /** Files per task when the hunt has no entry points and goes by groups of code files (US-2.AC-2). */
 const FILES_PER_GROUP = 5;
 
@@ -158,19 +165,22 @@ export function buildPlan(input: PlanInput): PlanResult {
   const hunting = input.modes.includes('hunt');
   if (hunting) work.push(...huntDrafts(input, notes, set_aside));
 
-  // The cross-cutting task goes with any hunt that has something to hunt in.
-  const crosscut: Draft | null = hunting && work.some((d) => d.kind === 'hunt') ? { kind: 'crosscut', target: { files: [] } } : null;
+  // The cross-cutting task goes with any hunt that has something to hunt in,
+  // and counts against max_tasks like any other (no room: it is not planned).
+  const wantsCrosscut = hunting && work.some((d) => d.kind === 'hunt');
+  const crosscut: Draft | null = wantsCrosscut && input.limits.max_tasks >= 1 ? { kind: 'crosscut', target: { files: [] } } : null;
 
   // max_tasks: what does not fit is left out and named, never silently dropped.
   const room = Math.max(0, input.limits.max_tasks - (crosscut === null ? 0 : 1));
   const kept = work.slice(0, room);
-  const reason = `over the plan's max_tasks limit (${String(input.limits.max_tasks)})`;
+  const reason = `${OVER_LIMIT_REASON_PREFIX} (${String(input.limits.max_tasks)})`;
   for (const d of work.slice(room)) {
     if (d.target.fingerprint !== undefined) not_eligible.push({ fingerprint: d.target.fingerprint, reason });
     else if (d.target.entry_points !== undefined) for (const ep of d.target.entry_points) set_aside.push({ entry_point: ep, reason });
-    else notes.push(`${reason}: files ${d.target.files.join(', ')} were not planned.`);
+    else set_aside.push({ entry_point: `files: ${d.target.files.join(', ')}`, reason });
   }
   if (crosscut !== null) kept.push(crosscut);
+  if (work.length > room) notes.push(`${String(work.length - room)} planned task(s) did not fit in max_tasks (${String(input.limits.max_tasks)}); coverage will be partial.`);
 
   const tasks: PlannedTask[] = kept.map((d, i) => ({ task_id: `t-${String(i + 1).padStart(4, '0')}`, ...d }));
   const briefTokens = (t: PlannedTask): number => (input.estimate_brief ?? ((x: PlannedTask) => DEFAULT_BRIEF_TOKENS[x.kind]))(t);
@@ -183,7 +193,9 @@ export function buildPlan(input: PlanInput): PlanResult {
   };
 
   let nothing_to_plan: string | null = null;
-  if (tasks.length === 0) {
+  if (tasks.length === 0 && work.length > 0) {
+    nothing_to_plan = `${reason}: no task fits`;
+  } else if (tasks.length === 0) {
     nothing_to_plan = hunting
       ? 'No entry points, no code files and no eligible findings: there is nothing to hunt in or to verify.'
       : 'No finding is eligible for verification (each needs a file and a line).';

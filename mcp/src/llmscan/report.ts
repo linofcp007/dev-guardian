@@ -9,6 +9,7 @@
  * `partial`, and the report names what is missing.
  */
 
+import { OVER_LIMIT_REASON_PREFIX } from './plan.js';
 import type { ScanCoverage } from '../types.js';
 import type { Independence, LlmScanPlan, LlmScanTask, LlmVerdict, TaskKind, VerifyVerdict } from './types.js';
 
@@ -42,10 +43,12 @@ export interface LlmScanReport {
   /** Task ids not closed with an answer: open, leased, never delivered. */
   missing: string[];
   entry_points: EntryPointAccount[];
+  /** Findings left out of the plan only because it was full (never verified): they keep coverage partial. */
+  not_planned: string[];
   /** Entry points not visited: set aside, or their task is not closed. */
   not_visited: string[];
   /** Findings an independent, non-stale `not_real` demotes. */
-  demoted: Array<{ fingerprint: string; decisive_line: string; reasoning: string }>;
+  demoted: Array<{ fingerprint: string; decisive_line: string; reasoning: string; origin_task_id?: string }>;
   hunt_findings: HuntFindingAccount[];
   /** US-4.AC-3: what was handed out and received, in characters. */
   sizes: { brief_chars: number; response_chars: number; estimated_brief_tokens: number };
@@ -94,7 +97,10 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
       if (verdict !== null && isVerify(t.result)) {
         counts.by_verdict[verdict] += 1;
         if (verdict === 'not_exploitable' && t.independence !== 'same_context' && t.target.fingerprint !== undefined) {
-          demoted.push({ fingerprint: t.target.fingerprint, decisive_line: t.result.decisive_line, reasoning: t.result.reasoning });
+          demoted.push({ fingerprint: t.target.fingerprint, decisive_line: t.result.decisive_line,
+            reasoning: t.result.reasoning,
+            ...(t.target.origin_task_id !== undefined ? { origin_task_id: t.target.origin_task_id } : {}),
+          });
         }
       }
       const fp = t.target.fingerprint;
@@ -128,6 +134,7 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
   const not_visited = entry_points.filter((e) => e.status !== 'visited').map((e) => e.entry_point);
 
   const missing = tasks.filter((t) => !answered(t)).map((t) => t.task_id);
+  const not_planned = plan.not_eligible.filter((n) => n.reason.startsWith(OVER_LIMIT_REASON_PREFIX)).map((n) => n.fingerprint);
   const taskCounts = {
     planned: tasks.length,
     closed: tasks.filter((t) => t.status === 'closed' && !neverDelivered(t)).length,
@@ -141,12 +148,13 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
   const noEntryPoints = plan.modes.includes('hunt') && entry_points.length === 0;
   if (noEntryPoints) notes.push('The hunt had no entry points (the attack surface found none), so coverage cannot be full.');
   if (missing.length > 0) notes.push(`${String(missing.length)} task(s) not closed with a valid answer: ${missing.join(', ')}.`);
+  if (not_planned.length > 0) notes.push(`${String(not_planned.length)} finding(s) were not planned because the plan was full: ${not_planned.join(', ')}.`);
   if (not_visited.length > 0) notes.push(`${String(not_visited.length)} entry point(s) not visited.`);
   const unverified = [...huntFindings.values()].filter((h) => h.status === 'unverified').length;
   if (unverified > 0) notes.push(`${String(unverified)} hunt finding(s) are unverified.`);
 
   const coverage: ScanCoverage =
-    tasks.length === 0 ? 'none' : missing.length === 0 && not_visited.length === 0 && !noEntryPoints ? 'full' : 'partial';
+    tasks.length === 0 ? 'none' : missing.length === 0 && not_planned.length === 0 && not_visited.length === 0 && !noEntryPoints ? 'full' : 'partial';
 
   const briefChars = tasks.reduce((n, t) => n + (t.brief_chars ?? 0), 0);
   return {
@@ -155,6 +163,7 @@ export function computeReport(plan: LlmScanPlan, tasks: readonly LlmScanTask[]):
     counts,
     missing,
     entry_points,
+    not_planned,
     not_visited,
     demoted,
     hunt_findings: [...huntFindings.values()],
