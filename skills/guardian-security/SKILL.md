@@ -320,6 +320,32 @@ Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
    (um cliente SSH ou de registry pode precisar disso); em high, manda
    também passá-lo a outro sítio ou escondê-lo — isso nenhuma tool precisa.
 
+## Verificação por modelo — `llm_scan_start` / `llm_scan_task` / `llm_scan_submit`
+
+Quando o utilizador quer que **o teu modelo** confirme o que os scanners acharam
+("verifica estes findings", "o que é que os scanners não veem?"): este passo vem
+**depois** da triagem da Secção 3 e não a substitui. O servidor não chama nenhum
+modelo; quem raciocina és tu, uma tarefa de cada vez.
+
+1. `llm_scan_start { project_path: "<project>", modes: ["verify"] }` (`"hunt"`
+   também, depois de `map_attack_surface`). Mostra ao utilizador a estimativa de
+   tokens e o `token_limit_note` **antes** de continuar. Acima de
+   `max_estimated_tokens` o plano pede `confirm: true` — só depois de o utilizador
+   concordar. O `confirm` abre a porta; o limite continua a ser um teto.
+2. `llm_scan_task { plan_id: "<plan_id>" }` devolve uma tarefa com `brief` e `lease_token`
+   (concessão de 20 minutos).
+3. **Uma tarefa por subagente novo**: lança o `Agent` com o brief e nada mais desta
+   conversa (podes lançar vários em paralelo), e submete a resposta JSON dele com
+   `llm_scan_submit { plan_id: "<plan_id>", task_id: "<task_id>", lease_token: "<lease_token>", independence: "subagent", payload: <resposta JSON> }`.
+4. Repete até `llm_scan_task` dizer `done`; `llm_scan_start { plan_id: "<plan_id>" }` devolve o
+   relatório (cobertura `full` só quando todas as tarefas fecharam).
+
+Declara a independência com verdade: se respondeste tu, no teu contexto,
+`independence: "same_context"` — o veredicto aparece no relatório mas nunca
+despromove nem confirma um finding. Nunca declares `subagent` por uma resposta tua.
+Noutros hosts a receita é a das regras do dev-guardian (Codex só lança subagentes
+se lho pedirem; Cline e Claude Desktop correm em sequência com `same_context`).
+
 ## Quando não correr scans completos
 
 - Em commits triviais (1-2 linhas): só hooks pre-commit chegam
