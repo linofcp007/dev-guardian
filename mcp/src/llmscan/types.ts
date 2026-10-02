@@ -9,12 +9,13 @@
  */
 
 import type { CreateMessageRequest, CreateMessageResult } from '@modelcontextprotocol/sdk/types.js';
+import type { LlmStoredVerdict } from '../validate/types.js';
 import type { HuntClass } from './classes.js';
 
 export type TaskKind = 'verify' | 'hunt' | 'crosscut';
 export type Independence = 'subagent' | 'sampling' | 'same_context';
 /** How a verdict is stored (`finding_validations`, provider `llm`). */
-export type LlmVerdict = 'exploitable' | 'not_exploitable' | 'undetermined';
+export type LlmVerdict = LlmStoredVerdict;
 export type ScanMode = 'verify' | 'hunt';
 
 /** Defaults of the design's API contract (`llm_scan_start`) and its limits. */

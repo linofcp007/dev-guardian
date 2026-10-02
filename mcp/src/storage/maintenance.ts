@@ -56,7 +56,10 @@
  * audit scan's `meta.sub_scan_ids` is read by `history/runCompare.ts`, which
  * falls back to the audit's own per-tool entries when a sub-scan is gone —
  * so only a BASELINED audit's sub-scans are held back (above); an ordinary
- * audit's go with their own partitions. A
+ * audit's go with their own partitions. `llm_scan_plans.scan_id` references
+ * `scans(id)` too: an OPEN plan holds its scan back (PROTECTED_SQL), a plan
+ * idle for {@link PLAN_ABANDON_DAYS} days is marked `abandoned` at retention's
+ * start, and `deleteRows` deletes a closed plan's rows with its scan. A
  * future table that references `scans(id)` must be added to the list above,
  * indexed, and deleted in `deleteRows`.
  */
@@ -65,6 +68,7 @@ import { spellingOnlyCanonical } from '../platform/pathSpelling.js';
 import type { DB } from './db.js';
 import { openSetForProject } from '../history/openSet.js';
 import type { Storage } from './index.js';
+import { PLAN_ABANDON_DAYS, abandonStalePlans } from './llmScanRepo.js';
 import { STACK_SNAPSHOTS_KEPT } from './stackRepo.js';
 
 export const DEFAULT_RETENTION_SCANS = 50;
@@ -396,6 +400,8 @@ export function pruneScans(db: DB, keep: number, budget: PruneBudget = {}): Prun
   const now = budget.now ?? (() => performance.now());
   const started = now();
   const protect = budget.protect ?? NOTHING_PROTECTED;
+  // Before the protected set is read: an abandoned plan no longer holds its scan back.
+  abandonStalePlans(db, new Date().toISOString());
   const pending = listPrunableScans(db, keep).filter((id) => !protect.has(id));
   const batchSize = budget.batchSize ?? PRUNE_BATCH;
   let deleted = 0;
@@ -586,6 +592,8 @@ export function scheduleRetention(
         // Once per start: what each candidate's project's open set reads
         // from is never deleted (openSetSourceIds). Re-read per start — a
         // scan the set stops reading goes at the next one.
+        const abandoned = abandonStalePlans(db, new Date().toISOString());
+        if (abandoned > 0) log(`marked ${abandoned} llm_scan plan(s) idle for over ${PLAN_ABANDON_DAYS} days as abandoned`);
         const listed = listPrunableScans(db, limit.keep);
         protect = openSetSourceIds(storage, listed);
         pending = listed.filter((id) => !protect.has(id));

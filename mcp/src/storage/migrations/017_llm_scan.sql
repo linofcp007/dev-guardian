@@ -8,7 +8,8 @@
 --
 -- Additive: two new tables, no change to an existing one. `scan_id` points at
 -- the plan's `llm_scan` scan; retention deletes a plan's rows with that scan
--- and holds the scan back while the plan is open (storage/maintenance.ts).
+-- and holds the scan back while the plan is open (storage/maintenance.ts);
+-- retention first abandons a plan idle for 30 days.
 
 CREATE TABLE IF NOT EXISTS llm_scan_plans (
   id                  TEXT PRIMARY KEY,
@@ -25,7 +26,10 @@ CREATE TABLE IF NOT EXISTS llm_scan_plans (
   not_eligible        TEXT NOT NULL DEFAULT '[]',
   set_aside           TEXT NOT NULL DEFAULT '[]',
   created_at          TEXT NOT NULL,
-  updated_at          TEXT NOT NULL
+  updated_at          TEXT NOT NULL,
+  -- Created, leased from, or answered: a plan idle for 7 days stops counting
+  -- toward the open-plan limit, one idle for 30 is abandoned by retention (D-2).
+  last_activity_at    TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_scan_plans_project ON llm_scan_plans(project_path, created_at);
