@@ -8,7 +8,123 @@
  * visited, or a hunt with no entry points at all (US-2.AC-2) makes it
  * `partial`, and the report names what is missing.
  */
-export function computeReport(_plan, _tasks) {
-    throw new Error('NotImplemented: computeReport');
+import { OVER_LIMIT_REASON_PREFIX } from './plan.js';
+const ESTIMATED_CHARS_PER_TOKEN = 4;
+/** The stored verdict of a verify task's answer. */
+const STORED = {
+    real: 'exploitable',
+    not_real: 'not_exploitable',
+    undetermined: 'undetermined',
+};
+const isVerify = (r) => r !== null && 'verdict' in r;
+/** Closed with a valid answer — the only way a task counts toward coverage. */
+const answered = (t) => t.status === 'closed' && t.closed_reason === 'valid';
+const neverDelivered = (t) => t.status === 'closed' && t.closed_reason === 'not_delivered';
+export function computeReport(plan, tasks) {
+    const counts = {
+        by_kind: { verify: 0, hunt: 0, crosscut: 0 },
+        by_verdict: { exploitable: 0, not_exploitable: 0, undetermined: 0 },
+        by_independence: { subagent: 0, sampling: 0, same_context: 0 },
+    };
+    const demoted = [];
+    const huntFindings = new Map();
+    const visitedBy = new Map();
+    const entryOrder = [];
+    const known = new Set();
+    const note = (ep) => {
+        if (!known.has(ep)) {
+            known.add(ep);
+            entryOrder.push(ep);
+        }
+    };
+    for (const t of tasks) {
+        counts.by_kind[t.kind] += 1;
+        if (answered(t) && t.independence !== null)
+            counts.by_independence[t.independence] += 1;
+        if (t.kind === 'verify') {
+            const verdict = answered(t) && isVerify(t.result) ? STORED[t.result.verdict] : null;
+            if (verdict !== null && isVerify(t.result)) {
+                counts.by_verdict[verdict] += 1;
+                if (verdict === 'not_exploitable' && t.independence !== 'same_context' && t.target.fingerprint !== undefined) {
+                    demoted.push({ fingerprint: t.target.fingerprint, decisive_line: t.result.decisive_line,
+                        reasoning: t.result.reasoning,
+                        ...(t.target.origin_task_id !== undefined ? { origin_task_id: t.target.origin_task_id } : {}),
+                    });
+                }
+            }
+            const fp = t.target.fingerprint;
+            if (t.target.origin_task_id !== undefined && fp !== undefined) {
+                const prior = huntFindings.get(fp);
+                huntFindings.set(fp, {
+                    fingerprint: fp,
+                    status: verdict ?? prior?.status ?? 'unverified',
+                    independent: verdict === null ? (prior?.independent ?? null) : t.independence !== null && t.independence !== 'same_context',
+                    sources: [...new Set([...(prior?.sources ?? []), t.target.origin_task_id])],
+                    verify_task_id: t.task_id,
+                });
+            }
+            continue;
+        }
+        for (const ep of t.target.entry_points ?? []) {
+            note(ep);
+            if (answered(t) && !visitedBy.has(ep))
+                visitedBy.set(ep, t.task_id);
+        }
+    }
+    const asideReason = new Map(plan.set_aside.map((s) => [s.entry_point, s.reason]));
+    for (const ep of asideReason.keys())
+        note(ep);
+    const entry_points = entryOrder.map((ep) => {
+        const by = visitedBy.get(ep);
+        if (by !== undefined)
+            return { entry_point: ep, status: 'visited', task_id: by };
+        const reason = asideReason.get(ep);
+        if (reason !== undefined)
+            return { entry_point: ep, status: 'set_aside', reason };
+        return { entry_point: ep, status: 'not_visited' };
+    });
+    const not_visited = entry_points.filter((e) => e.status !== 'visited').map((e) => e.entry_point);
+    const missing = tasks.filter((t) => !answered(t)).map((t) => t.task_id);
+    const not_planned = plan.not_eligible.filter((n) => n.reason.startsWith(OVER_LIMIT_REASON_PREFIX)).map((n) => n.fingerprint);
+    const taskCounts = {
+        planned: tasks.length,
+        closed: tasks.filter((t) => t.status === 'closed' && !neverDelivered(t)).length,
+        open: tasks.filter((t) => t.status === 'open').length,
+        leased: tasks.filter((t) => t.status === 'leased').length,
+        not_delivered: tasks.filter(neverDelivered).length,
+    };
+    const notes = ["The real token use is known only to the host; the sizes here are the server's estimate."];
+    // US-2.AC-2: a hunt with no entry points is never full coverage.
+    const noEntryPoints = plan.modes.includes('hunt') && entry_points.length === 0;
+    if (noEntryPoints)
+        notes.push('The hunt had no entry points (the attack surface found none), so coverage cannot be full.');
+    if (missing.length > 0)
+        notes.push(`${String(missing.length)} task(s) not closed with a valid answer: ${missing.join(', ')}.`);
+    if (not_planned.length > 0)
+        notes.push(`${String(not_planned.length)} finding(s) were not planned because the plan was full: ${not_planned.join(', ')}.`);
+    if (not_visited.length > 0)
+        notes.push(`${String(not_visited.length)} entry point(s) not visited.`);
+    const unverified = [...huntFindings.values()].filter((h) => h.status === 'unverified').length;
+    if (unverified > 0)
+        notes.push(`${String(unverified)} hunt finding(s) are unverified.`);
+    const coverage = tasks.length === 0 ? 'none' : missing.length === 0 && not_planned.length === 0 && not_visited.length === 0 && !noEntryPoints ? 'full' : 'partial';
+    const briefChars = tasks.reduce((n, t) => n + (t.brief_chars ?? 0), 0);
+    return {
+        coverage,
+        tasks: taskCounts,
+        counts,
+        missing,
+        entry_points,
+        not_planned,
+        not_visited,
+        demoted,
+        hunt_findings: [...huntFindings.values()],
+        sizes: {
+            brief_chars: briefChars,
+            response_chars: tasks.reduce((n, t) => n + (t.response_chars ?? 0), 0),
+            estimated_brief_tokens: Math.ceil(briefChars / ESTIMATED_CHARS_PER_TOKEN),
+        },
+        notes,
+    };
 }
 //# sourceMappingURL=report.js.map
