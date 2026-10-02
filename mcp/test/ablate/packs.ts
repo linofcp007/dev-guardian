@@ -247,6 +247,18 @@
  * nowhere in the 29 — their axis 3 is vacuous there, and the report says so.
  * The review round rebuilt the same tree from clones at the same commits
  * (1 914 files again) and re-ran the whole pack on it.
+ *
+ * **`web-js.yml`, `GUARDIAN_WEBJS_SRC`.** The Node/Express sink pack (SQL text
+ * built by interpolation in a SQL driver, a request path read or sent, a
+ * request URL fetched), run by scan_sast. Unset, axis 3 is `N/A`, not
+ * `mcp/src`: this repo opens no SQL connection and serves no Express route,
+ * so every rule would compare an empty set with an empty set. Point it at a
+ * tree of real Node application code with raw SQL and Express handlers; the
+ * pack header records which tree was measured, and the per-rule counts on it
+ * (US-3.AC-5, SC-002). The fixture root also holds `spike-app-s/` -- four
+ * files of the llm-scan spike's synthetic app, with two TRUE positives (S04,
+ * S06) and three decoys among them -- so it is neither `hits/` nor a decoy
+ * tree: axis 1 sees it as part of the fixture corpus, axis 0 and 2 do not.
  */
 
 import { existsSync } from 'node:fs';
@@ -286,6 +298,9 @@ export const RGPD_SRC_ENV = 'GUARDIAN_RGPD_SRC';
 
 /** Env var naming a tree of real LLM-application code (Python and JS/TS), for axis 3. */
 export const LLM_SRC_ENV = 'GUARDIAN_LLM_SRC';
+
+/** Env var naming a tree of real Node/Express application code (JS/TS, raw SQL), for axis 3. */
+export const WEBJS_SRC_ENV = 'GUARDIAN_WEBJS_SRC';
 
 /**
  * An opt-in axis-3 corpus read from an environment variable.
@@ -357,6 +372,19 @@ export function llmCorpus(): RealCorpus | undefined {
   return envCorpus(LLM_SRC_ENV, 'LLM corpus (GUARDIAN_LLM_SRC)', 'a tree of real LLM-application code (Python and JS/TS)');
 }
 
+/**
+ * Axis-3 corpus for the Node/Express sink pack. Unset, axis 3 is `N/A`: this
+ * repo holds no SQL driver call and no Express handler, so `mcp/src` would
+ * compare an empty set with an empty set for every rule. See the file header.
+ */
+export function webJsCorpus(): RealCorpus | undefined {
+  return envCorpus(
+    WEBJS_SRC_ENV,
+    'Node/Express corpus (GUARDIAN_WEBJS_SRC)',
+    'a tree of real Node application code (JS/TS) with raw SQL and Express handlers',
+  );
+}
+
 const RUST_STDLIB = rustStdlibCorpus();
 const CSHARP_SRC = csharpCorpus();
 const JAVA_SRC = javaCorpus();
@@ -365,6 +393,7 @@ const GO_SRC = goCorpus();
 const PHP_SRC = phpCorpus();
 const RGPD_SRC = rgpdCorpus();
 const LLM_SRC = llmCorpus();
+const WEBJS_SRC = webJsCorpus();
 
 export const PACKS: readonly PackSpec[] = [
   {
@@ -449,6 +478,16 @@ export const PACKS: readonly PackSpec[] = [
     fixtures: fixtures('llm'),
     hitsSubdir: 'hits',
     realCode: LLM_SRC,
+  },
+  // The Node/Express sink pack (SQL, path traversal, SSRF), run by scan_sast.
+  // See the file header for the corpus and the spike app in the fixture
+  // root, and `test/e2e/webJsPack.test.ts` for the fixtures.
+  {
+    name: 'web-js',
+    config: config('web-js'),
+    fixtures: fixtures('web-js'),
+    hitsSubdir: 'hits',
+    realCode: WEBJS_SRC,
   },
 ];
 

@@ -47,6 +47,7 @@ Read only by the test suite and `npm run ablate`; nothing at runtime looks at th
 | `GUARDIAN_RUST_SRC`, `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`, `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`, `GUARDIAN_PHP_SRC` | `npm run ablate` | Real-code corpus for axis 3 of the `bugfix-rs`, `-cs`, `-java`, `-py`, `-go` and `-php` packs. Unset: axis 3 prints `N/A`. Set to a path that does not exist: the run throws. |
 | `GUARDIAN_RGPD_SRC` | `npm run ablate` | Axis-3 corpus for the `rgpd` pack; unset falls back to `mcp/src`. |
 | `GUARDIAN_LLM_SRC` | `npm run ablate` | Axis-3 corpus for the `llm` pack: a tree of real LLM-application code, Python and JS/TS (the pack header names the one it was measured on). Unset: axis 3 prints `N/A`. Set to a path that does not exist: the run throws. |
+| `GUARDIAN_WEBJS_SRC` | `npm run ablate` | Axis-3 corpus for the `web-js` pack: a tree of real Node application code, JS/TS, with raw SQL and Express handlers (the pack header names the one it was measured on). Unset: axis 3 prints `N/A`. Set to a path that does not exist: the run throws. |
 | `GUARDIAN_CI_INIT_PIN_SHA` | `cli/dev-guardian.mjs ci-init` | Test seam: a 40-hex commit used instead of resolving the release tag. Production never sets it. |
 | `GUARDIAN_TEST_*` | individual tests | Test-internal switches (live network e2e, fetch mocks, raw temp paths, the run's own directory, `GUARDIAN_TEST_TIMING_LOG=<file>` to record every timing measurement as a JSON line). Not for users. |
 
