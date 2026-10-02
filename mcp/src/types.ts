@@ -773,6 +773,11 @@ export const DOMAIN_ERROR_CODES = [
   'unsupported_target',
   'target_not_authorized',
   'no_surface_snapshot',
+  // import_sarif: why a log was refused (tools/importSarif.ts).
+  'invalid_sarif',
+  'outside_project',
+  'refused_file',
+  'not_found',
 ] as const;
 export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
 

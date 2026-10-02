@@ -45,6 +45,8 @@ import './tools/precommitInstall.js';
 import './tools/registerCustomRules.js';
 import './tools/healthStatus.js';
 import './tools/reportExport.js';
+// Another tool's SARIF log into the history (feature sarif-import):
+import './tools/importSarif.js';
 import './tools/complianceEvidence.js';
 import './tools/createGithubIssues.js';
 // WordPress + .NET (Phase 15):
