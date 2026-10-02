@@ -216,7 +216,7 @@ describe('D-3: limits, delivery order, severity, concurrency', () => {
     const shown = over as typeof over & { deliverable_within_token_limit: number; token_limit_note: string };
     expect(shown.needs_confirm).toBe(true);
     expect(shown.deliverable_within_token_limit).toBe(1);
-    expect(shown.token_limit_note).toMatch(/limit_reached.*larger max_estimated_tokens/);
+    expect(shown.token_limit_note).toMatch(/About 1 task.*limit_reached.*larger max_estimated_tokens/);
     const refused = await callTool(h, 'llm_scan_task', { plan_id: over.plan_id });
     expectDomainError(refused, 'needs_confirm');
     expect(JSON.stringify(refused)).toContain('deliverable_within_token_limit');
@@ -243,6 +243,33 @@ describe('D-3: limits, delivery order, severity, concurrency', () => {
     const c = await start(h, { modes: ['verify'], per_task_overhead: 50_000, max_estimated_tokens: 250_000 });
     expect(c.needs_confirm).toBe(false); // 3 x 52 000 < 250 000
     for (let i = 0; i < 3; i += 1) await lease(h, c.plan_id);
+  });
+
+  it('deliverable_within_token_limit never exceeds max_tasks', async () => {
+    const h = harness();
+    seedMany(h, 800);
+    // 2 100 tokens per task by default sizes: a 700 000 limit would fit 333, but only 200 may be delivered.
+    const out = (await start(h, { modes: ['verify'], per_task_overhead: 100, max_estimated_tokens: 700_000, confirm: true })) as Awaited<ReturnType<typeof start>> & { deliverable_within_token_limit?: number };
+    expect(out.estimate.total_tokens).toBeLessThanOrEqual(700_000); // no gate: the field is absent
+    const over = (await start(h, { modes: ['verify'], per_task_overhead: 100, max_estimated_tokens: 410_000 })) as typeof out;
+    expect(over.estimate.total_tokens).toBe(420_000);
+    expect(over.deliverable_within_token_limit).toBeLessThanOrEqual(200);
+    expect(over.deliverable_within_token_limit).toBe(195);
+  });
+
+  it('after delivery has begun the field counts only the undelivered tasks against the remaining budget', async () => {
+    const h = harness();
+    seedStandard(h);
+    // 3 tasks, 102 000 each by default sizes; a 250 000 limit fits 2 of them; the estimate (306k) is above it.
+    const p = await start(h, { modes: ['verify'], per_task_overhead: 100_000, max_estimated_tokens: 250_000, confirm: true });
+    const field = async (): Promise<number | undefined> =>
+      (okResult<{ deliverable_within_token_limit?: number }>(await callTool(h, 'llm_scan_start', { project_path: h.project, plan_id: p.plan_id })).deliverable_within_token_limit);
+    expect(await field()).toBe(2);
+    await lease(h, p.plan_id);
+    expect(await field()).toBe(1);
+    await lease(h, p.plan_id);
+    expect(await field()).toBe(0);
+    expectDomainError(await callTool(h, 'llm_scan_task', { plan_id: p.plan_id }), 'limit_reached');
   });
 
   it('the estimate covers the deliverable tasks (max_tasks), and both numbers are shown', async () => {

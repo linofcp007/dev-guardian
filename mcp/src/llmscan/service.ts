@@ -126,25 +126,43 @@ export function reportOf(storage: Storage, plan: LlmScanPlan): LlmScanReport {
 }
 
 /** D-4: `confirm` authorises the start only; delivery still stops at max_estimated_tokens. */
-export const TOKEN_LIMIT_NOTE =
-  'Delivery stops at max_estimated_tokens with limit_reached; to cover the whole plan, start again with a larger max_estimated_tokens.';
+export const tokenLimitNote = (n: number): string =>
+  `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). To cover the whole plan, start again with a larger max_estimated_tokens.`;
 
-/** How many tasks, in delivery order, fit under max_estimated_tokens by the plan's own estimate. */
-function deliverableWithinTokenLimit(limits: PlanLimits, tasks: ReadonlyArray<{ kind: LlmScanTask['kind'] }>): number {
-  let spent = 0;
+/**
+ * A projection, not a promise: how many of the tasks not yet delivered, in delivery order, fit in what is
+ * left of the budget (max_estimated_tokens minus what `limitReason` counts as spent) and of max_tasks —
+ * with the default brief size per kind, since their briefs are not rendered yet, and the cross-cutting
+ * task's reserved slot honoured.
+ */
+function deliverableWithinTokenLimit(plan: LlmScanPlan, tasks: readonly LlmScanTask[]): number {
+  const { limits } = plan;
+  const delivered = tasks.filter((t) => t.delivered_at !== null);
+  let spent = delivered.reduce((sum, t) => sum + Math.ceil((t.brief_chars ?? 0) / 4) + limits.per_task_overhead, 0);
+  const slots = limits.max_tasks - delivered.filter((t) => t.target.origin_task_id === undefined).length;
+  const pending = tasks.filter((t) => t.delivered_at === null && t.status !== 'closed');
+  const crosscutPending = pending.some((t) => t.kind === 'crosscut');
+  let counted = 0;
   let n = 0;
-  for (const t of tasks) {
+  for (const t of pending) {
+    const exempt = t.target.origin_task_id !== undefined;
+    if (!exempt && counted >= slots - (t.kind !== 'crosscut' && crosscutPending ? 1 : 0)) {
+      if (t.kind !== 'crosscut' && crosscutPending) continue; // look on, to the cross-cutting task
+      break;
+    }
     spent += DEFAULT_BRIEF_TOKENS[t.kind] + limits.per_task_overhead;
     if (spent > limits.max_estimated_tokens) break;
+    if (!exempt) counted += 1;
     n += 1;
   }
   return n;
 }
 
-/** The fields that tell a user what a plan above the token limit will really deliver. */
-function tokenLimitFields(plan: LlmScanPlan, tasks: ReadonlyArray<{ kind: LlmScanTask['kind'] }>): Record<string, unknown> {
+/** The fields that tell a user what a plan above the token limit will deliver, about. */
+function tokenLimitFields(plan: LlmScanPlan, tasks: readonly LlmScanTask[]): Record<string, unknown> {
   if (plan.estimate.total_tokens <= plan.limits.max_estimated_tokens) return {};
-  return { deliverable_within_token_limit: deliverableWithinTokenLimit(plan.limits, tasks), token_limit_note: TOKEN_LIMIT_NOTE };
+  const n = deliverableWithinTokenLimit(plan, tasks);
+  return { deliverable_within_token_limit: n, token_limit_note: tokenLimitNote(n) };
 }
 
 const needsConfirm = (plan: LlmScanPlan): boolean => !plan.confirmed && plan.estimate.total_tokens > plan.limits.max_estimated_tokens;
@@ -355,7 +373,7 @@ export function planStatus(storage: Storage, planId: string, project: string | n
     limits: plan.limits,
     estimate: plan.estimate,
     needs_confirm: needsConfirm(plan),
-    ...tokenLimitFields(plan, storage.llmScan.listTasks(plan.id).filter((t) => t.target.origin_task_id === undefined)),
+    ...tokenLimitFields(plan, storage.llmScan.listTasks(plan.id)),
     prompt_version: plan.prompt_version,
     report: reportOf(storage, plan),
   };
@@ -416,8 +434,8 @@ export function leaseNext(storage: Storage, planId: string): Out {
   if (needsConfirm(plan)) {
     return fail(
       'needs_confirm',
-      `The plan's estimate (${String(plan.estimate.total_tokens)} tokens) is above the limit (${String(plan.limits.max_estimated_tokens)}). Confirm with llm_scan_start { plan_id: "${plan.id}", confirm: true } before any task is handed out. ${TOKEN_LIMIT_NOTE}`,
-      { plan_id: plan.id, confirm: true, ...tokenLimitFields(plan, repo.listTasks(plan.id).filter((t) => t.target.origin_task_id === undefined)) },
+      `The plan's estimate (${String(plan.estimate.total_tokens)} tokens) is above the limit (${String(plan.limits.max_estimated_tokens)}). Confirm with llm_scan_start { plan_id: "${plan.id}", confirm: true } before any task is handed out. ${tokenLimitNote(deliverableWithinTokenLimit(plan, repo.listTasks(plan.id)))}`,
+      { plan_id: plan.id, confirm: true, ...tokenLimitFields(plan, repo.listTasks(plan.id)) },
     );
   }
 
