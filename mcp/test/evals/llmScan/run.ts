@@ -792,7 +792,12 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
   for (const corpus of CORPUS_IDS) {
     if (!needed.has(corpus) || ws.base(corpus) === undefined) continue;
     const r = ws.reports.get(corpus);
-    if (r !== undefined) copyLines.push(`  blind copy ${corpus}: ${r.files} files, ${r.tells_before} tells neutralised, ${r.tells_after.length} left`);
+    if (r !== undefined) {
+      copyLines.push(
+        `  blind copy ${corpus}: ${r.files} files, ${r.tells_before} tells neutralised, ${r.tells_after.length} left ` +
+          `(renamed ${r.renamed.code} identifiers, ${r.renamed.strings} words in strings and data)`,
+      );
+    }
   }
   process.stdout.write(`${copyLines.join('\n')}\n`);
 

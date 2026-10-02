@@ -10,7 +10,7 @@
  * and checks the line counts and the key lines.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
@@ -241,6 +241,10 @@ describe('app-b (BenchmarkPython)', () => {
     expect(blindPathOf('benchmark-python', 'testcode/BenchmarkTest00432.py')).toBe(`testcode/View${benchmarkViewNumber(432)}.py`);
     expect(blindPathOf('vampi', 'config.py')).toBe('config.py');
     expect(blindPathOf('juice-shop', 'lib/insecurity.ts')).toBe('lib/secutil.ts');
+    // review round 2: every path also goes through the tell-token map, the same one as the code
+    expect(blindPathOf('juice-shop', 'lib/antiCheat.ts')).toBe('lib/antiAnomaly.ts');
+    expect(blindPathOf('dvwa', 'hackable/uploads/dvwa_email.png')).toBe('storage/uploads/app_email.png');
+    expect(blindPathOf('dvwa', 'm1/variant_c.php')).toBe('m1/variant_c.php');
   });
 
   it('the test-case numbers are a bijection: no two cases collide', () => {
@@ -257,9 +261,46 @@ describe('app-b (BenchmarkPython)', () => {
   });
 });
 
+describe('review round 2: the post-build grep refuses a copy with a tell in an identifier or a string', () => {
+  // app-s is copied verbatim, so whatever its files carry reaches the grep untouched.
+  const build = (files: Record<string, string>): (() => unknown) => {
+    const src = makeTempDir('llmscan-tells-src-');
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(src, ...rel.split('/').slice(0, -1)), { recursive: true });
+      writeFileSync(join(src, ...rel.split('/')), text, 'utf8');
+    }
+    return () => buildBlindCopy('app-s', src, join(makeTempDir('llmscan-tells-dest-'), 'app-s'));
+  };
+
+  it('an identifier split on its case boundaries', () => {
+    expect(build({ 'src/a.ts': 'export const xssFilter = 1\n' })).toThrow(/still carries 1 tell\(s\)[\s\S]*src\/a\.ts:1 \[code\] xssFilter/);
+  });
+
+  it('a string literal', () => {
+    expect(build({ 'src/a.ts': "export const m = 'Malicious activity detected'\n" })).toThrow(/src\/a\.ts:1 \[string\] Malicious/);
+  });
+
+  it('a file name never gets that far: every path is written through the same map', () => {
+    const src = makeTempDir('llmscan-tells-src-');
+    mkdirSync(join(src, 'src'));
+    writeFileSync(join(src, 'src', 'antiCheat.ts'), 'export {}\n', 'utf8');
+    const dest = join(makeTempDir('llmscan-tells-dest-'), 'app-s');
+    expect(buildBlindCopy('app-s', src, dest).tells_after).toEqual([]);
+    expect(readdirSync(join(dest, 'src'))).toEqual(['antiAnomaly.ts']);
+  });
+
+  it('and passes a clean one, the allowlisted CSP keyword included', () => {
+    expect(build({ 'src/a.ts': "export const csp = \"script-src 'self' 'unsafe-inline'\"\n" })()).toMatchObject({ files: 1, tells_after: [] });
+  });
+});
+
 // ---------- the real corpora (env-gated) ----------
 
-/** A key line and what it must still say in the blind copy. */
+/**
+ * A key line and what it must still say in the blind copy — plus, for
+ * review round 2, the reviewer's examples of tells in code, pinned on their
+ * real lines: they must read neutral and stay where they were.
+ */
 const KEY_LINES: Readonly<Record<CorpusId, ReadonlyArray<[string, number, RegExp]>>> = {
   'app-s': [['src/repositories/shifts.ts', 64, /LIKE '%\$\{term\}%'/]],
   vampi: [
@@ -269,10 +310,18 @@ const KEY_LINES: Readonly<Record<CorpusId, ReadonlyArray<[string, number, RegExp
   'juice-shop': [
     ['routes/login.ts', 34, /models\.sequelize\.query\(`SELECT \* FROM Users WHERE email/],
     ['routes/redirect.ts', 18, /redirect/],
+    ['lib/startup/validateConfig.ts', 18, /"Shared Raw Product" event product/],
+    ['lib/startup/validatePreconditions.ts', 41, /"Chatbot Prompt Input" event/],
+    ['lib/secutil.ts', 160, /'Unusual activity detected'/],
+    ['routes/metrics.ts', 127, /solved by anomaly/],
+    ['lib/telemetry.ts', 13, /import \* as antiAnomaly from '\.\/antiAnomaly'/],
+    ['routes/userProfile.ts', 91, /'unsafe-eval'/],
   ],
   dvwa: [
     ['m1/variant_c.php', 10, /shell_exec/],
     ['m3/variant_a.php', 34, /\$query/],
+    ['m5/variant_b.php', 5, /"storage\/uploads\/"/],
+    ['m2/variant_a.php', 9, /\$_APP\['QUERY_DB'\]/],
   ],
   'benchmark-python': [[blindPathOf('benchmark-python', 'testcode/BenchmarkTest00432.py'), 53, /subprocess/]],
 };

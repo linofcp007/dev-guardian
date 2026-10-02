@@ -14,13 +14,18 @@
  *   - app-j loses the CTF vocabulary, "Hacking Instructor" and its author's
  *     address; app-b (BenchmarkPython, which `blind.cjs` never covered) is
  *     blinded in file names and contents alike.
- * `corpora.ts` then greps every finished copy for tells and refuses it if
- * any survives. Only the I/O lives there; everything here is unit-tested for
+ * Review round 2 found tells in code strings and camelCase identifiers, so
+ * every code file now ends with `tells.ts#scrubCode` (and every data file
+ * with `scrubProse`): one deterministic token map renames each tell-bearing
+ * identifier, string word and — through {@link blindPathOf} — file name, the
+ * same way everywhere. `corpora.ts` then greps every finished copy for tells
+ * (raw words, split identifiers, string literals, comments, paths) and
+ * refuses it if any survives. Only the I/O lives there; everything here is unit-tested for
  * line preservation (`test/unit/evals/llmScanBlind.test.ts`).
  */
 
 import type { CorpusId } from './corpora.js';
-import { neutraliseTellComments } from './tells.js';
+import { neutraliseTellComments, rewritePath, scrubCode, scrubProse, type ScrubLog } from './tells.js';
 
 /** Throws when a transform changed the number of lines — every key line would be off. */
 export function assertSameLineCount(before: string, after: string, where: string): void {
@@ -49,7 +54,7 @@ export const VAMPI_FILES: readonly string[] = [
   'requirements.txt',
 ];
 
-export function blindVampiText(rel: string, orig: string): string {
+export function blindVampiText(rel: string, orig: string, log?: ScrubLog): string {
   let t = orig;
   if (rel.endsWith('.py')) {
     // drop comments (no '#' occurs inside a string literal in these files — checked by hand in the spike)
@@ -76,6 +81,7 @@ export function blindVampiText(rel: string, orig: string): string {
       .map((l) => (/vulnerab|evaluate the efficiency|learning\/teaching/i.test(l) ? l.replace(/\S[^\r\n]*/, 'Book catalogue API.') : l))
       .join('\n');
   }
+  t = rel.endsWith('.py') ? scrubCode(t, 'python', log) : scrubProse(t, log);
   assertSameLineCount(orig, t, `app-v/${rel}`);
   return t;
 }
@@ -103,7 +109,7 @@ export function juiceAliases(allText: string): Map<string, string> {
   return new Map(names.map((n, i) => [n, `e${String(i + 1).padStart(3, '0')}`]));
 }
 
-export function blindJuiceText(rel: string, orig: string, alias: ReadonlyMap<string, string>): string {
+export function blindJuiceText(rel: string, orig: string, alias: ReadonlyMap<string, string>, log?: ScrubLog): string {
   // Comments that state a flaw, name the project or its author (every licence
   // header): emptied on the original text, before any rename can mangle them.
   let t = neutraliseTellComments(orig, 'js').text;
@@ -142,6 +148,8 @@ export function blindJuiceText(rel: string, orig: string, alias: ReadonlyMap<str
     .replace(/bjoern\.kimminich/gi, 'shop.owner')
     .replace(/kimminich/gi, 'owner')
     .replace(/\bpwning\b/gi, 'docs');
+  // review round 2: the tells in strings and identifiers (antiCheat, 'Malicious activity…', alert(`xss`))
+  t = scrubCode(t, 'js', log);
   assertSameLineCount(orig, t, `app-j/${rel}`);
   return t;
 }
@@ -183,10 +191,12 @@ export function dvwaFiles(): Array<{ source: string; out: string; level: DvwaLev
   return out;
 }
 
-export function blindDvwaText(rel: string, orig: string): string {
+export function blindDvwaText(rel: string, orig: string, log?: ScrubLog): string {
   let t = neutraliseTellComments(orig, 'php').text;
   t = t.replace(/dvwa/gi, (m) => (m === m.toUpperCase() ? 'APP' : m[0] === 'D' ? 'App' : 'app'));
   t = t.replace(/(impossible|low|medium|high)\.php/gi, 'variant.php');
+  // review round 2: `hackable/uploads/` → `storage/uploads/`, the `SQLI_DB` config key … (paths map the same way: blindPathOf)
+  t = scrubCode(t, 'php', log);
   assertSameLineCount(orig, t, `app-d/${rel}`);
   return t;
 }
@@ -266,7 +276,7 @@ export function benchmarkBlindPath(rel: string): string {
  * file, so the code does what it did; only the words that hint at the
  * verdict go.
  */
-export function blindBenchmarkText(rel: string, orig: string): string {
+export function blindBenchmarkText(rel: string, orig: string, log?: ScrubLog): string {
   let t = orig;
   if (rel.endsWith('.py')) {
     const lines = t.split('\n');
@@ -286,15 +296,24 @@ export function blindBenchmarkText(rel: string, orig: string): string {
   t = benchmarkRenames(t)
     .replace(CATEGORY_SEGMENT, '/pages-$1/')
     .replace(/XXE Attack SUCCESSFUL-U_R_L33T!/g, 'entity resolved');
+  t = rel.endsWith('.py') ? scrubCode(t, 'python', log) : scrubProse(t, log);
   assertSameLineCount(orig, t, `app-b/${rel}`);
   return t;
 }
 
 // ---------- every corpus ----------
 
-/** Where a corpus file is in its blind copy (the C-items of app-j and app-d already name blind paths). */
+/**
+ * Where a corpus file is in its blind copy: the corpus's own renames, then
+ * the tell-token map every file name goes through (`tells.ts#rewritePath`,
+ * the same map as the code, so an import of `./antiCheat` and the file it
+ * names agree, and `hackable/uploads/` becomes `storage/uploads/` in a path
+ * as in a string). The C-items of app-j and app-d already name blind paths;
+ * this is idempotent on them. `corpora.ts` writes every copy through here, so
+ * grading maps a path exactly as the copy was written.
+ */
 export function blindPathOf(corpus: CorpusId, rel: string): string {
-  if (corpus === 'benchmark-python') return benchmarkBlindPath(rel);
-  if (corpus === 'juice-shop') return juiceOutPath(rel);
-  return rel;
+  if (corpus === 'benchmark-python') return rewritePath(benchmarkBlindPath(rel));
+  if (corpus === 'juice-shop') return rewritePath(juiceOutPath(rel));
+  return rewritePath(rel);
 }

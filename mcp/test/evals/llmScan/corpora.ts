@@ -28,17 +28,16 @@ import { rmDir } from '../../helpers/tempDir.js';
 import {
   BENCHMARK_PY_ROOTS,
   VAMPI_FILES,
-  benchmarkBlindPath,
   blindBenchmarkText,
   blindDvwaText,
   blindJuiceText,
+  blindPathOf,
   blindVampiText,
   dvwaFiles,
   isJuiceFile,
   juiceAliases,
-  juiceOutPath,
 } from './blind.js';
-import { fileKindOf, findTells, type Tell } from './tells.js';
+import { codeTokens, fileKindOf, findTells, newScrubLog, type ScrubLog, type Tell } from './tells.js';
 
 export type CorpusId = 'app-s' | 'vampi' | 'juice-shop' | 'dvwa' | 'benchmark-python';
 export const CORPUS_IDS: readonly CorpusId[] = ['app-s', 'vampi', 'juice-shop', 'dvwa', 'benchmark-python'];
@@ -192,25 +191,30 @@ function copyBytes(srcRoot: string, rel: string, destRoot: string, outRel: strin
 interface PlannedFile {
   from: string;
   to: string;
-  transform: ((text: string) => string) | null;
+  transform: ((text: string, log: ScrubLog) => string) | null;
 }
 
+/**
+ * Every file of a blind copy. Its destination is always `blindPathOf` —
+ * the one map grading uses too — so a renamed path cannot drift from the
+ * key that names it.
+ */
 function planCopy(id: CorpusId, src: string): PlannedFile[] {
   const read = (rel: string): string => readFileSync(join(src, ...rel.split('/')), 'utf8');
   switch (id) {
     case 'app-s':
-      return walkFiles(src).map((rel) => ({ from: rel, to: rel, transform: null }));
+      return walkFiles(src).map((rel) => ({ from: rel, to: blindPathOf(id, rel), transform: null }));
     case 'vampi':
-      return VAMPI_FILES.map((rel) => ({ from: rel, to: rel, transform: (t: string) => blindVampiText(rel, t) }));
+      return VAMPI_FILES.map((rel) => ({ from: rel, to: blindPathOf(id, rel), transform: (t: string, log: ScrubLog) => blindVampiText(rel, t, log) }));
     case 'juice-shop': {
       const rels = ['server.ts', 'app.ts']
         .concat(...['routes', 'lib', 'models'].map((d) => walkFiles(join(src, d)).map((r) => `${d}/${r}`)))
         .filter(isJuiceFile);
       const alias = juiceAliases(rels.map(read).join('\n'));
-      return rels.map((rel) => ({ from: rel, to: juiceOutPath(rel), transform: (t: string) => blindJuiceText(rel, t, alias) }));
+      return rels.map((rel) => ({ from: rel, to: blindPathOf(id, rel), transform: (t: string, log: ScrubLog) => blindJuiceText(rel, t, alias, log) }));
     }
     case 'dvwa':
-      return dvwaFiles().map((f) => ({ from: f.source, to: f.out, transform: (t: string) => blindDvwaText(f.source, t) }));
+      return dvwaFiles().map((f) => ({ from: f.source, to: blindPathOf(id, f.out), transform: (t: string, log: ScrubLog) => blindDvwaText(f.source, t, log) }));
     case 'benchmark-python':
       return BENCHMARK_PY_ROOTS.flatMap((top) => {
         const abs = join(src, top);
@@ -218,11 +222,29 @@ function planCopy(id: CorpusId, src: string): PlannedFile[] {
         const rels = statSync(abs).isDirectory() ? walkFiles(abs).map((r) => `${top}/${r}`) : [top];
         return rels.map((rel) => ({
           from: rel,
-          to: benchmarkBlindPath(rel),
-          transform: fileKindOf(rel) === 'binary' ? null : (t: string) => blindBenchmarkText(rel, t),
+          to: blindPathOf(id, rel),
+          transform: fileKindOf(rel) === 'binary' ? null : (t: string, log: ScrubLog) => blindBenchmarkText(rel, t, log),
         }));
       });
   }
+}
+
+/**
+ * Renames that would merge two names into one: an identifier renamed to a
+ * name the original code already uses, or two different identifiers renamed
+ * to the same name. Either would make the copy read differently from what it
+ * does, so the copy is refused and the map in `tells.ts` must be changed.
+ */
+export function renameCollisions(log: ScrubLog, originalCodeTokens: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  const byTarget = new Map<string, string>();
+  for (const [from, to] of log.code) {
+    if (originalCodeTokens.has(to)) out.push(`${from} -> ${to}: ${to} is already a name in the code`);
+    const other = byTarget.get(to);
+    if (other !== undefined && other !== from) out.push(`${other} and ${from} both -> ${to}`);
+    byTarget.set(to, from);
+  }
+  return out;
 }
 
 export interface LocatedTell extends Tell {
@@ -235,30 +257,37 @@ export interface BlindCopyReport {
   tells_before: number;
   /** Tells in the finished copy — always empty: a copy with any is refused. */
   tells_after: LocatedTell[];
+  /** Distinct tokens the tell map renamed: in code (identifiers), and in strings and data. */
+  renamed: { code: number; strings: number };
 }
 
 /**
  * Builds the blind copy of corpus `id` (source `src`) at `dest`, which must
- * not exist yet, then greps the finished copy for tells (`tells.ts`) and
- * THROWS when any survives: a copy that tells the model what it is looking
- * at measures recall, not reasoning.
+ * not exist yet, then greps the finished copy for tells (`tells.ts`: raw
+ * words, string literals and identifiers split on their case and underscore
+ * boundaries, comments and paths) and THROWS when any survives — a copy that
+ * tells the model what it is looking at measures recall, not reasoning — or
+ * when the tell map merged two names into one ({@link renameCollisions}).
  */
 export function buildBlindCopy(id: CorpusId, src: string, dest: string): BlindCopyReport {
   if (existsSync(dest)) throw new Error(`blind copy target already exists: ${dest}`);
   mkdirSync(dest, { recursive: true });
   const plan = planCopy(id, src);
+  const log = newScrubLog();
+  const originalTokens = new Set<string>();
   let before = 0;
   const after: LocatedTell[] = [];
   for (const f of plan) {
-    const binary = fileKindOf(f.from) === 'binary';
-    const original = binary ? null : readFileSync(join(src, ...f.from.split('/')), 'utf8');
+    const kind = fileKindOf(f.from);
+    const original = kind === 'binary' ? null : readFileSync(join(src, ...f.from.split('/')), 'utf8');
     before += findTells(f.from, original).length;
+    if (original !== null && kind !== 'prose' && kind !== 'binary') for (const t of codeTokens(original, kind)) originalTokens.add(t);
     if (original === null || f.transform === null) {
       copyBytes(src, f.from, dest, f.to);
       after.push(...findTells(f.to, original).map((t) => ({ ...t, file: f.to })));
       continue;
     }
-    const blinded = f.transform(original);
+    const blinded = f.transform(original, log);
     writeText(dest, f.to, blinded);
     after.push(...findTells(f.to, blinded).map((t) => ({ ...t, file: f.to })));
   }
@@ -269,7 +298,9 @@ export function buildBlindCopy(id: CorpusId, src: string, dest: string): BlindCo
       .join('\n  ');
     throw new Error(`the blind copy of ${id} still carries ${after.length} tell(s); refusing to run on it:\n  ${shown}`);
   }
-  return { files: plan.length, tells_before: before, tells_after: after };
+  const collisions = renameCollisions(log, originalTokens);
+  if (collisions.length > 0) throw new Error(`the tell map merges names in the blind copy of ${id}:\n  ${collisions.join('\n  ')}`);
+  return { files: plan.length, tells_before: before, tells_after: after, renamed: { code: log.code.size, strings: log.strings.size } };
 }
 
 /**
