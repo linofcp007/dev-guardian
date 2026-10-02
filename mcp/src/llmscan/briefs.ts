@@ -69,6 +69,8 @@ export interface BriefContext {
   scanner_findings?: Finding[];
   /** Default: the current prompt version. */
   prompt_version?: string;
+  /** The ceiling a brief is held to, in estimated tokens. Default {@link MAX_BRIEF_TOKENS}; lower only in tests. */
+  max_tokens?: number;
 }
 
 export interface RenderedBrief {
@@ -244,9 +246,12 @@ function excerptRange(lines: readonly string[], flagged: number): [number, numbe
 }
 
 /** The numbered, secret-free, size-capped quote of the code around `flagged`; `>` marks the flagged line. */
-function renderExcerpt(text: string, flagged: number | undefined): string {
+function renderExcerpt(text: string, flagged: number | undefined, maxChars: number = MAX_EXCERPT_CHARS): string {
   const lines = text.split(/\r?\n/);
-  const at = flagged ?? 1;
+  // A line past the end of the file (a stale scan) marks the last line, and the excerpt says so.
+  const beyond = flagged !== undefined && flagged > lines.length;
+  const at = Math.min(Math.max(flagged ?? 1, 1), lines.length);
+  const note = beyond ? `(the flagged line ${String(flagged)} is beyond the end of the file; the last line, ${String(at)}, is marked)\n` : '';
   const [from, to] = excerptRange(lines, at);
   const scrubbed = scrubSecrets(lines.slice(from - 1, to).join('\n'), from).split('\n');
   const width = String(to).length;
@@ -260,11 +265,11 @@ function renderExcerpt(text: string, flagged: number | undefined): string {
   let hi = rows.length;
   let size = rows.reduce((a, r) => a + r.length + 1, 0);
   const flaggedIdx = at - from;
-  while (size > MAX_EXCERPT_CHARS && hi - lo > 1) {
+  while (size > maxChars && hi - lo > 1) {
     if (flaggedIdx - lo >= hi - 1 - flaggedIdx) size -= (rows[lo++] ?? '').length + 1;
     else size -= (rows[--hi] ?? '').length + 1;
   }
-  return rows.slice(lo, hi).join('\n');
+  return note + rows.slice(lo, hi).join('\n');
 }
 
 // ---- parts -----------------------------------------------------------------
@@ -272,10 +277,10 @@ function renderExcerpt(text: string, flagged: number | undefined): string {
 function renderFinding(f: Finding, file: string | undefined): string {
   const line = file !== undefined && f.line_start !== undefined ? `:${String(f.line_start)}` : '';
   const rows = [
-    `tool: ${f.tool}`,
-    `rule: ${f.rule_id ?? '(none)'}`,
+    `tool: ${scrubSecrets(f.tool)}`,
+    `rule: ${scrubSecrets(f.rule_id ?? '(none)')}`,
     `severity: ${f.severity}`,
-    `location: ${file ?? '(no file)'}${line}`,
+    `location: ${file === undefined ? '(no file)' : scrubSecrets(file)}${line}`,
     `title: ${clip(scrubSecrets(f.title), 300)}`,
     `message: ${clip(scrubSecrets(f.message ?? ''), MAX_MESSAGE_CHARS)}`,
   ];
@@ -299,9 +304,9 @@ function renderList(items: readonly string[], more: string): string {
 function renderScannerFindings(findings: readonly Finding[] | undefined): string {
   return renderList(
     (findings ?? []).map((f) => {
-      const where = f.file_path !== undefined ? ` at ${f.file_path}${f.line_start !== undefined ? `:${String(f.line_start)}` : ''}` : '';
+      const where = f.file_path !== undefined ? ` at ${scrubSecrets(f.file_path)}${f.line_start !== undefined ? `:${String(f.line_start)}` : ''}` : '';
       const msg = scrubSecrets(f.message ?? f.title).replace(/\s+/g, ' ');
-      return `- ${f.tool} ${f.rule_id ?? '(none)'}${where}: ${clip(msg, MAX_FINDING_MESSAGE_CHARS)}`;
+      return `- ${scrubSecrets(f.tool)} ${scrubSecrets(f.rule_id ?? '(none)')}${where}: ${clip(msg, MAX_FINDING_MESSAGE_CHARS)}`;
     }),
     'findings',
   );
@@ -317,27 +322,45 @@ function renderEntryPoints(task: LlmScanTask, ctx: BriefContext): string {
     ctx.entry_points !== undefined && ctx.entry_points.length > 0
       ? ctx.entry_points.map((r) => entryPointId(r, ctx.root))
       : (task.target.entry_points ?? []);
-  return renderList(ids.length > 0 ? ids : task.target.files, 'entry points');
+  // A route literal or a path can hold a token: the ids go through the same scrub as the code.
+  return renderList((ids.length > 0 ? ids : task.target.files).map((id) => scrubSecrets(id)), 'entry points');
 }
 
-function renderVerifyData(task: LlmScanTask, ctx: BriefContext): { finding: string; excerpt: string } {
+interface VerifyData {
+  finding: string;
+  excerpt: string;
+  /** The excerpt again within a smaller character budget (the flagged line always stays). */
+  excerptWithin?: (maxChars: number) => string;
+}
+
+function renderVerifyData(task: LlmScanTask, ctx: BriefContext): VerifyData {
   const f = ctx.finding;
   if (f === undefined) throw new Error('a verify brief needs the scanner finding');
   const file = task.target.files[0] ?? f.file_path;
   if (file === undefined || file === '') return { finding: renderFinding(f, undefined), excerpt: '(the finding names no file)' };
   const read = ctx.reader(ctx.root, file);
-  const excerpt = read.status === 'ok' ? renderExcerpt(read.text, f.line_start) : `(the file could not be read: ${read.status})`;
-  return { finding: renderFinding(f, file), excerpt };
+  if (read.status !== 'ok') return { finding: renderFinding(f, file), excerpt: `(the file could not be read: ${read.status})` };
+  const text = read.text;
+  return {
+    finding: renderFinding(f, file),
+    excerpt: renderExcerpt(text, f.line_start),
+    excerptWithin: (maxChars) => renderExcerpt(text, f.line_start, maxChars),
+  };
 }
 
 // ---- rendering -------------------------------------------------------------
 
 export function renderBrief(task: LlmScanTask, ctx: BriefContext): RenderedBrief {
   const template = loadTemplate(ctx.prompt_version ?? CURRENT_PROMPT_VERSION, TEMPLATE_NAMES[task.kind]);
-  const values: Record<string, string> =
-    task.kind === 'verify'
-      ? { ...renderVerifyData(task, ctx), schema: VERIFY_SCHEMA }
-      : { entry_points: renderEntryPoints(task, ctx), scanner_findings: renderScannerFindings(ctx.scanner_findings), schema: HUNT_SCHEMA };
+  let excerptWithin: ((maxChars: number) => string) | undefined;
+  let values: Record<string, string>;
+  if (task.kind === 'verify') {
+    const { excerptWithin: within, ...data } = renderVerifyData(task, ctx);
+    excerptWithin = within;
+    values = { ...data, schema: VERIFY_SCHEMA };
+  } else {
+    values = { entry_points: renderEntryPoints(task, ctx), scanner_findings: renderScannerFindings(ctx.scanner_findings), schema: HUNT_SCHEMA };
+  }
   // The marker must not occur in anything it fences, or the data could close its own block.
   let boundary = ctx.boundary();
   for (let tries = 1; Object.values(values).some((v) => v.includes(boundary)); tries += 1) {
@@ -346,6 +369,19 @@ export function renderBrief(task: LlmScanTask, ctx: BriefContext): RenderedBrief
   }
   values['boundary'] = boundary;
   // One pass: a `{name}` inside a value is data and is not expanded again.
-  const text = template.replace(/\{(boundary|finding|excerpt|schema|entry_points|scanner_findings)\}/g, (whole, name: string) => values[name] ?? whole);
+  const fill = (): string => template.replace(/\{(boundary|finding|excerpt|schema|entry_points|scanner_findings)\}/g, (whole, name: string) => values[name] ?? whole);
+  const limit = ctx.max_tokens ?? MAX_BRIEF_TOKENS;
+  let text = fill();
+  // Hard ceiling: shrink the variable parts — the lists first, then the excerpt
+  // around the flagged line — and refuse rather than return an over-cap brief.
+  if (estimateTokens(text) > limit) {
+    for (const key of ['entry_points', 'scanner_findings']) if (values[key] !== undefined) values[key] = '(omitted: the brief size limit)';
+    text = fill();
+  }
+  for (let cap = MAX_EXCERPT_CHARS >> 1; excerptWithin !== undefined && estimateTokens(text) > limit && cap >= 1; cap >>= 1) {
+    values['excerpt'] = excerptWithin(cap);
+    text = fill();
+  }
+  if (estimateTokens(text) > limit) throw new Error('the brief exceeds the size limit even with its variable parts cut to the minimum');
   return { text, chars: text.length, estimated_tokens: estimateTokens(text) };
 }
