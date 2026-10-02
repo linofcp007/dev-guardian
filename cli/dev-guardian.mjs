@@ -245,6 +245,7 @@ Usage:
   node cli/dev-guardian.mjs status [--project <path>]
   node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
   node cli/dev-guardian.mjs db adopt [--project <path>] [--yes [--rehome]]
+  node cli/dev-guardian.mjs import-sarif <file> [--project <path>] [--allow-outside-project] [--max-results <n>]
 
 mcp-config — wire the MCP server into an AI host
   Hosts: ${[...ALL_HOSTS].join(', ')}, all
@@ -2644,6 +2645,146 @@ async function cmdStatus(argv) {
   return;
 }
 
+// ---------------------------------------------------------------------------
+// import-sarif — the `import_sarif` tool without an assistant session
+// ---------------------------------------------------------------------------
+
+/**
+ * Lazily loads the storage layer and the `import_sarif` tool module (loading
+ * it registers it) — see loadDashboardModules for why this is dynamic and for
+ * the two friendly failures (not built; Node without node:sqlite). The CLI
+ * calls the tool's own handler, so it is the same import by construction.
+ */
+async function loadImportSarifModules() {
+  const marker = resolve(ROOT, 'mcp', 'dist', 'tools', 'importSarif.js');
+  if (!existsSync(marker)) {
+    process.stderr.write(
+      `dev-guardian: MCP server not built (missing ${marker}).\n` +
+        'Run once:  cd mcp && npm install && npm run build\n',
+    );
+    process.exit(USAGE_ERROR_EXIT);
+  }
+  try {
+    const [storage, tools] = await Promise.all([
+      import('../mcp/dist/storage/index.js'),
+      import('../mcp/dist/tools/index.js'),
+      import('../mcp/dist/tools/importSarif.js'),
+    ]);
+    return { openDatabase: storage.openDatabase, Storage: storage.Storage, TOOLS: tools.TOOLS };
+  } catch (e) {
+    if (isNodeSqliteUnavailable(e)) {
+      process.stderr.write(
+        `dev-guardian: this command requires Node.js >= 22.13 (built-in node:sqlite support). ` +
+          `Current: ${process.version}.\n`,
+      );
+      process.exit(USAGE_ERROR_EXIT);
+    }
+    throw e;
+  }
+}
+
+function parseImportSarifArgs(argv) {
+  const out = { file: undefined, project: process.cwd(), allowOutside: false, maxResults: undefined };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--project') {
+      const r = takeOperand(argv, i, a, true);
+      if (r.error) return r;
+      out.project = r.value;
+      i = r.nextIndex;
+    } else if (a.startsWith('--project=')) {
+      const value = a.slice('--project='.length);
+      if (isMissingOperand(value, true)) return { error: '--project requires a value' };
+      out.project = value;
+    } else if (a === '--allow-outside-project') out.allowOutside = true;
+    else if (a === '--max-results' || a.startsWith('--max-results=')) {
+      let raw = a.slice('--max-results='.length);
+      if (a === '--max-results') {
+        const r = takeOperand(argv, i, a, true);
+        if (r.error) return r;
+        raw = r.value;
+        i = r.nextIndex;
+      }
+      const n = Number(raw);
+      if (!/^\d+$/.test(raw) || n < 1 || n > 200000) {
+        return { error: '--max-results must be an integer from 1 to 200000' };
+      }
+      out.maxResults = n;
+    } else if (a.startsWith('-')) return { error: `Unknown flag: ${a}` };
+    else if (out.file === undefined) out.file = a;
+    else return { error: `Unexpected argument: ${a}` };
+  }
+  if (out.file === undefined) return { error: 'import-sarif requires the SARIF file to import' };
+  return { value: out };
+}
+
+/** Exit 1 for a log the tool refuses (invalid, outside the project, not a plain file, absent); 3 is a usage error. */
+const IMPORT_SARIF_REFUSALS = new Set(['invalid_sarif', 'outside_project', 'refused_file', 'not_found']);
+
+async function cmdImportSarif(argv) {
+  const parsed = parseImportSarifArgs(argv);
+  if (parsed.error) return usageError(parsed.error);
+  const opts = parsed.value;
+
+  const projectPath = resolveProjectOrExit(opts.project);
+  const mods = await loadImportSarifModules();
+  const tool = mods.TOOLS.find((t) => t.name === 'import_sarif');
+  if (tool === undefined) return usageError('the import_sarif tool is not available in this build');
+
+  const opened = mods.openDatabase({ projectPath });
+  if (opened.unusable || opened.path === ':memory:') {
+    // An import into a database that is thrown away at exit would report success and keep nothing.
+    opened.db.close();
+    return usageError(opened.warning ?? `the database '${opened.unusable ?? ':memory:'}' cannot be used`);
+  }
+  if (opened.warning) process.stderr.write(`dev-guardian: ${opened.warning}\n`);
+
+  let result;
+  try {
+    const ctx = {
+      storage: new mods.Storage(opened.db),
+      shell: null,
+      scriptsDir: '',
+      progressNotifier: { send() {} },
+      ...(opened.warning ? { storageWarning: opened.warning } : {}),
+    };
+    result = await tool.handler(
+      {
+        project_path: projectPath,
+        // A path the user typed is relative to where they typed it, not to the project.
+        sarif_path: resolve(opts.file),
+        ...(opts.allowOutside ? { allow_outside_project: true } : {}),
+        ...(opts.maxResults !== undefined ? { max_results: opts.maxResults } : {}),
+      },
+      ctx,
+    );
+  } finally {
+    opened.db.close();
+  }
+
+  if (!result.ok) {
+    process.stderr.write(`error: ${result.error.code}: ${result.error.message}\n`);
+    process.exitCode = IMPORT_SARIF_REFUSALS.has(result.error.code) ? 1 : USAGE_ERROR_EXIT;
+    return;
+  }
+
+  let partial = false;
+  const lines = [];
+  for (const run of result.runs) {
+    const c = run.counts;
+    if (c.skipped.length > 0 || c.truncated > 0) partial = true;
+    lines.push(
+      `scan ${run.scan_id}  ${run.scan_type}  coverage: ${run.coverage}`,
+      `  results: ${c.results}  imported: ${c.imported}  without_location: ${c.without_location}  skipped: ${c.skipped.length}`,
+      `  suppressed_at_source: ${c.suppressed_at_source}  not_findings: ${c.not_findings}  duplicates: ${c.duplicates}  truncated: ${c.truncated}`,
+    );
+    for (const w of run.warnings) lines.push(`  warning: ${w}`);
+  }
+  process.stdout.write(`${lines.join('\n')}\n`);
+  // exitCode, not process.exit(): stdout to a pipe is asynchronous (see cmdStatus).
+  process.exitCode = partial ? 2 : 0;
+}
+
 /**
  * Computes the `{ command, args }` this process spawns to open `target` in
  * the OS default browser — pure, no I/O, and exported so a test can assert
@@ -3054,6 +3195,7 @@ const VALUE_FLAGS = new Set([
   '--min',
   '--branch',
   '--out',
+  '--max-results',
 ]);
 
 function main() {
@@ -3088,6 +3230,7 @@ function main() {
   if (cmd === 'status') return void cmdStatus(argv.slice(1)).catch(fatal);
   if (cmd === 'dashboard') return void cmdDashboard(argv.slice(1)).catch(fatal);
   if (cmd === 'db') return void cmdDb(argv.slice(1)).catch(fatal);
+  if (cmd === 'import-sarif') return void cmdImportSarif(argv.slice(1)).catch(fatal);
 
   process.stderr.write(`Unknown command: ${cmd}\n\n`);
   usage();
