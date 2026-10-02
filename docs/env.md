@@ -34,7 +34,7 @@ Set them where the process that reads them starts: in the `env` block of the MCP
 
 ## Developer tooling
 
-Read only by the test suite and `npm run ablate`; nothing at runtime looks at them.
+Read only by the test suite, `npm run ablate` and `npm run eval:llm-scan`; nothing at runtime looks at them.
 
 | Variable | Read by | Effect |
 | --- | --- | --- |
@@ -48,6 +48,7 @@ Read only by the test suite and `npm run ablate`; nothing at runtime looks at th
 | `GUARDIAN_RGPD_SRC` | `npm run ablate` | Axis-3 corpus for the `rgpd` pack; unset falls back to `mcp/src`. |
 | `GUARDIAN_LLM_SRC` | `npm run ablate` | Axis-3 corpus for the `llm` pack: a tree of real LLM-application code, Python and JS/TS (the pack header names the one it was measured on). Unset: axis 3 prints `N/A`. Set to a path that does not exist: the run throws. |
 | `GUARDIAN_WEBJS_SRC` | `npm run ablate` | Axis-3 corpus for the `web-js` pack: a tree of real Node application code, JS/TS, with raw SQL and Express handlers (the pack header names the one it was measured on). Unset: axis 3 prints `N/A`. Set to a path that does not exist: the run throws. |
+| `GUARDIAN_LLMSCAN_SPIKE`, `GUARDIAN_VAMPI_SRC`, `GUARDIAN_BENCHMARK_PY_SRC`, `GUARDIAN_JUICESHOP_SRC`, `GUARDIAN_DVWA_SRC` | `npm run eval:llm-scan` | Corpora of the LLM-scan evals: the spike folder (the synthetic app-s and its key), VAmPI at `f16052d`, OWASP BenchmarkPython at `f129148`, Juice Shop at `1618a61` and DVWA at `43b0f8b`. None is copied into the repository; a run copies each one, blinded, into a temp directory. Unset: that corpus's items print `N/A` and the run reports itself incomplete. Set to a path that does not exist, or to a checkout at another commit: the run throws. |
 | `GUARDIAN_CI_INIT_PIN_SHA` | `cli/dev-guardian.mjs ci-init` | Test seam: a 40-hex commit used instead of resolving the release tag. Production never sets it. |
 | `GUARDIAN_TEST_*` | individual tests | Test-internal switches (live network e2e, fetch mocks, raw temp paths, the run's own directory, `GUARDIAN_TEST_TIMING_LOG=<file>` to record every timing measurement as a JSON line). Not for users. |
 
