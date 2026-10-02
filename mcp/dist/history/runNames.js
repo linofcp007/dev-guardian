@@ -212,6 +212,11 @@ export const RUN_NAMES = {
     // it started (`runNameEntry` reads each as a pass of this base); a server
     // that failed or was skipped leaves the audit's findings unmeasured.
     'mcp-tool-audit': scanner('mcp-tool-audit'),
+    // import_sarif: the importer's own pass. It speaks for no key: an import's
+    // findings carry the TOOL that wrote the log (an open set of names), and
+    // only an import of the same source tool measures them
+    // (`runCompare.ts#compareScansFor`, `scanRoles.ts#sameImportSlot`).
+    sarif: scanner(),
     // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
     // sub-scan's own bookkeeping instead whenever the row still exists; these
     // speak for a sub-tool that failed before it wrote one.

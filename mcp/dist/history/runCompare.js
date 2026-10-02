@@ -74,7 +74,7 @@ import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
 import { pluginPacksDir, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { KNOWN_FINDING_KEYS, findingKey, keysOfRun, runNameEntry } from './runNames.js';
-import { isOrchestratedFullScan, isScriptEraFullScan, scriptEraSlotOfFinding } from './scanRoles.js';
+import { isOrchestratedFullScan, isScriptEraFullScan, sameImportSlot, scriptEraSlotOfFinding } from './scanRoles.js';
 /** A comparison with nothing unmeasured on either side (no reference scan row to read). */
 export const COMPLETE_COMPARISON = {
     isNotRemeasured: () => false,
@@ -980,13 +980,23 @@ export function compareScansFor(storage, from, to) {
     const typeOfTo = typeResolver(storage, to);
     const fromBooks = booksOf(storage, from);
     const toBooks = booksOf(storage, to);
+    // An import's findings are named by the tool that wrote the log, which no
+    // bookkeeping name knows: "no gap anywhere" would let ANY full scan resolve
+    // them. Only an import of the same source tool measures them (and an import
+    // measures nothing a native scan found).
+    const crossSlot = !sameImportSlot(from, to);
+    const notLookedAt = (f) => ({ verdict: 'not_run', notRun: f.tool, byTarget: false });
     /** `to`'s answer for a finding of `from`. */
     const inTo = (f) => {
+        if (crossSlot)
+            return notLookedAt(f);
         const t = typeOfFrom(f);
         return answerFor(fromBooks(t), toBooks(t), f);
     };
     /** `from`'s answer for a finding of `to`. */
     const inFrom = (f) => {
+        if (crossSlot)
+            return notLookedAt(f);
         const t = typeOfTo(f);
         return answerFor(toBooks(t), fromBooks(t), f);
     };

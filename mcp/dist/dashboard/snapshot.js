@@ -45,6 +45,7 @@ import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectL
 import { findLatestUsable, latestStateScan, openSetForProject, suppressionMatcher, } from '../history/openSet.js';
 import { classifyDiff, compareScansFor } from '../history/runCompare.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, } from '../types.js';
+import { isSarifSlot, sarifToolOfSlot } from '../storage/slots.js';
 import { compareFindings } from './delta.js';
 import { rankFiles } from './hotspots.js';
 import { scoreRisk } from './risk.js';
@@ -347,7 +348,8 @@ function buildSinceBaseline(storage, baseline, projectPath, isSuppressed, trunca
     const baselineType = baseline.scan_type ?? storage.scans.getById(baseline.scan_id)?.scan_type;
     if (baselineType === undefined)
         return null;
-    const target = latestStateScan(storage, projectPath, baselineType).scan;
+    // An imported log's baseline is one source tool's: its "latest" is too.
+    const target = latestStateScan(storage, projectPath, baselineType, baseline.slot !== undefined && isSarifSlot(baseline.slot) ? { sourceTool: sarifToolOfSlot(baseline.slot) } : {}).scan;
     const baselineScan = storage.scans.getById(baseline.scan_id);
     if (target === null || baselineScan === null)
         return null;

@@ -65,6 +65,8 @@ export const SCAN_TYPES = [
     'agent_audit',
     // What the configured MCP servers actually serve (audit_mcp_tools)
     'mcp_tool_audit',
+    // A SARIF log another tool wrote, imported (import_sarif); one open-set slot per meta.source_tool
+    'sarif_import',
 ];
 /**
  * Scan types whose rows carry CVEs (`scan_cves`): the dependency scanners and

@@ -77,7 +77,8 @@ import { computeCoverage } from '../tools/scanCoverage.js';
 import { SEVERITY_ORDER, } from '../types.js';
 import { admitLookup, ChainIndex, openGapFor, producedKeys, scopeAdmits, StillCarry, UNKNOWN_FINDING_KEY, } from './runCompare.js';
 import { findingKey, toolsOfKey } from './runNames.js';
-import { STATE_SCAN_TYPES, findingInSlot, isOrchestratedFullScan, isScopedScan, isScriptEraFullScan, slotView, sourceTypesOf, } from './scanRoles.js';
+import { STATE_SCAN_TYPES, findingInSlot, isOrchestratedFullScan, isScopedScan, isScriptEraFullScan, isSarifSlot, sarifSlot, sarifSlotOfScan, slotView, sourceTypesOf, } from './scanRoles.js';
+import { sarifToolOfSlot } from '../storage/slots.js';
 /** Rows fetched per query while looking past skipped scans. */
 const PAGE = 25;
 /** How many skipped scans a summary names, per reason. The count is exact. */
@@ -127,8 +128,22 @@ function search(storage, projectPath, types, opts) {
  * `report_export`): an SBOM, a stack detection or a diff review is never it.
  */
 export function latestStateScan(storage, projectPath, scanType, opts = {}) {
-    const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES;
-    const found = findLatestUsable(storage, projectPath, types, opts);
+    // An import is never "the latest scan" of a reader that did not ask for
+    // one, and when asked it is one source tool's: the slot of the open set.
+    const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
+    const { sourceTool: askedTool, ...usable } = opts;
+    // "The previous import" is the previous import of the SAME tool: with no
+    // tool named, the one `beforeScanId` was imported by.
+    const before = scanType === 'sarif_import' && askedTool === undefined && opts.beforeScanId !== undefined
+        ? storage.scans.getById(opts.beforeScanId)
+        : null;
+    const sourceTool = askedTool ?? (before !== null && before.scan_type === 'sarif_import' ? sarifToolOfSlot(sarifSlotOfScan(before)) : undefined);
+    const found = findLatestUsable(storage, projectPath, types, {
+        ...usable,
+        ...(scanType === 'sarif_import' && sourceTool !== undefined
+            ? { slot: sarifSlot(sourceTool), predicate: (s) => sarifSlotOfScan(s) === sarifSlot(sourceTool) }
+            : {}),
+    });
     if (scanType !== undefined || found.scan === null)
         return found;
     // Any type: an orchestrated run is one scan to its reader. Its children
@@ -299,6 +314,15 @@ function slotSources(storage, projectPath, slot) {
     // The residual slot: only what a script-era row could not route.
     if (slot === 'security_full') {
         const r = search(storage, projectPath, ['security_full'], { slot, ...scriptEra });
+        return { picks: pick(r), hits: r.hits };
+    }
+    // One source tool's imports: its newest, whole — a new import replaces it
+    // and nothing carries forward from the older one.
+    if (isSarifSlot(slot)) {
+        const r = search(storage, projectPath, ['sarif_import'], {
+            slot,
+            predicate: (scan) => sarifSlotOfScan(scan) === slot,
+        });
         return { picks: pick(r), hits: r.hits };
     }
     const dedicated = search(storage, projectPath, [slot], { slot });
@@ -496,12 +520,18 @@ function scannersOfGap(gap) {
     const head = gap.split(' (')[0] ?? gap;
     return head.split(', ').filter((name) => name.length > 0);
 }
+/** Every slot of the open set: one per state type, `sarif_import` split by source tool. */
+function openSetSlots(storage, projectPath) {
+    const slots = STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
+    const imports = storage.scans.sarifSourceTools(projectPath).map(sarifSlot);
+    return [...slots, ...imports.sort()];
+}
 export function openSetForProject(storage, projectPath, opts = {}) {
     const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
     const picked = [];
     const hits = [];
     const considered = new Map();
-    for (const slot of STATE_SCAN_TYPES) {
+    for (const slot of openSetSlots(storage, projectPath)) {
         const found = slotSources(storage, projectPath, slot);
         for (const h of found.hits) {
             hits.push(h);

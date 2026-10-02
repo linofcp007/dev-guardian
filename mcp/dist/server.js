@@ -40693,6 +40693,20 @@ var ScansRepo = class {
   countFutureDated(projectPath) {
     return this.db.prepare(`SELECT COUNT(*) AS n FROM scans WHERE project_path = ? AND ${datedInFutureSql()}`).get(projectPath)?.n ?? 0;
   }
+  /**
+   * The distinct `meta.source_tool` values of a project's completed
+   * `sarif_import` scans — one open-set slot each. A scan without a string
+   * `source_tool` reads as the empty name. One query: no import is paged in.
+   */
+  sarifSourceTools(projectPath) {
+    return this.db.prepare(
+      `SELECT DISTINCT CASE WHEN json_valid(meta)
+                 THEN CASE WHEN json_type(meta, '$.source_tool') = 'text' THEN json_extract(meta, '$.source_tool') ELSE '' END
+                 ELSE '' END AS tool
+         FROM scans
+         WHERE project_path = ? AND status = 'completed' AND scan_type = 'sarif_import' AND ${READABLE}`
+    ).all(projectPath).map((r) => r.tool);
+  }
   completedOfTypesStmt(arity, shape) {
     const key = `${arity}:${shape.before ? "b" : "-"}${shape.after ? "a" : "-"}${shape.noParents ? "p" : "-"}`;
     const cached2 = this.completedOfTypesCache.get(key);
@@ -41921,11 +41935,28 @@ var AgentAuditRepo = class {
   }
 };
 
+// src/storage/slots.ts
+var SARIF_PREFIX = "sarif_import:";
+function sarifSlot(tool50) {
+  return `${SARIF_PREFIX}${tool50}`;
+}
+function isSarifSlot(slot) {
+  return slot.startsWith(SARIF_PREFIX);
+}
+function sarifToolOfSlot(slot) {
+  return slot.slice(SARIF_PREFIX.length);
+}
+function sarifSlotOfMeta(meta) {
+  const tool50 = meta?.["source_tool"];
+  return sarifSlot(typeof tool50 === "string" ? tool50 : "");
+}
+
 // src/storage/baselinesRepo.ts
 var SELECT_SCOPED = `
   SELECT b.id, b.scan_id, b.set_at, b.note,
          COALESCE(b.project_path, s.project_path) AS project_path,
-         COALESCE(b.scan_type, s.scan_type) AS scan_type
+         COALESCE(b.scan_type, s.scan_type) AS scan_type,
+         b.slot AS slot
   FROM baselines b LEFT JOIN scans s ON s.id = b.scan_id
 `;
 var BaselinesRepo = class {
@@ -41934,23 +41965,29 @@ var BaselinesRepo = class {
   getActiveStmt;
   getActiveForProjectStmt;
   getActiveForProjectTypeStmt;
+  getActiveForProjectSlotStmt;
   listAllStmt;
   constructor(db) {
     this.scanScopeStmt = db.prepare(
-      `SELECT project_path, scan_type FROM scans WHERE id = ?`
+      `SELECT project_path, scan_type, meta FROM scans WHERE id = ?`
     );
     this.insertStmt = db.prepare(`
-      INSERT INTO baselines (scan_id, set_at, note, project_path, scan_type) VALUES (?, ?, ?, ?, ?)
+      INSERT INTO baselines (scan_id, set_at, note, project_path, scan_type, slot) VALUES (?, ?, ?, ?, ?, ?)
     `);
-    this.getActiveStmt = db.prepare(`${SELECT_SCOPED} ORDER BY b.id DESC LIMIT 1`);
+    this.getActiveStmt = db.prepare(`${SELECT_SCOPED} WHERE b.slot IS NULL ORDER BY b.id DESC LIMIT 1`);
     this.getActiveForProjectStmt = db.prepare(`
       ${SELECT_SCOPED}
-      WHERE COALESCE(b.project_path, s.project_path) = ?
+      WHERE COALESCE(b.project_path, s.project_path) = ? AND b.slot IS NULL
       ORDER BY b.id DESC LIMIT 1
     `);
     this.getActiveForProjectTypeStmt = db.prepare(`
       ${SELECT_SCOPED}
       WHERE COALESCE(b.project_path, s.project_path) = ? AND COALESCE(b.scan_type, s.scan_type) = ?
+      ORDER BY b.id DESC LIMIT 1
+    `);
+    this.getActiveForProjectSlotStmt = db.prepare(`
+      ${SELECT_SCOPED}
+      WHERE COALESCE(b.project_path, s.project_path) = ? AND COALESCE(b.scan_type, s.scan_type) = ? AND b.slot = ?
       ORDER BY b.id DESC LIMIT 1
     `);
     this.listAllStmt = db.prepare(`${SELECT_SCOPED} ORDER BY b.id DESC`);
@@ -41959,12 +41996,14 @@ var BaselinesRepo = class {
   set(input) {
     const setAt = nowIso();
     const scope = this.scanScopeStmt.get(input.scan_id);
+    const slot = scope?.scan_type === "sarif_import" ? sarifSlotOfMeta(parseMeta(scope.meta)) : null;
     const info = this.insertStmt.run(
       input.scan_id,
       setAt,
       input.note ?? null,
       scope?.project_path ?? null,
-      scope?.scan_type ?? null
+      scope?.scan_type ?? null,
+      slot
     );
     const b = {
       id: Number(info.lastInsertRowid),
@@ -41974,6 +42013,7 @@ var BaselinesRepo = class {
       scan_type: scope?.scan_type ?? null
     };
     if (input.note !== void 0) b.note = input.note;
+    if (slot !== null) b.slot = slot;
     return b;
   }
   /** The newest baseline in the database, from ANY project — see the module comment. */
@@ -41981,9 +42021,12 @@ var BaselinesRepo = class {
     const row = this.getActiveStmt.get();
     return row ? rowToBaseline(row) : null;
   }
-  /** The newest baseline of one project — of one scan type, when given. */
-  getActiveForProject(projectPath, scanType) {
-    const row = scanType === void 0 ? this.getActiveForProjectStmt.get(projectPath) : this.getActiveForProjectTypeStmt.get(projectPath, scanType);
+  /**
+   * The newest baseline of one project — of one scan type, when given; of one
+   * slot of that type (an import's source tool, `sarif_import:<tool>`), when given too.
+   */
+  getActiveForProject(projectPath, scanType, slot) {
+    const row = scanType === void 0 ? this.getActiveForProjectStmt.get(projectPath) : slot === void 0 ? this.getActiveForProjectTypeStmt.get(projectPath, scanType) : this.getActiveForProjectSlotStmt.get(projectPath, scanType, slot);
     return row ? rowToBaseline(row) : null;
   }
   listAll() {
@@ -41999,7 +42042,16 @@ function rowToBaseline(row) {
     scan_type: row.scan_type
   };
   if (row.note !== null) b.note = row.note;
+  if (row.slot !== null) b.slot = row.slot;
   return b;
+}
+function parseMeta(text2) {
+  try {
+    const v = JSON.parse(text2);
+    return v !== null && typeof v === "object" && !Array.isArray(v) ? v : void 0;
+  } catch {
+    return void 0;
+  }
 }
 
 // src/storage/cveIntelRepo.ts
@@ -42191,7 +42243,9 @@ var SCAN_TYPES = [
   // Agent workspace / host-config audit
   "agent_audit",
   // What the configured MCP servers actually serve (audit_mcp_tools)
-  "mcp_tool_audit"
+  "mcp_tool_audit",
+  // A SARIF log another tool wrote, imported (import_sarif); one open-set slot per meta.source_tool
+  "sarif_import"
 ];
 var CVE_SOURCE_SCAN_TYPES = ["deps_audit", "deps", "security_full"];
 function isDepsAuditScan(scan2) {
@@ -46553,6 +46607,11 @@ var RUN_NAMES = {
   // it started (`runNameEntry` reads each as a pass of this base); a server
   // that failed or was skipped leaves the audit's findings unmeasured.
   "mcp-tool-audit": scanner("mcp-tool-audit"),
+  // import_sarif: the importer's own pass. It speaks for no key: an import's
+  // findings carry the TOOL that wrote the log (an open set of names), and
+  // only an import of the same source tool measures them
+  // (`runCompare.ts#compareScansFor`, `scanRoles.ts#sameImportSlot`).
+  sarif: scanner(),
   // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
   // sub-scan's own bookkeeping instead whenever the row still exists; these
   // speak for a sub-tool that failed before it wrote one.
@@ -46610,6 +46669,8 @@ var SCAN_TYPE_ROLE = {
   wp_vuln_check_source: "state",
   dotnet_secrets: "state",
   dotnet_efcore_audit: "state",
+  // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
+  sarif_import: "state",
   sbom: "never",
   detect_stack: "never",
   init: "never",
@@ -46654,7 +46715,17 @@ function scriptEraSlotOfFinding(f) {
       return "security_full";
   }
 }
+function sarifSlotOfScan(scan2) {
+  return sarifSlotOfMeta(scan2.meta);
+}
+function sameImportSlot(a2, b) {
+  const aImport = a2.scan_type === "sarif_import";
+  const bImport = b.scan_type === "sarif_import";
+  if (!aImport && !bImport) return true;
+  return aImport && bImport && sarifSlotOfScan(a2) === sarifSlotOfScan(b);
+}
 function sourceTypesOf(slot) {
+  if (isSarifSlot(slot)) return ["sarif_import"];
   if (slot === "security_full") return ["security_full"];
   const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
   return coveredByFull ? [slot, "security_full"] : [slot];
@@ -46663,6 +46734,7 @@ function runSlotOf(tool50) {
   return SCRIPT_ERA_RUN_SLOTS[tool50] ?? "security_full";
 }
 function findingInSlot(scan2, finding4, slot) {
+  if (scan2.scan_type === "sarif_import") return isSarifSlot(slot);
   if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
   return scriptEraSlotOfFinding(finding4) === slot;
 }
@@ -47259,11 +47331,15 @@ function compareScansFor(storage, from, to) {
   const typeOfTo = typeResolver(storage, to);
   const fromBooks = booksOf(storage, from);
   const toBooks = booksOf(storage, to);
+  const crossSlot = !sameImportSlot(from, to);
+  const notLookedAt = (f) => ({ verdict: "not_run", notRun: f.tool, byTarget: false });
   const inTo = (f) => {
+    if (crossSlot) return notLookedAt(f);
     const t = typeOfFrom(f);
     return answerFor(fromBooks(t), toBooks(t), f);
   };
   const inFrom = (f) => {
+    if (crossSlot) return notLookedAt(f);
     const t = typeOfTo(f);
     return answerFor(toBooks(t), fromBooks(t), f);
   };
@@ -47395,8 +47471,14 @@ function search(storage, projectPath, types, opts) {
   }
 }
 function latestStateScan(storage, projectPath, scanType, opts = {}) {
-  const types = scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES;
-  const found2 = findLatestUsable(storage, projectPath, types, opts);
+  const types = scanType !== void 0 ? [scanType] : STATE_SCAN_TYPES.filter((t) => t !== "sarif_import");
+  const { sourceTool: askedTool, ...usable } = opts;
+  const before = scanType === "sarif_import" && askedTool === void 0 && opts.beforeScanId !== void 0 ? storage.scans.getById(opts.beforeScanId) : null;
+  const sourceTool = askedTool ?? (before !== null && before.scan_type === "sarif_import" ? sarifToolOfSlot(sarifSlotOfScan(before)) : void 0);
+  const found2 = findLatestUsable(storage, projectPath, types, {
+    ...usable,
+    ...scanType === "sarif_import" && sourceTool !== void 0 ? { slot: sarifSlot(sourceTool), predicate: (s) => sarifSlotOfScan(s) === sarifSlot(sourceTool) } : {}
+  });
   if (scanType !== void 0 || found2.scan === null) return found2;
   const hits = [...found2.hits];
   const rejected = /* @__PURE__ */ new Set();
@@ -47492,6 +47574,13 @@ function slotSources(storage, projectPath, slot) {
   const scriptEra = { excludeOrchestrated: true, predicate: isScriptEraFullScan };
   if (slot === "security_full") {
     const r = search(storage, projectPath, ["security_full"], { slot, ...scriptEra });
+    return { picks: pick2(r), hits: r.hits };
+  }
+  if (isSarifSlot(slot)) {
+    const r = search(storage, projectPath, ["sarif_import"], {
+      slot,
+      predicate: (scan2) => sarifSlotOfScan(scan2) === slot
+    });
     return { picks: pick2(r), hits: r.hits };
   }
   const dedicated = search(storage, projectPath, [slot], { slot });
@@ -47617,12 +47706,17 @@ function scannersOfGap(gap) {
   const head = gap.split(" (")[0] ?? gap;
   return head.split(", ").filter((name) => name.length > 0);
 }
+function openSetSlots(storage, projectPath) {
+  const slots = STATE_SCAN_TYPES.filter((t) => t !== "sarif_import");
+  const imports = storage.scans.sarifSourceTools(projectPath).map(sarifSlot);
+  return [...slots, ...imports.sort()];
+}
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
   const picked = [];
   const hits = [];
   const considered2 = /* @__PURE__ */ new Map();
-  for (const slot of STATE_SCAN_TYPES) {
+  for (const slot of openSetSlots(storage, projectPath)) {
     const found2 = slotSources(storage, projectPath, slot);
     for (const h2 of found2.hits) {
       hits.push(h2);

@@ -215,7 +215,7 @@ Compare findings between two scans of one project (same scan\_type). Returns new
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
-| `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit" | no | — | With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type. |
+| `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit", "sarif\_import" | no | — | With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type. |
 | `from_scan_id` | string | no | — | The older side: this exact scan. Takes precedence over from. Default: see from. |
 | `from` | one of "baseline", "previous" | no | — | The older side, when from\_scan\_id is not given: 'previous' — this project's usable scan of the same type just before the to scan — or 'baseline' — the baseline set\_baseline recorded for that type. Default: 'previous'. |
 | `to_scan_id` | string | no | — | The newer side: this exact scan. Takes precedence over to. Default: see to. |
@@ -386,7 +386,7 @@ Compare one project's latest scan against its baseline of the same scan type (or
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
-| `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit" | no | — | Compare scans of this type. Default: the type of the newest finding-producing scan. |
+| `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit", "sarif\_import" | no | — | Compare scans of this type. Default: the type of the newest finding-producing scan. |
 | `threshold` | number | no | — | Score-delta threshold above which `regressed=true`. Default 5. A single new critical alone surpasses this; 5 new lows do not. |
 
 ### `report_export`
@@ -585,7 +585,7 @@ Mark a scan as its project's regression baseline for its scan type. Without scan
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Absolute or relative path to the target project. Defaults to the current working directory. |
 | `scan_id` | string | no | — | Scan to mark as the baseline. Defaults to project\_path's newest usable scan. |
-| `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit" | no | — | Without scan\_id: baseline the newest scan of this type. Default: any finding-producing type. |
+| `scan_type` | one of "security\_full", "sast", "secrets", "deps", "deps\_audit", "containers", "iac", "bugs", "quality", "review\_pr", "compliance", "audit", "sbom", "detect\_stack", "perf", "init", "observability", "wordpress", "wp\_audit", "wp\_vuln\_check", "wp\_vuln\_check\_source", "wp\_cron\_audit", "wp\_rest\_audit", "dotnet\_secrets", "dotnet\_target\_framework", "dotnet\_efcore\_audit", "skill\_audit", "dast", "agent\_audit", "mcp\_tool\_audit", "sarif\_import" | no | — | Without scan\_id: baseline the newest scan of this type. Default: any finding-producing type. |
 | `note` | string | no | — | Free-form note attached to the baseline row. |
 
 ### `suggest_fix`

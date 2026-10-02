@@ -31,6 +31,8 @@
  * Independently of type, a scan whose `meta.scope` is set (diff or partial
  * runs) is never a state scan — see {@link isScopedScan}.
  */
+import { isSarifSlot, sarifSlotOfMeta } from '../storage/slots.js';
+export { isSarifSlot, sarifSlot } from '../storage/slots.js';
 /**
  * THE classification. `satisfies Record<ScanType, …>` makes it exhaustive at
  * compile time: a new scan type that is not placed here does not build.
@@ -57,6 +59,8 @@ export const SCAN_TYPE_ROLE = {
     wp_vuln_check_source: 'state',
     dotnet_secrets: 'state',
     dotnet_efcore_audit: 'state',
+    // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
+    sarif_import: 'state',
     sbom: 'never',
     detect_stack: 'never',
     init: 'never',
@@ -150,8 +154,26 @@ export function scriptEraSlotOfFinding(f) {
             return 'security_full';
     }
 }
+/** The slot a `sarif_import` scan belongs to, by its `meta.source_tool`. */
+export function sarifSlotOfScan(scan) {
+    return sarifSlotOfMeta(scan.meta);
+}
+/**
+ * Whether `a` and `b` can speak for each other's findings: an import only
+ * measures what an import of the same source tool found — and nothing but
+ * such an import measures it. Two scans of any other types: always.
+ */
+export function sameImportSlot(a, b) {
+    const aImport = a.scan_type === 'sarif_import';
+    const bImport = b.scan_type === 'sarif_import';
+    if (!aImport && !bImport)
+        return true;
+    return aImport && bImport && sarifSlotOfScan(a) === sarifSlotOfScan(b);
+}
 /** Scan types whose rows can feed `slot`. */
 export function sourceTypesOf(slot) {
+    if (isSarifSlot(slot))
+        return ['sarif_import'];
     if (slot === 'security_full')
         return ['security_full'];
     const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
@@ -163,6 +185,8 @@ function runSlotOf(tool) {
 }
 /** Whether `finding`, read from `scan`, belongs to `slot`. */
 export function findingInSlot(scan, finding, slot) {
+    if (scan.scan_type === 'sarif_import')
+        return isSarifSlot(slot);
     if (scan.scan_type !== 'security_full')
         return scan.scan_type === slot;
     return scriptEraSlotOfFinding(finding) === slot;

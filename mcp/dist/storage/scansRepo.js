@@ -362,6 +362,21 @@ export class ScansRepo {
             .prepare(`SELECT COUNT(*) AS n FROM scans WHERE project_path = ? AND ${datedInFutureSql()}`)
             .get(projectPath)?.n ?? 0);
     }
+    /**
+     * The distinct `meta.source_tool` values of a project's completed
+     * `sarif_import` scans — one open-set slot each. A scan without a string
+     * `source_tool` reads as the empty name. One query: no import is paged in.
+     */
+    sarifSourceTools(projectPath) {
+        return this.db
+            .prepare(`SELECT DISTINCT CASE WHEN json_valid(meta)
+                 THEN CASE WHEN json_type(meta, '$.source_tool') = 'text' THEN json_extract(meta, '$.source_tool') ELSE '' END
+                 ELSE '' END AS tool
+         FROM scans
+         WHERE project_path = ? AND status = 'completed' AND scan_type = 'sarif_import' AND ${READABLE}`)
+            .all(projectPath)
+            .map((r) => r.tool);
+    }
     completedOfTypesStmt(arity, shape) {
         const key = `${arity}:${shape.before ? 'b' : '-'}${shape.after ? 'a' : '-'}${shape.noParents ? 'p' : '-'}`;
         const cached = this.completedOfTypesCache.get(key);
