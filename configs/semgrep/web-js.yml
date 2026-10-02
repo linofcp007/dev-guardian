@@ -36,6 +36,8 @@
 #     import do driver, porque o repositório pode usar um módulo local
 #     (`./db.js`). Um fragmento sem estas palavras (o fragmento de `knex.raw` com so uma coluna e `desc`)
 #     não é visto.
+#   - Ficheiros em `migrations/` ficam de fora (`paths.exclude`): o SQL de uma
+#     migração corre uma vez e interpola nomes e ids lidos da própria base.
 #   - Um valor passado ao texto através de uma função própria
 #     (`buildWhere(filter)`) não e visto: so o valor interpolado na própria
 #     chamada, ou numa variável atribuída no mesmo bloco.
@@ -90,6 +92,10 @@
 #     efeito lateral (comparação EXATA com uma lista de valores permitidos).
 #     Um `startsWith` ou uma regex sobre o host NÃO limpam: não são uma
 #     comparação exata e deixam passar `https://permitido.example.evil.com`.
+#   - Uma função própria de validação (`isUrlAllowed(url)`) NÃO é um
+#     sanitizer: só a comparação exata com uma lista, escrita na própria
+#     função, o é. Medido: o único achado no corpus real é um proxy que valida
+#     com uma função dessas (falso positivo).
 #   - Um valor do pedido no CAMINHO de um URL de host fixo
 #     (`fetch(\`${BASE}/users/${req.params.id}\`)`) dispara como o resto: o
 #     taint não distingue o host do caminho. É um falso positivo medido.
@@ -109,6 +115,11 @@ rules:
         - "A05:2025 - Injection"
     languages: [javascript, typescript]
     severity: ERROR
+    # Migrações: o SQL corre uma vez, com nomes de tabelas e ids lidos da própria
+    # base; 32 dos 44 achados no corpus real eram só isto (nenhum atacável).
+    paths:
+      exclude:
+        - "**/migrations/**"
     message: >-
       O texto SQL entregue ao driver é construído por interpolação ou
       concatenação com um valor que não é um literal: o que esse valor contiver
