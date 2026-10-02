@@ -132,8 +132,8 @@ import { hasFileWithExtension } from '../runners/projectFiles.js';
 import {
   CONTAINER_PACKS_ROOT,
   hasDotnetProject,
-  LLM_RULES_FILE,
   planSemgrepConfigs,
+  PLUGIN_PACK_FILES,
   semgrepEngineNote,
 } from '../runners/semgrepConfigs.js';
 import {
@@ -183,10 +183,9 @@ registerToolModule(
       'Static analysis with Semgrep: the registry ruleset ' +
       "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
       '.dev-guardian/configs.json records), rules registered with ' +
-      "register_custom_rules, and the plugin's LLM-application pack (configs/semgrep/llm.yml: model " +
-      'output reaching eval/shell/SQL, trust_remote_code, request data in a system prompt, …; a pack ' +
-      'that ran only in part: `tools_run[].plugin_packs`, its own gap). Also runs Bandit ' +
-      'when Python files are present, and ' +
+      "register_custom_rules, and the plugin's packs: web-js.yml (Node/Express: SQL by interpolation, request " +
+      'paths and URLs) and llm.yml (model output reaching eval/shell/SQL, trust_remote_code, …); a pack ' +
+      'that ran only in part: `tools_run[].plugin_packs`. Also runs Bandit when Python files are present, and ' +
       'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
       'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
       '(plus Security Code Scan when referenced) — that ' +
@@ -225,7 +224,7 @@ registerToolModule(
         .optional()
         .describe(
           "Run only rules already on disk (the project's own Semgrep config, anything " +
-            "registered with register_custom_rules, and the plugin's LLM-application pack), skip " +
+            "registered with register_custom_rules, and the plugin's own packs), skip " +
             'the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer ' +
             'rules than the default. When the project has no rules of its own the scan is reported ' +
             'as skipped rather than as a clean result. Default: false.',
@@ -293,8 +292,8 @@ async function runSemgrep(args: Collect & {
       status: 'skipped',
       reason:
         'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
-        'nothing registered with register_custom_rules (the plugin\'s LLM-application pack, ' +
-        `${LLM_RULES_FILE}, is an addition and not run alone as a SAST scan). Run init_project, or drop ` +
+        'nothing registered with register_custom_rules (the plugin\'s own packs, ' +
+        `${PLUGIN_PACK_FILES.join(', ')} are an addition and not run alone as a SAST scan). Run init_project, or drop ` +
         'local_only to use the Semgrep registry.',
     });
     missing_tools.push('semgrep');

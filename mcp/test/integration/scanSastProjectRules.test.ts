@@ -86,6 +86,7 @@ const RULES =
  * through the code under test.
  */
 const LLM_PACK = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'configs', 'semgrep', 'llm.yml');
+const WEBJS_PACK = join(dirname(LLM_PACK), 'web-js.yml');
 
 /**
  * A report in which every rule of `.semgrep.yml` (`projectIds`) AND every
@@ -468,7 +469,7 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     const r = await runSast(project, makePlugin(project), { local_only: true });
     // The LLM pack rides along through its read-only mount, and does not
     // count toward "a rule loaded".
-    expect(configs).toEqual(['--config=/src/.semgrep.yml', '--config=/guardian-packs/llm.yml']);
+    expect(configs).toEqual(['--config=/src/.semgrep.yml', '--config=/guardian-packs/llm.yml', '--config=/guardian-packs/web-js.yml']);
     const run = r.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; failed_rules?: Array<{ rule_id: string }>; rule_config_error?: boolean }
       | undefined;
@@ -686,7 +687,7 @@ describe('scan_sast argv and cache key come from one plan', () => {
     await runSast(project, plugin);
     const configs = semgrepArgs().filter((a) => a.startsWith('--config=')).map((a) => a.slice('--config='.length));
     expect(configs).toEqual(planSemgrepConfigs(project, plugin, false).rulePacks);
-    expect(configs).toEqual(['auto', join(project, '.semgrep.yml'), team, LLM_PACK]);
+    expect(configs).toEqual(['auto', join(project, '.semgrep.yml'), team, LLM_PACK, WEBJS_PACK]);
   });
 
   it('says, in the response warnings, which 2.0.x registrations outside the project it no longer runs', async () => {
@@ -726,7 +727,8 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
   it('the pack is on disk where the plan looks for it', () => {
     expect(existsSync(LLM_PACK)).toBe(true);
     const plan = planSemgrepConfigs(makeTempDir('sast-llm-plan-'), makePlugin(makeTempDir('sast-llm-plugin-')), false);
-    expect(plan.pluginPacks).toEqual([LLM_PACK]);
+    expect(existsSync(WEBJS_PACK)).toBe(true);
+    expect(plan.pluginPacks).toEqual([LLM_PACK, WEBJS_PACK]);
   });
 
   it('appends it to every native run, after the registry and the project rules — and local_only runs it too', async () => {
@@ -737,8 +739,9 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
       mockSemgrepOnPath();
       await runSast(project, makePlugin(project), { local_only });
       const configs = semgrepArgs().filter((a) => a.startsWith('--config='));
-      expect(configs.at(-1)).toBe(`--config=${LLM_PACK}`);
+      expect(configs.slice(-2)).toEqual([`--config=${LLM_PACK}`, `--config=${WEBJS_PACK}`]);
       expect(configs.filter((c) => c === `--config=${LLM_PACK}`)).toHaveLength(1);
+      expect(configs.filter((c) => c === `--config=${WEBJS_PACK}`)).toHaveLength(1);
     }
   });
 
@@ -791,6 +794,7 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
     const mounts = call.args.filter((_a, i) => call.args[i - 1] === '--mount');
     expect(mounts).toContain(`type=bind,source=${dirname(LLM_PACK)},target=/guardian-packs,readonly`);
     expect(call.args).toContain('--config=/guardian-packs/llm.yml');
+    expect(call.args).toContain('--config=/guardian-packs/web-js.yml');
     // Only the project mount is writable.
     expect(mounts.filter((m) => !m.endsWith(',readonly'))).toEqual([`type=bind,source=${project},target=/src`]);
     const run = r.tools_run.find((t) => t.name === 'semgrep');
@@ -841,7 +845,8 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
     expect(semgrepArgs().some((a) => a.includes('llm.yml'))).toBe(false);
     const run = r.tools_run.find((t) => t.name === 'semgrep');
     expect(run?.status).toBe('ok');
-    expect(run?.reason ?? '').toMatch(/LLM-application pack was not found at .*llm\.yml — its rules did not run/);
+    expect(run?.reason ?? '').toMatch(/pack llm\.yml was not found at .*llm\.yml — its rules did not run/);
+    expect(run?.reason ?? '').toMatch(/pack web-js\.yml was not found at .*web-js\.yml — its rules did not run/);
     expect(r.missing_tools).toContain('semgrep');
     expect((r as unknown as { coverage: string }).coverage).toBe('partial');
   });

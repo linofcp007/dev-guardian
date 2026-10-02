@@ -11,7 +11,10 @@
  * off, which is only possible once `--config=auto` is gone: Semgrep refuses
  * to build an auto config with metrics off.
  *
- * Last, the plugin's own LLM-application pack (`configs/semgrep/llm.yml`:
+ * Last, the plugin's own packs: the Node/Express sink pack
+ * (`configs/semgrep/web-js.yml`: SQL text built by interpolation in a SQL
+ * driver, a request path reaching a file API, a request URL fetched) and the
+ * LLM-application pack (`configs/semgrep/llm.yml`:
  * model output reaching an interpreter, remote code in a model load, request
  * data in a system prompt, a completion with no token cap), in both modes — it
  * is a rule file on disk, so `local_only` runs it too. It is an ADDITION, not
@@ -29,7 +32,7 @@
  */
 
 import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import {
   inspectCustomSemgrepConfigs,
@@ -44,9 +47,20 @@ import { pluginPacksDir } from './semgrepRuleIds.js';
 /** The plugin's LLM-application pack, by file name in `configs/semgrep/`. */
 export const LLM_RULES_FILE = 'llm.yml';
 
+/** The plugin's Node/Express sink pack (SQL by interpolation, path traversal, direct SSRF). */
+export const WEBJS_RULES_FILE = 'web-js.yml';
+
+/** The plugin's own packs every Semgrep run passes, in argv order. */
+export const PLUGIN_PACK_FILES: readonly string[] = [LLM_RULES_FILE, WEBJS_RULES_FILE];
+
 /** Absolute path of the plugin's LLM-application pack. */
 export function llmRulesPath(): string {
   return join(pluginPacksDir(), LLM_RULES_FILE);
+}
+
+/** Absolute path of one of the plugin's own packs. */
+export function pluginPackPath(file: string): string {
+  return join(pluginPacksDir(), file);
 }
 
 /** Where the Docker fallback mounts the plugin's pack directory, read-only. */
@@ -130,11 +144,11 @@ export interface SemgrepConfigPlan {
    *  local rules a container run can see through its project mount. */
   projectConfigs: string[];
   /** The plugin's own packs this plan runs (absolute paths): the LLM-application
-   *  pack, when it is on disk. Last in `rulePacks`. */
+   *  and Node/Express sink packs, those on disk. Last in `rulePacks`. */
   pluginPacks: string[];
   /** The plugin's pack directory on the host — what the Docker fallback mounts. */
   pluginPacksDir: string;
-  /** The pack is not on disk (a damaged install): the run is partial, the gap in `notes`. */
+  /** A pack is not on disk (a damaged install): the run is partial, the gap in `notes`. */
   packMissing: boolean;
   /** The configs that make this a SAST scan — the registry, the project's and
    *  the registered ones; never the plugin's pack. "No rule loaded" is judged
@@ -168,8 +182,9 @@ export function planSemgrepConfigs(
   const registry = localOnly ? [] : ['auto', ...(hasDotnetProject(scannedPath) ? ['p/csharp'] : [])];
   // Never pass a --config that does not resolve: Semgrep aborts the WHOLE
   // scan when one fails to load. A damaged install without the pack says so.
-  const llmPack = llmRulesPath();
-  const pluginPacks = existsSync(llmPack) ? [llmPack] : [];
+  const packPaths = PLUGIN_PACK_FILES.map(pluginPackPath);
+  const pluginPacks = packPaths.filter((p) => existsSync(p));
+  const missingPacks = packPaths.filter((p) => !pluginPacks.includes(p));
   const rulePacks = [...registry, ...local, ...pluginPacks];
   return {
     args: [...(localOnly ? ['--metrics=off'] : []), ...rulePacks.map((c) => `--config=${c}`)],
@@ -178,13 +193,13 @@ export function planSemgrepConfigs(
     projectConfigs,
     pluginPacks,
     pluginPacksDir: pluginPacksDir(),
-    packMissing: pluginPacks.length === 0,
+    packMissing: missingPacks.length > 0,
     ruleConfigs: [...registry, ...local],
     notes: [
       ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
       ...custom.unusable.map((u) => `${u.path} not loaded (${u.reason})`),
       ...(legacy !== null ? [legacy] : []),
-      ...(pluginPacks.length === 0 ? [`the plugin's LLM-application pack was not found at ${llmPack} — its rules did not run`] : []),
+      ...missingPacks.map((p) => `the plugin's pack ${basename(p)} was not found at ${p} — its rules did not run`),
     ],
     nothingToRun: registry.length === 0 && local.length === 0,
   };

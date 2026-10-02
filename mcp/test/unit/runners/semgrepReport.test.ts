@@ -690,6 +690,40 @@ describe('pluginPackCheckIds', () => {
     expect(inside.has(`${semgrepConfigPrefix(pack)}.llm-a`)).toBe(true);
     expect(inside.has('llm-a')).toBe(false);
   });
+
+  it('a web-js.yml rule is a plugin pack rule like llm.yml\'s: its fixpoint timeout is the pack\'s gap, not the scan\'s (js-sink-rules)', async () => {
+    const { pluginPackCheckIds, semgrepConfigPrefix, ruleIdsInFile } = await import('../../../src/runners/semgrepRuleIds.js');
+    const { PLUGIN_PACK_FILES, pluginPackPath } = await import('../../../src/runners/semgrepConfigs.js');
+    const packs = PLUGIN_PACK_FILES.map(pluginPackPath);
+    const webjs = packs.find((p) => p.endsWith('web-js.yml'));
+    expect(webjs).toBeDefined();
+    const ids = pluginPackCheckIds(packs, { cwd: '/elsewhere' });
+    const prefix = semgrepConfigPrefix(webjs ?? '');
+    const ruleIds = ruleIdsInFile(webjs ?? '');
+    expect(ruleIds).toContain('web-js-ssrf');
+    for (const id of ruleIds) expect(ids.has(`${prefix}.${id}`)).toBe(true);
+    const r = checkSemgrepReport({
+      raw: report({
+        paths: { scanned: ['src/routes.ts'] },
+        time: {
+          fixpoint_timeouts: [
+            {
+              error_type: 'Fixpoint timeout',
+              severity: 'warn',
+              message: `Fixpoint timeout while performing taint analysis at src/routes.ts:10:2 [rules: 1, first: ${prefix}.web-js-ssrf]`,
+              location: { path: 'src/routes.ts', start: { line: 10, col: 3, offset: 0 }, end: { line: 10, col: 9, offset: 6 } },
+            },
+          ],
+        },
+      }),
+      exitCode: 0,
+      outcome: 'completed',
+      targets: 1,
+      pluginPackCheckIds: ids,
+    });
+    expect(r.verdict).toBe('ok');
+    expect(r.plugin_pack_fixpoint?.functions).toBe(1);
+  });
 });
 
 /**
