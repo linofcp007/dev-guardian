@@ -20,9 +20,11 @@
  * set that reads it cannot disagree on the encoding.
  */
 
+import { posix } from 'node:path';
 import type { ProjectTextRead } from '../platform/projectFs.js';
 import type { FindingValidation } from '../validate/types.js';
-import type { HuntResult, Independence, LlmMarker, LlmVerdict, VerifyVerdict } from './types.js';
+import { HUNT_CLASSES, type HuntClass } from './classes.js';
+import type { HuntFinding, HuntResult, Independence, LlmMarker, LlmVerdict, VerifyVerdict } from './types.js';
 
 /** US-1.AC-15 */
 export const MAX_SUBMISSION_BYTES = 64 * 1024;
@@ -60,12 +62,242 @@ export type SubmissionCheck<T> =
   | { ok: true; value: T; rejected: SubmissionError[] }
   | { ok: false; code: 'too_large' | 'invalid'; errors: SubmissionError[] };
 
-export function validateVerifySubmission(_payload: unknown, _ctx: SubmissionContext): SubmissionCheck<VerifyVerdict> {
-  throw new Error('NotImplemented: validateVerifySubmission');
+const VERDICTS = ['real', 'not_real', 'undetermined'] as const;
+const VERIFY_KEYS = ['verdict', 'attacker_input', 'operation', 'decisive_line', 'reasoning'] as const;
+const HUNT_KEYS = ['entry_points_reviewed', 'findings'] as const;
+const FINDING_KEYS = ['file', 'line', 'class', 'title', 'attacker', 'evidence'] as const;
+/** Bounds on what a hunt may list as reviewed, and on the references read per finding. */
+const MAX_ENTRY_POINTS = 200;
+const MAX_ENTRY_POINT_CHARS = 300;
+const MAX_EVIDENCE_REFS = 10;
+const MAX_FIELD_NAME_CHARS = 64;
+
+const CLASS_SET: ReadonlySet<string> = new Set(HUNT_CLASSES);
+
+type Errors = SubmissionError[];
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const wordCount = (s: string): number => s.split(/\s+/).filter((w) => w !== '').length;
+
+/** The serialized size, or null when the payload cannot be serialized at all. */
+function serializedBytes(payload: unknown): number | null {
+  try {
+    const text = JSON.stringify(payload);
+    return text === undefined ? null : Buffer.byteLength(text, 'utf8');
+  } catch {
+    return null;
+  }
 }
 
-export function validateHuntSubmission(_payload: unknown, _ctx: SubmissionContext): SubmissionCheck<HuntResult> {
-  throw new Error('NotImplemented: validateHuntSubmission');
+/** Size gate shared by both submissions: the failure to return, or null to go on. */
+function sizeGate(payload: unknown): SubmissionCheck<never> | null {
+  const bytes = serializedBytes(payload);
+  if (bytes === null) return { ok: false, code: 'invalid', errors: [{ path: '$', problem: 'payload is not serializable JSON' }] };
+  if (bytes > MAX_SUBMISSION_BYTES) {
+    return { ok: false, code: 'too_large', errors: [{ path: '$', problem: `payload is over ${MAX_SUBMISSION_BYTES} bytes serialized` }] };
+  }
+  return null;
+}
+
+function unknownKeys(obj: Record<string, unknown>, allowed: readonly string[], prefix: string, errors: Errors): void {
+  for (const key of Object.keys(obj)) {
+    if (!allowed.includes(key)) errors.push({ path: `${prefix}${key.slice(0, MAX_FIELD_NAME_CHARS)}`, problem: 'unknown field' });
+  }
+}
+
+function textField(obj: Record<string, unknown>, key: string, prefix: string, errors: Errors): string | null {
+  const v = obj[key];
+  if (v === undefined) {
+    errors.push({ path: `${prefix}${key}`, problem: 'missing field' });
+    return null;
+  }
+  if (typeof v !== 'string' || v.trim() === '') {
+    errors.push({ path: `${prefix}${key}`, problem: 'must be a non-empty string' });
+    return null;
+  }
+  return v;
+}
+
+/**
+ * A project-relative POSIX path, or null when it is not lexically inside the
+ * root (absolute in any platform's spelling, a drive, a UNC share, climbing
+ * out after normalisation). Judged BEFORE any read: an outside path is never
+ * handed to the reader (US-1.AC-14).
+ */
+function containedPath(raw: string): string | null {
+  if (raw === '' || raw.includes('\0')) return null;
+  const slashed = raw.replace(/\\/g, '/');
+  if (slashed.startsWith('/') || /^[A-Za-z]:/.test(slashed)) return null;
+  const normal = posix.normalize(slashed);
+  if (normal === '..' || normal.startsWith('../') || normal === '.') return null;
+  return normal;
+}
+
+type LineProblem = 'not inside the project' | 'file not found' | 'file could not be read' | 'line outside the file';
+
+/** Looks one `file:line` up on disk through the contained reader, once per file. */
+class CitationChecker {
+  private readonly texts = new Map<string, ProjectTextRead>();
+  constructor(private readonly ctx: SubmissionContext) {}
+
+  /** The reason a citation does not hold, or null when it does. */
+  check(file: string, line: number): LineProblem | null {
+    const path = containedPath(file);
+    if (path === null) return 'not inside the project';
+    if (!Number.isSafeInteger(line) || line < 1) return 'line outside the file';
+    let read = this.texts.get(path);
+    if (read === undefined) {
+      read = this.ctx.reader(this.ctx.root, path);
+      this.texts.set(path, read);
+    }
+    if (read.status === 'absent') return 'file not found';
+    if (read.status === 'refused') return 'file could not be read';
+    const body = read.text === '' ? [] : read.text.replace(/\r?\n$/, '').split(/\r?\n/);
+    return line > body.length ? 'line outside the file' : null;
+  }
+}
+
+const CITATION = /^(.+):(\d+)$/;
+const DECISIVE = /^(.+?):(\d+) — \S/;
+
+function checkCitation(checker: CitationChecker, field: string, text: string, form: RegExp, errors: Errors): void {
+  const m = form.exec(text);
+  const file = m?.[1];
+  const line = m?.[2];
+  if (file === undefined || line === undefined) {
+    errors.push({ path: field, problem: field === 'decisive_line' ? 'must have the form file:line — reason' : 'must have the form file:line' });
+    return;
+  }
+  const problem = checker.check(file, Number(line));
+  if (problem !== null) errors.push({ path: field, problem: `citation: ${problem}` });
+}
+
+export function validateVerifySubmission(payload: unknown, ctx: SubmissionContext): SubmissionCheck<VerifyVerdict> {
+  const gate = sizeGate(payload);
+  if (gate !== null) return gate;
+  if (!isRecord(payload)) return { ok: false, code: 'invalid', errors: [{ path: '$', problem: 'must be a JSON object' }] };
+
+  const errors: Errors = [];
+  unknownKeys(payload, VERIFY_KEYS, '', errors);
+  const verdict = payload['verdict'];
+  if (verdict === undefined) errors.push({ path: 'verdict', problem: 'missing field' });
+  else if (typeof verdict !== 'string' || !(VERDICTS as readonly string[]).includes(verdict)) {
+    errors.push({ path: 'verdict', problem: `must be one of ${VERDICTS.join(', ')}` });
+  }
+  const attacker = textField(payload, 'attacker_input', '', errors);
+  const operation = textField(payload, 'operation', '', errors);
+  const decisive = textField(payload, 'decisive_line', '', errors);
+  const reasoning = textField(payload, 'reasoning', '', errors);
+  if (reasoning !== null && wordCount(reasoning) > MAX_REASONING_WORDS) {
+    errors.push({ path: 'reasoning', problem: `must be at most ${MAX_REASONING_WORDS} words` });
+  }
+
+  // The disk is consulted only for a submission whose shape is already right.
+  if (errors.length === 0 && attacker !== null && operation !== null && decisive !== null) {
+    const checker = new CitationChecker(ctx);
+    if (attacker !== 'none') checkCitation(checker, 'attacker_input', attacker, CITATION, errors);
+    checkCitation(checker, 'operation', operation, CITATION, errors);
+    checkCitation(checker, 'decisive_line', decisive, DECISIVE, errors);
+  }
+  if (errors.length > 0 || attacker === null || operation === null || decisive === null || reasoning === null) {
+    return { ok: false, code: 'invalid', errors };
+  }
+  const value: VerifyVerdict = {
+    verdict: verdict as VerifyVerdict['verdict'],
+    attacker_input: attacker,
+    operation,
+    decisive_line: decisive,
+    reasoning,
+  };
+  return { ok: true, value, rejected: [] };
+}
+
+/** Every `file:line` in a piece of free text, URLs aside, at most {@link MAX_EVIDENCE_REFS}. */
+function evidenceRefs(evidence: string): Array<{ file: string; line: number }> {
+  const refs: Array<{ file: string; line: number }> = [];
+  for (const token of evidence.split(/[\s;,()'"`]+/)) {
+    if (token.includes('://')) continue;
+    const m = CITATION.exec(token.replace(/[.:]+$/, ''));
+    const file = m?.[1];
+    const line = m?.[2];
+    if (file === undefined || line === undefined) continue;
+    refs.push({ file, line: Number(line) });
+    if (refs.length >= MAX_EVIDENCE_REFS) break;
+  }
+  return refs;
+}
+
+function validateFinding(raw: unknown, index: number, checker: CitationChecker): { value: HuntFinding | null; errors: Errors } {
+  const prefix = `findings[${index}].`;
+  const errors: Errors = [];
+  if (!isRecord(raw)) return { value: null, errors: [{ path: `findings[${index}]`, problem: 'must be an object' }] };
+  unknownKeys(raw, FINDING_KEYS, prefix, errors);
+  const file = textField(raw, 'file', prefix, errors);
+  const line = raw['line'];
+  if (line === undefined) errors.push({ path: `${prefix}line`, problem: 'missing field' });
+  else if (typeof line !== 'number' || !Number.isSafeInteger(line) || line < 1) {
+    errors.push({ path: `${prefix}line`, problem: 'must be a positive integer' });
+  }
+  const cls = raw['class'];
+  if (cls === undefined) errors.push({ path: `${prefix}class`, problem: 'missing field' });
+  else if (typeof cls !== 'string' || !CLASS_SET.has(cls)) errors.push({ path: `${prefix}class`, problem: 'not one of the known classes' });
+  const title = textField(raw, 'title', prefix, errors);
+  if (title !== null && title.length > MAX_TITLE_CHARS) {
+    errors.push({ path: `${prefix}title`, problem: `must be at most ${MAX_TITLE_CHARS} characters` });
+  }
+  const attacker = textField(raw, 'attacker', prefix, errors);
+  if (attacker !== null && attacker.length > MAX_TITLE_CHARS) {
+    errors.push({ path: `${prefix}attacker`, problem: `must be at most ${MAX_TITLE_CHARS} characters` });
+  }
+  const evidence = textField(raw, 'evidence', prefix, errors);
+  if (evidence !== null && wordCount(evidence) > MAX_EVIDENCE_WORDS) {
+    errors.push({ path: `${prefix}evidence`, problem: `must be at most ${MAX_EVIDENCE_WORDS} words` });
+  }
+
+  if (errors.length > 0 || file === null || typeof line !== 'number' || title === null || attacker === null || evidence === null) {
+    return { value: null, errors };
+  }
+  const problem = checker.check(file, line);
+  if (problem !== null) errors.push({ path: `${prefix}file`, problem: `citation: ${problem}` });
+  // At least one reference in the evidence must hold; the rest is free text.
+  if (!evidenceRefs(evidence).some((r) => checker.check(r.file, r.line) === null)) {
+    errors.push({ path: `${prefix}evidence`, problem: 'needs at least one file:line reference that exists in the project' });
+  }
+  if (errors.length > 0) return { value: null, errors };
+  return { value: { file, line, class: cls as HuntClass, title, attacker, evidence }, errors };
+}
+
+export function validateHuntSubmission(payload: unknown, ctx: SubmissionContext): SubmissionCheck<HuntResult> {
+  const gate = sizeGate(payload);
+  if (gate !== null) return gate;
+  if (!isRecord(payload)) return { ok: false, code: 'invalid', errors: [{ path: '$', problem: 'must be a JSON object' }] };
+
+  const errors: Errors = [];
+  unknownKeys(payload, HUNT_KEYS, '', errors);
+  const reviewed = payload['entry_points_reviewed'];
+  if (reviewed === undefined) errors.push({ path: 'entry_points_reviewed', problem: 'missing field' });
+  else if (
+    !Array.isArray(reviewed) ||
+    reviewed.length > MAX_ENTRY_POINTS ||
+    reviewed.some((e) => typeof e !== 'string' || e.length > MAX_ENTRY_POINT_CHARS)
+  ) {
+    errors.push({ path: 'entry_points_reviewed', problem: `must be at most ${MAX_ENTRY_POINTS} strings of at most ${MAX_ENTRY_POINT_CHARS} characters` });
+  }
+  const findings = payload['findings'];
+  if (findings === undefined) errors.push({ path: 'findings', problem: 'missing field' });
+  else if (!Array.isArray(findings)) errors.push({ path: 'findings', problem: 'must be an array' });
+  else if (findings.length > MAX_HUNT_FINDINGS) errors.push({ path: 'findings', problem: `at most ${MAX_HUNT_FINDINGS} findings` });
+  if (errors.length > 0 || !Array.isArray(findings) || !Array.isArray(reviewed)) return { ok: false, code: 'invalid', errors };
+
+  const checker = new CitationChecker(ctx);
+  const kept: HuntFinding[] = [];
+  const rejected: Errors = [];
+  findings.forEach((raw: unknown, i) => {
+    const r = validateFinding(raw, i, checker);
+    if (r.value !== null) kept.push(r.value);
+    else rejected.push(...r.errors);
+  });
+  return { ok: true, value: { entry_points_reviewed: reviewed as string[], findings: kept }, rejected };
 }
 
 /** One `llm` verdict, as stored for a finding. */
@@ -81,12 +313,50 @@ export interface LlmVerdictRecord {
   computed_at: string;
 }
 
+/** Evidence rows are `key: value`; the marker is read back by these keys. */
+const EV = { independence: 'independence: ', decisive: 'decisive_line: ', reasoning: 'reasoning: ', prompt: 'prompt_version: ' } as const;
+const INDEPENDENCE: readonly string[] = ['subagent', 'sampling', 'same_context'];
+const STORED_VERDICTS: readonly string[] = ['exploitable', 'not_exploitable', 'undetermined'];
+
 /** The `finding_validations` row (provider `llm`) for a verdict. */
-export function toFindingValidation(_record: LlmVerdictRecord): FindingValidation {
-  throw new Error('NotImplemented: toFindingValidation');
+export function toFindingValidation(record: LlmVerdictRecord): FindingValidation {
+  const independent = record.independence !== 'same_context';
+  return {
+    fingerprint: record.fingerprint,
+    verdict: record.verdict,
+    confidence: independent ? 'high' : 'low',
+    provider: 'llm',
+    evidence: [
+      { detail: EV.independence + record.independence },
+      { detail: EV.decisive + record.decisive_line },
+      { detail: EV.reasoning + record.reasoning },
+      { detail: EV.prompt + record.prompt_version },
+    ],
+    coverage_gaps: independent ? [] : ['same_context: the judge shared the scan\'s context, so the verdict is advisory'],
+    // The verdict is about a tree, not a surface snapshot.
+    snapshot_id: 0,
+    tree_hash: record.tree_hash,
+    computed_at: record.computed_at,
+  };
 }
 
 /** The marker the open set attaches for a row; null for a row of any other provider. */
-export function llmMarkerOf(_validation: FindingValidation): LlmMarker | null {
-  throw new Error('NotImplemented: llmMarkerOf');
+export function llmMarkerOf(validation: FindingValidation): LlmMarker | null {
+  if (validation.provider !== 'llm' || !STORED_VERDICTS.includes(validation.verdict)) return null;
+  const field = (prefix: string): string | undefined =>
+    validation.evidence.find((e) => e.detail.startsWith(prefix))?.detail.slice(prefix.length);
+  const independence = field(EV.independence);
+  const decisive = field(EV.decisive);
+  const reasoning = field(EV.reasoning);
+  const prompt = field(EV.prompt);
+  if (independence === undefined || !INDEPENDENCE.includes(independence)) return null;
+  if (decisive === undefined || reasoning === undefined || prompt === undefined) return null;
+  return {
+    verdict: validation.verdict as LlmVerdict,
+    independent: independence !== 'same_context',
+    independence: independence as Independence,
+    decisive_line: decisive,
+    reasoning,
+    prompt_version: prompt,
+  };
 }
