@@ -269,6 +269,9 @@ export function semgrepOnFiles(args: {
     ...(rules?.packCheckIds !== undefined ? { pluginPackCheckIds: rules.packCheckIds } : {}),
     ...(rules?.nonPackTaintRules !== undefined ? { nonPackTaintRules: rules.nonPackTaintRules } : {}),
   };
+  // Semgrep runs in the project: a YAML file under it is a target, one
+  // outside it a rule file (`semgrepReport.ts`, the module comment).
+  const projectPath = args.cwd;
   return scanFileBatches({
     name: 'semgrep',
     // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
@@ -284,7 +287,7 @@ export function semgrepOnFiles(args: {
     // The shared judge's `partial` verdict is no failure of the batch, and
     // neither are rules that did not load while the others ran.
     check: (args) => {
-      const c = checkSemgrepReport({ ...args, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}), ...pack });
+      const c = checkSemgrepReport({ ...args, projectPath, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}), ...pack });
       const packFixpoint = c.plugin_pack_fixpoint !== undefined ? { packFixpoint: c.plugin_pack_fixpoint } : {};
       if (c.verdict === 'partial' && c.partial !== undefined) {
         return { ok: true, scanned: c.scanned, partial: c.partial, ...packFixpoint };

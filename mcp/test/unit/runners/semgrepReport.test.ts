@@ -197,6 +197,30 @@ describe('checkSemgrepReport verdicts: ok, partial, scanned_nothing, failed', ()
     // The project's own rules file scanned as a target (EC-3): its rules loaded.
     const own = check({ paths: { scanned: ['.semgrep.yml'] }, errors: [{ ...WORKFLOW_WARNING, path: '.semgrep.yml', type: ['PartialParsing', []], spans: [] }] });
     expect(own.verdict).toBe('partial');
+    // An absolute workflow path under the project (a whole-project run is given the project's absolute path).
+    const absolute = checkSemgrepReport({
+      raw: report({ paths: { scanned: ['/p/.github/workflows/ci.yml'] }, errors: [{ ...WORKFLOW_WARNING, path: '/p/.github/workflows/ci.yml', type: ['PartialParsing', []], spans: [] }] }),
+      exitCode: 0,
+      outcome: 'completed',
+      targets: 1,
+      projectPath: '/p',
+    });
+    expect(absolute.verdict).toBe('partial');
+    expect(absolute.partial?.map((x) => x.file)).toEqual(['.github/workflows/ci.yml']);
+  });
+
+  it('T-03 failed: a YAML file outside the scanned project — a rule file (the I3 ruling) — or absolute with no project known', () => {
+    const outside = { level: 'warn', type: 'Syntax error', message: 'x', path: '/r/routes.yml' };
+    const withProject = checkSemgrepReport({
+      raw: report({ paths: { scanned: ['/p/wp.php'] }, errors: [outside] }),
+      exitCode: 0,
+      outcome: 'completed',
+      targets: 1,
+      projectPath: '/p',
+    });
+    expect(withProject.verdict).toBe('failed');
+    expect(check({ paths: { scanned: ['wp.php'] }, errors: [outside] }).verdict).toBe('failed');
+    expect(check({ paths: { scanned: ['wp.php'] }, errors: [{ ...outside, path: '../rules/routes.yml' }] }).verdict).toBe('failed');
   });
 });
 

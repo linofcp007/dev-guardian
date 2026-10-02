@@ -46057,6 +46057,7 @@ function candidates(projectPath) {
 }
 
 // src/runners/semgrepReport.ts
+import { isAbsolute as isAbsolute9, relative as relativePath, resolve as resolvePath } from "node:path";
 var MAX_ERROR_TEXT = 300;
 var FIXPOINT_TIMEOUT_TYPE = "Fixpoint timeout";
 var FIXPOINT_TIMEOUT_PACK_TYPE = "Fixpoint timeout (plugin pack)";
@@ -46097,7 +46098,7 @@ function checkSemgrepReport(args) {
     return { ok: false, verdict: "scanned_nothing", scanned, errors: 0, reason };
   }
   if (exitClean && scanned > 0 && fixpoint.unscoped === 0 && (errors.length > 0 || fixpoint.functions > 0)) {
-    const partial3 = errors.length > 0 ? perFileErrors(errorEntries) : [];
+    const partial3 = errors.length > 0 ? perFileErrors(errorEntries, projectPath) : [];
     if (partial3 !== null) {
       return withPackGap({
         ok: false,
@@ -46113,7 +46114,7 @@ function checkSemgrepReport(args) {
   const configError = ruleConfigError(errorEntries);
   if (configError !== null) failed.rule_config_error = configError;
   if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0) && fixpoint.unscoped === 0) {
-    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
+    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id), projectPath);
     if (ruleGap !== null) {
       const { rule_config_error: _whole, ...someRan } = failed;
       const files = [...relative34(ruleGap.files), ...fixpointFiles];
@@ -46261,27 +46262,34 @@ function errorType(entry) {
   const rawType = getProp(entry, "type");
   return typeof rawType === "string" ? rawType : Array.isArray(rawType) && typeof rawType[0] === "string" ? rawType[0] : null;
 }
-function perFileError(entry) {
+function canBeTarget(file, projectPath) {
+  if (!/\.ya?ml$/i.test(file)) return true;
+  if (!isAbsolute9(file)) return !file.split(/[\\/]/).includes("..");
+  if (projectPath === void 0) return false;
+  const rel2 = relativePath(resolvePath(projectPath), resolvePath(file));
+  return rel2.length > 0 && !rel2.split(/[\\/]/).includes("..") && !isAbsolute9(rel2);
+}
+function perFileError(entry, projectPath) {
   const type = errorType(entry);
   if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
   const file = targetFileOf(entry, getProp(entry, "type"));
-  if (file === null) return null;
+  if (file === null || !canBeTarget(file, projectPath)) return null;
   const message2 = getString(entry, "message") ?? type;
   return { file, type, message: message2.split(/\r?\n/)[0] ?? message2 };
 }
 function pushOnce(out, p) {
   if (!out.some((q) => q.file === p.file && q.type === p.type)) out.push(p);
 }
-function perFileErrors(errors) {
+function perFileErrors(errors, projectPath) {
   const out = [];
   for (const entry of errors) {
-    const p = perFileError(entry);
+    const p = perFileError(entry, projectPath);
     if (p === null) return null;
     pushOnce(out, p);
   }
   return out.length > 0 ? out : null;
 }
-function rulesNotLoaded(errors, ruleIdOf) {
+function rulesNotLoaded(errors, ruleIdOf, projectPath) {
   const rules2 = [];
   const files = [];
   for (const entry of errors) {
@@ -46293,7 +46301,7 @@ function rulesNotLoaded(errors, ruleIdOf) {
       if (!rules2.some((r) => r.rule_id === id)) rules2.push({ rule_id: id, message: clip(lines[1] ?? lines[0] ?? type) });
       continue;
     }
-    const p = perFileError(entry);
+    const p = perFileError(entry, projectPath);
     if (p === null) return null;
     pushOnce(files, p);
   }
@@ -49882,7 +49890,7 @@ function redactCredentialSnippets(findings) {
 // src/platform/scope.ts
 import { createHash as createHash9 } from "node:crypto";
 import { lstatSync as lstatSync8, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute9, join as join30, relative as relative10, resolve as resolve13 } from "node:path";
+import { dirname as dirname11, isAbsolute as isAbsolute10, join as join30, relative as relative10, resolve as resolve13 } from "node:path";
 
 // src/platform/glob.ts
 import { join as join29, relative as relative9, sep as sep8 } from "node:path";
@@ -50126,10 +50134,10 @@ function matchesSelfOrAncestor(re, path8) {
   return false;
 }
 function escapes(rel2) {
-  return isAbsolute9(rel2) || rel2.split(/[\\/]/)[0] === "..";
+  return isAbsolute10(rel2) || rel2.split(/[\\/]/)[0] === "..";
 }
 function toProjectRelative(projectPath, entry) {
-  const abs = isAbsolute9(entry) ? resolve13(entry) : resolve13(projectPath, entry.replace(/\\/g, "/"));
+  const abs = isAbsolute10(entry) ? resolve13(entry) : resolve13(projectPath, entry.replace(/\\/g, "/"));
   const rel2 = relative10(resolve13(projectPath), abs);
   if (escapes(rel2)) return null;
   return normaliseRelPath(rel2);
@@ -51234,7 +51242,7 @@ import { basename as basename3, dirname as dirname13, join as join36, relative a
 
 // src/deps/dotnetRestore.ts
 import { unlinkSync as unlinkSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname12, extname as extname2, isAbsolute as isAbsolute10, join as join32, relative as relative12, resolve as resolve14 } from "node:path";
+import { basename as basename2, dirname as dirname12, extname as extname2, isAbsolute as isAbsolute11, join as join32, relative as relative12, resolve as resolve14 } from "node:path";
 var MAX_DOTNET_FILE_BYTES = 4 * 1024 * 1024;
 var SKIP_DIRS2 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
 var PROJECT_WALK_MAX_DEPTH = 8;
@@ -51262,7 +51270,7 @@ function findProjectFiles(projectPath) {
 }
 function resolveFromFile(file, written) {
   const normalised2 = written.trim().replace(/\\/g, "/");
-  return isAbsolute10(normalised2) ? resolve14(normalised2) : resolve14(dirname12(file), normalised2);
+  return isAbsolute11(normalised2) ? resolve14(normalised2) : resolve14(dirname12(file), normalised2);
 }
 function readText3(path8) {
   if (entryKindAnywhere(path8) === "remote") return "";
@@ -51610,6 +51618,7 @@ function semgrepOnFiles(args) {
     ...rules2?.packCheckIds !== void 0 ? { pluginPackCheckIds: rules2.packCheckIds } : {},
     ...rules2?.nonPackTaintRules !== void 0 ? { nonPackTaintRules: rules2.nonPackTaintRules } : {}
   };
+  const projectPath = args.cwd;
   return scanFileBatches({
     name: "semgrep",
     // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
@@ -51625,7 +51634,7 @@ function semgrepOnFiles(args) {
     // The shared judge's `partial` verdict is no failure of the batch, and
     // neither are rules that did not load while the others ran.
     check: (args2) => {
-      const c3 = checkSemgrepReport({ ...args2, ...ruleIdOf !== void 0 ? { ruleIdOf } : {}, ...pack });
+      const c3 = checkSemgrepReport({ ...args2, projectPath, ...ruleIdOf !== void 0 ? { ruleIdOf } : {}, ...pack });
       const packFixpoint = c3.plugin_pack_fixpoint !== void 0 ? { packFixpoint: c3.plugin_pack_fixpoint } : {};
       if (c3.verdict === "partial" && c3.partial !== void 0) {
         return { ok: true, scanned: c3.scanned, partial: c3.partial, ...packFixpoint };
@@ -51952,7 +51961,7 @@ function mapResult3(raw, ctx) {
     category,
     title: shortenTitle(message2, checkId),
     fix_available: fixAvailable,
-    file_path: relativePath(filePath, ctx.project_path),
+    file_path: relativePath2(filePath, ctx.project_path),
     taxonomy: { cwe: getProp(metadata, "cwe"), owasp: getProp(metadata, "owasp") }
   };
   if (message2 !== void 0) input.message = message2;
@@ -51963,7 +51972,7 @@ function mapResult3(raw, ctx) {
   if (snippet !== void 0) input.snippet = snippet;
   return redactCredentialSnippet(makeFinding(input));
 }
-function relativePath(filePath, projectPath) {
+function relativePath2(filePath, projectPath) {
   const rel2 = toRelativeIfPossible(filePath, projectPath);
   const mount = `${CONTAINER_PROJECT_ROOT}/`;
   return rel2.startsWith(mount) ? rel2.slice(mount.length) : rel2;
@@ -55033,7 +55042,7 @@ function uniqueRuns(runs) {
 }
 
 // src/tools/scanContainers.ts
-import { isAbsolute as isAbsolute11, join as join42, relative as relative16, resolve as resolve17, sep as sep11 } from "node:path";
+import { isAbsolute as isAbsolute12, join as join42, relative as relative16, resolve as resolve17, sep as sep11 } from "node:path";
 
 // src/runners/composeChecks.ts
 var COMPOSE_TOOL_NAME = "docker-compose";
@@ -56361,7 +56370,7 @@ function invalidSigner(inp) {
 function isInside2(root, candidate) {
   const within = (base, target) => {
     const rel2 = relative16(base, target);
-    return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep11}`) && !isAbsolute11(rel2);
+    return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep11}`) && !isAbsolute12(rel2);
   };
   const abs = resolve17(root, candidate);
   if (!within(root, abs)) return false;
@@ -67281,7 +67290,7 @@ function toBucket(f, reason) {
 
 // src/platform/hookInstallTarget.ts
 import { lstatSync as lstatSync13 } from "node:fs";
-import { dirname as dirname18, isAbsolute as isAbsolute12, join as join60, resolve as resolve19 } from "node:path";
+import { dirname as dirname18, isAbsolute as isAbsolute13, join as join60, resolve as resolve19 } from "node:path";
 var PRECOMMIT_HOOK_NAMES = ["pre-commit", "commit-msg", "pre-push"];
 var MAX_GIT_POINTER_BYTES = 64 * 1024;
 function lstatOrNull2(p) {
@@ -67317,7 +67326,7 @@ function gitDirFromFile(projectPath) {
   }
   return {
     ok: false,
-    reason: `.git is a file naming ${isAbsolute12(named2) ? named2 : gitDir}, which is neither a worktree of that repository (its gitdir file does not point back here) nor a submodule of one enclosing this project \u2014 pre-commit would install hooks into another repository`
+    reason: `.git is a file naming ${isAbsolute13(named2) ? named2 : gitDir}, which is neither a worktree of that repository (its gitdir file does not point back here) nor a submodule of one enclosing this project \u2014 pre-commit would install hooks into another repository`
   };
 }
 function hookInstallTarget(projectPath) {
@@ -67444,7 +67453,7 @@ function failDomain15(code, message2) {
 
 // src/tools/registerCustomRules.ts
 import { statSync as statSync10 } from "node:fs";
-import { isAbsolute as isAbsolute13, join as join61, resolve as resolve20 } from "node:path";
+import { isAbsolute as isAbsolute14, join as join61, resolve as resolve20 } from "node:path";
 
 // src/runners/semgrepValidate.ts
 var SEMGREP_VALIDATE_TIMEOUT_MS = 6e4;
@@ -67619,7 +67628,7 @@ function collectExplicit(projectPath, paths) {
   const rejected = [];
   for (const raw of paths) {
     if (hasGlobMagic(raw)) {
-      if (isAbsolute13(raw)) {
+      if (isAbsolute14(raw)) {
         rejected.push({ path: raw, reason: "a glob must be relative to the project" });
         continue;
       }
@@ -69859,7 +69868,7 @@ function severityFromVuln(raw) {
 
 // src/wordpress/siteKeys.ts
 import { existsSync as existsSync19 } from "node:fs";
-import { isAbsolute as isAbsolute14, resolve as resolve21 } from "node:path";
+import { isAbsolute as isAbsolute15, resolve as resolve21 } from "node:path";
 function wpSiteKey(url2) {
   return url2.replace(/\/$/, "");
 }
@@ -69873,7 +69882,7 @@ function wpInstallKeys(canonical2, raw) {
   return unique3(keys);
 }
 function namesOneInstall(raw) {
-  return isAbsolute14(raw) || existsSync19(raw);
+  return isAbsolute15(raw) || existsSync19(raw);
 }
 function wpSiteKeys(url2) {
   const key = wpSiteKey(url2);
@@ -74930,7 +74939,7 @@ import {
   writeFileSync as writeFileSync13
 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename6, dirname as dirname20, isAbsolute as isAbsolute15, join as join72, relative as relative27, resolve as resolve22 } from "node:path";
+import { basename as basename6, dirname as dirname20, isAbsolute as isAbsolute16, join as join72, relative as relative27, resolve as resolve22 } from "node:path";
 var MAX_FILES = 4e3;
 var MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
 var MAX_FILE_BYTES3 = 2 * 1024 * 1024;
@@ -75198,7 +75207,7 @@ async function tryExtract(zipPath, destDir) {
 }
 function isPathWithinRoot(candidate, root) {
   const rel2 = relative27(root, candidate);
-  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute15(rel2);
+  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute16(rel2);
 }
 function collectDir(root) {
   const files = [];
@@ -75523,7 +75532,7 @@ function hashFiles(parts) {
 }
 
 // src/tools/mapAttackSurface.ts
-import { isAbsolute as isAbsolute16, join as join77, resolve as resolve24 } from "node:path";
+import { isAbsolute as isAbsolute17, join as join77, resolve as resolve24 } from "node:path";
 
 // src/surface/collectors/envVars.ts
 function collectEnvVars(semgrepJson) {
@@ -76987,7 +76996,7 @@ var RECOVERY_STEP = "semgrep-metavar-recovery";
 function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path8 of collectAllFiles(parsed)) {
-    const read3 = readProjectBytes(projectPath, isAbsolute16(path8) ? path8 : join77(projectPath, path8));
+    const read3 = readProjectBytes(projectPath, isAbsolute17(path8) ? path8 : join77(projectPath, path8));
     if (read3.status !== "ok") continue;
     const buffer = read3.bytes;
     const text2 = buffer.toString("utf8");
@@ -77134,7 +77143,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path8) {
-  return resolve24(isAbsolute16(path8) ? path8 : join77(projectPath, path8));
+  return resolve24(isAbsolute17(path8) ? path8 : join77(projectPath, path8));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -79403,11 +79412,11 @@ function collectAnonymousExposures(ctx, projectPath) {
 
 // src/tools/createFixPr.ts
 import { rmSync as rmSync14 } from "node:fs";
-import { isAbsolute as isAbsolute18, join as join86, relative as relative31 } from "node:path";
+import { isAbsolute as isAbsolute19, join as join86, relative as relative31 } from "node:path";
 
 // src/fixpr/apply.ts
 import { rmSync as rmSync10 } from "node:fs";
-import { isAbsolute as isAbsolute17, join as join82, relative as relative29, resolve as resolve25, sep as sep17 } from "node:path";
+import { isAbsolute as isAbsolute18, join as join82, relative as relative29, resolve as resolve25, sep as sep17 } from "node:path";
 
 // src/fixpr/testCommandEnv.ts
 import { homedir as homedir5 } from "node:os";
@@ -79684,7 +79693,7 @@ function editPipPin(worktreePath, step) {
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
   const target = resolve25(worktreePath, file);
   const rel2 = relative29(worktreePath, target);
-  if (isAbsolute17(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep17}`) || isAbsolute17(rel2)) {
+  if (isAbsolute18(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep17}`) || isAbsolute18(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
   }
   const read3 = readProjectBytes(worktreePath, file, PROJECT_FILE_MAX_BYTES);
@@ -81247,7 +81256,7 @@ function inWorktree(root, prefix) {
   return join86(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
-  const rel2 = isAbsolute18(filePath) ? relative31(projectPath, filePath) : filePath;
+  const rel2 = isAbsolute19(filePath) ? relative31(projectPath, filePath) : filePath;
   return rel2.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
 }
 async function processGroup(opts) {
@@ -82527,7 +82536,7 @@ function analyzeAgentConfig(sources, previousHashes) {
 
 // src/agentaudit/configSources.ts
 import { homedir as homedir6 } from "node:os";
-import { dirname as dirname24, isAbsolute as isAbsolute19, join as join88, relative as relative32 } from "node:path";
+import { dirname as dirname24, isAbsolute as isAbsolute20, join as join88, relative as relative32 } from "node:path";
 
 // src/hostsetup/mcpConfig.ts
 import { join as join87, resolve as resolve29 } from "node:path";
@@ -82769,7 +82778,7 @@ function refusalMessage(reason, cap) {
 }
 function isWithin(root, path8) {
   const rel2 = relative32(root, path8);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute19(rel2);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute20(rel2);
 }
 function walkRoot(kind, projectPath, path8) {
   if (kind === "project") return projectPath;
@@ -86874,7 +86883,7 @@ var StreamableHTTPClientTransport = class {
 // src/mcpaudit/launch.ts
 import { spawn as spawn3 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
-import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute20, resolve as resolve30 } from "node:path";
+import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute21, resolve as resolve30 } from "node:path";
 var SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
 var ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
 var URL_END = /[\s"'<>|`]/;
@@ -87066,7 +87075,7 @@ async function resolveCommand(command, env, cwd, deadline) {
   const withExts = (base) => extname3(base) !== "" ? [base, ...exts.map((e) => base + e)] : exts.map((e) => base + e);
   let candidates2;
   const skipped2 = [];
-  if (/[\\/]/.test(command) || isAbsolute20(command)) {
+  if (/[\\/]/.test(command) || isAbsolute21(command)) {
     candidates2 = withExts(resolve30(cwd, command));
   } else {
     const dirs = (envValue3(env, "PATH") ?? "").split(delimiter2).filter((d) => d !== "");
@@ -89275,7 +89284,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync16, readdirSync as readdirSync14 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { dirname as dirname25, isAbsolute as isAbsolute21, join as join90, parse as parse9, relative as relative33, resolve as resolve31 } from "node:path";
+import { dirname as dirname25, isAbsolute as isAbsolute22, join as join90, parse as parse9, relative as relative33, resolve as resolve31 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -89295,7 +89304,7 @@ function isPublicRegistryUrl(ecosystem, url2) {
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside3(dir, path8) {
   const rel2 = relative33(dir, path8);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute21(rel2);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute22(rel2);
 }
 function walkRoot2(path8, ctx, under) {
   const abs = resolve31(path8);
