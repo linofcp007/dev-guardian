@@ -10,6 +10,11 @@
 #   |                       |         | tem uma interpolação ou uma concatenação  |
 #   |                       |         | que não é literal; sem taint, de          |
 #   |                       |         | propósito (ver abaixo)                    |
+#   | web-js-path-traversal | CWE-22  | taint na mesma função: `req.query|params|  |
+#   |                       |         | body` até ao caminho de uma leitura ou    |
+#   |                       |         | envio de ficheiro; sanitizers:            |
+#   |                       |         | `path.basename` e `startsWith` sobre o     |
+#   |                       |         | caminho resolvido                         |
 #
 # O QUE CADA REGRA NAO VÊ (lacunas conhecidas, medidas ou desenhadas):
 #
@@ -42,6 +47,25 @@
 #     objeto em minúsculas, mesmo constante, dispara; e o `.join(...)` de um
 #     array local de literais SEM nenhum `push` de um valor interpolado
 #     (a decoy D01) é tratado como seguro só em linha.
+#
+# web-js-path-traversal
+#   - Taint INTRA-procedimento: a fonte (`req.query`, `req.params`, `req.body`)
+#     e o sink têm de estar na mesma função; um valor que atravessa um
+#     ficheiro (o serviço recebe o nome por parâmetro) não é visto. Escolha
+#     de desenho: o S06 da app sintética está numa função só.
+#   - Sinks: o 1.º argumento de `fs.readFile`, `fs.readFileSync`,
+#     `fs.createReadStream`, `res.sendFile` e `res.download`. A ESCRITA de
+#     ficheiros (`writeFile`, `createWriteStream`, um upload) não é sink: é
+#     outra classe (sobrescrever) e outra regra. `res.sendFile(p, { root })`
+#     fica de fora: com `root` o Express recusa `..`.
+#   - Sanitizers: `path.basename(...)` (corta qualquer diretório) e
+#     `x.startsWith(...)`, que limpa `x` por efeito lateral — a regra não
+#     distingue o ramo que sai do que fica, nem se o prefixo é mesmo o
+#     diretório base: uma comparação com um prefixo qualquer também limpa.
+#     `path.normalize`, `path.relative`, `includes('..')` e um `realpath`
+#     NÃO limpam: o valor continua tainted e dispara.
+#   - Só as fontes `req.*` com esse nome de parâmetro; `request.query`,
+#     `ctx.query` e `event.queryStringParameters` não são vistos.
 #
 # Fixtures em mcp/test/fixtures/web-js/{hits,misses}/ (hits/ com uma linha
 # `// BUG: <id-da-regra>` por achado), `mcp/test/e2e/webJsPack.test.ts`.
@@ -129,3 +153,43 @@ rules:
                 ...
                 $W.push(`...${$Y}...`);
                 ...
+
+  # Taint intra-procedimento: o achado cai no argumento do sink (o caminho
+  # lido ou enviado), não na fonte. O `startsWith` e o `path.basename` são os
+  # sanitizers do US-2.AC-2.
+  - id: web-js-path-traversal
+    metadata:
+      cwe:
+        - "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Um valor do pedido HTTP (`req.query`, `req.params` ou `req.body`) chega,
+      na mesma função, ao caminho de um ficheiro lido ou enviado sem
+      verificação de contenção: `../../etc/passwd` sai do diretório
+      (CWE-22). Aplicar `path.basename` ao valor, ou resolver o caminho e
+      confirmar que começa pelo diretório base (`startsWith`) antes de o
+      usar; com `res.sendFile`, passar a opção `root`.
+    mode: taint
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.params
+      - pattern: req.body
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+      - patterns:
+          - pattern: $T.startsWith(...)
+          - focus-metavariable: $T
+        by-side-effect: true
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FS.readFile($P, ...)
+              - pattern: $FS.readFileSync($P, ...)
+              - pattern: $FS.createReadStream($P, ...)
+              - pattern: res.sendFile($P, ...)
+              - pattern: res.download($P, ...)
+          - pattern-not: 'res.sendFile($P, {root: ...}, ...)'
+          - focus-metavariable: $P
