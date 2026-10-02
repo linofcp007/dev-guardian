@@ -209,6 +209,32 @@ describe('the report reads the typed overflow flag, with the prefix as fallback'
 describe('D-3: limits, delivery order, severity, concurrency', () => {
   const huntValid = submissionFixture('hunt-valid.json') as HuntResult;
 
+  it('above the token limit: the response says how many tasks fit and that delivery stops there; after confirm exactly that many are delivered', async () => {
+    const h = harness();
+    seedStandard(h);
+    const over = await start(h, { modes: ['verify'], per_task_overhead: 300_000 });
+    const shown = over as typeof over & { deliverable_within_token_limit: number; token_limit_note: string };
+    expect(shown.needs_confirm).toBe(true);
+    expect(shown.deliverable_within_token_limit).toBe(1);
+    expect(shown.token_limit_note).toMatch(/limit_reached.*larger max_estimated_tokens/);
+    const refused = await callTool(h, 'llm_scan_task', { plan_id: over.plan_id });
+    expectDomainError(refused, 'needs_confirm');
+    expect(JSON.stringify(refused)).toContain('deliverable_within_token_limit');
+
+    const confirmed = okResult<{ deliverable_within_token_limit: number; token_limit_note: string }>(
+      await callTool(h, 'llm_scan_start', { project_path: h.project, plan_id: over.plan_id, confirm: true }),
+    );
+    expect(confirmed.token_limit_note).toBeTruthy();
+    let delivered = 0;
+    let last = await callTool(h, 'llm_scan_task', { plan_id: over.plan_id });
+    while (last.ok) {
+      delivered += 1;
+      last = await callTool(h, 'llm_scan_task', { plan_id: over.plan_id });
+    }
+    expect(delivered).toBe(confirmed.deliverable_within_token_limit);
+    expectDomainError(last, 'limit_reached');
+  });
+
   it('an unconfirmed plan under the limit still stops at max_estimated_tokens', async () => {
     const h = harness();
     seedStandard(h);
