@@ -26,7 +26,8 @@ import type { Storage } from '../storage/index.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import type { DomainError, Finding, ToolResult } from '../types.js';
 import { CURRENT_PROMPT_VERSION, randomBoundary, renderBrief, responseSchema } from './briefs.js';
-import { buildPlan, entryPointId, OVER_LIMIT_REASON_PREFIX } from './plan.js';
+import { huntSeverity } from './classes.js';
+import { buildPlan, DEFAULT_BRIEF_TOKENS, entryPointId, OVER_LIMIT_REASON_PREFIX } from './plan.js';
 import { computeReport, type LlmScanReport } from './report.js';
 import { toFindingValidation, validateHuntSubmission, validateVerifySubmission, type SubmissionError } from './submission.js';
 import {
@@ -35,6 +36,7 @@ import {
   type Independence,
   type LlmScanPlan,
   type LlmScanTask,
+  type PlanEstimate,
   type PlanLimits,
   type ScanMode,
   type VerifyVerdict,
@@ -210,7 +212,7 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
     findings,
     surface: persisted === null ? null : { id: persisted.id, snapshot: persisted.snapshot },
     code_files: codeFiles,
-    limits: { ...input.limits, max_tasks: Math.max(input.limits.max_tasks, MAX_PLANNED_TASKS) },
+    limits: { ...input.limits, max_tasks: MAX_PLANNED_TASKS },
   });
   const notEligible = [
     ...plan.not_eligible.map((n) => (isOverLimit(n.reason) ? { ...n, overflow: true as const } : n)),
@@ -223,7 +225,23 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
 
   const planId = randomUUID();
   const scanId = randomUUID();
-  const tasks: LlmScanTask[] = plan.tasks.map((t) => ({
+  // Delivery order is the planner's: verifications, entry-point hunts, the cross-cutting task last. The
+  // cross-cutting task keeps a slot when max_tasks cuts (see `limitReason`), so it is still delivered (D-3).
+  const ordered = plan.tasks;
+  // D-3: the estimate that decides the confirm gate is the DELIVERABLE tasks' — max_tasks of them.
+  const crosscuts = ordered.filter((t) => t.kind === 'crosscut');
+  const deliverable =
+    ordered.length <= input.limits.max_tasks
+      ? ordered
+      : [...ordered.filter((t) => t.kind !== 'crosscut').slice(0, Math.max(0, input.limits.max_tasks - crosscuts.length)), ...crosscuts].slice(0, input.limits.max_tasks);
+  const deliverableBrief = deliverable.reduce((sum, t) => sum + DEFAULT_BRIEF_TOKENS[t.kind], 0);
+  const estimate: PlanEstimate = {
+    tasks: deliverable.length,
+    brief_tokens: deliverableBrief,
+    total_tokens: deliverableBrief + deliverable.length * input.limits.per_task_overhead,
+    assumptions: `${plan.estimate.assumptions}; counted over the ${String(deliverable.length)} task(s) that can be delivered (max_tasks ${String(input.limits.max_tasks)}), in delivery order`,
+  };
+  const tasks: LlmScanTask[] = ordered.map((t) => ({
     plan_id: planId,
     task_id: t.task_id,
     kind: t.kind,
@@ -251,7 +269,7 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
     tree_hash: treeHash,
     surface_snapshot_id: persisted?.id ?? null,
     limits: input.limits,
-    estimate: plan.estimate,
+    estimate,
     confirmed: input.confirm,
     status: 'open',
     not_eligible: notEligible,
@@ -287,7 +305,9 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
     not_eligible_total: ne.total,
     set_aside: sa.items,
     set_aside_total: sa.total,
-    estimate: plan.estimate,
+    estimate,
+    deliverable_tasks: deliverable.length,
+    beyond_max_tasks: tasks.length - deliverable.length,
     needs_confirm: needsConfirm(stored),
     ...(needsConfirm(stored) ? { confirm_with: 'llm_scan_start { plan_id, confirm: true }' } : {}),
     notes: plan.notes,
@@ -346,7 +366,9 @@ function limitReason(plan: LlmScanPlan, tasks: readonly LlmScanTask[], next: Llm
   const delivered = tasks.filter((t) => t.delivered_at !== null);
   // The verify tasks of a hunt's findings are outside max_tasks, like they are outside the plan's count.
   const counted = delivered.filter((t) => t.target.origin_task_id === undefined).length;
-  if (next.target.origin_task_id === undefined && counted >= plan.limits.max_tasks) {
+  // The cross-cutting task keeps its slot: the tasks before it stop one short of max_tasks while it is still undelivered (D-3).
+  const reserved = next.kind !== 'crosscut' && tasks.some((t) => t.kind === 'crosscut' && t.delivered_at === null && t.status !== 'closed') ? 1 : 0;
+  if (next.target.origin_task_id === undefined && counted >= plan.limits.max_tasks - reserved) {
     return `the task limit (max_tasks ${String(plan.limits.max_tasks)}) is reached`;
   }
   const spent = delivered.reduce((sum, t) => sum + Math.ceil((t.brief_chars ?? 0) / 4) + plan.limits.per_task_overhead, 0);
@@ -391,7 +413,12 @@ export function leaseNext(storage: Storage, planId: string): Out {
     }
     if (task.delivered_at === null) {
       const reason = limitReason(plan, tasks, task, Math.ceil(brief.length / 4));
-      if (reason !== null) return stopDelivery(storage, plan, candidates, reason, now);
+      if (reason !== null) {
+        // The cross-cutting task keeps its slot (D-3): look past the tasks that no longer fit, to it.
+        const crosscutLeft = task.kind !== 'crosscut' && candidates.some((c) => c.kind === 'crosscut' && c.delivered_at === null);
+        if (crosscutLeft) continue;
+        return stopDelivery(storage, plan, candidates, reason, now);
+      }
     }
     const token = randomUUID();
     const expires = new Date(Date.parse(now) + LLM_SCAN_DEFAULTS.lease_minutes * 60_000).toISOString();
@@ -466,7 +493,7 @@ function huntFindingRow(f: HuntFinding): Finding {
   return makeFinding({
     tool: 'llm-hunt',
     rule_id: f.class,
-    severity: 'medium',
+    severity: huntSeverity(f.class),
     category: 'security',
     title: f.title,
     message: `Attacker: ${f.attacker} Evidence: ${f.evidence}`,
@@ -573,44 +600,45 @@ function acceptHunt(
 ): Out {
   const repo = storage.llmScan;
   const rows = new Map(value.findings.map((f) => huntFindingRow(f)).map((r) => [r.fingerprint, r]));
-  const known = new Set(storage.findings.listByScan(plan.scan_id).map((f) => f.fingerprint));
-  const fresh = [...rows.values()].filter((f) => !known.has(f.fingerprint));
-  const withIdentity = assignIdentities(fresh, { projectPath: plan.project_path, readSource: makeSourceReader(plan.project_path) });
-  const firstNumber = repo.nextTaskNumber(plan.id);
-  // Created with the hunt's own close: a finding is never stored without the task that will check it (US-2.AC-4),
-  // and these tasks are outside max_tasks.
-  const verifyTasks: LlmScanTask[] = fresh.map((f, i) => ({
-    plan_id: plan.id,
-    task_id: `t-${String(firstNumber + i).padStart(4, '0')}`,
-    kind: 'verify',
-    target: { fingerprint: f.fingerprint, files: [f.file_path ?? ''], origin_task_id: task.task_id },
-    status: 'open',
-    lease_token: null,
-    lease_expires_at: null,
-    attempts: 0,
-    file_hashes: hashesOf(plan.project_path, [f.file_path ?? '']),
-    brief_chars: null,
-    response_chars: null,
-    independence: null,
-    result: null,
-    closed_reason: null,
-    delivered_at: null,
-    closed_at: null,
-  }));
-
-  const closed = storage.rawHandle().transaction((): boolean => {
+  // Everything that depends on what other submissions wrote (the findings already stored, the next
+  // task number) is read INSIDE the transaction: BEGIN IMMEDIATE serialises two servers on one file.
+  const stored = storage.rawHandle().transaction((): { stored: number; verify: number } | null => {
     const result = { entry_points_reviewed: value.entry_points_reviewed, findings: value.findings, fingerprints: [...rows.keys()] };
-    if (!repo.closeTask(plan.id, task.task_id, input.lease_token, { independence: input.independence, result, closed_reason: 'valid', response_chars: responseChars }, now)) return false;
+    if (!repo.closeTask(plan.id, task.task_id, input.lease_token, { independence: input.independence, result, closed_reason: 'valid', response_chars: responseChars }, now)) return null;
+    const known = new Set(storage.findings.listByScan(plan.scan_id).map((f) => f.fingerprint));
+    const fresh = [...rows.values()].filter((f) => !known.has(f.fingerprint));
+    const withIdentity = assignIdentities(fresh, { projectPath: plan.project_path, readSource: makeSourceReader(plan.project_path) });
     storage.findings.bulkInsert(withIdentity.map((f) => ({ ...f, scan_id: plan.scan_id })));
+    const firstNumber = repo.nextTaskNumber(plan.id);
+    // Created with the hunt's own close: a finding is never stored without the task that will check it (US-2.AC-4),
+    // and these tasks are outside max_tasks.
+    const verifyTasks: LlmScanTask[] = fresh.map((f, i) => ({
+      plan_id: plan.id,
+      task_id: `t-${String(firstNumber + i).padStart(4, '0')}`,
+      kind: 'verify',
+      target: { fingerprint: f.fingerprint, files: [f.file_path ?? ''], origin_task_id: task.task_id },
+      status: 'open',
+      lease_token: null,
+      lease_expires_at: null,
+      attempts: 0,
+      file_hashes: hashesOf(plan.project_path, [f.file_path ?? '']),
+      brief_chars: null,
+      response_chars: null,
+      independence: null,
+      result: null,
+      closed_reason: null,
+      delivered_at: null,
+      closed_at: null,
+    }));
     if (verifyTasks.length > 0 && !repo.appendTasks(plan.id, verifyTasks)) throw new Error('the plan is no longer open');
-    return true;
+    return { stored: withIdentity.length, verify: verifyTasks.length };
   })();
-  if (!closed) return lostRace(storage, input);
+  if (stored === null) return lostRace(storage, input);
   return {
     ok: true,
     accepted: true,
-    stored: withIdentity.length,
-    verify_tasks_created: verifyTasks.length,
+    stored: stored.stored,
+    verify_tasks_created: stored.verify,
     ...(rejected.length > 0 ? { rejected } : {}),
     progress: progressOf(storage, settlePlan(storage, plan)),
   };

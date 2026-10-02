@@ -42,3 +42,21 @@ export const HUNT_CLASSES = [
 ] as const;
 
 export type HuntClass = (typeof HUNT_CLASSES)[number];
+
+/** D-3: the classes whose finding is stored as `high`; every other class is `medium`. Verification never changes it. */
+const HIGH_SEVERITY_CLASSES: ReadonlySet<HuntClass> = new Set<HuntClass>([
+  'sql-injection',
+  'nosql-injection',
+  'command-injection',
+  'code-injection',
+  'template-injection',
+  'deserialization',
+  'xxe',
+  'ssrf',
+  'path-traversal',
+  'broken-access-control',
+  'authentication',
+  'secrets',
+]);
+
+export const huntSeverity = (cls: HuntClass): 'high' | 'medium' => (HIGH_SEVERITY_CLASSES.has(cls) ? 'high' : 'medium');

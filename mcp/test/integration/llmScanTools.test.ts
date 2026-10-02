@@ -10,6 +10,10 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { computeReport } from '../../src/llmscan/report.js';
 import type { HuntResult, LlmScanPlan } from '../../src/llmscan/types.js';
+import { GuardianDatabase as Database } from '../../src/storage/db.js';
+import { Storage } from '../../src/storage/index.js';
+import { LlmScanRepo } from '../../src/storage/llmScanRepo.js';
+import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
 import { okResult } from '../helpers/toolResult.js';
 import {
@@ -22,6 +26,7 @@ import {
   lease,
   leaseWhere,
   next,
+  seedMany,
   seedStandard,
   seedSurface,
   start,
@@ -198,5 +203,77 @@ describe('the report reads the typed overflow flag, with the prefix as fallback'
 
   it('a finding with no file is not "not planned"', () => {
     expect(computeReport(plan([{ fingerprint: 'fp-2', reason: 'no file' }]), []).not_planned).toEqual([]);
+  });
+});
+
+describe('D-3: limits, delivery order, severity, concurrency', () => {
+  const huntValid = submissionFixture('hunt-valid.json') as HuntResult;
+
+  it('an unconfirmed plan under the limit still stops at max_estimated_tokens', async () => {
+    const h = harness();
+    seedStandard(h);
+    const p = await start(h, { modes: ['verify'], per_task_overhead: 100_000, max_estimated_tokens: 250_000 });
+    expect(p.needs_confirm).toBe(true); // 3 x 102 000 > 250 000
+    const c = await start(h, { modes: ['verify'], per_task_overhead: 50_000, max_estimated_tokens: 250_000 });
+    expect(c.needs_confirm).toBe(false); // 3 x 52 000 < 250 000
+    for (let i = 0; i < 3; i += 1) await lease(h, c.plan_id);
+  });
+
+  it('the estimate covers the deliverable tasks (max_tasks), and both numbers are shown', async () => {
+    const h = harness();
+    seedMany(h, 800);
+    const out = await start(h, { modes: ['verify'], per_task_overhead: 100 });
+    const shown = out as typeof out & { deliverable_tasks: number; beyond_max_tasks: number };
+    expect(shown.tasks_total).toBe(800);
+    expect(shown.estimate.tasks).toBe(200);
+    expect(shown.deliverable_tasks).toBe(200);
+    expect(shown.beyond_max_tasks).toBe(600);
+    expect(shown.estimate.total_tokens).toBe(200 * (2_000 + 100));
+    expect(shown.needs_confirm).toBe(false);
+  });
+
+  it('the cross-cutting task keeps a slot under max_tasks, so a task limit does not cut it', async () => {
+    const h = harness();
+    await seedSurface(h);
+    const out = await start(h, { modes: ['hunt'], max_tasks: 2 });
+    expect((await lease(h, out.plan_id)).kind).toBe('hunt');
+    expect((await lease(h, out.plan_id)).kind).toBe('crosscut');
+    expectDomainError(await callTool(h, 'llm_scan_task', { plan_id: out.plan_id }), 'limit_reached');
+  });
+
+  it('hunt findings are stored high for the dangerous classes and medium for the rest', async () => {
+    const h = harness();
+    await seedSurface(h);
+    const out = await start(h, { modes: ['hunt'] });
+    const t = await leaseWhere(h, out.plan_id, (x) => x.kind === 'hunt' && h.repo.getTask(out.plan_id, x.task_id)?.target.files.includes('src/routes/files.ts') === true);
+    const first = huntValid.findings[0];
+    if (first === undefined) throw new Error('fixture');
+    const dos = { ...first, class: 'dos' as const };
+    expect(okResult<SubmitOut>(await submit(h, out.plan_id, t, { ...emptyHunt(h, out.plan_id, t.task_id), findings: [first, dos] })).accepted).toBe(true);
+    const rows = h.storage.findings.listByScan(out.scan_id).filter((f) => f.tool === 'llm-hunt');
+    expect(rows.map((f) => `${f.rule_id}:${f.severity}`).sort()).toEqual([`dos:medium`, `${first.class}:high`].sort());
+  });
+
+  it('two servers on one database file: the same finding from two hunt tasks is one finding and one verify task', async () => {
+    const h = harness({ dbFile: true });
+    await seedSurface(h);
+    const out = await start(h, { modes: ['hunt'] });
+    const skipped: Awaited<ReturnType<typeof lease>>[] = [];
+    const t1 = await leaseWhere(h, out.plan_id, (x) => x.kind === 'hunt' && h.repo.getTask(out.plan_id, x.task_id)?.target.files.includes('src/routes/files.ts') === true, skipped);
+    const t2 = await leaseWhere(h, out.plan_id, (x) => x.kind === 'crosscut', skipped);
+    const db2 = new Database(h.dbPath);
+    runMigrations(db2);
+    const storage2 = new Storage(db2);
+    const h2 = { ...h, db: db2, storage: storage2, plugin: { ...h.plugin, storage: storage2 }, repo: new LlmScanRepo(db2) };
+    try {
+      const admin = huntValid.findings[1];
+      if (admin === undefined) throw new Error('fixture');
+      expect(okResult<SubmitOut>(await submit(h, out.plan_id, t1, { ...emptyHunt(h, out.plan_id, t1.task_id), findings: [admin] })).accepted).toBe(true);
+      expect(okResult<SubmitOut>(await submit(h2, out.plan_id, t2, { entry_points_reviewed: [], findings: [admin] })).accepted).toBe(true);
+      expect(h.storage.findings.listByScan(out.scan_id).filter((f) => f.tool === 'llm-hunt')).toHaveLength(1);
+      expect(h.repo.listTasks(out.plan_id).filter((x) => x.kind === 'verify')).toHaveLength(1);
+    } finally {
+      storage2.close();
+    }
   });
 });

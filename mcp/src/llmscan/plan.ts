@@ -65,7 +65,7 @@ export const OVER_LIMIT_REASON_PREFIX = "over the plan's max_tasks limit";
 const FILES_PER_GROUP = 5;
 
 /** Brief tokens assumed per task kind when the caller has no better estimate: below the 8 000 P95 limit. */
-const DEFAULT_BRIEF_TOKENS: Record<TaskKind, number> = { verify: 2_000, hunt: 3_000, crosscut: 2_500 };
+export const DEFAULT_BRIEF_TOKENS: Record<TaskKind, number> = { verify: 2_000, hunt: 3_000, crosscut: 2_500 };
 
 /** The project-relative POSIX path of `file`, or null when it lies outside the project. */
 function relativize(file: string, projectPath: string): string | null {
