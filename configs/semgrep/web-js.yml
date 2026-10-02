@@ -146,8 +146,21 @@
 # SC-002: 15 achados em 711 103 linhas = 0,04 por 2 000 linhas, contra o
 # orçamento de 1 por 2 000 (355 achados): cumprido. Verdadeiros positivos:
 # 0 de 15; a regra SQL é ruidosa por desenho (decide pela forma do texto).
-# NFR-2 (rácio de tempo do scan com/sem este pack): a medir na tarefa 6, sobre
-# o corpus do eixo 3 (GUARDIAN_WEBJS_SRC); sem número aqui até lá.
+# NFR-2 (rácio de tempo do scan com/sem este pack, limite 1,10): NAO CUMPRIDO.
+# Medido sobre o corpus do eixo 3 (os três commits acima, 4933 ficheiros),
+# com o argv do `scan_sast` em `local_only` (`--metrics=off --config=llm.yml
+# [--config=web-js.yml] --json --quiet --output F`, `--jobs` por omissão),
+# Semgrep 1.176.1, 24 CPUs, em corridas ALTERNADAS (sem, com, sem, com...):
+# 13 pares. Relógio, em segundos. Sem o pack: min 33,1, mediana 41,0, máx 76,4.
+# Com o pack: min 39,3, mediana 54,1, máx 159,9. Rácio dos mínimos 1,19; rácio
+# das medianas 1,32. A máquina estava carregada por outros processos (as
+# corridas lentas são carga, não regra: a mesma configuração deu 33,6 e 65,1),
+# por isso o mínimo é a leitura fiável e a mediana só confirma o sentido.
+# Quem custa é a regra SQL: cada regra sozinha ao lado do llm.yml, 4 rodadas,
+# mínimo de 30,6 s só com o llm.yml: web-js-sql-template 40,4 (1,32),
+# web-js-path-traversal 34,1 (1,11, mas 42,7 noutra rodada), web-js-ssrf 30,2
+# (1,00). A regra SQL percorre cada chamada com texto interpolado; as outras
+# duas partem de uma fonte `req.*` e quase não custam.
 #
 # ABLAÇÃO (`npm run ablate -- web-js`; corpus do eixo 3: os mesmos três
 # commits acima, em `GUARDIAN_WEBJS_SRC`; 1 114 s de relógio). Cobertura: 31 cláusulas em 3

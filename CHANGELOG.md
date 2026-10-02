@@ -10,6 +10,15 @@ version bump.
 
 ### Added
 
+- **`web-js` rule pack** (`configs/semgrep/web-js.yml`, 3 rules): SQL text built by interpolation or
+  concatenation in a SQL driver call (CWE-89, by the shape of the text, so it also sees a value that
+  reached the repository by parameter), a request path reaching a file read or send (CWE-22) and a
+  request URL fetched (CWE-918), both by same-function taint. `scan_sast` passes it beside `llm.yml` on
+  every Semgrep run, `local_only` and the Docker fallback included. Ablated on three real Node
+  applications (`GUARDIAN_WEBJS_SRC`, 4933 files): 15 findings, all read, none a true positive (the SQL
+  rule is noisy by design). Measured cost: the scan takes about 1.19x as long with the pack as without
+  (minimum of 13 alternating pairs; the SQL rule is the one that costs, 1.32x alone), above the 1.10
+  target; recorded in the pack header.
 - **`import_sarif`** (the 60th tool) and the CLI subcommand `import-sarif <file>`: record another
   analysis tool's SARIF 2.1.0 log (CodeQL, Snyk, Trivy, Semgrep, gitleaks, a dev-guardian export) as one
   `sarif_import` scan per run, so its findings share the project's baselines, diffs, suppressions, triage and

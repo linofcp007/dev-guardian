@@ -156,7 +156,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **30 of the 151 rules** across the eleven packs are
+nothing but positive terms. **30 of the 154 rules** across the twelve packs are
 one of those — 24 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -177,6 +177,7 @@ prints `N/A`.
 | `routes` | 64 | 44 | 20 |
 | `rgpd` | 8 | 8 | 0 |
 | `llm` | 9 | 8 | 1 |
+| `web-js` | 3 | 3 | 0 |
 
 The same numbers, rule by rule, are in [`docs/rule-packs.md`](docs/rule-packs.md),
 which `npm run build` generates; `mcp/test/docs/docs.test.ts` fails when this
@@ -219,10 +220,10 @@ property of the invocation — registered per pack in
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
 skipped) where none exists. **Every pack but `base` has one.** `bugfix-js` and
 `routes` use this repo's `mcp/src`; `rgpd` reads `GUARDIAN_RGPD_SRC` and falls
-back to `mcp/src`; the other seven read a path from an environment variable,
+back to `mcp/src`; the other eight read a path from an environment variable,
 because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC`,
 `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`, `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`,
-`GUARDIAN_PHP_SRC`, `GUARDIAN_LLM_SRC`; unset means `N/A`, set-but-missing
+`GUARDIAN_PHP_SRC`, `GUARDIAN_LLM_SRC`, `GUARDIAN_WEBJS_SRC`; unset means `N/A`, set-but-missing
 **throws**. `base` has
 no real-code corpus registered and always prints `N/A` for axis 3. `rgpd` finds
 nothing in `mcp/src`, so its axis 3 is vacuous there (its header records the
@@ -238,6 +239,7 @@ precision evidence it does have). Measured with the corpora below:
 | `bugfix-java` | OpenJDK + Spring | 17347 | — | 5 |
 | `bugfix-rs` | Rust stdlib | 1201 | 0 | 0 |
 | `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
+| `web-js` | uptime-kuma, actual and outline (Node apps) | 4933 | 15 (14 comparable) | 3, all working positive branches |
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
