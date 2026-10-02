@@ -1,0 +1,131 @@
+# dev-guardian Semgrep config web-js.
+# Sinks classicos de aplicações Node/Express, em JS e TS, que o registo da
+# Semgrep apanha mal ou so com taint de um ficheiro: SQL construído por
+# interpolação, path traversal e SSRF direto. Corre dentro do `scan_sast`
+# como o `llm.yml` (ficheiro do plugin, também no `local_only`).
+#
+#   | regra                 | CWE     | como decide                               |
+#   | --------------------- | ------- | ----------------------------------------- |
+#   | web-js-sql-template   | CWE-89  | padrão: o texto SQL entregue a um driver  |
+#   |                       |         | tem uma interpolação ou uma concatenação  |
+#   |                       |         | que não é literal; sem taint, de          |
+#   |                       |         | propósito (ver abaixo)                    |
+#
+# O QUE CADA REGRA NAO VÊ (lacunas conhecidas, medidas ou desenhadas):
+#
+# web-js-sql-template
+#   - Decide pela FORMA do texto, nunca pela origem do valor: um valor
+#     interpolado que e uma constante noutro ficheiro, ou um inteiro que o
+#     tipo garante, dispara. E de propósito: o repositório recebe o valor por
+#     parametro e a rota que lê `req.query` esta noutro ficheiro, fluxo que o
+#     taint intra-procedimento não vê (a vulnerabilidade S04 da app sintética
+#     do spike). O preço são falsos positivos, medidos no corpus real.
+#   - O cliente SQL e reconhecido pelo nome do metodo (`prepare`, `query`,
+#     `exec`, `execute`, `all`, `get`, `run`, `raw`) MAIS um texto que parece
+#     SQL (`select ... from`, `insert into`, `update ... set`, `delete from`,
+#     `create|alter|drop table`, `pragma`, `with x as (`...). Não depende do
+#     import do driver, porque o repositório pode usar um módulo local
+#     (`./db.js`). Um fragmento sem estas palavras (o fragmento de `knex.raw` com so uma coluna e `desc`)
+#     não é visto.
+#   - Um valor passado ao texto através de uma função própria
+#     (`buildWhere(filter)`) não e visto: so o valor interpolado na própria
+#     chamada, ou numa variável atribuída no mesmo bloco.
+#   - Excluídos por forma (o valor só pode ser um de vários literais), lidos
+#     no TEXTO do valor e, para uma variável, na atribuição do mesmo bloco:
+#     um literal, um ternário entre literais, `Number`/`parseInt`/`parseFloat`,
+#     `new Date(...).toISOString()`, `x.length`, marcadores gerados
+#     (`Array(n).fill('?').join(',')`, `.map(() => '?').join(',')`), um acesso
+#     a um objeto de NOME CONSTANTE (`SORT_COLUMNS[k]`, com ou sem `?? OUTRO`)
+#     e um identificador em MAIUSCULAS (`BATCH_SIZE`). A convenção do nome
+#     substitui "declarado const": confirmar a declaração custava uma
+#     sequência por ficheiro, medido como timeouts. Fica de fora: o acesso a um
+#     objeto em minúsculas, mesmo constante, dispara; e o `.join(...)` de um
+#     array local de literais SEM nenhum `push` de um valor interpolado
+#     (a decoy D01) é tratado como seguro só em linha.
+#
+# Fixtures em mcp/test/fixtures/web-js/{hits,misses}/ (hits/ com uma linha
+# `// BUG: <id-da-regra>` por achado), `mcp/test/e2e/webJsPack.test.ts`.
+#
+# Comentários e mensagens em português; nunca os caracteres que um locale
+# cp1252 não decodifica (U+00C1, U+00CD, U+00CF, U+00D0, U+00DD) — CLAUDE.md.
+
+rules:
+  - id: web-js-sql-template
+    metadata:
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp:
+        - "A05:2025 - Injection"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      O texto SQL entregue ao driver é construído por interpolação ou
+      concatenação com um valor que não é um literal: o que esse valor contiver
+      passa a ser SQL (CWE-89). Usar parâmetros (marcadores `?` ou nomeados) com os
+      valores no segundo argumento; para uma lista (`IN (...)`) gerar os
+      marcadores (`Array(n).fill('?').join(',')`); para ORDER BY, escolher
+      de um objeto constante com chaves fixas.
+    # O achado cai no VALOR interpolado (focus-metavariable), não na chamada: o
+    # bloco interior acaba no focus e as exclusões comparam-se com esse valor.
+    # Quatro alternativas: o texto no 1.º argumento (template ou concatenação) e
+    # o texto numa variável preparada mais abaixo no bloco (S04: o achado fica
+    # na linha onde o SQL é construído, não na do `prepare`). Os métodos são
+    # filtrados por regex DEPOIS do padrão: escrever os oito nomes em padrões
+    # separados deu timeouts em ficheiros grandes (medido).
+    # Desempenho: as exclusões são regex sobre o texto do valor e UMA sequência
+    # `$X = $V; ...`; um `pattern: $X` ou uma sequência por forma multiplicou o
+    # tempo por 5 em ficheiros grandes e deu timeouts no corpus (medido).
+    patterns:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $DB.$M($T, ...)
+                  - pattern: $DB.$M(`...${$X}...`, ...)
+              - patterns:
+                  - pattern: $DB.$M($T, ...)
+                  - pattern: $DB.$M(<... $A + $X ...>, ...)
+              - patterns:
+                  - pattern: $SQL = $T
+                  - pattern: $SQL = `...${$X}...`
+                  - pattern-inside: |
+                      $SQL = `...${$X}...`;
+                      ...
+                      $DB.$M($SQL, ...);
+              - patterns:
+                  - pattern: $SQL = $T
+                  - pattern: $SQL = <... $A + $X ...>
+                  - pattern-inside: |
+                      $SQL = <... $A + $X ...>;
+                      ...
+                      $DB.$M($SQL, ...);
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(prepare|query|exec|execute|all|get|run|raw)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: '(?is).*\b(select\b.*\bfrom|insert\s+(or\s+\w+\s+)?into|update\b.*\bset|delete\s+from|(create|alter|drop)\s+(or\s+replace\s+)?(temp\w*\s+|unique\s+)?(table|index|view|trigger|database|schema)|pragma\s|replace\s+into|truncate\s|with\s+\S+\s+as\s*\().*'
+          - focus-metavariable: $X
+      # Exclusões: o valor só pode ser um de vários literais (US-1.AC-2). Em linha
+      # (regex sobre o texto do valor) e através de uma variável do mesmo bloco.
+      - metavariable-regex:
+          metavariable: $X
+          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*\[[^\]]*\](?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\([^)]*\)|.+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\([^)]*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length|[A-Z][A-Z0-9_]*)$).+'
+      - pattern-not-inside:
+          patterns:
+            - pattern: |
+                $X = $V;
+                ...
+            - metavariable-regex:
+                metavariable: $V
+                regex: '(?s)^(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*\[[^\]]*\](?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\([^)]*\)|.+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\([^)]*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length|[A-Z][A-Z0-9_]*)$'
+      - pattern-not:
+          patterns:
+            - pattern: $W.join(...)
+            - pattern-inside: |
+                $W = [...];
+                ...
+            - pattern-not-inside: |
+                $W = [...];
+                ...
+                $W.push(`...${$Y}...`);
+                ...
