@@ -36,6 +36,8 @@ const EXPECTED_TOOLS = [
   'export_vex',
   'generate_sbom',
   'health_status',
+  // sarif-import (test plan T-23).
+  'import_sarif',
   'init_project',
   'install_toolchain',
   'license_compatibility',
@@ -99,7 +101,7 @@ const EXPECTED_RESOURCES = [
 ];
 
 describe('MCP surface — stability snapshot', () => {
-  it('exposes exactly the snapshotted tools', () => {
+  it('T-23 exposes exactly the snapshotted tools (import_sarif included)', () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
   });
 
@@ -107,8 +109,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('matches the counts documented in the README (59 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(59);
+  it('T-23 matches the counts documented in the README (60 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(60);
     expect(RESOURCES).toHaveLength(18);
   });
 });
