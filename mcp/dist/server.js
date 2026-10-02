@@ -76334,13 +76334,17 @@ var MAX_SPEC_FILES = 20;
 var MAX_SPEC_BYTES = 5 * 1024 * 1024;
 var SPEC_BASENAMES = /* @__PURE__ */ new Set(["openapi", "swagger", "api-docs"]);
 var SPEC_EXTENSIONS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml"]);
+var WIDENED_BASE = /^(?:openapi|swagger)|\.(?:openapi|swagger)$/i;
+var WIDENED_DIR = /^(?:openapi|swagger)|^api-?docs$/i;
+var DECLARES_SPEC = /^["']?(?:openapi|swagger)["']?[ \t]*:|"(?:openapi|swagger)"\s*:\s*"/m;
 function discoverSpecs(projectPath, explicit) {
   const root = resolve23(projectPath);
   const isExplicit = explicit !== void 0 && explicit.length > 0;
-  const candidates2 = isExplicit ? dedupeResolved(explicit) : walk4(root, root).sort();
+  const found2 = isExplicit ? null : walk4(root, root);
+  const candidates2 = found2 === null ? dedupeResolved(explicit ?? []) : [...found2.exact.sort(), ...found2.widened.sort()];
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
-  const outcome = readCandidates(isExplicit ? null : root, selected);
+  const outcome = readCandidates(isExplicit ? null : root, selected, new Set(found2?.widened ?? []));
   outcome.truncated = truncated;
   return outcome;
 }
@@ -76355,46 +76359,51 @@ function dedupeResolved(paths) {
   }
   return out;
 }
-function readCandidates(root, paths) {
+function readCandidates(root, paths, widened) {
   const specs = [];
   const oversized = [];
   for (const path8 of paths) {
     const read3 = root === null ? readSmallText(path8, MAX_SPEC_BYTES) : readProjectText(root, path8, MAX_SPEC_BYTES);
-    if (read3.status === "ok") specs.push({ file: path8, text: read3.text });
-    else if (read3.status === "refused" && read3.reason === "too-large") oversized.push(path8);
+    if (read3.status === "ok") {
+      if (widened.has(path8) && !DECLARES_SPEC.test(read3.text)) continue;
+      specs.push({ file: path8, text: read3.text });
+    } else if (read3.status === "refused" && read3.reason === "too-large") oversized.push(path8);
   }
   return { specs, oversized, truncated: false };
 }
 function walk4(root, dir) {
+  const out = { exact: [], widened: [] };
   let entries2;
   try {
     entries2 = readdirSync13(dir, { withFileTypes: true });
   } catch {
-    return [];
+    return out;
   }
-  const out = [];
   for (const entry of entries2) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      out.push(...walk4(root, join76(dir, entry.name)));
+      const sub = walk4(root, join76(dir, entry.name));
+      out.exact.push(...sub.exact);
+      out.widened.push(...sub.widened);
     } else if (entry.isFile()) {
-      if (isSpecCandidate(root, dir, entry.name)) {
-        out.push(join76(dir, entry.name));
-      }
+      const tier = specCandidateTier(root, dir, entry.name);
+      if (tier !== null) out[tier].push(join76(dir, entry.name));
     }
   }
   return out;
 }
-function isSpecCandidate(root, dir, name) {
+function specCandidateTier(root, dir, name) {
   const dot = name.lastIndexOf(".");
-  if (dot <= 0) return false;
+  if (dot <= 0) return null;
   const base = name.slice(0, dot);
   const ext = name.slice(dot).toLowerCase();
-  if (!SPEC_EXTENSIONS.has(ext)) return false;
-  if (SPEC_BASENAMES.has(base.toLowerCase())) return true;
+  if (!SPEC_EXTENSIONS.has(ext)) return null;
+  if (SPEC_BASENAMES.has(base.toLowerCase())) return "exact";
   const relDir = relative28(root, dir);
-  if (relDir === "") return false;
-  return relDir.split(sep16).some((segment) => segment.toLowerCase() === "openapi");
+  const segments = relDir === "" ? [] : relDir.split(sep16);
+  if (segments.some((segment) => segment.toLowerCase() === "openapi")) return "exact";
+  if (WIDENED_BASE.test(base) || segments.some((segment) => WIDENED_DIR.test(segment))) return "widened";
+  return null;
 }
 
 // src/surface/specDiff.ts

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { discoverSpecs, MAX_SPEC_FILES } from '../../../src/surface/specDiscover.js';
 import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
 
@@ -104,6 +104,51 @@ describe('discoverSpecs', () => {
 
     const out = discoverSpecs(dir, explicit);
     expect(out.specs).toHaveLength(MAX_SPEC_FILES);
+    expect(out.truncated).toBe(true);
+  });
+
+  // Measured on VAmPI (erev0s/VAmPI f16052d): its only route table is
+  // `openapi_specs/openapi3.yml`, and discovery found nothing — the base name
+  // is `openapi3`, the directory `openapi_specs`, and both rules matched
+  // whole names only. `spec_paths` read the same file as 14 routes.
+  it('T-01 finds a document whose name or directory only starts with openapi/swagger, or ends .openapi', () => {
+    const dir = project({
+      'openapi_specs/openapi3.yml': 'openapi: 3.0.0\npaths: {}\n',
+      'docs/petstore.openapi.yaml': "swagger: '2.0'\npaths: {}\n",
+      'swagger-docs/v2.json': '{"swagger": "2.0", "paths": {}}',
+    });
+    const names = discoverSpecs(dir).specs.map((s) => relative(dir, s.file).split(sep).join('/')).sort();
+    expect(names).toEqual(['docs/petstore.openapi.yaml', 'openapi_specs/openapi3.yml', 'swagger-docs/v2.json']);
+  });
+
+  it('T-02 keeps the exact names as before and lists a widened candidate only when it declares openapi/swagger', () => {
+    const dir = project({
+      // Exact names: discovered whatever they hold, as before (US-1.AC-2).
+      'openapi.yaml': 'not a spec',
+      'docs/openapi/v1.yml': 'also not a spec',
+      // Widened names without a top-level openapi/swagger key (EC-1).
+      'openapi-generator-config.yaml': 'generatorName: typescript-axios\n',
+      'openapitools.json': '{"generator-cli": {"version": "7.0.0"}}',
+      'swagger-ui-config.json': '{"url": "/openapi.json"}',
+      // Quoted keys, JSON and YAML (EC-2).
+      'api-docs/public.json': '{ "openapi" : "3.1.0", "paths": {} }',
+      "openapi.public.yaml": "'swagger': '2.0'\npaths: {}\n",
+      // Excluded directories stay excluded (EC-3).
+      'node_modules/pkg/openapi3.yml': 'openapi: 3.0.0\n',
+    });
+    const names = discoverSpecs(dir).specs.map((s) => relative(dir, s.file).split(sep).join('/')).sort();
+    expect(names).toEqual(['api-docs/public.json', 'docs/openapi/v1.yml', 'openapi.public.yaml', 'openapi.yaml']);
+  });
+
+  it('T-03 reads every exact-name candidate before the widened ones when the cap truncates', () => {
+    const files: Record<string, string> = { 'openapi.yaml': 'openapi: 3.0.0\n', 'swagger.json': '{"swagger": "2.0"}' };
+    for (let i = 0; i < MAX_SPEC_FILES + 5; i += 1) files[`openapi_specs/s${String(i).padStart(2, '0')}.yaml`] = 'openapi: 3.0.0\n';
+    const dir = project(files);
+    const out = discoverSpecs(dir);
+    const names = out.specs.map((s) => relative(dir, s.file).split(sep).join('/'));
+    expect(names).toContain('openapi.yaml');
+    expect(names).toContain('swagger.json');
+    expect(out.specs.length).toBeLessThanOrEqual(MAX_SPEC_FILES);
     expect(out.truncated).toBe(true);
   });
 });
