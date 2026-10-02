@@ -1,0 +1,7 @@
+{
+  "verdict": "undetermined",
+  "attacker_input": "none",
+  "operation": "src/util/shell.ts:8",
+  "decisive_line": "src/util/shell.ts:8 — whether the caller restricts the report name is not visible from here",
+  "reasoning": "The name reaches the shell unquoted at line 8, but the callers were not followed."
+}

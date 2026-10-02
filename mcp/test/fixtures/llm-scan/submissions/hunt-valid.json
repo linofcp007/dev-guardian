@@ -1,0 +1,24 @@
+{
+  "entry_points_reviewed": [
+    "GET /files/:name",
+    "POST /files/upload"
+  ],
+  "findings": [
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/admin.ts",
+      "line": 7,
+      "class": "broken-access-control",
+      "title": "Admin stats route is mounted without authentication",
+      "attacker": "Anyone who can reach the server",
+      "evidence": "src/app.ts:12 mounts adminRouter without requireAuth, so src/routes/admin.ts:7 answers anonymous requests."
+    }
+  ]
+}

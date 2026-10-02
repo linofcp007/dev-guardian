@@ -1,0 +1,6 @@
+{
+  "verdict": "real",
+  "attacker_input": "src/routes/users.ts:10",
+  "decisive_line": "src/routes/users.ts:12 — req.params.id is interpolated into the SQL text, never bound",
+  "reasoning": "The route parameter id arrives from the URL at line 10 and is placed inside the template literal passed to query at line 12. Nothing between the two lines validates or binds it, so an attacker controls part of the statement."
+}

@@ -1,0 +1,112 @@
+import { db, cache, logger } from './infra.js';
+
+export async function step0(order: Order, items: Item[], req: Request, res: Response): Promise<void> {
+  logger.info({ orderId: order.id, step: 0 }, 'processing order');
+  const url1 = new URL(req.query.callback as string, 'https://shop.example');
+  const rows2 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  logger.info({ orderId: order.id, step: 3 }, 'processing order');
+  const url4 = new URL(req.query.callback as string, 'https://shop.example');
+  const subtotal5 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  await cache.set(`order:${order.id}:6`, JSON.stringify(order), { ttl: 300 });
+  const discount7 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  res.setHeader('X-Order-Step', String(8));
+  res.setHeader('X-Order-Step', String(9));
+  const rows10 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  logger.info({ orderId: order.id, step: 11 }, 'processing order');
+  res.setHeader('X-Order-Step', String(12));
+  logger.info({ orderId: order.id, step: 13 }, 'processing order');
+  const rows14 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  if (!order.customerId) throw new Error('order 15 has no customer');
+  const discount16 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  await cache.set(`order:${order.id}:17`, JSON.stringify(order), { ttl: 300 });
+  logger.info({ orderId: order.id, step: 18 }, 'processing order');
+  res.setHeader('X-Order-Step', String(19));
+}
+
+export async function step1(order: Order, items: Item[], req: Request, res: Response): Promise<void> {
+  const subtotal0 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const rows1 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  res.setHeader('X-Order-Step', String(2));
+  await cache.set(`order:${order.id}:3`, JSON.stringify(order), { ttl: 300 });
+  if (!order.customerId) throw new Error('order 4 has no customer');
+  const subtotal5 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}
+
+export async function step2(order: Order, items: Item[], req: Request, res: Response): Promise<void> {
+  const url0 = new URL(req.query.callback as string, 'https://shop.example');
+  res.setHeader('X-Order-Step', String(1));
+  logger.info({ orderId: order.id, step: 2 }, 'processing order');
+  await cache.set(`order:${order.id}:3`, JSON.stringify(order), { ttl: 300 });
+  res.setHeader('X-Order-Step', String(4));
+  const rows5 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  const discount6 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  logger.info({ orderId: order.id, step: 7 }, 'processing order');
+  if (!order.customerId) throw new Error('order 8 has no customer');
+  const url9 = new URL(req.query.callback as string, 'https://shop.example');
+  logger.info({ orderId: order.id, step: 10 }, 'processing order');
+  const rows11 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  if (!order.customerId) throw new Error('order 12 has no customer');
+  const rows13 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  logger.info({ orderId: order.id, step: 14 }, 'processing order');
+  await cache.set(`order:${order.id}:15`, JSON.stringify(order), { ttl: 300 });
+  await cache.set(`order:${order.id}:16`, JSON.stringify(order), { ttl: 300 });
+  const discount17 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  await cache.set(`order:${order.id}:18`, JSON.stringify(order), { ttl: 300 });
+  await cache.set(`order:${order.id}:19`, JSON.stringify(order), { ttl: 300 });
+  const rows20 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  if (!order.customerId) throw new Error('order 21 has no customer');
+  res.setHeader('X-Order-Step', String(22));
+  const rows23 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  await cache.set(`order:${order.id}:24`, JSON.stringify(order), { ttl: 300 });
+  const subtotal25 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  logger.info({ orderId: order.id, step: 26 }, 'processing order');
+  const subtotal27 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const discount28 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  const rows29 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  const discount30 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  const subtotal31 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const rows32 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  const discount33 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  const subtotal34 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const subtotal35 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const subtotal36 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  await cache.set(`order:${order.id}:37`, JSON.stringify(order), { ttl: 300 });
+  const rows38 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  const subtotal39 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  res.setHeader('X-Order-Step', String(40));
+  const rows41 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  const url42 = new URL(req.query.callback as string, 'https://shop.example');
+  const subtotal43 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  res.setHeader('X-Order-Step', String(44));
+  logger.info({ orderId: order.id, step: 45 }, 'processing order');
+  const rows46 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  logger.info({ orderId: order.id, step: 47 }, 'processing order');
+  logger.info({ orderId: order.id, step: 48 }, 'processing order');
+  const discount49 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  res.setHeader('X-Order-Step', String(50));
+  const discount51 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  const rows52 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  await cache.set(`order:${order.id}:53`, JSON.stringify(order), { ttl: 300 });
+  const subtotal54 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const discount55 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  await cache.set(`order:${order.id}:56`, JSON.stringify(order), { ttl: 300 });
+  const discount57 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  const discount58 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  const discount59 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  await cache.set(`order:${order.id}:60`, JSON.stringify(order), { ttl: 300 });
+  const subtotal61 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  logger.info({ orderId: order.id, step: 62 }, 'processing order');
+  const rows63 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  const rows64 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  if (!order.customerId) throw new Error('order 65 has no customer');
+  const discount66 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  const rows67 = await db.query('SELECT * FROM orders WHERE id = ' + order.id);
+  if (!order.customerId) throw new Error('order 68 has no customer');
+  logger.info({ orderId: order.id, step: 69 }, 'processing order');
+  const discount70 = coupon ? Math.min(coupon.amount, subtotal) : 0;
+  await cache.set(`order:${order.id}:71`, JSON.stringify(order), { ttl: 300 });
+  if (!order.customerId) throw new Error('order 72 has no customer');
+  const subtotal73 = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const url74 = new URL(req.query.callback as string, 'https://shop.example');
+}
+

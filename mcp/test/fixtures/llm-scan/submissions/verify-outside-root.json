@@ -1,0 +1,7 @@
+{
+  "verdict": "real",
+  "attacker_input": "src/routes/users.ts:10",
+  "operation": "../../../../../../etc/passwd:1",
+  "decisive_line": "../outside/secret.ts:3 — the real sink is in another project",
+  "reasoning": "The route parameter id arrives from the URL at line 10 and is placed inside the template literal passed to query at line 12. Nothing between the two lines validates or binds it, so an attacker controls part of the statement."
+}

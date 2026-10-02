@@ -1,0 +1,355 @@
+import json
+import logging
+import subprocess
+from decimal import Decimal
+
+logger = logging.getLogger(__name__)
+
+def step_0(request, invoice, number):
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_1 = json.dumps({"invoice": invoice.number, "step": 1})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    logger.info("invoice %s step 3", invoice.number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    payload_7 = json.dumps({"invoice": invoice.number, "step": 7})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    return None
+
+def step_1(request, invoice, number):
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    logger.info("invoice %s step 1", invoice.number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    total_3 = sum(line.amount * line.quantity for line in invoice.lines)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 5
+    if invoice.tenant_id != request.tenant_id:  # step 6
+    logger.info("invoice %s step 7", invoice.number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 9
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 11
+    logger.info("invoice %s step 12", invoice.number)
+    total_13 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_14 = json.dumps({"invoice": invoice.number, "step": 14})
+    payload_15 = json.dumps({"invoice": invoice.number, "step": 15})
+    logger.info("invoice %s step 16", invoice.number)
+    logger.info("invoice %s step 17", invoice.number)
+    tax_18 = round(total * Decimal("0.23"), 2)
+    total_19 = sum(line.amount * line.quantity for line in invoice.lines)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    payload_21 = json.dumps({"invoice": invoice.number, "step": 21})
+    logger.info("invoice %s step 22", invoice.number)
+    logger.info("invoice %s step 23", invoice.number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    return None
+
+def step_2(request, invoice, number):
+    if invoice.tenant_id != request.tenant_id:  # step 0
+    payload_1 = json.dumps({"invoice": invoice.number, "step": 1})
+    total_2 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_3 = json.dumps({"invoice": invoice.number, "step": 3})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_5 = json.dumps({"invoice": invoice.number, "step": 5})
+    if invoice.tenant_id != request.tenant_id:  # step 6
+    tax_7 = round(total * Decimal("0.23"), 2)
+    payload_8 = json.dumps({"invoice": invoice.number, "step": 8})
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    logger.info("invoice %s step 10", invoice.number)
+    logger.info("invoice %s step 11", invoice.number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 13
+    if invoice.tenant_id != request.tenant_id:  # step 14
+    tax_15 = round(total * Decimal("0.23"), 2)
+    tax_16 = round(total * Decimal("0.23"), 2)
+    payload_17 = json.dumps({"invoice": invoice.number, "step": 17})
+    if invoice.tenant_id != request.tenant_id:  # step 18
+    total_19 = sum(line.amount * line.quantity for line in invoice.lines)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_21 = sum(line.amount * line.quantity for line in invoice.lines)
+    total_22 = sum(line.amount * line.quantity for line in invoice.lines)
+    tax_23 = round(total * Decimal("0.23"), 2)
+    payload_24 = json.dumps({"invoice": invoice.number, "step": 24})
+    tax_25 = round(total * Decimal("0.23"), 2)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    tax_28 = round(total * Decimal("0.23"), 2)
+    tax_29 = round(total * Decimal("0.23"), 2)
+    tax_30 = round(total * Decimal("0.23"), 2)
+    tax_31 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 32
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_35 = json.dumps({"invoice": invoice.number, "step": 35})
+    tax_36 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    payload_38 = json.dumps({"invoice": invoice.number, "step": 38})
+    if invoice.tenant_id != request.tenant_id:  # step 39
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 43
+    tax_44 = round(total * Decimal("0.23"), 2)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_46 = json.dumps({"invoice": invoice.number, "step": 46})
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_48 = round(total * Decimal("0.23"), 2)
+    tax_49 = round(total * Decimal("0.23"), 2)
+    tax_50 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 51
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 53
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 55
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    logger.info("invoice %s step 57", invoice.number)
+    tax_58 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    return None
+
+def step_3(request, invoice, number):
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    tax_1 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 3
+    payload_4 = json.dumps({"invoice": invoice.number, "step": 4})
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 6
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_8 = json.dumps({"invoice": invoice.number, "step": 8})
+    total_9 = sum(line.amount * line.quantity for line in invoice.lines)
+    tax_10 = round(total * Decimal("0.23"), 2)
+    logger.info("invoice %s step 11", invoice.number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_13 = sum(line.amount * line.quantity for line in invoice.lines)
+    if invoice.tenant_id != request.tenant_id:  # step 14
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_16 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_17 = json.dumps({"invoice": invoice.number, "step": 17})
+    if invoice.tenant_id != request.tenant_id:  # step 18
+    total_19 = sum(line.amount * line.quantity for line in invoice.lines)
+    total_20 = sum(line.amount * line.quantity for line in invoice.lines)
+    tax_21 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 22
+    logger.info("invoice %s step 23", invoice.number)
+    payload_24 = json.dumps({"invoice": invoice.number, "step": 24})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 27
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_30 = json.dumps({"invoice": invoice.number, "step": 30})
+    total_31 = sum(line.amount * line.quantity for line in invoice.lines)
+    logger.info("invoice %s step 32", invoice.number)
+    total_33 = sum(line.amount * line.quantity for line in invoice.lines)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 36
+    total_37 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_38 = json.dumps({"invoice": invoice.number, "step": 38})
+    if invoice.tenant_id != request.tenant_id:  # step 39
+    tax_40 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    total_43 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_44 = json.dumps({"invoice": invoice.number, "step": 44})
+    tax_45 = round(total * Decimal("0.23"), 2)
+    tax_46 = round(total * Decimal("0.23"), 2)
+    total_47 = sum(line.amount * line.quantity for line in invoice.lines)
+    if invoice.tenant_id != request.tenant_id:  # step 48
+    tax_49 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 50
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    logger.info("invoice %s step 53", invoice.number)
+    logger.info("invoice %s step 54", invoice.number)
+    logger.info("invoice %s step 55", invoice.number)
+    tax_56 = round(total * Decimal("0.23"), 2)
+    logger.info("invoice %s step 57", invoice.number)
+    logger.info("invoice %s step 58", invoice.number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_60 = sum(line.amount * line.quantity for line in invoice.lines)
+    if invoice.tenant_id != request.tenant_id:  # step 61
+    tax_62 = round(total * Decimal("0.23"), 2)
+    total_63 = sum(line.amount * line.quantity for line in invoice.lines)
+    logger.info("invoice %s step 64", invoice.number)
+    logger.info("invoice %s step 65", invoice.number)
+    tax_66 = round(total * Decimal("0.23"), 2)
+    logger.info("invoice %s step 67", invoice.number)
+    if invoice.tenant_id != request.tenant_id:  # step 68
+    total_69 = sum(line.amount * line.quantity for line in invoice.lines)
+    if invoice.tenant_id != request.tenant_id:  # step 70
+    payload_71 = json.dumps({"invoice": invoice.number, "step": 71})
+    total_72 = sum(line.amount * line.quantity for line in invoice.lines)
+    total_73 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_74 = json.dumps({"invoice": invoice.number, "step": 74})
+    payload_75 = json.dumps({"invoice": invoice.number, "step": 75})
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    total_77 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_78 = json.dumps({"invoice": invoice.number, "step": 78})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    total_81 = sum(line.amount * line.quantity for line in invoice.lines)
+    tax_82 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_86 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_88 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 89
+    tax_90 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 96
+    payload_97 = json.dumps({"invoice": invoice.number, "step": 97})
+    logger.info("invoice %s step 98", invoice.number)
+    payload_99 = json.dumps({"invoice": invoice.number, "step": 99})
+    tax_100 = round(total * Decimal("0.23"), 2)
+    payload_101 = json.dumps({"invoice": invoice.number, "step": 101})
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 103
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    payload_106 = json.dumps({"invoice": invoice.number, "step": 106})
+    logger.info("invoice %s step 107", invoice.number)
+    payload_108 = json.dumps({"invoice": invoice.number, "step": 108})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_110 = sum(line.amount * line.quantity for line in invoice.lines)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_113 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_115 = round(total * Decimal("0.23"), 2)
+    payload_116 = json.dumps({"invoice": invoice.number, "step": 116})
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_118 = round(total * Decimal("0.23"), 2)
+    payload_119 = json.dumps({"invoice": invoice.number, "step": 119})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    payload_122 = json.dumps({"invoice": invoice.number, "step": 122})
+    total_123 = sum(line.amount * line.quantity for line in invoice.lines)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    total_125 = sum(line.amount * line.quantity for line in invoice.lines)
+    total_126 = sum(line.amount * line.quantity for line in invoice.lines)
+    logger.info("invoice %s step 127", invoice.number)
+    logger.info("invoice %s step 128", invoice.number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_130 = json.dumps({"invoice": invoice.number, "step": 130})
+    tax_131 = round(total * Decimal("0.23"), 2)
+    logger.info("invoice %s step 132", invoice.number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    tax_134 = round(total * Decimal("0.23"), 2)
+    tax_135 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_137 = round(total * Decimal("0.23"), 2)
+    tax_138 = round(total * Decimal("0.23"), 2)
+    tax_139 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 140
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_142 = sum(line.amount * line.quantity for line in invoice.lines)
+    total_143 = sum(line.amount * line.quantity for line in invoice.lines)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    tax_145 = round(total * Decimal("0.23"), 2)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_147 = sum(line.amount * line.quantity for line in invoice.lines)
+    logger.info("invoice %s step 148", invoice.number)
+    logger.info("invoice %s step 149", invoice.number)
+    if invoice.tenant_id != request.tenant_id:  # step 150
+    logger.info("invoice %s step 151", invoice.number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 153
+    if invoice.tenant_id != request.tenant_id:  # step 154
+    payload_155 = json.dumps({"invoice": invoice.number, "step": 155})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    logger.info("invoice %s step 157", invoice.number)
+    total_158 = sum(line.amount * line.quantity for line in invoice.lines)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    payload_160 = json.dumps({"invoice": invoice.number, "step": 160})
+    tax_161 = round(total * Decimal("0.23"), 2)
+    logger.info("invoice %s step 162", invoice.number)
+    if invoice.tenant_id != request.tenant_id:  # step 163
+    tax_164 = round(total * Decimal("0.23"), 2)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    logger.info("invoice %s step 166", invoice.number)
+    payload_167 = json.dumps({"invoice": invoice.number, "step": 167})
+    logger.info("invoice %s step 168", invoice.number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    logger.info("invoice %s step 171", invoice.number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    logger.info("invoice %s step 173", invoice.number)
+    tax_174 = round(total * Decimal("0.23"), 2)
+    payload_175 = json.dumps({"invoice": invoice.number, "step": 175})
+    if invoice.tenant_id != request.tenant_id:  # step 176
+    if invoice.tenant_id != request.tenant_id:  # step 177
+    total_178 = sum(line.amount * line.quantity for line in invoice.lines)
+    logger.info("invoice %s step 179", invoice.number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    payload_181 = json.dumps({"invoice": invoice.number, "step": 181})
+    total_182 = sum(line.amount * line.quantity for line in invoice.lines)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    if invoice.tenant_id != request.tenant_id:  # step 184
+    if invoice.tenant_id != request.tenant_id:  # step 185
+    tax_186 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 187
+    logger.info("invoice %s step 188", invoice.number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 190
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 193
+    total_194 = sum(line.amount * line.quantity for line in invoice.lines)
+    if invoice.tenant_id != request.tenant_id:  # step 195
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    tax_197 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 198
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 201
+    payload_202 = json.dumps({"invoice": invoice.number, "step": 202})
+    payload_203 = json.dumps({"invoice": invoice.number, "step": 203})
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    logger.info("invoice %s step 207", invoice.number)
+    if invoice.tenant_id != request.tenant_id:  # step 208
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    total_210 = sum(line.amount * line.quantity for line in invoice.lines)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    if invoice.tenant_id != request.tenant_id:  # step 212
+    total_213 = sum(line.amount * line.quantity for line in invoice.lines)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    payload_215 = json.dumps({"invoice": invoice.number, "step": 215})
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    return None
+
+def step_4(request, invoice, number):
+    total_0 = sum(line.amount * line.quantity for line in invoice.lines)
+    payload_1 = json.dumps({"invoice": invoice.number, "step": 1})
+    payload_2 = json.dumps({"invoice": invoice.number, "step": 2})
+    total_3 = sum(line.amount * line.quantity for line in invoice.lines)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_5 = round(total * Decimal("0.23"), 2)
+    tax_6 = round(total * Decimal("0.23"), 2)
+    if invoice.tenant_id != request.tenant_id:  # step 7
+    subprocess.run(["pdf-render", invoice.number], check=True)
+    cursor.execute("SELECT * FROM invoices WHERE number = '%s'" % number)
+    tax_10 = round(total * Decimal("0.23"), 2)
+    total_11 = sum(line.amount * line.quantity for line in invoice.lines)
+    tax_12 = round(total * Decimal("0.23"), 2)
+    payload_13 = json.dumps({"invoice": invoice.number, "step": 13})
+    logger.info("invoice %s step 14", invoice.number)
+    payload_15 = json.dumps({"invoice": invoice.number, "step": 15})
+    logger.info("invoice %s step 16", invoice.number)
+    tax_17 = round(total * Decimal("0.23"), 2)
+    return None
+

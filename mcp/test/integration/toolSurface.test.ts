@@ -41,6 +41,9 @@ const EXPECTED_TOOLS = [
   'init_project',
   'install_toolchain',
   'license_compatibility',
+  'llm_scan_start',
+  'llm_scan_submit',
+  'llm_scan_task',
   'map_attack_surface',
   'observability_setup',
   'perf_check',
@@ -109,8 +112,8 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('T-23 matches the counts documented in the README (60 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(60);
+  it('T-23 matches the counts documented in the README (63 tools, 18 resources)', () => {
+    expect(TOOLS).toHaveLength(63);
     expect(RESOURCES).toHaveLength(18);
   });
 });

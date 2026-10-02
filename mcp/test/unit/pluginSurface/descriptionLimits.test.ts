@@ -43,6 +43,19 @@ describe('MCP tool descriptions', () => {
   it('every tool has a non-empty description', () => {
     expect(TOOLS.filter((t) => t.description.trim() === '').map((t) => t.name)).toEqual([]);
   });
+
+  // NFR-3 of llm-scan: the limit above holds only for tools that exist, so
+  // the three new ones are named — a description cannot be measured while
+  // its tool is missing from the registry.
+  it.each(['llm_scan_start', 'llm_scan_task', 'llm_scan_submit'])(
+    'T-34 (NFR-3) %s is registered, with a description of at most 1500 characters',
+    (name) => {
+      const tool = TOOLS.find((t) => t.name === name);
+      expect(tool, `${name} is registered`).toBeDefined();
+      expect(tool?.description.trim() ?? '').not.toBe('');
+      expect(tool?.description.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX);
+    },
+  );
 });
 
 // sarif-import (test plan T-23, NFR-1 and NFR-2): the new tool is held to the
