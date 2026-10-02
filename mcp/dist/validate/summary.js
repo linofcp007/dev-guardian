@@ -115,8 +115,10 @@ function countByVerdict(validations) {
     // than absent. A missing key reads as "not measured"; this one means "not
     // producible by the provider that ran".
     const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0]));
+    // Provider `llm` verdicts have their own vocabulary (LLM_VERDICTS) and are never counted here.
     for (const v of validations)
-        counts[v.verdict] += 1;
+        if (Object.hasOwn(counts, v.verdict))
+            counts[v.verdict] += 1;
     return counts;
 }
 function edgeCount(graph) {

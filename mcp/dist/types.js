@@ -67,6 +67,8 @@ export const SCAN_TYPES = [
     'mcp_tool_audit',
     // A SARIF log another tool wrote, imported (import_sarif); one open-set slot per meta.source_tool
     'sarif_import',
+    // The LLM-assisted scan's plan: its hunt findings (tool `llm-hunt`) live in this scan
+    'llm_scan',
 ];
 /**
  * Scan types whose rows carry CVEs (`scan_cves`): the dependency scanners and

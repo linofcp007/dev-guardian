@@ -42245,7 +42245,9 @@ var SCAN_TYPES = [
   // What the configured MCP servers actually serve (audit_mcp_tools)
   "mcp_tool_audit",
   // A SARIF log another tool wrote, imported (import_sarif); one open-set slot per meta.source_tool
-  "sarif_import"
+  "sarif_import",
+  // The LLM-assisted scan's plan: its hunt findings (tool `llm-hunt`) live in this scan
+  "llm_scan"
 ];
 var CVE_SOURCE_SCAN_TYPES = ["deps_audit", "deps", "security_full"];
 function isDepsAuditScan(scan2) {
@@ -42654,6 +42656,255 @@ function parseAliases(raw) {
     return [];
   }
 }
+
+// src/storage/llmScanRepo.ts
+var PLAN_INACTIVE_DAYS = 7;
+var PLAN_ABANDON_DAYS = 30;
+var DAY_MS = 864e5;
+function daysBefore(now, days) {
+  return new Date(Date.parse(now) - days * DAY_MS).toISOString();
+}
+function abandonStalePlans(db, now) {
+  return db.prepare(
+    `UPDATE llm_scan_plans SET status = 'abandoned', updated_at = @now
+        WHERE status = 'open' AND last_activity_at < @cutoff`
+  ).run({ now, cutoff: daysBefore(now, PLAN_ABANDON_DAYS) }).changes;
+}
+var PLAN_COLUMNS = `id, project_path, scan_id, modes, prompt_version, tree_hash, surface_snapshot_id,
+  limits, estimate, confirmed, status, not_eligible, set_aside, created_at, updated_at, last_activity_at`;
+var TASK_COLUMNS = `plan_id, task_id, kind, target, status, lease_token, lease_expires_at, attempts,
+  file_hashes, brief_chars, response_chars, independence, result, closed_reason, delivered_at, closed_at`;
+var LEASABLE_SQL = `(status = 'open' OR (status = 'leased' AND lease_expires_at <= @now))`;
+function toPlan(r) {
+  try {
+    return {
+      id: r.id,
+      project_path: r.project_path,
+      scan_id: r.scan_id,
+      modes: JSON.parse(r.modes),
+      prompt_version: r.prompt_version,
+      tree_hash: r.tree_hash,
+      surface_snapshot_id: r.surface_snapshot_id,
+      limits: JSON.parse(r.limits),
+      estimate: JSON.parse(r.estimate),
+      confirmed: r.confirmed === 1,
+      status: r.status,
+      not_eligible: JSON.parse(r.not_eligible),
+      set_aside: JSON.parse(r.set_aside),
+      created_at: r.created_at,
+      updated_at: r.updated_at
+    };
+  } catch {
+    return null;
+  }
+}
+function toTask(r) {
+  try {
+    return {
+      ...r,
+      target: JSON.parse(r.target),
+      file_hashes: JSON.parse(r.file_hashes),
+      result: r.result === null ? null : JSON.parse(r.result)
+    };
+  } catch {
+    return null;
+  }
+}
+function present(x) {
+  return x !== null;
+}
+var LlmScanRepo = class {
+  constructor(db) {
+    this.db = db;
+  }
+  db;
+  /** The plan and all its tasks, or nothing: one transaction. Activity starts at `created_at`. */
+  insertPlan(plan, tasks) {
+    this.db.transaction(() => {
+      this.db.prepare(
+        `INSERT INTO llm_scan_plans (${PLAN_COLUMNS})
+           VALUES (@id, @project_path, @scan_id, @modes, @prompt_version, @tree_hash, @surface_snapshot_id,
+                   @limits, @estimate, @confirmed, @status, @not_eligible, @set_aside, @created_at, @updated_at,
+                   @last_activity_at)`
+      ).run({
+        ...plan,
+        modes: JSON.stringify(plan.modes),
+        limits: JSON.stringify(plan.limits),
+        estimate: JSON.stringify(plan.estimate),
+        confirmed: plan.confirmed ? 1 : 0,
+        not_eligible: JSON.stringify(plan.not_eligible),
+        set_aside: JSON.stringify(plan.set_aside),
+        last_activity_at: plan.created_at
+      });
+      const insert = this.db.prepare(
+        `INSERT INTO llm_scan_tasks (${TASK_COLUMNS})
+         VALUES (@plan_id, @task_id, @kind, @target, @status, @lease_token, @lease_expires_at, @attempts,
+                 @file_hashes, @brief_chars, @response_chars, @independence, @result, @closed_reason,
+                 @delivered_at, @closed_at)`
+      );
+      for (const t of tasks) {
+        insert.run({
+          ...t,
+          target: JSON.stringify(t.target),
+          file_hashes: JSON.stringify(t.file_hashes),
+          result: t.result === null ? null : JSON.stringify(t.result)
+        });
+      }
+    })();
+  }
+  /** `null` when there is no such plan, or its row is corrupt. */
+  getPlan(planId) {
+    const r = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM llm_scan_plans WHERE id = ?`).get(planId);
+    return r === void 0 ? null : toPlan(r);
+  }
+  /** Plans of one project, newest first; a corrupt row is skipped. */
+  listPlans(projectPath) {
+    return this.db.prepare(
+      `SELECT ${PLAN_COLUMNS} FROM llm_scan_plans WHERE project_path = ? ORDER BY created_at DESC, rowid DESC`
+    ).all(projectPath).map(toPlan).filter(present);
+  }
+  /** `open` plans of the project with activity in the last {@link PLAN_INACTIVE_DAYS} days, newest first. */
+  listActivePlanIds(projectPath, now) {
+    return this.db.prepare(
+      `SELECT id FROM llm_scan_plans
+          WHERE project_path = ? AND status = 'open' AND last_activity_at >= ?
+          ORDER BY created_at DESC, rowid DESC`
+    ).all(projectPath, daysBefore(now, PLAN_INACTIVE_DAYS)).map((r) => r.id);
+  }
+  /** What the limit of open plans counts: {@link listActivePlanIds}. */
+  countOpenPlans(projectPath, now) {
+    return this.listActivePlanIds(projectPath, now).length;
+  }
+  /** Tasks of one plan, by task id; a corrupt row is skipped. */
+  listTasks(planId) {
+    return this.db.prepare(`SELECT ${TASK_COLUMNS} FROM llm_scan_tasks WHERE plan_id = ? ORDER BY task_id`).all(planId).map(toTask).filter(present);
+  }
+  getTask(planId, taskId) {
+    const r = this.db.prepare(`SELECT ${TASK_COLUMNS} FROM llm_scan_tasks WHERE plan_id = ? AND task_id = ?`).get(planId, taskId);
+    return r === void 0 ? null : toTask(r);
+  }
+  /**
+   * Leases one task, atomically: a single conditional UPDATE, so two server
+   * processes on the same database file cannot both win (D-2). True only when
+   * exactly one row changed. Bumps the plan's activity and records the first
+   * delivery.
+   */
+  claimTask(planId, taskId, token, expiresAt, now) {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(
+        `UPDATE llm_scan_tasks
+              SET status = 'leased', lease_token = @token, lease_expires_at = @expiresAt,
+                  delivered_at = COALESCE(delivered_at, @now)
+            WHERE plan_id = @planId AND task_id = @taskId AND ${LEASABLE_SQL}`
+      ).run({ planId, taskId, token, expiresAt, now }).changes;
+      if (changed !== 1) return false;
+      this.touchPlan(planId, now);
+      return true;
+    })();
+  }
+  /**
+   * Leases the lowest-numbered leasable task of the plan, or returns null when
+   * there is none. One UPDATE that picks the task in a subquery: SQLite runs
+   * the statement under the write lock, so choosing and claiming cannot be
+   * interleaved by another process — no retry loop is needed, and the outer
+   * condition repeats the guard of {@link claimTask}.
+   */
+  claimNextTask(planId, token, expiresAt, now) {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(
+        `UPDATE llm_scan_tasks
+              SET status = 'leased', lease_token = @token, lease_expires_at = @expiresAt,
+                  delivered_at = COALESCE(delivered_at, @now)
+            WHERE plan_id = @planId AND ${LEASABLE_SQL}
+              AND task_id = (SELECT task_id FROM llm_scan_tasks
+                              WHERE plan_id = @planId AND ${LEASABLE_SQL}
+                              ORDER BY task_id LIMIT 1)`
+      ).run({ planId, token, expiresAt, now }).changes;
+      if (changed !== 1) return null;
+      this.touchPlan(planId, now);
+      const row = this.db.prepare(
+        `SELECT ${TASK_COLUMNS} FROM llm_scan_tasks WHERE plan_id = ? AND lease_token = ?`
+      ).get(planId, token);
+      return row === void 0 ? null : toTask(row);
+    })();
+  }
+  /**
+   * Counts an invalid submission against a task the caller still holds
+   * (`lease_token` matches, status `leased`). Returns the new attempts, or
+   * null when the guard failed (the tool answers `bad_lease` / `already_closed`).
+   */
+  recordInvalidSubmission(planId, taskId, token) {
+    const r = this.db.prepare(
+      `UPDATE llm_scan_tasks SET attempts = attempts + 1
+          WHERE plan_id = ? AND task_id = ? AND lease_token = ? AND status = 'leased'
+          RETURNING attempts`
+    ).get(planId, taskId, token);
+    return r === void 0 ? null : r.attempts;
+  }
+  /**
+   * Closes a task the caller holds, with its outcome. Guarded by
+   * `lease_token = ? AND status = 'leased'`: a late submit under an old token
+   * (after a re-claim) or on a closed task changes nothing and returns false.
+   * The token stays on the row. Bumps the plan's activity.
+   */
+  closeTask(planId, taskId, token, outcome, now) {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(
+        `UPDATE llm_scan_tasks
+              SET status = 'closed', independence = @independence, result = @result,
+                  closed_reason = @closedReason, brief_chars = COALESCE(@briefChars, brief_chars),
+                  response_chars = @responseChars, closed_at = @now
+            WHERE plan_id = @planId AND task_id = @taskId AND lease_token = @token AND status = 'leased'`
+      ).run({
+        planId,
+        taskId,
+        token,
+        now,
+        independence: outcome.independence,
+        result: outcome.result === null ? null : JSON.stringify(outcome.result),
+        closedReason: outcome.closed_reason,
+        briefChars: outcome.brief_chars ?? null,
+        responseChars: outcome.response_chars
+      }).changes;
+      if (changed !== 1) return false;
+      this.touchPlan(planId, now);
+      return true;
+    })();
+  }
+  /**
+   * Closes a task nobody holds: `open`, or `leased` with an expired lease —
+   * never a live lease, never a closed row. Clears the lease token. Does NOT
+   * bump the plan's activity: closing undelivered work at plan end is not use.
+   */
+  closeUnleased(planId, taskId, reason, now) {
+    return this.db.prepare(
+      `UPDATE llm_scan_tasks
+              SET status = 'closed', closed_reason = @reason, closed_at = @now, lease_token = NULL,
+                  lease_expires_at = NULL
+            WHERE plan_id = @planId AND task_id = @taskId AND ${LEASABLE_SQL}`
+    ).run({ planId, taskId, reason, now }).changes === 1;
+  }
+  /** {@link closeUnleased} for every such task of the plan at once (limit reached, plan complete). Returns how many closed. */
+  closeAllUnleased(planId, reason, now) {
+    return this.db.prepare(
+      `UPDATE llm_scan_tasks
+            SET status = 'closed', closed_reason = @reason, closed_at = @now, lease_token = NULL,
+                lease_expires_at = NULL
+          WHERE plan_id = @planId AND ${LEASABLE_SQL}`
+    ).run({ planId, reason, now }).changes;
+  }
+  /** Records that an `open` plan was used just now. */
+  touchPlan(planId, now) {
+    this.db.prepare(`UPDATE llm_scan_plans SET last_activity_at = ?, updated_at = ? WHERE id = ? AND status = 'open'`).run(now, now, planId);
+  }
+  /** `open` -> `complete` | `abandoned`, nothing else. True when the plan changed. */
+  updatePlan(planId, status, now) {
+    return this.db.prepare(`UPDATE llm_scan_plans SET status = ?, updated_at = ? WHERE id = ? AND status = 'open'`).run(status, now, planId).changes === 1;
+  }
+  abandonStalePlans(now) {
+    return abandonStalePlans(this.db, now);
+  }
+};
 
 // src/storage/mcpToolPinsRepo.ts
 var McpToolPinsRepo = class {
@@ -43302,6 +43553,7 @@ var Storage = class {
     this.validations = new ValidationsRepo(db);
     this.agentAudit = new AgentAuditRepo(db);
     this.mcpToolPins = new McpToolPinsRepo(db);
+    this.llmScan = new LlmScanRepo(db);
   }
   db;
   scans;
@@ -43316,6 +43568,7 @@ var Storage = class {
   validations;
   agentAudit;
   mcpToolPins;
+  llmScan;
   close() {
     this.db.close();
   }
@@ -44295,16 +44548,16 @@ function readJsonFile(r, path8, maxBytes) {
     return void 0;
   }
 }
-function present(r, path8) {
+function present2(r, path8) {
   return presentInProject(r.root, path8);
 }
 var NPM_JSON_LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json"];
 var NPM_UNREAD_LOCKFILES = ["pnpm-lock.yaml", "bun.lock", "bun.lockb"];
 function npmLockFilesLockNothing(r, dir) {
-  for (const name of NPM_UNREAD_LOCKFILES) if (present(r, join18(dir, name))) return false;
+  for (const name of NPM_UNREAD_LOCKFILES) if (present2(r, join18(dir, name))) return false;
   for (const name of NPM_JSON_LOCKFILES) {
     const path8 = join18(dir, name);
-    if (!present(r, path8)) continue;
+    if (!present2(r, path8)) continue;
     const lock = readJsonFile(r, path8, LOCK_PARSE_MAX);
     if (typeof lock !== "object" || lock === null || Array.isArray(lock)) return false;
     const { packages, dependencies } = lock;
@@ -44315,7 +44568,7 @@ function npmLockFilesLockNothing(r, dir) {
     if (!isEmptyField(dependencies)) return false;
   }
   const yarnLock = join18(dir, "yarn.lock");
-  if (present(r, yarnLock)) {
+  if (present2(r, yarnLock)) {
     const text2 = readText2(r, yarnLock, YARN_LOCK_SCAN_MAX);
     if (text2 === null) return false;
     for (const line of textLines(text2)) if (line.trim() !== "" && !line.trimStart().startsWith("#")) return false;
@@ -44515,7 +44768,7 @@ function readWorkspace(r, rootAbs, ecosystem) {
       if (p.startsWith("!")) exclude.push(p.slice(1));
       else include.push(p);
     };
-    if (present(r, join18(rootAbs, "package.json"))) {
+    if (present2(r, join18(rootAbs, "package.json"))) {
       const manifest = readJsonFile(r, join18(rootAbs, "package.json"), MANIFEST_JSON_PARSE_MAX);
       if (typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)) {
         const ws = manifest["workspaces"];
@@ -44525,7 +44778,7 @@ function readWorkspace(r, rootAbs, ecosystem) {
         }
       }
     }
-    if (present(r, join18(rootAbs, "pnpm-workspace.yaml"))) {
+    if (present2(r, join18(rootAbs, "pnpm-workspace.yaml"))) {
       const pnpm = readText2(r, join18(rootAbs, "pnpm-workspace.yaml"), WORKSPACE_YAML_MAX);
       const parsed = pnpm === null ? null : parseYamlBounded(pnpm);
       if (parsed?.ok === true) {
@@ -44540,7 +44793,7 @@ function readWorkspace(r, rootAbs, ecosystem) {
   }
   if (ecosystem === "cargo" || ecosystem === "python") {
     const file = join18(rootAbs, ecosystem === "cargo" ? "Cargo.toml" : "pyproject.toml");
-    if (!present(r, file)) return null;
+    if (!present2(r, file)) return null;
     const text2 = readText2(r, file, TOML_SCAN_MAX);
     if (text2 === null) return null;
     const table = ecosystem === "cargo" ? "workspace" : "tool.uv.workspace";
@@ -44590,7 +44843,7 @@ function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
     return false;
   };
   const hasLockFile = (eco, dir) => {
-    const lockIn = (rel2) => eco.lockfiles.some((name) => present(reader, join18(abs(rel2), name)));
+    const lockIn = (rel2) => eco.lockfiles.some((name) => present2(reader, join18(abs(rel2), name)));
     if (lockIn(dir)) return true;
     const segments = dir === "" ? [] : dir.split("/");
     for (let n2 = segments.length - 1; n2 >= 0; n2--) {
@@ -46612,6 +46865,8 @@ var RUN_NAMES = {
   // it started (`runNameEntry` reads each as a pass of this base); a server
   // that failed or was skipped leaves the audit's findings unmeasured.
   "mcp-tool-audit": scanner("mcp-tool-audit"),
+  // llm_scan: the hunt's findings (tool `llm-hunt`); written by llm_scan_submit.
+  "llm-hunt": scanner("llm-hunt"),
   // import_sarif: the importer's own pass. It speaks for no key: an import's
   // findings carry the TOOL that wrote the log (an open set of names), and
   // only an import of the same source tool measures them
@@ -46676,6 +46931,8 @@ var SCAN_TYPE_ROLE = {
   dotnet_efcore_audit: "state",
   // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
   sarif_import: "state",
+  // The plan's hunt findings; the open set shows them only after an independent `exploitable` verdict.
+  llm_scan: "state",
   sbom: "never",
   detect_stack: "never",
   init: "never",
@@ -47948,6 +48205,7 @@ var BASELINED_RUN_MEMBERS_SQL = `
 var PROTECTED_SQL = `(
   status = 'running'
   OR id IN (SELECT scan_id FROM baselines)
+  OR id IN (SELECT scan_id FROM llm_scan_plans WHERE status = 'open')
   OR EXISTS (
     SELECT 1 FROM baselines b
      WHERE b.scan_id = (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.parent_scan_id') END)
@@ -48003,6 +48261,10 @@ function deleteScans(db, ids2) {
 function deleteRows(db, eligible) {
   if (eligible.length === 0) return 0;
   const del = eligible.map(() => "?").join(", ");
+  db.prepare(
+    `DELETE FROM llm_scan_tasks WHERE plan_id IN (SELECT id FROM llm_scan_plans WHERE scan_id IN (${del}))`
+  ).run(...eligible);
+  db.prepare(`DELETE FROM llm_scan_plans WHERE scan_id IN (${del})`).run(...eligible);
   db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
   db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
   db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
@@ -48099,6 +48361,8 @@ function scheduleRetention(storage, log, options = {}) {
         }
       }
       if (pending === void 0) {
+        const abandoned = abandonStalePlans(db, (/* @__PURE__ */ new Date()).toISOString());
+        if (abandoned > 0) log(`marked ${abandoned} llm_scan plan(s) idle for over ${PLAN_ABANDON_DAYS} days as abandoned`);
         const listed = listPrunableScans(db, limit.keep);
         protect = openSetSourceIds(storage, listed);
         pending = listed.filter((id) => !protect.has(id));
@@ -51375,7 +51639,7 @@ function readText3(path8) {
   if (entryKindAnywhere(path8) === "remote") return "";
   return readSmallTextFile(path8, MAX_DOTNET_FILE_BYTES) ?? "";
 }
-function present2(path8) {
+function present3(path8) {
   const kind = entryKindAnywhere(path8);
   return kind !== "absent" && kind !== "remote";
 }
@@ -51411,7 +51675,7 @@ function projectsForTarget(target) {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(next);
-    if (present2(next)) queue.push(...projectReferences(next));
+    if (present3(next)) queue.push(...projectReferences(next));
   }
   return out;
 }
@@ -51437,9 +51701,9 @@ function planDotnetRestore(root, target) {
   const withoutLock = [];
   for (const project of projects) {
     const candidates2 = lockFileCandidates(project);
-    const locks = candidates2.filter((c3) => present2(c3));
+    const locks = candidates2.filter((c3) => present3(c3));
     lockFiles.push(...locks);
-    absentLockCandidates.push(...candidates2.filter((c3) => !present2(c3)));
+    absentLockCandidates.push(...candidates2.filter((c3) => !present3(c3)));
     if (locks.length === 0) withoutLock.push(project);
   }
   const args = ["restore", target, "--locked-mode", "--nologo", "--verbosity", "quiet"];
@@ -57946,10 +58210,10 @@ var reviewPr = makeScanTool({
         if (changed.some(isPython2)) out.tools_run.push({ name: "bandit", status: "failed", reason: unavailable });
         if (touched.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
       } else {
-        const present4 = changed.filter((f) => isFileOnDisk(join46(scanRoot, f)));
+        const present5 = changed.filter((f) => isFileOnDisk(join46(scanRoot, f)));
         const submodules = await gitlinksAmong(ctx.projectPath, head, changed);
-        await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present4, where, submodules });
-        if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present4.filter(isPython2) });
+        await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present5, where, submodules });
+        if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present5.filter(isPython2) });
         if (!out.cancelled && touched.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir, touched });
       }
       if (!out.cancelled) {
@@ -61908,8 +62172,8 @@ function deliverAlongside(args) {
   const relativeNew = alongsideName(file.target, input.currentVersion);
   const existing = findManifestEntry(manifest, file.target);
   const oursAlready = existing?.delivered_as === relativeNew;
-  const present4 = presentInProject(input.projectPath, relativeNew);
-  if (present4 && !oursAlready) {
+  const present5 = presentInProject(input.projectPath, relativeNew);
+  if (present5 && !oursAlready) {
     return {
       item: {
         ...ids(file),
@@ -61933,7 +62197,7 @@ function deliverAlongside(args) {
     projectPath: input.projectPath,
     target: relativeNew,
     version: input.currentVersion,
-    mode: present4 ? "replace" : "create",
+    mode: present5 ? "replace" : "create",
     formatHint: file.target
   });
   if (!written.ok) return { item, manifest: null };
@@ -78378,13 +78642,13 @@ function checkSecurityHeaders(input, findings) {
   const first = completed[0];
   if (first === void 0) return;
   const expected = expectedSecurityHeaders(input.origin);
-  const present4 = /* @__PURE__ */ new Set();
+  const present5 = /* @__PURE__ */ new Set();
   for (const r of completed) {
     for (const header of expected) {
-      if (r.headers[header] !== void 0) present4.add(header);
+      if (r.headers[header] !== void 0) present5.add(header);
     }
   }
-  const missing = expected.filter((h2) => !present4.has(h2));
+  const missing = expected.filter((h2) => !present5.has(h2));
   if (missing.length === 0) return;
   findings.push(buildFinding2({
     check: "security_headers",
@@ -79844,7 +80108,7 @@ function describeSourceScan(input) {
 }
 function countByVerdict(validations) {
   const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0]));
-  for (const v of validations) counts[v.verdict] += 1;
+  for (const v of validations) if (Object.hasOwn(counts, v.verdict)) counts[v.verdict] += 1;
   return counts;
 }
 function edgeCount(graph) {
@@ -81434,8 +81698,8 @@ function judgeScan(targets, before, after2) {
   for (const target of targets) {
     const targetFinding = beforeByFingerprint.get(target);
     const key = targetFinding === void 0 ? null : resolutionKey(targetFinding);
-    const present4 = afterFingerprints.has(target) || key !== null && afterKeys.has(key);
-    if (present4) still_present.push(target);
+    const present5 = afterFingerprints.has(target) || key !== null && afterKeys.has(key);
+    if (present5) still_present.push(target);
     else resolved.push(target);
   }
   const newFindings = newByRuleAndFile(before.findings, after2.findings);
@@ -90016,7 +90280,7 @@ function read2(path8, ctx, under, what = "configuration") {
   if (r.status === "refused") noteUnread3(path8, what);
   return r.status === "ok" ? r.text : void 0;
 }
-function present3(path8) {
+function present4(path8) {
   try {
     lstatSync16(path8);
     return true;
@@ -90050,7 +90314,7 @@ function ancestors(ctx) {
   for (let i2 = 0; i2 < 16; i2 += 1) {
     if (stops.some((s) => samePath3(s, dir))) break;
     out.push(dir);
-    if (present3(join90(dir, ".git"))) break;
+    if (present4(join90(dir, ".git"))) break;
     const parent = dirname25(dir);
     if (parent === dir) break;
     dir = parent;
@@ -90290,7 +90554,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read2(join90(dir, "package.json"), ctx, void 0, "workspace manifest")) || present3(join90(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read2(join90(dir, "package.json"), ctx, void 0, "workspace manifest")) || present4(join90(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", npmManifestName, name, ctx);
     if (hit !== void 0) return hit;

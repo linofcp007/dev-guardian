@@ -10,7 +10,13 @@
  * is its own value — the only schema change, a new string in a TEXT column.
  */
 export const VERDICTS = ['unreachable', 'reachable', 'imported', 'confirmed', 'unknown'];
-export const PROVIDERS = ['static', 'runtime', 'dependency'];
+/**
+ * What provider `llm` stores (llm-scan). Kept apart from {@link VERDICTS}:
+ * those are the verdicts the evidence providers give, and `validate_finding`'s
+ * summary counts exactly them.
+ */
+export const LLM_VERDICTS = ['exploitable', 'not_exploitable', 'undetermined'];
+export const PROVIDERS = ['static', 'runtime', 'dependency', 'llm'];
 /** The providers this version implements, in the order they run and report. */
 export const IMPLEMENTED_PROVIDERS = ['static', 'dependency'];
 //# sourceMappingURL=types.js.map
