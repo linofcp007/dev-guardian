@@ -8,6 +8,19 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **`import_sarif`** (the 60th tool) and the CLI subcommand `import-sarif <file>`: record another
+  analysis tool's SARIF 2.1.0 log (CodeQL, Snyk, Trivy, Semgrep, gitleaks, a dev-guardian export) as one
+  `sarif_import` scan per run, so its findings share the project's baselines, diffs, suppressions, triage and
+  reports. Each tool that wrote a log has its own slot; `set_baseline`, `diff_scans`, `regression_alert` and
+  `report_export` take `source_tool` to choose it. A dev-guardian SARIF export now carries
+  `partialFingerprints.devGuardianIdentity`, so an export imported back keeps its identities and severities.
+  The log is read as untrusted input (regular file, at most 50 MiB, inside the project unless
+  `allow_outside_project`); nothing it names is opened or fetched. The CLI exits 0 on an import, 1 on an
+  invalid or refused log, 2 on a partial one and 3 on anything else. See
+  [docs/sarif-import.md](docs/sarif-import.md).
+
 ## [3.1.0] - 2026-09-30
 
 A full review of 3.0.0. Its theme: **the repository being scanned is untrusted input** — nothing in it

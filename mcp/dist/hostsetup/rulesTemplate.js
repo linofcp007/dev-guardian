@@ -57,7 +57,7 @@ export function substituteCliPath(body, cliPath) {
 export const RULES_BODY = `# dev-guardian
 
 This project has the **dev-guardian MCP server** registered. It exposes
-59 tools and 18 resources for security, quality, bugfix, deps,
+60 tools and 18 resources for security, quality, bugfix, deps,
 compliance, observability, performance, plus first-class WordPress and
 .NET (C#/F#) support. All scanners run locally. dev-guardian sends no
 telemetry of its own; Semgrep's registry mode sends metrics — pass
@@ -157,6 +157,9 @@ cache that avoids re-running unchanged scans.
 - "risk score" → \`risk_score\`
 - "what's new since last scan?" → \`diff_scans\`
 - "set baseline" → \`set_baseline\`
+- "import another scanner's SARIF" → \`import_sarif\` (one \`sarif_import\` scan per run;
+  \`set_baseline\`, \`diff_scans\`, \`regression_alert\` and \`report_export\` take
+  \`source_tool\` to say which tool's imports they read)
 - "noise reduction" → \`triage_findings\`
 - "prioritise" → \`prioritize_findings\` (a CISA SSVC decision per CVE finding, beside the score)
 - "how do I fix X?" → \`suggest_fix\` (returns context; you write the patch)
