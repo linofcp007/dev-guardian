@@ -13,3 +13,12 @@ import { db } from './db.js';
 export function shiftsByIds(ids: string[]) {
   return db.prepare(`SELECT * FROM shifts WHERE id IN (${ids.join(',')})`).all(); // BUG: web-js-sql-template -- join of caller-supplied values
 }
+
+// A WHERE list that the same function fills with an interpolated request value:
+// the `.join(' AND ')` is then NOT a join of literals, and the clause that
+// excuses a local array of literals must not excuse this one.
+export function filtered(req: { query: { name: string } }) {
+  const where = ['1=1'];
+  where.push(`name = '${req.query.name}'`);
+  return db.prepare(`SELECT * FROM shifts WHERE ${where.join(' AND ')}`).all(); // BUG: web-js-sql-template -- join of an array that took an interpolated push
+}

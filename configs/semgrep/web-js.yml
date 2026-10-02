@@ -148,7 +148,62 @@
 # 0 de 15; a regra SQL é ruidosa por desenho (decide pela forma do texto).
 # NFR-2 (rácio de tempo do scan com/sem este pack): a medir na tarefa 6, sobre
 # o corpus do eixo 3 (GUARDIAN_WEBJS_SRC); sem número aqui até lá.
-# Eixos 0 a 3 do harness de ablação: tarefa 4.
+#
+# ABLAÇÃO (`npm run ablate -- web-js`; corpus do eixo 3: os mesmos três
+# commits acima, em `GUARDIAN_WEBJS_SRC`; 1 114 s de relógio). Cobertura: 31 cláusulas em 3
+# de 3 regras, nenhuma regra sem cláusulas ablacionáveis.
+#   eixo 0 (dispara em hits/)   3/3 regras; hits/ com 23 achados SQL, 8 path
+#                               traversal e 11 SSRF (42; 47 no corpus de
+#                               fixtures inteiro, com a app sintética)
+#   eixo 1 (viva)               31/31 vivas, 0 DEAD (ver abaixo: 6 eram DEAD
+#                               na primeira medição, 1 só sem corpus real)
+#   eixo 2 (mantém os TP)       31/31, 0 a suprimir: nenhuma remoção revelou
+#                               um achado novo em hits/
+#   eixo 3 (sem subida no real) 28/31; 3 sobem, todas lidas (ver abaixo)
+# Achados por regra no corpus real (baseline do eixo 3): web-js-sql-template
+# 14, web-js-path-traversal 0 (eixo 3 vazio nesta regra: o corpus não a
+# exercita; só os fixtures a medem), web-js-ssrf 1. Total 15, igual ao bloco
+# CORPUS REAL. Ficheiros excluídos por timeout (Semgrep abandona a regra por
+# tempo ou memória): 30 no baseline, 33 a 36 nas varreduras de cada cláusula;
+# 14 dos 15 achados do baseline são comparáveis (um está num ficheiro abandonado
+# numa das varreduras). Piso de ruído 0: duas
+# varreduras do mesmo pack concordam em todas as regras, por isso o eixo 3
+# resolve uma diferença de 1.
+#
+# DEAD na primeira medição (6, mais 1 só sem corpus real) e resolução. Nenhum foi apagado: todos eram
+# cláusulas vivas sem um fixture que as exercesse; a forma foi escrita como
+# fixture (o `webJsPack.test.ts` confirma que cada linha `// BUG` dispara e que
+# o miss não dispara) e a cláusula medida de novo. A segunda medição, sobre os fixtures novos, deu 0 DEAD:
+#   - sql-template, `pattern-not-inside: $W = [...]; ... $W.push(`...${$Y}...`)`:
+#     faltava um array local preenchido com um push interpolado. Fixture
+#     hits/sql-join-of-values.ts (`filtered`): sem a cláusula o `.join(' AND ')`
+#     seria excluído e o achado desaparecia.
+#   - path-traversal, `pattern-not: res.sendFile($P, {root: ...}, ...)`: faltava
+#     um `sendFile` com `root` e um valor do pedido. Fixture
+#     misses/path-sendfile-root.ts: sem a cláusula passa a disparar.
+#   - sql-template, `metavariable-regex` sobre `$M` (nomes de método): viva no
+#     corpus real, DEAD só com `--no-real-code` (o `_Verify:_` da tarefa 4),
+#     porque nenhum fixture tinha texto de aparência SQL numa chamada que não é
+#     de um cliente SQL. Fixture misses/sql-not-a-sql-client.ts
+#     (`logger.info` com um template `select ... from`): sem a cláusula dispara.
+#   - ssrf, `axios($U, ...)`, `got.$M($U, ...)`, `http.get($U, ...)` e
+#     `https.get($U, ...)`: nenhum fixture usava estas formas (só `axios.get`,
+#     `got(...)` e `http(s).request`). Fixture hits/ssrf-call-forms.ts, uma
+#     linha `// BUG` por forma. A passagem de pares tinha dado INERT nos 6
+#     pares (nenhum corpus as exercitava), ou seja, não eram redundantes.
+#
+# Subidas do eixo 3, todas ramos que funcionam, não ruído a apagar:
+#   - ramo `$DB.$M($T, ...)` com template (remoção: -12 a -11 achados): é o
+#     ramo positivo que produz quase todos os 14 achados do corpus.
+#   - ramo com concatenação (-2): database.js:375 e clear-old-data.js:44, ambos
+#     FP já listados acima (concatenação com valor que a regra não reconhece).
+#   - `metavariable-regex` sobre `$V` do `const $X = $V; ...` (-4): apagá-lo faz
+#     QUALQUER `const x = <valor>` excluir o achado; os 4 achados que se perdem
+#     (statements.ts:22, database.js:375 e :1060, clear-old-data.js:44) são os
+#     FP documentados em que o const tem um valor que não é literal
+#     (`scopeClause`, `sqlHourOffset`); o mesmo corte esconderia
+#     `const SORT = req.query.sort` (hits/sql-exclusion-escapes.ts, eixo 1:
+#     -2 nos fixtures). A cláusula é o que impede um const de calar a regra.
 #
 # Fixtures em mcp/test/fixtures/web-js/{hits,misses}/ (hits/ com uma linha
 # `// BUG: <id-da-regra>` por achado), `mcp/test/e2e/webJsPack.test.ts`.

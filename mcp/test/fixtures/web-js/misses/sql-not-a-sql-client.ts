@@ -33,3 +33,11 @@ apiRouter.all(`${API_PREFIX}/*`, (_req, res, next) => {
   res.set('cache-control', 'no-store');
   next();
 });
+
+// A log line that QUOTES a query: the text looks like SQL, the method is not
+// one a SQL client has. This is what the method-name filter of the rule is
+// for, and the one clause the other fixtures could not tell from the text
+// filter (the ablation read it as inert until this existed).
+export function logSlowQuery(logger: { info(message: string): void }, table: string, ms: number) {
+  logger.info(`select * from ${table} took ${ms} ms`);
+}
