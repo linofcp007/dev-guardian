@@ -29,7 +29,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
-import { isConfirming, isHuntFinding, latestStateScan, llmMarkersOf } from '../history/openSet.js';
+import { latestStateScan, llmMarkersOf, splitHuntCandidates } from '../history/openSet.js';
 import type { LlmMarker } from '../llmscan/types.js';
 import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
@@ -216,10 +216,8 @@ async function handler(
   const stored = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
   // An `llm-hunt` finding counts only after an independent `exploitable`
   // verdict (US-2.AC-5): the others are listed apart, never counted.
-  const markers = llmMarkersOf(ctx.storage, scan.project_path);
-  const findings = stored.filter((f) => !isHuntFinding(f) || isConfirming(markers.get(f.fingerprint)));
-  const unconfirmed = stored.filter((f) => isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)));
-  const llm: LlmReportData = { markers, unconfirmed };
+  const { counted: findings, unconfirmed } = splitHuntCandidates(ctx.storage, scan.project_path, stored);
+  const llm: LlmReportData = { markers: llmMarkersOf(ctx.storage, scan.project_path), unconfirmed };
   const cves = CVE_SOURCE_SCAN_TYPES.includes(scan.scan_type)
     ? ctx.storage.cves.listActive(scanId)
     : [];
@@ -403,14 +401,37 @@ function splitByIndependence(llm: LlmReportData, findings: readonly Finding[]): 
   return `subagent ${n.subagent} · sampling ${n.sampling} · same_context ${n.same_context}`;
 }
 
+/** Longest model-written text one report line carries. */
+const MD_INLINE_MAX = 2_000;
+
+/**
+ * Model-written text (a verdict's decisive line and reasoning, a hunt
+ * finding's title) as inline markdown: one line, and no markup a viewer
+ * would act on. The repository under scan can steer the model's words, so a
+ * newline must not open a heading or a list item, and an image, a link, raw
+ * HTML or emphasis must print as the characters they are.
+ */
+export function mdInline(s: string): string {
+  const one = s.replace(/\s+/g, ' ').trim();
+  const cut = one.length > MD_INLINE_MAX ? `${one.slice(0, MD_INLINE_MAX)}…` : one;
+  return cut.replace(/[\\`*_[\]<>|!~#&]/g, (c) => `\\${c}`);
+}
+
+/** A location as an inline code span: one line, and no backtick to close the span early. */
+const mdCode = (s: string): string => `\`${s.replace(/\s+/g, ' ').replace(/`/g, "'")}\``;
+
 function llmMarkdown(findings: readonly Finding[], llm: LlmReportData): string[] {
   const judged = entriesOf(findings, llm.markers);
   const lines: string[] = [];
+  const verdictLines = (decisive: string, reasoning: string): string[] => [
+    `  - Decisive line: ${mdInline(decisive)}`,
+    `  - Reasoning: ${mdInline(reasoning)}`,
+  ];
   if (judged.length > 0 || llm.unconfirmed.length > 0) {
     lines.push('', `## LLM verification (${judged.length})`, '');
     lines.push(`**By independence:** ${splitByIndependence(llm, findings)}`, '');
     for (const e of judged) {
-      lines.push(`- \`${e.where}\` ${mdEscape(e.title)} — ${e.stance}`, `  - Decisive line: ${e.decisive}`, `  - Reasoning: ${e.reasoning}`);
+      lines.push(`- ${mdCode(e.where)} ${mdInline(e.title)} — ${e.stance}`, ...verdictLines(e.decisive, e.reasoning));
     }
   }
   if (llm.unconfirmed.length > 0) {
@@ -418,8 +439,8 @@ function llmMarkdown(findings: readonly Finding[], llm: LlmReportData): string[]
     lines.push('_Unverified, or judged not exploitable: these are not in the findings above, the totals or the release gates._', '');
     for (const f of llm.unconfirmed) {
       const m = llm.markers.get(f.fingerprint);
-      lines.push(`- \`${locationOf(f)}\` ${mdEscape(f.title)} — ${m === undefined ? 'unverified' : stanceOf(m)}`);
-      if (m !== undefined) lines.push(`  - Decisive line: ${m.decisive_line}`, `  - Reasoning: ${m.reasoning}`);
+      lines.push(`- ${mdCode(locationOf(f))} ${mdInline(f.title)} — ${m === undefined ? 'unverified' : stanceOf(m)}`);
+      if (m !== undefined) lines.push(...verdictLines(m.decisive_line, m.reasoning));
     }
   }
   return lines;

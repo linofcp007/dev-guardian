@@ -44,6 +44,7 @@
 import { coverageRunsOf, owaspCoverage, type OwaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
 import {
+  countableFindings,
   findLatestUsable,
   latestStateScan,
   openSetForProject,
@@ -405,8 +406,8 @@ function compareScans(
   what: string,
 ): FindingDelta {
   const check = compareScansFor(storage, from, to);
-  const fromFindings = unsuppressed(storage, from.scan_id, isSuppressed);
-  const toFindings = unsuppressed(storage, to.scan_id, isSuppressed);
+  const fromFindings = unsuppressed(storage, from, isSuppressed);
+  const toFindings = unsuppressed(storage, to, isSuppressed);
   const classified = classifyDiff(check, fromFindings, toFindings);
   const skipFrom = new Set(classified.notRemeasured);
   const skipTo = new Set(classified.notPreviouslyMeasured);
@@ -449,8 +450,9 @@ function buildSinceBaseline(
   return compareScans(storage, baselineScan, target, isSuppressed, truncation, 'deltas.since_baseline.new_findings');
 }
 
-function unsuppressed(storage: Storage, scanId: string, isSuppressed: IsSuppressed): Finding[] {
-  return storage.findings.listByScan(scanId).filter((f) => !isSuppressed(f));
+/** A scan's rows that count: not suppressed, and no unconfirmed `llm-hunt` candidate (US-2.AC-5). */
+function unsuppressed(storage: Storage, scan: ScanRecord, isSuppressed: IsSuppressed): Finding[] {
+  return countableFindings(storage, scan.project_path, storage.findings.listByScan(scan.scan_id)).filter((f) => !isSuppressed(f));
 }
 
 function buildBaselineState(resolved: ProjectBaseline | null, now: number): BaselineState {

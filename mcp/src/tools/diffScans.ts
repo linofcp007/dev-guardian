@@ -40,6 +40,7 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import {
+  countableFindings,
   latestStateScan,
   partitionSuppressed,
   type SkipHit,
@@ -145,13 +146,13 @@ async function handler(
   const fromScan = ctx.storage.scans.getById(fromId.value);
   if (!fromScan) return failDomain('unknown_scan_id', `from scan '${fromId.value}' not found`);
   // The project's active suppressions apply first, as in the open set: a
-  // suppressed finding is listed apart, never new, resolved or unchanged.
-  const fromSplit = partitionSuppressed(ctx.storage, toScan.value.project_path, ctx.storage.findings.listByScan(fromId.value));
-  const toSplit = partitionSuppressed(
-    ctx.storage,
-    toScan.value.project_path,
-    ctx.storage.findings.listByScan(toScan.value.scan_id),
-  );
+  // suppressed finding is listed apart, never new, resolved or unchanged. An
+  // `llm-hunt` candidate no independent verdict confirmed is not a finding yet
+  // (US-2.AC-5) and is left out of both sides.
+  const project = toScan.value.project_path;
+  const rowsOf = (scanId: string): Finding[] => countableFindings(ctx.storage, project, ctx.storage.findings.listByScan(scanId));
+  const fromSplit = partitionSuppressed(ctx.storage, project, rowsOf(fromId.value));
+  const toSplit = partitionSuppressed(ctx.storage, project, rowsOf(toScan.value.scan_id));
   const suppressed = suppressedOfEither(toSplit.suppressed, fromSplit.suppressed);
 
   // Per scanner (`history/runCompare.ts`): a `from` finding whose scanner `to`

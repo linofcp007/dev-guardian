@@ -776,10 +776,10 @@ function openSetSlots(storage: Storage, projectPath: string): OpenSetSlot[] {
   return [...slots, ...imports.sort()];
 }
 
-/** The host model's verdicts on a project's findings, by fingerprint (rows of any other provider are skipped). */
+/** The host model's verdicts on a project's findings, by fingerprint (provider `llm` only, read as such). */
 export function llmMarkersOf(storage: Storage, projectPath: string): Map<string, LlmMarker> {
   const markers = new Map<string, LlmMarker>();
-  for (const v of storage.validations.listByProject(projectPath)) {
+  for (const v of storage.validations.listByProvider(projectPath, 'llm')) {
     const marker = llmMarkerOf(v);
     if (marker !== null) markers.set(v.fingerprint, marker);
   }
@@ -799,6 +799,36 @@ export function isConfirming(marker: LlmMarker | undefined): marker is LlmMarker
 /** Whether a finding is one the LLM hunt wrote — a candidate until confirmed. */
 export function isHuntFinding(f: Pick<Finding, 'tool'>): boolean {
   return f.tool === HUNT_TOOL;
+}
+
+/**
+ * One scan's rows split as the open set splits them (US-2.AC-5): `counted`
+ * holds every finding except an `llm-hunt` one without an INDEPENDENT
+ * `exploitable` verdict, which goes to `unconfirmed`. For the paths that read
+ * a scan's rows directly rather than through the open set — a diff, a
+ * regression check, the report, a scan resource — so a hunt candidate never
+ * moves a total, a gate or a score there either.
+ */
+export function splitHuntCandidates<T extends Pick<Finding, 'tool' | 'fingerprint'>>(
+  storage: Storage,
+  projectPath: string,
+  rows: readonly T[],
+): { counted: T[]; unconfirmed: T[] } {
+  if (!rows.some(isHuntFinding)) return { counted: [...rows], unconfirmed: [] };
+  const markers = llmMarkersOf(storage, projectPath);
+  const counted: T[] = [];
+  const unconfirmed: T[] = [];
+  for (const f of rows) (isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)) ? unconfirmed : counted).push(f);
+  return { counted, unconfirmed };
+}
+
+/** {@link splitHuntCandidates}' `counted` half: the rows of a scan that count. */
+export function countableFindings<T extends Pick<Finding, 'tool' | 'fingerprint'>>(
+  storage: Storage,
+  projectPath: string,
+  rows: readonly T[],
+): T[] {
+  return splitHuntCandidates(storage, projectPath, rows).counted;
 }
 
 export function openSetForProject(

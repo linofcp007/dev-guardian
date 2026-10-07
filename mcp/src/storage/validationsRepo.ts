@@ -44,6 +44,7 @@ export class ValidationsRepo {
     [string, string, string, string, string, string, string, number, string, string]
   >;
   private readonly listByProjectStmt: Statement<[string], ValidationRow>;
+  private readonly listByProviderStmt: Statement<[string, string], ValidationRow>;
   private readonly getByFingerprintStmt: Statement<[string, string, string], ValidationRow>;
 
   constructor(private readonly db: DB) {
@@ -67,6 +68,12 @@ export class ValidationsRepo {
       SELECT * FROM finding_validations
       WHERE project_path = ?
       ORDER BY fingerprint ASC, provider ASC
+    `);
+
+    this.listByProviderStmt = db.prepare<[string, string], ValidationRow>(`
+      SELECT * FROM finding_validations
+      WHERE project_path = ? AND provider = ?
+      ORDER BY fingerprint ASC
     `);
 
     // The full primary key: at most one row, no tie to break.
@@ -106,6 +113,11 @@ export class ValidationsRepo {
 
   listByProject(projectPath: string): FindingValidation[] {
     return this.listByProjectStmt.all(projectPath).map(rowToValidation);
+  }
+
+  /** One provider's verdicts on a project's findings — the open set reads `llm` on every call. */
+  listByProvider(projectPath: string, provider: Provider): FindingValidation[] {
+    return this.listByProviderStmt.all(projectPath, provider).map(rowToValidation);
   }
 
   /**

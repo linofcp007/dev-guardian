@@ -29,6 +29,7 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import {
+  countableFindings,
   latestStateScan,
   partitionSuppressed,
   type SkipHit,
@@ -174,8 +175,10 @@ async function handler(
     };
   }
 
-  const prevFindings = ctx.storage.findings.listByScan(baselineId);
-  const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
+  // An `llm-hunt` candidate no independent verdict confirmed is not a finding
+  // yet (US-2.AC-5): it is neither new nor resolved, and never moves the score.
+  const prevFindings = countableFindings(ctx.storage, projectPath, ctx.storage.findings.listByScan(baselineId));
+  const curFindings = countableFindings(ctx.storage, projectPath, ctx.storage.findings.listByScan(latest.scan_id));
   // Per scanner (`history/runCompare.ts`): a reference finding whose scanner
   // the current scan did not measure is not resolved — counted as such it
   // cancelled a real new high — and a current finding whose scanner the

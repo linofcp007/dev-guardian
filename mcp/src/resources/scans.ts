@@ -15,6 +15,7 @@
  */
 
 import type { PluginContext } from '../context.js';
+import { countableFindings } from '../history/openSet.js';
 import { SEVERITY_ORDER, type Finding, type FindingsCountBySeverity } from '../types.js';
 import { registerResourceModule } from './index.js';
 import { boundFinding, serverProjectPath } from './paging.js';
@@ -81,7 +82,8 @@ function enrich(scanId: string, ctx: PluginContext): Record<string, unknown> {
       note: 'This scan is still running: its findings are not all stored yet. Read it again once it completes.',
     } as unknown as Record<string, unknown>;
   }
-  const findings = ctx.storage.findings.listByScan(scanId);
+  // An `llm-hunt` candidate no independent verdict confirmed is not counted (US-2.AC-5).
+  const findings = countableFindings(ctx.storage, record.project_path, ctx.storage.findings.listByScan(scanId));
   const counts = countBySeverity(findings);
   const top = topFindings(findings, 10);
   return {
