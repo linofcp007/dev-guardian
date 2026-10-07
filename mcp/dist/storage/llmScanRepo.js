@@ -9,7 +9,8 @@
  * state change of a task is ONE conditional UPDATE that says what it expects
  * (D-2): `claimTask` / `claimNextTask` lease, `recordInvalidSubmission` and
  * `closeTask` answer only the holder of the lease, and nothing rewrites a
- * `closed` task. There is deliberately no unconditional `updateTask`: the
+ * `closed` task. (`appendTasks`, `confirmPlan` and `recordBriefChars` add rows or
+ * set a column nothing else decides; none of them changes a task's state.) There is deliberately no unconditional `updateTask`: the
  * primitives cover every transition (lease, invalid attempt, close).
  */
 /** A plan idle this long stops counting toward the open-plan limit (it stays resumable by plan_id). D-2. */
@@ -107,19 +108,62 @@ export class LlmScanRepo {
                 set_aside: JSON.stringify(plan.set_aside),
                 last_activity_at: plan.created_at,
             });
-            const insert = this.db.prepare(`INSERT INTO llm_scan_tasks (${TASK_COLUMNS})
-         VALUES (@plan_id, @task_id, @kind, @target, @status, @lease_token, @lease_expires_at, @attempts,
-                 @file_hashes, @brief_chars, @response_chars, @independence, @result, @closed_reason,
-                 @delivered_at, @closed_at)`);
-            for (const t of tasks) {
-                insert.run({
-                    ...t,
-                    target: JSON.stringify(t.target),
-                    file_hashes: JSON.stringify(t.file_hashes),
-                    result: t.result === null ? null : JSON.stringify(t.result),
-                });
-            }
+            this.insertTasks(tasks);
         })();
+    }
+    insertTasks(tasks) {
+        const insert = this.db.prepare(`INSERT INTO llm_scan_tasks (${TASK_COLUMNS})
+       VALUES (@plan_id, @task_id, @kind, @target, @status, @lease_token, @lease_expires_at, @attempts,
+               @file_hashes, @brief_chars, @response_chars, @independence, @result, @closed_reason,
+               @delivered_at, @closed_at)`);
+        for (const t of tasks) {
+            insert.run({
+                ...t,
+                target: JSON.stringify(t.target),
+                file_hashes: JSON.stringify(t.file_hashes),
+                result: t.result === null ? null : JSON.stringify(t.result),
+            });
+        }
+    }
+    /**
+     * Adds tasks to an `open` plan (the verify tasks of a hunt's findings). Meant
+     * to run inside the transaction of the submission that creates them, so a
+     * failure takes the whole submission back. Returns false — and adds nothing —
+     * when the plan is not `open`.
+     */
+    appendTasks(planId, tasks) {
+        return this.db.transaction(() => {
+            const open = this.db.prepare(`SELECT 1 AS ok FROM llm_scan_plans WHERE id = ? AND status = 'open'`).get(planId);
+            if (open === undefined)
+                return false;
+            this.insertTasks(tasks);
+            return true;
+        })();
+    }
+    /** The next sequential task id (`t-0001`, …) of the plan. */
+    nextTaskNumber(planId) {
+        const rows = this.db.prepare(`SELECT task_id FROM llm_scan_tasks WHERE plan_id = ?`).all(planId);
+        return rows.reduce((max, r) => Math.max(max, Number(r.task_id.slice(2)) || 0), 0) + 1;
+    }
+    /** Whether a plan row exists, whether or not it can be read (a corrupt one is not "no such plan"). */
+    planRowExists(planId) {
+        return this.db.prepare(`SELECT 1 AS ok FROM llm_scan_plans WHERE id = ?`).get(planId) !== undefined;
+    }
+    /** US-4.AC-1: the user confirmed a plan above the token limit. True when an `open` plan changed. */
+    confirmPlan(planId, now) {
+        return (this.db
+            .prepare(`UPDATE llm_scan_plans SET confirmed = 1, updated_at = ? WHERE id = ? AND status = 'open'`)
+            .run(now, planId).changes === 1);
+    }
+    /**
+     * Records the size of the brief handed out (US-4.AC-3), for the holder of the
+     * lease only — the same guard as {@link closeTask}. True when one row changed.
+     */
+    recordBriefChars(planId, taskId, token, chars) {
+        return (this.db
+            .prepare(`UPDATE llm_scan_tasks SET brief_chars = ?
+            WHERE plan_id = ? AND task_id = ? AND lease_token = ? AND status = 'leased'`)
+            .run(chars, planId, taskId, token).changes === 1);
     }
     /** `null` when there is no such plan, or its row is corrupt. */
     getPlan(planId) {

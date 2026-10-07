@@ -52,6 +52,9 @@ export function attachAllTools(server, ctx) {
             if (typedExtra?.signal instanceof AbortSignal) {
                 callMeta.signal = typedExtra.signal;
             }
+            if (server.server.getClientCapabilities()?.sampling !== undefined) {
+                callMeta.sampling = (params, options) => server.server.createMessage(params, options);
+            }
             const result = await tool.handler(input, ctx, callMeta);
             return toCallToolResult(result, tool.contentOnlyKeys ?? []);
         });

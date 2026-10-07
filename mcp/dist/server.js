@@ -3889,49 +3889,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative36, options, skipNormalization) {
+    function resolveComponent(base, relative38, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse11(serialize2(base, options), options);
-        relative36 = parse11(serialize2(relative36, options), options);
+        relative38 = parse11(serialize2(relative38, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative36.scheme) {
-        target.scheme = relative36.scheme;
-        target.userinfo = relative36.userinfo;
-        target.host = relative36.host;
-        target.port = relative36.port;
-        target.path = removeDotSegments(relative36.path || "");
-        target.query = relative36.query;
+      if (!options.tolerant && relative38.scheme) {
+        target.scheme = relative38.scheme;
+        target.userinfo = relative38.userinfo;
+        target.host = relative38.host;
+        target.port = relative38.port;
+        target.path = removeDotSegments(relative38.path || "");
+        target.query = relative38.query;
       } else {
-        if (relative36.userinfo !== void 0 || relative36.host !== void 0 || relative36.port !== void 0) {
-          target.userinfo = relative36.userinfo;
-          target.host = relative36.host;
-          target.port = relative36.port;
-          target.path = removeDotSegments(relative36.path || "");
-          target.query = relative36.query;
+        if (relative38.userinfo !== void 0 || relative38.host !== void 0 || relative38.port !== void 0) {
+          target.userinfo = relative38.userinfo;
+          target.host = relative38.host;
+          target.port = relative38.port;
+          target.path = removeDotSegments(relative38.path || "");
+          target.query = relative38.query;
         } else {
-          if (!relative36.path) {
+          if (!relative38.path) {
             target.path = base.path;
-            if (relative36.query !== void 0) {
-              target.query = relative36.query;
+            if (relative38.query !== void 0) {
+              target.query = relative38.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative36.path[0] === "/") {
-              target.path = removeDotSegments(relative36.path);
+            if (relative38.path[0] === "/") {
+              target.path = removeDotSegments(relative38.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative36.path;
+                target.path = "/" + relative38.path;
               } else if (!base.path) {
-                target.path = relative36.path;
+                target.path = relative38.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative36.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative38.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative36.query;
+            target.query = relative38.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3939,7 +3939,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative36.fragment;
+      target.fragment = relative38.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -13704,16 +13704,16 @@ var init_mjs = __esm({
     };
     SignalExitBase = class {
     };
-    signalExitWrap = (handler48) => {
+    signalExitWrap = (handler51) => {
       return {
         onExit(cb, opts) {
-          return handler48.onExit(cb, opts);
+          return handler51.onExit(cb, opts);
         },
         load() {
-          return handler48.load();
+          return handler51.load();
         },
         unload() {
-          return handler48.unload();
+          return handler51.unload();
         }
       };
     };
@@ -22674,7 +22674,7 @@ var require_public_api = __commonJS({
     var log = require_log();
     var identity3 = require_identity();
     var lineCounter = require_line_counter();
-    var parser = require_parser();
+    var parser4 = require_parser();
     function parseOptions(options) {
       const prettyErrors = options.prettyErrors !== false;
       const lineCounter$1 = options.lineCounter || prettyErrors && new lineCounter.LineCounter() || null;
@@ -22682,7 +22682,7 @@ var require_public_api = __commonJS({
     }
     function parseAllDocuments(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
-      const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
+      const parser$1 = new parser4.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
       const docs = Array.from(composer$1.compose(parser$1.parse(source)));
       if (prettyErrors && lineCounter2)
@@ -22696,7 +22696,7 @@ var require_public_api = __commonJS({
     }
     function parseDocument(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
-      const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
+      const parser$1 = new parser4.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
       let doc = null;
       for (const _doc of composer$1.compose(parser$1.parse(source), true, source.length)) {
@@ -22778,7 +22778,7 @@ var require_dist2 = __commonJS({
     var cst = require_cst();
     var lexer = require_lexer();
     var lineCounter = require_line_counter();
-    var parser = require_parser();
+    var parser4 = require_parser();
     var publicApi = require_public_api();
     var visit = require_visit();
     exports.Composer = composer.Composer;
@@ -22803,7 +22803,7 @@ var require_dist2 = __commonJS({
     exports.CST = cst;
     exports.Lexer = lexer.Lexer;
     exports.LineCounter = lineCounter.LineCounter;
-    exports.Parser = parser.Parser;
+    exports.Parser = parser4.Parser;
     exports.parse = publicApi.parse;
     exports.parseAllDocuments = publicApi.parseAllDocuments;
     exports.parseDocument = publicApi.parseDocument;
@@ -25332,15 +25332,15 @@ var ZodObject = class _ZodObject extends ZodType {
       });
     }
     if (this._def.catchall instanceof ZodNever) {
-      const unknownKeys = this._def.unknownKeys;
-      if (unknownKeys === "passthrough") {
+      const unknownKeys2 = this._def.unknownKeys;
+      if (unknownKeys2 === "passthrough") {
         for (const key of extraKeys) {
           pairs.push({
             key: { status: "valid", value: key },
             value: { status: "valid", value: ctx.data[key] }
           });
         }
-      } else if (unknownKeys === "strict") {
+      } else if (unknownKeys2 === "strict") {
         if (extraKeys.length > 0) {
           addIssueToContext(ctx, {
             code: ZodIssueCode.unrecognized_keys,
@@ -25348,7 +25348,7 @@ var ZodObject = class _ZodObject extends ZodType {
           });
           status.dirty();
         }
-      } else if (unknownKeys === "strip") {
+      } else if (unknownKeys2 === "strip") {
       } else {
         throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
       }
@@ -34918,25 +34918,25 @@ var Protocol = class {
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
-    for (const handler48 of responseHandlers.values()) {
-      handler48(error2);
+    for (const handler51 of responseHandlers.values()) {
+      handler51(error2);
     }
   }
   _onerror(error2) {
     this.onerror?.(error2);
   }
   _onnotification(notification) {
-    const handler48 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
-    if (handler48 === void 0) {
+    const handler51 = this._notificationHandlers.get(notification.method) ?? this.fallbackNotificationHandler;
+    if (handler51 === void 0) {
       return;
     }
-    Promise.resolve().then(() => handler48(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
+    Promise.resolve().then(() => handler51(notification)).catch((error2) => this._onerror(new Error(`Uncaught error in notification handler: ${error2}`)));
   }
   _onrequest(request, extra) {
-    const handler48 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+    const handler51 = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
     const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
-    if (handler48 === void 0) {
+    if (handler51 === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
         id: request.id,
@@ -35000,7 +35000,7 @@ var Protocol = class {
       if (taskCreationParams) {
         this.assertTaskHandlerCapability(request.method);
       }
-    }).then(() => handler48(request, fullExtra)).then(async (result) => {
+    }).then(() => handler51(request, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
@@ -35049,8 +35049,8 @@ var Protocol = class {
   _onprogress(notification) {
     const { progressToken, ...params } = notification.params;
     const messageId = Number(progressToken);
-    const handler48 = this._progressHandlers.get(messageId);
-    if (!handler48) {
+    const handler51 = this._progressHandlers.get(messageId);
+    if (!handler51) {
       this._onerror(new Error(`Received a progress notification for an unknown token: ${JSON.stringify(notification)}`));
       return;
     }
@@ -35067,7 +35067,7 @@ var Protocol = class {
         return;
       }
     }
-    handler48(params);
+    handler51(params);
   }
   _onresponse(response) {
     const messageId = Number(response.id);
@@ -35082,8 +35082,8 @@ var Protocol = class {
       }
       return;
     }
-    const handler48 = this._responseHandlers.get(messageId);
-    if (handler48 === void 0) {
+    const handler51 = this._responseHandlers.get(messageId);
+    if (handler51 === void 0) {
       this._onerror(new Error(`Received a response for an unknown message ID: ${JSON.stringify(response)}`));
       return;
     }
@@ -35104,10 +35104,10 @@ var Protocol = class {
       this._progressHandlers.delete(messageId);
     }
     if (isJSONRPCResultResponse(response)) {
-      handler48(response);
+      handler51(response);
     } else {
       const error2 = McpError.fromError(response.error.code, response.error.message, response.error.data);
-      handler48(error2);
+      handler51(error2);
     }
   }
   get transport() {
@@ -35305,9 +35305,9 @@ var Protocol = class {
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
-          const handler48 = this._responseHandlers.get(messageId);
-          if (handler48) {
-            handler48(response);
+          const handler51 = this._responseHandlers.get(messageId);
+          if (handler51) {
+            handler51(response);
           } else {
             this._onerror(new Error(`Response handler missing for side-channeled request ${messageId}`));
           }
@@ -35444,12 +35444,12 @@ var Protocol = class {
    *
    * Note that this will replace any previous request handler for the same method.
    */
-  setRequestHandler(requestSchema, handler48) {
+  setRequestHandler(requestSchema, handler51) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
     this._requestHandlers.set(method, (request, extra) => {
       const parsed = parseWithCompat(requestSchema, request);
-      return Promise.resolve(handler48(parsed, extra));
+      return Promise.resolve(handler51(parsed, extra));
     });
   }
   /**
@@ -35471,11 +35471,11 @@ var Protocol = class {
    *
    * Note that this will replace any previous notification handler for the same method.
    */
-  setNotificationHandler(notificationSchema, handler48) {
+  setNotificationHandler(notificationSchema, handler51) {
     const method = getMethodLiteral(notificationSchema);
     this._notificationHandlers.set(method, (notification) => {
       const parsed = parseWithCompat(notificationSchema, notification);
-      return Promise.resolve(handler48(parsed));
+      return Promise.resolve(handler51(parsed));
     });
   }
   /**
@@ -36025,7 +36025,7 @@ var Server = class extends Protocol {
   /**
    * Override request handler registration to enforce server-side validation for tools/call.
    */
-  setRequestHandler(requestSchema, handler48) {
+  setRequestHandler(requestSchema, handler51) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -36044,7 +36044,7 @@ var Server = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage5}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler48(request, extra));
+        const result = await Promise.resolve(handler51(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -36062,7 +36062,7 @@ var Server = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler48);
+    return super.setRequestHandler(requestSchema, handler51);
   }
   assertCapabilityForMethod(method) {
     switch (method) {
@@ -36635,13 +36635,13 @@ var ExperimentalMcpServerTasks = class {
   constructor(_mcpServer) {
     this._mcpServer = _mcpServer;
   }
-  registerToolTask(name, config2, handler48) {
+  registerToolTask(name, config2, handler51) {
     const execution = { taskSupport: "required", ...config2.execution };
     if (execution.taskSupport === "forbidden") {
       throw new Error(`Cannot register task-based tool '${name}' with taskSupport 'forbidden'. Use registerTool() instead.`);
     }
     const mcpServerInternal = this._mcpServer;
-    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler48);
+    return mcpServerInternal._createRegisteredTool(name, config2.title, config2.description, config2.inputSchema, config2.outputSchema, config2.annotations, execution, config2._meta, handler51);
   }
 };
 
@@ -36699,24 +36699,24 @@ var McpServer = class {
       }
     });
     this.server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: Object.entries(this._registeredTools).filter(([, tool51]) => tool51.enabled).map(([name, tool51]) => {
+      tools: Object.entries(this._registeredTools).filter(([, tool54]) => tool54.enabled).map(([name, tool54]) => {
         const toolDefinition = {
           name,
-          title: tool51.title,
-          description: tool51.description,
+          title: tool54.title,
+          description: tool54.description,
           inputSchema: (() => {
-            const obj = normalizeObjectSchema(tool51.inputSchema);
+            const obj = normalizeObjectSchema(tool54.inputSchema);
             return obj ? toJsonSchemaCompat(obj, {
               strictUnions: true,
               pipeStrategy: "input"
             }) : EMPTY_OBJECT_JSON_SCHEMA;
           })(),
-          annotations: tool51.annotations,
-          execution: tool51.execution,
-          _meta: tool51._meta
+          annotations: tool54.annotations,
+          execution: tool54.execution,
+          _meta: tool54._meta
         };
-        if (tool51.outputSchema) {
-          const obj = normalizeObjectSchema(tool51.outputSchema);
+        if (tool54.outputSchema) {
+          const obj = normalizeObjectSchema(tool54.outputSchema);
           if (obj) {
             toolDefinition.outputSchema = toJsonSchemaCompat(obj, {
               strictUnions: true,
@@ -36729,16 +36729,16 @@ var McpServer = class {
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       try {
-        const tool51 = this._registeredTools[request.params.name];
-        if (!tool51) {
+        const tool54 = this._registeredTools[request.params.name];
+        if (!tool54) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
         }
-        if (!tool51.enabled) {
+        if (!tool54.enabled) {
           throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
         }
         const isTaskRequest = !!request.params.task;
-        const taskSupport = tool51.execution?.taskSupport;
-        const isTaskHandler = "createTask" in tool51.handler;
+        const taskSupport = tool54.execution?.taskSupport;
+        const isTaskHandler = "createTask" in tool54.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
           throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
@@ -36746,14 +36746,14 @@ var McpServer = class {
           throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool51, request, extra);
+          return await this.handleAutomaticTaskPolling(tool54, request, extra);
         }
-        const args = await this.validateToolInput(tool51, request.params.arguments, request.params.name);
-        const result = await this.executeToolHandler(tool51, args, extra);
+        const args = await this.validateToolInput(tool54, request.params.arguments, request.params.name);
+        const result = await this.executeToolHandler(tool54, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool51, result, request.params.name);
+        await this.validateToolOutput(tool54, result, request.params.name);
         return result;
       } catch (error2) {
         if (error2 instanceof McpError) {
@@ -36786,12 +36786,12 @@ var McpServer = class {
   /**
    * Validates tool input arguments against the tool's input schema.
    */
-  async validateToolInput(tool51, args, toolName) {
-    if (!tool51.inputSchema) {
+  async validateToolInput(tool54, args, toolName) {
+    if (!tool54.inputSchema) {
       return void 0;
     }
-    const inputObj = normalizeObjectSchema(tool51.inputSchema);
-    const schemaToParse = inputObj ?? tool51.inputSchema;
+    const inputObj = normalizeObjectSchema(tool54.inputSchema);
+    const schemaToParse = inputObj ?? tool54.inputSchema;
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36803,8 +36803,8 @@ var McpServer = class {
   /**
    * Validates tool output against the tool's output schema.
    */
-  async validateToolOutput(tool51, result, toolName) {
-    if (!tool51.outputSchema) {
+  async validateToolOutput(tool54, result, toolName) {
+    if (!tool54.outputSchema) {
       return;
     }
     if (!("content" in result)) {
@@ -36816,7 +36816,7 @@ var McpServer = class {
     if (!result.structuredContent) {
       throw new McpError(ErrorCode.InvalidParams, `Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
     }
-    const outputObj = normalizeObjectSchema(tool51.outputSchema);
+    const outputObj = normalizeObjectSchema(tool54.outputSchema);
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
@@ -36827,43 +36827,43 @@ var McpServer = class {
   /**
    * Executes a tool handler (either regular or task-based).
    */
-  async executeToolHandler(tool51, args, extra) {
-    const handler48 = tool51.handler;
-    const isTaskHandler = "createTask" in handler48;
+  async executeToolHandler(tool54, args, extra) {
+    const handler51 = tool54.handler;
+    const isTaskHandler = "createTask" in handler51;
     if (isTaskHandler) {
       if (!extra.taskStore) {
         throw new Error("No task store provided.");
       }
       const taskExtra = { ...extra, taskStore: extra.taskStore };
-      if (tool51.inputSchema) {
-        const typedHandler = handler48;
+      if (tool54.inputSchema) {
+        const typedHandler = handler51;
         return await Promise.resolve(typedHandler.createTask(args, taskExtra));
       } else {
-        const typedHandler = handler48;
+        const typedHandler = handler51;
         return await Promise.resolve(typedHandler.createTask(taskExtra));
       }
     }
-    if (tool51.inputSchema) {
-      const typedHandler = handler48;
+    if (tool54.inputSchema) {
+      const typedHandler = handler51;
       return await Promise.resolve(typedHandler(args, extra));
     } else {
-      const typedHandler = handler48;
+      const typedHandler = handler51;
       return await Promise.resolve(typedHandler(extra));
     }
   }
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool51, request, extra) {
+  async handleAutomaticTaskPolling(tool54, request, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool51, request.params.arguments, request.params.name);
-    const handler48 = tool51.handler;
+    const args = await this.validateToolInput(tool54, request.params.arguments, request.params.name);
+    const handler51 = tool54.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
-    const createTaskResult = args ? await Promise.resolve(handler48.createTask(args, taskExtra)) : (
+    const createTaskResult = args ? await Promise.resolve(handler51.createTask(args, taskExtra)) : (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await Promise.resolve(handler48.createTask(taskExtra))
+      await Promise.resolve(handler51.createTask(taskExtra))
     );
     const taskId = createTaskResult.task.taskId;
     let task = createTaskResult.task;
@@ -37199,17 +37199,17 @@ var McpServer = class {
     }
     return registeredPrompt;
   }
-  _createRegisteredTool(name, title, description, inputSchema31, outputSchema, annotations, execution, _meta, handler48) {
+  _createRegisteredTool(name, title, description, inputSchema34, outputSchema, annotations, execution, _meta, handler51) {
     validateAndWarnToolName(name);
     const registeredTool = {
       title,
       description,
-      inputSchema: getZodSchemaObject(inputSchema31),
+      inputSchema: getZodSchemaObject(inputSchema34),
       outputSchema: getZodSchemaObject(outputSchema),
       annotations,
       execution,
       _meta,
-      handler: handler48,
+      handler: handler51,
       enabled: true,
       disable: () => registeredTool.update({ enabled: false }),
       enable: () => registeredTool.update({ enabled: true }),
@@ -37255,7 +37255,7 @@ var McpServer = class {
       throw new Error(`Tool ${name} is already registered`);
     }
     let description;
-    let inputSchema31;
+    let inputSchema34;
     let outputSchema;
     let annotations;
     if (typeof rest[0] === "string") {
@@ -37264,7 +37264,7 @@ var McpServer = class {
     if (rest.length > 1) {
       const firstArg = rest[0];
       if (isZodRawShapeCompat(firstArg)) {
-        inputSchema31 = rest.shift();
+        inputSchema34 = rest.shift();
         if (rest.length > 1 && typeof rest[0] === "object" && rest[0] !== null && !isZodRawShapeCompat(rest[0])) {
           annotations = rest.shift();
         }
@@ -37276,7 +37276,7 @@ var McpServer = class {
       }
     }
     const callback = rest[0];
-    return this._createRegisteredTool(name, void 0, description, inputSchema31, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
+    return this._createRegisteredTool(name, void 0, description, inputSchema34, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
   }
   /**
    * Registers a tool with a config object and callback.
@@ -37285,8 +37285,8 @@ var McpServer = class {
     if (this._registeredTools[name]) {
       throw new Error(`Tool ${name} is already registered`);
     }
-    const { title, description, inputSchema: inputSchema31, outputSchema, annotations, _meta } = config2;
-    return this._createRegisteredTool(name, title, description, inputSchema31, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
+    const { title, description, inputSchema: inputSchema34, outputSchema, annotations, _meta } = config2;
+    return this._createRegisteredTool(name, title, description, inputSchema34, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
   }
   prompt(name, ...rest) {
     if (this._registeredPrompts[name]) {
@@ -38949,7 +38949,7 @@ function countProblem(env, platform2) {
   if (t === "" || /^\+?\d+$/.test(t)) return null;
   return `GIT_CONFIG_COUNT in the environment is ${JSON.stringify(raw)}, not a number, and git refuses to run with it`;
 }
-var GIT_CANNOT_READ = /cannot change to|bad config line|bad numeric config value|exceeded maximum include depth|not a git repository/i;
+var GIT_CANNOT_READ = /cannot change to|bad config line|bad numeric config value|exceeded maximum include depth|not a git repository|gitfile does not point to a valid repository/i;
 function interpretExit(status, stdout, stderr, dir) {
   if (status === 0) return { kind: "listing", bytes: stdout };
   if (status === 1) return { kind: "listing", bytes: Buffer.alloc(0) };
@@ -39322,15 +39322,15 @@ function collect(command, args, opts) {
       clearTimeout(timer);
       resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...error2 !== void 0 ? { error: error2 } : {} });
     };
-    const fail5 = (code, message2) => {
+    const fail6 = (code, message2) => {
       if (error2 === void 0) error2 = Object.assign(new Error(message2), { code });
       child.kill("SIGKILL");
     };
     const child = spawn2(command, args, { env: opts.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    const timer = setTimeout(() => fail5("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
+    const timer = setTimeout(() => fail6("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
     child.stdout.on("data", (chunk) => {
       outBytes += chunk.length;
-      if (outBytes > opts.maxBuffer) fail5("ENOBUFS", "stdout maxBuffer exceeded");
+      if (outBytes > opts.maxBuffer) fail6("ENOBUFS", "stdout maxBuffer exceeded");
       else out.push(chunk);
     });
     child.stderr.on("data", (chunk) => {
@@ -39931,8 +39931,8 @@ ${collapse(snippetText(f.tool, f.snippet))}`;
   }
   return "none";
 }
-function snippetText(tool51, snippet) {
-  if (tool51.toLowerCase() !== "bandit") return snippet;
+function snippetText(tool54, snippet) {
+  if (tool54.toLowerCase() !== "bandit") return snippet;
   return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(/^\d+ /, "")).join("\n");
 }
 var CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
@@ -41937,8 +41937,8 @@ var AgentAuditRepo = class {
 
 // src/storage/slots.ts
 var SARIF_PREFIX = "sarif_import:";
-function sarifSlot(tool51) {
-  return `${SARIF_PREFIX}${tool51}`;
+function sarifSlot(tool54) {
+  return `${SARIF_PREFIX}${tool54}`;
 }
 function isSarifSlot(slot) {
   return slot.startsWith(SARIF_PREFIX);
@@ -41947,8 +41947,8 @@ function sarifToolOfSlot(slot) {
   return slot.slice(SARIF_PREFIX.length);
 }
 function sarifSlotOfMeta(meta) {
-  const tool51 = meta?.["source_tool"];
-  return sarifSlot(typeof tool51 === "string" ? tool51 : "");
+  const tool54 = meta?.["source_tool"];
+  return sarifSlot(typeof tool54 === "string" ? tool54 : "");
 }
 
 // src/storage/baselinesRepo.ts
@@ -42283,7 +42283,21 @@ var DOMAIN_ERROR_CODES = [
   "invalid_sarif",
   "outside_project",
   "refused_file",
-  "not_found"
+  "not_found",
+  // llm_scan_start / llm_scan_task / llm_scan_submit (tools/llmScan*.ts).
+  "invalid_input",
+  "needs_surface",
+  "too_many_open_plans",
+  "nothing_to_plan",
+  "plan_abandoned",
+  "plan_corrupt",
+  "needs_confirm",
+  "limit_reached",
+  "sampling_unavailable",
+  "already_closed",
+  "bad_lease",
+  "too_large",
+  "store_failed"
 ];
 
 // src/storage/findingsRepo.ts
@@ -42736,21 +42750,61 @@ var LlmScanRepo = class {
         set_aside: JSON.stringify(plan.set_aside),
         last_activity_at: plan.created_at
       });
-      const insert = this.db.prepare(
-        `INSERT INTO llm_scan_tasks (${TASK_COLUMNS})
-         VALUES (@plan_id, @task_id, @kind, @target, @status, @lease_token, @lease_expires_at, @attempts,
-                 @file_hashes, @brief_chars, @response_chars, @independence, @result, @closed_reason,
-                 @delivered_at, @closed_at)`
-      );
-      for (const t of tasks) {
-        insert.run({
-          ...t,
-          target: JSON.stringify(t.target),
-          file_hashes: JSON.stringify(t.file_hashes),
-          result: t.result === null ? null : JSON.stringify(t.result)
-        });
-      }
+      this.insertTasks(tasks);
     })();
+  }
+  insertTasks(tasks) {
+    const insert = this.db.prepare(
+      `INSERT INTO llm_scan_tasks (${TASK_COLUMNS})
+       VALUES (@plan_id, @task_id, @kind, @target, @status, @lease_token, @lease_expires_at, @attempts,
+               @file_hashes, @brief_chars, @response_chars, @independence, @result, @closed_reason,
+               @delivered_at, @closed_at)`
+    );
+    for (const t of tasks) {
+      insert.run({
+        ...t,
+        target: JSON.stringify(t.target),
+        file_hashes: JSON.stringify(t.file_hashes),
+        result: t.result === null ? null : JSON.stringify(t.result)
+      });
+    }
+  }
+  /**
+   * Adds tasks to an `open` plan (the verify tasks of a hunt's findings). Meant
+   * to run inside the transaction of the submission that creates them, so a
+   * failure takes the whole submission back. Returns false — and adds nothing —
+   * when the plan is not `open`.
+   */
+  appendTasks(planId, tasks) {
+    return this.db.transaction(() => {
+      const open = this.db.prepare(`SELECT 1 AS ok FROM llm_scan_plans WHERE id = ? AND status = 'open'`).get(planId);
+      if (open === void 0) return false;
+      this.insertTasks(tasks);
+      return true;
+    })();
+  }
+  /** The next sequential task id (`t-0001`, …) of the plan. */
+  nextTaskNumber(planId) {
+    const rows = this.db.prepare(`SELECT task_id FROM llm_scan_tasks WHERE plan_id = ?`).all(planId);
+    return rows.reduce((max, r) => Math.max(max, Number(r.task_id.slice(2)) || 0), 0) + 1;
+  }
+  /** Whether a plan row exists, whether or not it can be read (a corrupt one is not "no such plan"). */
+  planRowExists(planId) {
+    return this.db.prepare(`SELECT 1 AS ok FROM llm_scan_plans WHERE id = ?`).get(planId) !== void 0;
+  }
+  /** US-4.AC-1: the user confirmed a plan above the token limit. True when an `open` plan changed. */
+  confirmPlan(planId, now) {
+    return this.db.prepare(`UPDATE llm_scan_plans SET confirmed = 1, updated_at = ? WHERE id = ? AND status = 'open'`).run(now, planId).changes === 1;
+  }
+  /**
+   * Records the size of the brief handed out (US-4.AC-3), for the holder of the
+   * lease only — the same guard as {@link closeTask}. True when one row changed.
+   */
+  recordBriefChars(planId, taskId, token, chars) {
+    return this.db.prepare(
+      `UPDATE llm_scan_tasks SET brief_chars = ?
+            WHERE plan_id = ? AND task_id = ? AND lease_token = ? AND status = 'leased'`
+    ).run(chars, planId, taskId, token).changes === 1;
   }
   /** `null` when there is no such plan, or its row is corrupt. */
   getPlan(planId) {
@@ -43205,8 +43259,8 @@ var SuppressionsRepo = class {
    * findings table on either key, since a suppression stores only the
    * finding's fingerprint/identity. Newest first.
    */
-  listActiveForRule(tool51, ruleId, limit, projectPath) {
-    return this.listActiveForRuleStmt.all(nowIso(), projectPath, tool51, ruleId, limit).map(rowToSuppression);
+  listActiveForRule(tool54, ruleId, limit, projectPath) {
+    return this.listActiveForRuleStmt.all(nowIso(), projectPath, tool54, ruleId, limit).map(rowToSuppression);
   }
   /**
    * Give every identity-less suppression whose fingerprint `scanId` reported
@@ -43576,6 +43630,318 @@ var Storage = class {
     return this.db;
   }
 };
+
+// src/llmscan/submission.ts
+import { posix } from "node:path";
+
+// src/llmscan/classes.ts
+var HUNT_CLASSES = [
+  // Injection families
+  "sql-injection",
+  "nosql-injection",
+  "command-injection",
+  "code-injection",
+  "template-injection",
+  "ldap-injection",
+  "xpath-injection",
+  "header-injection",
+  "xxe",
+  "xss",
+  // Server-side request and file access
+  "ssrf",
+  "path-traversal",
+  "open-redirect",
+  // Who may do what
+  "broken-access-control",
+  "mass-assignment",
+  "authentication",
+  "csrf",
+  // Data
+  "sensitive-data-exposure",
+  "secrets",
+  "crypto-weakness",
+  "deserialization",
+  // Behaviour
+  "business-logic",
+  "dos",
+  "misconfiguration"
+];
+var HIGH_SEVERITY_CLASSES = /* @__PURE__ */ new Set([
+  "sql-injection",
+  "nosql-injection",
+  "command-injection",
+  "code-injection",
+  "template-injection",
+  "deserialization",
+  "xxe",
+  "ssrf",
+  "path-traversal",
+  "broken-access-control",
+  "authentication",
+  "secrets"
+]);
+var huntSeverity = (cls) => HIGH_SEVERITY_CLASSES.has(cls) ? "high" : "medium";
+
+// src/llmscan/submission.ts
+var MAX_SUBMISSION_BYTES = 64 * 1024;
+var MAX_HUNT_FINDINGS = 50;
+var MAX_REASONING_WORDS = 120;
+var MAX_EVIDENCE_WORDS = 60;
+var MAX_TITLE_CHARS = 200;
+var VERDICTS = ["real", "not_real", "undetermined"];
+var VERIFY_KEYS = ["verdict", "attacker_input", "operation", "decisive_line", "reasoning"];
+var HUNT_KEYS = ["entry_points_reviewed", "findings"];
+var FINDING_KEYS = ["file", "line", "class", "title", "attacker", "evidence"];
+var MAX_ENTRY_POINTS = 200;
+var MAX_ENTRY_POINT_CHARS = 300;
+var MAX_EVIDENCE_REFS = 10;
+var MAX_CITED_FILE_BYTES = 1024 * 1024;
+var MAX_CITED_FILES = 100;
+var MAX_ECHOED_KEY_CHARS = 32;
+var CLASS_SET = new Set(HUNT_CLASSES);
+var isRecord = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+var wordCount = (s) => s.split(/\s+/).filter((w) => w !== "").length;
+function serializedBytes(payload) {
+  try {
+    const text2 = JSON.stringify(payload);
+    return text2 === void 0 ? null : Buffer.byteLength(text2, "utf8");
+  } catch {
+    return null;
+  }
+}
+function sizeGate(payload) {
+  const bytes = serializedBytes(payload);
+  if (bytes === null) return { ok: false, code: "invalid", errors: [{ path: "$", problem: "payload is not serializable JSON" }] };
+  if (bytes > MAX_SUBMISSION_BYTES) {
+    return { ok: false, code: "too_large", errors: [{ path: "$", problem: `payload is over ${MAX_SUBMISSION_BYTES} bytes serialized` }] };
+  }
+  return null;
+}
+function unknownKeys(obj, allowed, prefix, errors) {
+  let index = 0;
+  for (const key of Object.keys(obj)) {
+    if (allowed.includes(key)) continue;
+    const named2 = key.length <= MAX_ECHOED_KEY_CHARS && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+    errors.push({ path: `${prefix}[unknown field #${index}]`, problem: named2 ? `unknown field ${key}` : "unknown field" });
+    index += 1;
+  }
+}
+function textField(obj, key, prefix, errors) {
+  const v = obj[key];
+  if (v === void 0) {
+    errors.push({ path: `${prefix}${key}`, problem: "missing field" });
+    return null;
+  }
+  if (typeof v !== "string" || v.trim() === "") {
+    errors.push({ path: `${prefix}${key}`, problem: "must be a non-empty string" });
+    return null;
+  }
+  return v;
+}
+var WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+function containedPath(raw) {
+  if (raw === "" || raw.includes("\0")) return null;
+  const slashed = raw.replace(/\\/g, "/");
+  if (slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
+  if (slashed.includes(":")) return null;
+  const normal = posix.normalize(slashed);
+  if (normal === ".." || normal.startsWith("../") || normal === ".") return null;
+  if (normal.split("/").some((seg) => WINDOWS_DEVICE.test(seg))) return null;
+  return normal;
+}
+var CitationChecker = class {
+  constructor(ctx) {
+    this.ctx = ctx;
+  }
+  ctx;
+  looked = /* @__PURE__ */ new Map();
+  /** The reason a citation does not hold, or null when it does. */
+  check(file, line) {
+    const path8 = containedPath(file);
+    if (path8 === null) return "not inside the project";
+    if (!Number.isSafeInteger(line) || line < 1) return "line outside the file";
+    let seen = this.looked.get(path8);
+    if (seen === void 0) {
+      if (this.looked.size >= MAX_CITED_FILES) return "too many distinct files cited";
+      seen = this.look(path8);
+      this.looked.set(path8, seen);
+    }
+    if (seen.status === "absent") return "file not found";
+    if (seen.status === "refused") return "file could not be read";
+    return line > seen.lines ? "line outside the file" : null;
+  }
+  look(path8) {
+    const read3 = this.ctx.reader(this.ctx.root, path8, MAX_CITED_FILE_BYTES);
+    if (read3.status !== "ok") return { status: read3.status };
+    return { status: "ok", lines: read3.text === "" ? 0 : read3.text.replace(/\r?\n$/, "").split(/\r?\n/).length };
+  }
+};
+var CITATION = /^(.+):(\d+)$/;
+var DECISIVE = /^(.+?):(\d+) — \S/;
+function checkCitation(checker, field2, text2, form, errors) {
+  const m = form.exec(text2);
+  const file = m?.[1];
+  const line = m?.[2];
+  if (file === void 0 || line === void 0) {
+    errors.push({ path: field2, problem: field2 === "decisive_line" ? "must have the form file:line \u2014 reason" : "must have the form file:line" });
+    return;
+  }
+  const problem = checker.check(file, Number(line));
+  if (problem !== null) errors.push({ path: field2, problem: `citation: ${problem}` });
+}
+function validateVerifySubmission(payload, ctx) {
+  const gate2 = sizeGate(payload);
+  if (gate2 !== null) return gate2;
+  if (!isRecord(payload)) return { ok: false, code: "invalid", errors: [{ path: "$", problem: "must be a JSON object" }] };
+  const errors = [];
+  unknownKeys(payload, VERIFY_KEYS, "", errors);
+  const verdict = payload["verdict"];
+  if (verdict === void 0) errors.push({ path: "verdict", problem: "missing field" });
+  else if (typeof verdict !== "string" || !VERDICTS.includes(verdict)) {
+    errors.push({ path: "verdict", problem: `must be one of ${VERDICTS.join(", ")}` });
+  }
+  const attacker = textField(payload, "attacker_input", "", errors);
+  const operation = textField(payload, "operation", "", errors);
+  const decisive = textField(payload, "decisive_line", "", errors);
+  const reasoning = textField(payload, "reasoning", "", errors);
+  if (reasoning !== null && wordCount(reasoning) > MAX_REASONING_WORDS) {
+    errors.push({ path: "reasoning", problem: `must be at most ${MAX_REASONING_WORDS} words` });
+  }
+  if (errors.length === 0 && attacker !== null && operation !== null && decisive !== null) {
+    const checker = new CitationChecker(ctx);
+    if (attacker !== "none") checkCitation(checker, "attacker_input", attacker, CITATION, errors);
+    checkCitation(checker, "operation", operation, CITATION, errors);
+    checkCitation(checker, "decisive_line", decisive, DECISIVE, errors);
+  }
+  if (errors.length > 0 || attacker === null || operation === null || decisive === null || reasoning === null) {
+    return { ok: false, code: "invalid", errors };
+  }
+  const value = {
+    verdict,
+    attacker_input: attacker,
+    operation,
+    decisive_line: decisive,
+    reasoning
+  };
+  return { ok: true, value, rejected: [] };
+}
+function evidenceRefs(evidence) {
+  const refs = [];
+  for (const token of evidence.split(/[\s;,()'"`]+/)) {
+    if (token.includes("://")) continue;
+    const m = CITATION.exec(token.replace(/[.:]+$/, ""));
+    const file = m?.[1];
+    const line = m?.[2];
+    if (file === void 0 || line === void 0) continue;
+    refs.push({ file, line: Number(line) });
+    if (refs.length >= MAX_EVIDENCE_REFS) break;
+  }
+  return refs;
+}
+function validateFinding(raw, index, checker) {
+  const prefix = `findings[${index}].`;
+  const errors = [];
+  if (!isRecord(raw)) return { value: null, errors: [{ path: `findings[${index}]`, problem: "must be an object" }] };
+  unknownKeys(raw, FINDING_KEYS, prefix, errors);
+  const file = textField(raw, "file", prefix, errors);
+  const line = raw["line"];
+  if (line === void 0) errors.push({ path: `${prefix}line`, problem: "missing field" });
+  else if (typeof line !== "number" || !Number.isSafeInteger(line) || line < 1) {
+    errors.push({ path: `${prefix}line`, problem: "must be a positive integer" });
+  }
+  const cls = raw["class"];
+  if (cls === void 0) errors.push({ path: `${prefix}class`, problem: "missing field" });
+  else if (typeof cls !== "string" || !CLASS_SET.has(cls)) errors.push({ path: `${prefix}class`, problem: "not one of the known classes" });
+  const title = textField(raw, "title", prefix, errors);
+  if (title !== null && title.length > MAX_TITLE_CHARS) {
+    errors.push({ path: `${prefix}title`, problem: `must be at most ${MAX_TITLE_CHARS} characters` });
+  }
+  const attacker = textField(raw, "attacker", prefix, errors);
+  if (attacker !== null && attacker.length > MAX_TITLE_CHARS) {
+    errors.push({ path: `${prefix}attacker`, problem: `must be at most ${MAX_TITLE_CHARS} characters` });
+  }
+  const evidence = textField(raw, "evidence", prefix, errors);
+  if (evidence !== null && wordCount(evidence) > MAX_EVIDENCE_WORDS) {
+    errors.push({ path: `${prefix}evidence`, problem: `must be at most ${MAX_EVIDENCE_WORDS} words` });
+  }
+  if (errors.length > 0 || file === null || typeof line !== "number" || title === null || attacker === null || evidence === null) {
+    return { value: null, errors };
+  }
+  const problem = checker.check(file, line);
+  if (problem !== null) errors.push({ path: `${prefix}file`, problem: `citation: ${problem}` });
+  if (!evidenceRefs(evidence).some((r) => checker.check(r.file, r.line) === null)) {
+    errors.push({ path: `${prefix}evidence`, problem: "needs at least one file:line reference that exists in the project" });
+  }
+  if (errors.length > 0) return { value: null, errors };
+  return { value: { file, line, class: cls, title, attacker, evidence }, errors };
+}
+function validateHuntSubmission(payload, ctx) {
+  const gate2 = sizeGate(payload);
+  if (gate2 !== null) return gate2;
+  if (!isRecord(payload)) return { ok: false, code: "invalid", errors: [{ path: "$", problem: "must be a JSON object" }] };
+  const errors = [];
+  unknownKeys(payload, HUNT_KEYS, "", errors);
+  const reviewed = payload["entry_points_reviewed"];
+  if (reviewed === void 0) errors.push({ path: "entry_points_reviewed", problem: "missing field" });
+  else if (!Array.isArray(reviewed) || reviewed.length > MAX_ENTRY_POINTS || reviewed.some((e) => typeof e !== "string" || e.length > MAX_ENTRY_POINT_CHARS)) {
+    errors.push({ path: "entry_points_reviewed", problem: `must be at most ${MAX_ENTRY_POINTS} strings of at most ${MAX_ENTRY_POINT_CHARS} characters` });
+  }
+  const findings = payload["findings"];
+  if (findings === void 0) errors.push({ path: "findings", problem: "missing field" });
+  else if (!Array.isArray(findings)) errors.push({ path: "findings", problem: "must be an array" });
+  else if (findings.length > MAX_HUNT_FINDINGS) errors.push({ path: "findings", problem: `at most ${MAX_HUNT_FINDINGS} findings` });
+  if (errors.length > 0 || !Array.isArray(findings) || !Array.isArray(reviewed)) return { ok: false, code: "invalid", errors };
+  const checker = new CitationChecker(ctx);
+  const kept = [];
+  const rejected = [];
+  findings.forEach((raw, i2) => {
+    const r = validateFinding(raw, i2, checker);
+    if (r.value !== null) kept.push(r.value);
+    else rejected.push(...r.errors);
+  });
+  return { ok: true, value: { entry_points_reviewed: reviewed, findings: kept }, rejected };
+}
+var EV = { independence: "independence: ", decisive: "decisive_line: ", reasoning: "reasoning: ", prompt: "prompt_version: " };
+var INDEPENDENCE = ["subagent", "sampling", "same_context"];
+var STORED_VERDICTS = ["exploitable", "not_exploitable", "undetermined"];
+function toFindingValidation(record8) {
+  const independent = record8.independence !== "same_context";
+  return {
+    fingerprint: record8.fingerprint,
+    verdict: record8.verdict,
+    confidence: independent ? "high" : "low",
+    provider: "llm",
+    evidence: [
+      { detail: EV.independence + record8.independence },
+      { detail: EV.decisive + record8.decisive_line },
+      { detail: EV.reasoning + record8.reasoning },
+      { detail: EV.prompt + record8.prompt_version }
+    ],
+    coverage_gaps: independent ? [] : ["same_context: the judge shared the scan's context, so the verdict is advisory"],
+    // The verdict is about a tree, not a surface snapshot.
+    snapshot_id: 0,
+    tree_hash: record8.tree_hash,
+    computed_at: record8.computed_at
+  };
+}
+function llmMarkerOf(validation) {
+  if (validation.provider !== "llm" || !STORED_VERDICTS.includes(validation.verdict)) return null;
+  const field2 = (prefix) => validation.evidence.find((e) => e.detail.startsWith(prefix))?.detail.slice(prefix.length);
+  const independence = field2(EV.independence);
+  const decisive = field2(EV.decisive);
+  const reasoning = field2(EV.reasoning);
+  const prompt = field2(EV.prompt);
+  if (independence === void 0 || !INDEPENDENCE.includes(independence)) return null;
+  if (decisive === void 0 || reasoning === void 0 || prompt === void 0) return null;
+  return {
+    verdict: validation.verdict,
+    independent: independence !== "same_context",
+    independence,
+    decisive_line: decisive,
+    reasoning,
+    prompt_version: prompt
+  };
+}
 
 // src/runners/scannerParsers/trivy.ts
 import { dirname as dirname8, join as join18, relative as relative7, sep as sep5 } from "node:path";
@@ -44626,9 +44992,9 @@ function pythonManifestDeclaresNothing(r, path8) {
 }
 var MAX_MANIFEST_WALK_DIRS = 2e4;
 function dirOf(path8) {
-  const posix2 = path8.replace(/\\/g, "/").replace(/^\.\//, "");
-  const i2 = posix2.lastIndexOf("/");
-  return i2 < 0 ? "" : posix2.slice(0, i2);
+  const posix4 = path8.replace(/\\/g, "/").replace(/^\.\//, "");
+  const i2 = posix4.lastIndexOf("/");
+  return i2 < 0 ? "" : posix4.slice(0, i2);
 }
 function walkManifests(projectPath, opts) {
   const maxDirs = opts.maxDirs ?? MAX_MANIFEST_WALK_DIRS;
@@ -45611,7 +45977,7 @@ function honouredEntry(path8, decides, kind, verdict) {
   return { path: path8, decides: kind === "link" ? `${decides} (a link, which the scanner follows)` : decides };
 }
 async function nestedFiles(projectPath, names) {
-  const listed = await git(projectPath, [
+  const listed2 = await git(projectPath, [
     "ls-files",
     "-z",
     "--cached",
@@ -45620,9 +45986,9 @@ async function nestedFiles(projectPath, names) {
     "--",
     ...names.map((n2) => `:(glob)**/${n2}`)
   ]);
-  if (listed.exitCode === 0) {
+  if (listed2.exitCode === 0) {
     const found3 = [];
-    for (const rel2 of splitNul(listed.stdout)) {
+    for (const rel2 of splitNul(listed2.stdout)) {
       const kind = entryExactly(projectPath, rel2);
       if (kind !== null) found3.push({ path: rel2, kind });
     }
@@ -45698,9 +46064,9 @@ function honouredNote(files) {
   for (const [decides, paths] of byDecides) {
     const room = Math.max(0, MAX_NAMED - shown);
     if (room === 0) break;
-    const listed = paths.slice(0, room);
-    shown += listed.length;
-    parts.push(`${listed.join(", ")} (${decides})`);
+    const listed2 = paths.slice(0, room);
+    shown += listed2.length;
+    parts.push(`${listed2.join(", ")} (${decides})`);
   }
   const more = files.length > shown ? ` and ${files.length - shown} more` : "";
   return `honoured the project's ${parts.join(", ")}${more}`;
@@ -45710,8 +46076,8 @@ function withProjectConfig(run2, files) {
   if (note === null) return run2;
   const already = run2.reason !== void 0 && run2.reason.includes(note);
   const reason = already ? run2.reason : run2.reason !== void 0 && run2.reason.length > 0 ? `${run2.reason}; ${note}` : note;
-  const listed = [.../* @__PURE__ */ new Set([...run2.honoured_config ?? [], ...files.map((f) => f.path)])].slice(0, MAX_LISTED);
-  return { ...run2, ...reason !== void 0 ? { reason } : {}, honoured_config: listed };
+  const listed2 = [.../* @__PURE__ */ new Set([...run2.honoured_config ?? [], ...files.map((f) => f.path)])].slice(0, MAX_LISTED);
+  return { ...run2, ...reason !== void 0 ? { reason } : {}, honoured_config: listed2 };
 }
 async function nameRepoConfig(run2, projectPath, runner) {
   return withProjectConfig(run2, await honouredFiles(projectPath, runner));
@@ -46138,13 +46504,13 @@ function validateSemgrepRulesFile(path8) {
     return { ok: false, reason: parsed.reason === "invalid" ? "not valid YAML" : describeYamlRefusal(parsed) };
   }
   const doc = parsed.value;
-  if (!isRecord(doc)) return { ok: false, reason: "no `rules:` list" };
+  if (!isRecord2(doc)) return { ok: false, reason: "no `rules:` list" };
   const rules2 = doc["rules"];
   if (!Array.isArray(rules2)) return { ok: false, reason: "no `rules:` list" };
   if (rules2.length === 0) return { ok: false, reason: "empty `rules:` list" };
   for (let i2 = 0; i2 < rules2.length; i2++) {
     const rule = rules2[i2];
-    if (!isRecord(rule)) return { ok: false, reason: `rule #${i2 + 1} is not a mapping` };
+    if (!isRecord2(rule)) return { ok: false, reason: `rule #${i2 + 1} is not a mapping` };
     const id = rule["id"];
     if (typeof id !== "string" || id.length === 0) return { ok: false, reason: `rule #${i2 + 1} has no \`id\`` };
     const message2 = rule["message"];
@@ -46254,7 +46620,7 @@ function isInside(root, path8) {
   const rel2 = relative8(norm(root), norm(path8));
   return rel2 === "" || rel2 !== ".." && !rel2.startsWith(`..${sep6}`) && !isAbsolute8(rel2);
 }
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -46377,7 +46743,7 @@ var FIXPOINT_FILES_NAMED = 5;
 var CONFIG_ERROR_TYPE = /rule|config|yaml|schema|plugin|SemgrepError|fatal/i;
 function checkSemgrepReport(args) {
   const { raw, exitCode, outcome, targets, projectPath } = args;
-  const relative36 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
+  const relative38 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
   if (outcome === "cancelled" || outcome === "timed_out" || outcome === "output_too_large") {
     return { ok: false, verdict: "failed", scanned: 0, errors: 0, reason: `semgrep did not finish (${outcome})` };
   }
@@ -46394,8 +46760,8 @@ function checkSemgrepReport(args) {
   const exitClean = exitCode === 0 || exitCode === 1;
   const all = fixpointTimeoutsOf(root, args.pluginPackCheckIds ?? /* @__PURE__ */ new Set(), args.nonPackTaintRules ?? true);
   const fixpoint = all.scan;
-  const fixpointFiles = relative36(fixpoint.files);
-  const packGap = all.pack.functions > 0 ? { files: relative36(all.pack.files), functions: all.pack.functions } : null;
+  const fixpointFiles = relative38(fixpoint.files);
+  const packGap = all.pack.functions > 0 ? { files: relative38(all.pack.files), functions: all.pack.functions } : null;
   const withPackGap = (check2) => packGap === null ? check2 : { ...check2, plugin_pack_fixpoint: packGap };
   const problems = [];
   if (!exitClean) problems.push(`exit ${String(exitCode)}`);
@@ -46418,7 +46784,7 @@ function checkSemgrepReport(args) {
         scanned,
         errors: errors.length,
         reason,
-        partial: [...relative36(partial3), ...fixpointFiles]
+        partial: [...relative38(partial3), ...fixpointFiles]
       });
     }
   }
@@ -46429,7 +46795,7 @@ function checkSemgrepReport(args) {
     const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id), projectPath);
     if (ruleGap !== null) {
       const { rule_config_error: _whole, ...someRan } = failed;
-      const files = [...relative36(ruleGap.files), ...fixpointFiles];
+      const files = [...relative38(ruleGap.files), ...fixpointFiles];
       return withPackGap({
         ...someRan,
         rules_not_loaded: ruleGap.rules,
@@ -46524,9 +46890,9 @@ function describePartialParse(partial3, consequence) {
   const fixpoint = partial3.filter((p) => p.type === FIXPOINT_TIMEOUT_TYPE);
   const parts = [];
   if (parsed.length > 0) {
-    const listed = nameAFew(parsed.map((p) => `${p.type}: ${p.file}`), "; ");
+    const listed2 = nameAFew(parsed.map((p) => `${p.type}: ${p.file}`), "; ");
     const files = new Set(parsed.map((p) => p.file)).size;
-    parts.push(`partial: ${files} file(s) only partly parsed \u2014 ${consequence} (${listed})`);
+    parts.push(`partial: ${files} file(s) only partly parsed \u2014 ${consequence} (${listed2})`);
   }
   if (fixpoint.length > 0) {
     parts.push(`partial: ${describeFixpointTimeouts(fixpoint)} \u2014 taint findings in those functions may be missing`);
@@ -46895,8 +47261,8 @@ var RUN_NAMES = {
 };
 var BY_NAME = new Map(Object.entries(RUN_NAMES));
 function runNameEntry(name) {
-  const listed = BY_NAME.get(name);
-  if (listed !== void 0) return listed;
+  const listed2 = BY_NAME.get(name);
+  if (listed2 !== void 0) return listed2;
   const colon = name.indexOf(":");
   return colon > 0 ? BY_NAME.get(name.slice(0, colon)) ?? null : null;
 }
@@ -46995,8 +47361,8 @@ function sourceTypesOf(slot) {
   const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
   return coveredByFull ? [slot, "security_full"] : [slot];
 }
-function runSlotOf(tool51) {
-  return SCRIPT_ERA_RUN_SLOTS[tool51] ?? "security_full";
+function runSlotOf(tool54) {
+  return SCRIPT_ERA_RUN_SLOTS[tool54] ?? "security_full";
 }
 function findingInSlot(scan2, finding4, slot) {
   if (scan2.scan_type === "sarif_import") return isSarifSlot(slot);
@@ -47030,10 +47396,10 @@ var COMPLETE_COMPARISON = {
   notMeasuredByFrom: []
 };
 function childrenOf2(storage, parent) {
-  const listed = parent.meta?.["child_scans"];
-  if (!Array.isArray(listed)) return [];
+  const listed2 = parent.meta?.["child_scans"];
+  if (!Array.isArray(listed2)) return [];
   const out = [];
-  for (const entry of listed) {
+  for (const entry of listed2) {
     if (entry === null || typeof entry !== "object") continue;
     const e = entry;
     const row = typeof e.scan_id === "string" ? storage.scans.getById(e.scan_id) : null;
@@ -47706,6 +48072,7 @@ function describeMeasurementGaps(from, to, gaps) {
 // src/history/openSet.ts
 var PAGE2 = 25;
 var SKIPPED_SAMPLE = 5;
+var HUNT_TOOL = "llm-hunt";
 function findLatestUsable(storage, projectPath, types, opts = {}) {
   const r = search(storage, projectPath, types, opts);
   return { scan: r.scan, coverage: r.coverage, skipped: summarizeSkipped(r.hits), hits: r.hits };
@@ -47935,7 +48302,7 @@ function carriedFrom(args) {
         everything = true;
         break;
       }
-      for (const tool51 of toolsOfKey(key)) tools.add(tool51);
+      for (const tool54 of toolsOfKey(key)) tools.add(tool54);
       continue;
     }
     const lookup2 = admitLookup(scope.admit);
@@ -47976,6 +48343,23 @@ function openSetSlots(storage, projectPath) {
   const imports = storage.scans.sarifSourceTools(projectPath).map(sarifSlot);
   return [...slots, ...imports.sort()];
 }
+function llmMarkersOf(storage, projectPath) {
+  const markers = /* @__PURE__ */ new Map();
+  for (const v of storage.validations.listByProject(projectPath)) {
+    const marker = llmMarkerOf(v);
+    if (marker !== null) markers.set(v.fingerprint, marker);
+  }
+  return markers;
+}
+function isDemoting(marker) {
+  return marker !== void 0 && marker.independent && marker.verdict === "not_exploitable";
+}
+function isConfirming(marker) {
+  return marker !== void 0 && marker.independent && marker.verdict === "exploitable";
+}
+function isHuntFinding(f) {
+  return f.tool === HUNT_TOOL;
+}
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
   const picked = [];
@@ -48014,6 +48398,11 @@ function openSetForProject(storage, projectPath, opts = {}) {
   const rankOf = (scanId) => rank2.get(scanId) ?? order.length;
   picked.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
   carried.sort((a2, b) => rankOf(a2.scan.scan_id) - rankOf(b.scan.scan_id));
+  const llmVerdicts = llmMarkersOf(storage, projectPath);
+  const admitted = (f) => {
+    const marker = llmVerdicts.get(f.fingerprint);
+    return { marker, show: !isHuntFinding(f) || isConfirming(marker) };
+  };
   const findings = [];
   const sources = [];
   const seen = indexFindings([]);
@@ -48029,6 +48418,8 @@ function openSetForProject(storage, projectPath, opts = {}) {
     const batch = [];
     for (const f of rowsOf(scan2)) {
       if (!findingInSlot(scan2, f, slot) || seen.has(f)) continue;
+      const { marker, show } = admitted(f);
+      if (!show) continue;
       if (isSuppressed(f)) {
         if (!suppressedSeen.has(f)) {
           suppressedSeen.add(f);
@@ -48036,7 +48427,7 @@ function openSetForProject(storage, projectPath, opts = {}) {
         }
         continue;
       }
-      batch.push({ ...f, scan_id: scan2.scan_id });
+      batch.push({ ...f, scan_id: scan2.scan_id, ...marker !== void 0 ? { llm: marker } : {} });
     }
     admit(batch);
     const contributed = batch.length;
@@ -48055,7 +48446,9 @@ function openSetForProject(storage, projectPath, opts = {}) {
     const batch = [];
     for (const { finding: finding4, gap } of rows) {
       if (seen.has(finding4)) continue;
-      batch.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true });
+      const { marker, show } = admitted(finding4);
+      if (!show) continue;
+      batch.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true, ...marker !== void 0 ? { llm: marker } : {} });
       gaps.add(gap);
     }
     admit(batch);
@@ -48366,9 +48759,9 @@ function scheduleRetention(storage, log, options = {}) {
       if (pending === void 0) {
         const abandoned = abandonStalePlans(db, (/* @__PURE__ */ new Date()).toISOString());
         if (abandoned > 0) log(`marked ${abandoned} llm_scan plan(s) idle for over ${PLAN_ABANDON_DAYS} days as abandoned`);
-        const listed = listPrunableScans(db, limit.keep);
-        protect = openSetSourceIds(storage, listed);
-        pending = listed.filter((id) => !protect.has(id));
+        const listed2 = listPrunableScans(db, limit.keep);
+        protect = openSetSourceIds(storage, listed2);
+        pending = listed2.filter((id) => !protect.has(id));
       }
       deleted += deletePrunableScans(db, takePruneBatch(db, pending, batchSize), limit.keep, protect);
       left = pending.length;
@@ -48657,20 +49050,20 @@ function boundResponsePayload(payload) {
 
 // src/tools/index.ts
 var TOOLS = [];
-function registerToolModule(tool51) {
-  if (TOOLS.some((t) => t.name === tool51.name)) {
-    throw new Error(`Tool '${tool51.name}' is already registered`);
+function registerToolModule(tool54) {
+  if (TOOLS.some((t) => t.name === tool54.name)) {
+    throw new Error(`Tool '${tool54.name}' is already registered`);
   }
-  TOOLS.push(tool51);
+  TOOLS.push(tool54);
 }
 function attachAllTools(server, ctx) {
-  for (const tool51 of TOOLS) {
+  for (const tool54 of TOOLS) {
     server.registerTool(
-      tool51.name,
+      tool54.name,
       {
-        ...tool51.title ? { title: tool51.title } : {},
-        description: tool51.description,
-        inputSchema: strictInputSchema(tool51)
+        ...tool54.title ? { title: tool54.title } : {},
+        description: tool54.description,
+        inputSchema: strictInputSchema(tool54)
       },
       async (input, extra) => {
         const callMeta = {};
@@ -48682,14 +49075,17 @@ function attachAllTools(server, ctx) {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
-        const result = await tool51.handler(input, ctx, callMeta);
-        return toCallToolResult(result, tool51.contentOnlyKeys ?? []);
+        if (server.server.getClientCapabilities()?.sampling !== void 0) {
+          callMeta.sampling = (params, options) => server.server.createMessage(params, options);
+        }
+        const result = await tool54.handler(input, ctx, callMeta);
+        return toCallToolResult(result, tool54.contentOnlyKeys ?? []);
       }
     );
   }
 }
-function strictInputSchema(tool51) {
-  const schema = external_exports.object(tool51.inputSchema).strict();
+function strictInputSchema(tool54) {
+  const schema = external_exports.object(tool54.inputSchema).strict();
   const parse11 = schema.safeParseAsync.bind(schema);
   schema.safeParseAsync = (data, params) => parse11(data ?? {}, params);
   return schema;
@@ -49458,9 +49854,9 @@ async function loadProjectExclusions(projectPath, configRoot = projectPath) {
   if (read3.status === "refused") return { file, error: `not read: ${describeReadRefusal(read3.reason)}` };
   const text2 = read3.text;
   const matcher = compileIgnore(text2);
-  const listed = await gitListFiles(projectPath);
+  const listed2 = await gitListFiles(projectPath);
   let semgrepAnchor;
-  if (listed !== null) {
+  if (listed2 !== null) {
     const prefix = await git(projectPath, ["rev-parse", "--show-prefix"]);
     semgrepAnchor = prefix.exitCode === 0 ? prefix.stdout.trim() : null;
   } else {
@@ -49471,7 +49867,7 @@ async function loadProjectExclusions(projectPath, configRoot = projectPath) {
     hash: createHash7("sha256").update(text2).digest("hex"),
     patterns: matcher.patterns,
     ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
-    ...classify(listed ?? listProjectFiles(projectPath), matcher),
+    ...classify(listed2 ?? listProjectFiles(projectPath), matcher),
     semgrepAnchor
   };
 }
@@ -49899,8 +50295,8 @@ function fromFiles(listing, files, exclusions, incomplete) {
 }
 async function languagesFromFilesAsync(root, opts = {}) {
   const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
-  const listed = opts.useGit === false ? null : await gitListAsync(root);
-  if (listed !== null) return fromFiles("git", listed, exclusions);
+  const listed2 = opts.useGit === false ? null : await gitListAsync(root);
+  if (listed2 !== null) return fromFiles("git", listed2, exclusions);
   const walked = await walkAsync2(root, exclusions, opts);
   return fromFiles("walk", walked?.files ?? null, exclusions, walked?.incomplete);
 }
@@ -49942,9 +50338,9 @@ async function oversizedSourceFilesAsync(root, opts = {}) {
     const rels = opts.only.map((p) => p.split("\\").join("/")).filter((rel2) => isScannedSource(rel2, exclusions));
     return { files: await sizesOver(root, rels, limit) };
   }
-  const listed = await gitListAsync(root);
-  const walked = listed === null ? await walkAsync2(root, exclusions, {}) : null;
-  const files = listed ?? walked?.files ?? [];
+  const listed2 = await gitListAsync(root);
+  const walked = listed2 === null ? await walkAsync2(root, exclusions, {}) : null;
+  const files = listed2 ?? walked?.files ?? [];
   const out = { files: await sizesOver(root, files.filter((rel2) => isScannedSource(rel2, exclusions)), limit) };
   if (walked?.incomplete !== void 0) out.incomplete = walked.incomplete;
   return out;
@@ -52404,8 +52800,8 @@ async function semgrepCoverageGaps(projectPath, opts = {}) {
   const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath), from);
   const among = opts.among ?? opts.files;
   const submodules = among === void 0 ? all : all.filter((sub) => among.some((p) => {
-    const posix2 = p.split("\\").join("/");
-    return posix2 === sub || posix2.startsWith(`${sub}/`);
+    const posix4 = p.split("\\").join("/");
+    return posix4 === sub || posix4.startsWith(`${sub}/`);
   }));
   const out = { oversized: sized.files, submodules };
   if (sized.incomplete !== void 0) out.incomplete = sized.incomplete;
@@ -52847,8 +53243,8 @@ async function runSemgrepOnScope(args) {
       nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs)
     }
   });
-  const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
-  for (const raw of run2.reports) parser_inputs.push({ parser, input: raw });
+  const parser4 = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
+  for (const raw of run2.reports) parser_inputs.push({ parser: parser4, input: raw });
   const entry = { ...run2.toolRun };
   const engineNote = semgrepEngineNote(semgrepEngineOf(run2.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
   const scopeNotes = [...plan.notes, ...engineNote !== null ? [engineNote] : []];
@@ -53203,7 +53599,7 @@ function sanitizeGitleaksReport(text2, keep) {
     return clean2;
   };
   const clean = items.map((item, n2) => {
-    if (!isRecord2(item)) return item;
+    if (!isRecord3(item)) return item;
     const c3 = { ...item };
     const value = own[n2] ?? null;
     const key = `${stringField(item, "File") ?? ""}\0${stringField(item, "Commit") ?? ""}`;
@@ -53313,16 +53709,16 @@ function makeTrieScrubber(values) {
     if (node !== 0) longest[node] = v.length;
   }
   if (parent.length === 1) return (text2) => text2;
-  const fail5 = parent.map(() => 0);
+  const fail6 = parent.map(() => 0);
   const order = parent.map((_, n2) => n2).sort((a2, b) => at(depth, a2) - at(depth, b));
   for (const v of order) {
     const p = at(parent, v);
     if (v === 0 || p === 0) continue;
     const c3 = at(unit, v);
-    let f = at(fail5, p);
-    while (f !== 0 && !edges.has(f * EDGE + c3)) f = at(fail5, f);
+    let f = at(fail6, p);
+    while (f !== 0 && !edges.has(f * EDGE + c3)) f = at(fail6, f);
     const target = edges.get(f * EDGE + c3) ?? 0;
-    fail5[v] = target;
+    fail6[v] = target;
     if (at(longest, v) === 0) longest[v] = at(longest, target);
   }
   return (text2) => {
@@ -53332,7 +53728,7 @@ function makeTrieScrubber(values) {
       const c3 = text2.charCodeAt(i2);
       let next = edges.get(node * EDGE + c3);
       while (next === void 0 && node !== 0) {
-        node = at(fail5, node);
+        node = at(fail6, node);
         next = edges.get(node * EDGE + c3);
       }
       node = next ?? 0;
@@ -53356,16 +53752,16 @@ function endsBefore(a2, b) {
 function endsLater(a2, b) {
   return a2.endLine > b.endLine || a2.endLine === b.endLine && a2.endCol > b.endCol;
 }
-function isRecord2(v) {
+function isRecord3(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function stringField(v, key) {
-  if (!isRecord2(v)) return null;
+  if (!isRecord3(v)) return null;
   const x = v[key];
   return typeof x === "string" ? x : null;
 }
 function numberField(v, key) {
-  if (!isRecord2(v)) return null;
+  if (!isRecord3(v)) return null;
   const x = v[key];
   return typeof x === "number" && Number.isFinite(x) ? x : null;
 }
@@ -54012,11 +54408,11 @@ var USER_AGENT = "dev-guardian-secret-verify";
 function hostOf(endpoint) {
   return new URL(endpoint).host;
 }
-function isRecord3(v) {
+function isRecord4(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function field(body, key) {
-  return isRecord3(body) ? body[key] : void 0;
+  return isRecord4(body) ? body[key] : void 0;
 }
 function live(host, status, note = "") {
   return { verdict: "live", reason: `${host} accepted it (HTTP ${status}${note})` };
@@ -55346,8 +55742,8 @@ async function runChild(name, input, ctx, meta) {
     cves: [],
     cancelled
   });
-  const tool51 = TOOLS.find((t) => t.name === name);
-  if (!tool51) {
+  const tool54 = TOOLS.find((t) => t.name === name);
+  if (!tool54) {
     return empty({ tool: name, scan_id: null, status: "failed", error: "not registered" }, [
       { name, status: "failed", reason: `tool ${name} is not registered` }
     ], false);
@@ -55355,7 +55751,7 @@ async function runChild(name, input, ctx, meta) {
   if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
   let r;
   try {
-    r = await tool51.handler(input, ctx.plugin, meta);
+    r = await tool54.handler(input, ctx.plugin, meta);
   } catch (e) {
     if (ctx.signal.aborted) return empty({ tool: name, scan_id: null, status: "cancelled" }, [], true);
     const reason = e instanceof Error ? e.message : String(e);
@@ -55423,7 +55819,7 @@ function checkComposeValue(doc, filePath) {
   return findings;
 }
 function checkService(name, service, filePath) {
-  if (!isRecord4(service)) return [];
+  if (!isRecord5(service)) return [];
   const findings = [];
   if (service["privileged"] === true) {
     findings.push(
@@ -55473,16 +55869,16 @@ function checkService(name, service, filePath) {
   return findings;
 }
 function getServices(doc) {
-  if (!isRecord4(doc)) return null;
+  if (!isRecord5(doc)) return null;
   const services = doc["services"];
-  if (!isRecord4(services)) return null;
+  if (!isRecord5(services)) return null;
   return Object.entries(services);
 }
 function mountsDockerSock(volumes) {
   if (!Array.isArray(volumes)) return false;
   return volumes.some((v) => {
     if (typeof v === "string") return v.split(":").some((part) => part.trim() === "/var/run/docker.sock");
-    if (isRecord4(v)) {
+    if (isRecord5(v)) {
       return v["source"] === "/var/run/docker.sock" || v["target"] === "/var/run/docker.sock";
     }
     return false;
@@ -55495,7 +55891,7 @@ function isUnpinnedTag(image) {
   if (colon === -1) return true;
   return lastSegment.slice(colon + 1) === "latest";
 }
-function isRecord4(v) {
+function isRecord5(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function finding(opts) {
@@ -55697,17 +56093,17 @@ function referrerIndex(apis, tags) {
 }
 function readIndex(body, fromTag) {
   const index = body === null ? void 0 : firstJsonObject(body);
-  const manifests = isRecord5(index) ? goField(index, "manifests") : void 0;
+  const manifests = isRecord6(index) ? goField(index, "manifests") : void 0;
   if (!Array.isArray(manifests)) return null;
   const out = [];
   for (const entry of manifests) {
-    if (!isRecord5(entry)) continue;
+    if (!isRecord6(entry)) continue;
     const digest = goField(entry, "digest");
     if (typeof digest !== "string") continue;
     const type = goField(entry, "artifacttype");
     const artifactType = typeof type === "string" ? type : "";
     const annotations = goField(entry, "annotations");
-    const predicate = isRecord5(annotations) ? annotations[PREDICATE_ANNOTATION] : void 0;
+    const predicate = isRecord6(annotations) ? annotations[PREDICATE_ANNOTATION] : void 0;
     out.push({
       digest,
       artifactType,
@@ -55730,8 +56126,8 @@ function goFold(key) {
 }
 function layersOf(body) {
   const manifest = body === null ? void 0 : firstJsonObject(body);
-  if (!isRecord5(manifest) || !Array.isArray(manifest["layers"])) return [];
-  return manifest["layers"].flatMap((l) => isRecord5(l) && typeof l["digest"] === "string" ? [l["digest"]] : []);
+  if (!isRecord6(manifest) || !Array.isArray(manifest["layers"])) return [];
+  return manifest["layers"].flatMap((l) => isRecord6(l) && typeof l["digest"] === "string" ? [l["digest"]] : []);
 }
 function dumpedBody(record8) {
   const gap = /\r?\n\r?\n/.exec(record8);
@@ -55853,7 +56249,7 @@ function classifySignatureDownload(r) {
       if (r.outcome === "output_too_large") continue;
       return none;
     }
-    if (!isRecord5(item)) return none;
+    if (!isRecord6(item)) return none;
     if (typeof item["Base64Signature"] === "string") {
       signature = true;
       continue;
@@ -55876,10 +56272,10 @@ function classifySignatureDownload(r) {
   return none;
 }
 function dssePredicateType(envelope) {
-  if (!isRecord5(envelope) || typeof envelope["payload"] !== "string") return null;
+  if (!isRecord6(envelope) || typeof envelope["payload"] !== "string") return null;
   try {
     const statement = JSON.parse(Buffer.from(envelope["payload"], "base64").toString("utf8"));
-    return isRecord5(statement) && typeof statement["predicateType"] === "string" ? statement["predicateType"] : null;
+    return isRecord6(statement) && typeof statement["predicateType"] === "string" ? statement["predicateType"] : null;
   } catch {
     return null;
   }
@@ -55976,17 +56372,17 @@ function verifiedPayloads(stdout) {
   }
   if (!Array.isArray(parsed)) return { types };
   for (const item of parsed) {
-    const critical = isRecord5(item) && isRecord5(item["critical"]) ? item["critical"] : null;
+    const critical = isRecord6(item) && isRecord6(item["critical"]) ? item["critical"] : null;
     if (critical === null) continue;
     const type = critical["type"];
     if (typeof type === "string" && !types.includes(say(type))) types.push(say(type));
     const image = critical["image"];
-    const d = isRecord5(image) ? image["docker-manifest-digest"] : void 0;
+    const d = isRecord6(image) ? image["docker-manifest-digest"] : void 0;
     if (typeof d === "string" && digest === void 0) digest = say(d);
   }
   return digest !== void 0 ? { types, digest } : { types };
 }
-function isRecord5(v) {
+function isRecord6(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function verifyArgs(ref, policy) {
@@ -56170,13 +56566,13 @@ async function settleNoSignature(ref, policy, claim, run2) {
   const trace = parseRegistryTrace(probe22.stderr);
   const fault = referrerFaults(trace);
   if (fault !== null) return { verdict: "error", detail: `cosign verify said "${claim}", but ${fault} \u2014 not a verdict` };
-  const listed = attachedReferrers(trace);
-  if (listed.length === 0) return nothing(trace);
+  const listed2 = attachedReferrers(trace);
+  if (listed2.length === 0) return nothing(trace);
   const served = servedBundles(trace).length > 0;
   return {
     verdict: "rejected",
     reason: "no_signature",
-    detail: served ? `the registry's referrers index lists ${describeListed(listed)} for this digest: ${UNREADABLE_BUNDLE}. cosign verify found no signature it can use, twice \u2014 and anyone who can push to the repository can attach a bundle that does not parse` : `the registry's referrers index lists ${describeListed(listed)} for this digest, and the registry answered for each (served, or 404) \u2014 none is a Sigstore bundle cosign can read: cosign verify found no signature, twice. An artifact that is not a Sigstore signature is no signature \u2014 anyone who can push to the repository can attach one`
+    detail: served ? `the registry's referrers index lists ${describeListed(listed2)} for this digest: ${UNREADABLE_BUNDLE}. cosign verify found no signature it can use, twice \u2014 and anyone who can push to the repository can attach a bundle that does not parse` : `the registry's referrers index lists ${describeListed(listed2)} for this digest, and the registry answered for each (served, or 404) \u2014 none is a Sigstore bundle cosign can read: cosign verify found no signature, twice. An artifact that is not a Sigstore signature is no signature \u2014 anyone who can push to the repository can attach one`
   };
 }
 async function verifyImage(image, policy, ctx) {
@@ -56324,7 +56720,7 @@ async function detectImageSupplyChain(image, ctx) {
   if (provenance === "unknown" && provenanceWhy === void 0 && cancelled) provenanceWhy = "cancelled";
   const findings = [];
   if (signature === "absent") {
-    const listed = (sig.listed.length > 0 ? ` What is attached (${describeListed(sig.listed)}) is no Sigstore bundle \u2014 anyone who can push to the repository can attach such an artifact.` : "") + (sig.note === "" ? "" : ` Note: ${sig.note}.`);
+    const listed2 = (sig.listed.length > 0 ? ` What is attached (${describeListed(sig.listed)}) is no Sigstore bundle \u2014 anyone who can push to the repository can attach such an artifact.` : "") + (sig.note === "" ? "" : ` Note: ${sig.note}.`);
     const legacyProvenance = provenance === "present" ? " A signed SLSA provenance attestation IS attached as a legacy .att tag, which `cosign verify-attestation` checks \u2014 `cosign verify` does not accept it as the image's signature." : " Nothing ties it to who built it.";
     findings.push(
       makeFinding({
@@ -56334,7 +56730,7 @@ async function detectImageSupplyChain(image, ctx) {
         category: "security",
         subcategory: "supply-chain",
         title: `Image ${image} has no Sigstore signature`,
-        message: `cosign found no signature for ${pinned.checked ?? image} \u2014 no .sig tag, and no signing or signed attestation bundle attached as an OCI referrer, which is everything \`cosign verify\` accepts.${listed}${legacyProvenance} On a multi-arch index this is the index: a signature on the per-platform images only is not seen. Sign it in the pipeline that builds it (cosign sign, keyless), then verify it before deploying: scan_containers with signer_identity and signer_issuer.`,
+        message: `cosign found no signature for ${pinned.checked ?? image} \u2014 no .sig tag, and no signing or signed attestation bundle attached as an OCI referrer, which is everything \`cosign verify\` accepts.${listed2}${legacyProvenance} On a multi-arch index this is the index: a signature on the per-platform images only is not seen. Sign it in the pipeline that builds it (cosign sign, keyless), then verify it before deploying: scan_containers with signer_identity and signer_issuer.`,
         file_path: image,
         snippet: image,
         fix_available: false,
@@ -57307,7 +57703,7 @@ function loadBudgets(projectPath) {
     };
   }
   const doc = parsed.value;
-  if (!isRecord6(doc)) {
+  if (!isRecord7(doc)) {
     return { kind: "invalid", path: path8, error: "the document must be a mapping with perf: and/or quality: keys" };
   }
   const knownTopLevel = /* @__PURE__ */ new Set(["perf", "quality"]);
@@ -57330,7 +57726,7 @@ function loadBudgets(projectPath) {
   return { kind: "loaded", path: path8, budgets };
 }
 function parseSection(raw, fields, sectionName) {
-  if (!isRecord6(raw)) return `"${sectionName}:" must be a mapping of budget name to number`;
+  if (!isRecord7(raw)) return `"${sectionName}:" must be a mapping of budget name to number`;
   const known = new Set(fields);
   const out = {};
   for (const [key, value] of Object.entries(raw)) {
@@ -57391,7 +57787,7 @@ function budgetViolationFindings(violations, filePath) {
     });
   });
 }
-function isRecord6(v) {
+function isRecord7(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -57834,7 +58230,7 @@ function notInstalled(out, name, reason = "not_installed") {
   out.tools_run.push({ name, status: "skipped", reason });
   out.missing_tools.push(name);
 }
-function record3(out, name, run2, okExitCodes, report, reportOk, parser, gaps = []) {
+function record3(out, name, run2, okExitCodes, report, reportOk, parser4, gaps = []) {
   if (run2.outcome === "cancelled") out.cancelled = true;
   const problems = [];
   if (run2.outcome === "cancelled" || run2.outcome === "timed_out" || run2.outcome === "output_too_large") {
@@ -57849,7 +58245,7 @@ function record3(out, name, run2, okExitCodes, report, reportOk, parser, gaps = 
     out.tools_run.push({ name, status: "failed", reason: problems.join("; ") });
     return;
   }
-  out.parser_inputs.push({ parser, input: report });
+  out.parser_inputs.push({ parser: parser4, input: report });
   const entry = { name, status: "ok" };
   if (gaps.length > 0) {
     entry.reason = gaps.join("; ");
@@ -58328,8 +58724,8 @@ async function runSemgrep3(ctx, input, out, args) {
       nonPackTaintRules: mayHoldTaintRules(plan.ruleConfigs)
     }
   });
-  const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
-  for (const raw of run2.reports) out.parser_inputs.push({ parser, input: raw });
+  const parser4 = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
+  for (const raw of run2.reports) out.parser_inputs.push({ parser: parser4, input: raw });
   const engineNote = semgrepEngineNote(semgrepEngineOf(run2.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
   out.tools_run.push(
     withNotes(run2.toolRun, [...plan.notes, ...gap !== null ? [gap] : [], ...engineNote !== null ? [engineNote] : []])
@@ -60934,9 +61330,9 @@ async function runDotnetOutdated(projectPath, cves) {
       cwd: projectPath,
       timeout: 9e4
     });
-    const listed = typeof r.stdout === "string" ? r.stdout : "";
-    if (r.exitCode === 0 && listed.trim().startsWith("{")) {
-      steps.push(...parseDotnetJson(listed, cves));
+    const listed2 = typeof r.stdout === "string" ? r.stdout : "";
+    if (r.exitCode === 0 && listed2.trim().startsWith("{")) {
+      steps.push(...parseDotnetJson(listed2, cves));
       continue;
     }
     const fallback = await execPackageManager("dotnet", ["list", target, "package", "--outdated", "--no-restore"], {
@@ -62450,8 +62846,8 @@ async function computeSecretsStatusLine(projectPath) {
       return `  Secrets: failed (${reasons}) \u2014 corre /guardian-scan`;
     }
     let total = 0;
-    for (const { parser, input } of scan2.parser_inputs) {
-      total += parser.parse(input, { project_path: projectPath }).findings.length;
+    for (const { parser: parser4, input } of scan2.parser_inputs) {
+      total += parser4.parse(input, { project_path: projectPath }).findings.length;
     }
     return `  Secrets: ${total} findings`;
   } catch {
@@ -63535,10 +63931,10 @@ function buildResolutionIndex(projectFiles) {
   const byPosixPath = /* @__PURE__ */ new Map();
   const goPackages = /* @__PURE__ */ new Map();
   for (const file of projectFiles) {
-    const posix2 = toPosix2(file);
-    byPosixPath.set(posix2, file);
-    if (!posix2.endsWith(".go")) continue;
-    const dir = dirOf2(posix2);
+    const posix4 = toPosix2(file);
+    byPosixPath.set(posix4, file);
+    if (!posix4.endsWith(".go")) continue;
+    const dir = dirOf2(posix4);
     if (dir === "" || dir === "/") continue;
     const existing = goPackages.get(dir);
     if (existing === void 0) goPackages.set(dir, [file]);
@@ -63557,11 +63953,11 @@ function toPosix2(path8) {
   return path8.replace(/\\/g, "/");
 }
 function dirOf2(file) {
-  const posix2 = toPosix2(file);
-  const parts = posix2.split("/");
+  const posix4 = toPosix2(file);
+  const parts = posix4.split("/");
   parts.pop();
   const dir = parts.join("/");
-  return dir === "" && posix2.startsWith("/") ? "/" : dir;
+  return dir === "" && posix4.startsWith("/") ? "/" : dir;
 }
 function joinAndNormalize(dir, tail) {
   const absolute = dir.startsWith("/");
@@ -63993,9 +64389,9 @@ function unique2(values) {
   return [...new Set(values)].sort();
 }
 function dirOf3(path8) {
-  const posix2 = path8.replace(/\\/g, "/");
-  const at = posix2.lastIndexOf("/");
-  return at === -1 ? "" : posix2.slice(0, at);
+  const posix4 = path8.replace(/\\/g, "/");
+  const at = posix4.lastIndexOf("/");
+  return at === -1 ? "" : posix4.slice(0, at);
 }
 function isUnder(file, dir) {
   return dir === "" || file.startsWith(`${dir}/`);
@@ -64197,11 +64593,11 @@ var MANIFEST_PATTERNS = [
   [/\.(jar|war|ear)$/, "maven"]
 ];
 function ecosystemOfManifest(path8) {
-  const posix2 = path8.replace(/\\/g, "/").toLowerCase();
-  const base = posix2.split("/").pop() ?? "";
+  const posix4 = path8.replace(/\\/g, "/").toLowerCase();
+  const base = posix4.split("/").pop() ?? "";
   const exact = MANIFEST_ECOSYSTEMS2[base];
   if (exact !== void 0) return exact;
-  if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix2)) return "pypi";
+  if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix4)) return "pypi";
   for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
     if (pattern.test(base)) return ecosystem;
   }
@@ -65776,8 +66172,8 @@ function cosignReleaseInstaller(os) {
     user_bin: "cosign"
   };
 }
-function releaseArchiveInstaller(tool51, os) {
-  const r = PINNED_RELEASES[tool51];
+function releaseArchiveInstaller(tool54, os) {
+  const r = PINNED_RELEASES[tool54];
   const amd = r.assets[`${os}-amd64`];
   const arm = r.assets[`${os}-arm64`];
   const check2 = os === "linux" ? "sha256sum -c -" : "shasum -a 256 -c -";
@@ -65786,46 +66182,46 @@ function releaseArchiveInstaller(tool51, os) {
     'case "$(uname -m)" in',
     `  x86_64|amd64) asset=${amd.file}; sum=${amd.sha256} ;;`,
     `  aarch64|arm64) asset=${arm.file}; sum=${arm.sha256} ;;`,
-    `  *) echo "${tool51}: no pinned release archive for this CPU ($(uname -m))" >&2; exit 1 ;;`,
+    `  *) echo "${tool54}: no pinned release archive for this CPU ($(uname -m))" >&2; exit 1 ;;`,
     "esac",
     'tmp="$(mktemp -d)"',
     `trap 'rm -rf "$tmp"' EXIT`,
-    `curl -sSfL -o "$tmp/${tool51}.tar.gz" "${r.base}/$asset"`,
-    `echo "$sum  $tmp/${tool51}.tar.gz" | ${check2}`,
-    `tar -xzf "$tmp/${tool51}.tar.gz" -C "$tmp" ${tool51}`,
+    `curl -sSfL -o "$tmp/${tool54}.tar.gz" "${r.base}/$asset"`,
+    `echo "$sum  $tmp/${tool54}.tar.gz" | ${check2}`,
+    `tar -xzf "$tmp/${tool54}.tar.gz" -C "$tmp" ${tool54}`,
     'mkdir -p "$HOME/.local/bin"',
-    `install -m 0755 "$tmp/${tool51}" "$HOME/.local/bin/${tool51}"`
+    `install -m 0755 "$tmp/${tool54}" "$HOME/.local/bin/${tool54}"`
   ].join("\n");
   return {
     command: "bash",
     args: ["-c", script],
     needs_elevation: false,
-    description: `${tool51} v${r.version} release archive (${os}, sha256-checked) \u2192 ~/.local/bin/${tool51}`,
-    user_bin: tool51
+    description: `${tool54} v${r.version} release archive (${os}, sha256-checked) \u2192 ~/.local/bin/${tool54}`,
+    user_bin: tool54
   };
 }
-function windowsReleaseInstaller(tool51) {
-  const r = PINNED_RELEASES[tool51];
+function windowsReleaseInstaller(tool54) {
+  const r = PINNED_RELEASES[tool54];
   const a2 = r.assets["windows-amd64"];
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
     "$arch = $env:PROCESSOR_ARCHITEW6432",
     "if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }",
-    `if ($arch -ne 'AMD64') { throw ('${tool51}: no pinned release archive for this CPU (' + $arch + ')') }`,
+    `if ($arch -ne 'AMD64') { throw ('${tool54}: no pinned release archive for this CPU (' + $arch + ')') }`,
     "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12",
     "$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())",
     "New-Item -ItemType Directory -Path $tmp | Out-Null",
     "try {",
-    `  $zip = Join-Path $tmp '${tool51}.zip'`,
+    `  $zip = Join-Path $tmp '${tool54}.zip'`,
     `  Invoke-WebRequest -UseBasicParsing -Uri '${r.base}/${a2.file}' -OutFile $zip`,
     "  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()",
-    `  if ($got -ne '${a2.sha256}') { throw ('${tool51}: sha256 mismatch, got ' + $got) }`,
+    `  if ($got -ne '${a2.sha256}') { throw ('${tool54}: sha256 mismatch, got ' + $got) }`,
     "  Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x')",
     "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
     "  New-Item -ItemType Directory -Force -Path $bin | Out-Null",
-    `  Copy-Item -LiteralPath (Join-Path $tmp 'x\\${tool51}.exe') -Destination (Join-Path $bin '${tool51}.exe') -Force`,
-    `  if (-not (($env:PATH -split ';') -contains $bin)) { Write-Warning ('${tool51}: ' + $bin + ' is not on PATH; dev-guardian looks there itself, but add it to PATH for a terminal to find ${tool51}.exe') }`,
+    `  Copy-Item -LiteralPath (Join-Path $tmp 'x\\${tool54}.exe') -Destination (Join-Path $bin '${tool54}.exe') -Force`,
+    `  if (-not (($env:PATH -split ';') -contains $bin)) { Write-Warning ('${tool54}: ' + $bin + ' is not on PATH; dev-guardian looks there itself, but add it to PATH for a terminal to find ${tool54}.exe') }`,
     "} finally {",
     "  Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue",
     "}"
@@ -65834,8 +66230,8 @@ function windowsReleaseInstaller(tool51) {
     command: "powershell",
     args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
     needs_elevation: false,
-    description: `${tool51} v${r.version} release archive (windows, sha256-checked) \u2192 %USERPROFILE%\\.local\\bin\\${tool51}.exe`,
-    user_bin: `${tool51}.exe`
+    description: `${tool54} v${r.version} release archive (windows, sha256-checked) \u2192 %USERPROFILE%\\.local\\bin\\${tool54}.exe`,
+    user_bin: `${tool54}.exe`
   };
 }
 function uvInstall(pkg) {
@@ -66992,20 +67388,20 @@ async function enrichCveIntel(storage, cveIds, opts = {}) {
     getKevCatalog(storage, { ...netOpts, now, ...opts.fetchKevCatalogImpl ? { fetchKevCatalogImpl: opts.fetchKevCatalogImpl } : {} })
   ]);
   if (epssResult.ok && kevResult.ok) {
-    const nowIso2 = new Date(now).toISOString();
+    const nowIso3 = new Date(now).toISOString();
     const toUpsert = [];
     for (const id of staleIds) {
       const kev = kevResult.entries.has(id);
       const kevDate = kevResult.entries.get(id);
       const epss = epssResult.scores.get(id);
-      const entry = { cve_id: id, status: "ok", kev, fetched_at: nowIso2 };
+      const entry = { cve_id: id, status: "ok", kev, fetched_at: nowIso3 };
       if (kevDate !== void 0) entry.kev_date_added = kevDate;
       if (epss !== void 0) {
         entry.epss_score = epss.score;
         entry.epss_percentile = epss.percentile;
       }
       result.set(id, entry);
-      const row = { cve_id: id, kev, fetched_at: nowIso2 };
+      const row = { cve_id: id, kev, fetched_at: nowIso3 };
       if (kevDate !== void 0) row.kev_date_added = kevDate;
       if (epss !== void 0) {
         row.epss_score = epss.score;
@@ -67645,6 +68041,12 @@ async function handler18(input, ctx) {
   for (const f of open) {
     if (isCredentialFinding(f)) {
       keep.push(toBucket(f, "credential finding \u2014 suppression is never suggested; rotate the secret instead"));
+      continue;
+    }
+    if (isDemoting(f.llm)) {
+      likely_false_positive.push(
+        toBucket(f, `LLM verification (${f.llm.independence}) judged it not exploitable: ${f.llm.decisive_line}`)
+      );
       continue;
     }
     const path8 = f.file_path ?? "";
@@ -68715,7 +69117,11 @@ async function handler22(input, ctx) {
   if (scan2.status === "running") {
     return failDomain17("unknown_scan_id", `Scan '${scanId}' is still running: its findings are not all stored yet.`);
   }
-  const findings = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
+  const stored = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
+  const markers = llmMarkersOf(ctx.storage, scan2.project_path);
+  const findings = stored.filter((f) => !isHuntFinding(f) || isConfirming(markers.get(f.fingerprint)));
+  const unconfirmed = stored.filter((f) => isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)));
+  const llm = { markers, unconfirmed };
   const cves = CVE_SOURCE_SCAN_TYPES.includes(scan2.scan_type) ? ctx.storage.cves.listActive(scanId) : [];
   const runs = coverageRunsOfScan(ctx, scan2);
   const owasp = owaspCoverage(
@@ -68723,7 +69129,7 @@ async function handler22(input, ctx) {
     findings,
     await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(ctx.storage.stack, scan2.project_path))
   );
-  const { content, fileName } = renderReport(format2, scan2, findings, cves, lang, owasp);
+  const { content, fileName } = renderReport(format2, scan2, findings, cves, lang, owasp, llm);
   const written = writeReport(projectPath, `export-${scanId.slice(0, 8)}`, fileName, content);
   if (!written.ok) return failDomain17("unsupported_target", written.reason);
   const outFile = written.path;
@@ -68736,6 +69142,7 @@ async function handler22(input, ctx) {
     bytes: Buffer.byteLength(content, "utf8"),
     findings_count: findings.length,
     cves_count: cves.length,
+    ...unconfirmed.length > 0 ? { llm_hunt_unconfirmed_count: unconfirmed.length } : {},
     ...(latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}
   };
 }
@@ -68782,23 +69189,97 @@ function coverageRunsOfScan(ctx, scan2, seen = /* @__PURE__ */ new Set()) {
   }
   return runs;
 }
-function renderReport(format2, scan2, findings, cves, lang, owasp) {
+function renderReport(format2, scan2, findings, cves, lang, owasp, llm) {
   switch (format2) {
     case "sarif":
       return { content: toSarif(findings), fileName: "report.sarif" };
     case "json":
       return {
-        content: JSON.stringify({ scan: scan2, findings, cves, owasp_2025: owasp }, null, 2),
+        content: JSON.stringify(
+          {
+            scan: scan2,
+            findings: findings.map((f) => withVerdict(f, llm.markers)),
+            ...llm.unconfirmed.length > 0 ? { llm_hunt_unconfirmed: llm.unconfirmed.map((f) => withVerdict(f, llm.markers)) } : {},
+            cves,
+            owasp_2025: owasp
+          },
+          null,
+          2
+        ),
         fileName: "report.json"
       };
     case "markdown":
-      return { content: renderMarkdown(scan2, findings, cves, owasp), fileName: "report.md" };
+      return { content: renderMarkdown(scan2, findings, cves, owasp, llm), fileName: "report.md" };
     case "html":
     default:
-      return { content: renderHtml(scan2, findings, cves, lang, owasp), fileName: "report.html" };
+      return { content: renderHtml(scan2, findings, cves, lang, owasp, llm), fileName: "report.html" };
   }
 }
-function renderMarkdown(scan2, findings, cves, owasp) {
+function withVerdict(f, markers) {
+  const marker = markers.get(f.fingerprint);
+  return marker === void 0 ? f : { ...f, llm: marker };
+}
+var locationOf = (f) => f.file_path ? `${f.file_path}${f.line_start ? `:${f.line_start}` : ""}` : "";
+function stanceOf(m) {
+  if (!m.independent) return `${m.verdict} (${m.independence}: advisory, not counted as verification)`;
+  if (m.verdict === "not_exploitable") return `not exploitable (${m.independence}): demoted, not suppressed`;
+  return `${m.verdict} (${m.independence})`;
+}
+function entriesOf(findings, markers) {
+  return findings.flatMap((f) => {
+    const m = markers.get(f.fingerprint);
+    return m === void 0 ? [] : [{ where: locationOf(f), title: f.title, stance: stanceOf(m), decisive: m.decisive_line, reasoning: m.reasoning }];
+  });
+}
+function splitByIndependence(llm, findings) {
+  const n2 = { subagent: 0, sampling: 0, same_context: 0 };
+  for (const f of [...findings, ...llm.unconfirmed]) {
+    const m = llm.markers.get(f.fingerprint);
+    if (m !== void 0) n2[m.independence] += 1;
+  }
+  return `subagent ${n2.subagent} \xB7 sampling ${n2.sampling} \xB7 same_context ${n2.same_context}`;
+}
+function llmMarkdown(findings, llm) {
+  const judged = entriesOf(findings, llm.markers);
+  const lines = [];
+  if (judged.length > 0 || llm.unconfirmed.length > 0) {
+    lines.push("", `## LLM verification (${judged.length})`, "");
+    lines.push(`**By independence:** ${splitByIndependence(llm, findings)}`, "");
+    for (const e of judged) {
+      lines.push(`- \`${e.where}\` ${mdEscape(e.title)} \u2014 ${e.stance}`, `  - Decisive line: ${e.decisive}`, `  - Reasoning: ${e.reasoning}`);
+    }
+  }
+  if (llm.unconfirmed.length > 0) {
+    lines.push("", `## LLM hunt candidates, not counted (${llm.unconfirmed.length})`, "");
+    lines.push("_Unverified, or judged not exploitable: these are not in the findings above, the totals or the release gates._", "");
+    for (const f of llm.unconfirmed) {
+      const m = llm.markers.get(f.fingerprint);
+      lines.push(`- \`${locationOf(f)}\` ${mdEscape(f.title)} \u2014 ${m === void 0 ? "unverified" : stanceOf(m)}`);
+      if (m !== void 0) lines.push(`  - Decisive line: ${m.decisive_line}`, `  - Reasoning: ${m.reasoning}`);
+    }
+  }
+  return lines;
+}
+function llmHtml(findings, llm) {
+  const judged = entriesOf(findings, llm.markers);
+  const item = (e) => `<li><code>${escapeHtml(e.where)}</code> ${escapeHtml(e.title)} \u2014 ${escapeHtml(e.stance)}<br>Decisive line: ${escapeHtml(e.decisive)}<br>Reasoning: ${escapeHtml(e.reasoning)}</li>`;
+  let html = "";
+  if (judged.length > 0 || llm.unconfirmed.length > 0) {
+    html += `<h2>LLM verification (${judged.length})</h2>
+<p><strong>By independence:</strong> ${escapeHtml(splitByIndependence(llm, findings))}</p>
+<ul>${judged.map(item).join("")}</ul>`;
+  }
+  if (llm.unconfirmed.length > 0) {
+    const judgedHunt = entriesOf(llm.unconfirmed, llm.markers).map(item);
+    const unverified = llm.unconfirmed.filter((f) => !llm.markers.has(f.fingerprint)).map((f) => `<li><code>${escapeHtml(locationOf(f))}</code> ${escapeHtml(f.title)} \u2014 unverified</li>`);
+    html += `
+<h2>LLM hunt candidates, not counted (${llm.unconfirmed.length})</h2>
+<p>Unverified, or judged not exploitable: not in the findings above, the totals or the release gates.</p>
+<ul>${judgedHunt.join("")}${unverified.join("")}</ul>`;
+  }
+  return html;
+}
+function renderMarkdown(scan2, findings, cves, owasp, llm) {
   const counts = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const lines = [];
@@ -68828,6 +69309,7 @@ function renderMarkdown(scan2, findings, cves, owasp) {
       );
     }
   }
+  lines.push(...llmMarkdown(findings, llm));
   lines.push("");
   lines.push(...owaspCoverageMarkdown(owasp));
   if (cves.length > 0) {
@@ -68856,7 +69338,7 @@ var SCAN_TITLE = {
   pt: "Relat\xF3rio de Seguran\xE7a",
   es: "Informe de Seguridad"
 };
-function renderHtml(scan2, findings, cves, lang, owasp) {
+function renderHtml(scan2, findings, cves, lang, owasp, llm) {
   const counts = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const meta = `<div class="pdk-meta">
@@ -68895,7 +69377,7 @@ function renderHtml(scan2, findings, cves, lang, owasp) {
   return renderHtmlDocument({
     title: SCAN_TITLE[lang],
     subtitle: `${scan2.scan_type} \xB7 ${scan2.started_at} \xB7 ${scan2.status}`,
-    sections: [meta, sevSection, findingsSection, owaspCoverageHtml(owasp), cveSection],
+    sections: [meta, sevSection, findingsSection, llmHtml(findings, llm), owaspCoverageHtml(owasp), cveSection],
     lang
   });
 }
@@ -68960,7 +69442,7 @@ function parseLog(text2) {
 function readRun(run2, projectPath, maxResults) {
   const toolObj = getProp(run2, "tool");
   const driver = getProp(toolObj, "driver");
-  const tool51 = (getString(driver, "name") ?? "").trim().slice(0, TOOL_NAME_MAX) || "unknown";
+  const tool54 = (getString(driver, "name") ?? "").trim().slice(0, TOOL_NAME_MAX) || "unknown";
   const version2 = getString(driver, "version") ?? getString(driver, "semanticVersion");
   const driverRules = asArray(getProp(driver, "rules"));
   const extensions = asArray(getProp(toolObj, "extensions"));
@@ -68970,7 +69452,7 @@ function readRun(run2, projectPath, maxResults) {
     if (id !== void 0 && isObject4(rule) && !rulesById.has(id)) rulesById.set(id, rule);
   }
   const bases = getProp(run2, "originalUriBaseIds");
-  const rc = { projectPath, tool: tool51, driverRules, extensions, rulesById, bases: isObject4(bases) ? bases : {} };
+  const rc = { projectPath, tool: tool54, driverRules, extensions, rulesById, bases: isObject4(bases) ? bases : {} };
   const counts = {
     results: 0,
     imported: 0,
@@ -69022,7 +69504,7 @@ function readRun(run2, projectPath, maxResults) {
     counts.imported += 1;
   }
   separateSharedFingerprints(findings, keys);
-  return { source_tool: tool51, ...version2 !== void 0 ? { source_version: version2 } : {}, findings, counts };
+  return { source_tool: tool54, ...version2 !== void 0 ? { source_version: version2 } : {}, findings, counts };
 }
 function separateSharedFingerprints(findings, keys) {
   const uses = /* @__PURE__ */ new Map();
@@ -69169,14 +69651,14 @@ function usableFingerprints(bag) {
     return typeof v === "string" && v !== "" && !PLACEHOLDER_FINGERPRINT.test(v.trim()) ? [[k, v]] : [];
   });
 }
-function identityOf(result, tool51, ruleId) {
+function identityOf(result, tool54, ruleId) {
   const partial3 = getProp(result, "partialFingerprints");
   const own = getString(partial3, "devGuardianIdentity");
   if (own !== void 0 && /^[0-9a-f]{64}$/.test(own)) return own;
   let key = usableFingerprints(partial3);
   if (key.length === 0) key = usableFingerprints(getProp(result, "fingerprints"));
   if (key.length === 0) return void 0;
-  return createHash11("sha256").update(JSON.stringify(["sarif-v1", tool51, ruleId ?? "", key])).digest("hex");
+  return createHash11("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
 }
 var DRIVE_PATH = /^[a-zA-Z]:[\\/]/;
 var URI_SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
@@ -70053,16 +70535,16 @@ async function listExistingTags(cwd) {
 }
 async function ensureLabels(cwd, labels) {
   if (labels.length === 0) return { applied: [], omitted: [] };
-  const listed = await runProcess({
+  const listed2 = await runProcess({
     command: "gh",
     args: ["label", "list", "--limit", "1000", "--json", "name"],
     cwd,
     timeoutMs: 15e3
   });
   const known = /* @__PURE__ */ new Set();
-  if (listed.outcome === "completed") {
+  if (listed2.outcome === "completed") {
     try {
-      const parsed = JSON.parse(listed.stdout || "[]");
+      const parsed = JSON.parse(listed2.stdout || "[]");
       if (Array.isArray(parsed)) {
         for (const l of parsed) {
           const name = l.name;
@@ -70579,8 +71061,8 @@ async function handler26(input, ctx) {
       gaps.push(`config ${flag} not read`);
     }
   });
-  const answered = [versionResult, coreVerify, pluginVerify, pluginListResult, ...configResults].some((r) => r.ok);
-  const toolRun = gaps.length === 0 ? { name: "wp-cli", status: "ok" } : { name: "wp-cli", status: answered ? "ok" : "failed", reason: gaps.join("; ") };
+  const answered2 = [versionResult, coreVerify, pluginVerify, pluginListResult, ...configResults].some((r) => r.ok);
+  const toolRun = gaps.length === 0 ? { name: "wp-cli", status: "ok" } : { name: "wp-cli", status: answered2 ? "ok" : "failed", reason: gaps.join("; ") };
   const tools_run = [toolRun];
   const missing_tools = gaps.length > 0 ? ["wp-cli"] : [];
   const coverage = computeCoverage(tools_run, missing_tools);
@@ -70593,7 +71075,7 @@ async function handler26(input, ctx) {
   });
   ctx.storage.scans.finalize({
     scan_id: scanId,
-    status: answered ? "completed" : "failed",
+    status: answered2 ? "completed" : "failed",
     tools_run,
     missing_tools,
     meta
@@ -76575,7 +77057,7 @@ function canonicalPath2(projectPath, path8) {
 var RECOVERABLE_KINDS = /* @__PURE__ */ new Set(["route", "mount", "import", "env"]);
 function recoverMetavars(semgrepJson, sources) {
   const results = prop4(semgrepJson, "results");
-  if (!isRecord7(semgrepJson) || !Array.isArray(results)) {
+  if (!isRecord8(semgrepJson) || !Array.isArray(results)) {
     return {
       json: semgrepJson,
       intact: 0,
@@ -76606,14 +77088,14 @@ function recoverMetavars(semgrepJson, sources) {
     }
     const span = sliceSpan(raw, sources, buffers);
     const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
-    if (metavars === void 0 || !isRecord7(raw)) {
+    if (metavars === void 0 || !isRecord8(raw)) {
       unrecoverable += 1;
       const path8 = kind === "route" ? str5(raw, "path") : void 0;
       if (path8 !== void 0) unreadableRouteFiles.push(path8);
       return raw;
     }
     recovered += 1;
-    return { ...raw, extra: { ...isRecord7(extra) ? extra : {}, metavars } };
+    return { ...raw, extra: { ...isRecord8(extra) ? extra : {}, metavars } };
   });
   return {
     json: { ...semgrepJson, results: rebuilt },
@@ -77073,7 +77555,7 @@ function calleeIdentifier(span) {
 function stripQuotes3(value) {
   return value.replace(/^['"`]|['"`]$/g, "");
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function prop4(value, key) {
@@ -77090,7 +77572,7 @@ function num2(value, key) {
 }
 function hasMetavars(extra) {
   const metavars = prop4(extra, "metavars");
-  if (!isRecord7(metavars)) return false;
+  if (!isRecord8(metavars)) return false;
   return Object.keys(metavars).length > 0;
 }
 
@@ -77219,8 +77701,8 @@ var SEMGREP_DEFAULT_IGNORED_DIRS = [
 var SEMGREP_DEFAULT_IGNORED_SUFFIXES = [".min.js", "_test.go"];
 async function countRouteTargets(projectPath) {
   const ownIgnore = presentInProject(projectPath, ".semgrepignore");
-  const listed = await gitListedFiles(projectPath);
-  if (listed !== null) return countListedRouteTargets(projectPath, listed, ownIgnore);
+  const listed2 = await gitListedFiles(projectPath);
+  if (listed2 !== null) return countListedRouteTargets(projectPath, listed2, ownIgnore);
   if (ownIgnore) {
     return countFilesWithExtension(projectPath, ROUTE_PACK_EXTENSIONS);
   }
@@ -79081,7 +79563,7 @@ function mapSeverity3(value) {
   }
   return "info";
 }
-function isRecord8(value) {
+function isRecord9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function pathnameOf(matchedAt) {
@@ -79110,10 +79592,10 @@ function normalizeLine(line, routes) {
   } catch {
     return null;
   }
-  if (!isRecord8(parsed)) return null;
+  if (!isRecord9(parsed)) return null;
   const templateId = parsed["template-id"];
   if (typeof templateId !== "string" || templateId === "") return null;
-  const info = isRecord8(parsed["info"]) ? parsed["info"] : void 0;
+  const info = isRecord9(parsed["info"]) ? parsed["info"] : void 0;
   const nameValue = info !== void 0 ? info["name"] : void 0;
   const title = typeof nameValue === "string" && nameValue !== "" ? nameValue : templateId;
   const descriptionValue = info !== void 0 ? info["description"] : void 0;
@@ -80028,7 +80510,7 @@ function outcomeCounts(results) {
 }
 
 // src/validate/types.ts
-var VERDICTS = ["unreachable", "reachable", "imported", "confirmed", "unknown"];
+var VERDICTS2 = ["unreachable", "reachable", "imported", "confirmed", "unknown"];
 var IMPLEMENTED_PROVIDERS = ["static", "dependency"];
 
 // src/validate/summary.ts
@@ -80110,7 +80592,7 @@ function describeSourceScan(input) {
   };
 }
 function countByVerdict(validations) {
-  const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0]));
+  const counts = Object.fromEntries(VERDICTS2.map((v) => [v, 0]));
   for (const v of validations) if (Object.hasOwn(counts, v.verdict)) counts[v.verdict] += 1;
   return counts;
 }
@@ -81447,7 +81929,7 @@ function readJsonObject(checkoutRoot, path8, maxBytes) {
   return { status: "ok", value: parsed.value };
 }
 function scanNetwork(file, value, prefix, out) {
-  const entriesOf = (v) => Array.isArray(v) ? v.map((x, i2) => [`[${i2}]`, x]) : typeof v === "object" && v !== null ? Object.entries(v) : [];
+  const entriesOf2 = (v) => Array.isArray(v) ? v.map((x, i2) => [`[${i2}]`, x]) : typeof v === "object" && v !== null ? Object.entries(v) : [];
   const stack = [{ entries: [[prefix, value]], next: 0, path: "" }];
   while (stack.length > 0 && out.length < MAX_NPM_NAMED) {
     const frame = stack[stack.length - 1];
@@ -81464,7 +81946,7 @@ function scanNetwork(file, value, prefix, out) {
       const host = npmSpecNetworkHost(v);
       if (host !== null) out.push(`${file}: ${path8 || "(root)"} (${host})`);
     } else if (typeof v === "object" && v !== null) {
-      stack.push({ entries: entriesOf(v), next: 0, path: path8 });
+      stack.push({ entries: entriesOf2(v), next: 0, path: path8 });
     }
   }
 }
@@ -81499,15 +81981,15 @@ function workspaceMembers(projectDir, checkoutRoot, patterns) {
   const positive = patterns.filter((p) => !p.startsWith("!"));
   if (positive.length === 0) return { members, unchecked };
   const stack = [{ abs: projectDir, rel: "", depth: 0 }];
-  let listed = 0;
+  let listed2 = 0;
   while (stack.length > 0) {
     const cur = stack.pop();
     if (cur === void 0) break;
-    if (listed >= MAX_WORKSPACE_DIRS) {
+    if (listed2 >= MAX_WORKSPACE_DIRS) {
       unchecked.push(`workspace members (the walk stopped after ${MAX_WORKSPACE_DIRS} directories)`);
       break;
     }
-    listed += 1;
+    listed2 += 1;
     const entries2 = listProjectDirOrNull(checkoutRoot, cur.abs);
     if (entries2 === null) {
       unchecked.push(`${cur.rel || "."} (could not be listed, and workspace members may be below it)`);
@@ -81910,8 +82392,8 @@ function samePathKey(path8) {
   } catch {
     real = resolve30(path8);
   }
-  const posix2 = real.replace(/\\/g, "/");
-  return process.platform === "win32" ? posix2.toLowerCase() : posix2;
+  const posix4 = real.replace(/\\/g, "/");
+  return process.platform === "win32" ? posix4.toLowerCase() : posix4;
 }
 function parseWorktreeList(porcelain) {
   const entries2 = [];
@@ -84933,14 +85415,14 @@ function parsePinKey(key) {
 function versioned(value) {
   return `v${PIN_SCHEME}:${hashConfigValue(value)}`;
 }
-function toolDefinitionHash(tool51) {
+function toolDefinitionHash(tool54) {
   return versioned({
-    name: tool51.name,
-    title: tool51.title ?? null,
-    description: tool51.description ?? null,
-    inputSchema: tool51.inputSchema ?? null,
-    outputSchema: tool51.outputSchema ?? null,
-    annotations: tool51.annotations ?? null
+    name: tool54.name,
+    title: tool54.title ?? null,
+    description: tool54.description ?? null,
+    inputSchema: tool54.inputSchema ?? null,
+    outputSchema: tool54.outputSchema ?? null,
+    annotations: tool54.annotations ?? null
   });
 }
 function promptHash(p) {
@@ -85443,7 +85925,7 @@ var Client = class extends Protocol {
   /**
    * Override request handler registration to enforce client-side validation for elicitation.
    */
-  setRequestHandler(requestSchema, handler48) {
+  setRequestHandler(requestSchema, handler51) {
     const shape = getObjectShape(requestSchema);
     const methodSchema = shape?.method;
     if (!methodSchema) {
@@ -85470,7 +85952,7 @@ var Client = class extends Protocol {
         if (params.mode === "url" && !supportsUrlMode) {
           throw new McpError(ErrorCode.InvalidParams, "Client does not support URL-mode elicitation requests");
         }
-        const result = await Promise.resolve(handler48(request, extra));
+        const result = await Promise.resolve(handler51(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -85506,7 +85988,7 @@ var Client = class extends Protocol {
           throw new McpError(ErrorCode.InvalidParams, `Invalid sampling request: ${errorMessage5}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler48(request, extra));
+        const result = await Promise.resolve(handler51(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -85526,7 +86008,7 @@ var Client = class extends Protocol {
       };
       return super.setRequestHandler(requestSchema, wrappedHandler);
     }
-    return super.setRequestHandler(requestSchema, handler48);
+    return super.setRequestHandler(requestSchema, handler51);
   }
   assertCapability(capability, method) {
     if (!this._serverCapabilities?.[capability]) {
@@ -85769,17 +86251,17 @@ var Client = class extends Protocol {
     this._cachedToolOutputValidators.clear();
     this._cachedKnownTaskTools.clear();
     this._cachedRequiredTaskTools.clear();
-    for (const tool51 of tools) {
-      if (tool51.outputSchema) {
-        const toolValidator = this._jsonSchemaValidator.getValidator(tool51.outputSchema);
-        this._cachedToolOutputValidators.set(tool51.name, toolValidator);
+    for (const tool54 of tools) {
+      if (tool54.outputSchema) {
+        const toolValidator = this._jsonSchemaValidator.getValidator(tool54.outputSchema);
+        this._cachedToolOutputValidators.set(tool54.name, toolValidator);
       }
-      const taskSupport = tool51.execution?.taskSupport;
+      const taskSupport = tool54.execution?.taskSupport;
       if (taskSupport === "required" || taskSupport === "optional") {
-        this._cachedKnownTaskTools.add(tool51.name);
+        this._cachedKnownTaskTools.add(tool54.name);
       }
       if (taskSupport === "required") {
-        this._cachedRequiredTaskTools.add(tool51.name);
+        this._cachedRequiredTaskTools.add(tool54.name);
       }
     }
   }
@@ -85821,7 +86303,7 @@ var Client = class extends Protocol {
         onChanged(error2, null);
       }
     };
-    const handler48 = () => {
+    const handler51 = () => {
       if (debounceMs) {
         const existingTimer = this._listChangedDebounceTimers.get(listType);
         if (existingTimer) {
@@ -85833,7 +86315,7 @@ var Client = class extends Protocol {
         refresh();
       }
     };
-    this.setNotificationHandler(notificationSchema, handler48);
+    this.setNotificationHandler(notificationSchema, handler51);
   }
   async sendRootsListChanged() {
     return this.notification({ method: "notifications/roots/list_changed" });
@@ -86353,8 +86835,8 @@ async function random(size) {
   const evenDistCutoff = Math.pow(2, 8) - Math.pow(2, 8) % mask.length;
   let result = "";
   while (result.length < size) {
-    const randomBytes4 = await getRandomValues(size - result.length);
-    for (const randomByte of randomBytes4) {
+    const randomBytes5 = await getRandomValues(size - result.length);
+    for (const randomByte of randomBytes5) {
       if (randomByte < evenDistCutoff) {
         result += mask[randomByte % mask.length];
       }
@@ -87398,10 +87880,10 @@ function mediaTypeEssence(header) {
 // node_modules/eventsource-parser/dist/stream.js
 var EventSourceParserStream = class extends TransformStream {
   constructor({ onError, onRetry, onComment, maxBufferSize } = {}) {
-    let parser;
+    let parser4;
     super({
       start(controller) {
-        parser = createParser({
+        parser4 = createParser({
           onEvent: (event) => {
             controller.enqueue(event);
           },
@@ -87414,7 +87896,7 @@ var EventSourceParserStream = class extends TransformStream {
         });
       },
       transform(chunk) {
-        parser.feed(chunk);
+        parser4.feed(chunk);
       }
     });
   }
@@ -90822,12 +91304,12 @@ async function fetchJson(url2, http, headers = {}) {
     return { kind: "error", reason: describeError(e, http.signal) };
   }
 }
-function isRecord9(x) {
+function isRecord10(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 function stringRecord(x) {
   const out = {};
-  if (!isRecord9(x)) return out;
+  if (!isRecord10(x)) return out;
   for (const [k, v] of Object.entries(x)) if (typeof v === "string") out[k] = v;
   return out;
 }
@@ -90837,11 +91319,11 @@ function npmDocUrl(name) {
 async function lookupNpm(name, http) {
   const r = await fetchJson(npmDocUrl(name), http, { accept: "application/vnd.npm.install-v1+json" });
   if (r.kind !== "ok") return r;
-  if (!isRecord9(r.json) || !isRecord9(r.json["versions"])) return { kind: "error", reason: "npm registry returned an unexpected document" };
+  if (!isRecord10(r.json) || !isRecord10(r.json["versions"])) return { kind: "error", reason: "npm registry returned an unexpected document" };
   const versions = Object.keys(r.json["versions"]);
   const installScript = {};
   for (const [v, meta] of Object.entries(r.json["versions"])) {
-    if (isRecord9(meta) && meta["hasInstallScript"] === true) installScript[v] = true;
+    if (isRecord10(meta) && meta["hasInstallScript"] === true) installScript[v] = true;
   }
   const tags = stringRecord(r.json["dist-tags"]);
   const info = { versions, tags, times: {}, installScript };
@@ -90853,12 +91335,12 @@ async function npmFullDocument(name, http) {
   const r = await fetchJson(npmDocUrl(name), http);
   if (r.kind === "not_found") return { kind: "error", reason: "npm registry no longer has this package" };
   if (r.kind === "error") return r;
-  if (!isRecord9(r.json)) return { kind: "error", reason: "npm registry returned an unexpected document" };
+  if (!isRecord10(r.json)) return { kind: "error", reason: "npm registry returned an unexpected document" };
   const scripts = {};
   const versions = r.json["versions"];
-  if (isRecord9(versions)) {
+  if (isRecord10(versions)) {
     for (const [v, meta] of Object.entries(versions)) {
-      if (isRecord9(meta)) scripts[v] = stringRecord(meta["scripts"]);
+      if (isRecord10(meta)) scripts[v] = stringRecord(meta["scripts"]);
     }
   }
   return { kind: "ok", times: stringRecord(r.json["time"]), scripts };
@@ -90867,13 +91349,13 @@ async function npmVersionScripts(name, version2, http) {
   const r = await fetchJson(`${npmDocUrl(name)}/${encodeURIComponent(version2)}`, http);
   if (r.kind === "not_found") return { kind: "error", reason: "version manifest not found" };
   if (r.kind === "error") return r;
-  return { kind: "ok", scripts: isRecord9(r.json) ? stringRecord(r.json["scripts"]) : {} };
+  return { kind: "ok", scripts: isRecord10(r.json) ? stringRecord(r.json["scripts"]) : {} };
 }
 async function lookupPypi(name, http) {
   const r = await fetchJson(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, http);
   if (r.kind !== "ok") return r;
-  if (!isRecord9(r.json) || !isRecord9(r.json["info"])) return { kind: "error", reason: "PyPI returned an unexpected document" };
-  const releases = isRecord9(r.json["releases"]) ? r.json["releases"] : {};
+  if (!isRecord10(r.json) || !isRecord10(r.json["info"])) return { kind: "error", reason: "PyPI returned an unexpected document" };
+  const releases = isRecord10(r.json["releases"]) ? r.json["releases"] : {};
   const times = {};
   const versions = [];
   for (const [v, files] of Object.entries(releases)) {
@@ -90881,7 +91363,7 @@ async function lookupPypi(name, http) {
     versions.push(v);
     let earliest;
     for (const f of files) {
-      const t = isRecord9(f) ? f["upload_time_iso_8601"] ?? f["upload_time"] : void 0;
+      const t = isRecord10(f) ? f["upload_time_iso_8601"] ?? f["upload_time"] : void 0;
       if (typeof t === "string" && (earliest === void 0 || t < earliest)) earliest = t;
     }
     if (earliest !== void 0) times[v] = earliest;
@@ -90895,14 +91377,14 @@ async function lookupPackagist(name, http) {
   const lower = name.toLowerCase();
   const r = await fetchJson(`https://repo.packagist.org/p2/${lower}.json`, http);
   if (r.kind !== "ok") return r;
-  const pkgs = isRecord9(r.json) ? r.json["packages"] : void 0;
-  const list2 = isRecord9(pkgs) ? pkgs[lower] : void 0;
+  const pkgs = isRecord10(r.json) ? r.json["packages"] : void 0;
+  const list2 = isRecord10(pkgs) ? pkgs[lower] : void 0;
   if (!Array.isArray(list2)) return { kind: "error", reason: "Packagist returned an unexpected document" };
   let carried = {};
   const versions = [];
   const times = {};
   for (const entry of list2) {
-    if (!isRecord9(entry)) continue;
+    if (!isRecord10(entry)) continue;
     const next = { ...carried };
     for (const [k, v] of Object.entries(entry)) {
       if (v === "__unset") delete next[k];
@@ -90921,7 +91403,7 @@ async function lookupNuget(name, http) {
   const lower = name.toLowerCase();
   const r = await fetchJson(`https://api.nuget.org/v3-flatcontainer/${encodeURIComponent(lower)}/index.json`, http);
   if (r.kind !== "ok") return r;
-  const versions = isRecord9(r.json) && Array.isArray(r.json["versions"]) ? r.json["versions"].filter((v) => typeof v === "string") : null;
+  const versions = isRecord10(r.json) && Array.isArray(r.json["versions"]) ? r.json["versions"].filter((v) => typeof v === "string") : null;
   if (versions === null) return { kind: "error", reason: "NuGet returned an unexpected document" };
   return { kind: "found", info: { versions, times: {}, installScript: {} } };
 }
@@ -90930,9 +91412,9 @@ function nugetSearchUrl(id) {
 }
 async function nugetCanonicalId(id, http) {
   const r = await fetchJson(nugetSearchUrl(id), http);
-  if (r.kind !== "ok" || !isRecord9(r.json) || !Array.isArray(r.json["data"])) return void 0;
+  if (r.kind !== "ok" || !isRecord10(r.json) || !Array.isArray(r.json["data"])) return void 0;
   for (const entry of r.json["data"]) {
-    const found2 = isRecord9(entry) ? entry["id"] : void 0;
+    const found2 = isRecord10(entry) ? entry["id"] : void 0;
     if (typeof found2 === "string" && found2.toLowerCase() === id.toLowerCase()) return found2;
   }
   return void 0;
@@ -90942,7 +91424,7 @@ async function nugetPublished(name, version2, http) {
   const r = await fetchJson(url2, http);
   if (r.kind === "not_found") return { kind: "error", reason: "NuGet registration leaf not found" };
   if (r.kind === "error") return r;
-  const published = isRecord9(r.json) ? r.json["published"] : void 0;
+  const published = isRecord10(r.json) ? r.json["published"] : void 0;
   return typeof published === "string" ? { kind: "ok", published } : { kind: "ok" };
 }
 function lookupRegistry(ecosystem, name, http) {
@@ -91663,7 +92145,7 @@ async function handler46(input, _ctx, callMeta) {
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID22 } from "node:crypto";
 import { existsSync as existsSync24, readFileSync as readFileSync12, writeFileSync as writeFileSync17 } from "node:fs";
-import { basename as basename11, join as join91, posix, win32 } from "node:path";
+import { basename as basename11, join as join91, posix as posix2, win32 } from "node:path";
 
 // src/vex/render.ts
 var OPENVEX_CONTEXT = "https://openvex.dev/ns/v0.2.0";
@@ -92013,7 +92495,1208 @@ function sbomTrust(sbom, deps) {
   return { trusted: true, note: null };
 }
 function isAbsolutePath(name) {
-  return posix.isAbsolute(name) || win32.isAbsolute(name);
+  return posix2.isAbsolute(name) || win32.isAbsolute(name);
+}
+
+// src/llmscan/types.ts
+var LLM_SCAN_DEFAULTS = {
+  max_tasks: 200,
+  /** US-4.AC-1: above this estimate the plan needs `confirm: true`. */
+  max_estimated_tokens: 5e5,
+  /** The host's fixed cost per task, measured in the spike for a subagent. */
+  per_task_overhead: 6e4,
+  /** The same for a task run by MCP sampling (brief only, no agent context). */
+  sampling_overhead: 1e3,
+  /** A lease lasts this long; an expired lease returns the task to `open`. */
+  lease_minutes: 20,
+  /** No more than this many open plans per project. */
+  max_open_plans: 5,
+  /** `execute: 'sampling'` stops starting tasks once this much time has gone. */
+  sampling_budget_ms: 5e4
+};
+
+// src/llmscan/service.ts
+import { createHash as createHash17, randomUUID as randomUUID23 } from "node:crypto";
+import { posix as posix3, relative as relative37, isAbsolute as isAbsolute25 } from "node:path";
+
+// src/llmscan/briefs.ts
+import { randomBytes as randomBytes4 } from "node:crypto";
+import { join as join92 } from "node:path";
+
+// src/llmscan/plan.ts
+import { isAbsolute as isAbsolute24, relative as relative36 } from "node:path";
+var MAX_ROUTES_PER_HUNT_TASK = 5;
+var OVER_LIMIT_REASON_PREFIX = "over the plan's max_tasks limit";
+var FILES_PER_GROUP = 5;
+var DEFAULT_BRIEF_TOKENS = { verify: 2e3, hunt: 3e3, crosscut: 2500 };
+function relativize(file, projectPath) {
+  const rel2 = isAbsolute24(file) ? relative36(projectPath, file) : file;
+  const posix4 = rel2.replace(/\\/g, "/");
+  if (posix4 === "" || posix4 === ".." || posix4.startsWith("../") || isAbsolute24(posix4) || /^[A-Za-z]:/.test(posix4)) return null;
+  return posix4.replace(/^\.\//, "");
+}
+function entryPointId(route, projectPath) {
+  const where = relativize(route.file, projectPath) ?? route.file.replace(/\\/g, "/");
+  return `${route.method} ${route.path_resolved} (${where}:${String(route.line)})`;
+}
+function verifyDrafts(input) {
+  const drafts = [];
+  const notEligible = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const f of input.findings) {
+    if (seen.has(f.fingerprint)) continue;
+    seen.add(f.fingerprint);
+    if (f.file_path === void 0 || f.file_path === "") {
+      notEligible.push({ fingerprint: f.fingerprint, reason: "no file: nothing to read and cite (dependency, configuration)" });
+      continue;
+    }
+    if (f.line_start === void 0 || !Number.isInteger(f.line_start) || f.line_start < 1) {
+      notEligible.push({ fingerprint: f.fingerprint, reason: "no line: the finding names a file but not where" });
+      continue;
+    }
+    const rel2 = relativize(f.file_path, input.project_path);
+    if (rel2 === null) {
+      notEligible.push({ fingerprint: f.fingerprint, reason: "the file is outside the project" });
+      continue;
+    }
+    drafts.push({ kind: "verify", target: { fingerprint: f.fingerprint, files: [rel2] } });
+  }
+  return { drafts, notEligible };
+}
+function huntDrafts(input, notes, setAside) {
+  const byFile = /* @__PURE__ */ new Map();
+  const seen = /* @__PURE__ */ new Set();
+  for (const route of input.surface?.snapshot.routes ?? []) {
+    const id = entryPointId(route, input.project_path);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const rel2 = relativize(route.file, input.project_path);
+    if (rel2 === null) {
+      setAside.push({ entry_point: id, reason: "handler file is outside the project" });
+      continue;
+    }
+    const list2 = byFile.get(rel2) ?? [];
+    list2.push({ id, line: route.line });
+    byFile.set(rel2, list2);
+  }
+  const drafts = [];
+  for (const file of [...byFile.keys()].sort()) {
+    const routes = (byFile.get(file) ?? []).sort((a2, b) => a2.line - b.line || (a2.id < b.id ? -1 : 1));
+    for (let i2 = 0; i2 < routes.length; i2 += MAX_ROUTES_PER_HUNT_TASK) {
+      const entry_points = routes.slice(i2, i2 + MAX_ROUTES_PER_HUNT_TASK).map((r) => r.id);
+      drafts.push({ kind: "hunt", target: { entry_points, files: [file] } });
+    }
+  }
+  if (seen.size > 0) return drafts;
+  notes.push(
+    input.surface === null ? "No attack surface snapshot: no entry points are known, so the hunt goes by groups of code files. Coverage stays partial." : "The attack surface found no entry points: the hunt goes by groups of code files. Coverage stays partial."
+  );
+  const files = [...new Set(input.code_files)].sort();
+  for (let i2 = 0; i2 < files.length; i2 += FILES_PER_GROUP) {
+    drafts.push({ kind: "hunt", target: { files: files.slice(i2, i2 + FILES_PER_GROUP) } });
+  }
+  return drafts;
+}
+function buildPlan(input) {
+  const notes = [];
+  const set_aside = [];
+  const not_eligible = [];
+  const work = [];
+  if (input.modes.includes("verify")) {
+    const v = verifyDrafts(input);
+    work.push(...v.drafts);
+    not_eligible.push(...v.notEligible);
+  }
+  const hunting = input.modes.includes("hunt");
+  if (hunting) work.push(...huntDrafts(input, notes, set_aside));
+  const wantsCrosscut = hunting && work.some((d) => d.kind === "hunt");
+  const crosscut = wantsCrosscut && input.limits.max_tasks >= 1 ? { kind: "crosscut", target: { files: [] } } : null;
+  const room = Math.max(0, input.limits.max_tasks - (crosscut === null ? 0 : 1));
+  const kept = work.slice(0, room);
+  const reason = `${OVER_LIMIT_REASON_PREFIX} (${String(input.limits.max_tasks)})`;
+  for (const d of work.slice(room)) {
+    if (d.target.fingerprint !== void 0) not_eligible.push({ fingerprint: d.target.fingerprint, reason });
+    else if (d.target.entry_points !== void 0) for (const ep of d.target.entry_points) set_aside.push({ entry_point: ep, reason });
+    else set_aside.push({ entry_point: `files: ${d.target.files.join(", ")}`, reason });
+  }
+  if (crosscut !== null) kept.push(crosscut);
+  if (work.length > room) notes.push(`${String(work.length - room)} planned task(s) did not fit in max_tasks (${String(input.limits.max_tasks)}); coverage will be partial.`);
+  const tasks = kept.map((d, i2) => ({ task_id: `t-${String(i2 + 1).padStart(4, "0")}`, ...d }));
+  const briefTokens = (t) => (input.estimate_brief ?? ((x) => DEFAULT_BRIEF_TOKENS[x.kind]))(t);
+  const brief_tokens = tasks.reduce((sum, t) => sum + briefTokens(t), 0);
+  const estimate = {
+    tasks: tasks.length,
+    brief_tokens,
+    total_tokens: brief_tokens + tasks.length * input.limits.per_task_overhead,
+    assumptions: `brief tokens per task (about 4 characters per token) plus ${String(input.limits.per_task_overhead)} tokens of fixed host cost per task; the host's real use is not known to the server`
+  };
+  let nothing_to_plan = null;
+  if (tasks.length === 0 && work.length > 0) {
+    nothing_to_plan = `${reason}: no task fits`;
+  } else if (tasks.length === 0) {
+    nothing_to_plan = hunting ? "No entry points, no code files and no eligible findings: there is nothing to hunt in or to verify." : "No finding is eligible for verification (each needs a file and a line).";
+  }
+  return { tasks, not_eligible, set_aside, estimate, notes, nothing_to_plan };
+}
+
+// src/llmscan/briefs.ts
+var MAX_BRIEF_TOKENS = 25e3;
+var MAX_EXCERPT_LINES = 200;
+var CURRENT_PROMPT_VERSION = "v1";
+var MAX_EXCERPT_CHARS = 2e4;
+var MAX_LINE_CHARS = 400;
+var MAX_FLAGGED_LINE_CHARS = 2e3;
+var MAX_MESSAGE_CHARS = 4e3;
+var MAX_SNIPPET_CHARS = 2e3;
+var MAX_LIST_CHARS = 12e3;
+var MAX_LIST_ITEMS = 200;
+var MAX_FINDING_MESSAGE_CHARS = 300;
+var MAX_LOOKBACK_LINES = 400;
+var BOUNDARY_TRIES = 20;
+function randomBoundary() {
+  return `BOUNDARY-${randomBytes4(12).toString("hex")}`;
+}
+function estimateTokens(text2) {
+  return Math.ceil(text2.length / 4);
+}
+function responseSchema(kind) {
+  return JSON.parse(kind === "verify" ? VERIFY_SCHEMA : HUNT_SCHEMA);
+}
+var TEMPLATE_NAMES = { verify: "verify", hunt: "hunt-entrypoint", crosscut: "hunt-crosscut" };
+var templateCache = /* @__PURE__ */ new Map();
+function loadTemplate(version2, name) {
+  const key = `${version2}/${name}`;
+  const cached2 = templateCache.get(key);
+  if (cached2 !== void 0) return cached2;
+  if (!/^v[0-9]+$/.test(version2)) throw new Error("llm-scan prompt version is not of the form vN");
+  const read3 = readSmallText(join92(resolveConfigsDir(), "llm-scan", "prompts", version2, `${name}.md`), 256 * 1024);
+  if (read3.status !== "ok") throw new Error(`llm-scan prompt template ${key}.md is not available (${read3.status}); the plugin install is incomplete`);
+  const text2 = read3.text.replace(/^<!--[^\n]*-->\r?\n+/, "");
+  templateCache.set(key, text2);
+  return text2;
+}
+var VERIFY_SCHEMA = JSON.stringify(
+  {
+    type: "object",
+    additionalProperties: false,
+    required: ["verdict", "attacker_input", "operation", "decisive_line", "reasoning"],
+    properties: {
+      verdict: { enum: ["real", "not_real", "undetermined"] },
+      attacker_input: { type: "string", description: 'file:line, or "none"' },
+      operation: { type: "string", description: "file:line" },
+      decisive_line: { type: "string", description: "file:line \u2014 reason" },
+      reasoning: { type: "string", description: `at most ${String(MAX_REASONING_WORDS)} words` }
+    }
+  },
+  null,
+  2
+);
+var HUNT_SCHEMA = JSON.stringify(
+  {
+    type: "object",
+    additionalProperties: false,
+    required: ["entry_points_reviewed", "findings"],
+    properties: {
+      entry_points_reviewed: { type: "array", items: { type: "string" } },
+      findings: {
+        type: "array",
+        maxItems: MAX_HUNT_FINDINGS,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["file", "line", "class", "title", "attacker", "evidence"],
+          properties: {
+            file: { type: "string", description: "project-relative path" },
+            line: { type: "integer", minimum: 1 },
+            class: { enum: [...HUNT_CLASSES] },
+            title: { type: "string", maxLength: MAX_TITLE_CHARS },
+            attacker: { type: "string", maxLength: MAX_TITLE_CHARS },
+            evidence: { type: "string", description: `at most ${String(MAX_EVIDENCE_WORDS)} words, with at least one file:line` }
+          }
+        }
+      }
+    }
+  },
+  null,
+  2
+);
+function scrubSecrets(text2, firstLine7 = 1) {
+  const hits = scanForSecrets(text2);
+  if (hits.length === 0) return text2;
+  const lines = text2.split(/\r?\n/);
+  const rulesByLine = /* @__PURE__ */ new Map();
+  const keyBody = /* @__PURE__ */ new Set();
+  for (const h2 of hits) {
+    const at = h2.line - 1;
+    rulesByLine.set(at, [...rulesByLine.get(at) ?? [], h2.ruleId]);
+    if (h2.ruleId !== "private-key-block") continue;
+    for (let i2 = at + 1; i2 < lines.length; i2 += 1) {
+      keyBody.add(i2);
+      if ((lines[i2] ?? "").includes("-----END")) break;
+    }
+  }
+  return lines.map((line, i2) => {
+    const rules2 = rulesByLine.get(i2);
+    if (rules2 === void 0) return keyBody.has(i2) ? "\u2039private key body removed\u203A" : line;
+    const indent = /^\s*/.exec(line)?.[0] ?? "";
+    return `${indent}\u2039${rules2.join(", ")} line ${String(firstLine7 + i2)}\u203A`;
+  }).join("\n");
+}
+var clip4 = (s, max) => s.length <= max ? s : `${s.slice(0, max)} \u2026[cut, ${String(s.length - max)} more characters]`;
+var CONTROL_WORDS = /^(?:if|else|elif|for|foreach|while|do|switch|case|catch|try|finally|with|return|await|throw|synchronized|using|lock|until|unless)\b/;
+var indentOf = (line) => (/^[ \t]*/.exec(line)?.[0] ?? "").replace(/\t/g, "    ").length;
+function startsFunction(line) {
+  const t = line.trim();
+  if (t === "" || CONTROL_WORDS.test(t)) return false;
+  if (/^(?:(?:export|public|private|protected|static|async|final|override|abstract|default|pub|unsafe|extern|const)\s+)*(?:function\*?|def|func|fn|fun|sub)\b/.test(t)) return true;
+  if (/=>\s*\{?\s*$/.test(t)) return true;
+  return /\w\s*\([^;]*\)\s*(?:->\s*[^{]+|:\s*[\w<>[\]|., ]+|throws\s+[\w., ]+)?\s*\{?\s*:?\s*$/.test(t) && /[{:]\s*$/.test(t);
+}
+function excerptRange(lines, flagged) {
+  const total = lines.length;
+  const at = Math.min(Math.max(flagged, 1), total);
+  const window = () => {
+    const s2 = Math.max(1, Math.min(at - 99, total - MAX_EXCERPT_LINES + 1));
+    return [s2, Math.min(total, s2 + MAX_EXCERPT_LINES - 1)];
+  };
+  const flaggedIndent = indentOf(lines[at - 1] ?? "");
+  let start = 0;
+  for (let n2 = at; n2 >= 1 && at - n2 <= MAX_LOOKBACK_LINES; n2 -= 1) {
+    const line = lines[n2 - 1] ?? "";
+    if (line.trim() === "" || !startsFunction(line)) continue;
+    if (indentOf(line) < flaggedIndent || n2 === at) {
+      start = n2;
+      break;
+    }
+  }
+  if (start === 0) return window();
+  const startIndent = indentOf(lines[start - 1] ?? "");
+  let end = total;
+  for (let n2 = start + 1; n2 <= total; n2 += 1) {
+    const line = lines[n2 - 1] ?? "";
+    if (line.trim() === "" || indentOf(line) > startIndent) continue;
+    end = /^\s*(?:[})\]]|end\b)/.test(line) ? n2 : n2 - 1;
+    break;
+  }
+  while (end > at && (lines[end - 1] ?? "").trim() === "") end -= 1;
+  if (end < at) return window();
+  if (end - start + 1 <= MAX_EXCERPT_LINES) return [start, end];
+  const s = Math.max(start, Math.min(at - 99, end - MAX_EXCERPT_LINES + 1));
+  return [s, s + MAX_EXCERPT_LINES - 1];
+}
+function renderExcerpt(text2, flagged, maxChars = MAX_EXCERPT_CHARS) {
+  const lines = text2.split(/\r?\n/);
+  const beyond = flagged !== void 0 && flagged > lines.length;
+  const at = Math.min(Math.max(flagged ?? 1, 1), lines.length);
+  const note = beyond ? `(the flagged line ${String(flagged)} is beyond the end of the file; the last line, ${String(at)}, is marked)
+` : "";
+  const [from, to] = excerptRange(lines, at);
+  const scrubbed = scrubSecrets(lines.slice(from - 1, to).join("\n"), from).split("\n");
+  const width = String(to).length;
+  const rows = scrubbed.map((line, i2) => {
+    const n2 = from + i2;
+    const cap = n2 === at ? MAX_FLAGGED_LINE_CHARS : MAX_LINE_CHARS;
+    return `${n2 === at ? ">" : " "}${String(n2).padStart(width)} | ${clip4(line, cap)}`;
+  });
+  let lo = 0;
+  let hi = rows.length;
+  let size = rows.reduce((a2, r) => a2 + r.length + 1, 0);
+  const flaggedIdx = at - from;
+  while (size > maxChars && hi - lo > 1) {
+    if (flaggedIdx - lo >= hi - 1 - flaggedIdx) size -= (rows[lo++] ?? "").length + 1;
+    else size -= (rows[--hi] ?? "").length + 1;
+  }
+  return note + rows.slice(lo, hi).join("\n");
+}
+function renderFinding(f, file) {
+  const line = file !== void 0 && f.line_start !== void 0 ? `:${String(f.line_start)}` : "";
+  const rows = [
+    `tool: ${scrubSecrets(f.tool)}`,
+    `rule: ${scrubSecrets(f.rule_id ?? "(none)")}`,
+    `severity: ${f.severity}`,
+    `location: ${file === void 0 ? "(no file)" : scrubSecrets(file)}${line}`,
+    `title: ${clip4(scrubSecrets(f.title), 300)}`,
+    `message: ${clip4(scrubSecrets(f.message ?? ""), MAX_MESSAGE_CHARS)}`
+  ];
+  if (f.snippet !== void 0 && f.snippet !== "") rows.push(`snippet: ${clip4(scrubSecrets(f.snippet), MAX_SNIPPET_CHARS)}`);
+  return rows.join("\n");
+}
+function renderList(items, more) {
+  if (items.length === 0) return "(none)";
+  const out = [];
+  let size = 0;
+  for (const item of items.slice(0, MAX_LIST_ITEMS)) {
+    if (size + item.length > MAX_LIST_CHARS) break;
+    out.push(item);
+    size += item.length + 1;
+  }
+  if (out.length < items.length) out.push(`(${String(items.length - out.length)} more ${more} not listed)`);
+  return out.join("\n");
+}
+function renderScannerFindings(findings) {
+  return renderList(
+    (findings ?? []).map((f) => {
+      const where = f.file_path !== void 0 ? ` at ${scrubSecrets(f.file_path)}${f.line_start !== void 0 ? `:${String(f.line_start)}` : ""}` : "";
+      const msg = scrubSecrets(f.message ?? f.title).replace(/\s+/g, " ");
+      return `- ${scrubSecrets(f.tool)} ${scrubSecrets(f.rule_id ?? "(none)")}${where}: ${clip4(msg, MAX_FINDING_MESSAGE_CHARS)}`;
+    }),
+    "findings"
+  );
+}
+function renderEntryPoints(task, ctx) {
+  const ids2 = ctx.entry_points !== void 0 && ctx.entry_points.length > 0 ? ctx.entry_points.map((r) => entryPointId(r, ctx.root)) : task.target.entry_points ?? [];
+  return renderList((ids2.length > 0 ? ids2 : task.target.files).map((id) => scrubSecrets(id)), "entry points");
+}
+function renderVerifyData(task, ctx) {
+  const f = ctx.finding;
+  if (f === void 0) throw new Error("a verify brief needs the scanner finding");
+  const file = task.target.files[0] ?? f.file_path;
+  if (file === void 0 || file === "") return { finding: renderFinding(f, void 0), excerpt: "(the finding names no file)" };
+  const read3 = ctx.reader(ctx.root, file);
+  if (read3.status !== "ok") return { finding: renderFinding(f, file), excerpt: `(the file could not be read: ${read3.status})` };
+  const text2 = read3.text;
+  return {
+    finding: renderFinding(f, file),
+    excerpt: renderExcerpt(text2, f.line_start),
+    excerptWithin: (maxChars) => renderExcerpt(text2, f.line_start, maxChars)
+  };
+}
+function renderBrief(task, ctx) {
+  const template = loadTemplate(ctx.prompt_version ?? CURRENT_PROMPT_VERSION, TEMPLATE_NAMES[task.kind]);
+  let excerptWithin;
+  let values;
+  if (task.kind === "verify") {
+    const { excerptWithin: within, ...data } = renderVerifyData(task, ctx);
+    excerptWithin = within;
+    values = { ...data, schema: VERIFY_SCHEMA };
+  } else {
+    values = { entry_points: renderEntryPoints(task, ctx), scanner_findings: renderScannerFindings(ctx.scanner_findings), schema: HUNT_SCHEMA };
+  }
+  let boundary = ctx.boundary();
+  for (let tries = 1; Object.values(values).some((v) => v.includes(boundary)); tries += 1) {
+    if (tries >= BOUNDARY_TRIES) throw new Error("could not draw a boundary marker absent from the quoted data");
+    boundary = ctx.boundary();
+  }
+  values["boundary"] = boundary;
+  const fill = () => template.replace(/\{(boundary|finding|excerpt|schema|entry_points|scanner_findings)\}/g, (whole, name) => values[name] ?? whole);
+  const limit = ctx.max_tokens ?? MAX_BRIEF_TOKENS;
+  let text2 = fill();
+  if (estimateTokens(text2) > limit) {
+    for (const key of ["entry_points", "scanner_findings"]) if (values[key] !== void 0) values[key] = "(omitted: the brief size limit)";
+    text2 = fill();
+  }
+  for (let cap = MAX_EXCERPT_CHARS >> 1; excerptWithin !== void 0 && estimateTokens(text2) > limit && cap >= 1; cap >>= 1) {
+    values["excerpt"] = excerptWithin(cap);
+    text2 = fill();
+  }
+  if (estimateTokens(text2) > limit) throw new Error("the brief exceeds the size limit even with its variable parts cut to the minimum");
+  return { text: text2, chars: text2.length, estimated_tokens: estimateTokens(text2) };
+}
+
+// src/llmscan/report.ts
+var ESTIMATED_CHARS_PER_TOKEN = 4;
+var STORED = {
+  real: "exploitable",
+  not_real: "not_exploitable",
+  undetermined: "undetermined"
+};
+var isVerify = (r) => r !== null && "verdict" in r;
+var isHunt = (r) => r !== null && "findings" in r;
+var answered = (t) => t.status === "closed" && t.closed_reason === "valid";
+var neverDelivered = (t) => t.status === "closed" && t.closed_reason === "not_delivered";
+function computeReport(plan, tasks) {
+  const counts = {
+    by_kind: { verify: 0, hunt: 0, crosscut: 0 },
+    by_verdict: { exploitable: 0, not_exploitable: 0, undetermined: 0 },
+    by_independence: { subagent: 0, sampling: 0, same_context: 0 }
+  };
+  const demoted = [];
+  const huntFindings = /* @__PURE__ */ new Map();
+  const visitedBy = /* @__PURE__ */ new Map();
+  const entryOrder = [];
+  const known = /* @__PURE__ */ new Set();
+  const note = (ep) => {
+    if (!known.has(ep)) {
+      known.add(ep);
+      entryOrder.push(ep);
+    }
+  };
+  const reportedBy = /* @__PURE__ */ new Map();
+  for (const t of tasks) {
+    if (t.kind === "verify" || !answered(t) || !isHunt(t.result)) continue;
+    for (const fp of t.result.fingerprints ?? []) reportedBy.set(fp, /* @__PURE__ */ new Set([...reportedBy.get(fp) ?? [], t.task_id]));
+  }
+  for (const t of tasks) {
+    counts.by_kind[t.kind] += 1;
+    if (answered(t) && t.independence !== null) counts.by_independence[t.independence] += 1;
+    if (t.kind === "verify") {
+      const verdict = answered(t) && isVerify(t.result) ? STORED[t.result.verdict] : null;
+      if (verdict !== null && isVerify(t.result)) {
+        counts.by_verdict[verdict] += 1;
+        if (verdict === "not_exploitable" && t.independence !== "same_context" && t.target.fingerprint !== void 0) {
+          demoted.push({
+            fingerprint: t.target.fingerprint,
+            decisive_line: t.result.decisive_line,
+            reasoning: t.result.reasoning,
+            ...t.target.origin_task_id !== void 0 ? { origin_task_id: t.target.origin_task_id } : {}
+          });
+        }
+      }
+      if (t.status === "closed" && t.closed_reason === "invalid_submissions") counts.by_verdict.undetermined += 1;
+      const fp = t.target.fingerprint;
+      if (t.target.origin_task_id !== void 0 && fp !== void 0) {
+        const prior = huntFindings.get(fp);
+        huntFindings.set(fp, {
+          fingerprint: fp,
+          status: verdict ?? prior?.status ?? "unverified",
+          independent: verdict === null ? prior?.independent ?? null : t.independence !== null && t.independence !== "same_context",
+          sources: [.../* @__PURE__ */ new Set([...prior?.sources ?? [], t.target.origin_task_id, ...reportedBy.get(fp) ?? []])],
+          verify_task_id: t.task_id
+        });
+      }
+      continue;
+    }
+    for (const ep of t.target.entry_points ?? []) {
+      note(ep);
+      if (answered(t) && !visitedBy.has(ep)) visitedBy.set(ep, t.task_id);
+    }
+  }
+  const asideReason = new Map(plan.set_aside.map((s) => [s.entry_point, s.reason]));
+  for (const ep of asideReason.keys()) note(ep);
+  const entry_points = entryOrder.map((ep) => {
+    const by = visitedBy.get(ep);
+    if (by !== void 0) return { entry_point: ep, status: "visited", task_id: by };
+    const reason = asideReason.get(ep);
+    if (reason !== void 0) return { entry_point: ep, status: "set_aside", reason };
+    return { entry_point: ep, status: "not_visited" };
+  });
+  const not_visited = entry_points.filter((e) => e.status !== "visited").map((e) => e.entry_point);
+  const missing = tasks.filter((t) => !answered(t)).map((t) => t.task_id);
+  const not_planned = plan.not_eligible.filter((n2) => n2.overflow === true || n2.reason.startsWith(OVER_LIMIT_REASON_PREFIX)).map((n2) => n2.fingerprint);
+  const taskCounts = {
+    planned: tasks.length,
+    closed: tasks.filter((t) => t.status === "closed" && !neverDelivered(t)).length,
+    open: tasks.filter((t) => t.status === "open").length,
+    leased: tasks.filter((t) => t.status === "leased").length,
+    not_delivered: tasks.filter(neverDelivered).length
+  };
+  const notes = ["The real token use is known only to the host; the sizes here are the server's estimate."];
+  const noEntryPoints = plan.modes.includes("hunt") && entry_points.length === 0;
+  if (noEntryPoints) notes.push("The hunt had no entry points (the attack surface found none), so coverage cannot be full.");
+  if (missing.length > 0) notes.push(`${String(missing.length)} task(s) not closed with a valid answer: ${missing.join(", ")}.`);
+  if (not_planned.length > 0) notes.push(`${String(not_planned.length)} finding(s) were not planned because the plan was full: ${not_planned.join(", ")}.`);
+  if (not_visited.length > 0) notes.push(`${String(not_visited.length)} entry point(s) not visited.`);
+  const unverified = [...huntFindings.values()].filter((h2) => h2.status === "unverified").length;
+  if (unverified > 0) notes.push(`${String(unverified)} hunt finding(s) are unverified.`);
+  const coverage = tasks.length === 0 ? "none" : missing.length === 0 && not_planned.length === 0 && not_visited.length === 0 && !noEntryPoints ? "full" : "partial";
+  const briefChars = tasks.reduce((n2, t) => n2 + (t.brief_chars ?? 0), 0);
+  return {
+    coverage,
+    tasks: taskCounts,
+    counts,
+    missing,
+    entry_points,
+    not_planned,
+    not_visited,
+    demoted,
+    hunt_findings: [...huntFindings.values()],
+    sizes: {
+      brief_chars: briefChars,
+      response_chars: tasks.reduce((n2, t) => n2 + (t.response_chars ?? 0), 0),
+      estimated_brief_tokens: Math.ceil(briefChars / ESTIMATED_CHARS_PER_TOKEN)
+    },
+    notes
+  };
+}
+
+// src/llmscan/service.ts
+var fail5 = (code, message2, retry_with) => ({
+  ok: false,
+  error: { code, message: message2, ...retry_with !== void 0 ? { retry_with } : {} }
+});
+var nowIso2 = () => (/* @__PURE__ */ new Date()).toISOString();
+var MAX_INVALID_SUBMISSIONS = 3;
+var MAX_PLANNED_TASKS = 1e3;
+var HOST_BRIEF_MAX_TOKENS = 2e4;
+var MAX_LISTED2 = 100;
+var MAX_FALLBACK_CODE_FILES = 2e3;
+var CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".java", ".cs", ".php", ".rb", ".rs"];
+var isOverLimit = (reason) => reason.startsWith(OVER_LIMIT_REASON_PREFIX);
+function listed(items) {
+  return { items: items.slice(0, MAX_LISTED2), total: items.length };
+}
+function relPosix(project, file) {
+  const rel2 = (isAbsolute25(file) ? relative37(project, file) : file).replace(/\\/g, "/");
+  return rel2 === "" || rel2.startsWith("../") || rel2 === ".." || isAbsolute25(rel2) ? null : rel2.replace(/^\.\//, "");
+}
+function fileHash(project, rel2) {
+  const read3 = readProjectBytes(project, rel2);
+  return read3.status === "ok" ? createHash17("sha256").update(read3.bytes).digest("hex") : "unreadable";
+}
+var hashesOf = (project, files) => Object.fromEntries(files.map((f) => [f, fileHash(project, f)]));
+function isStale(project, task) {
+  return Object.entries(task.file_hashes).some(([file, hash]) => fileHash(project, file) !== hash);
+}
+function loadPlan(storage, planId, opts = {}) {
+  const plan = storage.llmScan.getPlan(planId);
+  if (plan === null) {
+    return storage.llmScan.planRowExists(planId) ? fail5("plan_corrupt", `The stored plan ${planId} cannot be read (its row is damaged); it cannot be resumed. Start a new plan.`) : fail5("not_found", `No LLM scan plan with id ${planId}.`);
+  }
+  if (plan.status === "abandoned" && opts.allowAbandoned !== true) {
+    return fail5("plan_abandoned", `Plan ${planId} was abandoned (no activity for a long time). Start a new plan with llm_scan_start.`, { plan_id: planId });
+  }
+  return { ok: true, plan };
+}
+function settlePlan(storage, plan) {
+  if (plan.status !== "open") return plan;
+  const tasks = storage.llmScan.listTasks(plan.id);
+  if (tasks.length > 0 && tasks.every((t) => t.status === "closed")) {
+    storage.llmScan.updatePlan(plan.id, "complete", nowIso2());
+    return storage.llmScan.getPlan(plan.id) ?? plan;
+  }
+  return plan;
+}
+function reportOf(storage, plan) {
+  return computeReport(plan, storage.llmScan.listTasks(plan.id));
+}
+var tokenLimitNote = (n2) => `About ${String(n2)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). To cover the whole plan, start again with a larger max_estimated_tokens.`;
+function deliverableWithinTokenLimit(plan, tasks) {
+  const { limits } = plan;
+  const delivered = tasks.filter((t) => t.delivered_at !== null);
+  let spent = delivered.reduce((sum, t) => sum + Math.ceil((t.brief_chars ?? 0) / 4) + limits.per_task_overhead, 0);
+  const slots = limits.max_tasks - delivered.filter((t) => t.target.origin_task_id === void 0).length;
+  const pending = tasks.filter((t) => t.delivered_at === null && t.status !== "closed");
+  const crosscutPending = pending.some((t) => t.kind === "crosscut");
+  let counted = 0;
+  let n2 = 0;
+  for (const t of pending) {
+    const exempt = t.target.origin_task_id !== void 0;
+    if (!exempt && counted >= slots - (t.kind !== "crosscut" && crosscutPending ? 1 : 0)) {
+      if (t.kind !== "crosscut" && crosscutPending) continue;
+      break;
+    }
+    spent += DEFAULT_BRIEF_TOKENS[t.kind] + limits.per_task_overhead;
+    if (spent > limits.max_estimated_tokens) break;
+    if (!exempt) counted += 1;
+    n2 += 1;
+  }
+  return n2;
+}
+function tokenLimitFields(plan, tasks) {
+  if (plan.estimate.total_tokens <= plan.limits.max_estimated_tokens) return {};
+  const n2 = deliverableWithinTokenLimit(plan, tasks);
+  return { deliverable_within_token_limit: n2, token_limit_note: tokenLimitNote(n2) };
+}
+var needsConfirm = (plan) => !plan.confirmed && plan.estimate.total_tokens > plan.limits.max_estimated_tokens;
+var RECIPE = {
+  loop: [
+    "llm_scan_task { plan_id } -> one task: task_id, lease_token, brief, response_schema. Repeat for the next one (tasks may be leased in parallel).",
+    "Run the brief in a FRESH context \u2014 a subagent with its own context, one per task \u2014 and take its JSON answer. The brief says what the subagent may read.",
+    "llm_scan_submit { plan_id, task_id, lease_token, independence, payload } with that answer. An invalid answer is refused with the reason: fix it and submit again (up to two more tries).",
+    "Until llm_scan_task answers { done: true, report }. llm_scan_start { plan_id } gives the report at any time."
+  ],
+  independence: "'subagent' when a fresh context ran the brief; 'same_context' when you ran it yourself (shown, and never used to demote or confirm).",
+  lease: `A leased task is yours for ${String(LLM_SCAN_DEFAULTS.lease_minutes)} minutes; after that it goes to whoever asks next.`
+};
+function findingsToVerify(storage, input) {
+  if (input.fingerprints !== void 0) {
+    const found2 = [];
+    const unknown4 = [];
+    for (const fp of input.fingerprints) {
+      const hit = storage.findings.findLatestInProject(input.project, fp);
+      if (hit === null) unknown4.push(fp);
+      else found2.push(hit.finding);
+    }
+    return { ok: true, findings: found2, unknown: unknown4 };
+  }
+  if (input.scan_id !== void 0) {
+    const scan2 = storage.scans.getById(input.scan_id);
+    if (scan2 === null || scan2.project_path !== input.project) return fail5("unknown_scan_id", `No scan ${input.scan_id} for this project.`);
+    return { ok: true, findings: storage.findings.listByScan(input.scan_id).filter((f) => f.tool !== "llm-hunt"), unknown: [] };
+  }
+  return { ok: true, findings: openSetForProject(storage, input.project).findings.filter((f) => f.tool !== "llm-hunt"), unknown: [] };
+}
+async function startPlan(storage, input) {
+  const { project, modes } = input;
+  const now = nowIso2();
+  const active = storage.llmScan.listActivePlanIds(project, now);
+  if (active.length >= LLM_SCAN_DEFAULTS.max_open_plans) {
+    return fail5(
+      "too_many_open_plans",
+      `This project already has ${String(active.length)} open LLM scan plans (the limit is ${String(LLM_SCAN_DEFAULTS.max_open_plans)}). Finish one, or read its report with llm_scan_start { plan_id }: ${active.join(", ")}.`,
+      { open_plans: active }
+    );
+  }
+  const treeHash = await computeTreeHash(project);
+  const hunting = modes.includes("hunt");
+  const persisted = hunting ? storage.surface.getLatestForProject(project) : null;
+  if (hunting && (persisted === null || persisted.tree_hash !== treeHash)) {
+    return fail5(
+      "needs_surface",
+      persisted === null ? "The hunt starts from the attack surface, and this project has no snapshot. Run map_attack_surface first." : "The latest attack surface snapshot is of an older tree than the project now is. Run map_attack_surface again first."
+    );
+  }
+  let findings = [];
+  const unknown4 = [];
+  if (modes.includes("verify")) {
+    const chosen = findingsToVerify(storage, input);
+    if (!chosen.ok) return chosen;
+    findings = chosen.findings;
+    unknown4.push(...chosen.unknown);
+  }
+  const codeFiles = hunting ? listProjectFiles(project).filter((f) => CODE_EXTENSIONS.some((e) => f.toLowerCase().endsWith(e))).slice(0, MAX_FALLBACK_CODE_FILES) : [];
+  const plan = buildPlan({
+    project_path: project,
+    modes,
+    findings,
+    surface: persisted === null ? null : { id: persisted.id, snapshot: persisted.snapshot },
+    code_files: codeFiles,
+    limits: { ...input.limits, max_tasks: MAX_PLANNED_TASKS }
+  });
+  const notEligible = [
+    ...plan.not_eligible.map((n2) => isOverLimit(n2.reason) ? { ...n2, overflow: true } : n2),
+    ...unknown4.map((fingerprint) => ({ fingerprint, reason: "not found among this project's stored findings" }))
+  ];
+  const setAside = plan.set_aside.map((s) => isOverLimit(s.reason) ? { ...s, overflow: true } : s);
+  if (plan.nothing_to_plan !== null) {
+    return fail5("nothing_to_plan", plan.nothing_to_plan, { not_eligible: listed(notEligible).items });
+  }
+  const planId = randomUUID23();
+  const scanId = randomUUID23();
+  const ordered = plan.tasks;
+  const crosscuts = ordered.filter((t) => t.kind === "crosscut");
+  const deliverable = ordered.length <= input.limits.max_tasks ? ordered : [...ordered.filter((t) => t.kind !== "crosscut").slice(0, Math.max(0, input.limits.max_tasks - crosscuts.length)), ...crosscuts].slice(0, input.limits.max_tasks);
+  const deliverableBrief = deliverable.reduce((sum, t) => sum + DEFAULT_BRIEF_TOKENS[t.kind], 0);
+  const estimate = {
+    tasks: deliverable.length,
+    brief_tokens: deliverableBrief,
+    total_tokens: deliverableBrief + deliverable.length * input.limits.per_task_overhead,
+    assumptions: `${plan.estimate.assumptions}; counted over the ${String(deliverable.length)} task(s) that can be delivered (max_tasks ${String(input.limits.max_tasks)}), in delivery order`
+  };
+  const tasks = ordered.map((t) => ({
+    plan_id: planId,
+    task_id: t.task_id,
+    kind: t.kind,
+    target: t.target,
+    status: "open",
+    lease_token: null,
+    lease_expires_at: null,
+    attempts: 0,
+    // Only a verdict can go stale (US-1.AC-9).
+    file_hashes: t.kind === "verify" ? hashesOf(project, t.target.files) : {},
+    brief_chars: null,
+    response_chars: null,
+    independence: null,
+    result: null,
+    closed_reason: null,
+    delivered_at: null,
+    closed_at: null
+  }));
+  const stored = {
+    id: planId,
+    project_path: project,
+    scan_id: scanId,
+    modes,
+    prompt_version: CURRENT_PROMPT_VERSION,
+    tree_hash: treeHash,
+    surface_snapshot_id: persisted?.id ?? null,
+    limits: input.limits,
+    estimate,
+    confirmed: input.confirm,
+    status: "open",
+    not_eligible: notEligible,
+    set_aside: setAside,
+    created_at: now,
+    updated_at: now
+  };
+  storage.rawHandle().transaction(() => {
+    storage.scans.insert({ scan_id: scanId, scan_type: "llm_scan", project_path: project, tree_hash: treeHash, meta: { plan_id: planId, modes } });
+    storage.scans.finalize({
+      scan_id: scanId,
+      status: "completed",
+      tools_run: hunting ? [{ name: "llm-hunt", status: "ok" }] : [],
+      missing_tools: []
+    });
+    storage.llmScan.insertPlan(stored, tasks);
+  })();
+  const byKind = {};
+  for (const t of tasks) byKind[t.kind] = (byKind[t.kind] ?? 0) + 1;
+  const ne = listed(notEligible);
+  const sa = listed(setAside);
+  return {
+    ok: true,
+    plan_id: planId,
+    scan_id: scanId,
+    tasks_total: tasks.length,
+    by_kind: byKind,
+    not_eligible: ne.items,
+    not_eligible_total: ne.total,
+    set_aside: sa.items,
+    set_aside_total: sa.total,
+    estimate,
+    deliverable_tasks: deliverable.length,
+    beyond_max_tasks: tasks.length - deliverable.length,
+    needs_confirm: needsConfirm(stored),
+    ...tokenLimitFields(stored, tasks),
+    ...needsConfirm(stored) ? { confirm_with: "llm_scan_start { plan_id, confirm: true }" } : {},
+    notes: plan.notes,
+    recipe: RECIPE,
+    prompt_version: CURRENT_PROMPT_VERSION
+  };
+}
+function planStatus(storage, planId, project, confirm) {
+  const loaded = loadPlan(storage, planId);
+  if (!loaded.ok) return loaded;
+  if (project !== null && loaded.plan.project_path !== project) return fail5("not_found", `No LLM scan plan with id ${planId} for this project.`);
+  if (confirm && loaded.plan.status === "open") storage.llmScan.confirmPlan(planId, nowIso2());
+  const plan = settlePlan(storage, storage.llmScan.getPlan(planId) ?? loaded.plan);
+  return {
+    ok: true,
+    plan_id: plan.id,
+    scan_id: plan.scan_id,
+    status: plan.status,
+    modes: plan.modes,
+    limits: plan.limits,
+    estimate: plan.estimate,
+    needs_confirm: needsConfirm(plan),
+    ...tokenLimitFields(plan, storage.llmScan.listTasks(plan.id)),
+    prompt_version: plan.prompt_version,
+    report: reportOf(storage, plan)
+  };
+}
+var isLeasable = (t, now) => t.status === "open" || t.status === "leased" && t.lease_expires_at !== null && t.lease_expires_at <= now;
+function briefFor(storage, plan, task) {
+  const root = plan.project_path;
+  const base = { root, reader: readProjectText, boundary: randomBoundary, prompt_version: plan.prompt_version, max_tokens: HOST_BRIEF_MAX_TOKENS };
+  if (task.kind === "verify") {
+    const fp = task.target.fingerprint;
+    const hit = fp === void 0 ? null : storage.findings.findLatestInProject(root, fp);
+    return hit === null ? null : renderBrief(task, { ...base, finding: hit.finding }).text;
+  }
+  const ids2 = new Set(task.target.entry_points ?? []);
+  const surface = plan.surface_snapshot_id === null ? null : storage.surface.getById(plan.surface_snapshot_id);
+  const routes = (surface?.snapshot.routes ?? []).filter((r) => ids2.has(entryPointId(r, root)));
+  const files = new Set(task.target.files);
+  const known = files.size === 0 ? [] : openSetForProject(storage, root).findings.filter((f) => {
+    const rel2 = f.file_path === void 0 ? null : relPosix(root, f.file_path);
+    return f.tool !== "llm-hunt" && rel2 !== null && files.has(rel2);
+  });
+  return renderBrief(task, { ...base, entry_points: routes, scanner_findings: known }).text;
+}
+function limitReason(plan, tasks, next, briefTokens) {
+  const delivered = tasks.filter((t) => t.delivered_at !== null);
+  const counted = delivered.filter((t) => t.target.origin_task_id === void 0).length;
+  const reserved = next.kind !== "crosscut" && tasks.some((t) => t.kind === "crosscut" && t.delivered_at === null && t.status !== "closed") ? 1 : 0;
+  if (next.target.origin_task_id === void 0 && counted >= plan.limits.max_tasks - reserved) {
+    return `the task limit (max_tasks ${String(plan.limits.max_tasks)}) is reached`;
+  }
+  const spent = delivered.reduce((sum, t) => sum + Math.ceil((t.brief_chars ?? 0) / 4) + plan.limits.per_task_overhead, 0);
+  if (spent + briefTokens + plan.limits.per_task_overhead > plan.limits.max_estimated_tokens) {
+    return `the estimated-token limit (max_estimated_tokens ${String(plan.limits.max_estimated_tokens)}) is reached`;
+  }
+  return null;
+}
+function leaseNext(storage, planId, only = {}) {
+  const loaded = loadPlan(storage, planId);
+  if (!loaded.ok) return loaded;
+  let plan = loaded.plan;
+  const repo = storage.llmScan;
+  const done = () => {
+    plan = settlePlan(storage, plan);
+    return { ok: true, done: true, report: reportOf(storage, plan) };
+  };
+  if (plan.status === "complete") return done();
+  if (needsConfirm(plan)) {
+    return fail5(
+      "needs_confirm",
+      `The plan's estimate (${String(plan.estimate.total_tokens)} tokens) is above the limit (${String(plan.limits.max_estimated_tokens)}). Confirm with llm_scan_start { plan_id: "${plan.id}", confirm: true } before any task is handed out. ${tokenLimitNote(deliverableWithinTokenLimit(plan, repo.listTasks(plan.id)))}`,
+      { plan_id: plan.id, confirm: true, ...tokenLimitFields(plan, repo.listTasks(plan.id)) }
+    );
+  }
+  const now = nowIso2();
+  const tasks = repo.listTasks(plan.id);
+  const candidates2 = tasks.filter((t) => isLeasable(t, now) && (only.kinds === void 0 || only.kinds.includes(t.kind)));
+  for (const task of candidates2) {
+    if (task.kind === "verify" && isStale(plan.project_path, task)) {
+      repo.closeUnleased(plan.id, task.task_id, "stale", now);
+      continue;
+    }
+    const brief = briefFor(storage, plan, task);
+    if (brief === null) {
+      repo.closeUnleased(plan.id, task.task_id, "stale", now);
+      continue;
+    }
+    if (task.delivered_at === null) {
+      const reason = limitReason(plan, tasks, task, Math.ceil(brief.length / 4));
+      if (reason !== null) {
+        const crosscutLeft = task.kind !== "crosscut" && candidates2.some((c3) => c3.kind === "crosscut" && c3.delivered_at === null);
+        if (crosscutLeft) continue;
+        return stopDelivery(storage, plan, candidates2, reason, now);
+      }
+    }
+    const token = randomUUID23();
+    const expires = new Date(Date.parse(now) + LLM_SCAN_DEFAULTS.lease_minutes * 6e4).toISOString();
+    if (!repo.claimTask(plan.id, task.task_id, token, expires, now)) continue;
+    repo.recordBriefChars(plan.id, task.task_id, token, brief.length);
+    return {
+      ok: true,
+      task_id: task.task_id,
+      kind: task.kind,
+      lease_token: token,
+      lease_expires_at: expires,
+      brief,
+      response_schema: responseSchema(task.kind),
+      attempts_left: Math.max(0, MAX_INVALID_SUBMISSIONS - task.attempts)
+    };
+  }
+  const after2 = repo.listTasks(plan.id);
+  if (after2.every((t) => t.status === "closed")) return done();
+  return {
+    ok: true,
+    done: false,
+    waiting: true,
+    message: "Every task still to do is leased to someone. Answer yours, or ask again once a lease expires.",
+    leased: after2.filter((t) => t.status === "leased").map((t) => ({ task_id: t.task_id, lease_expires_at: t.lease_expires_at })).slice(0, MAX_LISTED2)
+  };
+}
+function stopDelivery(storage, plan, candidates2, reason, now) {
+  const undelivered = candidates2.filter((t) => t.delivered_at === null).map((t) => t.task_id);
+  for (const id of undelivered) storage.llmScan.closeUnleased(plan.id, id, "not_delivered", now);
+  settlePlan(storage, plan);
+  const named2 = listed(undelivered);
+  return fail5(
+    "limit_reached",
+    `Delivery stopped: ${reason}. Coverage is partial. ${String(named2.total)} task(s) were not delivered: ${named2.items.join(", ")}${named2.total > named2.items.length ? ", \u2026" : ""}.`,
+    { plan_id: plan.id, undelivered: named2.items, undelivered_total: named2.total }
+  );
+}
+var sizeOf = (payload) => {
+  try {
+    return JSON.stringify(payload)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+};
+function progressOf(storage, plan) {
+  const r = reportOf(storage, plan);
+  return { coverage: r.coverage, tasks: r.tasks, missing_total: r.missing.length };
+}
+function lostRace(storage, input) {
+  const t = storage.llmScan.getTask(input.plan_id, input.task_id);
+  return t?.status === "closed" ? fail5("already_closed", `Task ${input.task_id} is already closed.`) : fail5("bad_lease", "The lease token does not hold this task.");
+}
+function huntFindingRow(f) {
+  return makeFinding({
+    tool: "llm-hunt",
+    rule_id: f.class,
+    severity: huntSeverity(f.class),
+    category: "security",
+    title: f.title,
+    message: `Attacker: ${f.attacker} Evidence: ${f.evidence}`,
+    file_path: posix3.normalize(f.file.replace(/\\/g, "/")),
+    line_start: f.line
+  });
+}
+function submitAnswer(storage, input) {
+  const loaded = loadPlan(storage, input.plan_id);
+  if (!loaded.ok) return loaded;
+  const plan = loaded.plan;
+  const repo = storage.llmScan;
+  const task = repo.getTask(plan.id, input.task_id);
+  if (task === null || task.lease_token === null || task.lease_token !== input.lease_token) {
+    return fail5("bad_lease", "The lease token does not hold this task.");
+  }
+  if (task.status === "closed") return fail5("already_closed", `Task ${task.task_id} is already closed; its first answer stands.`);
+  if (task.status !== "leased") return fail5("bad_lease", "The lease token does not hold this task.");
+  const ctx = { root: plan.project_path, reader: readProjectText };
+  const responseChars = sizeOf(input.payload);
+  const check2 = task.kind === "verify" ? validateVerifySubmission(input.payload, ctx) : validateHuntSubmission(input.payload, ctx);
+  const now = nowIso2();
+  if (!check2.ok) {
+    if (check2.code === "too_large") return fail5("too_large", check2.errors.map((e) => e.problem).join("; "));
+    return refuseInvalid(storage, plan, task, input, check2.errors, responseChars, now);
+  }
+  try {
+    if ("verdict" in check2.value) return acceptVerdict(storage, plan, task, input, check2.value, responseChars, now);
+    return acceptHunt(storage, plan, task, input, check2.value, check2.rejected, responseChars, now);
+  } catch {
+    return fail5("store_failed", "The answer could not be stored; nothing was changed and the task is still yours. Submit it again.");
+  }
+}
+function refuseInvalid(storage, plan, task, input, errors, responseChars, now) {
+  const repo = storage.llmScan;
+  const attempts = repo.recordInvalidSubmission(plan.id, task.task_id, input.lease_token);
+  if (attempts === null) return lostRace(storage, input);
+  const left = Math.max(0, MAX_INVALID_SUBMISSIONS - attempts);
+  if (left > 0) return { ok: true, accepted: false, errors, attempts_left: left };
+  repo.closeTask(plan.id, task.task_id, input.lease_token, { independence: input.independence, result: null, closed_reason: "invalid_submissions", response_chars: responseChars }, now);
+  settlePlan(storage, plan);
+  return { ok: true, accepted: false, errors, attempts_left: 0, closed: "undetermined", closed_reason: "invalid_submissions" };
+}
+function acceptVerdict(storage, plan, task, input, verdict, responseChars, now) {
+  const repo = storage.llmScan;
+  const outcome = { independence: input.independence, result: verdict, response_chars: responseChars };
+  if (isStale(plan.project_path, task)) {
+    if (!repo.closeTask(plan.id, task.task_id, input.lease_token, { ...outcome, closed_reason: "stale" }, now)) return lostRace(storage, input);
+    const current = settlePlan(storage, plan);
+    return { ok: true, accepted: true, stale: true, note: "A file of the target changed after the plan was made: the verdict is recorded as stale and is not used.", progress: progressOf(storage, current) };
+  }
+  const fingerprint = task.target.fingerprint;
+  const closed = storage.rawHandle().transaction(() => {
+    if (!repo.closeTask(plan.id, task.task_id, input.lease_token, { ...outcome, closed_reason: "valid" }, now)) return false;
+    if (fingerprint !== void 0) {
+      storage.validations.upsert(plan.project_path, [
+        toFindingValidation({
+          fingerprint,
+          verdict: verdict.verdict === "real" ? "exploitable" : verdict.verdict === "not_real" ? "not_exploitable" : "undetermined",
+          independence: input.independence,
+          decisive_line: verdict.decisive_line,
+          reasoning: verdict.reasoning,
+          prompt_version: plan.prompt_version,
+          tree_hash: plan.tree_hash,
+          computed_at: now
+        })
+      ]);
+    }
+    return true;
+  })();
+  if (!closed) return lostRace(storage, input);
+  return { ok: true, accepted: true, progress: progressOf(storage, settlePlan(storage, plan)) };
+}
+function acceptHunt(storage, plan, task, input, value, rejected, responseChars, now) {
+  const repo = storage.llmScan;
+  const rows = new Map(value.findings.map((f) => huntFindingRow(f)).map((r) => [r.fingerprint, r]));
+  const stored = storage.rawHandle().transaction(() => {
+    const result = { entry_points_reviewed: value.entry_points_reviewed, findings: value.findings, fingerprints: [...rows.keys()] };
+    if (!repo.closeTask(plan.id, task.task_id, input.lease_token, { independence: input.independence, result, closed_reason: "valid", response_chars: responseChars }, now)) return null;
+    const known = new Set(storage.findings.listByScan(plan.scan_id).map((f) => f.fingerprint));
+    const fresh = [...rows.values()].filter((f) => !known.has(f.fingerprint));
+    const withIdentity = assignIdentities(fresh, { projectPath: plan.project_path, readSource: makeSourceReader(plan.project_path) });
+    storage.findings.bulkInsert(withIdentity.map((f) => ({ ...f, scan_id: plan.scan_id })));
+    const firstNumber = repo.nextTaskNumber(plan.id);
+    const verifyTasks = fresh.map((f, i2) => ({
+      plan_id: plan.id,
+      task_id: `t-${String(firstNumber + i2).padStart(4, "0")}`,
+      kind: "verify",
+      target: { fingerprint: f.fingerprint, files: [f.file_path ?? ""], origin_task_id: task.task_id },
+      status: "open",
+      lease_token: null,
+      lease_expires_at: null,
+      attempts: 0,
+      file_hashes: hashesOf(plan.project_path, [f.file_path ?? ""]),
+      brief_chars: null,
+      response_chars: null,
+      independence: null,
+      result: null,
+      closed_reason: null,
+      delivered_at: null,
+      closed_at: null
+    }));
+    if (verifyTasks.length > 0 && !repo.appendTasks(plan.id, verifyTasks)) throw new Error("the plan is no longer open");
+    return { stored: withIdentity.length, verify: verifyTasks.length };
+  })();
+  if (stored === null) return lostRace(storage, input);
+  return {
+    ok: true,
+    accepted: true,
+    stored: stored.stored,
+    verify_tasks_created: stored.verify,
+    ...rejected.length > 0 ? { rejected } : {},
+    progress: progressOf(storage, settlePlan(storage, plan))
+  };
+}
+
+// src/tools/llmScanStart.ts
+var inputSchema31 = {
+  project_path: ProjectPath,
+  modes: external_exports.array(external_exports.enum(["verify", "hunt"])).min(1).max(2).optional().describe("'verify' checks scanner findings, 'hunt' looks for what scanners miss from the entry points. Default ['verify']."),
+  scan_id: external_exports.string().uuid().optional().describe("Verify the findings of this scan. Default: the project open set."),
+  fingerprints: external_exports.array(external_exports.string().min(1).max(200)).min(1).max(1e3).optional().describe("Verify only these findings."),
+  max_tasks: external_exports.number().int().min(1).optional().describe(`Stop handing out tasks after this many. Default ${String(LLM_SCAN_DEFAULTS.max_tasks)}.`),
+  max_estimated_tokens: external_exports.number().int().min(1).optional().describe(`Above this estimate the plan needs confirm: true. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`),
+  per_task_overhead: external_exports.number().int().min(0).optional().describe(`Host tokens assumed per task. Default ${String(LLM_SCAN_DEFAULTS.per_task_overhead)}.`),
+  confirm: external_exports.boolean().optional().describe("Accept an estimate above the limit."),
+  plan_id: external_exports.string().min(1).max(100).optional().describe("Read this plan status and report instead of planning (with confirm: true, also confirm it).")
+};
+var parser = external_exports.object(inputSchema31).strict();
+var tool51 = {
+  name: "llm_scan_start",
+  title: "Plan an LLM-assisted scan",
+  description: "Plan a scan in which YOUR model checks the scanners' findings and hunts what they miss; this server calls no model. modes: verify (one task per finding with a file and line) and/or hunt (needs map_attack_surface first). Returns plan_id, the task count, what was left out and why (not_eligible, set_aside) and a token estimate; above max_estimated_tokens (default 500000) nothing is handed out until confirm: true. The loop: (1) llm_scan_task {plan_id} gives a task with a brief and a lease_token; (2) run that brief in a FRESH subagent/context, one per task (tasks may run in parallel); (3) llm_scan_submit {plan_id, task_id, lease_token, independence: 'subagent'|'same_context', payload} with its JSON answer; (4) repeat until llm_scan_task says done. llm_scan_start {plan_id} returns the report at any time: counts, coverage (full only when every task closed and every entry point was visited), demoted findings, hunt findings. Only an independent 'subagent' verdict demotes or confirms a finding. The real token use is known only to the host.",
+  inputSchema: inputSchema31,
+  handler: async (input, ctx) => handler48(input, ctx)
+};
+registerToolModule(tool51);
+async function handler48(input, ctx) {
+  const parsed = parser.safeParse(input);
+  if (!parsed.success) {
+    return fail5("invalid_input", `Invalid input: ${parsed.error.issues.map((i2) => `${i2.path.join(".") || "$"}: ${i2.message}`).join("; ")}`);
+  }
+  const inp = parsed.data;
+  let project;
+  try {
+    project = resolveProjectPath(inp.project_path).path;
+  } catch (e) {
+    if (e instanceof InvalidProjectPathError) return fail5("not_a_git_repo", e.message);
+    throw e;
+  }
+  if (inp.plan_id !== void 0) {
+    return planStatus(ctx.storage, inp.plan_id, inp.project_path === void 0 ? null : project, inp.confirm === true);
+  }
+  return startPlan(ctx.storage, {
+    project,
+    modes: [...new Set(inp.modes ?? ["verify"])],
+    ...inp.scan_id !== void 0 ? { scan_id: inp.scan_id } : {},
+    ...inp.fingerprints !== void 0 ? { fingerprints: inp.fingerprints } : {},
+    limits: {
+      max_tasks: inp.max_tasks ?? LLM_SCAN_DEFAULTS.max_tasks,
+      max_estimated_tokens: inp.max_estimated_tokens ?? LLM_SCAN_DEFAULTS.max_estimated_tokens,
+      per_task_overhead: inp.per_task_overhead ?? LLM_SCAN_DEFAULTS.per_task_overhead
+    },
+    confirm: inp.confirm === true
+  });
+}
+
+// src/llmscan/sampling.ts
+var SAMPLING_BUDGET_MS = 5e4;
+var REQUEST_MARGIN_MS = 5e3;
+var MAX_ANSWER_TOKENS = 2e3;
+var SYSTEM_PROMPT = "You verify one finding. Reply with ONLY the JSON object the brief asks for, no prose and no code fence.";
+function payloadOf(text2) {
+  const trimmed = text2.trim();
+  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  const candidate = (fenced?.[1] ?? trimmed).trim();
+  if (!candidate.startsWith("{") || !candidate.endsWith("}")) return text2;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return text2;
+  }
+}
+async function runSampling(storage, planId, sampling, opts = {}) {
+  const clock = opts.clock ?? Date.now;
+  const budget = opts.budget_ms ?? SAMPLING_BUDGET_MS;
+  const began = opts.began ?? clock();
+  const spent = () => clock() - began;
+  let slowest = 0;
+  let executed = 0;
+  let stopped = null;
+  while (stopped === null) {
+    if (spent() >= budget || executed > 0 && spent() + slowest > budget) {
+      stopped = "time_budget";
+      break;
+    }
+    const leased = leaseNext(storage, planId, { kinds: ["verify"] });
+    if (leased.ok !== true || typeof leased["task_id"] !== "string") {
+      if (executed === 0 && leased.ok !== true) return leased;
+      stopped = leased.ok !== true ? leased.error.code : leased["done"] === true ? "done" : "nothing_to_sample";
+      break;
+    }
+    const taskId = leased["task_id"];
+    const token = String(leased["lease_token"]);
+    const taskStarted = clock();
+    let sent = false;
+    let text2 = `${String(leased["brief"])}
+
+Answer schema:
+${JSON.stringify(leased["response_schema"])}`;
+    let settled = false;
+    for (let attempt = 0; attempt < MAX_INVALID_SUBMISSIONS && !settled; attempt += 1) {
+      if (spent() >= budget) {
+        stopped = "time_budget";
+        break;
+      }
+      let payload;
+      try {
+        sent = true;
+        const reply = await sampling(
+          { messages: [{ role: "user", content: { type: "text", text: text2 } }], systemPrompt: SYSTEM_PROMPT, maxTokens: MAX_ANSWER_TOKENS },
+          { signal: AbortSignal.timeout(Math.max(1, budget + REQUEST_MARGIN_MS - spent())) }
+        );
+        payload = reply.content.type === "text" ? payloadOf(reply.content.text) : null;
+      } catch {
+        submitAnswer(storage, { plan_id: planId, task_id: taskId, lease_token: token, independence: "sampling", payload: null });
+        stopped = "sampling_failed";
+        break;
+      }
+      const res = submitAnswer(storage, { plan_id: planId, task_id: taskId, lease_token: token, independence: "sampling", payload });
+      const refusedWithTriesLeft = res.ok === true && res["accepted"] === false && res["closed"] === void 0;
+      if (refusedWithTriesLeft) {
+        text2 += `
+
+Your previous answer was refused: ${JSON.stringify(res["errors"])}. Answer again with only the corrected JSON.`;
+      } else {
+        settled = true;
+      }
+    }
+    if (sent) executed += 1;
+    slowest = Math.max(slowest, clock() - taskStarted);
+  }
+  const loaded = loadPlan(storage, planId);
+  if (!loaded.ok) return loaded;
+  const plan = settlePlan(storage, loaded.plan);
+  const report = reportOf(storage, plan);
+  const remaining = storage.llmScan.listTasks(plan.id).filter((t) => t.status !== "closed").length;
+  return { ok: true, executed, remaining, stopped, report };
+}
+var samplingUnavailable = () => fail5(
+  "sampling_unavailable",
+  'This client did not declare the MCP sampling capability; use execute: "host" (the default) and run the briefs in subagents.'
+);
+
+// src/tools/llmScanTask.ts
+var inputSchema32 = {
+  plan_id: external_exports.string().min(1).max(100).describe("The plan from llm_scan_start."),
+  execute: external_exports.enum(["host", "sampling"]).optional().describe("'host' (default): hand the task out. 'sampling': run tasks through the client's MCP sampling, where it offers it.")
+};
+var parser2 = external_exports.object(inputSchema32).strict();
+var tool52 = {
+  name: "llm_scan_task",
+  title: "Lease the next LLM scan task",
+  description: "Lease the next task of a plan made by llm_scan_start. Returns task_id, kind (verify, hunt, crosscut), lease_token, lease_expires_at, brief (self-contained: give it to a FRESH subagent/context, one per task) and response_schema (the JSON answer's schema), attempts_left; or { done: true, report } when every task is closed; or { waiting: true } when the rest are leased to others. Then call llm_scan_submit with the answer. Errors: needs_confirm (the estimate is above the limit: llm_scan_start {plan_id, confirm: true}), limit_reached (max_tasks or max_estimated_tokens hit: the tasks not delivered are named and coverage is partial), plan_abandoned. A task whose file changed since planning is closed stale, not handed out. execute: 'sampling' runs tasks through the client's MCP sampling instead, where the client offers it.",
+  inputSchema: inputSchema32,
+  // The brief is the bulk of the response and the model reads the text once.
+  contentOnlyKeys: ["brief"],
+  handler: async (input, ctx, meta) => handler49(input, ctx, meta)
+};
+registerToolModule(tool52);
+async function handler49(input, ctx, meta) {
+  const began = Date.now();
+  const parsed = parser2.safeParse(input);
+  if (!parsed.success) {
+    return fail5("invalid_input", `Invalid input: ${parsed.error.issues.map((i2) => `${i2.path.join(".") || "$"}: ${i2.message}`).join("; ")}`);
+  }
+  if (parsed.data.execute === "sampling") {
+    if (meta?.sampling === void 0) return samplingUnavailable();
+    return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling, { began });
+  }
+  return leaseNext(ctx.storage, parsed.data.plan_id);
+}
+
+// src/tools/llmScanSubmit.ts
+var inputSchema33 = {
+  plan_id: external_exports.string().min(1).max(100).describe("The plan the task belongs to."),
+  task_id: external_exports.string().min(1).max(40).describe("The task, as llm_scan_task returned it."),
+  lease_token: external_exports.string().min(1).max(100).describe("The lease_token llm_scan_task returned with the task."),
+  independence: external_exports.enum(["subagent", "same_context"]).describe("'subagent': a fresh context ran the brief. 'same_context': you ran it yourself \u2014 shown, never used to demote or confirm."),
+  payload: external_exports.unknown().describe("The answer, matching the task response_schema. At most 64 KiB serialized.")
+};
+var parser3 = external_exports.object(inputSchema33).strict();
+var tool53 = {
+  name: "llm_scan_submit",
+  title: "Submit the answer to an LLM scan task",
+  description: "Submit the JSON answer to a task leased with llm_scan_task: plan_id, task_id, lease_token, independence (subagent when a fresh context ran the brief, same_context when you did) and payload (at most 64 KiB, matching the task response_schema). Returns { accepted: true, progress } or { accepted: false, errors: [{path, problem}], attempts_left }: an invalid answer is refused with the reason and the task stays yours for two more tries, then it closes undetermined. Every file:line it cites is checked against the project on disk. A hunt result stores its valid findings (unverified until a verdict) and creates a verify task for each; rejected ones are named. Errors: already_closed (a task takes one answer), bad_lease (wrong plan, task or token), too_large, plan_abandoned. If the target file changed since planning, the verdict is recorded stale and demotes nothing. After submitting, call llm_scan_task for the next task.",
+  inputSchema: inputSchema33,
+  handler: async (input, ctx) => handler50(input, ctx)
+};
+registerToolModule(tool53);
+async function handler50(input, ctx) {
+  const parsed = parser3.safeParse(input);
+  if (!parsed.success) {
+    return fail5("invalid_input", `Invalid input: ${parsed.error.issues.map((i2) => `${i2.path.join(".") || "$"}: ${i2.message}`).join("; ")}`);
+  }
+  const { plan_id, task_id, lease_token, independence, payload } = parsed.data;
+  return submitAnswer(ctx.storage, { plan_id, task_id, lease_token, independence, payload });
 }
 
 // src/resources/scans.ts

@@ -39,4 +39,20 @@ export const HUNT_CLASSES = [
     'dos',
     'misconfiguration',
 ];
+/** D-3: the classes whose finding is stored as `high`; every other class is `medium`. Verification never changes it. */
+const HIGH_SEVERITY_CLASSES = new Set([
+    'sql-injection',
+    'nosql-injection',
+    'command-injection',
+    'code-injection',
+    'template-injection',
+    'deserialization',
+    'xxe',
+    'ssrf',
+    'path-traversal',
+    'broken-access-control',
+    'authentication',
+    'secrets',
+]);
+export const huntSeverity = (cls) => (HIGH_SEVERITY_CLASSES.has(cls) ? 'high' : 'medium');
 //# sourceMappingURL=classes.js.map

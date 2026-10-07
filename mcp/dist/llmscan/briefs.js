@@ -55,6 +55,10 @@ export function randomBoundary() {
 export function estimateTokens(text) {
     return Math.ceil(text.length / 4);
 }
+/** The JSON schema a task's answer must follow, as handed to the host with the brief. */
+export function responseSchema(kind) {
+    return JSON.parse(kind === 'verify' ? VERIFY_SCHEMA : HUNT_SCHEMA);
+}
 // ---- templates -------------------------------------------------------------
 const TEMPLATE_NAMES = { verify: 'verify', hunt: 'hunt-entrypoint', crosscut: 'hunt-crosscut' };
 const templateCache = new Map();
