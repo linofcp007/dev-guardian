@@ -1,3 +1,4 @@
+<!-- provenance: written from .specs/llm-scan (D-1) -->
 # Verify one security finding (dev-guardian llm-scan, prompt v1)
 
 An automated tool flagged the code below. Decide whether an attacker can exploit this finding in this code, and answer with one JSON object.

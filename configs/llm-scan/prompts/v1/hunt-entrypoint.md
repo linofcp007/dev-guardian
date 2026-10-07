@@ -1,3 +1,4 @@
+<!-- provenance: written from .specs/llm-scan (D-1) -->
 # Hunt from entry points (dev-guardian llm-scan, prompt v1)
 
 Review the entry points below (up to five routes, with the handler and middleware behind them) for vulnerabilities an attacker can reach through them, above all the kinds scanners miss: broken access control, business-logic flaws and data exposure. Answer with one JSON object.

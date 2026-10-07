@@ -1,3 +1,4 @@
+<!-- provenance: written from .specs/llm-scan (D-1) -->
 # Hunt across the project (dev-guardian llm-scan, prompt v1)
 
 Other tasks follow single routes. This one covers what no single route owns, across the whole project: authentication, tokens, secrets and data exposure. Answer with one JSON object.
