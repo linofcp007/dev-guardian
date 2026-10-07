@@ -28,7 +28,7 @@
 
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
-import { describeOpenSet, openSetForProject } from '../history/openSet.js';
+import { describeOpenSet, isDemoting, openSetForProject } from '../history/openSet.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { Finding, ToolResult } from '../types.js';
@@ -112,6 +112,14 @@ async function handler(
     // an exposed secret instead of rotating it.
     if (isCredentialFinding(f)) {
       keep.push(toBucket(f, 'credential finding — suppression is never suggested; rotate the secret instead'));
+      continue;
+    }
+    // An independent `not_real` verdict with its decisive line: demoted, never
+    // suppressed or deleted. A `same_context` one is advisory and never demotes.
+    if (isDemoting(f.llm)) {
+      likely_false_positive.push(
+        toBucket(f, `LLM verification (${f.llm.independence}) judged it not exploitable: ${f.llm.decisive_line}`),
+      );
       continue;
     }
     const path = f.file_path ?? '';

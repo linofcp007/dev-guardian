@@ -58,6 +58,8 @@
  *   - a carried finding is marked `not_remeasured: true`, and the scan it
  *     came from is listed in `sources` with `carried_for` (the gaps);
  *   - suppressions still apply;
+ *   - a finding carries the host model's verdict (`llm`) when it has one; an
+ *     `llm-hunt` finding is in the set only after an independent `exploitable`;
  *   - a scanner the newer scan did not run AT ALL (no gap recorded: a
  *     Python-free project's Bandit) is not a gap, and carries nothing —
  *     except a pass that runs only when asked (`trivy-image`, nuclei:
@@ -73,6 +75,8 @@
  */
 
 import { indexFindings } from '../fingerprint/findingIdentity.js';
+import type { LlmMarker } from '../llmscan/types.js';
+import { llmMarkerOf } from '../llmscan/submission.js';
 import type { Storage } from '../storage/index.js';
 import { futureDatedNote } from '../storage/scanClock.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
@@ -118,6 +122,9 @@ const PAGE = 25;
 /** How many skipped scans a summary names, per reason. The count is exact. */
 export const SKIPPED_SAMPLE = 5;
 
+/** The tool name of a finding the LLM hunt wrote (`llm_scan_submit`). */
+const HUNT_TOOL = 'llm-hunt';
+
 export type SkipReason = 'coverage_none';
 
 /**
@@ -157,6 +164,13 @@ export interface OpenFinding extends Finding {
    * its slot looked at it again (see the module comment). Absent otherwise.
    */
   not_remeasured?: true;
+  /**
+   * The host model's verdict on this finding (`finding_validations`, provider
+   * `llm`), shown whatever its independence. Only an `independent` one acts:
+   * `not_exploitable` demotes (triage, report), `exploitable` admits an
+   * `llm-hunt` finding to the set. A `same_context` one never does (US-1.AC-7).
+   */
+  llm?: LlmMarker;
 }
 
 export interface OpenSetSource {
@@ -762,6 +776,31 @@ function openSetSlots(storage: Storage, projectPath: string): OpenSetSlot[] {
   return [...slots, ...imports.sort()];
 }
 
+/** The host model's verdicts on a project's findings, by fingerprint (rows of any other provider are skipped). */
+export function llmMarkersOf(storage: Storage, projectPath: string): Map<string, LlmMarker> {
+  const markers = new Map<string, LlmMarker>();
+  for (const v of storage.validations.listByProject(projectPath)) {
+    const marker = llmMarkerOf(v);
+    if (marker !== null) markers.set(v.fingerprint, marker);
+  }
+  return markers;
+}
+
+/** An INDEPENDENT `not_exploitable` verdict: the only one that demotes a finding (US-1.AC-6, US-1.AC-7). */
+export function isDemoting(marker: LlmMarker | undefined): marker is LlmMarker {
+  return marker !== undefined && marker.independent && marker.verdict === 'not_exploitable';
+}
+
+/** An INDEPENDENT `exploitable` verdict: the only one that confirms an `llm-hunt` finding (US-2.AC-5). */
+export function isConfirming(marker: LlmMarker | undefined): marker is LlmMarker {
+  return marker !== undefined && marker.independent && marker.verdict === 'exploitable';
+}
+
+/** Whether a finding is one the LLM hunt wrote — a candidate until confirmed. */
+export function isHuntFinding(f: Pick<Finding, 'tool'>): boolean {
+  return f.tool === HUNT_TOOL;
+}
+
 export function openSetForProject(
   storage: Storage,
   projectPath: string,
@@ -816,6 +855,16 @@ export function openSetForProject(
   picked.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
   carried.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
 
+  // The host model's verdicts, by fingerprint (the set reads `finding_validations`, never the plan tables).
+  const llmVerdicts = llmMarkersOf(storage, projectPath);
+  // An `llm-hunt` finding is only a candidate until an INDEPENDENT `exploitable`
+  // verdict confirms it; unverified, `not_exploitable` and `same_context` ones
+  // never count (US-2.AC-5). Others are marked, never filtered.
+  const admitted = (f: Finding): { marker: LlmMarker | undefined; show: boolean } => {
+    const marker = llmVerdicts.get(f.fingerprint);
+    return { marker, show: !isHuntFinding(f) || isConfirming(marker) };
+  };
+
   const findings: OpenFinding[] = [];
   const sources: OpenSetSource[] = [];
   // Grows with `findings`, one source at a time: a source's rows are matched
@@ -837,6 +886,8 @@ export function openSetForProject(
     const batch: OpenFinding[] = [];
     for (const f of rowsOf(scan)) {
       if (!findingInSlot(scan, f, slot) || seen.has(f)) continue;
+      const { marker, show } = admitted(f);
+      if (!show) continue;
       if (isSuppressed(f)) {
         if (!suppressedSeen.has(f)) {
           suppressedSeen.add(f);
@@ -844,7 +895,7 @@ export function openSetForProject(
         }
         continue;
       }
-      batch.push({ ...f, scan_id: scan.scan_id });
+      batch.push({ ...f, scan_id: scan.scan_id, ...(marker !== undefined ? { llm: marker } : {}) });
     }
     admit(batch);
     const contributed = batch.length;
@@ -865,7 +916,9 @@ export function openSetForProject(
     const batch: OpenFinding[] = [];
     for (const { finding, gap } of rows) {
       if (seen.has(finding)) continue;
-      batch.push({ ...finding, scan_id: scan.scan_id, not_remeasured: true });
+      const { marker, show } = admitted(finding);
+      if (!show) continue;
+      batch.push({ ...finding, scan_id: scan.scan_id, not_remeasured: true, ...(marker !== undefined ? { llm: marker } : {}) });
       gaps.add(gap);
     }
     admit(batch);

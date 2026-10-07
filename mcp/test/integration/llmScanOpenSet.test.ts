@@ -104,11 +104,13 @@ const DECISIVE = `${at(PARAM_INSERT)} — the values are passed as bound paramet
 const REASONING = 'The statement text is a constant; the driver binds name, email and role.';
 
 describe('T-06 an independent not_real with a decisive line demotes the finding, never deleting or suppressing it (US-1.AC-6, EC-5)', () => {
-  function demoted(): { h: Harness; insert: Finding; others: Finding[] } {
+  // `seedStandard` writes the three SAST findings and, in a later `deps` scan,
+  // one CVE (decision D-5): four open findings, and the newest scan is the CVE's.
+  function demoted(): { h: Harness; insert: Finding; others: Finding[]; sastScanId: string } {
     const h = harness();
     const s = seedStandard(h);
     writeVerdict(h.storage, h.project, s.insert.fingerprint, 'not_exploitable', 'subagent', DECISIVE, REASONING);
-    return { h, insert: s.insert, others: [s.sqli, s.shell] };
+    return { h, insert: s.insert, others: [s.sqli, s.shell], sastScanId: s.sastScanId };
   }
 
   it('T-06 triage lists it among the likely false positives, the decisive line as the reason', async () => {
@@ -120,7 +122,8 @@ describe('T-06 an independent not_real with a decisive line demotes the finding,
     expect(entry?.reason).toContain('bound parameters');
     expect(t.keep.map((b) => b.fingerprint)).not.toContain(insert.fingerprint);
     for (const f of others) expect(t.keep.map((b) => b.fingerprint)).toContain(f.fingerprint);
-    expect(t.summary.total).toBe(3);
+    // Every open finding is still counted, the demoted one included: 3 SAST + the CVE.
+    expect(t.summary.total).toBe(4);
   });
 
   it('T-06 the open set still holds it, marked with the verdict; nothing was suppressed', () => {
@@ -135,9 +138,10 @@ describe('T-06 an independent not_real with a decisive line demotes the finding,
   });
 
   it('T-06 the exported report still lists it, with the decisive line and the reasoning', async () => {
-    const { h } = demoted();
+    const { h, sastScanId } = demoted();
+    // The SAST scan by id: without one, the export takes the newest scan, the CVE's.
     const out = okResult<{ file_path: string; findings_count: number }>(
-      await callTool(h, 'report_export', { project_path: h.project, format: 'markdown' }),
+      await callTool(h, 'report_export', { project_path: h.project, scan_id: sastScanId, format: 'markdown' }),
     );
     expect(out.findings_count).toBe(3);
     const md = readFileSync(out.file_path, 'utf8');

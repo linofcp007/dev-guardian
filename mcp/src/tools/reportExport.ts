@@ -29,7 +29,8 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
-import { latestStateScan } from '../history/openSet.js';
+import { isConfirming, isHuntFinding, latestStateScan, llmMarkersOf } from '../history/openSet.js';
+import type { LlmMarker } from '../llmscan/types.js';
 import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
@@ -212,7 +213,13 @@ async function handler(
   // stored, and `json` dumps a finding's every field — a row written before
   // `redaction/secretFindingRedaction.ts` existed, or by a path outside its
   // reach, must not resurface a credential's own line in an exported report.
-  const findings = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
+  const stored = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
+  // An `llm-hunt` finding counts only after an independent `exploitable`
+  // verdict (US-2.AC-5): the others are listed apart, never counted.
+  const markers = llmMarkersOf(ctx.storage, scan.project_path);
+  const findings = stored.filter((f) => !isHuntFinding(f) || isConfirming(markers.get(f.fingerprint)));
+  const unconfirmed = stored.filter((f) => isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)));
+  const llm: LlmReportData = { markers, unconfirmed };
   const cves = CVE_SOURCE_SCAN_TYPES.includes(scan.scan_type)
     ? ctx.storage.cves.listActive(scanId)
     : [];
@@ -226,7 +233,7 @@ async function handler(
     findings,
     await languagesOfRunsAsync(runs, () => resolveProjectLanguagesAsync(ctx.storage.stack, scan.project_path)),
   );
-  const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp);
+  const { content, fileName } = renderReport(format, scan, findings, cves, lang, owasp, llm);
   const written = writeReport(projectPath, `export-${scanId.slice(0, 8)}`, fileName, content);
   if (!written.ok) return failDomain('unsupported_target', written.reason);
   const outFile = written.path;
@@ -240,6 +247,7 @@ async function handler(
     bytes: Buffer.byteLength(content, 'utf8'),
     findings_count: findings.length,
     cves_count: cves.length,
+    ...(unconfirmed.length > 0 ? { llm_hunt_unconfirmed_count: unconfirmed.length } : {}),
     ...((latest?.skipped.count ?? 0) > 0 ? { skipped_scans: latest?.skipped } : {}),
   };
 }
@@ -320,24 +328,129 @@ function renderReport(
   cves: Cve[],
   lang: Lang,
   owasp: OwaspCoverage,
+  llm: LlmReportData,
 ): { content: string; fileName: string } {
   switch (format) {
     case 'sarif':
       return { content: toSarif(findings), fileName: 'report.sarif' };
     case 'json':
       return {
-        content: JSON.stringify({ scan, findings, cves, owasp_2025: owasp }, null, 2),
+        content: JSON.stringify(
+          {
+            scan,
+            findings: findings.map((f) => withVerdict(f, llm.markers)),
+            ...(llm.unconfirmed.length > 0 ? { llm_hunt_unconfirmed: llm.unconfirmed.map((f) => withVerdict(f, llm.markers)) } : {}),
+            cves,
+            owasp_2025: owasp,
+          },
+          null,
+          2,
+        ),
         fileName: 'report.json',
       };
     case 'markdown':
-      return { content: renderMarkdown(scan, findings, cves, owasp), fileName: 'report.md' };
+      return { content: renderMarkdown(scan, findings, cves, owasp, llm), fileName: 'report.md' };
     case 'html':
     default:
-      return { content: renderHtml(scan, findings, cves, lang, owasp), fileName: 'report.html' };
+      return { content: renderHtml(scan, findings, cves, lang, owasp, llm), fileName: 'report.html' };
   }
 }
 
-function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owasp: OwaspCoverage): string {
+/** What the report knows of the host model's verdicts: every marker, and the `llm-hunt` findings not counted. */
+interface LlmReportData {
+  markers: Map<string, LlmMarker>;
+  unconfirmed: Finding[];
+}
+
+function withVerdict(f: Finding, markers: Map<string, LlmMarker>): Finding & { llm?: LlmMarker } {
+  const marker = markers.get(f.fingerprint);
+  return marker === undefined ? f : { ...f, llm: marker };
+}
+
+const locationOf = (f: Finding): string => (f.file_path ? `${f.file_path}${f.line_start ? `:${f.line_start}` : ''}` : '');
+
+/** The stance a verdict takes in the report: only an independent one demotes or confirms. */
+function stanceOf(m: LlmMarker): string {
+  if (!m.independent) return `${m.verdict} (${m.independence}: advisory, not counted as verification)`;
+  if (m.verdict === 'not_exploitable') return `not exploitable (${m.independence}): demoted, not suppressed`;
+  return `${m.verdict} (${m.independence})`;
+}
+
+interface LlmEntry {
+  where: string;
+  title: string;
+  stance: string;
+  decisive: string;
+  reasoning: string;
+}
+
+function entriesOf(findings: readonly Finding[], markers: Map<string, LlmMarker>): LlmEntry[] {
+  return findings.flatMap((f) => {
+    const m = markers.get(f.fingerprint);
+    return m === undefined
+      ? []
+      : [{ where: locationOf(f), title: f.title, stance: stanceOf(m), decisive: m.decisive_line, reasoning: m.reasoning }];
+  });
+}
+
+/** `subagent 2 · sampling 0 · same_context 1` over the judged findings (US-1.AC-7). */
+function splitByIndependence(llm: LlmReportData, findings: readonly Finding[]): string {
+  const n = { subagent: 0, sampling: 0, same_context: 0 };
+  for (const f of [...findings, ...llm.unconfirmed]) {
+    const m = llm.markers.get(f.fingerprint);
+    if (m !== undefined) n[m.independence] += 1;
+  }
+  return `subagent ${n.subagent} · sampling ${n.sampling} · same_context ${n.same_context}`;
+}
+
+function llmMarkdown(findings: readonly Finding[], llm: LlmReportData): string[] {
+  const judged = entriesOf(findings, llm.markers);
+  const lines: string[] = [];
+  if (judged.length > 0 || llm.unconfirmed.length > 0) {
+    lines.push('', `## LLM verification (${judged.length})`, '');
+    lines.push(`**By independence:** ${splitByIndependence(llm, findings)}`, '');
+    for (const e of judged) {
+      lines.push(`- \`${e.where}\` ${mdEscape(e.title)} — ${e.stance}`, `  - Decisive line: ${e.decisive}`, `  - Reasoning: ${e.reasoning}`);
+    }
+  }
+  if (llm.unconfirmed.length > 0) {
+    lines.push('', `## LLM hunt candidates, not counted (${llm.unconfirmed.length})`, '');
+    lines.push('_Unverified, or judged not exploitable: these are not in the findings above, the totals or the release gates._', '');
+    for (const f of llm.unconfirmed) {
+      const m = llm.markers.get(f.fingerprint);
+      lines.push(`- \`${locationOf(f)}\` ${mdEscape(f.title)} — ${m === undefined ? 'unverified' : stanceOf(m)}`);
+      if (m !== undefined) lines.push(`  - Decisive line: ${m.decisive_line}`, `  - Reasoning: ${m.reasoning}`);
+    }
+  }
+  return lines;
+}
+
+function llmHtml(findings: readonly Finding[], llm: LlmReportData): string {
+  const judged = entriesOf(findings, llm.markers);
+  const item = (e: LlmEntry): string =>
+    `<li><code>${escapeHtml(e.where)}</code> ${escapeHtml(e.title)} — ${escapeHtml(e.stance)}<br>` +
+    `Decisive line: ${escapeHtml(e.decisive)}<br>Reasoning: ${escapeHtml(e.reasoning)}</li>`;
+  let html = '';
+  if (judged.length > 0 || llm.unconfirmed.length > 0) {
+    html +=
+      `<h2>LLM verification (${judged.length})</h2>\n` +
+      `<p><strong>By independence:</strong> ${escapeHtml(splitByIndependence(llm, findings))}</p>\n` +
+      `<ul>${judged.map(item).join('')}</ul>`;
+  }
+  if (llm.unconfirmed.length > 0) {
+    const judgedHunt = entriesOf(llm.unconfirmed, llm.markers).map(item);
+    const unverified = llm.unconfirmed
+      .filter((f) => !llm.markers.has(f.fingerprint))
+      .map((f) => `<li><code>${escapeHtml(locationOf(f))}</code> ${escapeHtml(f.title)} — unverified</li>`);
+    html +=
+      `\n<h2>LLM hunt candidates, not counted (${llm.unconfirmed.length})</h2>\n` +
+      '<p>Unverified, or judged not exploitable: not in the findings above, the totals or the release gates.</p>\n' +
+      `<ul>${judgedHunt.join('')}${unverified.join('')}</ul>`;
+  }
+  return html;
+}
+
+function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owasp: OwaspCoverage, llm: LlmReportData): string {
   const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
   const lines: string[] = [];
@@ -367,6 +480,7 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
       );
     }
   }
+  lines.push(...llmMarkdown(findings, llm));
   lines.push('');
   lines.push(...owaspCoverageMarkdown(owasp));
   if (cves.length > 0) {
@@ -399,7 +513,7 @@ const SCAN_TITLE: Record<Lang, string> = {
   es: 'Informe de Seguridad',
 };
 
-function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: Lang, owasp: OwaspCoverage): string {
+function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: Lang, owasp: OwaspCoverage, llm: LlmReportData): string {
   const counts: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
   for (const f of findings) counts[f.severity] += 1;
 
@@ -455,7 +569,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
   return renderHtmlDocument({
     title: SCAN_TITLE[lang],
     subtitle: `${scan.scan_type} · ${scan.started_at} · ${scan.status}`,
-    sections: [meta, sevSection, findingsSection, owaspCoverageHtml(owasp), cveSection],
+    sections: [meta, sevSection, findingsSection, llmHtml(findings, llm), owaspCoverageHtml(owasp), cveSection],
     lang,
   });
 }
