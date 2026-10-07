@@ -321,6 +321,25 @@ export class LlmScanRepo {
   }
 
   /**
+   * Gives a lease back before it expires: the task is `open` again, for
+   * whoever asks next, with its attempts and its first delivery kept. For the
+   * holder only — the same guard as {@link closeTask}. Sampling calls it when
+   * its time budget or the client cuts a task short, so the task does not sit
+   * leased for the rest of the 20 minutes under a token nobody has. True when
+   * one row changed.
+   */
+  releaseLease(planId: string, taskId: string, token: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `UPDATE llm_scan_tasks SET status = 'open', lease_token = NULL, lease_expires_at = NULL
+            WHERE plan_id = ? AND task_id = ? AND lease_token = ? AND status = 'leased'`,
+        )
+        .run(planId, taskId, token).changes === 1
+    );
+  }
+
+  /**
    * Counts an invalid submission against a task the caller still holds
    * (`lease_token` matches, status `leased`). Returns the new attempts, or
    * null when the guard failed (the tool answers `bad_lease` / `already_closed`).
