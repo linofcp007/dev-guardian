@@ -26,6 +26,7 @@ export class ValidationsRepo {
     db;
     upsertStmt;
     listByProjectStmt;
+    listByProviderStmt;
     getByFingerprintStmt;
     constructor(db) {
         this.db = db;
@@ -48,6 +49,11 @@ export class ValidationsRepo {
       SELECT * FROM finding_validations
       WHERE project_path = ?
       ORDER BY fingerprint ASC, provider ASC
+    `);
+        this.listByProviderStmt = db.prepare(`
+      SELECT * FROM finding_validations
+      WHERE project_path = ? AND provider = ?
+      ORDER BY fingerprint ASC
     `);
         // The full primary key: at most one row, no tie to break.
         this.getByFingerprintStmt = db.prepare(`
@@ -74,6 +80,10 @@ export class ValidationsRepo {
     }
     listByProject(projectPath) {
         return this.listByProjectStmt.all(projectPath).map(rowToValidation);
+    }
+    /** One provider's verdicts on a project's findings — the open set reads `llm` on every call. */
+    listByProvider(projectPath, provider) {
+        return this.listByProviderStmt.all(projectPath, provider).map(rowToValidation);
     }
     /**
      * One provider's verdict for a finding, or `null` if it has none.

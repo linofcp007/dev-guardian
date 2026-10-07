@@ -42883,6 +42883,20 @@ var LlmScanRepo = class {
     })();
   }
   /**
+   * Gives a lease back before it expires: the task is `open` again, for
+   * whoever asks next, with its attempts and its first delivery kept. For the
+   * holder only — the same guard as {@link closeTask}. Sampling calls it when
+   * its time budget or the client cuts a task short, so the task does not sit
+   * leased for the rest of the 20 minutes under a token nobody has. True when
+   * one row changed.
+   */
+  releaseLease(planId, taskId, token) {
+    return this.db.prepare(
+      `UPDATE llm_scan_tasks SET status = 'open', lease_token = NULL, lease_expires_at = NULL
+            WHERE plan_id = ? AND task_id = ? AND lease_token = ? AND status = 'leased'`
+    ).run(planId, taskId, token).changes === 1;
+  }
+  /**
    * Counts an invalid submission against a task the caller still holds
    * (`lease_token` matches, status `leased`). Returns the new attempts, or
    * null when the guard failed (the tool answers `bad_lease` / `already_closed`).
@@ -43495,6 +43509,11 @@ var ValidationsRepo = class {
       WHERE project_path = ?
       ORDER BY fingerprint ASC, provider ASC
     `);
+    this.listByProviderStmt = db.prepare(`
+      SELECT * FROM finding_validations
+      WHERE project_path = ? AND provider = ?
+      ORDER BY fingerprint ASC
+    `);
     this.getByFingerprintStmt = db.prepare(`
       SELECT * FROM finding_validations
       WHERE project_path = ? AND fingerprint = ? AND provider = ?
@@ -43503,6 +43522,7 @@ var ValidationsRepo = class {
   db;
   upsertStmt;
   listByProjectStmt;
+  listByProviderStmt;
   getByFingerprintStmt;
   /**
    * Replaces (never accumulates) the verdict for each row's
@@ -43533,6 +43553,10 @@ var ValidationsRepo = class {
   }
   listByProject(projectPath) {
     return this.listByProjectStmt.all(projectPath).map(rowToValidation);
+  }
+  /** One provider's verdicts on a project's findings — the open set reads `llm` on every call. */
+  listByProvider(projectPath, provider) {
+    return this.listByProviderStmt.all(projectPath, provider).map(rowToValidation);
   }
   /**
    * One provider's verdict for a finding, or `null` if it has none.
@@ -48345,7 +48369,7 @@ function openSetSlots(storage, projectPath) {
 }
 function llmMarkersOf(storage, projectPath) {
   const markers = /* @__PURE__ */ new Map();
-  for (const v of storage.validations.listByProject(projectPath)) {
+  for (const v of storage.validations.listByProvider(projectPath, "llm")) {
     const marker = llmMarkerOf(v);
     if (marker !== null) markers.set(v.fingerprint, marker);
   }
@@ -48359,6 +48383,17 @@ function isConfirming(marker) {
 }
 function isHuntFinding(f) {
   return f.tool === HUNT_TOOL;
+}
+function splitHuntCandidates(storage, projectPath, rows) {
+  if (!rows.some(isHuntFinding)) return { counted: [...rows], unconfirmed: [] };
+  const markers = llmMarkersOf(storage, projectPath);
+  const counted = [];
+  const unconfirmed = [];
+  for (const f of rows) (isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)) ? unconfirmed : counted).push(f);
+  return { counted, unconfirmed };
+}
+function countableFindings(storage, projectPath, rows) {
+  return splitHuntCandidates(storage, projectPath, rows).counted;
 }
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
@@ -65193,12 +65228,10 @@ async function handler9(input, ctx) {
   }
   const fromScan = ctx.storage.scans.getById(fromId.value);
   if (!fromScan) return failDomain10("unknown_scan_id", `from scan '${fromId.value}' not found`);
-  const fromSplit = partitionSuppressed(ctx.storage, toScan.value.project_path, ctx.storage.findings.listByScan(fromId.value));
-  const toSplit = partitionSuppressed(
-    ctx.storage,
-    toScan.value.project_path,
-    ctx.storage.findings.listByScan(toScan.value.scan_id)
-  );
+  const project = toScan.value.project_path;
+  const rowsOf = (scanId) => countableFindings(ctx.storage, project, ctx.storage.findings.listByScan(scanId));
+  const fromSplit = partitionSuppressed(ctx.storage, project, rowsOf(fromId.value));
+  const toSplit = partitionSuppressed(ctx.storage, project, rowsOf(toScan.value.scan_id));
   const suppressed = suppressedOfEither(toSplit.suppressed, fromSplit.suppressed);
   const check2 = compareScansFor(ctx.storage, fromScan, toScan.value);
   const d = classifyDiff(check2, fromSplit.visible, toSplit.visible);
@@ -67856,8 +67889,8 @@ async function handler16(input, ctx) {
       ...note
     };
   }
-  const prevFindings = ctx.storage.findings.listByScan(baselineId);
-  const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
+  const prevFindings = countableFindings(ctx.storage, projectPath, ctx.storage.findings.listByScan(baselineId));
+  const curFindings = countableFindings(ctx.storage, projectPath, ctx.storage.findings.listByScan(latest.scan_id));
   const baselineScan = ctx.storage.scans.getById(baselineId);
   const check2 = baselineScan === null ? COMPLETE_COMPARISON : compareScansFor(ctx.storage, baselineScan, latest);
   const prev = partitionSuppressed(ctx.storage, projectPath, prevFindings);
@@ -69118,10 +69151,8 @@ async function handler22(input, ctx) {
     return failDomain17("unknown_scan_id", `Scan '${scanId}' is still running: its findings are not all stored yet.`);
   }
   const stored = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
-  const markers = llmMarkersOf(ctx.storage, scan2.project_path);
-  const findings = stored.filter((f) => !isHuntFinding(f) || isConfirming(markers.get(f.fingerprint)));
-  const unconfirmed = stored.filter((f) => isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)));
-  const llm = { markers, unconfirmed };
+  const { counted: findings, unconfirmed } = splitHuntCandidates(ctx.storage, scan2.project_path, stored);
+  const llm = { markers: llmMarkersOf(ctx.storage, scan2.project_path), unconfirmed };
   const cves = CVE_SOURCE_SCAN_TYPES.includes(scan2.scan_type) ? ctx.storage.cves.listActive(scanId) : [];
   const runs = coverageRunsOfScan(ctx, scan2);
   const owasp = owaspCoverage(
@@ -69239,14 +69270,25 @@ function splitByIndependence(llm, findings) {
   }
   return `subagent ${n2.subagent} \xB7 sampling ${n2.sampling} \xB7 same_context ${n2.same_context}`;
 }
+var MD_INLINE_MAX = 2e3;
+function mdInline(s) {
+  const one = s.replace(/\s+/g, " ").trim();
+  const cut = one.length > MD_INLINE_MAX ? `${one.slice(0, MD_INLINE_MAX)}\u2026` : one;
+  return cut.replace(/[\\`*_[\]<>|!~#&]/g, (c3) => `\\${c3}`);
+}
+var mdCode = (s) => `\`${s.replace(/\s+/g, " ").replace(/`/g, "'")}\``;
 function llmMarkdown(findings, llm) {
   const judged = entriesOf(findings, llm.markers);
   const lines = [];
+  const verdictLines = (decisive, reasoning) => [
+    `  - Decisive line: ${mdInline(decisive)}`,
+    `  - Reasoning: ${mdInline(reasoning)}`
+  ];
   if (judged.length > 0 || llm.unconfirmed.length > 0) {
     lines.push("", `## LLM verification (${judged.length})`, "");
     lines.push(`**By independence:** ${splitByIndependence(llm, findings)}`, "");
     for (const e of judged) {
-      lines.push(`- \`${e.where}\` ${mdEscape(e.title)} \u2014 ${e.stance}`, `  - Decisive line: ${e.decisive}`, `  - Reasoning: ${e.reasoning}`);
+      lines.push(`- ${mdCode(e.where)} ${mdInline(e.title)} \u2014 ${e.stance}`, ...verdictLines(e.decisive, e.reasoning));
     }
   }
   if (llm.unconfirmed.length > 0) {
@@ -69254,8 +69296,8 @@ function llmMarkdown(findings, llm) {
     lines.push("_Unverified, or judged not exploitable: these are not in the findings above, the totals or the release gates._", "");
     for (const f of llm.unconfirmed) {
       const m = llm.markers.get(f.fingerprint);
-      lines.push(`- \`${locationOf(f)}\` ${mdEscape(f.title)} \u2014 ${m === void 0 ? "unverified" : stanceOf(m)}`);
-      if (m !== void 0) lines.push(`  - Decisive line: ${m.decisive_line}`, `  - Reasoning: ${m.reasoning}`);
+      lines.push(`- ${mdCode(locationOf(f))} ${mdInline(f.title)} \u2014 ${m === void 0 ? "unverified" : stanceOf(m)}`);
+      if (m !== void 0) lines.push(...verdictLines(m.decisive_line, m.reasoning));
     }
   }
   return lines;
@@ -93562,6 +93604,11 @@ var SAMPLING_BUDGET_MS = 5e4;
 var REQUEST_MARGIN_MS = 5e3;
 var MAX_ANSWER_TOKENS = 2e3;
 var SYSTEM_PROMPT = "You verify one finding. Reply with ONLY the JSON object the brief asks for, no prose and no code fence.";
+function failureOf(err, cancelled) {
+  if (cancelled) return "cancelled";
+  const name = err instanceof Error ? err.name : "";
+  return name === "TimeoutError" || name === "AbortError" ? "timeout" : "client_error";
+}
 function payloadOf(text2) {
   const trimmed = text2.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n?```$/.exec(trimmed);
@@ -93578,11 +93625,18 @@ async function runSampling(storage, planId, sampling, opts = {}) {
   const budget = opts.budget_ms ?? SAMPLING_BUDGET_MS;
   const began = opts.began ?? clock();
   const spent = () => clock() - began;
-  let slowest = 0;
+  const cancelled = () => opts.signal?.aborted === true;
+  let slowestTask = 0;
+  let slowestRequest = 0;
   let executed = 0;
   let stopped = null;
+  let failure = null;
   while (stopped === null) {
-    if (spent() >= budget || executed > 0 && spent() + slowest > budget) {
+    if (cancelled()) {
+      stopped = "cancelled";
+      break;
+    }
+    if (spent() >= budget || executed > 0 && spent() + slowestTask > budget) {
       stopped = "time_budget";
       break;
     }
@@ -93594,50 +93648,61 @@ async function runSampling(storage, planId, sampling, opts = {}) {
     }
     const taskId = leased["task_id"];
     const token = String(leased["lease_token"]);
+    const giveBack = (why) => {
+      storage.llmScan.releaseLease(planId, taskId, token);
+      stopped = why;
+    };
     const taskStarted = clock();
-    let sent = false;
     let text2 = `${String(leased["brief"])}
 
 Answer schema:
 ${JSON.stringify(leased["response_schema"])}`;
-    let settled = false;
-    for (let attempt = 0; attempt < MAX_INVALID_SUBMISSIONS && !settled; attempt += 1) {
-      if (spent() >= budget) {
-        stopped = "time_budget";
+    let closed = false;
+    for (let attempt = 0; attempt < MAX_INVALID_SUBMISSIONS; attempt += 1) {
+      if (cancelled()) {
+        giveBack("cancelled");
+        break;
+      }
+      if (spent() >= budget || attempt > 0 && spent() + slowestRequest > budget) {
+        giveBack("time_budget");
         break;
       }
       let payload;
+      const requestStarted = clock();
       try {
-        sent = true;
+        const timeout = AbortSignal.timeout(Math.max(1, budget + REQUEST_MARGIN_MS - spent()));
         const reply = await sampling(
           { messages: [{ role: "user", content: { type: "text", text: text2 } }], systemPrompt: SYSTEM_PROMPT, maxTokens: MAX_ANSWER_TOKENS },
-          { signal: AbortSignal.timeout(Math.max(1, budget + REQUEST_MARGIN_MS - spent())) }
+          { signal: opts.signal === void 0 ? timeout : AbortSignal.any([timeout, opts.signal]) }
         );
         payload = reply.content.type === "text" ? payloadOf(reply.content.text) : null;
-      } catch {
-        submitAnswer(storage, { plan_id: planId, task_id: taskId, lease_token: token, independence: "sampling", payload: null });
-        stopped = "sampling_failed";
+      } catch (err) {
+        failure = failureOf(err, cancelled());
+        giveBack("sampling_failed");
         break;
+      } finally {
+        slowestRequest = Math.max(slowestRequest, clock() - requestStarted);
       }
       const res = submitAnswer(storage, { plan_id: planId, task_id: taskId, lease_token: token, independence: "sampling", payload });
-      const refusedWithTriesLeft = res.ok === true && res["accepted"] === false && res["closed"] === void 0;
-      if (refusedWithTriesLeft) {
+      if (res.ok === true && res["accepted"] === false && res["closed"] === void 0) {
         text2 += `
 
 Your previous answer was refused: ${JSON.stringify(res["errors"])}. Answer again with only the corrected JSON.`;
-      } else {
-        settled = true;
+        continue;
       }
+      if (res.ok === true) closed = true;
+      else giveBack(res.error.code);
+      break;
     }
-    if (sent) executed += 1;
-    slowest = Math.max(slowest, clock() - taskStarted);
+    if (closed) executed += 1;
+    slowestTask = Math.max(slowestTask, clock() - taskStarted);
   }
   const loaded = loadPlan(storage, planId);
   if (!loaded.ok) return loaded;
   const plan = settlePlan(storage, loaded.plan);
   const report = reportOf(storage, plan);
   const remaining = storage.llmScan.listTasks(plan.id).filter((t) => t.status !== "closed").length;
-  return { ok: true, executed, remaining, stopped, report };
+  return { ok: true, executed, remaining, stopped, ...failure !== null ? { failure } : {}, report };
 }
 var samplingUnavailable = () => fail5(
   "sampling_unavailable",
@@ -93668,7 +93733,7 @@ async function handler49(input, ctx, meta) {
   }
   if (parsed.data.execute === "sampling") {
     if (meta?.sampling === void 0) return samplingUnavailable();
-    return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling, { began });
+    return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling, { began, ...meta.signal !== void 0 ? { signal: meta.signal } : {} });
   }
   return leaseNext(ctx.storage, parsed.data.plan_id);
 }
@@ -93749,7 +93814,7 @@ function enrich(scanId, ctx) {
       note: "This scan is still running: its findings are not all stored yet. Read it again once it completes."
     };
   }
-  const findings = ctx.storage.findings.listByScan(scanId);
+  const findings = countableFindings(ctx.storage, record8.project_path, ctx.storage.findings.listByScan(scanId));
   const counts = countBySeverity8(findings);
   const top = topFindings5(findings, 10);
   return {

@@ -531,10 +531,10 @@ function openSetSlots(storage, projectPath) {
     const imports = storage.scans.sarifSourceTools(projectPath).map(sarifSlot);
     return [...slots, ...imports.sort()];
 }
-/** The host model's verdicts on a project's findings, by fingerprint (rows of any other provider are skipped). */
+/** The host model's verdicts on a project's findings, by fingerprint (provider `llm` only, read as such). */
 export function llmMarkersOf(storage, projectPath) {
     const markers = new Map();
-    for (const v of storage.validations.listByProject(projectPath)) {
+    for (const v of storage.validations.listByProvider(projectPath, 'llm')) {
         const marker = llmMarkerOf(v);
         if (marker !== null)
             markers.set(v.fingerprint, marker);
@@ -552,6 +552,28 @@ export function isConfirming(marker) {
 /** Whether a finding is one the LLM hunt wrote — a candidate until confirmed. */
 export function isHuntFinding(f) {
     return f.tool === HUNT_TOOL;
+}
+/**
+ * One scan's rows split as the open set splits them (US-2.AC-5): `counted`
+ * holds every finding except an `llm-hunt` one without an INDEPENDENT
+ * `exploitable` verdict, which goes to `unconfirmed`. For the paths that read
+ * a scan's rows directly rather than through the open set — a diff, a
+ * regression check, the report, a scan resource — so a hunt candidate never
+ * moves a total, a gate or a score there either.
+ */
+export function splitHuntCandidates(storage, projectPath, rows) {
+    if (!rows.some(isHuntFinding))
+        return { counted: [...rows], unconfirmed: [] };
+    const markers = llmMarkersOf(storage, projectPath);
+    const counted = [];
+    const unconfirmed = [];
+    for (const f of rows)
+        (isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)) ? unconfirmed : counted).push(f);
+    return { counted, unconfirmed };
+}
+/** {@link splitHuntCandidates}' `counted` half: the rows of a scan that count. */
+export function countableFindings(storage, projectPath, rows) {
+    return splitHuntCandidates(storage, projectPath, rows).counted;
 }
 export function openSetForProject(storage, projectPath, opts = {}) {
     const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);

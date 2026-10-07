@@ -41,7 +41,7 @@ async function handler(input, ctx, meta) {
         // `meta.sampling` exists only when the client declared the capability.
         if (meta?.sampling === undefined)
             return samplingUnavailable();
-        return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling, { began });
+        return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling, { began, ...(meta.signal !== undefined ? { signal: meta.signal } : {}) });
     }
     return leaseNext(ctx.storage, parsed.data.plan_id);
 }
