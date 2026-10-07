@@ -25,6 +25,7 @@
  */
 import { execa } from 'execa';
 import { detectOs } from '../../src/platform/osDetect.js';
+import { highestDotnetSdk } from '../../src/runners/toolProbe.js';
 
 /** Resolves `true` when `bin` is on PATH. Never throws — a probe that fails
  *  to run reports "not installed", which is the safe direction: the caller
@@ -39,6 +40,23 @@ export async function isInstalled(bin: string): Promise<boolean> {
       timeout: PROBE_TIMEOUT_MS,
     });
     return r.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves `true` when a .NET SDK is installed — not merely the `dotnet`
+ * host. A machine with only the runtime has `dotnet` on PATH, and there
+ * `dotnet new` and `dotnet restore` fail ("No .NET SDKs were found"), so an
+ * e2e gated on the binary alone fails instead of skipping. Read the way
+ * `check_toolchain` reads it: the highest SDK `dotnet --list-sdks` lists.
+ */
+export async function isDotnetSdkInstalled(): Promise<boolean> {
+  if (!(await isInstalled('dotnet'))) return false;
+  try {
+    const r = await execa('dotnet', ['--list-sdks'], { reject: false, timeout: PROBE_TIMEOUT_MS });
+    return r.exitCode === 0 && highestDotnetSdk(String(r.stdout)) !== null;
   } catch {
     return false;
   }

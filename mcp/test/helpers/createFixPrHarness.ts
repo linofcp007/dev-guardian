@@ -68,7 +68,7 @@ import { TOOLS } from '../../src/tools/index.js';
 import type { Finding } from '../../src/types.js';
 import '../../src/registerAll.js';
 import { rmDirOrDefer } from './tempDir.js';
-import { isInstalled } from './toolchain.js';
+import { isDotnetSdkInstalled, isInstalled } from './toolchain.js';
 
 // execFileSync (unlike execa/runProcess, which shell out through
 // cross-spawn) does not resolve npm's Windows .cmd shim on its own — same
@@ -110,7 +110,7 @@ export const REGISTRY_BACKED_TIMEOUT_MS = 300_000;
 export const TRIVY_INSTALLED = await isInstalled('trivy');
 export const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 export const SEMGREP_INSTALLED = await isInstalled('semgrep');
-export const DOTNET_INSTALLED = await isInstalled('dotnet');
+export const DOTNET_INSTALLED = await isDotnetSdkInstalled();
 
 export let repo: string;
 export let binDir: string;

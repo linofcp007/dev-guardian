@@ -5,7 +5,7 @@
  * round 4 cases also drive `deps_update_plan`'s dotnet branch, which shares
  * the restore plan (`src/deps/dotnetRestore.ts`).
  *
- * Gated on the .NET SDK being on PATH (`isInstalled('dotnet')`), the same
+ * Gated on a .NET SDK being installed (`isDotnetSdkInstalled()`), the same
  * `it.skipIf` discipline `rulePackFixture.test.ts` documents for Semgrep: a
  * skip must report as a skip, never a silent pass. This restores from
  * nuget.org, so it also needs network access — same trust boundary
@@ -24,7 +24,7 @@ import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
-import { isInstalled } from '../helpers/toolchain.js';
+import { isDotnetSdkInstalled } from '../helpers/toolchain.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 await import('../../src/tools/depsAudit.js');
@@ -32,7 +32,7 @@ await import('../../src/tools/depsUpdatePlan.js');
 
 afterAll(cleanupTempDirs);
 
-const DOTNET_INSTALLED = await isInstalled('dotnet');
+const DOTNET_INSTALLED = await isDotnetSdkInstalled();
 
 function getTool(name: string) {
   const t = TOOLS.find((x) => x.name === name);
