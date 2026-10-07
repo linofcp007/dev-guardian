@@ -205,8 +205,9 @@ on every host; only WHERE each task's brief runs differs.
 1. \`llm_scan_start { project_path, modes }\` returns \`plan_id\`, the task count, what
    was left out and a token estimate. **Show the user the estimate and
    \`token_limit_note\` before anything else.** Above \`max_estimated_tokens\` the plan
-   needs \`confirm: true\` — only after the user agrees. \`confirm\` opens the gate;
-   it never raises the limit, which stays a hard ceiling on what is handed out.
+   says \`needs_confirm\`: pass \`confirm: true\` only after the user agrees.
+   \`confirm\` opens the gate; it never raises the limit, which stays a hard ceiling
+   on what is handed out (\`deliverable_within_token_limit\` says how many tasks fit).
 2. \`llm_scan_task { plan_id }\` returns one task: a \`brief\` and a \`lease_token\`
    (20 minutes).
 3. Run THAT brief where the host's recipe below says, and \`llm_scan_submit
@@ -216,20 +217,26 @@ on every host; only WHERE each task's brief runs differs.
 
 Recipe per host:
 
-- **Claude Code, and any other host whose subagents can reach MCP** — run each task in a fresh subagent, one subagent per
-  task (parallel is fine), and submit with \`independence: "subagent"\`. The
-  subagent gets the brief and nothing else of this conversation.
+- **Claude Code** — run each task in a fresh subagent, one subagent per task
+  (parallel is fine), and submit with \`independence: "subagent"\`. The subagent
+  gets the brief and nothing else of this conversation.
 - **Codex** — Codex spawns a subagent only when it is asked to, so ask explicitly:
   "spawn a subagent for each \`llm_scan_task\` brief, one task per subagent, and
   have it return the JSON answer". Without that instruction, Codex answers in its
   own context: then declare \`same_context\`.
-- **Cline** — its subagents cannot reach MCP. Run the tasks sequentially, one task
+- **Cline** — no subagent that can use MCP: run the tasks sequentially, one task
   after another, in the same context, and declare \`independence: "same_context"\`.
 - **Claude Desktop / Cowork chat** — no subagents: run the tasks sequentially, one
   at a time, in the same context, and declare \`same_context\`.
-- **VS Code Copilot** — MCP sampling is available: \`llm_scan_task { plan_id,
-  execute: "sampling" }\` runs verification tasks inside the server through the
-  client's model; the server records those as \`sampling\`.
+- **A client that declares MCP sampling (VS Code Copilot does)** —
+  \`llm_scan_task { plan_id, execute: "sampling" }\` runs the verification tasks
+  inside the server through the client's model, recorded as \`sampling\`. Without
+  the capability the call answers \`sampling_unavailable\`; hunt tasks are never
+  sampled. Run whatever is left the way the rest of this list says.
+- **Any other host (Cursor, Gemini CLI, Windsurf, …)** — if you can start a fresh
+  subagent that can call these tools, one per task, declare \`subagent\`;
+  otherwise run the tasks sequentially, one at a time, and declare
+  \`same_context\`.
 
 Declare independence honestly. A \`same_context\` verdict is shown in the report but
 never demotes or confirms a finding — in those hosts the scan is advisory. Claiming
