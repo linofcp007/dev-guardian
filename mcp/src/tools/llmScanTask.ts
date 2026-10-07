@@ -40,6 +40,7 @@ const tool: ToolModule = {
 registerToolModule(tool);
 
 async function handler(input: Record<string, unknown>, ctx: PluginContext, meta?: ToolCallMeta) {
+  const began = Date.now(); // the sampling budget counts from the tool's entry
   const parsed = parser.safeParse(input);
   if (!parsed.success) {
     return fail('invalid_input', `Invalid input: ${parsed.error.issues.map((i) => `${i.path.join('.') || '$'}: ${i.message}`).join('; ')}`);
@@ -47,7 +48,7 @@ async function handler(input: Record<string, unknown>, ctx: PluginContext, meta?
   if (parsed.data.execute === 'sampling') {
     // `meta.sampling` exists only when the client declared the capability.
     if (meta?.sampling === undefined) return samplingUnavailable();
-    return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling);
+    return runSampling(ctx.storage, parsed.data.plan_id, meta.sampling, { began });
   }
   return leaseNext(ctx.storage, parsed.data.plan_id);
 }
