@@ -10,6 +10,21 @@ version bump.
 
 ### Added
 
+- **LLM-assisted scan** — `llm_scan_start`, `llm_scan_task` and `llm_scan_submit` (61st to 63rd tools):
+  the host's own model verifies scanner findings (`verify`) and hunts, from the routes
+  `map_attack_surface` found, for what scanners miss (`hunt`). The server calls no model and holds no
+  key. It plans, hands out one self-contained brief at a time under a 20-minute lease, validates every
+  answer against a closed schema and against the files on disk, and keeps the plan in the database
+  (migration 017, scan type `llm_scan`), so a plan resumes after a restart. Each answer declares its
+  independence (`subagent`, `sampling` or `same_context`), and only an independent one acts: a
+  `not_real` demotes a finding in triage and the report, never suppressing it; a hunt finding counts
+  in the open set, totals, diffs and gates only once an independent verdict confirms it. Limits: 200
+  tasks and 500 000 estimated tokens per plan by default (`confirm: true` opens the gate, never the
+  ceiling), five open plans per project, answers up to 64 KiB, three invalid answers per task.
+  `execute: "sampling"` runs verify tasks through a client that declares MCP sampling, within 50 s per
+  call. The rules file for every host carries its recipe (a subagent per task; `same_context` where
+  there is none). Prompt templates v1 are in `configs/llm-scan/prompts/v1/`. See
+  [docs/llm-scan.md](docs/llm-scan.md). Eval baseline on the reference model: still to be measured.
 - **`web-js` rule pack** (`configs/semgrep/web-js.yml`, 3 rules): SQL text built by interpolation or
   concatenation in a SQL driver call (CWE-89, by the shape of the text, so it also sees a value that
   reached the repository by parameter), a request path reaching a file read or send (CWE-22) and a

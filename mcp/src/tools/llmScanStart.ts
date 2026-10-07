@@ -49,7 +49,7 @@ const tool: ToolModule = {
     "llm_scan_submit {plan_id, task_id, lease_token, independence: 'subagent'|'same_context', payload} with its JSON answer; " +
     '(4) repeat until llm_scan_task says done. llm_scan_start {plan_id} returns the report at any time: counts, coverage ' +
     '(full only when every task closed and every entry point was visited), demoted findings, hunt findings. Only an independent ' +
-    "'subagent' verdict demotes or confirms a finding. The real token use is known only to the host.",
+    "verdict ('subagent', or 'sampling') demotes or confirms a finding. The real token use is known only to the host.",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
