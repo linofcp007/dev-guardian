@@ -230,6 +230,29 @@ describe('app-b (BenchmarkPython)', () => {
     expect(findTells(benchmarkBlindPath('testcode/BenchmarkTest00004.py'), out)).toEqual([]);
   });
 
+  it('keeps the branch the benchmark decides with "should": the renamed constant still answers the same test', () => {
+    // BenchmarkPython decides 106 test cases with these two shapes. Renaming the
+    // constant alone ("fixed value b" holds no 'should') flipped every one of
+    // them: the request value no longer reached the sink, and the case's label
+    // no longer described its code (measured on the first eval run, 2026-10-08).
+    const code = [
+      '\tbar = "This should never happen"',
+      "\tif 'should' in bar:",
+      '\t\tbar = param',
+      '\tTestParam = "This should never happen"',
+      "\tif 'should' not in TestParam:",
+      '\t\tbar = "Ifnot case passed"',
+    ].join('\n');
+    const out = blindBenchmarkText('testcode/BenchmarkTest00825.py', code);
+    const constant = /bar = "([^"]+)"/.exec(out)?.[1] ?? '';
+    const marker = /if '([^']+)' in bar:/.exec(out)?.[1] ?? '';
+    const negated = /if '([^']+)' not in TestParam:/.exec(out)?.[1] ?? '';
+    expect(constant).toBe('fixed value b');
+    expect(constant.includes(marker)).toBe('This should never happen'.includes('should'));
+    expect(!constant.includes(negated)).toBe(!'This should never happen'.includes('should'));
+    expect(out).not.toMatch(/should/i);
+  });
+
   it('maps every path the same way, so a file opened by name is still there', () => {
     expect(benchmarkBlindPath('testcode/BenchmarkTest00004.py')).toBe(`testcode/View${benchmarkViewNumber(4)}.py`);
     expect(benchmarkBlindPath('testfiles/This should never happen')).toBe('testfiles/fixed value b');

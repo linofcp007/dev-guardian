@@ -240,6 +240,11 @@ export function benchmarkRenames(s: string): string {
     .replace(/BENCHMARK/g, 'SITE')
     .replace(/benchmark/gi, 'site')
     .replace(/This should never happen/g, 'fixed value b')
+    // The benchmark decides 106 cases by testing that constant for 'should'
+    // (`if 'should' in bar`, `if 'should' not in TestParam`): the test word
+    // follows the constant, or the branch the label describes is no longer
+    // the one that runs.
+    .replace(/(['"])should\1(\s+(?:not\s+)?in\s)/g, '$1value$1$2')
     .replace(/This_should_always_happen/g, 'fixed_value_a')
     .replace(/xxe\.txt/g, 'entity.txt')
     .replace(/insecureCmd/g, 'runCmd');
