@@ -597,7 +597,15 @@ interface RunRecord {
   brief_tokens: number;
   verdict: VerifyVerdict['verdict'] | null;
   verdict_detail: VerifyVerdict | null;
-  hunt: { findings: number; rejected: number; entry_points_reviewed: number } | null;
+  hunt: {
+    findings: number;
+    rejected: number;
+    entry_points_reviewed: number;
+    /** Why each refused finding was refused (`findings[3].line: line outside the file`). */
+    rejected_detail: string[];
+    /** What the model sent, valid or not: where and what, never its prose. */
+    sent: SentFinding[];
+  } | null;
   failure: 'error' | 'invalid' | null;
   errors: string[];
   attempts: number;
@@ -623,10 +631,28 @@ function verifyCheck(root: string): (answer: unknown) => AnswerCheck<VerifyVerdi
   };
 }
 
-function huntCheck(root: string, rejected: string[]): (answer: unknown) => AnswerCheck<HuntResult> {
+/** One finding of a hunt answer as the model sent it — for the report, so a refused one can be read. */
+export interface SentFinding {
+  file: unknown;
+  line: unknown;
+  class: unknown;
+  title: string;
+}
+
+function sentFindings(answer: unknown): SentFinding[] {
+  const list = typeof answer === 'object' && answer !== null ? (answer as { findings?: unknown }).findings : undefined;
+  if (!Array.isArray(list)) return [];
+  return list.map((f: unknown) => {
+    const o = typeof f === 'object' && f !== null ? (f as Record<string, unknown>) : {};
+    return { file: o['file'], line: o['line'], class: o['class'], title: String(o['title'] ?? '').slice(0, 200) };
+  });
+}
+
+function huntCheck(root: string, rejected: string[], sent: SentFinding[]): (answer: unknown) => AnswerCheck<HuntResult> {
   return (answer) => {
     const r = validateHuntSubmission(answer, submissionContext(root));
     if (r.ok) {
+      sent.splice(0, sent.length, ...sentFindings(answer));
       rejected.push(...r.rejected.map((e) => `${e.path}: ${e.problem}`));
       return { ok: true, value: r.value };
     }
@@ -890,13 +916,23 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
       progress(`${w.job.item} run ${w.job.run + 1}: ${d.value?.verdict ?? d.failure ?? '?'}`);
     } else {
       const rejected: string[] = [];
-      const d = await driveTask(w.job.brief.text, w.job.root, driver, huntCheck(w.job.root, rejected));
+      const sent: SentFinding[] = [];
+      const d = await driveTask(w.job.brief.text, w.job.root, driver, huntCheck(w.job.root, rejected, sent));
       huntResults.set(w.job.key, { job: w.job, result: d.value, rejected });
       records.push({
         ...record(w.job, w.job.key, 0, 'G-H', d),
         verdict: null,
         verdict_detail: null,
-        hunt: d.value === null ? null : { findings: d.value.findings.length, rejected: rejected.length, entry_points_reviewed: d.value.entry_points_reviewed.length },
+        hunt:
+          d.value === null
+            ? null
+            : {
+                findings: d.value.findings.length,
+                rejected: rejected.length,
+                entry_points_reviewed: d.value.entry_points_reviewed.length,
+                rejected_detail: rejected,
+                sent,
+              },
       });
       progress(`${w.job.key}: ${d.value === null ? d.failure ?? '?' : `${d.value.findings.length} findings`}`);
     }
