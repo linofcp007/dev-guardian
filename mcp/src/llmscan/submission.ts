@@ -244,16 +244,25 @@ export function validateVerifySubmission(payload: unknown, ctx: SubmissionContex
   return { ok: true, value, rejected: [] };
 }
 
-/** Every `file:line` in a piece of free text, URLs aside, at most {@link MAX_EVIDENCE_REFS}. */
-function evidenceRefs(evidence: string): Array<{ file: string; line: number }> {
-  const refs: Array<{ file: string; line: number }> = [];
-  for (const token of evidence.split(/[\s;,()'"`]+/)) {
+/** `file:line`, or a span `file:12-14` / `file:12–14` (both ends must exist). */
+const EVIDENCE_REF = /^(.+?):(\d+)(?:[-–](\d+))?$/;
+
+/**
+ * Every `file:line` (or `file:a-b` span) in a piece of free text, URLs aside,
+ * at most {@link MAX_EVIDENCE_REFS}. A model cites a span as often as a line,
+ * and often in brackets: refusing those threw real findings away (measured,
+ * v2 eval run).
+ */
+function evidenceRefs(evidence: string): Array<{ file: string; line: number; end?: number }> {
+  const refs: Array<{ file: string; line: number; end?: number }> = [];
+  for (const token of evidence.split(/[\s;,()[\]'"`]+/)) {
     if (token.includes('://')) continue;
-    const m = CITATION.exec(token.replace(/[.:]+$/, ''));
+    const m = EVIDENCE_REF.exec(token.replace(/[.:]+$/, ''));
     const file = m?.[1];
     const line = m?.[2];
     if (file === undefined || line === undefined) continue;
-    refs.push({ file, line: Number(line) });
+    const end = m?.[3];
+    refs.push({ file, line: Number(line), ...(end !== undefined ? { end: Number(end) } : {}) });
     if (refs.length >= MAX_EVIDENCE_REFS) break;
   }
   return refs;
@@ -292,7 +301,9 @@ function validateFinding(raw: unknown, index: number, checker: CitationChecker):
   const problem = checker.check(file, line);
   if (problem !== null) errors.push({ path: `${prefix}file`, problem: `citation: ${problem}` });
   // At least one reference in the evidence must hold; the rest is free text.
-  if (!evidenceRefs(evidence).some((r) => checker.check(r.file, r.line) === null)) {
+  const holds = (r: { file: string; line: number; end?: number }): boolean =>
+    checker.check(r.file, r.line) === null && (r.end === undefined || checker.check(r.file, r.end) === null);
+  if (!evidenceRefs(evidence).some(holds)) {
     errors.push({ path: `${prefix}evidence`, problem: 'needs at least one file:line reference that exists in the project' });
   }
   if (errors.length > 0) return { value: null, errors };
