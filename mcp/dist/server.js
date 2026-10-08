@@ -92970,6 +92970,11 @@ var HUNT_SCHEMA = JSON.stringify(
   null,
   2
 );
+function isKeyBodyLine(line) {
+  if (/^\s*(Proc-Type|DEK-Info):/.test(line)) return true;
+  const content = line.replace(/\\[rn]/g, "").replace(/^[\s'"`]+|[\s'"`,+]+$/g, "");
+  return /^[A-Za-z0-9+/=]{8,}$/.test(content);
+}
 function scrubSecrets(text2, firstLine7 = 1) {
   const hits = scanForSecrets(text2);
   if (hits.length === 0) return text2;
@@ -92980,9 +92985,15 @@ function scrubSecrets(text2, firstLine7 = 1) {
     const at = h2.line - 1;
     rulesByLine.set(at, [...rulesByLine.get(at) ?? [], h2.ruleId]);
     if (h2.ruleId !== "private-key-block") continue;
+    if ((lines[at] ?? "").includes("-----END")) continue;
     for (let i2 = at + 1; i2 < lines.length; i2 += 1) {
+      const line = lines[i2] ?? "";
+      if (line.includes("-----END")) {
+        keyBody.add(i2);
+        break;
+      }
+      if (!isKeyBodyLine(line)) break;
       keyBody.add(i2);
-      if ((lines[i2] ?? "").includes("-----END")) break;
     }
   }
   return lines.map((line, i2) => {

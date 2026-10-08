@@ -123,10 +123,24 @@ const HUNT_SCHEMA = JSON.stringify({
 }, null, 2);
 // ---- secrets ---------------------------------------------------------------
 /**
+ * A line of a private key's body: base64 (8 characters or more), quoted or
+ * not, with a trailing `,` or `+` and `\r\n` escapes, as a key is written in
+ * code; or a PEM header line of an encrypted key.
+ */
+function isKeyBodyLine(line) {
+    if (/^\s*(Proc-Type|DEK-Info):/.test(line))
+        return true;
+    const content = line.replace(/\\[rn]/g, '').replace(/^[\s'"`]+|[\s'"`,+]+$/g, '');
+    return /^[A-Za-z0-9+/=]{8,}$/.test(content);
+}
+/**
  * `text` with every line that holds a detected secret replaced by
  * `‹rule line n›` (n counted from `firstLine`). The detector reports where a
  * secret is, never its extent, so the whole line goes; a private key's body
- * goes with its header, up to the END line.
+ * goes with its header: the lines below it that look like a key's body, up
+ * to the END line. A key on ONE line (a string with `\r\n` escapes, as OWASP
+ * Juice Shop keeps its own) has no body below it — taking every line "up to
+ * the END line" there removed the rest of the excerpt (measured: 179 lines).
  */
 function scrubSecrets(text, firstLine = 1) {
     const hits = scanForSecrets(text);
@@ -140,10 +154,17 @@ function scrubSecrets(text, firstLine = 1) {
         rulesByLine.set(at, [...(rulesByLine.get(at) ?? []), h.ruleId]);
         if (h.ruleId !== 'private-key-block')
             continue;
+        if ((lines[at] ?? '').includes('-----END'))
+            continue;
         for (let i = at + 1; i < lines.length; i += 1) {
-            keyBody.add(i);
-            if ((lines[i] ?? '').includes('-----END'))
+            const line = lines[i] ?? '';
+            if (line.includes('-----END')) {
+                keyBody.add(i);
                 break;
+            }
+            if (!isKeyBodyLine(line))
+                break;
+            keyBody.add(i);
         }
     }
     return lines
