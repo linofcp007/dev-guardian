@@ -1,0 +1,416 @@
+{
+  "entry_points_reviewed": [
+    "GET /files/:name",
+    "POST /files/upload"
+  ],
+  "findings": [
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (1)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (2)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (3)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (4)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (5)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (6)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (7)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (8)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (9)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (10)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (11)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (12)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (13)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (14)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (15)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (16)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (17)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (18)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (19)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (20)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (21)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (22)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (23)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (24)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (25)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (26)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (27)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (28)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (29)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (30)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (31)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (32)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (33)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (34)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (35)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (36)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (37)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (38)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (39)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (40)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (41)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (42)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (43)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (44)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (45)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (46)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (47)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (48)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (49)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (50)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    },
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "path-traversal",
+      "title": "File download joins the raw name into the uploads path (51)",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    }
+  ]
+}

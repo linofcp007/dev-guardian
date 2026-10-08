@@ -119,8 +119,13 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
         },
       ];
     }
-    if (f.fingerprint) {
-      result.partialFingerprints = { devGuardian: f.fingerprint };
+    // `devGuardianIdentity` is the stable identity (64 hex) — what `import_sarif`
+    // adopts as is, so a baseline or suppression keeps recognising the finding.
+    if (f.fingerprint || f.identity) {
+      result.partialFingerprints = {
+        ...(f.fingerprint ? { devGuardian: f.fingerprint } : {}),
+        ...(f.identity ? { devGuardianIdentity: f.identity } : {}),
+      };
     }
     return result;
   };

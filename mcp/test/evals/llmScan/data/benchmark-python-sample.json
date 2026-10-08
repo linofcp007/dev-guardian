@@ -1,0 +1,657 @@
+{
+  "note": "Verification-set sample (G-V) over OWASP BenchmarkPython: real scanner findings, labelled by the corpus's expectedresults-0.1.csv (kept only when the finding's weakness matches the test case's category). Finding metadata only; no code from the corpus (GPL-3.0). Messages are the scanner's first sentence. Regenerate with `npm run eval:llm-scan -- --build-benchmark-sample --semgrep-json=<f> --bandit-json=<f>`.",
+  "provenance": {
+    "corpus": "OWASP-Benchmark/BenchmarkPython",
+    "commit": "f1291485808b66e20ddb6b01b10dc71b3df8c8ba",
+    "expected_results": "expectedresults-0.1.csv",
+    "semgrep": {
+      "version": "1.176.1",
+      "config": "auto",
+      "findings": 462
+    },
+    "bandit": {
+      "version": "1.9.4",
+      "findings": 533
+    },
+    "labelled": 572,
+    "seed": 20261002,
+    "pairs": 20,
+    "generated_at": "2026-10-02T18:33:07.449Z"
+  },
+  "composition": {
+    "cmdi": {
+      "real": 3,
+      "not_real": 3
+    },
+    "codeinj": {
+      "real": 3,
+      "not_real": 3
+    },
+    "deserialization": {
+      "real": 3,
+      "not_real": 3
+    },
+    "pathtraver": {
+      "real": 2,
+      "not_real": 2
+    },
+    "redirect": {
+      "real": 1,
+      "not_real": 1
+    },
+    "securecookie": {
+      "real": 3,
+      "not_real": 3
+    },
+    "sqli": {
+      "real": 3,
+      "not_real": 3
+    },
+    "xxe": {
+      "real": 2,
+      "not_real": 2
+    }
+  },
+  "items": [
+    {
+      "file": "testcode/BenchmarkTest00432.py",
+      "line": 53,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+      "severity": "ERROR",
+      "message": "Found 'subprocess' function 'run' with 'shell=True'.",
+      "label": "real",
+      "category": "cmdi",
+      "cwe": 78,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest00432"
+    },
+    {
+      "file": "testcode/BenchmarkTest00350.py",
+      "line": 58,
+      "tool": "bandit",
+      "rule_id": "B602",
+      "severity": "high",
+      "message": "subprocess call with shell=True identified, security issue.",
+      "label": "not_real",
+      "category": "cmdi",
+      "cwe": 78,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest00350"
+    },
+    {
+      "file": "testcode/BenchmarkTest00425.py",
+      "line": 43,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.exec-detected.exec-detected",
+      "severity": "WARNING",
+      "message": "Detected the use of exec().",
+      "label": "real",
+      "category": "codeinj",
+      "cwe": 94,
+      "finding_cwes": [
+        95
+      ],
+      "test": "BenchmarkTest00425"
+    },
+    {
+      "file": "testcode/BenchmarkTest00988.py",
+      "line": 64,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.exec-detected.exec-detected",
+      "severity": "WARNING",
+      "message": "Detected the use of exec().",
+      "label": "not_real",
+      "category": "codeinj",
+      "cwe": 94,
+      "finding_cwes": [
+        95
+      ],
+      "test": "BenchmarkTest00988"
+    },
+    {
+      "file": "testcode/BenchmarkTest00825.py",
+      "line": 47,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.deserialization.pickle.avoid-pickle",
+      "severity": "WARNING",
+      "message": "Avoid using `pickle`, which is known to lead to code execution vulnerabilities.",
+      "label": "real",
+      "category": "deserialization",
+      "cwe": 502,
+      "finding_cwes": [
+        502
+      ],
+      "test": "BenchmarkTest00825"
+    },
+    {
+      "file": "testcode/BenchmarkTest00608.py",
+      "line": 53,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.deserialization.avoid-pyyaml-load.avoid-pyyaml-load",
+      "severity": "ERROR",
+      "message": "Detected a possible YAML deserialization vulnerability.",
+      "label": "not_real",
+      "category": "deserialization",
+      "cwe": 502,
+      "finding_cwes": [
+        502
+      ],
+      "test": "BenchmarkTest00608"
+    },
+    {
+      "file": "testcode/BenchmarkTest01179.py",
+      "line": 31,
+      "tool": "semgrep",
+      "rule_id": "python.django.security.injection.path-traversal.path-traversal-open.path-traversal-open",
+      "severity": "WARNING",
+      "message": "Found request data in a call to 'open'.",
+      "label": "real",
+      "category": "pathtraver",
+      "cwe": 22,
+      "finding_cwes": [
+        22
+      ],
+      "test": "BenchmarkTest01179"
+    },
+    {
+      "file": "testcode/BenchmarkTest01180.py",
+      "line": 31,
+      "tool": "semgrep",
+      "rule_id": "python.django.security.injection.path-traversal.path-traversal-open.path-traversal-open",
+      "severity": "WARNING",
+      "message": "Found request data in a call to 'open'.",
+      "label": "not_real",
+      "category": "pathtraver",
+      "cwe": 22,
+      "finding_cwes": [
+        22
+      ],
+      "test": "BenchmarkTest01180"
+    },
+    {
+      "file": "testcode/BenchmarkTest01208.py",
+      "line": 31,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.open-redirect.open-redirect",
+      "severity": "ERROR",
+      "message": "Data from request is passed to redirect().",
+      "label": "real",
+      "category": "redirect",
+      "cwe": 601,
+      "finding_cwes": [
+        601
+      ],
+      "test": "BenchmarkTest01208"
+    },
+    {
+      "file": "testcode/BenchmarkTest01209.py",
+      "line": 31,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.open-redirect.open-redirect",
+      "severity": "ERROR",
+      "message": "Data from request is passed to redirect().",
+      "label": "not_real",
+      "category": "redirect",
+      "cwe": 601,
+      "finding_cwes": [
+        601
+      ],
+      "test": "BenchmarkTest01209"
+    },
+    {
+      "file": "testcode/BenchmarkTest01187.py",
+      "line": 55,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.audit.secure-set-cookie.secure-set-cookie",
+      "severity": "WARNING",
+      "message": "Found a Flask cookie with insecurely configured properties.",
+      "label": "real",
+      "category": "securecookie",
+      "cwe": 614,
+      "finding_cwes": [
+        614
+      ],
+      "test": "BenchmarkTest01187"
+    },
+    {
+      "file": "testcode/BenchmarkTest00812.py",
+      "line": 56,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.audit.secure-set-cookie.secure-set-cookie",
+      "severity": "WARNING",
+      "message": "Found a Flask cookie with insecurely configured properties.",
+      "label": "not_real",
+      "category": "securecookie",
+      "cwe": 614,
+      "finding_cwes": [
+        614
+      ],
+      "test": "BenchmarkTest00812"
+    },
+    {
+      "file": "testcode/BenchmarkTest00455.py",
+      "line": 46,
+      "tool": "semgrep",
+      "rule_id": "python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query",
+      "severity": "ERROR",
+      "message": "Avoiding SQL string concatenation: untrusted input concatenated with raw SQL query can result in SQL Injection.",
+      "label": "real",
+      "category": "sqli",
+      "cwe": 89,
+      "finding_cwes": [
+        89
+      ],
+      "test": "BenchmarkTest00455"
+    },
+    {
+      "file": "testcode/BenchmarkTest01203.py",
+      "line": 38,
+      "tool": "bandit",
+      "rule_id": "B608",
+      "severity": "medium",
+      "message": "Possible SQL injection vector through string-based query construction.",
+      "label": "not_real",
+      "category": "sqli",
+      "cwe": 89,
+      "finding_cwes": [
+        89
+      ],
+      "test": "BenchmarkTest01203"
+    },
+    {
+      "file": "testcode/BenchmarkTest00462.py",
+      "line": 48,
+      "tool": "bandit",
+      "rule_id": "B318",
+      "severity": "medium",
+      "message": "Using xml.dom.minidom.parseString to parse untrusted XML data is known to be vulnerable to XML attacks.",
+      "label": "real",
+      "category": "xxe",
+      "cwe": 611,
+      "finding_cwes": [
+        20
+      ],
+      "test": "BenchmarkTest00462"
+    },
+    {
+      "file": "testcode/BenchmarkTest00850.py",
+      "line": 54,
+      "tool": "bandit",
+      "rule_id": "B318",
+      "severity": "medium",
+      "message": "Using xml.dom.minidom.parseString to parse untrusted XML data is known to be vulnerable to XML attacks.",
+      "label": "not_real",
+      "category": "xxe",
+      "cwe": 611,
+      "finding_cwes": [
+        20
+      ],
+      "test": "BenchmarkTest00850"
+    },
+    {
+      "file": "testcode/BenchmarkTest01191.py",
+      "line": 52,
+      "tool": "bandit",
+      "rule_id": "B603",
+      "severity": "low",
+      "message": "subprocess call - check for execution of untrusted input.",
+      "label": "real",
+      "category": "cmdi",
+      "cwe": 78,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest01191"
+    },
+    {
+      "file": "testcode/BenchmarkTest01098.py",
+      "line": 53,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+      "severity": "ERROR",
+      "message": "Found 'subprocess' function 'run' with 'shell=True'.",
+      "label": "not_real",
+      "category": "cmdi",
+      "cwe": 78,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest01098"
+    },
+    {
+      "file": "testcode/BenchmarkTest00074.py",
+      "line": 51,
+      "tool": "bandit",
+      "rule_id": "B102",
+      "severity": "medium",
+      "message": "Use of exec detected.",
+      "label": "real",
+      "category": "codeinj",
+      "cwe": 94,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest00074"
+    },
+    {
+      "file": "testcode/BenchmarkTest01167.py",
+      "line": 47,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.exec-detected.exec-detected",
+      "severity": "WARNING",
+      "message": "Detected the use of exec().",
+      "label": "not_real",
+      "category": "codeinj",
+      "cwe": 94,
+      "finding_cwes": [
+        95
+      ],
+      "test": "BenchmarkTest01167"
+    },
+    {
+      "file": "testcode/BenchmarkTest00657.py",
+      "line": 53,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.deserialization.pickle.avoid-pickle",
+      "severity": "WARNING",
+      "message": "Avoid using `pickle`, which is known to lead to code execution vulnerabilities.",
+      "label": "real",
+      "category": "deserialization",
+      "cwe": 502,
+      "finding_cwes": [
+        502
+      ],
+      "test": "BenchmarkTest00657"
+    },
+    {
+      "file": "testcode/BenchmarkTest00508.py",
+      "line": 55,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.deserialization.pickle.avoid-pickle",
+      "severity": "WARNING",
+      "message": "Avoid using `pickle`, which is known to lead to code execution vulnerabilities.",
+      "label": "not_real",
+      "category": "deserialization",
+      "cwe": 502,
+      "finding_cwes": [
+        502
+      ],
+      "test": "BenchmarkTest00508"
+    },
+    {
+      "file": "testcode/BenchmarkTest01196.py",
+      "line": 31,
+      "tool": "semgrep",
+      "rule_id": "python.django.security.injection.path-traversal.path-traversal-open.path-traversal-open",
+      "severity": "WARNING",
+      "message": "Found request data in a call to 'open'.",
+      "label": "real",
+      "category": "pathtraver",
+      "cwe": 22,
+      "finding_cwes": [
+        22
+      ],
+      "test": "BenchmarkTest01196"
+    },
+    {
+      "file": "testcode/BenchmarkTest01202.py",
+      "line": 31,
+      "tool": "semgrep",
+      "rule_id": "python.django.security.injection.path-traversal.path-traversal-open.path-traversal-open",
+      "severity": "WARNING",
+      "message": "Found request data in a call to 'open'.",
+      "label": "not_real",
+      "category": "pathtraver",
+      "cwe": 22,
+      "finding_cwes": [
+        22
+      ],
+      "test": "BenchmarkTest01202"
+    },
+    {
+      "file": "testcode/BenchmarkTest01085.py",
+      "line": 60,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.audit.secure-set-cookie.secure-set-cookie",
+      "severity": "WARNING",
+      "message": "Found a Flask cookie with insecurely configured properties.",
+      "label": "real",
+      "category": "securecookie",
+      "cwe": 614,
+      "finding_cwes": [
+        614
+      ],
+      "test": "BenchmarkTest01085"
+    },
+    {
+      "file": "testcode/BenchmarkTest01090.py",
+      "line": 62,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.audit.secure-set-cookie.secure-set-cookie",
+      "severity": "WARNING",
+      "message": "Found a Flask cookie with insecurely configured properties.",
+      "label": "not_real",
+      "category": "securecookie",
+      "cwe": 614,
+      "finding_cwes": [
+        614
+      ],
+      "test": "BenchmarkTest01090"
+    },
+    {
+      "file": "testcode/BenchmarkTest00284.py",
+      "line": 47,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.formatted-sql-query.formatted-sql-query",
+      "severity": "WARNING",
+      "message": "Detected possible formatted SQL query.",
+      "label": "real",
+      "category": "sqli",
+      "cwe": 89,
+      "finding_cwes": [
+        89
+      ],
+      "test": "BenchmarkTest00284"
+    },
+    {
+      "file": "testcode/BenchmarkTest00755.py",
+      "line": 42,
+      "tool": "bandit",
+      "rule_id": "B608",
+      "severity": "medium",
+      "message": "Possible SQL injection vector through string-based query construction.",
+      "label": "not_real",
+      "category": "sqli",
+      "cwe": 89,
+      "finding_cwes": [
+        89
+      ],
+      "test": "BenchmarkTest00755"
+    },
+    {
+      "file": "testcode/BenchmarkTest00205.py",
+      "line": 49,
+      "tool": "bandit",
+      "rule_id": "B317",
+      "severity": "medium",
+      "message": "Using xml.sax.make_parser to parse untrusted XML data is known to be vulnerable to XML attacks.",
+      "label": "real",
+      "category": "xxe",
+      "cwe": 611,
+      "finding_cwes": [
+        20
+      ],
+      "test": "BenchmarkTest00205"
+    },
+    {
+      "file": "testcode/BenchmarkTest00206.py",
+      "line": 49,
+      "tool": "bandit",
+      "rule_id": "B317",
+      "severity": "medium",
+      "message": "Using xml.sax.make_parser to parse untrusted XML data is known to be vulnerable to XML attacks.",
+      "label": "not_real",
+      "category": "xxe",
+      "cwe": 611,
+      "finding_cwes": [
+        20
+      ],
+      "test": "BenchmarkTest00206"
+    },
+    {
+      "file": "testcode/BenchmarkTest00606.py",
+      "line": 51,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+      "severity": "ERROR",
+      "message": "Found 'subprocess' function 'run' with 'shell=True'.",
+      "label": "real",
+      "category": "cmdi",
+      "cwe": 78,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest00606"
+    },
+    {
+      "file": "testcode/BenchmarkTest00900.py",
+      "line": 59,
+      "tool": "bandit",
+      "rule_id": "B602",
+      "severity": "high",
+      "message": "subprocess call with shell=True identified, security issue.",
+      "label": "not_real",
+      "category": "cmdi",
+      "cwe": 78,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest00900"
+    },
+    {
+      "file": "testcode/BenchmarkTest01188.py",
+      "line": 38,
+      "tool": "bandit",
+      "rule_id": "B102",
+      "severity": "medium",
+      "message": "Use of exec detected.",
+      "label": "real",
+      "category": "codeinj",
+      "cwe": 94,
+      "finding_cwes": [
+        78
+      ],
+      "test": "BenchmarkTest01188"
+    },
+    {
+      "file": "testcode/BenchmarkTest00603.py",
+      "line": 53,
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.exec-detected.exec-detected",
+      "severity": "WARNING",
+      "message": "Detected the use of exec().",
+      "label": "not_real",
+      "category": "codeinj",
+      "cwe": 94,
+      "finding_cwes": [
+        95
+      ],
+      "test": "BenchmarkTest00603"
+    },
+    {
+      "file": "testcode/BenchmarkTest00898.py",
+      "line": 49,
+      "tool": "bandit",
+      "rule_id": "B301",
+      "severity": "medium",
+      "message": "Pickle and modules that wrap it can be unsafe when used to deserialize untrusted data, possible security issue.",
+      "label": "real",
+      "category": "deserialization",
+      "cwe": 502,
+      "finding_cwes": [
+        502
+      ],
+      "test": "BenchmarkTest00898"
+    },
+    {
+      "file": "testcode/BenchmarkTest00995.py",
+      "line": 51,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.insecure-deserialization.insecure-deserialization",
+      "severity": "ERROR",
+      "message": "Detected the use of an insecure deserialization library in a Flask route.",
+      "label": "not_real",
+      "category": "deserialization",
+      "cwe": 502,
+      "finding_cwes": [
+        502
+      ],
+      "test": "BenchmarkTest00995"
+    },
+    {
+      "file": "testcode/BenchmarkTest00720.py",
+      "line": 56,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.audit.secure-set-cookie.secure-set-cookie",
+      "severity": "WARNING",
+      "message": "Found a Flask cookie with insecurely configured properties.",
+      "label": "real",
+      "category": "securecookie",
+      "cwe": 614,
+      "finding_cwes": [
+        614
+      ],
+      "test": "BenchmarkTest00720"
+    },
+    {
+      "file": "testcode/BenchmarkTest00416.py",
+      "line": 59,
+      "tool": "semgrep",
+      "rule_id": "python.flask.security.audit.secure-set-cookie.secure-set-cookie",
+      "severity": "WARNING",
+      "message": "Found a Flask cookie with insecurely configured properties.",
+      "label": "not_real",
+      "category": "securecookie",
+      "cwe": 614,
+      "finding_cwes": [
+        614
+      ],
+      "test": "BenchmarkTest00416"
+    },
+    {
+      "file": "testcode/BenchmarkTest00283.py",
+      "line": 49,
+      "tool": "semgrep",
+      "rule_id": "python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query",
+      "severity": "ERROR",
+      "message": "Avoiding SQL string concatenation: untrusted input concatenated with raw SQL query can result in SQL Injection.",
+      "label": "real",
+      "category": "sqli",
+      "cwe": 89,
+      "finding_cwes": [
+        89
+      ],
+      "test": "BenchmarkTest00283"
+    },
+    {
+      "file": "testcode/BenchmarkTest00285.py",
+      "line": 49,
+      "tool": "bandit",
+      "rule_id": "B608",
+      "severity": "medium",
+      "message": "Possible SQL injection vector through string-based query construction.",
+      "label": "not_real",
+      "category": "sqli",
+      "cwe": 89,
+      "finding_cwes": [
+        89
+      ],
+      "test": "BenchmarkTest00285"
+    }
+  ]
+}

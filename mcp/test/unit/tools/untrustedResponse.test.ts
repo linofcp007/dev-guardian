@@ -35,14 +35,14 @@ describe('toCallToolResult — untrusted text', () => {
       expect(text.includes(raw)).toBe(false);
       expect(JSON.stringify(out.structuredContent).includes(raw)).toBe(false);
     }
-    const f = (out.structuredContent['findings'] as Array<Record<string, string>>)[0];
+    const f = (out.structuredContent?.['findings'] as Array<Record<string, string>>)[0];
     expect(f?.['file_path']).toBe('src/invoice\\u{202E}gpj.exe');
     expect(f?.['message']).toBe('hard-coded key\\u{200B} here \\u{001B}[2J');
     // A multi-line field keeps its line breaks.
     expect(f?.['snippet']).toBe('const a = 1;\nconst b = 2;');
     // Legitimate non-ASCII is untouched.
     expect(text).toContain('日本.py');
-    const second = (out.structuredContent['findings'] as Array<Record<string, string>>)[1];
+    const second = (out.structuredContent?.['findings'] as Array<Record<string, string>>)[1];
     expect(second?.['file_path']).toBe('日本.py');
     // The handler's own object is not mutated: storage keeps the bytes.
     expect(stored.file_path).toBe(`src/invoice${RLO}gpj.exe`);

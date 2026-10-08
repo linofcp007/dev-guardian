@@ -26,10 +26,12 @@
  * never in the score.
  */
 import { z } from 'zod';
-import { latestStateScan, partitionSuppressed, summarizeSkipped, suppressedOfEither, } from '../history/openSet.js';
+import { countableFindings, latestStateScan, partitionSuppressed, summarizeSkipped, suppressedOfEither, } from '../history/openSet.js';
 import { COMPLETE_COMPARISON, classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps, } from '../history/runCompare.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
+import { sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
+import { chooseSourceTool, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES } from '../types.js';
 import { registerToolModule } from './index.js';
 const SEVERITY_WEIGHT = {
@@ -45,6 +47,7 @@ const inputSchema = {
         .enum(SCAN_TYPES)
         .optional()
         .describe('Compare scans of this type. Default: the type of the newest finding-producing scan.'),
+    source_tool: SourceToolInput,
     threshold: z
         .number()
         .min(0)
@@ -63,7 +66,8 @@ const tool = {
         'projects. A finding under an active suppression is neither new nor resolved and never moves the ' +
         'score: it is counted apart in `suppressed_by_severity` — a mass suppression shows there, never as an ' +
         "improvement. One whose scanner did not run this time is `not_remeasured_by_severity` (the scanners in " +
-        '`not_measured`), never resolved. Returns enough context for the model to recommend follow-up actions.',
+        '`not_measured`), never resolved. For scan_type sarif_import (import_sarif) source_tool names the tool whose ' +
+        "latest import is scored against that tool's baseline. Returns enough context for the model to recommend follow-up actions.",
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -79,7 +83,10 @@ async function handler(input, ctx) {
         return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
     }
     const skipHits = [];
-    const current = latestStateScan(ctx.storage, projectPath, inp.scan_type);
+    const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
+    if (!choice.ok)
+        return { ok: false, error: { code: 'unsupported_target', message: choice.message } };
+    const current = latestStateScan(ctx.storage, projectPath, inp.scan_type, choice.sourceTool !== undefined ? { sourceTool: choice.sourceTool } : {});
     skipHits.push(...current.hits);
     const latest = current.scan;
     if (!latest) {
@@ -97,7 +104,8 @@ async function handler(input, ctx) {
     }
     // Reference: this project's baseline of the same type, else its previous
     // usable scan of that type.
-    const baseline = ctx.storage.baselines.getActiveForProject(projectPath, latest.scan_type);
+    // An import's baseline is its source tool's.
+    const baseline = ctx.storage.baselines.getActiveForProject(projectPath, latest.scan_type, latest.scan_type === 'sarif_import' ? sarifSlotOfScan(latest) : undefined);
     const otherTypeBaseline = baseline ? null : ctx.storage.baselines.getActiveForProject(projectPath);
     const note = otherTypeBaseline?.scan_type != null
         ? {
@@ -135,8 +143,10 @@ async function handler(input, ctx) {
             ...note,
         };
     }
-    const prevFindings = ctx.storage.findings.listByScan(baselineId);
-    const curFindings = ctx.storage.findings.listByScan(latest.scan_id);
+    // An `llm-hunt` candidate no independent verdict confirmed is not a finding
+    // yet (US-2.AC-5): it is neither new nor resolved, and never moves the score.
+    const prevFindings = countableFindings(ctx.storage, projectPath, ctx.storage.findings.listByScan(baselineId));
+    const curFindings = countableFindings(ctx.storage, projectPath, ctx.storage.findings.listByScan(latest.scan_id));
     // Per scanner (`history/runCompare.ts`): a reference finding whose scanner
     // the current scan did not measure is not resolved — counted as such it
     // cancelled a real new high — and a current finding whose scanner the

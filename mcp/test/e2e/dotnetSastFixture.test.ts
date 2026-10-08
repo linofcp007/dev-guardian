@@ -26,14 +26,14 @@ import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
-import { isInstalled } from '../helpers/toolchain.js';
+import { isDotnetSdkInstalled } from '../helpers/toolchain.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 await import('../../src/tools/scanSast.js');
 
 afterAll(cleanupTempDirs);
 
-const DOTNET_INSTALLED = await isInstalled('dotnet');
+const DOTNET_INSTALLED = await isDotnetSdkInstalled();
 const TIMEOUT_MS = 300_000;
 
 const MD5_CS =

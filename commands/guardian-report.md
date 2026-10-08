@@ -42,6 +42,7 @@ Arguments: $ARGUMENTS
 1. Read `guardian://scans/history` (the 50 most recent scans of every type). Default window: the last 10 scans of each type, or the window in the hint.
 2. For each consecutive pair of the same type: `diff_scans { project_path: "<project>", from_scan_id: "<older>", to_scan_id: "<newer>" }` — `new`, `resolved`, and `not_remeasured` (a scanner that did not run, never a resolution). A finding under an active suppression is in `suppressed_findings` (`summary.suppressed`), never in `resolved`: report a jump there as a suppression, not a fix.
 3. `regression_alert { project_path: "<project>", scan_type: "<type>" }` — the latest scan of that type against its baseline; `suppressed_by_severity` counts what suppressions kept out of its score.
+   Another scanner's SARIF log joins the history with `import_sarif { project_path: "<project>", sarif_path: "<log>" }` (`sarif_import` scans); `diff_scans`, `regression_alert` and `set_baseline` then take `source_tool` to say which tool's imports to compare — see `docs/sarif-import.md`.
 4. Show a table per severity with ↑ worse / ↓ better / → flat, the **chronic** findings (still `unchanged` across most of the window), the wins that stayed resolved, and a rough **debt half-life** from the resolution rate. This is a snapshot: for what to do next, `debt`.
 
 ## `debt` — hotspots ranked by ROI

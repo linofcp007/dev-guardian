@@ -32,7 +32,10 @@
  * runs) is never a state scan — see {@link isScopedScan}.
  */
 
+import { isSarifSlot, sarifSlotOfMeta, type SarifSlot } from '../storage/slots.js';
 import type { Finding, ScanRecord, ScanType, ToolRun } from '../types.js';
+
+export { isSarifSlot, sarifSlot, type SarifSlot } from '../storage/slots.js';
 
 export type ScanTypeRole = 'state' | 'never';
 
@@ -62,6 +65,10 @@ export const SCAN_TYPE_ROLE = {
   wp_vuln_check_source: 'state',
   dotnet_secrets: 'state',
   dotnet_efcore_audit: 'state',
+  // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
+  sarif_import: 'state',
+  // The plan's hunt findings; the open set shows them only after an independent `exploitable` verdict.
+  llm_scan: 'state',
 
   sbom: 'never',
   detect_stack: 'never',
@@ -164,16 +171,35 @@ export function scriptEraSlotOfFinding(f: Pick<Finding, 'tool' | 'category' | 's
   }
 }
 
+/** The slot a `sarif_import` scan belongs to, by its `meta.source_tool`. */
+export function sarifSlotOfScan(scan: Pick<ScanRecord, 'meta'>): SarifSlot {
+  return sarifSlotOfMeta(scan.meta);
+}
+
 /**
- * An open-set slot: one per `'state'` type. Each is fed by scans of its own
+ * Whether `a` and `b` can speak for each other's findings: an import only
+ * measures what an import of the same source tool found — and nothing but
+ * such an import measures it. Two scans of any other types: always.
+ */
+export function sameImportSlot(a: Pick<ScanRecord, 'scan_type' | 'meta'>, b: Pick<ScanRecord, 'scan_type' | 'meta'>): boolean {
+  const aImport = a.scan_type === 'sarif_import';
+  const bImport = b.scan_type === 'sarif_import';
+  if (!aImport && !bImport) return true;
+  return aImport && bImport && sarifSlotOfScan(a) === sarifSlotOfScan(b);
+}
+
+/**
+ * An open-set slot: one per `'state'` type — except `sarif_import`, which has
+ * one per source tool ({@link SarifSlot}). Each is fed by scans of its own
  * type, plus — for the slots a script-era security_full routes to — that
  * row's matching part. The `security_full` slot holds only a script-era
  * row's unroutable remainder.
  */
-export type OpenSetSlot = ScanType;
+export type OpenSetSlot = ScanType | SarifSlot;
 
 /** Scan types whose rows can feed `slot`. */
 export function sourceTypesOf(slot: OpenSetSlot): ScanType[] {
+  if (isSarifSlot(slot)) return ['sarif_import'];
   if (slot === 'security_full') return ['security_full'];
   const coveredByFull = Object.values(SCRIPT_ERA_RUN_SLOTS).includes(slot);
   return coveredByFull ? [slot, 'security_full'] : [slot];
@@ -190,6 +216,7 @@ export function findingInSlot(
   finding: Pick<Finding, 'tool' | 'category' | 'subcategory'>,
   slot: OpenSetSlot,
 ): boolean {
+  if (scan.scan_type === 'sarif_import') return isSarifSlot(slot);
   if (scan.scan_type !== 'security_full') return scan.scan_type === slot;
   return scriptEraSlotOfFinding(finding) === slot;
 }

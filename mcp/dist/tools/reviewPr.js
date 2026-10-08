@@ -79,7 +79,7 @@ const reviewPr = makeScanTool({
             .boolean()
             .optional()
             .describe("Semgrep runs only rules on disk — the project's own, registered custom rules and the plugin's " +
-            'LLM-application pack — with --metrics=off. Trivy (run when a manifest changed) may still download ' +
+            'LLM-application and web-JS sink packs — with --metrics=off. Trivy (run when a manifest changed) may still download ' +
             'its database. Default: false.'),
         severity_min: SeverityMin,
         force: Force,

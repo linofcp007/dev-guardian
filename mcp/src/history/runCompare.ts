@@ -70,14 +70,14 @@
 
 import { join } from 'node:path';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
-import { LLM_RULES_FILE } from '../runners/semgrepConfigs.js';
+import { PLUGIN_PACK_FILES } from '../runners/semgrepConfigs.js';
 import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
 import { pluginPacksDir, ruleIdsInFile } from '../runners/semgrepRuleIds.js';
 import type { Storage } from '../storage/index.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import type { Finding, PartialParse, ScanRecord, ToolRun } from '../types.js';
 import { KNOWN_FINDING_KEYS, findingKey, keysOfRun, runNameEntry } from './runNames.js';
-import { isOrchestratedFullScan, isScriptEraFullScan, scriptEraSlotOfFinding } from './scanRoles.js';
+import { isOrchestratedFullScan, isScriptEraFullScan, sameImportSlot, scriptEraSlotOfFinding } from './scanRoles.js';
 
 export interface ScanComparison {
   /** Whether `f`, a finding of `from`, was not measured again by `to` — a gap, or not run. */
@@ -242,14 +242,14 @@ function isPluginPackGap(pp: PartialParse): boolean {
 let packRuleIds: ReadonlySet<string> | undefined;
 
 /**
- * The rule ids the plugin's LLM pack declares (`configs/semgrep/llm.yml`),
+ * The rule ids the plugin's packs declare (`configs/semgrep/llm.yml`, `web-js.yml`),
  * as its findings are stored — the pack rule's own id (`localRuleIds.ts`).
  * Read once. A project-root rule carrying the same id is stored the same
  * way and is read as the pack's: that can only keep one of its findings
  * open, never close one.
  */
 function pluginPackRuleIds(): ReadonlySet<string> {
-  packRuleIds ??= new Set(ruleIdsInFile(join(pluginPacksDir(), LLM_RULES_FILE)));
+  packRuleIds ??= new Set(PLUGIN_PACK_FILES.flatMap((file) => ruleIdsInFile(join(pluginPacksDir(), file))));
   return packRuleIds;
 }
 
@@ -1128,13 +1128,21 @@ export function compareScansFor(storage: Storage, from: ScanRecord, to: ScanReco
   const typeOfTo = typeResolver(storage, to);
   const fromBooks = booksOf(storage, from);
   const toBooks = booksOf(storage, to);
+  // An import's findings are named by the tool that wrote the log, which no
+  // bookkeeping name knows: "no gap anywhere" would let ANY full scan resolve
+  // them. Only an import of the same source tool measures them (and an import
+  // measures nothing a native scan found).
+  const crossSlot = !sameImportSlot(from, to);
+  const notLookedAt = (f: Finding): Answer => ({ verdict: 'not_run', notRun: f.tool, byTarget: false });
   /** `to`'s answer for a finding of `from`. */
   const inTo = (f: Finding): Answer => {
+    if (crossSlot) return notLookedAt(f);
     const t = typeOfFrom(f);
     return answerFor(fromBooks(t), toBooks(t), f);
   };
   /** `from`'s answer for a finding of `to`. */
   const inFrom = (f: Finding): Answer => {
+    if (crossSlot) return notLookedAt(f);
     const t = typeOfTo(f);
     return answerFor(toBooks(t), fromBooks(t), f);
   };

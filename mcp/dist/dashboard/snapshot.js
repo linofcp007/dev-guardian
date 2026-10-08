@@ -42,9 +42,10 @@
  */
 import { coverageRunsOf, owaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRuns, resolveProjectLanguages } from '../frameworks/projectLanguages.js';
-import { findLatestUsable, latestStateScan, openSetForProject, suppressionMatcher, } from '../history/openSet.js';
+import { countableFindings, findLatestUsable, latestStateScan, openSetForProject, suppressionMatcher, } from '../history/openSet.js';
 import { classifyDiff, compareScansFor } from '../history/runCompare.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, } from '../types.js';
+import { isSarifSlot, sarifToolOfSlot } from '../storage/slots.js';
 import { compareFindings } from './delta.js';
 import { rankFiles } from './hotspots.js';
 import { scoreRisk } from './risk.js';
@@ -324,8 +325,8 @@ function buildSincePrevious(storage, currentScan, isSuppressed, truncation) {
  */
 function compareScans(storage, from, to, isSuppressed, truncation, what) {
     const check = compareScansFor(storage, from, to);
-    const fromFindings = unsuppressed(storage, from.scan_id, isSuppressed);
-    const toFindings = unsuppressed(storage, to.scan_id, isSuppressed);
+    const fromFindings = unsuppressed(storage, from, isSuppressed);
+    const toFindings = unsuppressed(storage, to, isSuppressed);
     const classified = classifyDiff(check, fromFindings, toFindings);
     const skipFrom = new Set(classified.notRemeasured);
     const skipTo = new Set(classified.notPreviouslyMeasured);
@@ -347,14 +348,16 @@ function buildSinceBaseline(storage, baseline, projectPath, isSuppressed, trunca
     const baselineType = baseline.scan_type ?? storage.scans.getById(baseline.scan_id)?.scan_type;
     if (baselineType === undefined)
         return null;
-    const target = latestStateScan(storage, projectPath, baselineType).scan;
+    // An imported log's baseline is one source tool's: its "latest" is too.
+    const target = latestStateScan(storage, projectPath, baselineType, baseline.slot !== undefined && isSarifSlot(baseline.slot) ? { sourceTool: sarifToolOfSlot(baseline.slot) } : {}).scan;
     const baselineScan = storage.scans.getById(baseline.scan_id);
     if (target === null || baselineScan === null)
         return null;
     return compareScans(storage, baselineScan, target, isSuppressed, truncation, 'deltas.since_baseline.new_findings');
 }
-function unsuppressed(storage, scanId, isSuppressed) {
-    return storage.findings.listByScan(scanId).filter((f) => !isSuppressed(f));
+/** A scan's rows that count: not suppressed, and no unconfirmed `llm-hunt` candidate (US-2.AC-5). */
+function unsuppressed(storage, scan, isSuppressed) {
+    return countableFindings(storage, scan.project_path, storage.findings.listByScan(scan.scan_id)).filter((f) => !isSuppressed(f));
 }
 function buildBaselineState(resolved, now) {
     if (resolved === null)

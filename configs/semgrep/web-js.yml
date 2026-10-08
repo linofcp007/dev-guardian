@@ -1,0 +1,431 @@
+# dev-guardian Semgrep config web-js.
+# Sinks classicos de aplicações Node/Express, em JS e TS, que o registo da
+# Semgrep apanha mal ou so com taint de um ficheiro: SQL construído por
+# interpolação, path traversal e SSRF direto. Corre dentro do `scan_sast`
+# como o `llm.yml` (ficheiro do plugin, também no `local_only`).
+#
+#   | regra                 | CWE     | como decide                               |
+#   | --------------------- | ------- | ----------------------------------------- |
+#   | web-js-sql-template   | CWE-89  | padrão: o texto SQL entregue a um driver  |
+#   |                       |         | tem uma interpolação ou uma concatenação  |
+#   |                       |         | que não é literal; sem taint, de          |
+#   |                       |         | propósito (ver abaixo)                    |
+#   | web-js-path-traversal | CWE-22  | taint na mesma função: `req.query|params|  |
+#   |                       |         | body` até ao caminho de uma leitura ou    |
+#   |                       |         | envio de ficheiro; sanitizers:            |
+#   |                       |         | `path.basename` e `startsWith` sobre o     |
+#   |                       |         | caminho resolvido                         |
+#   | web-js-ssrf           | CWE-918 | taint na mesma função: `req.query|params|  |
+#   |                       |         | body` até ao URL de fetch, axios, got,    |
+#   |                       |         | http(s).request/get; sanitizer: o URL     |
+#   |                       |         | comparado com uma lista exata             |
+#
+# O QUE CADA REGRA NAO VÊ (lacunas conhecidas, medidas ou desenhadas):
+#
+# web-js-sql-template
+#   - Decide pela FORMA do texto, nunca pela origem do valor: um valor
+#     interpolado que e uma constante noutro ficheiro, ou um inteiro que o
+#     tipo garante, dispara. E de propósito: o repositório recebe o valor por
+#     parametro e a rota que lê `req.query` esta noutro ficheiro, fluxo que o
+#     taint intra-procedimento não vê (a vulnerabilidade S04 da app sintética
+#     do spike). O preço são falsos positivos, medidos no corpus real.
+#   - O cliente SQL e reconhecido pelo nome do metodo (`prepare`, `query`,
+#     `exec`, `execute`, `all`, `get`, `run`, `raw`) MAIS um texto que parece
+#     SQL (`select ... from`, `insert into`, `update ... set`, `delete from`,
+#     `create|alter|drop table`, `pragma`, `with x as (`...). Não depende do
+#     import do driver, porque o repositório pode usar um módulo local
+#     (`./db.js`). Um fragmento sem estas palavras (o fragmento de `knex.raw` com so uma coluna e `desc`)
+#     não é visto.
+#   - Ficheiros em `migrations/` ficam de fora (`paths.exclude`): o SQL de uma
+#     migração corre uma vez e interpola nomes e ids lidos da própria base.
+#   - Um valor passado ao texto através de uma função própria
+#     (`buildWhere(filter)`) não e visto: so o valor interpolado na própria
+#     chamada, ou numa variável atribuída no mesmo bloco.
+#   - Excluídos por forma (o valor só pode ser um de vários literais), lidos
+#     no TEXTO do valor: um literal, um ternário entre literais,
+#     `Number`/`parseInt`/`parseFloat`, `new Date(...).toISOString()`,
+#     `x.length`, marcadores gerados (`Array(n).fill('?').join(',')`,
+#     `.map(() => '?').join(',')`, com o separador LITERAL) e um acesso a um
+#     objeto de NOME CONSTANTE (`SORT_COLUMNS[k]`, `COLUNAS.titulo`, com ou sem
+#     `?? OUTRO`). A convenção do nome só vale para acessos a um objeto:
+#     substitui "declarado const", que custava segundos por ficheiro grande
+#     (timeouts, medido). Um identificador isolado (`SORT`, `TABLE`) é
+#     excluído só se for um `const` com um destes valores à direita, no mesmo
+#     bloco ou num bloco que o envolva (um `const` de módulo usado dentro de
+#     uma função ou de um método de classe: sondado). À direita desse `const`
+#     valem também um número e uma concatenação só de literais (D-4). Um
+#     template sem interpolação conta como literal (EC-1), mas o Semgrep dá o
+#     texto de um template SEM a crase final (medido: `` `id, name ``), e a
+#     alternativa exigia as duas: até à D-2 um `const COLS = \`...\`` disparava
+#     sempre (43 falsos positivos no mcp/src deste repositório, 26 depois da
+#     correção). O nome nunca conta: `const SORT = req.query.sort` dispara
+#     (D-4). Um `let`/`var` NUNCA é excluído: pode ser
+#     reatribuído com dados do pedido, e a regra não segue a ordem das
+#     atribuições. Preço medido: um `let direction = x ? 'ASC' : 'DESC'` dispara
+#     (falso positivo). Outro preço: uma constante importada
+#     (`import { PREFIX } from './x'`) interpolada dispara, a regra não a vê,
+#     e uma constante calculada por uma função do próprio módulo
+#     (`const READABLE = notInFutureSql()`) também: são os 26 que ficam no
+#     mcp/src, todos fragmentos montados pelo código.
+#     Fica de fora: o acesso a um objeto em minúsculas, mesmo constante, dispara;
+#     e o `.join(...)` de um array local de literais SEM nenhum `push` de um
+#     valor interpolado (a decoy D01) é tratado como seguro só em linha.
+#
+# web-js-path-traversal
+#   - Taint INTRA-procedimento: a fonte (`req.query`, `req.params`, `req.body`)
+#     e o sink têm de estar na mesma função; um valor que atravessa um
+#     ficheiro (o serviço recebe o nome por parâmetro) não é visto. Escolha
+#     de desenho: o S06 da app sintética está numa função só.
+#   - Sinks: o 1.º argumento de `fs.readFile`, `fs.readFileSync`,
+#     `fs.createReadStream`, `res.sendFile` e `res.download`. A ESCRITA de
+#     ficheiros (`writeFile`, `createWriteStream`, um upload) não é sink: é
+#     outra classe (sobrescrever) e outra regra. `res.sendFile(p, { root })`
+#     fica de fora: com `root` o Express recusa `..`.
+#   - Sanitizers: `path.basename(...)` (corta qualquer diretório) e
+#     `x.startsWith(...)`, que limpa `x` por efeito lateral — a regra não
+#     distingue o ramo que sai do que fica, nem se o prefixo é mesmo o
+#     diretório base: uma comparação com um prefixo qualquer também limpa.
+#     `path.normalize`, `path.relative`, `includes('..')` e um `realpath`
+#     NÃO limpam: o valor continua tainted e dispara.
+#   - Sinks: o valor do pedido que chega DIRETO ao ficheiro lido ou enviado
+#     (`res.sendFile(req.query.f)`) também dispara, não só através de
+#     `path.join`/`path.resolve`: mais largo que o US-2.AC-1, de propósito (é
+#     o mesmo traversal).
+#   - Só as fontes `req.*` com esse nome de parâmetro; `request.query`,
+#     `ctx.query` e `event.queryStringParameters` não são vistos.
+#
+# web-js-ssrf
+#   - SSRF ARMAZENADO não é visto, de propósito: o URL vem de uma linha da
+#     base de dados (um endereço de pager guardado por um administrador e
+#     chamado mais tarde), não do pedido em curso, e nenhuma regra que siga
+#     `req.*` dentro de uma função o alcança (o S05 da app sintética do
+#     spike). Fica para o `llm-scan`; o ficheiro misses/ssrf-stored.ts fixa
+#     que a regra não finge o contrário.
+#   - Taint INTRA-procedimento, como a de path traversal: o URL que atravessa
+#     um ficheiro (o serviço recebe-o por parâmetro) não é visto.
+#   - Sinks: o 1.º argumento de `fetch`, `axios(...)`, `axios.get|post|...`,
+#     `got(...)`, `got.get|...`, `http.request|get` e `https.request|get`. O
+#     corpo do pedido (`axios.post(url, req.body)`) não é o URL e não dispara.
+#     `axios.request({ url })`, `new URL(...)` guardado e clientes próprios
+#     (`this.http.get`, `request(...)`, `superagent`, `node-fetch` importado
+#     com outro nome) não são vistos.
+#   - Sanitizer: `LISTA.includes(url)` e `LISTA.has(url)` limpam `url` por
+#     efeito lateral (comparação EXATA com uma lista de valores permitidos).
+#     Um `startsWith` ou uma regex sobre o host NÃO limpam: não são uma
+#     comparação exata e deixam passar `https://permitido.example.evil.com`.
+#   - Uma função própria de validação (`isUrlAllowed(url)`) NÃO é um
+#     sanitizer: só a comparação exata com uma lista, escrita na própria
+#     função, o é. Medido: o único achado no corpus real é um proxy que valida
+#     com uma função dessas (falso positivo).
+#   - Um valor do pedido no CAMINHO de um URL de host fixo
+#     (`fetch(\`${BASE}/users/${req.params.id}\`)`) dispara como o resto: o
+#     taint não distingue o host do caminho. É um falso positivo medido.
+#
+# CORPUS REAL (SC-002, US-3.AC-5). Medido com `semgrep --config
+# configs/semgrep/web-js.yml --json --metrics=off --jobs 2` (Semgrep 1.176.1)
+# sobre três aplicações Node de código aberto, nos commits
+#   uptime-kuma  e7420f8fa5 (master, 3.0.0-beta.0)
+#   actual       7e683249a9 (master)
+#   outline      aaab59d8ca (main, 1.10.1)
+# 4933 ficheiros JS/TS lidos pelo Semgrep (`paths.scanned`: js, mjs, cjs, jsx,
+# ts, tsx) e 711 103 LINHAS (todas as linhas físicas desses ficheiros, brancos e
+# comentários incluídos: uptime-kuma 339 ficheiros / 38 824 linhas, actual
+# 2 061 / 319 326, outline 2 533 / 352 953). Contagem por regra e veredicto de
+# CADA achado (FP = o padrão casa mas o valor não é controlado por um atacante):
+#   web-js-sql-template   14 achados
+#     actual/packages/loot-core/src/server/budget/actions.ts:89  FP: `table` vem de getBudgetTable(), nomes fixos
+#     actual/.../budget/statements.ts:19  FP: GOAL/TEMPLATE_PREFIX, constantes importadas
+#     actual/.../budget/statements.ts:20  FP: idem
+#     actual/.../budget/statements.ts:22  FP: `scopeClause` é um fragmento montado na própria função
+#     outline/server/queues/tasks/UpdateDocumentsPopularityScoreTask.ts:180  FP: `this.workingTable`, nome gerado pela tarefa
+#     ...:298, :449, :466, :469, :523  FP: o mesmo `this.workingTable` (5 achados)
+#     ...:509  FP: `tablename` lido de pg_tables
+#     uptime-kuma/server/database.js:375  FP: o nome da base passou por SqlString.escapeId
+#     uptime-kuma/server/database.js:1060  FP: `sqlHourOffset` vem de Database.sqlHourOffset(), texto por dialeto
+#     uptime-kuma/server/jobs/clear-old-data.js:44  FP: o mesmo `sqlHourOffset`
+#     (32 achados em outline/server/migrations/ ficam de fora por `paths.exclude`:
+#     eram todos FP, nomes de tabela e ids lidos da base)
+#   web-js-path-traversal  0 achados (o corpus quase não tem leituras ou envios
+#     de ficheiros com valores do pedido: o recall mede-se só pelos fixtures)
+#   web-js-ssrf             1 achado
+#     actual/packages/sync-server/src/app-cors-proxy.js:207  FP: o URL do pedido
+#     é validado antes por isUrlAllowed(), função própria, que a regra não
+#     reconhece como lista exata
+# Verdictos lidos no código, não inferidos: actions.ts, statements.ts,
+# database.js:375/1060, o proxy; nos restantes pela origem do valor.
+# SC-002: 15 achados em 711 103 linhas = 0,04 por 2 000 linhas, contra o
+# orçamento de 1 por 2 000 (355 achados): cumprido. Verdadeiros positivos:
+# 0 de 15; a regra SQL é ruidosa por desenho (decide pela forma do texto).
+# Repetido a 2026-10-08 (máquina nova, depois da D-2 e da D-4): os mesmos 15
+# achados, nas mesmas linhas. Nenhum era um `const` literal, por isso as
+# correções não mudam nada neste corpus.
+# NFR-2 (rácio de tempo do scan com/sem este pack; limite 1,30 desde a D-5 —
+# 1,25 na D-3/D-4, 1,10 antes): CUMPRIDO nas duas máquinas. Segunda medição (2026-10-08, máquina nova, pack depois da D-2/D-4,
+# Semgrep 1.176.1, 24 CPUs, o mesmo argv `local_only`, 5 pares ALTERNADOS):
+# sem o pack min 19,9 / mediana 20,1 s; com o pack min 25,0 / mediana 25,1 s.
+# Rácio dos mínimos 1,256, das medianas 1,249. Por
+# regra, cada uma sozinha ao lado do llm.yml, 3 rodadas (mínimo de 18,9 s só
+# com o llm.yml): web-js-sql-template 23,9 (1,26), web-js-path-traversal 19,6
+# (1,04), web-js-ssrf 19,7 (1,04). Sondas sobre a regra SQL: sem os dois ramos
+# em sequência (`$SQL = ...; ... $DB.$M($SQL)`) 23,4; sem as exclusões
+# `pattern-not`/`pattern-not-inside` 23,2 — o custo é casar `$DB.$M($T, ...)`
+# em todas as chamadas de método e só depois filtrar pelos nomes e pelo texto.
+# O rácio depende da máquina: o mesmo pack deu 1,19 na primeira medição; por
+# isso o limite ficou em 1,30 (D-5) e não em 1,25.
+# Primeira medição (2026-10-02, limite então 1,10: não cumprido):
+# Medido sobre o corpus do eixo 3 (os três commits acima, 4933 ficheiros),
+# com o argv do `scan_sast` em `local_only` (`--metrics=off --config=llm.yml
+# [--config=web-js.yml] --json --quiet --output F`, `--jobs` por omissão),
+# Semgrep 1.176.1, 24 CPUs, em corridas ALTERNADAS (sem, com, sem, com...):
+# 13 pares. Relógio, em segundos. Sem o pack: min 33,1, mediana 41,0, máx 76,4.
+# Com o pack: min 39,3, mediana 54,1, máx 159,9. Rácio dos mínimos 1,19; rácio
+# das medianas 1,32. A máquina estava carregada por outros processos (as
+# corridas lentas são carga, não regra: a mesma configuração deu 33,6 e 65,1),
+# por isso o mínimo é a leitura fiável e a mediana só confirma o sentido.
+# Quem custa é a regra SQL: cada regra sozinha ao lado do llm.yml, 4 rodadas,
+# mínimo de 30,6 s só com o llm.yml: web-js-sql-template 40,4 (1,32),
+# web-js-path-traversal 34,1 (1,11, mas 42,7 noutra rodada), web-js-ssrf 30,2
+# (1,00). A regra SQL percorre cada chamada com texto interpolado; as outras
+# duas partem de uma fonte `req.*` e quase não custam.
+#
+# ABLAÇÃO depois da D-2/D-4 (2026-10-08, máquina nova; pack sha256
+# a3fb662b…, 904 s de relógio): o mesmo veredicto da medição abaixo. Eixo 0
+# 3/3; eixo 1 31/31 vivas; eixo 2 31/31; eixo 3 28/31, as mesmas 3 subidas
+# (ramo de template −12, ramo de concatenação −2, `$V` −2), todas ramos que
+# funcionam. Piso de ruído 0. hits/ tem agora 25 achados SQL (44 no total;
+# 49 no corpus de fixtures inteiro): +2 de `hits/sql-not-a-constant-name.ts`.
+# Baseline do corpus real 14: o achado SSRF do proxy faltou NESSA varredura
+# (análise de taint abandonada por tempo sob carga: 29 ficheiros excluídos);
+# numa varredura isolada e em 4 de 5 das corridas do NFR-2 está lá.
+#
+# ABLAÇÃO (`npm run ablate -- web-js`; corpus do eixo 3: os mesmos três
+# commits acima, em `GUARDIAN_WEBJS_SRC`; 1 114 s de relógio). Cobertura: 31 cláusulas em 3
+# de 3 regras, nenhuma regra sem cláusulas ablacionáveis.
+#   eixo 0 (dispara em hits/)   3/3 regras; hits/ com 23 achados SQL, 8 path
+#                               traversal e 11 SSRF (42; 47 no corpus de
+#                               fixtures inteiro, com a app sintética)
+#   eixo 1 (viva)               31/31 vivas, 0 DEAD (ver abaixo: 6 eram DEAD
+#                               na primeira medição, 1 só sem corpus real)
+#   eixo 2 (mantém os TP)       31/31, 0 a suprimir: nenhuma remoção revelou
+#                               um achado novo em hits/
+#   eixo 3 (sem subida no real) 28/31; 3 sobem, todas lidas (ver abaixo)
+# Achados por regra no corpus real (baseline do eixo 3): web-js-sql-template
+# 14, web-js-path-traversal 0 (eixo 3 vazio nesta regra: o corpus não a
+# exercita; só os fixtures a medem), web-js-ssrf 1. Total 15, igual ao bloco
+# CORPUS REAL. Ficheiros excluídos por timeout (Semgrep abandona a regra por
+# tempo ou memória): 30 no baseline, 33 a 36 nas varreduras de cada cláusula;
+# 14 dos 15 achados do baseline são comparáveis (um está num ficheiro abandonado
+# numa das varreduras). Piso de ruído 0: duas
+# varreduras do mesmo pack concordam em todas as regras, por isso o eixo 3
+# resolve uma diferença de 1.
+#
+# DEAD na primeira medição (6, mais 1 só sem corpus real) e resolução. Nenhum foi apagado: todos eram
+# cláusulas vivas sem um fixture que as exercesse; a forma foi escrita como
+# fixture (o `webJsPack.test.ts` confirma que cada linha `// BUG` dispara e que
+# o miss não dispara) e a cláusula medida de novo. A segunda medição, sobre os fixtures novos, deu 0 DEAD:
+#   - sql-template, `pattern-not-inside: $W = [...]; ... $W.push(`...${$Y}...`)`:
+#     faltava um array local preenchido com um push interpolado. Fixture
+#     hits/sql-join-of-values.ts (`filtered`): sem a cláusula o `.join(' AND ')`
+#     seria excluído e o achado desaparecia.
+#   - path-traversal, `pattern-not: res.sendFile($P, {root: ...}, ...)`: faltava
+#     um `sendFile` com `root` e um valor do pedido. Fixture
+#     misses/path-sendfile-root.ts: sem a cláusula passa a disparar.
+#   - sql-template, `metavariable-regex` sobre `$M` (nomes de método): viva no
+#     corpus real, DEAD só com `--no-real-code` (o `_Verify:_` da tarefa 4),
+#     porque nenhum fixture tinha texto de aparência SQL numa chamada que não é
+#     de um cliente SQL. Fixture misses/sql-not-a-sql-client.ts
+#     (`logger.info` com um template `select ... from`): sem a cláusula dispara.
+#   - ssrf, `axios($U, ...)`, `got.$M($U, ...)`, `http.get($U, ...)` e
+#     `https.get($U, ...)`: nenhum fixture usava estas formas (só `axios.get`,
+#     `got(...)` e `http(s).request`). Fixture hits/ssrf-call-forms.ts, uma
+#     linha `// BUG` por forma. A passagem de pares tinha dado INERT nos 6
+#     pares (nenhum corpus as exercitava), ou seja, não eram redundantes.
+#
+# Subidas do eixo 3, todas ramos que funcionam, não ruído a apagar:
+#   - ramo `$DB.$M($T, ...)` com template (remoção: -12 a -11 achados): é o
+#     ramo positivo que produz quase todos os 14 achados do corpus.
+#   - ramo com concatenação (-2): database.js:375 e clear-old-data.js:44, ambos
+#     FP já listados acima (concatenação com valor que a regra não reconhece).
+#   - `metavariable-regex` sobre `$V` do `const $X = $V; ...` (-4): apagá-lo faz
+#     QUALQUER `const x = <valor>` excluir o achado; os 4 achados que se perdem
+#     (statements.ts:22, database.js:375 e :1060, clear-old-data.js:44) são os
+#     FP documentados em que o const tem um valor que não é literal
+#     (`scopeClause`, `sqlHourOffset`); o mesmo corte esconderia
+#     `const SORT = req.query.sort` (hits/sql-exclusion-escapes.ts, eixo 1:
+#     -2 nos fixtures). A cláusula é o que impede um const de calar a regra.
+#
+# Fixtures em mcp/test/fixtures/web-js/{hits,misses}/ (hits/ com uma linha
+# `// BUG: <id-da-regra>` por achado), `mcp/test/e2e/webJsPack.test.ts`.
+#
+# Comentários e mensagens em português; nunca os caracteres que um locale
+# cp1252 não decodifica (U+00C1, U+00CD, U+00CF, U+00D0, U+00DD) — CLAUDE.md.
+
+rules:
+  - id: web-js-sql-template
+    metadata:
+      cwe:
+        - "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp:
+        - "A05:2025 - Injection"
+    languages: [javascript, typescript]
+    severity: ERROR
+    # Migrações: o SQL corre uma vez, com nomes de tabelas e ids lidos da própria
+    # base; 32 dos 44 achados no corpus real eram só isto (nenhum atacável).
+    paths:
+      exclude:
+        - "**/migrations/**"
+    message: >-
+      O texto SQL entregue ao driver é construído por interpolação ou
+      concatenação com um valor que não é um literal: o que esse valor contiver
+      passa a ser SQL (CWE-89). Usar parâmetros (marcadores `?` ou nomeados) com os
+      valores no segundo argumento; para uma lista (`IN (...)`) gerar os
+      marcadores (`Array(n).fill('?').join(',')`); para ORDER BY, escolher
+      de um objeto constante com chaves fixas.
+    # O achado cai no VALOR interpolado (focus-metavariable), não na chamada: o
+    # bloco interior acaba no focus e as exclusões comparam-se com esse valor.
+    # Quatro alternativas: o texto no 1.º argumento (template ou concatenação) e
+    # o texto numa variável preparada mais abaixo no bloco (S04: o achado fica
+    # na linha onde o SQL é construído, não na do `prepare`). Os métodos são
+    # filtrados por regex DEPOIS do padrão: escrever os oito nomes em padrões
+    # separados deu timeouts em ficheiros grandes (medido).
+    # Desempenho: as exclusões são regex sobre o texto do valor e UMA sequência
+    # `$X = $V; ...`; um `pattern: $X` ou uma sequência por forma multiplicou o
+    # tempo por 5 em ficheiros grandes e deu timeouts no corpus (medido).
+    patterns:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $DB.$M($T, ...)
+                  - pattern: $DB.$M(`...${$X}...`, ...)
+              - patterns:
+                  - pattern: $DB.$M($T, ...)
+                  - pattern: $DB.$M(<... $A + $X ...>, ...)
+              - patterns:
+                  - pattern: $SQL = $T
+                  - pattern: $SQL = `...${$X}...`
+                  - pattern-inside: |
+                      $SQL = `...${$X}...`;
+                      ...
+                      $DB.$M($SQL, ...);
+              - patterns:
+                  - pattern: $SQL = $T
+                  - pattern: $SQL = <... $A + $X ...>
+                  - pattern-inside: |
+                      $SQL = <... $A + $X ...>;
+                      ...
+                      $DB.$M($SQL, ...);
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(prepare|query|exec|execute|all|get|run|raw)$
+          - metavariable-regex:
+              metavariable: $T
+              regex: '(?is).*\b(select\b.*\bfrom|insert\s+(or\s+\w+\s+)?into|update\b.*\bset|delete\s+from|(create|alter|drop)\s+(or\s+replace\s+)?(temp\w*\s+|unique\s+)?(table|index|view|trigger|database|schema)|pragma\s|replace\s+into|truncate\s|with\s+\S+\s+as\s*\().*'
+          - focus-metavariable: $X
+      # Exclusões: o valor só pode ser um de vários literais (US-1.AC-2). Em linha
+      # (regex sobre o texto do valor) e através de uma variável do mesmo bloco.
+      - metavariable-regex:
+          metavariable: $X
+          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$).+'
+      - pattern-not-inside:
+          patterns:
+            - pattern: |
+                const $X = $V;
+                ...
+            - metavariable-regex:
+                metavariable: $V
+                regex: '(?s)^(?:-?\d[\d_]*(?:\.\d+)?|(?:"[^"]*"|''[^'']*''|`[^`$]*`?)(?:\s*\+\s*(?:"[^"]*"|''[^'']*''|`[^`$]*`?))+|(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$'
+      - pattern-not:
+          patterns:
+            - pattern: $W.join(...)
+            - pattern-inside: |
+                $W = [...];
+                ...
+            - pattern-not-inside: |
+                $W = [...];
+                ...
+                $W.push(`...${$Y}...`);
+                ...
+
+  # Taint intra-procedimento: o achado cai no argumento do sink (o caminho
+  # lido ou enviado), não na fonte. O `startsWith` e o `path.basename` são os
+  # sanitizers do US-2.AC-2.
+  - id: web-js-path-traversal
+    metadata:
+      cwe:
+        - "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Um valor do pedido HTTP (`req.query`, `req.params` ou `req.body`) chega,
+      na mesma função, ao caminho de um ficheiro lido ou enviado sem
+      verificação de contenção: `../../etc/passwd` sai do diretório
+      (CWE-22). Aplicar `path.basename` ao valor, ou resolver o caminho e
+      confirmar que começa pelo diretório base (`startsWith`) antes de o
+      usar; com `res.sendFile`, passar a opção `root`.
+    mode: taint
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.params
+      - pattern: req.body
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+      - patterns:
+          - pattern: $T.startsWith(...)
+          - focus-metavariable: $T
+        by-side-effect: true
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FS.readFile($P, ...)
+              - pattern: $FS.readFileSync($P, ...)
+              - pattern: $FS.createReadStream($P, ...)
+              - pattern: res.sendFile($P, ...)
+              - pattern: res.download($P, ...)
+          - pattern-not: 'res.sendFile($P, {root: ...}, ...)'
+          - focus-metavariable: $P
+
+  # Taint intra-procedimento: só o 1.º argumento (o URL) é o sink; o corpo do
+  # pedido não decide onde o servidor liga. O sanitizer é a comparação exata
+  # com uma lista (US-3.AC-2).
+  - id: web-js-ssrf
+    metadata:
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Um valor do pedido HTTP (`req.query`, `req.params` ou `req.body`) chega,
+      na mesma função, ao URL de um pedido de saída: o servidor liga ao que o
+      chamador indicar, serviços internos e metadados de cloud incluídos
+      (CWE-918). Comparar o URL com uma lista exata de destinos permitidos
+      (`includes`/`has`) antes de o usar, ou construir o URL no servidor e
+      aceitar do pedido só um identificador.
+    mode: taint
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.params
+      - pattern: req.body
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: $L.includes($U)
+              - pattern: $L.has($U)
+          - focus-metavariable: $U
+        by-side-effect: true
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fetch($U, ...)
+              - pattern: axios($U, ...)
+              - pattern: axios.$M($U, ...)
+              - pattern: got($U, ...)
+              - pattern: got.$M($U, ...)
+              - pattern: http.request($U, ...)
+              - pattern: https.request($U, ...)
+              - pattern: http.get($U, ...)
+              - pattern: https.get($U, ...)
+          - focus-metavariable: $U

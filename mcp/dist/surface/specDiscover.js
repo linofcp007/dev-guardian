@@ -26,19 +26,42 @@ export const MAX_SPEC_BYTES = 5 * 1024 * 1024;
 const SPEC_BASENAMES = new Set(['openapi', 'swagger', 'api-docs']);
 const SPEC_EXTENSIONS = new Set(['.json', '.yaml', '.yml']);
 /**
+ * The widened names (bugfix openapi-discovery-names): a base name that only
+ * STARTS with openapi/swagger (`openapi3`, `openapi-v1`, `swagger2`), one that
+ * ends `.openapi`/`.swagger` (`petstore.openapi`), and a directory segment
+ * that starts with openapi/swagger or is `api-docs`/`apidocs`
+ * (`openapi_specs/`, `swagger-docs/`). Measured on VAmPI: its only route
+ * table is `openapi_specs/openapi3.yml`, and the exact names alone found
+ * nothing. These names are also worn by files that are not documents —
+ * `openapi-generator-config.yaml`, `openapitools.json` — so a widened
+ * candidate is kept only when its text declares a top-level `openapi` or
+ * `swagger` key ({@link DECLARES_SPEC}); the exact names are reported as
+ * before, valid or not.
+ */
+const WIDENED_BASE = /^(?:openapi|swagger)|\.(?:openapi|swagger)$/i;
+const WIDENED_DIR = /^(?:openapi|swagger)|^api-?docs$/i;
+/**
+ * A top-level `openapi`/`swagger` key: a YAML key at column 0, bare or
+ * quoted, or a JSON key whose value is a string (the version).
+ */
+const DECLARES_SPEC = /^["']?(?:openapi|swagger)["']?[ \t]*:|"(?:openapi|swagger)"\s*:\s*"/m;
+/**
  * Find OpenAPI/Swagger documents under `projectPath`, or read exactly the
  * `explicit` paths when given. Never throws.
  */
 export function discoverSpecs(projectPath, explicit) {
     const root = resolve(projectPath);
     const isExplicit = explicit !== undefined && explicit.length > 0;
-    const candidates = isExplicit ? dedupeResolved(explicit) : walk(root, root).sort();
+    const found = isExplicit ? null : walk(root, root);
+    // Exact names first, so a widened candidate never pushes a conventional
+    // document out of the cap.
+    const candidates = found === null ? dedupeResolved(explicit ?? []) : [...found.exact.sort(), ...found.widened.sort()];
     // The file cap applies on both entry paths: discovery can find more than
     // MAX_SPEC_FILES candidates, and a caller can just as easily hand in an
     // over-cap explicit list. Either way `truncated` must reflect it.
     const truncated = candidates.length > MAX_SPEC_FILES;
     const selected = candidates.slice(0, MAX_SPEC_FILES);
-    const outcome = readCandidates(isExplicit ? null : root, selected);
+    const outcome = readCandidates(isExplicit ? null : root, selected, new Set(found?.widened ?? []));
     outcome.truncated = truncated;
     return outcome;
 }
@@ -85,64 +108,78 @@ export function dedupeResolved(paths) {
  * repository's and is read contained in it (`platform/projectFs.ts`); an
  * explicit `spec_paths` entry is the caller's choice and may lie anywhere
  * (`hooks/configFile.ts`'s reader). Over the cap is `oversized`; absent,
- * unreadable or refused is absent from the result, not an error.
+ * unreadable or refused is absent from the result, not an error. A
+ * `widened` candidate that reads but declares no `openapi`/`swagger` key is
+ * not a document, and is left out.
  */
-function readCandidates(root, paths) {
+function readCandidates(root, paths, widened) {
     const specs = [];
     const oversized = [];
     for (const path of paths) {
         const read = root === null ? readSmallText(path, MAX_SPEC_BYTES) : readProjectText(root, path, MAX_SPEC_BYTES);
-        if (read.status === 'ok')
+        if (read.status === 'ok') {
+            if (widened.has(path) && !DECLARES_SPEC.test(read.text))
+                continue;
             specs.push({ file: path, text: read.text });
+        }
         else if (read.status === 'refused' && read.reason === 'too-large')
             oversized.push(path);
     }
     return { specs, oversized, truncated: false };
 }
 function walk(root, dir) {
+    const out = { exact: [], widened: [] };
     let entries;
     try {
         entries = readdirSync(dir, { withFileTypes: true });
     }
     catch {
-        return [];
+        return out;
     }
-    const out = [];
     for (const entry of entries) {
         if (entry.isDirectory()) {
             if (FS_EXCLUDE.has(entry.name))
                 continue;
-            out.push(...walk(root, join(dir, entry.name)));
+            const sub = walk(root, join(dir, entry.name));
+            out.exact.push(...sub.exact);
+            out.widened.push(...sub.widened);
         }
         else if (entry.isFile()) {
-            if (isSpecCandidate(root, dir, entry.name)) {
-                out.push(join(dir, entry.name));
-            }
+            const tier = specCandidateTier(root, dir, entry.name);
+            if (tier !== null)
+                out[tier].push(join(dir, entry.name));
         }
     }
     return out;
 }
 /**
- * `dir` matches the "under an openapi/ directory" rule only when a
- * *project-relative* path segment is named `openapi` — i.e. relative to
- * `root`, not the absolute path. Checking the absolute path would also match
- * any project that merely happens to live beneath a directory named
- * `openapi` (a checkout path, a monorepo namespace), pulling in unrelated
- * files from outside the project entirely.
+ * `exact` for the conventional names (a base name of exactly openapi,
+ * swagger or api-docs, or a file under a directory named exactly `openapi`),
+ * `widened` for the names {@link WIDENED_BASE} / {@link WIDENED_DIR} admit,
+ * null for anything else.
+ *
+ * `dir` matches a directory rule only on *project-relative* path segments —
+ * i.e. relative to `root`, not the absolute path. Checking the absolute path
+ * would also match any project that merely happens to live beneath a
+ * directory named `openapi` (a checkout path, a monorepo namespace), pulling
+ * in unrelated files from outside the project entirely.
  */
-function isSpecCandidate(root, dir, name) {
+function specCandidateTier(root, dir, name) {
     const dot = name.lastIndexOf('.');
     if (dot <= 0)
-        return false;
+        return null;
     const base = name.slice(0, dot);
     const ext = name.slice(dot).toLowerCase();
     if (!SPEC_EXTENSIONS.has(ext))
-        return false;
+        return null;
     if (SPEC_BASENAMES.has(base.toLowerCase()))
-        return true;
+        return 'exact';
     const relDir = relative(root, dir);
-    if (relDir === '')
-        return false;
-    return relDir.split(sep).some((segment) => segment.toLowerCase() === 'openapi');
+    const segments = relDir === '' ? [] : relDir.split(sep);
+    if (segments.some((segment) => segment.toLowerCase() === 'openapi'))
+        return 'exact';
+    if (WIDENED_BASE.test(base) || segments.some((segment) => WIDENED_DIR.test(segment)))
+        return 'widened';
+    return null;
 }
 //# sourceMappingURL=specDiscover.js.map

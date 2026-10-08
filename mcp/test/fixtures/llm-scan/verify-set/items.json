@@ -1,0 +1,429 @@
+{
+  "note": "Verification-set stand-in for T-12: scanner-style findings over three languages, some inside functions longer than the 200-line excerpt cap.",
+  "items": [
+    {
+      "id": "v01",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 4
+    },
+    {
+      "id": "v02",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 15
+    },
+    {
+      "id": "v03",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 22
+    },
+    {
+      "id": "v04",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 29
+    },
+    {
+      "id": "v05",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 33
+    },
+    {
+      "id": "v06",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 52
+    },
+    {
+      "id": "v07",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 72
+    },
+    {
+      "id": "v08",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 76
+    },
+    {
+      "id": "v09",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 205
+    },
+    {
+      "id": "v10",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.audit.express-open-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 335
+    },
+    {
+      "id": "v11",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 339
+    },
+    {
+      "id": "v12",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 353
+    },
+    {
+      "id": "v13",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 368
+    },
+    {
+      "id": "v14",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.audit.express-open-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 372
+    },
+    {
+      "id": "v15",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.audit.express-open-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 377
+    },
+    {
+      "id": "v16",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.audit.express-open-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/orders.ts",
+      "line": 383
+    },
+    {
+      "id": "v17",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/checkout.ts",
+      "line": 4
+    },
+    {
+      "id": "v18",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/checkout.ts",
+      "line": 13
+    },
+    {
+      "id": "v19",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/checkout.ts",
+      "line": 23
+    },
+    {
+      "id": "v20",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/checkout.ts",
+      "line": 27
+    },
+    {
+      "id": "v21",
+      "tool": "semgrep",
+      "rule_id": "javascript.express.security.audit.express-open-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/checkout.ts",
+      "line": 36
+    },
+    {
+      "id": "v22",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/checkout.ts",
+      "line": 73
+    },
+    {
+      "id": "v23",
+      "tool": "semgrep",
+      "rule_id": "javascript.lang.security.audit.unsafe-formatstring",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "ts/checkout.ts",
+      "line": 110
+    },
+    {
+      "id": "v24",
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.subprocess-shell-true",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 9
+    },
+    {
+      "id": "v25",
+      "tool": "semgrep",
+      "rule_id": "bandit.B608",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 13
+    },
+    {
+      "id": "v26",
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.subprocess-shell-true",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 18
+    },
+    {
+      "id": "v27",
+      "tool": "bandit",
+      "rule_id": "python.lang.security.audit.formatted-sql-query",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 22
+    },
+    {
+      "id": "v28",
+      "tool": "semgrep",
+      "rule_id": "bandit.B608",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 34
+    },
+    {
+      "id": "v29",
+      "tool": "bandit",
+      "rule_id": "bandit.B608",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 46
+    },
+    {
+      "id": "v30",
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.formatted-sql-query",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 50
+    },
+    {
+      "id": "v31",
+      "tool": "bandit",
+      "rule_id": "python.lang.security.audit.formatted-sql-query",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 79
+    },
+    {
+      "id": "v32",
+      "tool": "semgrep",
+      "rule_id": "bandit.B608",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 109
+    },
+    {
+      "id": "v33",
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.subprocess-shell-true",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 113
+    },
+    {
+      "id": "v34",
+      "tool": "bandit",
+      "rule_id": "bandit.B608",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 222
+    },
+    {
+      "id": "v35",
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.formatted-sql-query",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 332
+    },
+    {
+      "id": "v36",
+      "tool": "bandit",
+      "rule_id": "python.lang.security.audit.formatted-sql-query",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 336
+    },
+    {
+      "id": "v37",
+      "tool": "semgrep",
+      "rule_id": "python.lang.security.audit.subprocess-shell-true",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 344
+    },
+    {
+      "id": "v38",
+      "tool": "bandit",
+      "rule_id": "python.lang.security.audit.formatted-sql-query",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "py/billing.py",
+      "line": 353
+    },
+    {
+      "id": "v39",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 6
+    },
+    {
+      "id": "v40",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.audit.header-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 12
+    },
+    {
+      "id": "v41",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.tainted-filename",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 18
+    },
+    {
+      "id": "v42",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 22
+    },
+    {
+      "id": "v43",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 39
+    },
+    {
+      "id": "v44",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.audit.header-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 57
+    },
+    {
+      "id": "v45",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.tainted-filename",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 61
+    },
+    {
+      "id": "v46",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.tainted-filename",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 106
+    },
+    {
+      "id": "v47",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.audit.header-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 151
+    },
+    {
+      "id": "v48",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.audit.header-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 155
+    },
+    {
+      "id": "v49",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.tainted-filename",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 162
+    },
+    {
+      "id": "v50",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.audit.header-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 169
+    },
+    {
+      "id": "v51",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.audit.header-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 173
+    },
+    {
+      "id": "v52",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.injection.tainted-sql-string",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 288
+    },
+    {
+      "id": "v53",
+      "tool": "semgrep",
+      "rule_id": "php.lang.security.audit.header-redirect",
+      "message": "Untrusted input may reach a sensitive operation on this line.",
+      "file": "php/report.php",
+      "line": 403
+    }
+  ]
+}

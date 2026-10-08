@@ -1,6 +1,7 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { hostname } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { deadPid } from '../../helpers/deadPid.js';
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { ScansRepo } from '../../../src/storage/scansRepo.js';
@@ -11,13 +12,6 @@ function freshRepo() {
   const db = new Database(':memory:');
   runMigrations(db);
   return { db, repo: new ScansRepo(db) };
-}
-
-/** The pid of a process that has already exited. */
-function deadPid(): number {
-  const r = spawnSync(process.execPath, ['-e', '']);
-  if (typeof r.pid !== 'number') throw new Error('could not spawn a short-lived child');
-  return r.pid;
 }
 
 /**

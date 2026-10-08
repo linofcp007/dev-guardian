@@ -470,9 +470,10 @@ function countProblem(env, platform) {
  * dies with the same message — so no git can run a command it names: a bad
  * line, a bad include, an include cycle, a `.git` file pointing at no
  * repository (a broken submodule). Any other failure of the read is a
- * refusal of ours.
+ * refusal of ours. Git 2.56 words the broken `.git` file "gitfile does not
+ * point to a valid repository" where older ones said "not a git repository".
  */
-const GIT_CANNOT_READ = /cannot change to|bad config line|bad numeric config value|exceeded maximum include depth|not a git repository/i;
+const GIT_CANNOT_READ = /cannot change to|bad config line|bad numeric config value|exceeded maximum include depth|not a git repository|gitfile does not point to a valid repository/i;
 function interpretExit(status, stdout, stderr, dir) {
     if (status === 0)
         return { kind: 'listing', bytes: stdout };

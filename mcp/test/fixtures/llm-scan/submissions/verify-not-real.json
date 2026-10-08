@@ -1,0 +1,7 @@
+{
+  "verdict": "not_real",
+  "attacker_input": "src/routes/users.ts:17",
+  "operation": "src/routes/users.ts:18",
+  "decisive_line": "src/routes/users.ts:18 — the values are passed as bound parameters, never concatenated",
+  "reasoning": "The statement text at line 18 is a constant; name, email and role travel in the parameter array, so the driver binds them."
+}

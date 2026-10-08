@@ -65,6 +65,10 @@ export const SCAN_TYPES = [
     'agent_audit',
     // What the configured MCP servers actually serve (audit_mcp_tools)
     'mcp_tool_audit',
+    // A SARIF log another tool wrote, imported (import_sarif); one open-set slot per meta.source_tool
+    'sarif_import',
+    // The LLM-assisted scan's plan: its hunt findings (tool `llm-hunt`) live in this scan
+    'llm_scan',
 ];
 /**
  * Scan types whose rows carry CVEs (`scan_cves`): the dependency scanners and
@@ -122,5 +126,24 @@ export const DOMAIN_ERROR_CODES = [
     'unsupported_target',
     'target_not_authorized',
     'no_surface_snapshot',
+    // import_sarif: why a log was refused (tools/importSarif.ts).
+    'invalid_sarif',
+    'outside_project',
+    'refused_file',
+    'not_found',
+    // llm_scan_start / llm_scan_task / llm_scan_submit (tools/llmScan*.ts).
+    'invalid_input',
+    'needs_surface',
+    'too_many_open_plans',
+    'nothing_to_plan',
+    'plan_abandoned',
+    'plan_corrupt',
+    'needs_confirm',
+    'limit_reached',
+    'sampling_unavailable',
+    'already_closed',
+    'bad_lease',
+    'too_large',
+    'store_failed',
 ];
 //# sourceMappingURL=types.js.map

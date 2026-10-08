@@ -101,7 +101,7 @@ registerToolModule(
         .optional()
         .describe(
           "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the " +
-            "plugin's LLM-application pack) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, " +
+            "plugin's LLM-application and web-JS sink packs) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, " +
             "scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet " +
             'feeds. Default: false.',
         ),

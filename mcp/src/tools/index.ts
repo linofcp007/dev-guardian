@@ -9,6 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z, type ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
+import type { SamplingFn } from '../llmscan/types.js';
 import type { ToolResult } from '../types.js';
 import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
@@ -32,6 +33,11 @@ export interface ToolCallMeta {
    * SIGTERM the child process tree.
    */
   signal?: AbortSignal;
+  /**
+   * MCP sampling (`sampling/createMessage` to the client). Present only when
+   * the client declared the `sampling` capability at initialize.
+   */
+  sampling?: SamplingFn;
   /**
    * Set only by an orchestrator (`security_scan_full`) running this tool as
    * one of its children: the scan-tool factory records it in the child's
@@ -73,11 +79,14 @@ export interface ToolModule {
     callMeta?: ToolCallMeta,
   ) => Promise<ToolResult<Record<string, unknown>>>;
   /**
-   * Result keys sent ONCE, in the text content the model reads, and left
-   * out of `structuredContent`. Every result otherwise travels twice (the
-   * JSON text block and the structured copy), which for a bulky payload —
-   * an inlined SBOM — doubles the response for nothing. Declaring any also
-   * makes the text block compact JSON.
+   * Bulky result keys — an inlined SBOM, an LLM-scan brief. Every result
+   * otherwise travels twice (the JSON text block and the structured copy),
+   * which for such a payload doubles the response for nothing. A tool that
+   * declares any answers with the text block ALONE, compact JSON, and no
+   * `structuredContent`: hosts disagree on which of the two the model reads
+   * (Claude Code reads `structuredContent` when there is one — measured: a
+   * brief kept out of it never reached the model), and with one
+   * representation every host shows the whole result.
    */
   contentOnlyKeys?: readonly string[];
 }
@@ -133,6 +142,9 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
         if (typedExtra?.signal instanceof AbortSignal) {
           callMeta.signal = typedExtra.signal;
         }
+        if (server.server.getClientCapabilities()?.sampling !== undefined) {
+          callMeta.sampling = (params, options) => server.server.createMessage(params, options);
+        }
         const result = await tool.handler(input as Record<string, unknown>, ctx, callMeta);
         return toCallToolResult(result, tool.contentOnlyKeys ?? []);
       },
@@ -175,20 +187,19 @@ export function toCallToolResult<T extends Record<string, unknown>>(
   contentOnlyKeys: readonly string[],
 ): {
   content: Array<{ type: 'text'; text: string }>;
-  structuredContent: Record<string, unknown>;
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 } {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
     const payload = untrustedValue(boundResponsePayload({ ok: true, ...rest } as Record<string, unknown>));
-    const structured: Record<string, unknown> = { ...payload };
-    for (const key of contentOnlyKeys) delete structured[key];
-    // A tool with a bulky content-only payload is serialised compactly too:
-    // re-indenting an inlined document adds whitespace to every line of it.
-    const indent = contentOnlyKeys.length > 0 ? undefined : 2;
+    // A bulky payload goes once, in the text block every host shows, as
+    // compact JSON: re-indenting an inlined document adds whitespace to every
+    // line of it (see `ToolModule.contentOnlyKeys`).
+    if (contentOnlyKeys.length > 0) return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
     return {
-      content: [{ type: 'text', text: JSON.stringify(payload, null, indent) }],
-      structuredContent: structured,
+      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+      structuredContent: { ...payload },
     };
   }
   const error = untrustedValue(result.error);

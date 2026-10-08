@@ -23,6 +23,7 @@ import {
   readSmallTextFile,
   walkLinksUnder,
 } from '../../../src/hooks/configFile.js';
+import { expectNearReference } from '../../helpers/timing.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 
 const POSIX = process.platform !== 'win32';
@@ -234,11 +235,21 @@ describe('readSmallJsonFile', () => {
   // reader allocated cap + 1 bytes per read. It now sizes the buffer from
   // the descriptor, and still refuses a file that grew past the cap.
   it('sizes its buffer from the file, not from a large cap', () => {
+    // A shape, not milliseconds (CLAUDE.md, test/helpers/timing.ts): the same
+    // 7-byte file read with a 64 MiB cap costs about what it costs with a
+    // 1 KiB cap. A buffer sized from the cap zero-fills 64 MiB per call —
+    // ~10x the reference, measured (healthy reads 0.96-1.02, so the bound is
+    // the geometric middle, 3). The old "300 reads under 2000 ms"
+    // measured the machine and failed at 4.5 s under a parallel suite.
     const p = join(dir, 'small.json');
     writeFileSync(p, '{"a":1}');
-    const t0 = Date.now();
-    for (let i = 0; i < 300; i++) expect(readSmallText(p, 64 * 1024 * 1024).status).toBe('ok');
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(readSmallText(p, 64 * 1024 * 1024).status).toBe('ok');
+    expectNearReference(
+      'readSmallText, 64 MiB cap vs 1 KiB cap',
+      () => readSmallText(p, 64 * 1024 * 1024),
+      () => readSmallText(p, 1024),
+      { maxRatio: 3 },
+    );
   });
 
   it('a directory is refused, not read', () => {

@@ -63,7 +63,7 @@ export function substituteCliPath(body: string, cliPath: string): string {
 export const RULES_BODY = `# dev-guardian
 
 This project has the **dev-guardian MCP server** registered. It exposes
-59 tools and 18 resources for security, quality, bugfix, deps,
+63 tools and 18 resources for security, quality, bugfix, deps,
 compliance, observability, performance, plus first-class WordPress and
 .NET (C#/F#) support. All scanners run locally. dev-guardian sends no
 telemetry of its own; Semgrep's registry mode sends metrics — pass
@@ -112,6 +112,10 @@ cache that avoids re-running unchanged scans.
   entry point, or an unresolvable dynamic import — see its tool description
   for the full limits. For a dependency CVE (npm, PyPI) its \`dependency\`
   provider says whether a file a route reaches imports the package
+- "have a model check what the scanners found" / "verify the findings" / "what do the
+  scanners miss?" → \`llm_scan_start\` (plan; \`modes\`: \`verify\`, \`hunt\`), then the
+  loop in "LLM-assisted scan" below. The server calls no model: yours does the
+  reasoning, one brief at a time
 
 **Quality**
 - "review before PR" → \`review_pr\`
@@ -163,6 +167,9 @@ cache that avoids re-running unchanged scans.
 - "risk score" → \`risk_score\`
 - "what's new since last scan?" → \`diff_scans\`
 - "set baseline" → \`set_baseline\`
+- "import another scanner's SARIF" → \`import_sarif\` (one \`sarif_import\` scan per run;
+  \`set_baseline\`, \`diff_scans\`, \`regression_alert\` and \`report_export\` take
+  \`source_tool\` to say which tool's imports they read)
 - "noise reduction" → \`triage_findings\`
 - "prioritise" → \`prioritize_findings\` (a CISA SSVC decision per CVE finding, beside the score)
 - "how do I fix X?" → \`suggest_fix\` (returns context; you write the patch)
@@ -188,6 +195,52 @@ cache that avoids re-running unchanged scans.
   one-screen summary) or \`dashboard\` (CLI, same data as a self-contained HTML
   page) — both read-only, report rather than gate
 - "set up another AI host" → run \`node ${CLI_PATH_PLACEHOLDER} mcp-config <host>\` (CLI)
+
+## LLM-assisted scan (\`llm_scan_start\` → \`llm_scan_task\` → \`llm_scan_submit\`)
+
+Your model checks the scanners' findings (\`verify\`) and hunts what they miss from
+the entry points (\`hunt\`, needs \`map_attack_surface\` first). The loop is the same
+on every host; only WHERE each task's brief runs differs.
+
+1. \`llm_scan_start { project_path, modes }\` returns \`plan_id\`, the task count, what
+   was left out and a token estimate. **Show the user the estimate and
+   \`token_limit_note\` before anything else.** Above \`max_estimated_tokens\` the plan
+   says \`needs_confirm\`: pass \`confirm: true\` only after the user agrees.
+   \`confirm\` opens the gate; it never raises the limit, which stays a hard ceiling
+   on what is handed out (\`deliverable_within_token_limit\` says how many tasks fit).
+2. \`llm_scan_task { plan_id }\` returns one task: a \`brief\` and a \`lease_token\`
+   (20 minutes).
+3. Run THAT brief where the host's recipe below says, and \`llm_scan_submit
+   { plan_id, task_id, lease_token, independence, payload }\` with its JSON answer.
+4. Repeat until \`llm_scan_task\` says \`done\`; \`llm_scan_start { plan_id }\` reads the
+   report at any time. Coverage is \`full\` only when every task closed.
+
+Recipe per host:
+
+- **Claude Code** — run each task in a fresh subagent, one subagent per task
+  (parallel is fine), and submit with \`independence: "subagent"\`. The subagent
+  gets the brief and nothing else of this conversation.
+- **Codex** — Codex spawns a subagent only when it is asked to, so ask explicitly:
+  "spawn a subagent for each \`llm_scan_task\` brief, one task per subagent, and
+  have it return the JSON answer". Without that instruction, Codex answers in its
+  own context: then declare \`same_context\`.
+- **Cline** — no subagent that can use MCP: run the tasks sequentially, one task
+  after another, in the same context, and declare \`independence: "same_context"\`.
+- **Claude Desktop / Cowork chat** — no subagents: run the tasks sequentially, one
+  at a time, in the same context, and declare \`same_context\`.
+- **A client that declares MCP sampling (VS Code Copilot does)** —
+  \`llm_scan_task { plan_id, execute: "sampling" }\` runs the verification tasks
+  inside the server through the client's model, recorded as \`sampling\`. Without
+  the capability the call answers \`sampling_unavailable\`; hunt tasks are never
+  sampled. Run whatever is left the way the rest of this list says.
+- **Any other host (Cursor, Gemini CLI, Windsurf, …)** — if you can start a fresh
+  subagent that can call these tools, one per task, declare \`subagent\`;
+  otherwise run the tasks sequentially, one at a time, and declare
+  \`same_context\`.
+
+Declare independence honestly. A \`same_context\` verdict is shown in the report but
+never demotes or confirms a finding — in those hosts the scan is advisory. Claiming
+\`subagent\` for an answer you gave yourself corrupts the report.
 
 ## Resources
 

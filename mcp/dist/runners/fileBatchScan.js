@@ -171,6 +171,9 @@ export function semgrepOnFiles(args) {
         ...(rules?.packCheckIds !== undefined ? { pluginPackCheckIds: rules.packCheckIds } : {}),
         ...(rules?.nonPackTaintRules !== undefined ? { nonPackTaintRules: rules.nonPackTaintRules } : {}),
     };
+    // Semgrep runs in the project: a YAML file under it is a target, one
+    // outside it a rule file (`semgrepReport.ts`, the module comment).
+    const projectPath = args.cwd;
     return scanFileBatches({
         name: 'semgrep',
         // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
@@ -186,7 +189,7 @@ export function semgrepOnFiles(args) {
         // The shared judge's `partial` verdict is no failure of the batch, and
         // neither are rules that did not load while the others ran.
         check: (args) => {
-            const c = checkSemgrepReport({ ...args, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}), ...pack });
+            const c = checkSemgrepReport({ ...args, projectPath, ...(ruleIdOf !== undefined ? { ruleIdOf } : {}), ...pack });
             const packFixpoint = c.plugin_pack_fixpoint !== undefined ? { packFixpoint: c.plugin_pack_fixpoint } : {};
             if (c.verdict === 'partial' && c.partial !== undefined) {
                 return { ok: true, scanned: c.scanned, partial: c.partial, ...packFixpoint };
@@ -238,8 +241,15 @@ export function banditOnFiles(args) {
 }
 /**
  * Bandit exits 0 (clean) or 1 (issues); its report lists files it could not
- * analyse under `errors`, which — like Semgrep's — means the run did not
- * cover what it was given.
+ * analyse under `errors`. Judged as Semgrep's per-file errors are
+ * (`semgrepReport.ts`): on a clean exit whose report analysed files, an error
+ * that names its file is a PARTIAL gap — `ok`, the file in `partial`, type
+ * `Syntax error` for Bandit's "syntax error while parsing AST from file"
+ * (what the CI gate's `--accept-partial-parse` accepts) and `Bandit error`
+ * for any other reason. Measured on OWASP Juice Shop: two Python test
+ * fixtures with syntax errors made the whole run `failed`, and scan_sast
+ * reported coverage `none`. An error naming no file, a run that analysed
+ * nothing, an unclean exit or no report stays a failure.
  */
 export function checkBanditReport(args) {
     if (args.outcome === 'cancelled' || args.outcome === 'timed_out' || args.outcome === 'output_too_large') {
@@ -250,9 +260,24 @@ export function checkBanditReport(args) {
     const root = args.raw === null ? null : parseInputAsJson(args.raw);
     if (root === null || typeof root !== 'object')
         return { ok: false, reason: 'bandit wrote no JSON report' };
-    const errors = asArray(getProp(root, 'errors')).map((e) => `${getString(e, 'filename') ?? '?'}: ${getString(e, 'reason') ?? 'error'}`);
-    if (errors.length > 0)
-        return { ok: false, reason: `${errors.length} file(s) not analysed: ${errors.join('; ')}` };
-    return { ok: true };
+    const metrics = getProp(root, 'metrics');
+    const scanned = metrics !== null && typeof metrics === 'object' ? Object.keys(metrics).filter((k) => k !== '_totals').length : 0;
+    const entries = asArray(getProp(root, 'errors'));
+    if (entries.length === 0)
+        return { ok: true, scanned };
+    const everyErrorNamesAFile = entries.every((e) => (getString(e, 'filename') ?? '').length > 0);
+    if (scanned === 0 || !everyErrorNamesAFile) {
+        const errors = entries.map((e) => `${getString(e, 'filename') ?? '?'}: ${getString(e, 'reason') ?? 'error'}`);
+        return { ok: false, scanned, reason: `${errors.length} file(s) not analysed: ${errors.join('; ')}` };
+    }
+    const partial = [];
+    for (const e of entries) {
+        const file = getString(e, 'filename') ?? '';
+        const reason = getString(e, 'reason') ?? 'error';
+        const type = /syntax error/i.test(reason) ? 'Syntax error' : 'Bandit error';
+        if (!partial.some((p) => p.file === file && p.type === type))
+            partial.push({ file, type, message: reason });
+    }
+    return { ok: true, scanned, partial };
 }
 //# sourceMappingURL=fileBatchScan.js.map

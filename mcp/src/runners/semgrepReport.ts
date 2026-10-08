@@ -37,10 +37,23 @@
  *     there were targets — a gap, `skipped`.
  *   - `failed`: everything fatal — an unclean exit, a run that did not
  *     finish, no or unparseable report, an error that is not tied to one
- *     target file (a rule or config error, an entry naming no file, one
- *     naming a YAML file, which cannot be told from the rule pack by name —
- *     a broken YAML target stays `failed`, the conservative reading), or
- *     per-file errors on a run that scanned nothing.
+ *     target file (a rule or config error — told by its TYPE, whatever path
+ *     it names — or an entry naming no file), or per-file errors on a run
+ *     that scanned nothing.
+ *
+ *     A YAML file named by a per-file type is a target when it lies inside
+ *     the scanned project — a path Semgrep reports relative to its cwd (every
+ *     caller runs it in the project), or an absolute one under `projectPath`.
+ *     It used to be refused on its extension alone ("cannot be told from the
+ *     rule pack by name"), and every repository with a GitHub Actions
+ *     workflow a bash sub-pattern could not read went `failed` — OWASP Juice
+ *     Shop's scan_sast reported coverage `none` over 969 files read and 68
+ *     results. Measured on 1.176.1: a broken rule pack is `SemgrepError`
+ *     (exit 7) or `Rule parse error` (exit 2), with no path and nothing
+ *     scanned; a workflow target is a warn-level `PartialParsing` with its
+ *     path, on exit 0, results intact. A YAML file OUTSIDE the project, or an
+ *     absolute one when the project is not known, can only be a rule file:
+ *     that stays fatal (the I3 ruling — "not the rule file").
  *
  * `ok` stays true only for the first, so a caller that reads nothing else
  * (`fixpr/apply.ts`, `compliance_check`) keeps treating a partial run as
@@ -77,6 +90,7 @@
  * add (`semgrepConfigs.ts#semgrepEngineNote`).
  */
 
+import { isAbsolute, relative as relativePath, resolve as resolvePath } from 'node:path';
 import type { FailedRule, PartialParse, ToolRun } from '../types.js';
 import type { ProcessOutcome } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson, toPosixPath, toRelativeIfPossible } from './scannerParsers/index.js';
@@ -235,7 +249,7 @@ export function checkSemgrepReport(args: {
     return { ok: false, verdict: 'scanned_nothing', scanned, errors: 0, reason };
   }
   if (exitClean && scanned > 0 && fixpoint.unscoped === 0 && (errors.length > 0 || fixpoint.functions > 0)) {
-    const partial = errors.length > 0 ? perFileErrors(errorEntries) : [];
+    const partial = errors.length > 0 ? perFileErrors(errorEntries, projectPath) : [];
     if (partial !== null) {
       return withPackGap({
         ok: false,
@@ -251,7 +265,7 @@ export function checkSemgrepReport(args: {
   const configError = ruleConfigError(errorEntries);
   if (configError !== null) failed.rule_config_error = configError;
   if ((exitClean || exitCode === 2) && (scanned > 0 || targets === 0) && fixpoint.unscoped === 0) {
-    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id));
+    const ruleGap = rulesNotLoaded(errorEntries, args.ruleIdOf ?? ((id) => id), projectPath);
     if (ruleGap !== null) {
       const { rule_config_error: _whole, ...someRan } = failed;
       const files = [...relative(ruleGap.files), ...fixpointFiles];
@@ -538,17 +552,30 @@ function errorType(entry: unknown): string | null {
 }
 
 /**
- * One `errors[]` entry as a per-file problem, or null when it is not: a
- * config/rule error type, no target file named, or the file named is a YAML
- * file (it cannot be told from a rule pack by its name). The file comes from
- * the entry's `path`, else its first span, else the location list inside a
- * `["PartialParsing", [...]]` type. The message is its first line.
+ * Whether a file an error names can be a scan target (the module comment): any
+ * non-YAML file; a YAML file only inside the scanned project.
  */
-function perFileError(entry: unknown): PartialParse | null {
+function canBeTarget(file: string, projectPath: string | undefined): boolean {
+  if (!/\.ya?ml$/i.test(file)) return true;
+  if (!isAbsolute(file)) return !file.split(/[\\/]/).includes('..');
+  if (projectPath === undefined) return false;
+  const rel = relativePath(resolvePath(projectPath), resolvePath(file));
+  return rel.length > 0 && !rel.split(/[\\/]/).includes('..') && !isAbsolute(rel);
+}
+
+/**
+ * One `errors[]` entry as a per-file problem, or null when it is not: a
+ * config/rule error type (whatever file it names — the module comment), no
+ * target file named, or a YAML file outside the project (a rule file). The
+ * file comes from the entry's `path`, else its first span, else the location
+ * list inside a `["PartialParsing", [...]]` type. The message is its first
+ * line.
+ */
+function perFileError(entry: unknown, projectPath: string | undefined): PartialParse | null {
   const type = errorType(entry);
   if (type === null || CONFIG_ERROR_TYPE.test(type)) return null;
   const file = targetFileOf(entry, getProp(entry, 'type'));
-  if (file === null || /\.ya?ml$/i.test(file)) return null;
+  if (file === null || !canBeTarget(file, projectPath)) return null;
   const message = getString(entry, 'message') ?? type;
   return { file, type, message: message.split(/\r?\n/)[0] ?? message };
 }
@@ -563,10 +590,10 @@ function pushOnce(out: PartialParse[], p: PartialParse): void {
 }
 
 /** Every `errors[]` entry as a per-file problem ({@link perFileError}), or null when any one is not. */
-function perFileErrors(errors: readonly unknown[]): PartialParse[] | null {
+function perFileErrors(errors: readonly unknown[], projectPath: string | undefined): PartialParse[] | null {
   const out: PartialParse[] = [];
   for (const entry of errors) {
-    const p = perFileError(entry);
+    const p = perFileError(entry, projectPath);
     if (p === null) return null;
     pushOnce(out, p);
   }
@@ -584,6 +611,7 @@ function perFileErrors(errors: readonly unknown[]): PartialParse[] | null {
 function rulesNotLoaded(
   errors: readonly unknown[],
   ruleIdOf: (checkId: string) => string,
+  projectPath: string | undefined,
 ): { rules: RuleNotLoaded[]; files: PartialParse[] } | null {
   const rules: RuleNotLoaded[] = [];
   const files: PartialParse[] = [];
@@ -596,7 +624,7 @@ function rulesNotLoaded(
       if (!rules.some((r) => r.rule_id === id)) rules.push({ rule_id: id, message: clip(lines[1] ?? lines[0] ?? type) });
       continue;
     }
-    const p = perFileError(entry);
+    const p = perFileError(entry, projectPath);
     if (p === null) return null;
     pushOnce(files, p);
   }

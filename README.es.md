@@ -9,8 +9,8 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 ## Qué incluye
 
 - **13 skills** y **10 comandos** slash para Claude Code / Cowork (abajo).
-- Un **servidor MCP** con **59 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés).
-- **151 reglas Semgrep en 11 packs** escritas para este proyecto: clases de bugs para siete lenguajes, un pack RGPD, un pack de inventario de rutas para nueve lenguajes y un pack para aplicaciones con LLM (salida del modelo en eval/shell/SQL, código remoto al cargar un modelo, superficie de inyección de prompt, llamadas sin límite de tokens) que `scan_sast` ejecuta — ver [docs/rule-packs.md](docs/rule-packs.md).
+- Un **servidor MCP** con **63 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés).
+- **154 reglas Semgrep en 12 packs** escritas para este proyecto: clases de bugs para siete lenguajes, un pack RGPD, un pack de inventario de rutas para nueve lenguajes, un pack Node/Express (SQL montado por interpolación, ruta de la petición en una API de ficheros, URL de la petición solicitada) y un pack para aplicaciones con LLM (salida del modelo en eval/shell/SQL, código remoto al cargar un modelo, superficie de inyección de prompt, llamadas sin límite de tokens) que `scan_sast` ejecuta — ver [docs/rule-packs.md](docs/rule-packs.md).
 - **Hooks de protección** que bloquean comandos de shell catastróficos, revisan paquetes en el momento de instalarlos y avisan cuando se escribe un secreto en un archivo — ver [docs/hooks.md](docs/hooks.md).
 - Una **CLI** (`cli/dev-guardian.mjs`) para gates de CI, configuración de hosts, un resumen en terminal y un panel HTML.
 
@@ -84,6 +84,7 @@ La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo,
 | Bugs y calidad | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
 | Dependencias y cadena de suministro | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Superficie de ataque | `map_attack_surface`, `scan_dast`, `validate_finding` |
+| Escaneo asistido por LLM | `llm_scan_start`, `llm_scan_task`, `llm_scan_submit` — el modelo de tu host verifica los findings y busca lo que los escáneres no ven; el servidor no llama a ningún modelo ([docs/llm-scan.md](docs/llm-scan.md), en inglés) |
 | Historial y triaje | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
 | Informes | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
 | Configuración y operación | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |
@@ -145,7 +146,7 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .      
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-`ci-init` genera un pipeline con cada action fijada por SHA de commit y cada escáner por versión y checksum. `scan` termina con 0 si pasa, 1 cuando un finding nuevo respecto a la baseline alcanza `--fail-on`, **2 cuando un escáner no se ejecutó** (nunca lo leas como aprobado) y 3 ante un error de uso. En un pull request, el pipeline generado evalúa contra la baseline y las reglas Semgrep del commit base (`--baseline-ref`, `--rules-ref`), nunca contra las del propio pull request. Ver [docs/ci.md](docs/ci.md). Ejecútalos desde tu proyecto, con la ruta de tu clon (la copia del propio plugin también sirve). Para una vista local: `status` y `dashboard` (una página HTML autónoma, sin red).
+`ci-init` genera un pipeline con cada action fijada por SHA de commit y cada escáner por versión y checksum. `scan` termina con 0 si pasa, 1 cuando un finding nuevo respecto a la baseline alcanza `--fail-on`, **2 cuando un escáner no se ejecutó** (nunca lo leas como aprobado) y 3 ante un error de uso. En un pull request, el pipeline generado evalúa contra la baseline y las reglas Semgrep del commit base (`--baseline-ref`, `--rules-ref`), nunca contra las del propio pull request. Ver [docs/ci.md](docs/ci.md). Ejecútalos desde tu proyecto, con la ruta de tu clon (la copia del propio plugin también sirve). Para una vista local: `status` y `dashboard` (una página HTML autónoma, sin red). Para traer el log SARIF de otro analizador al mismo historial, usa la herramienta `import_sarif` o `import-sarif <archivo>` — ver [docs/sarif-import.md](docs/sarif-import.md) (en inglés).
 
 ## Privacidad y red
 
@@ -173,7 +174,7 @@ dev-guardian no envía telemetría propia. Algunas herramientas sí acceden a la
 commands/         los 10 comandos slash
 skills/           las 13 skills
 hooks/            hooks.json + guardian-hook.mjs
-cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt)
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt, import-sarif)
 mcp/              el servidor MCP: src/, test/, dist/ (en el repositorio)
 configs/          packs Semgrep, plantillas de CI, configuraciones de gitleaks/Renovate/pre-commit, plantillas de cumplimiento
 host-rules/       plantillas de reglas para otros hosts

@@ -19,6 +19,7 @@ import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
 import { isScopedScan } from '../history/scanRoles.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
+import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES } from '../types.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
@@ -32,6 +33,7 @@ const inputSchema = {
         .enum(SCAN_TYPES)
         .optional()
         .describe('Without scan_id: baseline the newest scan of this type. Default: any finding-producing type.'),
+    source_tool: SourceToolInput,
     note: z.string().max(500).optional().describe('Free-form note attached to the baseline row.'),
 };
 const tool = {
@@ -42,13 +44,16 @@ const tool = {
         'when given — never an SBOM, stack detection, diff review, scoped scan (meta.scope; refused ' +
         'as scan_id too) or a scan whose scanners did not run. Future `diff_scans from=baseline` and ' +
         '`regression_alert` calls compare scans of that ' +
-        'type against it. Older baselines are kept for history but inactive.',
+        'type against it. Older baselines are kept for history but inactive. For scan_type sarif_import (import_sarif), ' +
+        "source_tool says which tool's newest import is baselined — each tool keeps its own baseline.",
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };
 registerToolModule(tool);
 async function handler(input, ctx) {
     const inp = input;
+    if (inp.scan_id && inp.source_tool !== undefined)
+        return failDomain('unsupported_target', SOURCE_TOOL_WITH_SCAN_ID);
     let targetScanId;
     if (inp.scan_id) {
         const scan = ctx.storage.scans.getById(inp.scan_id);
@@ -75,7 +80,10 @@ async function handler(input, ctx) {
         catch (e) {
             return failDomain('not_a_git_repo', e.message);
         }
-        const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type);
+        const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
+        if (!choice.ok)
+            return failDomain('unsupported_target', choice.message);
+        const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type, choice.sourceTool !== undefined ? { sourceTool: choice.sourceTool } : {});
         if (!latest.scan) {
             return failDomain('unknown_scan_id', `No usable completed ${inp.scan_type ?? 'finding-producing'} scan exists for ${projectPath} ` +
                 'yet; run a scan tool before setting a baseline.' +

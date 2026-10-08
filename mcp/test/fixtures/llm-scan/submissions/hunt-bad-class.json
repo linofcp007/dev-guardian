@@ -1,0 +1,16 @@
+{
+  "entry_points_reviewed": [
+    "GET /files/:name",
+    "POST /files/upload"
+  ],
+  "findings": [
+    {
+      "file": "src/routes/files.ts",
+      "line": 11,
+      "class": "rce-ish",
+      "title": "File download joins the raw name into the uploads path",
+      "attacker": "Any authenticated user requesting /files/..%2f..%2fetc%2fpasswd",
+      "evidence": "src/routes/files.ts:9 takes req.params.name; src/routes/files.ts:11 joins it to UPLOADS with no normalisation and reads the result."
+    }
+  ]
+}

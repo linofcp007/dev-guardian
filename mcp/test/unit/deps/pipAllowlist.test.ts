@@ -162,10 +162,19 @@ describe.skipIf(PIP_VERSION === null)(`the allowlist against pip ${PIP_VERSION ?
     expect(Object.keys(pip).sort()).toEqual(Object.keys(CORPUS).sort());
   });
 
+  /**
+   * How pip fails when it goes to the network for an include: the release this
+   * test was written against raised its own `ConnectionFailedError`; pip 25.0.1
+   * raises requests' `ConnectionError` (measured). Both mean pip chose a source.
+   */
+  const NETWORK_ERRORS = new Set(['ConnectionFailedError', 'ConnectionError']);
   /** pip chose a source: an option, an editable, a link or URL — or it went to the network to read an include. */
   const pipChoosesSource = (name: string): boolean => {
     const seen = pip[name];
-    return seen !== undefined && (seen.error === 'ConnectionFailedError' || seen.sources.some((x) => x !== 'unparsable-requirement'));
+    return (
+      seen !== undefined &&
+      ((seen.error !== null && NETWORK_ERRORS.has(seen.error)) || seen.sources.some((x) => x !== 'unparsable-requirement'))
+    );
   };
 
   it('pip itself chooses a source in every non-plain case but one', () => {

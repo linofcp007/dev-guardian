@@ -83,6 +83,7 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 | "esta skill é segura?" | `guardian-scanskill` |
 | "o `.mcp.json` / as settings do agente são seguras?" | `audit_agent_config { project_path: "<project>" }` |
 | "as tools que o servidor MCP X expõe são seguras?" / "mudaram?" | `guardian-security` → `audit_mcp_tools { servers: ["X"] }` (executa o servidor — só os nomes que o utilizador indicar) |
+| "um modelo que confirme estes findings" / "o que é que os scanners não veem?" | `guardian-security` → `llm_scan_start` (uma tarefa por subagente novo; `same_context` declarado onde não há subagentes) |
 
 **Features de AI / LLM dentro da app** (prompt injection, custo, evals): `/guardian-scan` — o `scan_sast`, e por isso o `security_scan_full` e o `review_pr`, corre sempre o pack LLM do plugin (Python e JS/TS, também com `local_only`): saída do modelo a chegar a `eval`/`exec`, à shell ou a SQL, o nome de uma ferramenta escolhido pelo modelo sem lista de permitidos, `trust_remote_code=True`, `torch.load` inseguro, dados do pedido HTTP no prompt de sistema e chamadas à OpenAI sem limite de tokens (a lista completa está no `guardian-security`). O que o pack não vê — prompt injection vinda de documentos ou de resultados de tools, efeitos do output do modelo fora desses sinks (escritas na DB, chamadas externas), quotas e ciclos agênticos sem teto, evals — revê-se à mão com a secção "Features de AI / LLM" da checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura total.
 

@@ -8,6 +8,65 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **LLM-assisted scan** — `llm_scan_start`, `llm_scan_task` and `llm_scan_submit` (61st to 63rd tools):
+  the host's own model verifies scanner findings (`verify`) and hunts, from the routes
+  `map_attack_surface` found, for what scanners miss (`hunt`). The server calls no model and holds no
+  key. It plans, hands out one self-contained brief at a time under a 20-minute lease, validates every
+  answer against a closed schema and against the files on disk, and keeps the plan in the database
+  (migration 017, scan type `llm_scan`), so a plan resumes after a restart. Each answer declares its
+  independence (`subagent`, `sampling` or `same_context`), and only an independent one acts: a
+  `not_real` demotes a finding in triage and the report, never suppressing it; a hunt finding counts
+  in the open set, totals, diffs and gates only once an independent verdict confirms it. Limits: 200
+  tasks and 500 000 estimated tokens per plan by default (`confirm: true` opens the gate, never the
+  ceiling), five open plans per project, answers up to 64 KiB, three invalid answers per task.
+  `execute: "sampling"` runs verify tasks through a client that declares MCP sampling, within 50 s per
+  call. The rules file for every host carries its recipe (a subagent per task; `same_context` where
+  there is none). See [docs/llm-scan.md](docs/llm-scan.md).
+  Prompts: v5 (`configs/llm-scan/prompts/v5/`) is the current version: the model writes its working in
+  prose before the answer object, and the object comes last. v1–v4 stay shipped, because a plan keeps
+  the version it was made with. Evals on the reference model (Claude Sonnet through Claude Code,
+  subagent mode, 2 runs per item):
+
+  | Set | v1 | v2 | v3 | v5 | Threshold |
+  | --- | --- | --- | --- | --- | --- |
+  | Verification (58 findings, PHP/Python/TypeScript) | 92.2 % right | 96.6 %, 93.1 % agreement | 97.4 %, 96.6 % | 97.4 %, 94.8 % | ≥ 95 %, ≥ 90 % |
+  | Hunt (18 planted vulnerabilities, 0 decoys confirmed) | 83.3 % found | 94.4 % | 100 % | 94.4 % | ≥ 90 %, 0 |
+  | Prompt injection in the analysed code | 100 % unchanged | 100 % | 95 % | 100 % | ≥ 98 % |
+  | Answers refused by the schema, injected runs | 5 | 1 | 3 | 0 | 0 |
+  | Regression cases kept | 4/5 | 4/5 | 5/5 | 5/5 | 5/5 |
+
+  v5 is the first version to pass every threshold. Its refused answers had one cause from v3 on: with
+  "the object alone" as the whole final message and no file to read, the model committed to `verdict`
+  in the object's first key, reasoned after it, and appended a corrected second object; v4 asked for the
+  keys in another order and the order did not change. v1–v4 were measured with the harness asking for
+  nothing before or after the object; v5 with working allowed before it, as `llm_scan_submit` allows.
+  The API's safeguards intermittently refuse a brief before the model answers (3 runs in 175); the
+  harness retries that within the same attempts. A run is about 2.7 M tokens; a verification task costs
+  about 13 k on the host.
+- **`web-js` rule pack** (`configs/semgrep/web-js.yml`, 3 rules): SQL text built by interpolation or
+  concatenation in a SQL driver call (CWE-89, by the shape of the text, so it also sees a value that
+  reached the repository by parameter), a request path reaching a file read or send (CWE-22) and a
+  request URL fetched (CWE-918), both by same-function taint. `scan_sast` passes it beside `llm.yml` on
+  every Semgrep run, `local_only` and the Docker fallback included. Ablated on three real Node
+  applications (`GUARDIAN_WEBJS_SRC`, 4933 files): 15 findings, all read, none a true positive (the SQL
+  rule is noisy by design). A const bound to a template with no substitution, a number or a concatenation
+  of literals counts as a literal (Semgrep gives a template's text without its closing backtick, so the
+  exclusion never matched it: 43 false positives on this repo's own `mcp/src`, 26 now). Measured cost, with
+  `scan_sast`'s `local_only` argv: 1.19x on one machine and 1.256x on another (minimum of alternating
+  pairs; the SQL rule is nearly all of it), within the 1.30 budget; recorded in the pack header.
+- **`import_sarif`** (the 60th tool) and the CLI subcommand `import-sarif <file>`: record another
+  analysis tool's SARIF 2.1.0 log (CodeQL, Snyk, Trivy, Semgrep, gitleaks, a dev-guardian export) as one
+  `sarif_import` scan per run, so its findings share the project's baselines, diffs, suppressions, triage and
+  reports. Each tool that wrote a log has its own slot; `set_baseline`, `diff_scans`, `regression_alert` and
+  `report_export` take `source_tool` to choose it. A dev-guardian SARIF export now carries
+  `partialFingerprints.devGuardianIdentity`, so an export imported back keeps its identities and severities.
+  The log is read as untrusted input (regular file, at most 50 MiB, inside the project unless
+  `allow_outside_project`); nothing it names is opened or fetched. The CLI exits 0 on an import, 1 on an
+  invalid or refused log, 2 on a partial one and 3 on anything else. See
+  [docs/sarif-import.md](docs/sarif-import.md).
+
 ## [3.1.0] - 2026-09-30
 
 A full review of 3.0.0. Its theme: **the repository being scanned is untrusted input** — nothing in it

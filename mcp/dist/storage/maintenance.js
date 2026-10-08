@@ -56,12 +56,16 @@
  * audit scan's `meta.sub_scan_ids` is read by `history/runCompare.ts`, which
  * falls back to the audit's own per-tool entries when a sub-scan is gone —
  * so only a BASELINED audit's sub-scans are held back (above); an ordinary
- * audit's go with their own partitions. A
+ * audit's go with their own partitions. `llm_scan_plans.scan_id` references
+ * `scans(id)` too: an OPEN plan holds its scan back (PROTECTED_SQL), a plan
+ * idle for {@link PLAN_ABANDON_DAYS} days is marked `abandoned` at retention's
+ * start, and `deleteRows` deletes a closed plan's rows with its scan. A
  * future table that references `scans(id)` must be added to the list above,
  * indexed, and deleted in `deleteRows`.
  */
 import { spellingOnlyCanonical } from '../platform/pathSpelling.js';
 import { openSetForProject } from '../history/openSet.js';
+import { PLAN_ABANDON_DAYS, abandonStalePlans } from './llmScanRepo.js';
 import { STACK_SNAPSHOTS_KEPT } from './stackRepo.js';
 export const DEFAULT_RETENTION_SCANS = 50;
 /**
@@ -202,6 +206,7 @@ const BASELINED_RUN_MEMBERS_SQL = `
 const PROTECTED_SQL = `(
   status = 'running'
   OR id IN (SELECT scan_id FROM baselines)
+  OR id IN (SELECT scan_id FROM llm_scan_plans WHERE status = 'open')
   OR EXISTS (
     SELECT 1 FROM baselines b
      WHERE b.scan_id = (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.parent_scan_id') END)
@@ -316,6 +321,9 @@ function deleteRows(db, eligible) {
     if (eligible.length === 0)
         return 0;
     const del = eligible.map(() => '?').join(', ');
+    // A closed plan goes with its scan; an open plan holds the scan back (PROTECTED_SQL).
+    db.prepare(`DELETE FROM llm_scan_tasks WHERE plan_id IN (SELECT id FROM llm_scan_plans WHERE scan_id IN (${del}))`).run(...eligible);
+    db.prepare(`DELETE FROM llm_scan_plans WHERE scan_id IN (${del})`).run(...eligible);
     db.prepare(`DELETE FROM findings WHERE scan_id IN (${del})`).run(...eligible);
     db.prepare(`DELETE FROM scan_cves WHERE scan_id IN (${del})`).run(...eligible);
     db.prepare(`DELETE FROM tree_cache WHERE scan_id IN (${del})`).run(...eligible);
@@ -333,6 +341,8 @@ export function pruneScans(db, keep, budget = {}) {
     const now = budget.now ?? (() => performance.now());
     const started = now();
     const protect = budget.protect ?? NOTHING_PROTECTED;
+    // Before the protected set is read: an abandoned plan no longer holds its scan back.
+    abandonStalePlans(db, new Date().toISOString());
     const pending = listPrunableScans(db, keep).filter((id) => !protect.has(id));
     const batchSize = budget.batchSize ?? PRUNE_BATCH;
     let deleted = 0;
@@ -495,6 +505,9 @@ export function scheduleRetention(storage, log, options = {}) {
                 // Once per start: what each candidate's project's open set reads
                 // from is never deleted (openSetSourceIds). Re-read per start — a
                 // scan the set stops reading goes at the next one.
+                const abandoned = abandonStalePlans(db, new Date().toISOString());
+                if (abandoned > 0)
+                    log(`marked ${abandoned} llm_scan plan(s) idle for over ${PLAN_ABANDON_DAYS} days as abandoned`);
                 const listed = listPrunableScans(db, limit.keep);
                 protect = openSetSourceIds(storage, listed);
                 pending = listed.filter((id) => !protect.has(id));

@@ -58,6 +58,8 @@
  *   - a carried finding is marked `not_remeasured: true`, and the scan it
  *     came from is listed in `sources` with `carried_for` (the gaps);
  *   - suppressions still apply;
+ *   - a finding carries the host model's verdict (`llm`) when it has one; an
+ *     `llm-hunt` finding is in the set only after an independent `exploitable`;
  *   - a scanner the newer scan did not run AT ALL (no gap recorded: a
  *     Python-free project's Bandit) is not a gap, and carries nothing —
  *     except a pass that runs only when asked (`trivy-image`, nuclei:
@@ -72,16 +74,20 @@
  * rows it skips; nothing here searches a fixed window of recent scans.
  */
 import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { llmMarkerOf } from '../llmscan/submission.js';
 import { futureDatedNote } from '../storage/scanClock.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { SEVERITY_ORDER, } from '../types.js';
 import { admitLookup, ChainIndex, openGapFor, producedKeys, scopeAdmits, StillCarry, UNKNOWN_FINDING_KEY, } from './runCompare.js';
 import { findingKey, toolsOfKey } from './runNames.js';
-import { STATE_SCAN_TYPES, findingInSlot, isOrchestratedFullScan, isScopedScan, isScriptEraFullScan, slotView, sourceTypesOf, } from './scanRoles.js';
+import { STATE_SCAN_TYPES, findingInSlot, isOrchestratedFullScan, isScopedScan, isScriptEraFullScan, isSarifSlot, sarifSlot, sarifSlotOfScan, slotView, sourceTypesOf, } from './scanRoles.js';
+import { sarifToolOfSlot } from '../storage/slots.js';
 /** Rows fetched per query while looking past skipped scans. */
 const PAGE = 25;
 /** How many skipped scans a summary names, per reason. The count is exact. */
 export const SKIPPED_SAMPLE = 5;
+/** The tool name of a finding the LLM hunt wrote (`llm_scan_submit`). */
+const HUNT_TOOL = 'llm-hunt';
 /**
  * The newest completed, unscoped scan of `types` for `projectPath` whose
  * coverage is not `none` — and the none-coverage scans passed over on the
@@ -127,8 +133,22 @@ function search(storage, projectPath, types, opts) {
  * `report_export`): an SBOM, a stack detection or a diff review is never it.
  */
 export function latestStateScan(storage, projectPath, scanType, opts = {}) {
-    const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES;
-    const found = findLatestUsable(storage, projectPath, types, opts);
+    // An import is never "the latest scan" of a reader that did not ask for
+    // one, and when asked it is one source tool's: the slot of the open set.
+    const types = scanType !== undefined ? [scanType] : STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
+    const { sourceTool: askedTool, ...usable } = opts;
+    // "The previous import" is the previous import of the SAME tool: with no
+    // tool named, the one `beforeScanId` was imported by.
+    const before = scanType === 'sarif_import' && askedTool === undefined && opts.beforeScanId !== undefined
+        ? storage.scans.getById(opts.beforeScanId)
+        : null;
+    const sourceTool = askedTool ?? (before !== null && before.scan_type === 'sarif_import' ? sarifToolOfSlot(sarifSlotOfScan(before)) : undefined);
+    const found = findLatestUsable(storage, projectPath, types, {
+        ...usable,
+        ...(scanType === 'sarif_import' && sourceTool !== undefined
+            ? { slot: sarifSlot(sourceTool), predicate: (s) => sarifSlotOfScan(s) === sarifSlot(sourceTool) }
+            : {}),
+    });
     if (scanType !== undefined || found.scan === null)
         return found;
     // Any type: an orchestrated run is one scan to its reader. Its children
@@ -299,6 +319,15 @@ function slotSources(storage, projectPath, slot) {
     // The residual slot: only what a script-era row could not route.
     if (slot === 'security_full') {
         const r = search(storage, projectPath, ['security_full'], { slot, ...scriptEra });
+        return { picks: pick(r), hits: r.hits };
+    }
+    // One source tool's imports: its newest, whole — a new import replaces it
+    // and nothing carries forward from the older one.
+    if (isSarifSlot(slot)) {
+        const r = search(storage, projectPath, ['sarif_import'], {
+            slot,
+            predicate: (scan) => sarifSlotOfScan(scan) === slot,
+        });
         return { picks: pick(r), hits: r.hits };
     }
     const dedicated = search(storage, projectPath, [slot], { slot });
@@ -496,12 +525,62 @@ function scannersOfGap(gap) {
     const head = gap.split(' (')[0] ?? gap;
     return head.split(', ').filter((name) => name.length > 0);
 }
+/** Every slot of the open set: one per state type, `sarif_import` split by source tool. */
+function openSetSlots(storage, projectPath) {
+    const slots = STATE_SCAN_TYPES.filter((t) => t !== 'sarif_import');
+    const imports = storage.scans.sarifSourceTools(projectPath).map(sarifSlot);
+    return [...slots, ...imports.sort()];
+}
+/** The host model's verdicts on a project's findings, by fingerprint (provider `llm` only, read as such). */
+export function llmMarkersOf(storage, projectPath) {
+    const markers = new Map();
+    for (const v of storage.validations.listByProvider(projectPath, 'llm')) {
+        const marker = llmMarkerOf(v);
+        if (marker !== null)
+            markers.set(v.fingerprint, marker);
+    }
+    return markers;
+}
+/** An INDEPENDENT `not_exploitable` verdict: the only one that demotes a finding (US-1.AC-6, US-1.AC-7). */
+export function isDemoting(marker) {
+    return marker !== undefined && marker.independent && marker.verdict === 'not_exploitable';
+}
+/** An INDEPENDENT `exploitable` verdict: the only one that confirms an `llm-hunt` finding (US-2.AC-5). */
+export function isConfirming(marker) {
+    return marker !== undefined && marker.independent && marker.verdict === 'exploitable';
+}
+/** Whether a finding is one the LLM hunt wrote — a candidate until confirmed. */
+export function isHuntFinding(f) {
+    return f.tool === HUNT_TOOL;
+}
+/**
+ * One scan's rows split as the open set splits them (US-2.AC-5): `counted`
+ * holds every finding except an `llm-hunt` one without an INDEPENDENT
+ * `exploitable` verdict, which goes to `unconfirmed`. For the paths that read
+ * a scan's rows directly rather than through the open set — a diff, a
+ * regression check, the report, a scan resource — so a hunt candidate never
+ * moves a total, a gate or a score there either.
+ */
+export function splitHuntCandidates(storage, projectPath, rows) {
+    if (!rows.some(isHuntFinding))
+        return { counted: [...rows], unconfirmed: [] };
+    const markers = llmMarkersOf(storage, projectPath);
+    const counted = [];
+    const unconfirmed = [];
+    for (const f of rows)
+        (isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)) ? unconfirmed : counted).push(f);
+    return { counted, unconfirmed };
+}
+/** {@link splitHuntCandidates}' `counted` half: the rows of a scan that count. */
+export function countableFindings(storage, projectPath, rows) {
+    return splitHuntCandidates(storage, projectPath, rows).counted;
+}
 export function openSetForProject(storage, projectPath, opts = {}) {
     const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
     const picked = [];
     const hits = [];
     const considered = new Map();
-    for (const slot of STATE_SCAN_TYPES) {
+    for (const slot of openSetSlots(storage, projectPath)) {
         const found = slotSources(storage, projectPath, slot);
         for (const h of found.hits) {
             hits.push(h);
@@ -542,6 +621,15 @@ export function openSetForProject(storage, projectPath, opts = {}) {
     const rankOf = (scanId) => rank.get(scanId) ?? order.length;
     picked.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
     carried.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
+    // The host model's verdicts, by fingerprint (the set reads `finding_validations`, never the plan tables).
+    const llmVerdicts = llmMarkersOf(storage, projectPath);
+    // An `llm-hunt` finding is only a candidate until an INDEPENDENT `exploitable`
+    // verdict confirms it; unverified, `not_exploitable` and `same_context` ones
+    // never count (US-2.AC-5). Others are marked, never filtered.
+    const admitted = (f) => {
+        const marker = llmVerdicts.get(f.fingerprint);
+        return { marker, show: !isHuntFinding(f) || isConfirming(marker) };
+    };
     const findings = [];
     const sources = [];
     // Grows with `findings`, one source at a time: a source's rows are matched
@@ -564,6 +652,9 @@ export function openSetForProject(storage, projectPath, opts = {}) {
         for (const f of rowsOf(scan)) {
             if (!findingInSlot(scan, f, slot) || seen.has(f))
                 continue;
+            const { marker, show } = admitted(f);
+            if (!show)
+                continue;
             if (isSuppressed(f)) {
                 if (!suppressedSeen.has(f)) {
                     suppressedSeen.add(f);
@@ -571,7 +662,7 @@ export function openSetForProject(storage, projectPath, opts = {}) {
                 }
                 continue;
             }
-            batch.push({ ...f, scan_id: scan.scan_id });
+            batch.push({ ...f, scan_id: scan.scan_id, ...(marker !== undefined ? { llm: marker } : {}) });
         }
         admit(batch);
         const contributed = batch.length;
@@ -592,7 +683,10 @@ export function openSetForProject(storage, projectPath, opts = {}) {
         for (const { finding, gap } of rows) {
             if (seen.has(finding))
                 continue;
-            batch.push({ ...finding, scan_id: scan.scan_id, not_remeasured: true });
+            const { marker, show } = admitted(finding);
+            if (!show)
+                continue;
+            batch.push({ ...finding, scan_id: scan.scan_id, not_remeasured: true, ...(marker !== undefined ? { llm: marker } : {}) });
             gaps.add(gap);
         }
         admit(batch);
