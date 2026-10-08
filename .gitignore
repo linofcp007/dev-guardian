@@ -61,3 +61,9 @@ build/
 # sat in the repo root for ten days because it was empty — git does not track
 # empty directories, so it showed up in neither `git status` nor `check-ignore`.
 .scratch-*/
+
+# Claude Code: a developer's own settings (local permission rules) and the
+# worktrees agents check out. .claude/settings.json, the shared project
+# settings, stays committable.
+.claude/settings.local.json
+.claude/worktrees/
