@@ -262,6 +262,31 @@ export function extractAnswerDetailed(text: string): { value: unknown; lenient: 
 }
 
 /**
+ * Why the span from the first `{` to the last `}` of a final message is not
+ * JSON — the parser's message and the text around where it stopped — or null
+ * when there is no such span. For the report only: a message that begins as a
+ * well-formed object and still yields nothing (an unescaped quote, a raw line
+ * break or a `\'` inside a string, a second object after the first) reads the
+ * same as prose in the error line without it.
+ */
+export function jsonProblem(text: string): string | null {
+  const first = text.indexOf('{');
+  const last = text.lastIndexOf('}');
+  if (first === -1 || last <= first) return null;
+  const span = text.slice(first, last + 1);
+  try {
+    JSON.parse(span);
+    return null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const at = /position (\d+)/.exec(message)?.[1];
+    if (at === undefined) return `JSON.parse: ${message}`;
+    const pos = Number(at);
+    return `JSON.parse: ${message}; near ${JSON.stringify(span.slice(Math.max(0, pos - 60), pos + 40))}`;
+  }
+}
+
+/**
  * Why a session's offered tools break the mode's isolation, or null when
  * they do not. The `init` event lists every tool the session was started
  * with; anything beyond the mode's list (a `Bash`, an `mcp__…` tool from a
@@ -454,7 +479,11 @@ export async function driveTask<T>(
     // For the report only (the retry prompt below gets the bare errors): how a
     // final message with no JSON object began, so the next prompt revision
     // can tell a refusal from prose from a cut answer.
-    const head = extracted.value === undefined ? ` (it began: ${JSON.stringify(run.final_text.slice(0, 160))})` : '';
+    const problem = extracted.value === undefined ? jsonProblem(run.final_text) : null;
+    const head =
+      extracted.value === undefined
+        ? ` (it began: ${JSON.stringify(run.final_text.slice(0, 160))}${problem === null ? '' : `; ${problem}`})`
+        : '';
     attempts.push({ run, errors: verdict.errors.map((e, k) => (k === 0 ? `${e}${head}` : e)) });
     prompt =
       `${brief}\n\n---\nYour previous answer was refused:\n${verdict.errors.map((e) => `- ${e}`).join('\n')}\n` +

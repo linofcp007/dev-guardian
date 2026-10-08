@@ -15,7 +15,7 @@ import { makeFinding } from '../../../src/runners/scannerParsers/index.js';
 import type { RouteRecord } from '../../../src/types.js';
 
 /** Every shipped prompt version: the class list may drift in none of them. */
-const VERSIONS = ['v1', 'v2'] as const;
+const VERSIONS = ['v1', 'v2', 'v3'] as const;
 const promptsOf = (v: string): string => fileURLToPath(new URL(`../../../../configs/llm-scan/prompts/${v}/`, import.meta.url));
 
 function task(kind: TaskKind, files: string[]): LlmScanTask {

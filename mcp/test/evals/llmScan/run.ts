@@ -29,6 +29,8 @@
  *   --timeout <seconds>               (default 600, per model run)
  *   --retries <n>                     (default 2: further attempts after a refused answer)
  *   --prompt-version <v>              (default: renderBrief's current version)
+ *   --only <id,...>                   (only these G-V / A-I items, e.g. GV-B06,AI-20 — an A-I item brings its base;
+ *                                     no hunt; everything else reads not measured, so the run never passes)
  *   --no-surface                      (hunt without map_attack_surface: the planner's file-group fallback)
  *   --out <file.json>                 (the full report, every run included)
  *   --dry-run                         (build everything and print the briefs; run no model)
@@ -126,6 +128,8 @@ interface Options {
   timeoutMs: number;
   retries: number;
   promptVersion: string | undefined;
+  /** --only: the verification items to run (development; the run cannot pass). */
+  only: Set<string> | undefined;
   surface: boolean;
   out: string | undefined;
   dryRun: boolean;
@@ -139,7 +143,7 @@ interface Options {
 }
 
 const VALUE_FLAGS = new Set([
-  'suite', 'mode', 'model', 'repeat', 'concurrency', 'timeout', 'retries', 'prompt-version', 'out', 'claude',
+  'suite', 'mode', 'model', 'repeat', 'concurrency', 'timeout', 'retries', 'prompt-version', 'only', 'out', 'claude',
   'write-spec-sets', 'semgrep-json', 'bandit-json', 'semgrep-config', 'pairs', 'seed',
 ]);
 const BOOL_FLAGS = new Set(['dry-run', 'allow-incomplete', 'allow-commit-mismatch', 'no-surface', 'build-benchmark-sample', 'help']);
@@ -216,6 +220,7 @@ function parse(argv: readonly string[]): Options {
     timeoutMs: intOf(one('timeout'), 'timeout', 600, 10) * 1000,
     retries: intOf(one('retries'), 'retries', 2, 0),
     promptVersion: one('prompt-version'),
+    only: values.has('only') ? new Set((values.get('only') ?? []).flatMap((s) => s.split(',')).map((s) => s.trim()).filter((s) => s !== '')) : undefined,
     surface: !bools.has('no-surface'),
     out: one('out'),
     dryRun: bools.has('dry-run'),
@@ -808,6 +813,14 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
       if (r.kind === 'hunt' && h !== undefined) huntCorpora.add(h.corpus);
     }
   }
+  // --only: the named verification items, the base of each named A-I item, and
+  // the A-I copies of either; no hunt. The rest reads "not measured", so the
+  // run cannot pass — it is for reproducing one item, never for a verdict.
+  const only = opts.only === undefined ? undefined : new Set([...opts.only, ...sets.adversarial.filter((a) => opts.only?.has(a.id)).map((a) => a.base)]);
+  if (only !== undefined) {
+    for (const id of [...runsOf.keys()]) if (!only.has(id)) runsOf.delete(id);
+    huntCorpora.clear();
+  }
 
   // ---- prepare: the blind copies (each grepped for tells, refused if any survives) ----
   const needed = new Set<CorpusId>([...[...runsOf.keys()].flatMap((id) => {
@@ -857,9 +870,9 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
   const injected: InjectedCopy[] = [];
   if (wants('adversarial')) {
     const built = buildInjected(ws, sets);
-    injected.push(...built.copies);
+    injected.push(...built.copies.filter((c) => only === undefined || only.has(c.item) || only.has(c.base.id)));
     prepNotes.push(...built.problems);
-    for (const c of built.copies) {
+    for (const c of injected) {
       const planned = planVerify(opts, c.root, c.base.corpus, [
         { id: c.item, set: 'A-I', truth: c.base.truth, runs: 1, finding: scannerFinding({ ...c.base, file: c.file, line: c.line }) },
       ]);
@@ -1226,7 +1239,7 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
         {
           harness: 'mcp/test/evals/llmScan',
           finished_at: new Date().toISOString(),
-          options: { ...opts, benchmark: undefined },
+          options: { ...opts, only: opts.only === undefined ? undefined : [...opts.only], benchmark: undefined },
           corpora,
           blind_copies: Object.fromEntries(ws.reports),
           overall,

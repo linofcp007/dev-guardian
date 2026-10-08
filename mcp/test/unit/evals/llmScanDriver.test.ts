@@ -18,6 +18,7 @@ import {
   extractAnswerDetailed,
   insideRoot,
   isolationProblem,
+  jsonProblem,
   outOfBriefCalls,
   parseClaudeOutput,
   pool,
@@ -142,6 +143,16 @@ describe('the JSON answer in the final message', () => {
     expect(extractAnswerDetailed('Verdict:\n{"verdict":"real"}').lenient).toBe(true);
     expect(extractAnswerDetailed('{"plan_id":"p","payload":{"verdict":"real"}}')).toEqual({ value: { verdict: 'real' }, lenient: true });
     expect(extractAnswerDetailed('no json')).toEqual({ value: undefined, lenient: false });
+  });
+
+  it('says why an object-shaped message is not JSON, with the text where the parser stopped', () => {
+    const quote = jsonProblem('{"verdict":"real","reasoning":"possible = "ABC" so guess is B"}');
+    expect(quote).toMatch(/^JSON\.parse: /);
+    expect(quote).toContain('near ');
+    expect(quote).toContain('possible = ');
+    expect(jsonProblem('{"reasoning":"line one\nline two"}')).toMatch(/^JSON\.parse: .*near /);
+    expect(jsonProblem('{"verdict":"real"}')).toBeNull();
+    expect(jsonProblem('no object here')).toBeNull();
   });
 });
 
