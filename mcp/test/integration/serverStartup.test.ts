@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { deadPid } from '../helpers/deadPid.js';
 import { GuardianDatabase, openDatabase } from '../../src/storage/db.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { registerInPlace } from '../helpers/registerInPlace.js';
@@ -70,13 +71,6 @@ function startServer(cwd: string, nodeArgs: string[] = [], env: Record<string, s
       });
     },
   };
-}
-
-/** The pid of a process that has already exited. */
-function deadPid(): number {
-  const r = spawnSync(process.execPath, ['-e', '']);
-  if (typeof r.pid !== 'number') throw new Error('could not spawn a short-lived child');
-  return r.pid;
 }
 
 describe('server startup against a database another process is writing to', () => {
