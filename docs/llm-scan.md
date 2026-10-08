@@ -123,6 +123,14 @@ the real token use, and the report says so.
 five open plans, and stays resumable by its `plan_id`. Retention marks it
 `abandoned` at 30 days; resuming it then answers `plan_abandoned`.
 
+**A brief the host's model refuses.** Briefs quote security-relevant code, and a
+provider's safeguards sometimes refuse one before the model answers (in the evals,
+3 runs in 175, also on briefs with nothing injected, and rarely twice in a row).
+Nothing is submitted, so nothing changes: the task's lease expires after 20
+minutes and the task is handed out again. Run it again in a new subagent, or
+leave it: the report names it among the tasks not closed with a valid answer,
+and coverage stays `partial`.
+
 ## Errors
 
 | Code | Meaning |

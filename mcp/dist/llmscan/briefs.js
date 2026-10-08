@@ -32,11 +32,14 @@ export const VERIFY_BRIEF_P95_TOKENS = 8_000;
 export const MAX_EXCERPT_LINES = 200;
 /**
  * The prompt version a brief is rendered with unless the plan names another.
- * v2 (D-6): v1 revised for the failure classes of its first eval run, and the
- * first version to meet the eval thresholds on the reference model (T-10,
- * T-11, T-24). A plan keeps the version it was made with.
+ * v5 (D-11, D-12): the model writes its working in prose before the answer
+ * object, and the object comes last. v3 (ReDoS in validation code, the key
+ * list, the last message, evidence references) found every planted
+ * vulnerability but committed to a verdict in the object's first key and
+ * corrected itself after it; v4's key order did not move that. A plan keeps
+ * the version it was made with, so v1–v4 stay shipped.
  */
-export const CURRENT_PROMPT_VERSION = 'v2';
+export const CURRENT_PROMPT_VERSION = 'v5';
 /**
  * Size caps per part, so a brief stays far under {@link MAX_BRIEF_TOKENS}
  * whatever a scanner or a file holds, and a verify brief keeps its P95 under

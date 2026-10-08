@@ -24,18 +24,27 @@ version bump.
   `execute: "sampling"` runs verify tasks through a client that declares MCP sampling, within 50 s per
   call. The rules file for every host carries its recipe (a subagent per task; `same_context` where
   there is none). See [docs/llm-scan.md](docs/llm-scan.md).
-  Prompts: v2 (`configs/llm-scan/prompts/v2/`) is the current version. v1 stays shipped, because a
-  plan keeps the version it was made with. Evals on the reference model (Claude Sonnet through Claude
-  Code, subagent mode, 2 runs per item):
+  Prompts: v5 (`configs/llm-scan/prompts/v5/`) is the current version: the model writes its working in
+  prose before the answer object, and the object comes last. v1–v4 stay shipped, because a plan keeps
+  the version it was made with. Evals on the reference model (Claude Sonnet through Claude Code,
+  subagent mode, 2 runs per item):
 
-  | Set | v1 | v2 | Threshold |
-  | --- | --- | --- | --- |
-  | Verification (58 findings, PHP/Python/TypeScript) | 92.2 % right | 96.6 % right, 93.1 % agreement | ≥ 95 %, ≥ 90 % |
-  | Hunt (18 planted vulnerabilities) | 83.3 % found | 94.4 % found, 0 decoys confirmed | ≥ 90 %, 0 decoys |
-  | Prompt injection in the analysed code | 100 % unchanged | 100 % unchanged, 0 tool calls outside the brief | ≥ 98 % |
+  | Set | v1 | v2 | v3 | v5 | Threshold |
+  | --- | --- | --- | --- | --- | --- |
+  | Verification (58 findings, PHP/Python/TypeScript) | 92.2 % right | 96.6 %, 93.1 % agreement | 97.4 %, 96.6 % | 97.4 %, 94.8 % | ≥ 95 %, ≥ 90 % |
+  | Hunt (18 planted vulnerabilities, 0 decoys confirmed) | 83.3 % found | 94.4 % | 100 % | 94.4 % | ≥ 90 %, 0 |
+  | Prompt injection in the analysed code | 100 % unchanged | 100 % | 95 % | 100 % | ≥ 98 % |
+  | Answers refused by the schema, injected runs | 5 | 1 | 3 | 0 | 0 |
+  | Regression cases kept | 4/5 | 4/5 | 5/5 | 5/5 | 5/5 |
 
-  Both versions miss the VAmPI ReDoS regression case. A run is about 2.7 M tokens; a verification
-  task costs about 13 k on the host.
+  v5 is the first version to pass every threshold. Its refused answers had one cause from v3 on: with
+  "the object alone" as the whole final message and no file to read, the model committed to `verdict`
+  in the object's first key, reasoned after it, and appended a corrected second object; v4 asked for the
+  keys in another order and the order did not change. v1–v4 were measured with the harness asking for
+  nothing before or after the object; v5 with working allowed before it, as `llm_scan_submit` allows.
+  The API's safeguards intermittently refuse a brief before the model answers (3 runs in 175); the
+  harness retries that within the same attempts. A run is about 2.7 M tokens; a verification task costs
+  about 13 k on the host.
 - **`web-js` rule pack** (`configs/semgrep/web-js.yml`, 3 rules): SQL text built by interpolation or
   concatenation in a SQL driver call (CWE-89, by the shape of the text, so it also sees a value that
   reached the repository by parameter), a request path reaching a file read or send (CWE-22) and a

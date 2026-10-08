@@ -145,6 +145,16 @@ describe('the JSON answer in the final message', () => {
     expect(extractAnswerDetailed('no json')).toEqual({ value: undefined, lenient: false });
   });
 
+  it('D-11: working before the object may quote braces; the one object after it is the answer', () => {
+    const text = 'The guard `if (!ok) { return; }` runs first, so the value never arrives.\n{"verdict":"not_real","reasoning":"x"}';
+    expect(extractAnswerDetailed(text)).toEqual({ value: { verdict: 'not_real', reasoning: 'x' }, lenient: true });
+    expect(extractAnswer('Working: `{}` is empty here.\n{"plan_id":"p","payload":{"verdict":"real"}}')).toEqual({ verdict: 'real' });
+  });
+
+  it('D-8: an answer, then a correction and a second object, is two answers: refused', () => {
+    expect(extractAnswer('{"verdict":"real","reasoning":"a"}\n\nWait, that contradicts itself:\n{"verdict":"not_real","reasoning":"b"}')).toBeUndefined();
+  });
+
   it('says why an object-shaped message is not JSON, with the text where the parser stopped', () => {
     const quote = jsonProblem('{"verdict":"real","reasoning":"possible = "ABC" so guess is B"}');
     expect(quote).toMatch(/^JSON\.parse: /);
@@ -201,6 +211,37 @@ describe('review round 1: isolation is verified on every session', () => {
       expect(seen).toEqual([]);
       expect(calls).toBe(1);
     }
+  });
+
+  it('a run the API safeguards blocked is run again; a block on every attempt, or any other failure, ends the task', async () => {
+    const blocked = (): ClaudeRun => ({
+      ...run(['Glob', 'Grep', 'Read'], "API Error: Sonnet 5.5's safeguards flagged this message (https://www.anthropic.com/legal/aup)."),
+      ok: false,
+      is_error: true,
+      exit_code: 1,
+      error: "exit 1: result success: API Error: Sonnet 5.5's safeguards flagged this message",
+    });
+    const script = (runs: ClaudeRun[]) => {
+      let calls = 0;
+      return { runner: async () => runs[Math.min(calls++, runs.length - 1)] ?? blocked(), calls: () => calls };
+    };
+
+    const once = script([blocked(), run(['Glob', 'Grep', 'Read'], '{"verdict":"real"}')]);
+    const d = await driveTask('brief', '/tmp/x', opts, accept([]), once.runner);
+    expect(d.failure).toBeNull();
+    expect(d.value).toEqual({ verdict: 'real' });
+    expect(d.attempts).toHaveLength(2);
+    expect(once.calls()).toBe(2);
+
+    const always = script([blocked()]);
+    const e = await driveTask('brief', '/tmp/x', opts, accept([]), always.runner);
+    expect(e.failure).toBe('error');
+    expect(always.calls()).toBe(opts.retries + 1);
+
+    const other = script([{ ...blocked(), error: 'exit 1: something else', final_text: '' }]);
+    const f = await driveTask('brief', '/tmp/x', opts, accept([]), other.runner);
+    expect(f.failure).toBe('error');
+    expect(other.calls()).toBe(1);
   });
 
   it('an isolated session is read as before, and a lenient answer is counted', async () => {

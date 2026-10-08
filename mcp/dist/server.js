@@ -92892,7 +92892,7 @@ function buildPlan(input) {
 // src/llmscan/briefs.ts
 var MAX_BRIEF_TOKENS = 25e3;
 var MAX_EXCERPT_LINES = 200;
-var CURRENT_PROMPT_VERSION = "v2";
+var CURRENT_PROMPT_VERSION = "v5";
 var MAX_EXCERPT_CHARS = 2e4;
 var MAX_LINE_CHARS = 400;
 var MAX_FLAGGED_LINE_CHARS = 2e3;
