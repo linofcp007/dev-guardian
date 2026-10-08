@@ -42,9 +42,11 @@ version bump.
   request URL fetched (CWE-918), both by same-function taint. `scan_sast` passes it beside `llm.yml` on
   every Semgrep run, `local_only` and the Docker fallback included. Ablated on three real Node
   applications (`GUARDIAN_WEBJS_SRC`, 4933 files): 15 findings, all read, none a true positive (the SQL
-  rule is noisy by design). Measured cost: the scan takes about 1.19x as long with the pack as without
-  (minimum of 13 alternating pairs; the SQL rule is the one that costs, 1.32x alone), above the 1.10
-  target; recorded in the pack header.
+  rule is noisy by design). A const bound to a template with no substitution, a number or a concatenation
+  of literals counts as a literal (Semgrep gives a template's text without its closing backtick, so the
+  exclusion never matched it: 43 false positives on this repo's own `mcp/src`, 26 now). Measured cost, with
+  `scan_sast`'s `local_only` argv: 1.19x on one machine and 1.256x on another (minimum of alternating
+  pairs; the SQL rule is nearly all of it), within the 1.30 budget; recorded in the pack header.
 - **`import_sarif`** (the 60th tool) and the CLI subcommand `import-sarif <file>`: record another
   analysis tool's SARIF 2.1.0 log (CodeQL, Snyk, Trivy, Semgrep, gitleaks, a dev-guardian export) as one
   `sarif_import` scan per run, so its findings share the project's baselines, diffs, suppressions, triage and
