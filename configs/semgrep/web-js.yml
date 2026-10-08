@@ -52,11 +52,21 @@
 #     (timeouts, medido). Um identificador isolado (`SORT`, `TABLE`) é
 #     excluído só se for um `const` com um destes valores à direita, no mesmo
 #     bloco ou num bloco que o envolva (um `const` de módulo usado dentro de
-#     uma função: sondado). Um `let`/`var` NUNCA é excluído: pode ser
+#     uma função ou de um método de classe: sondado). À direita desse `const`
+#     valem também um número e uma concatenação só de literais (D-4). Um
+#     template sem interpolação conta como literal (EC-1), mas o Semgrep dá o
+#     texto de um template SEM a crase final (medido: `` `id, name ``), e a
+#     alternativa exigia as duas: até à D-2 um `const COLS = \`...\`` disparava
+#     sempre (43 falsos positivos no mcp/src deste repositório, 26 depois da
+#     correção). O nome nunca conta: `const SORT = req.query.sort` dispara
+#     (D-4). Um `let`/`var` NUNCA é excluído: pode ser
 #     reatribuído com dados do pedido, e a regra não segue a ordem das
 #     atribuições. Preço medido: um `let direction = x ? 'ASC' : 'DESC'` dispara
 #     (falso positivo). Outro preço: uma constante importada
-#     (`import { PREFIX } from './x'`) interpolada dispara, a regra não a vê.
+#     (`import { PREFIX } from './x'`) interpolada dispara, a regra não a vê,
+#     e uma constante calculada por uma função do próprio módulo
+#     (`const READABLE = notInFutureSql()`) também: são os 26 que ficam no
+#     mcp/src, todos fragmentos montados pelo código.
 #     Fica de fora: o acesso a um objeto em minúsculas, mesmo constante, dispara;
 #     e o `.join(...)` de um array local de literais SEM nenhum `push` de um
 #     valor interpolado (a decoy D01) é tratado como seguro só em linha.
@@ -146,7 +156,22 @@
 # SC-002: 15 achados em 711 103 linhas = 0,04 por 2 000 linhas, contra o
 # orçamento de 1 por 2 000 (355 achados): cumprido. Verdadeiros positivos:
 # 0 de 15; a regra SQL é ruidosa por desenho (decide pela forma do texto).
-# NFR-2 (rácio de tempo do scan com/sem este pack, limite 1,10): NAO CUMPRIDO.
+# Repetido a 2026-10-08 (máquina nova, depois da D-2 e da D-4): os mesmos 15
+# achados, nas mesmas linhas. Nenhum era um `const` literal, por isso as
+# correções não mudam nada neste corpus.
+# NFR-2 (rácio de tempo do scan com/sem este pack; limite 1,25 desde a D-3/D-4,
+# era 1,10). Segunda medição (2026-10-08, máquina nova, pack depois da D-2/D-4,
+# Semgrep 1.176.1, 24 CPUs, o mesmo argv `local_only`, 5 pares ALTERNADOS):
+# sem o pack min 19,9 / mediana 20,1 s; com o pack min 25,0 / mediana 25,1 s.
+# Rácio dos mínimos 1,256 (0,006 ACIMA do limite), das medianas 1,249. Por
+# regra, cada uma sozinha ao lado do llm.yml, 3 rodadas (mínimo de 18,9 s só
+# com o llm.yml): web-js-sql-template 23,9 (1,26), web-js-path-traversal 19,6
+# (1,04), web-js-ssrf 19,7 (1,04). Sondas sobre a regra SQL: sem os dois ramos
+# em sequência (`$SQL = ...; ... $DB.$M($SQL)`) 23,4; sem as exclusões
+# `pattern-not`/`pattern-not-inside` 23,2 — o custo é casar `$DB.$M($T, ...)`
+# em todas as chamadas de método e só depois filtrar pelos nomes e pelo texto.
+# O rácio depende da máquina: o mesmo pack deu 1,19 na primeira medição.
+# Primeira medição (2026-10-02, limite então 1,10: não cumprido):
 # Medido sobre o corpus do eixo 3 (os três commits acima, 4933 ficheiros),
 # com o argv do `scan_sast` em `local_only` (`--metrics=off --config=llm.yml
 # [--config=web-js.yml] --json --quiet --output F`, `--jobs` por omissão),
@@ -161,6 +186,16 @@
 # web-js-path-traversal 34,1 (1,11, mas 42,7 noutra rodada), web-js-ssrf 30,2
 # (1,00). A regra SQL percorre cada chamada com texto interpolado; as outras
 # duas partem de uma fonte `req.*` e quase não custam.
+#
+# ABLAÇÃO depois da D-2/D-4 (2026-10-08, máquina nova; pack sha256
+# a3fb662b…, 904 s de relógio): o mesmo veredicto da medição abaixo. Eixo 0
+# 3/3; eixo 1 31/31 vivas; eixo 2 31/31; eixo 3 28/31, as mesmas 3 subidas
+# (ramo de template −12, ramo de concatenação −2, `$V` −2), todas ramos que
+# funcionam. Piso de ruído 0. hits/ tem agora 25 achados SQL (44 no total;
+# 49 no corpus de fixtures inteiro): +2 de `hits/sql-not-a-constant-name.ts`.
+# Baseline do corpus real 14: o achado SSRF do proxy faltou NESSA varredura
+# (análise de taint abandonada por tempo sob carga: 29 ficheiros excluídos);
+# numa varredura isolada e em 4 de 5 das corridas do NFR-2 está lá.
 #
 # ABLAÇÃO (`npm run ablate -- web-js`; corpus do eixo 3: os mesmos três
 # commits acima, em `GUARDIAN_WEBJS_SRC`; 1 114 s de relógio). Cobertura: 31 cláusulas em 3
@@ -289,7 +324,7 @@ rules:
       # (regex sobre o texto do valor) e através de uma variável do mesmo bloco.
       - metavariable-regex:
           metavariable: $X
-          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$).+'
+          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$).+'
       - pattern-not-inside:
           patterns:
             - pattern: |
@@ -297,7 +332,7 @@ rules:
                 ...
             - metavariable-regex:
                 metavariable: $V
-                regex: '(?s)^(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$'
+                regex: '(?s)^(?:-?\d[\d_]*(?:\.\d+)?|(?:"[^"]*"|''[^'']*''|`[^`$]*`?)(?:\s*\+\s*(?:"[^"]*"|''[^'']*''|`[^`$]*`?))+|(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$'
       - pattern-not:
           patterns:
             - pattern: $W.join(...)
