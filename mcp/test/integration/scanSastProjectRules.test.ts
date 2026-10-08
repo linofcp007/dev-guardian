@@ -1555,7 +1555,7 @@ describe('scan_sast: a taint fixpoint timeout (time.fixpoint_timeouts)', () => {
     expect(full?.reason).toMatch(/in 500 function\(s\) across 500 file\(s\): src\/f0\.py, .*, \+495 more/);
     // The response: the first 20, the whole count and the count per type.
     const call = toCallToolResult(result, []);
-    const sent = call.structuredContent['tools_run'] as Array<Record<string, unknown>>;
+    const sent = call.structuredContent?.['tools_run'] as Array<Record<string, unknown>>;
     const semgrep = sent.find((t) => t['name'] === 'semgrep');
     expect((semgrep?.['partially_parsed'] as unknown[]).length).toBe(20);
     expect(semgrep?.['partially_parsed_total']).toBe(1000);

@@ -49192,12 +49192,10 @@ function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
     const { ok: _ok, ...rest } = result;
     const payload = untrustedValue(boundResponsePayload({ ok: true, ...rest }));
-    const structured = { ...payload };
-    for (const key of contentOnlyKeys) delete structured[key];
-    const indent = contentOnlyKeys.length > 0 ? void 0 : 2;
+    if (contentOnlyKeys.length > 0) return { content: [{ type: "text", text: JSON.stringify(payload) }] };
     return {
-      content: [{ type: "text", text: JSON.stringify(payload, null, indent) }],
-      structuredContent: structured
+      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      structuredContent: { ...payload }
     };
   }
   const error2 = untrustedValue(result.error);

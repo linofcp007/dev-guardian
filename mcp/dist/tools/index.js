@@ -93,15 +93,14 @@ export function toCallToolResult(result, contentOnlyKeys) {
     if (result.ok) {
         const { ok: _ok, ...rest } = result;
         const payload = untrustedValue(boundResponsePayload({ ok: true, ...rest }));
-        const structured = { ...payload };
-        for (const key of contentOnlyKeys)
-            delete structured[key];
-        // A tool with a bulky content-only payload is serialised compactly too:
-        // re-indenting an inlined document adds whitespace to every line of it.
-        const indent = contentOnlyKeys.length > 0 ? undefined : 2;
+        // A bulky payload goes once, in the text block every host shows, as
+        // compact JSON: re-indenting an inlined document adds whitespace to every
+        // line of it (see `ToolModule.contentOnlyKeys`).
+        if (contentOnlyKeys.length > 0)
+            return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
         return {
-            content: [{ type: 'text', text: JSON.stringify(payload, null, indent) }],
-            structuredContent: structured,
+            content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+            structuredContent: { ...payload },
         };
     }
     const error = untrustedValue(result.error);

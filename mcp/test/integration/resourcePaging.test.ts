@@ -246,10 +246,12 @@ describe('generate_sbom response size', () => {
     const project = projectDir('sbom-');
     const client = await connect(s.plugin);
     const res = await client.callTool({ name: 'generate_sbom', arguments: { project_path: project } });
-    const structured = res.structuredContent as Record<string, unknown>;
-    expect(structured['ok']).toBe(true);
-    expect(structured['inline']).toBeUndefined();
-    expect(structured['inlined']).toBe(false);
+    // One representation, the text block every host shows (`ToolModule.contentOnlyKeys`).
+    expect(res.structuredContent).toBeUndefined();
+    const body = JSON.parse((res.content as Array<{ type: string; text?: string }>)[0]?.text ?? '{}') as Record<string, unknown>;
+    expect(body['ok']).toBe(true);
+    expect(body['inline']).toBeUndefined();
+    expect(body['inlined']).toBe(false);
   });
 
   it('never sends the inlined document twice', async () => {
@@ -258,13 +260,12 @@ describe('generate_sbom response size', () => {
     const project = projectDir('sbom-');
     const client = await connect(s.plugin);
     const res = await client.callTool({ name: 'generate_sbom', arguments: { project_path: project } });
-    const structured = res.structuredContent as Record<string, unknown>;
-    expect(structured['inlined']).toBe(true);
-    expect(structured['inline']).toBeUndefined();
+    expect(res.structuredContent).toBeUndefined();
     const text = (res.content as Array<{ type: string; text?: string }>)
       .map((c) => c.text ?? '')
       .join('');
-    // Once — in the text the model reads — and nowhere else.
+    expect((JSON.parse(text) as Record<string, unknown>)['inlined']).toBe(true);
+    // Once — in the one text block every host shows — and nowhere else.
     expect(text.split('"bomFormat"').length - 1).toBe(1);
   });
 
