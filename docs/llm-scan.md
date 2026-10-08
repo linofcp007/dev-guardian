@@ -71,6 +71,10 @@ The rules file `mcp-config` writes for each host carries this recipe:
 - **Any other host** — a fresh subagent per task when one can call the tools,
   otherwise sequential with `same_context`.
 
+Run end to end on a real host so far: Claude Code (20 findings verified, every
+tool call under 300 ms). The Cursor, VS Code Copilot and Codex recipes follow
+what those hosts document and have not yet been run on them.
+
 ## What the verdicts change
 
 Verdicts are stored as `finding_validations` with provider `llm`: `real` as
