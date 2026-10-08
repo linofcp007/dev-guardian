@@ -14,7 +14,9 @@ import type { LlmScanTask, TaskKind } from '../../../src/llmscan/types.js';
 import { makeFinding } from '../../../src/runners/scannerParsers/index.js';
 import type { RouteRecord } from '../../../src/types.js';
 
-const PROMPTS = fileURLToPath(new URL('../../../../configs/llm-scan/prompts/v1/', import.meta.url));
+/** Every shipped prompt version: the class list may drift in none of them. */
+const VERSIONS = ['v1', 'v2'] as const;
+const promptsOf = (v: string): string => fileURLToPath(new URL(`../../../../configs/llm-scan/prompts/${v}/`, import.meta.url));
 
 function task(kind: TaskKind, files: string[]): LlmScanTask {
   return {
@@ -40,9 +42,9 @@ function task(kind: TaskKind, files: string[]): LlmScanTask {
 const PLACEHOLDER = /\{(boundary|finding|excerpt|schema|entry_points|scanner_findings)\}/;
 
 describe('prompt templates and the renderer', () => {
-  it('both hunt templates list exactly the HUNT_CLASSES', () => {
+  it.each(VERSIONS)('%s: both hunt templates list exactly the HUNT_CLASSES', (version) => {
     for (const name of ['hunt-entrypoint', 'hunt-crosscut']) {
-      const text = readFileSync(join(PROMPTS, `${name}.md`), 'utf8');
+      const text = readFileSync(join(promptsOf(version), `${name}.md`), 'utf8');
       const line = text.split('\n').find((l) => l.includes('`class`: exactly one of'));
       expect(line, name).toBeDefined();
       const list = (line ?? '').split('exactly one of')[1]?.split(';')[0] ?? '';

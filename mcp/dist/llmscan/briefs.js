@@ -30,8 +30,13 @@ export const MAX_BRIEF_TOKENS = 25_000;
 export const VERIFY_BRIEF_P95_TOKENS = 8_000;
 /** The excerpt is the function holding the line, at most this many lines. */
 export const MAX_EXCERPT_LINES = 200;
-/** The prompt version a brief is rendered with unless the plan names another. */
-export const CURRENT_PROMPT_VERSION = 'v1';
+/**
+ * The prompt version a brief is rendered with unless the plan names another.
+ * v2 (D-6): v1 revised for the failure classes of its first eval run, and the
+ * first version to meet the eval thresholds on the reference model (T-10,
+ * T-11, T-24). A plan keeps the version it was made with.
+ */
+export const CURRENT_PROMPT_VERSION = 'v2';
 /**
  * Size caps per part, so a brief stays far under {@link MAX_BRIEF_TOKENS}
  * whatever a scanner or a file holds, and a verify brief keeps its P95 under

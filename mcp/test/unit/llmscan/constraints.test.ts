@@ -15,6 +15,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { CURRENT_PROMPT_VERSION } from '../../../src/llmscan/briefs.js';
 import { TOOLS } from '../../../src/tools/index.js';
 
 beforeAll(async () => {
@@ -121,6 +122,16 @@ describe('T-34 constraints (NFR-1, NFR-3, NFR-4)', () => {
       expect(existsSync(path), path).toBe(true);
       const first = readFileSync(path, 'utf8').split(/\r?\n/)[0];
       expect(first).toBe(PROVENANCE);
+    },
+  );
+
+  it.each(['verify.md', 'hunt-entrypoint.md', 'hunt-crosscut.md'])(
+    'T-34 NFR-4: the current version (%s) is versioned and opens with the D-1 provenance too',
+    (name) => {
+      const path = join(REPO, 'configs', 'llm-scan', 'prompts', CURRENT_PROMPT_VERSION, name);
+      expect(existsSync(path), path).toBe(true);
+      const first = readFileSync(path, 'utf8').split(/\r?\n/)[0] ?? '';
+      expect(first.startsWith(PROVENANCE.replace(/ -->$/, ''))).toBe(true);
     },
   );
 });

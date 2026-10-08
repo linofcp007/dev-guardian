@@ -43912,15 +43912,17 @@ function validateVerifySubmission(payload, ctx) {
   };
   return { ok: true, value, rejected: [] };
 }
+var EVIDENCE_REF = /^(.+?):(\d+)(?:[-–](\d+))?$/;
 function evidenceRefs(evidence) {
   const refs = [];
-  for (const token of evidence.split(/[\s;,()'"`]+/)) {
+  for (const token of evidence.split(/[\s;,()[\]'"`]+/)) {
     if (token.includes("://")) continue;
-    const m = CITATION.exec(token.replace(/[.:]+$/, ""));
+    const m = EVIDENCE_REF.exec(token.replace(/[.:]+$/, ""));
     const file = m?.[1];
     const line = m?.[2];
     if (file === void 0 || line === void 0) continue;
-    refs.push({ file, line: Number(line) });
+    const end = m?.[3];
+    refs.push({ file, line: Number(line), ...end !== void 0 ? { end: Number(end) } : {} });
     if (refs.length >= MAX_EVIDENCE_REFS) break;
   }
   return refs;
@@ -43956,7 +43958,8 @@ function validateFinding(raw, index, checker) {
   }
   const problem = checker.check(file, line);
   if (problem !== null) errors.push({ path: `${prefix}file`, problem: `citation: ${problem}` });
-  if (!evidenceRefs(evidence).some((r) => checker.check(r.file, r.line) === null)) {
+  const holds = (r) => checker.check(r.file, r.line) === null && (r.end === void 0 || checker.check(r.file, r.end) === null);
+  if (!evidenceRefs(evidence).some(holds)) {
     errors.push({ path: `${prefix}evidence`, problem: "needs at least one file:line reference that exists in the project" });
   }
   if (errors.length > 0) return { value: null, errors };
@@ -92889,7 +92892,7 @@ function buildPlan(input) {
 // src/llmscan/briefs.ts
 var MAX_BRIEF_TOKENS = 25e3;
 var MAX_EXCERPT_LINES = 200;
-var CURRENT_PROMPT_VERSION = "v1";
+var CURRENT_PROMPT_VERSION = "v2";
 var MAX_EXCERPT_CHARS = 2e4;
 var MAX_LINE_CHARS = 400;
 var MAX_FLAGGED_LINE_CHARS = 2e3;

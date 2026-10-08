@@ -10,6 +10,7 @@ import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { openSetForProject } from '../../src/history/openSet.js';
+import { CURRENT_PROMPT_VERSION } from '../../src/llmscan/briefs.js';
 import { entryPointId } from '../../src/llmscan/plan.js';
 import type { HuntResult, VerifyVerdict } from '../../src/llmscan/types.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
@@ -70,7 +71,7 @@ describe('T-01 llm_scan_start plans one verify task per eligible finding, before
     expect(out.by_kind.verify).toBe(3);
     expect(out.not_eligible.map((x) => x.fingerprint)).toEqual([s.cve.fingerprint]);
     expect(out.not_eligible[0]?.reason.trim()).not.toBe('');
-    expect(out.prompt_version).toBe('v1');
+    expect(out.prompt_version).toBe(CURRENT_PROMPT_VERSION);
     const tasks = h.repo.listTasks(out.plan_id);
     expect(tasks.map((t) => t.kind)).toEqual(['verify', 'verify', 'verify']);
     expect(tasks.map((t) => t.target.fingerprint).sort()).toEqual([s.sqli, s.insert, s.shell].map((f) => f.fingerprint).sort());

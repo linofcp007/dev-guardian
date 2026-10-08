@@ -451,7 +451,11 @@ export async function driveTask<T>(
       return finish(verdict.value, null);
     }
     if (verdict.schema) schemaRefusals += 1;
-    attempts.push({ run, errors: verdict.errors });
+    // For the report only (the retry prompt below gets the bare errors): how a
+    // final message with no JSON object began, so the next prompt revision
+    // can tell a refusal from prose from a cut answer.
+    const head = extracted.value === undefined ? ` (it began: ${JSON.stringify(run.final_text.slice(0, 160))})` : '';
+    attempts.push({ run, errors: verdict.errors.map((e, k) => (k === 0 ? `${e}${head}` : e)) });
     prompt =
       `${brief}\n\n---\nYour previous answer was refused:\n${verdict.errors.map((e) => `- ${e}`).join('\n')}\n` +
       'Answer again with only the corrected JSON payload.';

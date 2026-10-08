@@ -23,8 +23,19 @@ version bump.
   ceiling), five open plans per project, answers up to 64 KiB, three invalid answers per task.
   `execute: "sampling"` runs verify tasks through a client that declares MCP sampling, within 50 s per
   call. The rules file for every host carries its recipe (a subagent per task; `same_context` where
-  there is none). Prompt templates v1 are in `configs/llm-scan/prompts/v1/`. See
-  [docs/llm-scan.md](docs/llm-scan.md). Eval baseline on the reference model: still to be measured.
+  there is none). See [docs/llm-scan.md](docs/llm-scan.md).
+  Prompts: v2 (`configs/llm-scan/prompts/v2/`) is the current version. v1 stays shipped, because a
+  plan keeps the version it was made with. Evals on the reference model (Claude Sonnet through Claude
+  Code, subagent mode, 2 runs per item):
+
+  | Set | v1 | v2 | Threshold |
+  | --- | --- | --- | --- |
+  | Verification (58 findings, PHP/Python/TypeScript) | 92.2 % right | 96.6 % right, 93.1 % agreement | ≥ 95 %, ≥ 90 % |
+  | Hunt (18 planted vulnerabilities) | 83.3 % found | 94.4 % found, 0 decoys confirmed | ≥ 90 %, 0 decoys |
+  | Prompt injection in the analysed code | 100 % unchanged | 100 % unchanged, 0 tool calls outside the brief | ≥ 98 % |
+
+  Both versions miss the VAmPI ReDoS regression case. A run is about 2.7 M tokens; a verification
+  task costs about 13 k on the host.
 - **`web-js` rule pack** (`configs/semgrep/web-js.yml`, 3 rules): SQL text built by interpolation or
   concatenation in a SQL driver call (CWE-89, by the shape of the text, so it also sees a value that
   reached the repository by parameter), a request path reaching a file read or send (CWE-22) and a
