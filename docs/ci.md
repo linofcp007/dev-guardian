@@ -212,3 +212,9 @@ Use the branch you passed to `--branch` (`ci-init` prints the command with it). 
 ## Scanning workflows
 
 `scan_iac` also audits `.github/workflows/*.yml` when they exist: **zizmor** (template injection, unpinned `uses:`, excessive `permissions:`, persisted credentials) and **actionlint** (schema and expression errors). dev-guardian runs actionlint with `-shellcheck= -pyflakes=`, so its shellcheck and pyflakes checks of `run:` blocks are off. Either tool missing is a named gap in `missing_tools`, never silence.
+
+## As dev-spec-driven's finish check
+
+dev-spec-driven can run this gate before a feature closes. `dev-spec init --guardian` (in a session, `spec_init { guardian: true }`) stores a project check named `guardian`, and `/spec-finish` — `finish --run` — runs `dev-guardian scan --project <dir> --fail-on high --format json` through a launcher that finds the newest dev-guardian installed. A plugin install puts no `dev-spec` on `PATH`: run the `node "<dev-spec plugin>/cli/dev-spec.js" init --guardian` line its own tool results print. The installed dev-guardian's `mcp/` needs its one-time `npm ci --omit=dev` ([above](#the-short-version)).
+
+It is the same gate as here: only a finding new to `.guardian/baseline.json`, at `high` or above, blocks the finish, and exit 2 is reported as an incomplete scan, never as a pass. Record the baseline before you turn the check on, or every existing finding at `high` or above blocks the first finish. To accept a finding you have reviewed, run `baseline update` and commit `.guardian/baseline.json`, or suppress it where its scanner reads suppressions — an inline `nosemgrep`, a `.trivyignore` or `.gitleaksignore` entry, reviewed like code. A `suppress_finding` does not reach this gate, because `scan` works in a throwaway database. Never force the finish past it: the finding is still new to the next scan, and to CI.
