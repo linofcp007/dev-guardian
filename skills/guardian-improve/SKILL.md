@@ -63,8 +63,8 @@ For each unit, produce this seed. Keep it **language-agnostic** and metric-ancho
 - THE refactor SHALL NOT change observable behaviour (characterization tests stay green).
 
 **Suggested track:** core (+tdd if behaviour must be pinned before refactor)
-**Grill first:** yes — run /grill or /guardian-grill on the current code so you understand the
-branches before you move them.
+**Grill first:** yes — run /guardian-grill on the current code (dev-spec-driven's `/clarify --grill`
+once the spec exists) so you understand the branches before you move them.
 ```
 
 The **Current → Target block is the spec's success criterion**: the same measurement that found the
@@ -101,9 +101,13 @@ at the end is your measurement or the project's coverage report, not a dev-guard
 
 For each seed, add it to the backlog so it shows in the roadmap:
 
-- Preferred: `spec_backlog` MCP tool — `dev-spec backlog add "<title>" "<one-line note + target metric>"`.
-- Then offer to scaffold the chosen one into a full feature with `spec_create` / `/spec`, carrying
-  the seed's EARS criteria into `requirements.md`.
+- Preferred: dev-spec-driven's MCP tool —
+  `spec_roadmap_edit { kind: "backlog", action: "add", name: "<title>", note: "<one-line note + target metric>" }`.
+- Without its MCP tools, its CLI: `node "<dev-spec plugin>/cli/dev-spec.js" backlog add "<title>" "<one-line note + target metric>"`.
+  A plugin install puts no `dev-spec` on `PATH`: use the exact `node "…/cli/dev-spec.js"` line that
+  dev-spec-driven's own tool results print, and a bare `dev-spec` only when the user has one on `PATH`.
+- Then offer to scaffold the chosen one into a full feature with `/spec <title>` (or `spec_create`),
+  carrying the seed's EARS criteria into `requirements.md`.
 
 If `dev-spec-driven` isn't installed, write the seeds to `docs/improvement-specs/<title>.md` and tell
 the user they can feed them to any spec workflow.
