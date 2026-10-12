@@ -8,6 +8,43 @@ version bump.
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-10-12
+
+The CLI runs from a plugin install again. In 3.2.0 every subcommand that reaches the scan pipeline or
+the database failed there — among them the gate dev-spec-driven 1.29's `/spec-finish` runs.
+
+### Fixed
+
+- **`scan`, `baseline update`, `status`, `dashboard`, `import-sarif` and `db adopt` failed in every
+  plugin install** with `dev-guardian: unexpected error: Cannot find package 'yaml' imported from
+  …/mcp/dist/platform/boundedParse.js`, exit 3 (`check`, `mcp-config` and `ci-init` still ran). A
+  plugin install is a git checkout with no `node_modules`. `cli/dev-guardian.mjs` imported tsc's
+  per-file output, `mcp/dist/<area>/*.js`, which imports the npm packages by name, and since the
+  LLM-assisted scan and SARIF import that graph reached them. Every test was green, because every test
+  ran the CLI from a checkout that has `mcp/node_modules`. dev-spec-driven 1.29's finish check runs
+  `dev-guardian scan --project . --fail-on high --format json` from the newest dev-guardian installed:
+  with 3.2.0 it could only fail, never return a verdict. The CLI now runs on `mcp/dist/cli.js`, a
+  self-contained esbuild bundle of `mcp/src/cli.ts` (3.8 MiB), made by the same build step and options
+  as `mcp/dist/server.js`: Node's builtins stay external, every package is inlined.
+  `cli/dev-guardian.mjs` imports that bundle and Node's builtins, nothing else. The scan pipeline and
+  the storage layer stay lazy inside it, so `--help`, `check`, `mcp-config` and `ci-init` still never
+  load `node:sqlite`. `mcp-config` finds the 2.0.0 rules templates from the bundle too (probed, as the
+  migrations are). The one-time `npm ci --omit=dev` in the plugin's `mcp/` that the 3.2.0 README and
+  `docs/ci.md` asked for — also for dev-spec-driven's gate — is no longer needed; the pipelines
+  `ci-init` writes still run it, harmlessly.
+  `mcp/test/e2e/pluginInstall.test.ts` builds an install — every file git tracks, copied to a temp
+  directory, with a positive control that none of `mcp/`'s dependencies resolves there — and runs from
+  it, with a plain `node`, every CLI subcommand (the finish gate's exact `scan` command among them),
+  the hooks and the MCP server's handshake. Against 3.2.0's CLI it fails on `Cannot find package
+  'yaml'`. `distSync.test.ts` rebuilds both bundles and holds each to Node's builtins (esbuild's
+  metafile).
+- **On a Node without `node:sqlite`, `status`, `dashboard`, `import-sarif` and `db adopt` say so in one
+  line again** — `this command requires Node.js >= 22.13`, exit 3 — instead of `unexpected error: No
+  such built-in module: node:sqlite`; `scan` and `baseline update` now do the same. The storage layer
+  loads `node:sqlite` at first use, no longer at import, so the CLI's check had stopped seeing it; the
+  bundle's loaders now check before anything touches storage. `cliLazyStorage.test.ts` runs the CLI
+  with `node:sqlite` made unavailable, the way an old Node has it.
+
 ## [3.2.0] - 2026-10-12
 
 The LLM-assisted scan, the `web-js` rule pack and SARIF import, and the handoff to dev-spec-driven

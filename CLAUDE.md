@@ -62,7 +62,7 @@ documents do not.
 cd mcp
 npm ci               # first time only — Node >= 22.13; no native modules, storage is node:sqlite
 npm run lint         # tsc over src/ AND test/ (two tsconfigs)
-npm run build        # tsc -> mcp/dist, copy-assets, host-rules, esbuild bundle, docs
+npm run build        # tsc -> mcp/dist, copy-assets, host-rules, esbuild bundles, docs
 npm test             # vitest run (full suite)
 npm run test:coverage # the only run that enforces the coverage thresholds
 ```
@@ -563,8 +563,21 @@ Enforced by the compiler where possible, by review where not:
 - **Rebuild before committing TS changes.** A stale `dist/` silently desyncs from
   `src/`. Run `npm run build` and stage `mcp/dist/` in the *same* commit.
   `test/unit/pluginSurface/distSync.test.ts` fails when the committed `dist/`
-  is not, byte for byte, what the build makes of `src/` (tsc, the bundle,
+  is not, byte for byte, what the build makes of `src/` (tsc, the bundles,
   copy-assets — and nothing stale).
+- **The CLI runs on its bundle, never on tsc's per-file output.** A plugin
+  install is a checkout with no `node_modules`, and `dist/<area>/*.js` imports
+  the npm packages by name: 3.2.0's `scan` and `status` failed in every install
+  with `Cannot find package 'yaml'` while every test passed. So
+  `cli/dev-guardian.mjs` imports Node builtins and `mcp/dist/cli.js` — the
+  esbuild bundle of `mcp/src/cli.ts`, built beside `dist/server.js` with the
+  same options — and nothing else (`test/e2e/cliLazyStorage.test.ts`). What the
+  CLI needs from `src/` is exported from `src/cli.ts`: re-exported when it is
+  light, through one of its lazy `load*Modules()` when it reaches the storage
+  layer or the scan pipeline. `test/e2e/pluginInstall.test.ts` runs the CLI's
+  subcommands, the hooks and the server from a copy of the files git tracks —
+  so `git add` a new file the install needs (a build output too) before it
+  passes, as it must be committed to ship.
 - **Markdownlint stays clean** for `skills/`, `commands/`, the three READMEs
   and `docs/` (config: [`.markdownlint.jsonc`](.markdownlint.jsonc)):
   `npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "docs/**/*.md"`.

@@ -22,7 +22,7 @@ Trilingue: as skills e os comandos respondem em inglês, português ou espanhol,
 - **Opcional: Docker.** Sem um `semgrep` nativo, `scan_sast` e `map_attack_surface` recorrem à imagem `semgrep/semgrep`.
 - **Windows:** todos os scans correm nativamente, sem shell. Só é preciso um bash para o relatório de estado inicial do `init_project` e para o recurso ao WSL do `install_toolchain` quando não há winget, scoop nem choco. O dev-guardian procura primeiro o Git Bash, depois o WSL, depois qualquer `bash` no `PATH`.
 
-Não é preciso `npm install`: o `mcp/dist/server.js` está no repositório como um bundle autónomo. Só os comandos `scan` e `baseline update` da CLI precisam de `npm ci --omit=dev` em `mcp/`, uma vez, para os seus pacotes de runtime.
+Não é preciso `npm install`: o servidor MCP e a CLI correm sobre o `mcp/dist/server.js` e o `mcp/dist/cli.js`, que estão no repositório como bundles autónomos.
 
 ## Início rápido (Claude Code)
 
@@ -130,12 +130,12 @@ Detalhes, configuração e formas de desligar: [docs/hooks.md](docs/hooks.md). O
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline e Claude Desktop recebem o servidor MCP e um ficheiro de regras (sem skills, comandos nem hooks). Clona uma vez e depois corre a CLI **pelo caminho absoluto** a partir do teu projeto:
 
 ```text
-git clone --depth 1 --branch v3.2.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.2.1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-O clone acima fixa a 3.2.0; para seguir uma versão posterior, clona antes a tag `vX.Y.Z` dela. `--update-mcp`, `--global` e `ci-init` precisam da 3.0.0 ou posterior — a 2.0.0 também escreve as configurações globais do Windsurf e do Claude Desktop com `mcp-config all --write`. A CLI preenche os caminhos absolutos, junta em vez de substituir e só gere um bloco delimitado dentro de ficheiros como o `AGENTS.md`; `--update-mcp` atualiza uma entrada desatualizada. Caminhos por host e snippets manuais: [docs/hosts.md](docs/hosts.md).
+O clone acima fixa a 3.2.1; para seguir uma versão posterior, clona antes a tag `vX.Y.Z` dela. `--update-mcp`, `--global` e `ci-init` precisam da 3.0.0 ou posterior — a 2.0.0 também escreve as configurações globais do Windsurf e do Claude Desktop com `mcp-config all --write`. A CLI preenche os caminhos absolutos, junta em vez de substituir e só gere um bloco delimitado dentro de ficheiros como o `AGENTS.md`; `--update-mcp` atualiza uma entrada desatualizada. Caminhos por host e snippets manuais: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 

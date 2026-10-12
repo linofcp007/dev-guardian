@@ -7,7 +7,6 @@ The CLI runs the same tool handlers an MCP session does — no Claude Code, no M
 Run the CLI from the project you want to scan, by the absolute path of a dev-guardian clone (see [hosts.md](hosts.md#1-clone-once) — `ci-init` needs 3.0.0 or later) or of the installed plugin:
 
 ```text
-npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                  # once: the runtime packages scan needs
 node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write      # or gitlab, bitbucket
 node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .  # once, locally
 git add .github/workflows/dev-guardian.yml .guardian/baseline.json
@@ -215,6 +214,6 @@ Use the branch you passed to `--branch` (`ci-init` prints the command with it). 
 
 ## As dev-spec-driven's finish check
 
-dev-spec-driven can run this gate before a feature closes. `dev-spec init --guardian` (in a session, `spec_init { guardian: true }`) stores a project check named `guardian`, and `/spec-finish` — `finish --run` — runs `dev-guardian scan --project <dir> --fail-on high --format json` through a launcher that finds the newest dev-guardian installed. A plugin install puts no `dev-spec` on `PATH`: run the `node "<dev-spec plugin>/cli/dev-spec.js" init --guardian` line its own tool results print. The installed dev-guardian's `mcp/` needs its one-time `npm ci --omit=dev` ([above](#the-short-version)).
+dev-spec-driven can run this gate before a feature closes. `dev-spec init --guardian` (in a session, `spec_init { guardian: true }`) stores a project check named `guardian`, and `/spec-finish` — `finish --run` — runs `dev-guardian scan --project <dir> --fail-on high --format json` through a launcher that finds the newest dev-guardian installed. A plugin install puts no `dev-spec` on `PATH`: run the `node "<dev-spec plugin>/cli/dev-spec.js" init --guardian` line its own tool results print. Nothing needs installing in the plugin's `mcp/`: the CLI runs on the committed bundle `mcp/dist/cli.js`. That takes dev-guardian 3.2.1 or later — 3.2.0's `scan` failed in every plugin install with `Cannot find package 'yaml'` (exit 3).
 
 It is the same gate as here: only a finding new to `.guardian/baseline.json`, at `high` or above, blocks the finish, and exit 2 is reported as an incomplete scan, never as a pass. Record the baseline before you turn the check on, or every existing finding at `high` or above blocks the first finish. To accept a finding you have reviewed, run `baseline update` and commit `.guardian/baseline.json`, or suppress it where its scanner reads suppressions — an inline `nosemgrep`, a `.trivyignore` or `.gitleaksignore` entry, reviewed like code. A `suppress_finding` does not reach this gate, because `scan` works in a throwaway database. Never force the finish past it: the finding is still new to the next scan, and to CI.

@@ -190,8 +190,11 @@ describe('every raw spawn is classified (platform/gitSafety.ts)', () => {
   it('the hook and the CLI run git only through the helper they import from dist', () => {
     const hook = SOURCES.find((s) => s.rel === 'hooks/guardian-hook.mjs')?.text ?? '';
     expect(hook).toMatch(/import\(pathToFileURL\(join\(DIST_PLATFORM, 'gitSafety\.js'\)\)\.href\)/);
+    // The CLI imports it from its bundle, dist/cli.js, which re-exports the helper (src/cli.ts).
     const cli = SOURCES.find((s) => s.rel === 'cli/dev-guardian.mjs')?.text ?? '';
-    expect(cli).toMatch(/import \{ execGitSync \} from '\.\.\/mcp\/dist\/platform\/gitSafety\.js'/);
+    expect(cli).toMatch(/^import \{[^}]*\bexecGitSync,[^}]*\} from '\.\.\/mcp\/dist\/cli\.js';$/m);
+    const entry = SOURCES.find((s) => s.rel === 'mcp/src/cli.ts')?.text ?? '';
+    expect(entry).toMatch(/^export \{ execGitSync \} from '\.\/platform\/gitSafety\.js';$/m);
   });
 
   it('every reason is written down', () => {
