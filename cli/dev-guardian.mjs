@@ -111,7 +111,9 @@
  *   `scan_dast` target are the same origin, so there is nothing else for
  *   `--base-url` to name once the app starts on its own.
  *
- * Requires a built server (`cd mcp && npm install && npm run build`).
+ * Runs from a plain checkout — a plugin install has no `node_modules`: what it
+ * uses from the server's code is the committed, self-contained bundle
+ * `mcp/dist/cli.js` (rebuilt by `cd mcp && npm run build`).
  */
 
 import {
@@ -134,43 +136,42 @@ import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:p
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
-import { ALL_HOSTS } from '../mcp/dist/hostsetup/hostSpecs.js';
-import { previewMcpConfig, setupHost } from '../mcp/dist/hostsetup/setup.js';
-import { execGitSync } from '../mcp/dist/platform/gitSafety.js';
-import { detectOs } from '../mcp/dist/platform/osDetect.js';
-import { hardenCommandSearch } from '../mcp/dist/platform/binaryPath.js';
-import { canonicalPath } from '../mcp/dist/platform/projectPath.js';
-import { scanForSecrets } from '../mcp/dist/hooks/secretScan.js';
-import { assessBashCommand } from '../mcp/dist/hooks/bashGuard.js';
-import { decodeText } from '../mcp/dist/hooks/textEncoding.js';
-import { untrustedText } from '../mcp/dist/platform/untrustedText.js';
+// Everything this CLI uses from the server's code comes from ONE file, the
+// self-contained bundle `mcp/dist/cli.js` (built from `mcp/src/cli.ts` by
+// `npm run build`, every npm package inlined): a plugin install is a git
+// checkout with no `node_modules`. Never import a `../mcp/dist/<area>/*.js`
+// module here — tsc's per-file output imports the packages by name, which is
+// how 3.2.0's `scan` and `status` failed in every install with `Cannot find
+// package 'yaml'` (`mcp/test/e2e/pluginInstall.test.ts` runs this CLI from a
+// copy of the tracked files, with no `node_modules` in reach).
+//
+// The scan pipeline and the storage layer (`node:sqlite`) come through the
+// bundle's `load*Modules()` functions, which the bundle keeps lazy: `--help`,
+// `check`, `mcp-config` and `ci-init` never evaluate them, on any Node
+// version (`mcp/test/e2e/cliLazyStorage.test.ts`).
 import {
+  ALL_HOSTS,
+  assessBashCommand,
+  canonicalPath,
+  decodeText,
   describeReadRefusal,
   describeWriteRefusal,
+  detectOs,
+  execGitSync,
+  hardenCommandSearch,
   isWithinDir,
+  loadCiModules as loadCiEngine,
+  loadDashboardModules as loadDashboardEngine,
+  loadDbModules as loadDbEngine,
+  loadImportSarifModules as loadImportSarifEngine,
+  previewMcpConfig,
   PROJECT_LOCKFILE_MAX_BYTES,
   readProjectText,
+  scanForSecrets,
+  setupHost,
+  untrustedText,
   writeProjectFile,
-} from '../mcp/dist/platform/projectFs.js';
-
-// `storage/*` and `dashboard/*` are NOT statically imported here (contrast
-// the five imports directly above, which are pure — no `node:sqlite`
-// anywhere in their own transitive closure, confirmed by grepping the built
-// `dist/` for it). `storage/db.ts` requires `node:sqlite` at MODULE LOAD
-// TIME (`createRequire(import.meta.url)('node:sqlite')`, top-level, not
-// inside a function) — still a gated/experimental Node builtin below the
-// project's own floor (Global Constraint 12: Node >= 22.13, no
-// `--experimental-sqlite` anywhere), so on an OLDER Node a static top-level
-// `import` of `storage/index.js` would throw the moment THIS FILE loads,
-// before `main()` runs and before argv is even inspected — every
-// invocation, including `--help`, `check`, and `mcp-config` (none of which
-// touch a database), would crash with a raw `ERR_UNKNOWN_BUILTIN_MODULE`
-// stack trace instead of running. `status`/`dashboard` are the only two
-// subcommands that ever need a database or a snapshot renderer; they load
-// this cluster lazily via `loadDashboardModules()` (mirroring
-// `loadCiModules()`'s identical reasoning for `scan`/`baseline update`,
-// just below), so every OTHER subcommand's process never touches
-// `node:sqlite` at all, on any Node version.
+} from '../mcp/dist/cli.js';
 
 // `scan` runs in the project it scans: no spawn by bare name may find a binary
 // there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
@@ -204,8 +205,8 @@ const CI_CONFIG_RELATIVE_PATH = '.guardian/ci.json';
 
 // Mirrors CI_EXIT.USAGE_ERROR in mcp/src/ci/types.ts (value 3). Kept as a
 // literal, not imported, because it must be usable BEFORE ci/types.js can
-// be loaded at all — including to report that ci/types.js is missing
-// (see loadCiModules below).
+// be loaded at all — including to report that it cannot be, on a Node
+// without node:sqlite (see loadOrExit below).
 const USAGE_ERROR_EXIT = 3;
 
 // `scan`/`baseline update` pull in `Storage`/`GuardianDatabase` (via
@@ -769,53 +770,12 @@ function usageError(message) {
 }
 
 /**
- * `mcp/dist/ci/*.js` (and the pre-existing `mcp/dist/types.js`) are loaded
- * lazily with dynamic `import()`, never a static top-of-file `import` like
- * this file's other dependencies. A static import that fails aborts the
- * whole process before a single line of this file's own code runs — INCLUDING
- * a friendly `existsSync` check placed after it in the source — so a repo
- * that has never run `cd mcp && npm run build` would otherwise see a raw
- * Node `ERR_MODULE_NOT_FOUND` stack trace on `dev-guardian scan` instead of
- * a message that says what to do. Awaited only from inside `cmdScan` /
- * `cmdBaseline`, so `mcp-config` and `check` are completely unaffected.
+ * `scan` / `baseline update`: the scan pipeline, the gate and its reports —
+ * the bundle's lazy `loadCiModules()` (see the note above the import), so
+ * awaited only from inside `cmdScan` / `cmdBaseline`.
  */
-async function loadCiModules() {
-  const marker = resolve(ROOT, 'mcp', 'dist', 'ci', 'types.js');
-  if (!existsSync(marker)) {
-    process.stderr.write(
-      `dev-guardian: MCP server not built (missing ${marker}).\n` +
-        'Run once:  cd mcp && npm install && npm run build\n',
-    );
-    process.exit(USAGE_ERROR_EXIT);
-  }
-  const [ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig] = await Promise.all([
-    import('../mcp/dist/ci/types.js'),
-    import('../mcp/dist/ci/baseline.js'),
-    import('../mcp/dist/ci/gate.js'),
-    import('../mcp/dist/ci/report.js'),
-    import('../mcp/dist/ci/runScans.js'),
-    import('../mcp/dist/ci/appRunner.js'),
-    import('../mcp/dist/types.js'),
-    import('../mcp/dist/ci/refConfig.js'),
-  ]);
-  return {
-    CI_EXIT: ciTypes.CI_EXIT,
-    BASELINE_RELATIVE_PATH: baseline.BASELINE_RELATIVE_PATH,
-    parseBaseline: baseline.parseBaseline,
-    buildBaseline: baseline.buildBaseline,
-    serialiseBaseline: baseline.serialiseBaseline,
-    evaluateGate: gate.evaluateGate,
-    exitCodeForCoverage: gate.exitCodeForCoverage,
-    renderHuman: report.renderHuman,
-    renderJson: report.renderJson,
-    renderSarif: report.renderSarif,
-    runScans: runScansMod.runScans,
-    startApp: appRunner.startApp,
-    SEVERITIES: types.SEVERITIES,
-    resolveCiRef: refConfig.resolveCiRef,
-    readBaselineAtRef: refConfig.readBaselineAtRef,
-    resetExclusionsFromRef: refConfig.resetExclusionsFromRef,
-  };
+function loadCiModules() {
+  return loadOrExit(loadCiEngine);
 }
 
 /**
@@ -2463,7 +2423,9 @@ function cmdCiInit(argv) {
  * True when `error` is the shape Node throws for a builtin module that does
  * not exist on the running Node version — `createRequire(...)('node:sqlite')`
  * in `storage/db.ts` throws exactly this when `node:sqlite` is not
- * registered (below the project's Node floor). Matched on BOTH the stable
+ * registered (below the project's Node floor), and the bundle's `load*Modules()`
+ * reject with the same shape when they find it missing (`mcp/src/cli.ts`).
+ * Matched on BOTH the stable
  * error `code` and a message fallback (Node has changed the exact wording of
  * this error across versions; the `code` has not), so a genuine, unrelated
  * failure inside `storage`/`dashboard` (a real bug) is never misreported as
@@ -2478,47 +2440,16 @@ export function isNodeSqliteUnavailable(error) {
 }
 
 /**
- * Lazily loads the `storage`/`dashboard` module cluster — see the module doc
- * comment above the (deliberately static) imports for why this is dynamic
- * rather than a top-level `import`. Mirrors `loadCiModules()` exactly: the
- * same "not built" friendly check (a marker file existence probe, so a repo
- * that never ran `npm run build` gets one clear line instead of
- * `ERR_MODULE_NOT_FOUND`), and — new here, because this cluster is the one
- * that can genuinely fail on a Node version this project no longer
- * supports — a SECOND friendly message specifically for that case, so
- * `status`/`dashboard` on Node < 22.13 fail with "this command requires
- * Node.js >= 22.13" rather than a raw `ERR_UNKNOWN_BUILTIN_MODULE` stack
- * trace. Only `status`/`dashboard` ever call this; every other subcommand
- * never touches `node:sqlite`, on any Node version — see the note above the
- * static imports.
+ * Runs one of the bundle's lazy loaders (`load*Modules()` in `mcp/src/cli.ts`
+ * — see the note above the import). On a Node without `node:sqlite` (below
+ * the project's floor, 22.13) the subcommand fails with one line, "this
+ * command requires Node.js >= 22.13", and exit 3, rather than as an
+ * unexpected error; anything else is rethrown, to the subcommand's own
+ * `.catch(fatal)`.
  */
-async function loadDashboardModules() {
-  const marker = resolve(ROOT, 'mcp', 'dist', 'storage', 'index.js');
-  if (!existsSync(marker)) {
-    process.stderr.write(
-      `dev-guardian: MCP server not built (missing ${marker}).\n` +
-        'Run once:  cd mcp && npm install && npm run build\n',
-    );
-    process.exit(USAGE_ERROR_EXIT);
-  }
+async function loadOrExit(load) {
   try {
-    const [storage, migrations, snapshot, statusRenderer, dashboardRenderer] = await Promise.all([
-      import('../mcp/dist/storage/index.js'),
-      import('../mcp/dist/storage/migrations/runner.js'),
-      import('../mcp/dist/dashboard/snapshot.js'),
-      import('../mcp/dist/dashboard/renderStatus.js'),
-      import('../mcp/dist/dashboard/renderHtml.js'),
-    ]);
-    return {
-      openDatabase: storage.openDatabase,
-      openDatabaseAtPath: storage.openDatabaseAtPath,
-      resolveFallbackDbPath: storage.resolveFallbackDbPath,
-      Storage: storage.Storage,
-      runMigrations: migrations.runMigrations,
-      buildSnapshot: snapshot.buildSnapshot,
-      renderStatus: statusRenderer.renderStatus,
-      renderDashboard: dashboardRenderer.renderDashboard,
-    };
+    return await load();
   } catch (e) {
     if (isNodeSqliteUnavailable(e)) {
       process.stderr.write(
@@ -2529,6 +2460,11 @@ async function loadDashboardModules() {
     }
     throw e;
   }
+}
+
+/** `status` / `dashboard`: the storage layer, the snapshot and its two renderers. */
+function loadDashboardModules() {
+  return loadOrExit(loadDashboardEngine);
 }
 
 /**
@@ -2650,37 +2586,12 @@ async function cmdStatus(argv) {
 // ---------------------------------------------------------------------------
 
 /**
- * Lazily loads the storage layer and the `import_sarif` tool module (loading
- * it registers it) — see loadDashboardModules for why this is dynamic and for
- * the two friendly failures (not built; Node without node:sqlite). The CLI
- * calls the tool's own handler, so it is the same import by construction.
+ * The storage layer and the `import_sarif` tool module (loading it registers
+ * it), lazily — see loadOrExit. The CLI calls the tool's own handler, so it
+ * is the same import by construction.
  */
-async function loadImportSarifModules() {
-  const marker = resolve(ROOT, 'mcp', 'dist', 'tools', 'importSarif.js');
-  if (!existsSync(marker)) {
-    process.stderr.write(
-      `dev-guardian: MCP server not built (missing ${marker}).\n` +
-        'Run once:  cd mcp && npm install && npm run build\n',
-    );
-    process.exit(USAGE_ERROR_EXIT);
-  }
-  try {
-    const [storage, tools] = await Promise.all([
-      import('../mcp/dist/storage/index.js'),
-      import('../mcp/dist/tools/index.js'),
-      import('../mcp/dist/tools/importSarif.js'),
-    ]);
-    return { openDatabase: storage.openDatabase, Storage: storage.Storage, TOOLS: tools.TOOLS };
-  } catch (e) {
-    if (isNodeSqliteUnavailable(e)) {
-      process.stderr.write(
-        `dev-guardian: this command requires Node.js >= 22.13 (built-in node:sqlite support). ` +
-          `Current: ${process.version}.\n`,
-      );
-      process.exit(USAGE_ERROR_EXIT);
-    }
-    throw e;
-  }
+function loadImportSarifModules() {
+  return loadOrExit(loadImportSarifEngine);
 }
 
 function parseImportSarifArgs(argv) {
@@ -2944,8 +2855,9 @@ function fatal(e) {
  * names the file and what to do. Printed after "unexpected error:" it read as
  * a crash in dev-guardian, so it is printed alone — with exit 3, what
  * `status`/`dashboard` exit with when they refuse an unusable database
- * themselves. Recognised by name: the storage layer is loaded lazily from
- * `mcp/dist`, so this file holds no class to test `instanceof` against.
+ * themselves. Recognised by name: the storage layer is loaded lazily, inside
+ * the bundle `mcp/dist/cli.js`, so this file holds no class to test
+ * `instanceof` against.
  * Anything else is still unexpected, exit 3.
  */
 export function fatalOutcome(e) {
@@ -2975,28 +2887,9 @@ export function fatalOutcome(e) {
 // and never an MCP tool: a model whose context includes the repository must
 // not be the one that vouches for the repository's database.
 
-/** Lazily loads the storage layer (node:sqlite) — see loadDashboardModules. */
-async function loadDbModules() {
-  const marker = resolve(ROOT, 'mcp', 'dist', 'storage', 'db.js');
-  if (!existsSync(marker)) {
-    process.stderr.write(
-      `dev-guardian: MCP server not built (missing ${marker}).\n` +
-        'Run once:  cd mcp && npm install && npm run build\n',
-    );
-    process.exit(USAGE_ERROR_EXIT);
-  }
-  try {
-    return await import('../mcp/dist/storage/db.js');
-  } catch (e) {
-    if (isNodeSqliteUnavailable(e)) {
-      process.stderr.write(
-        `dev-guardian: this command requires Node.js >= 22.13 (built-in node:sqlite support). ` +
-          `Current: ${process.version}.\n`,
-      );
-      process.exit(USAGE_ERROR_EXIT);
-    }
-    throw e;
-  }
+/** The storage layer (node:sqlite), lazily — see loadOrExit. */
+function loadDbModules() {
+  return loadOrExit(loadDbEngine);
 }
 
 function parseDbAdoptArgs(argv) {

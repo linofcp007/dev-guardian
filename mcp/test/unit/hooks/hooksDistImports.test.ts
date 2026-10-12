@@ -6,10 +6,12 @@
  * dispatcher fails OPEN: the guard it was loading is silently off. This walks
  * every module the dispatcher names, and everything they import, in the
  * committed `dist/`, and holds each import to a Node built-in or a relative
- * file — and every module under `dist/hooks/` to `dist/hooks/` itself: the
- * CLI's `check` and `--help` load them with `dist/storage/` absent
- * (`test/e2e/cliLazyStorage.test.ts`). Review of 3.0, W2E: the data
- * directory's resolution, once mirrored in `hooks/dataRegistry.ts` and
+ * file — and every module under `dist/hooks/` to `dist/hooks/` itself, so the
+ * guards never load the storage layer. (The rule began with the CLI, whose
+ * `check` and `--help` loaded these files with `dist/storage/` absent; since
+ * 3.2.1 the CLI runs on its bundle, `dist/cli.js`, and `pluginInstall.test.ts`
+ * runs the dispatcher itself from an install's files.) Review of 3.0, W2E: the
+ * data directory's resolution, once mirrored in `hooks/dataRegistry.ts` and
  * `storage/userData.ts`, is now one module, `hooks/userDataDir.ts` — a first
  * attempt that imported `storage/userData.js` from the hook broke the CLI.
  */

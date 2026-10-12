@@ -1,19 +1,26 @@
 /**
- * The esbuild options that make `dist/server.js` — shared by
+ * The esbuild options that make the two bundles — `dist/server.js` (the MCP
+ * server) and `dist/cli.js` (what `cli/dev-guardian.mjs` runs) — shared by
  * `scripts/bundle.mjs` (the build) and `test/unit/pluginSurface/distSync.test.ts`
- * (which rebuilds the bundle in memory and compares it with the committed
- * one), so the two can never bundle differently. See `bundle.mjs` for why the
- * server is bundled at all.
+ * (which rebuilds them in memory and compares them with the committed ones),
+ * so the two can never bundle differently. See `bundle.mjs` for why they are
+ * bundled at all.
+ *
+ * One build, two entry points, no code splitting: each output is a
+ * self-contained bundle of its own, made with the same options.
  *
  * @param {string} root the `mcp/` directory
  * @returns {import('esbuild').BuildOptions}
  */
 import { resolve } from 'node:path';
 
+/** Every bundle, by its entry under `src/`: `src/<name>.ts` is written to `dist/<name>.js`, over tsc's file of that name. */
+export const BUNDLES = ['server', 'cli'];
+
 export function bundleOptions(root) {
   return {
-    entryPoints: [resolve(root, 'src', 'server.ts')],
-    outfile: resolve(root, 'dist', 'server.js'),
+    entryPoints: BUNDLES.map((name) => resolve(root, 'src', `${name}.ts`)),
+    outdir: resolve(root, 'dist'),
     // The paths esbuild writes into the bundle's comments are relative to
     // this; `npm run build` runs from `mcp/`, and so must anything that
     // compares against its output.

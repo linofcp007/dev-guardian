@@ -1,40 +1,33 @@
 /**
- * End-to-end proof that `cli/dev-guardian.mjs` loads `storage/*` /
- * `dashboard/*` LAZILY — Task 5 of the 2026-09-25 full review, item 2.
+ * End-to-end proof that `cli/dev-guardian.mjs` loads the storage layer
+ * (`node:sqlite`) and the scan pipeline LAZILY — Task 5 of the 2026-09-25 full
+ * review, item 2; reshaped in 3.2.1, when the CLI moved onto the bundle.
  *
- * `storage/db.ts` requires `node:sqlite` at MODULE LOAD TIME
- * (`createRequire(import.meta.url)('node:sqlite')`, top-level, not inside a
- * function). Before this fix, `cli/dev-guardian.mjs` statically imported
- * `storage/index.js` (and four sibling modules) at the top of the file, so
- * EVERY invocation — including `--help`, `check`, and `mcp-config`, none of
- * which touch a database — paid that cost: on a Node build lacking
- * `node:sqlite` (below this project's floor, Global Constraint 12), the
- * whole CLI crashed before `main()` even ran, with a raw
- * `ERR_UNKNOWN_BUILTIN_MODULE` stack trace, regardless of which subcommand
- * was requested.
+ * `--help`, `check`, `mcp-config` and `ci-init` touch no database, and must
+ * run on any Node — including one without `node:sqlite` (below this project's
+ * floor, 22.13), where a CLI that loaded it at start crashed every
+ * invocation, before `main()` ran, with a raw `ERR_UNKNOWN_BUILTIN_MODULE`.
  *
+ * Since 3.2.1 the CLI imports one module, the self-contained bundle
+ * `mcp/dist/cli.js` (`mcp/src/cli.ts`; why: `pluginInstall.test.ts`), and
+ * reaches the scan pipeline and the storage layer only through its
+ * `load*Modules()` functions, whose dynamic `import()`s esbuild keeps lazy.
  * Two independent proofs, because neither alone rules out the defect:
  *
- * 1. A STATIC check on the source text: no top-level `import` line names any
- *    `storage/*` or `dashboard/*` module, and `loadDashboardModules` (the
- *    only place that may) reaches them via dynamic `import()`. This is the
- *    direct, mechanical property the fix requires.
- * 2. A BEHAVIOURAL check against an isolated copy of the CLI + a `dist/`
- *    with `storage/` and `dashboard/` removed (a safe, self-contained stand-in
- *    for "unavailable on this Node build" that never touches the real,
- *    shared `mcp/dist/` other test files depend on): `--help`, `check`, and
- *    `mcp-config` (preview mode) must still succeed; `status`/`dashboard`
- *    must fail with the friendly "MCP server not built" message this
- *    project's own `loadCiModules()` already establishes as the house style
- *    for this situation, never a raw stack trace.
+ * 1. STATIC, on the source text: the CLI imports Node builtins and the
+ *    bundle, nothing else, and has no `import()` of its own.
+ * 2. BEHAVIOURAL, on an isolated copy of the CLI and the bundle, run with a
+ *    preload that makes `node:sqlite` unavailable the way an old Node does
+ *    (`ERR_UNKNOWN_BUILTIN_MODULE`): `--help`, `check` and `mcp-config` still
+ *    succeed; `status`, `dashboard`, `db adopt`, `import-sarif` and `scan`
+ *    fail with one line — "this command requires Node.js >= 22.13" — and
+ *    exit 3, never a stack trace.
  *
  * `isNodeSqliteUnavailable`'s own message/code matching is covered directly
- * in `mcp/test/unit/cli/lazyStorage.test.ts` — this file proves the
- * STRUCTURAL property (lazy loading) and the "not built" friendly path;
- * that one proves the Node-version-message predicate in isolation.
+ * in `mcp/test/unit/cli/lazyStorage.test.ts`.
  */
 
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,50 +41,74 @@ const TIMEOUT_MS = 15_000;
 // Above the cap: a hung CLI is reported by the cap, naming it (R7-I1).
 vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
 
-describe('cli/dev-guardian.mjs — storage/dashboard modules load lazily', () => {
-  it('no top-level import names storage/* or dashboard/*', () => {
-    const source = readFileSync(REAL_CLI, 'utf8');
-    // Only the module's own top-of-file import statements — one per line,
-    // this file's own convention (confirmed by every existing import in it).
-    const topLevelImportLines = source.split('\n').filter((l) => /^import\s/.test(l));
-    for (const line of topLevelImportLines) {
-      expect(line).not.toMatch(/storage\/(index|migrations\/runner)\.js/);
-      expect(line).not.toMatch(/dashboard\/(snapshot|renderStatus|renderHtml)\.js/);
-    }
+/** Every module specifier a source names: static imports and re-exports, and dynamic `import()`. */
+function specifiers(source: string): { staticSpecs: string[]; dynamicSpecs: string[] } {
+  const staticSpecs = [...source.matchAll(/^(?:import|export)\s[^;]*?\sfrom\s*['"]([^'"]+)['"]/gm)].map((m) => m[1] ?? '');
+  const dynamicSpecs = [...source.matchAll(/\bimport\(\s*['"]?([^'")]*)/g)].map((m) => m[1] ?? '');
+  return { staticSpecs, dynamicSpecs };
+}
+
+describe('cli/dev-guardian.mjs — imports Node builtins and the bundle, nothing else', () => {
+  it('every import names a node: builtin or ../mcp/dist/cli.js, and the bundle is among them', () => {
+    const { staticSpecs } = specifiers(readFileSync(REAL_CLI, 'utf8'));
+    expect(staticSpecs).toContain('../mcp/dist/cli.js');
+    expect(staticSpecs.filter((s) => !s.startsWith('node:') && s !== '../mcp/dist/cli.js')).toEqual([]);
   });
 
-  it('loadDashboardModules reaches them only via dynamic import()', () => {
-    const source = readFileSync(REAL_CLI, 'utf8');
-    const fnMatch = /async function loadDashboardModules\(\)[\s\S]*?\n\}/.exec(source);
-    expect(fnMatch).toBeTruthy();
-    const body = fnMatch?.[0] ?? '';
-    expect(body).toMatch(/import\(['"]\.\.\/mcp\/dist\/storage\/index\.js['"]\)/);
-    expect(body).toMatch(/import\(['"]\.\.\/mcp\/dist\/storage\/migrations\/runner\.js['"]\)/);
-    expect(body).toMatch(/import\(['"]\.\.\/mcp\/dist\/dashboard\/snapshot\.js['"]\)/);
-    expect(body).toMatch(/import\(['"]\.\.\/mcp\/dist\/dashboard\/renderStatus\.js['"]\)/);
-    expect(body).toMatch(/import\(['"]\.\.\/mcp\/dist\/dashboard\/renderHtml\.js['"]\)/);
+  it('has no dynamic import() of its own — the lazy loading is the bundle’s', () => {
+    expect(specifiers(readFileSync(REAL_CLI, 'utf8')).dynamicSpecs).toEqual([]);
+  });
+
+  it('positive control: the reader sees a per-file dist import, static or dynamic', () => {
+    const { staticSpecs, dynamicSpecs } = specifiers(
+      [
+        "import { a } from '../mcp/dist/storage/index.js';",
+        "import {\n  b,\n  c,\n} from '../mcp/dist/cli.js';",
+        "const m = await import('../mcp/dist/ci/types.js');",
+      ].join('\n'),
+    );
+    expect(staticSpecs).toEqual(['../mcp/dist/storage/index.js', '../mcp/dist/cli.js']);
+    expect(dynamicSpecs).toEqual(['../mcp/dist/ci/types.js']);
   });
 });
 
-describe('cli/dev-guardian.mjs — behaves correctly when storage/dashboard are unavailable', () => {
+describe('cli/dev-guardian.mjs — on a Node without node:sqlite', () => {
   let sandbox: string;
   let cli: string;
+  let noSqlite: string;
   let project: string;
 
   beforeAll(() => {
-    // An isolated copy — never the real, shared mcp/dist/ other test files
-    // (running possibly in parallel) depend on.
+    // An isolated copy — the CLI, its bundle, and what the bundle reads at
+    // run time (the migrations; server.js, whose path mcp-config prints).
     sandbox = mkdtempSync(join(tmpdir(), 'guardian-lazy-'));
-    const sandboxMcpDist = join(sandbox, 'mcp', 'dist');
-    mkdirSync(sandboxMcpDist, { recursive: true });
-    cpSync(REAL_DIST, sandboxMcpDist, { recursive: true });
-    rmSync(join(sandboxMcpDist, 'storage'), { recursive: true, force: true });
-    rmSync(join(sandboxMcpDist, 'dashboard'), { recursive: true, force: true });
-
-    const sandboxCliDir = join(sandbox, 'cli');
-    mkdirSync(sandboxCliDir, { recursive: true });
-    cli = join(sandboxCliDir, 'dev-guardian.mjs');
+    const dist = join(sandbox, 'mcp', 'dist');
+    mkdirSync(join(sandbox, 'cli'), { recursive: true });
+    mkdirSync(dist, { recursive: true });
+    cli = join(sandbox, 'cli', 'dev-guardian.mjs');
     cpSync(REAL_CLI, cli);
+    for (const file of ['cli.js', 'server.js']) cpSync(join(REAL_DIST, file), join(dist, file));
+    cpSync(join(REAL_DIST, 'storage', 'migrations'), join(dist, 'storage', 'migrations'), { recursive: true });
+
+    // What an old Node does on `node:sqlite` — through every require, which
+    // is how storage/db.ts loads it (createRequire, at first use).
+    noSqlite = join(sandbox, 'no-sqlite.cjs');
+    writeFileSync(
+      noSqlite,
+      [
+        "const Module = require('node:module');",
+        'const load = Module._load;',
+        'Module._load = function (request, ...rest) {',
+        "  if (request === 'node:sqlite') {",
+        "    const e = new Error('No such built-in module: node:sqlite');",
+        "    e.code = 'ERR_UNKNOWN_BUILTIN_MODULE';",
+        '    throw e;',
+        '  }',
+        '  return load.call(this, request, ...rest);',
+        '};',
+        '',
+      ].join('\n'),
+    );
 
     project = join(sandbox, 'proj');
     mkdirSync(project, { recursive: true });
@@ -101,8 +118,8 @@ describe('cli/dev-guardian.mjs — behaves correctly when storage/dashboard are 
     rmSync(sandbox, { recursive: true, force: true });
   });
 
-  function run(args: string[]) {
-    const r = spawnSyncCapped(process.execPath, [cli, ...args], {
+  function run(args: string[], opts: { sqlite: boolean } = { sqlite: false }) {
+    const r = spawnSyncCapped(process.execPath, [...(opts.sqlite ? [] : ['--require', noSqlite]), cli, ...args], {
       encoding: 'utf8',
       env: { ...process.env, NO_COLOR: '1' },
       timeout: TIMEOUT_MS,
@@ -110,35 +127,51 @@ describe('cli/dev-guardian.mjs — behaves correctly when storage/dashboard are 
     return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   }
 
-  it('--help still works with storage/dashboard missing', () => {
+  it('positive control: the preload makes node:sqlite unavailable, with the code an old Node uses', () => {
+    const r = spawnSyncCapped(
+      process.execPath,
+      ['--require', noSqlite, '-e', "try { require('node:sqlite'); } catch (e) { process.stdout.write(e.code); }"],
+      { encoding: 'utf8', timeout: TIMEOUT_MS },
+    );
+    expect(r.stdout).toBe('ERR_UNKNOWN_BUILTIN_MODULE');
+  });
+
+  it('positive control: without the preload, the same copy runs status', () => {
+    const r = run(['status', '--project', project], { sqlite: true });
+    expect(r.status, r.stderr).toBe(0);
+  });
+
+  it('--help still works', () => {
     const r = run(['--help']);
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/dev-guardian/);
   });
 
-  it('check --bash still works with storage/dashboard missing', () => {
+  it('check --bash still works', () => {
     const r = run(['check', '--bash', 'echo hi']);
     expect(r.status).toBe(0);
-    expect(r.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module/);
+    expect(r.stderr).toBe('');
   });
 
-  it('mcp-config preview (no --write) still works with storage/dashboard missing', () => {
+  it('mcp-config preview (no --write) still works', () => {
     const r = run(['mcp-config', 'cursor']);
     expect(r.status).toBe(0);
-    expect(r.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module/);
+    expect(r.stderr).not.toMatch(/sqlite|ERR_|Cannot find/i);
   });
 
-  it('status fails with the friendly "not built" message, not a raw stack trace', () => {
-    const r = run(['status', '--project', project]);
-    expect(r.status).toBe(3);
-    expect(r.stderr).toMatch(/MCP server not built/);
-    expect(r.stderr).not.toMatch(/at Object|at async|ERR_MODULE_NOT_FOUND/);
-  });
+  const NEEDS_SQLITE: ReadonlyArray<[string, () => string[]]> = [
+    ['status', () => ['status', '--project', project]],
+    ['dashboard', () => ['dashboard', '--project', project, '--no-open']],
+    ['db adopt', () => ['db', 'adopt', '--project', project]],
+    ['import-sarif', () => ['import-sarif', join(project, 'none.sarif'), '--project', project]],
+    ['scan', () => ['scan', '--project', project]],
+  ];
 
-  it('dashboard fails with the friendly "not built" message, not a raw stack trace', () => {
-    const r = run(['dashboard', '--project', project, '--no-open']);
-    expect(r.status).toBe(3);
-    expect(r.stderr).toMatch(/MCP server not built/);
-    expect(r.stderr).not.toMatch(/at Object|at async|ERR_MODULE_NOT_FOUND/);
-  });
+  for (const [name, args] of NEEDS_SQLITE) {
+    it(`${name} fails with one line naming the Node it needs, exit 3 — not a stack trace`, () => {
+      const r = run(args());
+      expect(r.status).toBe(3);
+      expect(r.stderr).toMatch(/^dev-guardian: this command requires Node\.js >= 22\.13 \(built-in node:sqlite support\)\. Current: v[\d.]+\.\n$/);
+    });
+  }
 });
