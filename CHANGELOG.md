@@ -8,7 +8,7 @@ version bump.
 
 ## [Unreleased]
 
-## [3.1.1] - 2026-10-12
+## [3.2.0] - 2026-10-12
 
 The LLM-assisted scan, the `web-js` rule pack and SARIF import, and the handoff to dev-spec-driven
 brought to its current names — with a contract test so the next rename on its side fails here.
