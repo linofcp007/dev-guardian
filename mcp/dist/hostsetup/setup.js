@@ -39,17 +39,22 @@ import { substituteCliPath } from './rulesTemplate.js';
  *
  * Sits next to this module's own compiled location
  * (`mcp/dist/hostsetup/legacyRulesTemplates/`, copied there by
- * `scripts/copy-assets.mjs` — same convention as `storage/migrations/*.sql`)
- * so it resolves correctly whether this file is running from `dist/`
- * (production) or `src/` (dev, via tsx) without either needing to know
- * which.
+ * `scripts/copy-assets.mjs` — same convention as `storage/migrations/*.sql`).
+ * Two candidates, tried in order, like the migrations
+ * (`storage/migrations/runner.ts`): run as its own file (`src/` under tsx, or
+ * tsc's `dist/hostsetup/`), this module's directory holds it; bundled into
+ * `dist/cli.js` — what the CLI's `mcp-config` runs — `import.meta.url` is the
+ * bundle's, so it is one level down, in `dist/hostsetup/`.
  */
-const LEGACY_TEMPLATES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'legacyRulesTemplates');
+const LEGACY_TEMPLATES_DIRS = (() => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return [resolve(here, 'legacyRulesTemplates'), resolve(here, 'hostsetup', 'legacyRulesTemplates')];
+})();
 /**
  * Loads every known legacy template body, cached after the first call —
  * `installRulesOne` runs once per host in `setupHost`'s own `.map()`, and
  * re-reading a handful of small files from disk that many times has no
- * value. Returns `[]` (never throws) when the directory is missing — a
+ * value. Returns `[]` (never throws) when neither directory is there — a
  * build that skipped `copy-assets.mjs` degrades to `mergeRulesBlock`'s own
  * safe defaults (no known templates to match against — a file that mentions
  * dev-guardian falls through to `manual_merge_required` rather than
@@ -59,13 +64,17 @@ let cachedLegacyTemplates = null;
 function loadKnownLegacyTemplates() {
     if (cachedLegacyTemplates)
         return cachedLegacyTemplates;
-    try {
-        const files = readdirSync(LEGACY_TEMPLATES_DIR);
-        cachedLegacyTemplates = files.map((f) => readFileSync(join(LEGACY_TEMPLATES_DIR, f), 'utf8'));
+    for (const dir of LEGACY_TEMPLATES_DIRS) {
+        try {
+            const files = readdirSync(dir);
+            cachedLegacyTemplates = files.map((f) => readFileSync(join(dir, f), 'utf8'));
+            return cachedLegacyTemplates;
+        }
+        catch {
+            /* not this candidate (absent, or unreadable) — try the next */
+        }
     }
-    catch {
-        cachedLegacyTemplates = [];
-    }
+    cachedLegacyTemplates = [];
     return cachedLegacyTemplates;
 }
 /**
