@@ -130,12 +130,12 @@ Details, configuration and the escape hatches: [docs/hooks.md](docs/hooks.md). T
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline and Claude Desktop get the MCP server and a rules file (no skills, commands or hooks). Clone once, then run the CLI **by its absolute path** from your project:
 
 ```text
-git clone --depth 1 --branch v3.1.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.2.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-The clone above pins 3.0.0; to follow a later release, clone its `vX.Y.Z` tag instead. `--update-mcp`, `--global` and `ci-init` need 3.0.0 or later — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
+The clone above pins 3.2.0; to follow a later release, clone its `vX.Y.Z` tag instead. `--update-mcp`, `--global` and `ci-init` need 3.0.0 or later — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 
@@ -147,6 +147,8 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high -
 ```
 
 `ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. On a pull request the generated pipeline gates against the base commit's baseline and Semgrep rules (`--baseline-ref`, `--rules-ref`), never the pull request's own. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network). To bring another scanner's SARIF log into the same history, use the `import_sarif` tool or `import-sarif <file>` — see [docs/sarif-import.md](docs/sarif-import.md).
+
+**With dev-spec-driven.** Its `/spec-finish` can run this gate as a project check (`dev-spec init --guardian`, or `spec_init { guardian: true }` in a session): only a finding new to the baseline, at `high` or above, blocks the finish, and exit 2 is an incomplete scan, never a pass. Accept a finding you have reviewed with `baseline update` or a suppression its scanner reads, never by forcing the finish — see [docs/ci.md](docs/ci.md).
 
 ## Privacy and network
 

@@ -130,12 +130,12 @@ Detalles, configuración y formas de desactivarlos: [docs/hooks.md](docs/hooks.m
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline y Claude Desktop reciben el servidor MCP y un archivo de reglas (sin skills, comandos ni hooks). Clona una vez y después ejecuta la CLI **por su ruta absoluta** desde tu proyecto:
 
 ```text
-git clone --depth 1 --branch v3.1.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.2.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-El clon de arriba fija la 3.0.0; para seguir una versión posterior, clona su etiqueta `vX.Y.Z`. `--update-mcp`, `--global` y `ci-init` necesitan la 3.0.0 o posterior — 2.0.0 además escribe las configuraciones globales de Windsurf y Claude Desktop con `mcp-config all --write`. La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
+El clon de arriba fija la 3.2.0; para seguir una versión posterior, clona su etiqueta `vX.Y.Z`. `--update-mcp`, `--global` y `ci-init` necesitan la 3.0.0 o posterior — 2.0.0 además escribe las configuraciones globales de Windsurf y Claude Desktop con `mcp-config all --write`. La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 
@@ -147,6 +147,8 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high -
 ```
 
 `ci-init` genera un pipeline con cada action fijada por SHA de commit y cada escáner por versión y checksum. `scan` termina con 0 si pasa, 1 cuando un finding nuevo respecto a la baseline alcanza `--fail-on`, **2 cuando un escáner no se ejecutó** (nunca lo leas como aprobado) y 3 ante un error de uso. En un pull request, el pipeline generado evalúa contra la baseline y las reglas Semgrep del commit base (`--baseline-ref`, `--rules-ref`), nunca contra las del propio pull request. Ver [docs/ci.md](docs/ci.md). Ejecútalos desde tu proyecto, con la ruta de tu clon (la copia del propio plugin también sirve). Para una vista local: `status` y `dashboard` (una página HTML autónoma, sin red). Para traer el log SARIF de otro analizador al mismo historial, usa la herramienta `import_sarif` o `import-sarif <archivo>` — ver [docs/sarif-import.md](docs/sarif-import.md) (en inglés).
+
+**Con dev-spec-driven.** Su `/spec-finish` puede ejecutar este gate como check del proyecto (`dev-spec init --guardian`, o `spec_init { guardian: true }` en una sesión): solo un finding nuevo respecto a la baseline, de severidad `high` o superior, bloquea el cierre, y el exit 2 es un escaneo incompleto, nunca un aprobado. Un finding que ya revisaste se acepta con `baseline update` o con una supresión que lea el propio escáner, nunca forzando el cierre — ver [docs/ci.md](docs/ci.md) (en inglés).
 
 ## Privacidad y red
 

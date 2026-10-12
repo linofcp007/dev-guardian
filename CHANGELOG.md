@@ -8,6 +8,11 @@ version bump.
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-10-12
+
+The LLM-assisted scan, the `web-js` rule pack and SARIF import, and the handoff to dev-spec-driven
+brought to its current names — with a contract test so the next rename on its side fails here.
+
 ### Added
 
 - **LLM-assisted scan** — `llm_scan_start`, `llm_scan_task` and `llm_scan_submit` (61st to 63rd tools):
@@ -66,6 +71,29 @@ version bump.
   `allow_outside_project`); nothing it names is opened or fetched. The CLI exits 0 on an import, 1 on an
   invalid or refused log, 2 on a partial one and 3 on anything else. See
   [docs/sarif-import.md](docs/sarif-import.md).
+- **dev-spec-driven's finish check, documented** — in [docs/ci.md](docs/ci.md), the READMEs' CI
+  section and the router skill. dev-spec-driven's `/spec-finish` can run this gate as a project check
+  (`dev-spec init --guardian`, `spec_init { guardian: true }`): `scan --fail-on high` against
+  `.guardian/baseline.json`, so only a new finding at `high` or above blocks the finish, and exit 2 is an
+  incomplete scan, never a pass. A reviewed finding is accepted with `baseline update` or a suppression
+  its scanner reads (`nosemgrep`, `.trivyignore`, `.gitleaksignore`), never by forcing the finish; a
+  `suppress_finding` does not reach that gate, because `scan` works in a throwaway database.
+
+### Fixed
+
+- **The handoff to dev-spec-driven named a tool a Claude Code model cannot call.** `guardian-improve`
+  added each improvement seed with `spec_backlog`, which dev-spec-driven 1.26 folded into
+  `spec_roadmap_edit { kind: "backlog" }`; the old name survives only as a hidden alias, absent from
+  `tools/list`, and in Claude Code a model can call only listed tools. The skill now calls
+  `spec_roadmap_edit { kind: "backlog", action: "add", name, note }`; its CLI fallback is the runnable
+  `node "<dev-spec plugin>/cli/dev-spec.js" backlog add …` line dev-spec-driven's tool results print (a
+  plugin install puts no `dev-spec` on `PATH`), and `/grill` is now `/clarify --grill`. A contract test,
+  `mcp/test/unit/pluginSurface/devSpecNames.test.ts`, holds every dev-spec-driven tool and command name
+  the prose cites — skills, commands, docs, READMEs, rules templates and their copies, hooks, CLI and
+  `mcp/src` — to dev-spec-driven 1.28's listed tools and its commands, and says what to cite instead of a
+  retired one. When a dev-spec-driven checkout (`../dev-spec-driven`) or install of that version or newer
+  is on the machine, it also holds the list to that install's live `tools/list` (a real handshake, in
+  Claude Code plugin mode) and command files; with none, that part is skipped and its title says why.
 
 ## [3.1.0] - 2026-09-30
 

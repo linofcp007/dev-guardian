@@ -89,6 +89,8 @@ O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensag
 
 **Checkup completo** ("faz um checkup", "verifica tudo", "diagnóstico do projeto", "do a full checkup", "haz un chequeo"): `audit_executive { project_path: "<project>" }` (segurança, qualidade, dependências, compliance) mais `bug_hunt { project_path: "<project>" }`, num único relatório consolidado. O `audit_executive` corre os sub-scans em paralelo, envia métricas ao registo do Semgrep, descarrega a base de dados do Trivy e, no `deps_audit`, instala os requirements do PyPI num virtualenv temporário. Se o utilizador não quiser nada disso, passa `local_only: true`: o Semgrep fica só com as regras em disco e o `scan_wordpress` é saltado, mas o Trivy, o `deps_audit` e um restore .NET continuam a sair para a rede — o resultado lista-os em `local_only_gaps`; di-lo ao utilizador.
 
+**Com o dev-spec-driven:** o `/spec-finish` dele pode correr o gate do dev-guardian como check do projeto (`spec_init { guardian: true }`; na CLI dele, `init --guardian`) — o `scan --fail-on high` contra o `.guardian/baseline.json`: só um finding novo de severidade `high` ou acima bloqueia o fecho, e um exit 2 é um scan incompleto, nunca aprovado. Se bloquear, mostra o finding; depois de o utilizador o rever, aceita-se com `baseline update` (e o commit do `.guardian/baseline.json`) ou com uma supressão que o próprio scanner lê (`nosemgrep`, `.trivyignore`, `.gitleaksignore`) — nunca forçando o fecho. O `suppress_finding` não chega a este gate: o `scan` corre numa base de dados descartável.
+
 Se o pedido é ambíguo, pergunta de forma curta — não assumas em silêncio.
 
 ## Fluxo geral
