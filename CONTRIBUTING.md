@@ -12,7 +12,7 @@ cd mcp
 npm ci               # reproducible install — no native modules, storage is node:sqlite
 npm run lint         # tsc over src/ and test/ (two tsconfigs)
 npm run build        # tsc -> mcp/dist, copy SQL migrations, regenerate host rules,
-                     # esbuild bundle (dist/server.js), regenerate docs/tools.md and docs/rule-packs.md
+                     # esbuild bundles (dist/server.js, dist/cli.js), regenerate docs/tools.md and docs/rule-packs.md
 npm test             # vitest run (full suite)
 ```
 

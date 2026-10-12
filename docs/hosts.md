@@ -4,7 +4,7 @@ The engine is the MCP server, so any host that speaks MCP over stdio can use dev
 
 ## 1. Clone once
 
-The server is committed pre-built and bundled (`mcp/dist/server.js` has no runtime `node_modules`), so there is nothing to install or build — only Node.js ≥ 22.13 and git.
+The server and the CLI are committed pre-built and bundled (`mcp/dist/server.js` and `mcp/dist/cli.js` need no runtime `node_modules`), so there is nothing to install or build — only Node.js ≥ 22.13 and git.
 
 ```text
 git clone --depth 1 --branch v3.2.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
