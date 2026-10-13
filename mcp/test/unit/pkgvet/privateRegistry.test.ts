@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { customRegistryFor } from '../../../src/pkgvet/privateRegistry.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
+import { hangBound } from '../../helpers/timing.js';
 
 let project: string;
 let home: string;
@@ -563,7 +564,7 @@ describe('customRegistryFor — files that are not small regular files are not r
     expect(spawnSync('mkfifo', [join(project, '.npmrc')]).status).toBe(0);
     const t0 = Date.now();
     expect(customRegistryFor('npm', 'lodash', ctx())).toEqual(unreadable(join(project, '.npmrc')));
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(1000));
   });
 
   it('a registry found elsewhere still wins over an unreadable file', () => {
@@ -763,7 +764,7 @@ describe('customRegistryFor — a file reached through a network or device link 
         { kind: 'unreadable', source: join(home, '.config', 'pip', 'pip.conf'), what: 'configuration' },
         { kind: 'unreadable', source: join(home, '.nuget', 'NuGet'), what: 'directory' },
       ]);
-      expect(parsed.ms).toBeLessThan(5000);
+      expect(parsed.ms).toBeLessThan(hangBound(5000));
     },
     60_000,
   );

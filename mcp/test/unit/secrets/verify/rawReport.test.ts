@@ -29,7 +29,7 @@ import {
 } from '../../../../src/secrets/verify/rawReport.js';
 import { isVerifiableRule } from '../../../../src/secrets/verify/providers.js';
 import { longSecretReport, longValue } from '../../../helpers/longSecretReport.js';
-import { expectLinear, PERF_STRICT } from '../../../helpers/timing.js';
+import { expectLinear, expectNearReference, PERF_STRICT } from '../../../helpers/timing.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../../helpers/tsxNode.js';
 
 const GH = ['ghp', 'Z'.repeat(36)].join('_');
@@ -176,68 +176,80 @@ describe('sanitizeGitleaksReport', () => {
     // The first version cross-scrubbed every string of every item against
     // every distinct value: 3000 items took 16.8 s, 6000 took 66 s, and the
     // MCP server was frozen for all of it.
-    const items: Array<Record<string, unknown>> = [];
-    const message = `bulk import ${'x'.repeat(200)}`;
-    for (let n = 0; n < 2_500; n += 1) {
-      const secret = `tok_${String(n).padStart(6, '0')}_${'q'.repeat(24)}`;
-      const col = 1 + n * (secret.length + 1);
-      items.push(
-        item('generic-api-key', secret, {
-          File: 'dist/bundle.min.js',
-          StartColumn: col,
-          EndColumn: col + secret.length - 1,
-          Match: secret,
-          Commit: 'c0ffee',
-          Message: message,
-        }),
-      );
-    }
-    for (let n = 0; n < 2_500; n += 1) {
-      const secret = ['ghp', `${String(n).padStart(6, '0')}${'W'.repeat(30)}`].join('_');
-      items.push(
-        item('github-pat', secret, { File: `src/f${n}.ts`, StartLine: 1 + (n % 40), EndLine: 1 + (n % 40), Commit: 'c0ffee', Message: message }),
-      );
-    }
-    const text = JSON.stringify(items);
+    const bulk = (count: number): string => {
+      const items: Array<Record<string, unknown>> = [];
+      const message = `bulk import ${'x'.repeat(200)}`;
+      for (let n = 0; n < count; n += 1) {
+        const secret = `tok_${String(n).padStart(6, '0')}_${'q'.repeat(24)}`;
+        const col = 1 + n * (secret.length + 1);
+        items.push(
+          item('generic-api-key', secret, {
+            File: 'dist/bundle.min.js',
+            StartColumn: col,
+            EndColumn: col + secret.length - 1,
+            Match: secret,
+            Commit: 'c0ffee',
+            Message: message,
+          }),
+        );
+      }
+      for (let n = 0; n < count; n += 1) {
+        const secret = ['ghp', `${String(n).padStart(6, '0')}${'W'.repeat(30)}`].join('_');
+        items.push(
+          item('github-pat', secret, { File: `src/f${n}.ts`, StartLine: 1 + (n % 40), EndLine: 1 + (n % 40), Commit: 'c0ffee', Message: message }),
+        );
+      }
+      return JSON.stringify(items);
+    };
     const started = performance.now();
-    const out = sanitizeGitleaksReport(text, isVerifiableRule);
+    const out = sanitizeGitleaksReport(bulk(2_500), isVerifiableRule);
     const elapsed = performance.now() - started;
     expect(out?.secrets.filter((s) => s !== null)).toHaveLength(2_500);
     expect(out?.text).not.toContain('tok_000123_');
     expect(out?.text).not.toContain(['ghp', `000123${'W'.repeat(30)}`].join('_'));
-    // Measured ~50 ms; the budget is for a loaded machine, not a benchmark.
-    expect(elapsed).toBeLessThan(3_000);
-  });
+    // The shape, not the machine (review 8, finding 13): eight times the
+    // findings cost well under 22.6 times as much; quadratic reads ~64.
+    const texts = new Map([300, 2_400].map((n) => [n, bulk(n)]));
+    expectLinear('findings on one line, in one commit', (n) => sanitizeGitleaksReport(texts.get(n) ?? '', isVerifiableRule), 300);
+    // Measured ~50 ms: the absolute bound is for a quiet machine.
+    if (PERF_STRICT) expect(elapsed).toBeLessThan(3_000);
+  }, 60_000);
 
   it('stays near-linear when MANY findings overlap one wide region — every value still scrubbed from every Match', () => {
     // The adversarial shape the sweep alone did not bound: 5000 findings
     // (a custom rule each, say) whose spans all overlap one another in one
     // (File, Commit) group. Each Match was scrubbed value by value with all
     // 5000 values: 4000 findings took 5.9 s, the MCP server frozen for it.
+    const overlapping = (k: number): { text: string; values: string[] } => {
+      const values = Array.from({ length: k }, (_, n) => `sk_${String(n).padStart(6, '0')}_${'z'.repeat(20)}`);
+      const items = values.map((v, n) =>
+        item(`custom-rule-${n}`, v, {
+          File: 'config/huge.env',
+          Commit: 'c0ffee',
+          StartLine: 1,
+          EndLine: 100,
+          StartColumn: 1 + (n % 7),
+          EndColumn: 80,
+          // Its own value and both neighbours' — each in another finding's span.
+          Match: `${values[n - 1] ?? 'x'} ${v} ${values[n + 1] ?? 'y'}`,
+        }),
+      );
+      return { text: JSON.stringify(items), values };
+    };
     const k = 5_000;
-    const values = Array.from({ length: k }, (_, n) => `sk_${String(n).padStart(6, '0')}_${'z'.repeat(20)}`);
-    const items = values.map((v, n) =>
-      item(`custom-rule-${n}`, v, {
-        File: 'config/huge.env',
-        Commit: 'c0ffee',
-        StartLine: 1,
-        EndLine: 100,
-        StartColumn: 1 + (n % 7),
-        EndColumn: 80,
-        // Its own value and both neighbours' — each in another finding's span.
-        Match: `${values[n - 1] ?? 'x'} ${v} ${values[n + 1] ?? 'y'}`,
-      }),
-    );
+    const { text, values } = overlapping(k);
     const started = performance.now();
-    const out = sanitizeGitleaksReport(JSON.stringify(items), isVerifiableRule);
+    const out = sanitizeGitleaksReport(text, isVerifiableRule);
     const elapsed = performance.now() - started;
     const parsed = parse(out?.text);
     expect(parsed).toHaveLength(k);
     for (const v of values) expect(out?.text.includes(v), v).toBe(false);
     expect(parsed[1]?.['Match']).toBe(`${REDACTED} ${REDACTED} ${REDACTED}`);
-    // Measured ~60 ms; the budget is for a loaded machine, not a benchmark.
-    expect(elapsed).toBeLessThan(2_000);
-  });
+    const texts = new Map([600, 4_800].map((n) => [n, overlapping(n).text]));
+    expectLinear('findings overlapping one region', (n) => sanitizeGitleaksReport(texts.get(n) ?? '', isVerifiableRule), 600);
+    // Measured ~60 ms: the absolute bound is for a quiet machine.
+    if (PERF_STRICT) expect(elapsed).toBeLessThan(2_000);
+  }, 60_000);
 
   /**
    * Fix round 1: the common case — findings that overlap nothing, each with a
@@ -256,9 +268,21 @@ describe('sanitizeGitleaksReport', () => {
       expect(out).not.toBeNull();
       for (let n = 0; n < k; n += 1) expect(out?.text.includes(longValue(n).slice(40, 120)), `value ${n}`).toBe(false);
       expect(parse(out?.text)[0]?.['Match']).toBe(REDACTED);
-      // Measured ~80 ms (the per-run matcher: ~2 s); the budget is for a loaded machine.
-      expect(elapsed).toBeLessThan(1_000);
-    });
+      // Against a reference measured alternately in this process (review 8,
+      // finding 13): the work no sanitizer can skip — the same report parsed
+      // and serialised again. Measured at about 1 times it; the per-run matcher
+      // cost ~25 times a plain replace (460 ms against 19 ms for 1000
+      // findings), far past the bound.
+      const small = longSecretReport(1_000);
+      expectNearReference(
+        'findings that overlap nothing, against parsing and serialising the report',
+        () => sanitizeGitleaksReport(small, isVerifiableRule),
+        () => JSON.stringify(JSON.parse(small)),
+        { maxRatio: 8 },
+      );
+      // Measured ~80 ms (the per-run matcher: ~2 s): the absolute bound is for a quiet machine.
+      if (PERF_STRICT) expect(elapsed).toBeLessThan(1_000);
+    }, 60_000);
 
     it('fit in a small heap: nothing per run outlives the run', () => {
       // A fatal OOM kills the process, so it is watched from outside: a child

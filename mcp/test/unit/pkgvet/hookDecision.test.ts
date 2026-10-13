@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { decideInstallCommand, MAX_DEADLINE_MS, vetDeadlineMs, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
+import { hangBound } from '../../helpers/timing.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
 const OSV = 'https://api.osv.dev/v1/querybatch';
@@ -205,7 +206,7 @@ describe('decideInstallCommand', () => {
     const f = fakeFetch({ 'https://registry.npmjs.org/express': { hang: true }, [OSV]: { hang: true } });
     const t0 = Date.now();
     const d = await decideInstallCommand('npm install express', opts(f.fetchImpl, { budgetMs: 200 }));
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
     expect(d?.deny).toBeUndefined();
     expect(d?.context).toMatch(/could not vet/i);
     expect(d?.context).not.toMatch(/\bok\b|vetted and clean/i);
@@ -529,7 +530,7 @@ describe('Part Y — shapes that were never vetted: malicious denies, missing na
       const t0 = performance.now();
       expect(await decideInstallCommand('npm i express; '.repeat(6_800), opts(f.fetchImpl))).toBeNull();
       expect(f.calls.filter((u) => u.endsWith('/express'))).toHaveLength(1);
-      expect(performance.now() - t0).toBeLessThan(3000);
+      expect(performance.now() - t0).toBeLessThan(hangBound(3000));
     });
 
     it('past 50 distinct packages the rest are not looked up — and the answer says so', async () => {
@@ -814,14 +815,14 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
     const t0 = Date.now();
     const d = await decideInstallCommand(`npm i ${NAMES.join(' ')}`, opts(all404(), { cwd: mono }));
     const ms = Date.now() - t0;
-    expect(ms).toBeLessThan(8000);
+    expect(ms).toBeLessThan(hangBound(8000));
     for (const name of NAMES) expect(`${d?.deny ?? ''}${d?.context ?? ''}`).toContain(name);
   }, 60_000);
 
   it('offline, the workspace is not walked at all', async () => {
     const t0 = Date.now();
     const d = await decideInstallCommand(`npm i ${NAMES.join(' ')}`, opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '1' } }));
-    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(3000));
     expect(d?.context).toMatch(/not verified/);
     for (const name of NAMES) expect(d?.context).toContain(name);
   }, 60_000);
@@ -871,7 +872,7 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
       `npm i ${NAMES.join(' ')} zz-evil`,
       opts(all404('zz-evil'), { cwd: mono, deadlineAt: Date.now() + 1500 }),
     );
-    expect(Date.now() - t0).toBeLessThan(4000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(4000));
     expect(d?.deny).toMatch(/MAL-2026-9/);
   }, 60_000);
 });

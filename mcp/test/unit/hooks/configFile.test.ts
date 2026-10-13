@@ -23,7 +23,7 @@ import {
   readSmallTextFile,
   walkLinksUnder,
 } from '../../../src/hooks/configFile.js';
-import { expectNearReference } from '../../helpers/timing.js';
+import { expectNearReference, hangBound } from '../../helpers/timing.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 
 const POSIX = process.platform !== 'win32';
@@ -270,7 +270,7 @@ describe('readSmallJsonFile', () => {
     expect(made.status).toBe(0);
     const t0 = Date.now();
     expect(readSmallJsonFile(p)).toMatchObject({ status: 'refused', reason: 'not-a-regular-file' });
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(1000));
   });
 
   it.skipIf(!POSIX)('a symlink to /dev/zero is refused (POSIX only: Windows has no /dev/zero)', () => {
@@ -278,7 +278,7 @@ describe('readSmallJsonFile', () => {
     symlinkSync('/dev/zero', p);
     const t0 = Date.now();
     expect(readSmallJsonFile(p)).toMatchObject({ status: 'refused', reason: 'not-a-regular-file' });
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(1000));
   });
 
   it('a symlink to a small regular file is followed and read', () => {
@@ -341,7 +341,7 @@ describe('readSmallJsonFile — what it opened, not what the path said', () => {
         expect(r.timedOut).toBe(false);
         expect(r.code).toBe(0);
         expect(r.counts).toEqual({ 'refused:not-a-regular-file': 1 });
-        expect(r.readMs).toBeLessThan(2000);
+        expect(r.readMs).toBeLessThan(hangBound(2000));
       } finally {
         unlinkSync(link);
         server.close();
@@ -427,7 +427,7 @@ describe('readSmallJsonFile — a link to the network is refused before anything
       const r = await readInChild(cfg, 1, 45_000, dir);
       expect(r.timedOut).toBe(false);
       expect(r.counts).toEqual({ 'refused:remote-link': 1 });
-      expect(r.readMs).toBeLessThan(2000);
+      expect(r.readMs).toBeLessThan(hangBound(2000));
     },
     60_000,
   );
@@ -439,7 +439,7 @@ describe('readSmallJsonFile — a link to the network is refused before anything
       const r = await readInChild(join(dir, '.guardian', 'hooks.config.json'), 1, 45_000, dir);
       expect(r.timedOut).toBe(false);
       expect(r.counts).toEqual({ 'refused:remote-link': 1 });
-      expect(r.readMs).toBeLessThan(2000);
+      expect(r.readMs).toBeLessThan(hangBound(2000));
     },
     60_000,
   );

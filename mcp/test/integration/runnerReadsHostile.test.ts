@@ -31,6 +31,7 @@ import type { StackSnapshot } from '../../src/types.js';
 import { inventoryWordPressSource } from '../../src/wordpress/sourceInventory.js';
 import { CAN_SYMLINK, POSIX } from '../helpers/fsCapabilities.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -44,7 +45,7 @@ const NOT_ROOT = POSIX && typeof process.getuid === 'function' && process.getuid
 const fast = <T>(fn: () => T): T => {
   const t0 = Date.now();
   const out = fn();
-  expect(Date.now() - t0).toBeLessThan(3000);
+  expect(Date.now() - t0).toBeLessThan(hangBound(3000));
   return out;
 };
 
@@ -172,7 +173,7 @@ describe('repoConfig — a `when` file that cannot be read is named, never dropp
     mkfifo(join(p, 'tox.ini'));
     const t0 = Date.now();
     const named = await honouredFiles(p, 'radon');
-    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(3000));
     // Round 2 (I3): a config that could not be checked is never taken for absent.
     expect(named.map((h) => h.path)).toEqual(['pyproject.toml', 'tox.ini']);
     for (const h of named) expect(h.decides).toMatch(/if it applies: present, not checked: not a regular file/);

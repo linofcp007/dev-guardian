@@ -97,6 +97,27 @@ function record(entry: Record<string, unknown>): void {
 /** `GUARDIAN_PERF_STRICT=1`: the absolute time bounds run (a quiet machine). */
 export const PERF_STRICT = process.env['GUARDIAN_PERF_STRICT'] === '1';
 
+/**
+ * The ceiling, without `GUARDIAN_PERF_STRICT`, of a test whose defect is a
+ * WAIT rather than a cost — a read that blocks on a FIFO, `/dev/zero` or a
+ * network path, a lookup that ignores its budget, work piled past a deadline:
+ * under the 15 s a hook gets before Claude Code kills it (what the property
+ * allows), and still short of every such defect (an unbounded wait; 16.5 s,
+ * 57 s and 136 s, measured).
+ */
+export const HANG_BOUND_MS = 12_000;
+
+/**
+ * A wall-clock bound for a wait-shaped defect (review 8, finding 13): the
+ * tight `strictMs` on a quiet machine (`GUARDIAN_PERF_STRICT=1`), else
+ * {@link HANG_BOUND_MS}. A fixed "under 1 s" measured the machine — this file
+ * records 17x slowdowns under load. A cost-shaped defect (superlinear in the
+ * input) takes {@link expectLinear} instead.
+ */
+export function hangBound(strictMs: number): number {
+  return PERF_STRICT ? strictMs : Math.max(strictMs, HANG_BOUND_MS);
+}
+
 /** The shortest a timed chunk may be; a cheaper call is repeated inside it. */
 export const MIN_CHUNK_MS = 5;
 

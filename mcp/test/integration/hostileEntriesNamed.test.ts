@@ -28,6 +28,7 @@ import { ingestTarget } from '../../src/skillaudit/ingest.js';
 import { inventoryWordPressSource } from '../../src/wordpress/sourceInventory.js';
 import { CAN_SYMLINK, POSIX } from '../helpers/fsCapabilities.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -162,7 +163,7 @@ describe('M4 — scan_skill names a FIFO it skipped (POSIX)', () => {
     mkfifo(join(p, 'pipe'));
     const t0 = Date.now();
     const r = await ingestTarget(p);
-    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(5_000));
     if (!r.ok) throw new Error(r.message);
     expect(r.skipped).toBeGreaterThanOrEqual(1);
     expect(r.warnings).toContain('not read: pipe (not a regular file: a FIFO, a device or a socket)');
@@ -176,6 +177,6 @@ describe('M5 — a FIFO .git/shallow reads as undetermined, and says so (POSIX)'
     mkfifo(join(p, '.git', 'shallow'));
     const t0 = Date.now();
     expect(await shallowBoundary(p)).toEqual([SHALLOW_UNDETERMINED]);
-    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(15_000));
   }, 30_000);
 });

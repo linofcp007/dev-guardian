@@ -20,6 +20,7 @@ import { freshPlugin, projectDir } from '../helpers/historySeed.js';
 import { callTool, importOk, sarifLog, sarifResult, sarifRun, sarifText, scanRow, scansOf, writeSarif } from '../helpers/sarif.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { MCP_ROOT } from '../helpers/tsxNode.js';
+import { hangBound } from '../helpers/timing.js';
 
 vi.setConfig({ testTimeout: 60_000 });
 
@@ -98,7 +99,7 @@ describe('T-13 only a regular file within the cap is read (US-1.AC-13)', () => {
     expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
     const t0 = Date.now();
     const r = await callTool('import_sarif', { project_path: dir, sarif_path: fifo }, s.plugin);
-    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(5000));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe('refused_file');
     expect(scansOf(s.plugin, dir)).toEqual([]);
@@ -111,7 +112,7 @@ describe('T-13 only a regular file within the cap is read (US-1.AC-13)', () => {
     symlinkSync('/dev/zero', link);
     const t0 = Date.now();
     const r = await callTool('import_sarif', { project_path: dir, sarif_path: link }, s.plugin);
-    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(5000));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe('refused_file');
     expect(scansOf(s.plugin, dir)).toEqual([]);

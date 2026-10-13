@@ -67,7 +67,12 @@ number of milliseconds (`test/helpers/timing.ts`): a ratio of 8x the input,
 and — where a 16 KB cap keeps a slow rule's total linear — a ceiling against
 a benign input of the same size. A new one must fail by its assertion with
 the defect it guards reintroduced in `src/`, and pass under load
-(`GUARDIAN_TEST_TIMING_LOG=<file>` records every reading).
+(`GUARDIAN_TEST_TIMING_LOG=<file>` records every reading). A defect that is
+a WAIT rather than a cost — a read blocked on a FIFO or a network path, a
+budget ignored — takes `hangBound(strictMs)`: the tight bound under
+`GUARDIAN_PERF_STRICT=1`, else 12 s, under a hook's 15 s kill and short of
+every such defect. No test asserts "under N ms" on its own (review 8,
+finding 13).
 `GUARDIAN_PERF_STRICT=1` adds or tightens absolute bounds for a quiet machine
 — see [`docs/env.md`](../../docs/env.md). The FIFO-swap test in
 `test/unit/hooks/configFile.test.ts` reads `/proc` to tell a killed process

@@ -26,6 +26,7 @@ import { claudeDesktopConfigPath } from '../../../src/hostsetup/mcpConfig.js';
 import { detectOs } from '../../../src/platform/osDetect.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -115,7 +116,7 @@ function expectRefused(r: ChildRead, label: string, refusal: string): void {
   expect(s?.exists).toBe(true);
   expect(s?.refusal).toBe(refusal);
   expect(typeof s?.parseError).toBe('string');
-  expect(r.readMs).toBeLessThan(5_000);
+  expect(r.readMs).toBeLessThan(hangBound(5_000));
 }
 
 describe('readConfigSources: a project config that would hang a plain read', () => {

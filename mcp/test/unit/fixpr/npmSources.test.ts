@@ -18,6 +18,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { checkNpmSources, installRefusal, npmSourcesRefusal } from '../../../src/fixpr/repoPackageConfig.js';
 import { CAN_SYMLINK, POSIX } from '../../helpers/fsCapabilities.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -111,7 +112,7 @@ describe('every file npm reads, at any depth', () => {
     expect(spawnSync('mkfifo', [join(dir, 'package-lock.json')]).status).toBe(0);
     const t0 = Date.now();
     expect(checkNpmSources(dir).unchecked).toEqual([expect.stringMatching(/^package-lock\.json \(/)]);
-    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(3_000));
   });
 
   it("yarn.lock's text: a file: URL to a host is named, the registry's https URLs are not", () => {
