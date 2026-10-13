@@ -66,7 +66,7 @@ export interface SemgrepFixPlan {
   dir: string;
 }
 
-export type SemgrepFixPlanResult = { ok: true; plan: SemgrepFixPlan } | { ok: false; reason: string };
+type SemgrepFixPlanResult = { ok: true; plan: SemgrepFixPlan } | { ok: false; reason: string };
 
 /** Does Semgrep's check_id `checkId` name rule `id` of the file `ruleFile`? */
 export function checkIdMatches(checkId: string, ruleFile: string, id: string): boolean {

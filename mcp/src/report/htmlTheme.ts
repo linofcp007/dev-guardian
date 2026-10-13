@@ -197,7 +197,7 @@ const FOOTER: Record<Lang, string> = {
     'de Semgrep envía métricas &mdash; define <code>local_only: true</code> para evitarlo',
 };
 
-export interface HtmlDocument {
+interface HtmlDocument {
   title: string;
   subtitle?: string;
   /** Body blocks, already rendered to HTML. */

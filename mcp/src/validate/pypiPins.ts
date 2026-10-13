@@ -34,7 +34,7 @@ import type { PypiPin, PypiPinResolver } from './dependencyProvider.js';
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 
 /** Whether a project-relative POSIX path is a manifest this module reads. */
-export function isPypiPinFile(path: string): boolean {
+function isPypiPinFile(path: string): boolean {
   const lower = path.toLowerCase();
   const base = lower.split('/').pop() ?? '';
   if (/^requirements.*\.txt$/.test(base) || /-requirements\.txt$/.test(base)) return true;

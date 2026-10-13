@@ -11393,7 +11393,7 @@ function describeYamlRefusal(parsed, limits = YAML_CONFIG_LIMITS) {
       return `not valid YAML${parsed.detail !== void 0 ? ` (${parsed.detail.split("\n")[0] ?? ""})` : ""}`;
   }
 }
-var import_yaml, YAML_CONFIG_LIMITS, YAML_SPEC_LIMITS, YAML_CONFIG_MAX_NODES, YAML_SPEC_MAX_NODES, YAML_INDICATORS;
+var import_yaml, YAML_CONFIG_LIMITS, YAML_SPEC_LIMITS, YAML_CONFIG_MAX_NODES, YAML_INDICATORS;
 var init_boundedParse = __esm({
   "src/platform/boundedParse.ts"() {
     "use strict";
@@ -11403,7 +11403,6 @@ var init_boundedParse = __esm({
     YAML_CONFIG_LIMITS = { maxBytes: 1024 * 1024, maxNodes: 5e4, maxDepth: 64, maxExpanded: 5e5, maxAliases: 1e3 };
     YAML_SPEC_LIMITS = { maxBytes: 5 * 1024 * 1024, maxNodes: 1e5, maxDepth: 64, maxExpanded: 1e6, maxAliases: 1e3 };
     YAML_CONFIG_MAX_NODES = YAML_CONFIG_LIMITS.maxNodes;
-    YAML_SPEC_MAX_NODES = YAML_SPEC_LIMITS.maxNodes;
     YAML_INDICATORS = new Set([..."\n-?:,[]{}&*!|>'\"%@`#"].map((c) => c.charCodeAt(0)));
   }
 });

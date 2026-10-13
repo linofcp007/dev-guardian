@@ -127,7 +127,7 @@ export const FINDINGS_INSERT_CHUNK = 2000;
  * transactions: longer than the longest poll interval of SQLite's default
  * busy handler (100 ms).
  */
-export const FINDINGS_INSERT_GAP_MS = 120;
+const FINDINGS_INSERT_GAP_MS = 120;
 
 /**
  * The pause after a transaction that held the write lock `heldMs`: half of
@@ -138,11 +138,11 @@ export const FINDINGS_INSERT_GAP_MS = 120;
  * third of the insert's time at most, and nothing for fast chunks' tiny
  * waits beyond the 20 ms floor (Windows sleeps in ~16 ms steps).
  */
-export function insertGapMs(heldMs: number): number {
+function insertGapMs(heldMs: number): number {
   return Math.min(FINDINGS_INSERT_GAP_MS, Math.max(20, Math.ceil(heldMs / 2) + 5));
 }
 
-export interface BulkInsertOptions {
+interface BulkInsertOptions {
   /** Rows per write transaction. Default {@link FINDINGS_INSERT_CHUNK}. */
   chunkSize?: number;
   /** A fixed pause between transactions. Default: {@link insertGapMs} of the last one. */

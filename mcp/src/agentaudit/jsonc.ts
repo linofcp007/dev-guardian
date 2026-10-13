@@ -108,7 +108,7 @@ function stripTrailingCommas(text: string): string {
 }
 
 /** Strips comments and trailing commas from JSONC text, leaving strict-JSON input unchanged. */
-export function stripJsonc(text: string): string {
+function stripJsonc(text: string): string {
   return stripTrailingCommas(stripComments(text));
 }
 

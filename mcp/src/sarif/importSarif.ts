@@ -64,15 +64,6 @@ export interface SarifImportResult {
   runs: SarifImportRun[];
 }
 
-/** `meta` of a `sarif_import` scan row. */
-export interface SarifImportMeta {
-  source_tool: string;
-  source_version?: string;
-  /** Relative to the project, or the basename when the log was outside it. */
-  source_file: string;
-  counts: SarifImportCounts;
-}
-
 export interface SarifImportContext {
   /** Canonical project root the log's locations are resolved against. */
   projectPath: string;

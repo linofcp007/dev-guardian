@@ -63,10 +63,10 @@ const MAX_README_BYTES = 16384;
 /** `wp-includes/version.php` is a few KB; `$wp_version` sits near its top. */
 const MAX_VERSION_PHP_BYTES = 64 * 1024;
 /** What one inventory may read in all: a large site has a few thousand plugin files, each read for 8 KiB. */
-export const INVENTORY_BUDGET_BYTES = 64 * 1024 * 1024;
-export const INVENTORY_BUDGET_FILES = 20_000;
+const INVENTORY_BUDGET_BYTES = 64 * 1024 * 1024;
+const INVENTORY_BUDGET_FILES = 20_000;
 
-export interface WpComponentInventory {
+interface WpComponentInventory {
   /** Directory name under `wp-content/plugins/` or `wp-content/themes/`
    *  (or the file's basename, sans `.php`, for a single-file plugin) —
    *  this is the slug wp.org and the Wordfence feed both key by. */

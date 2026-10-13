@@ -38,7 +38,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const PHPCS_TOOL_NAME = 'phpcs';
+const PHPCS_TOOL_NAME = 'phpcs';
 
 export const phpcsParser: ScannerParser = {
   name: PHPCS_TOOL_NAME,

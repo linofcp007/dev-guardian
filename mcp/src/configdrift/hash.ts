@@ -42,7 +42,7 @@ import { stripProvenanceHeader } from './header.js';
 export { stripProvenanceHeader };
 
 /** The comparable form of a config file's text. */
-export function canonicaliseConfig(text: string): string {
+function canonicaliseConfig(text: string): string {
   const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const lf = withoutBom.replace(/\r\n?/g, '\n');
   return stripProvenanceHeader(lf).replace(/\n+$/, '');

@@ -21,13 +21,13 @@ import { makeFinding } from '../runners/scannerParsers/index.js';
 import type { Finding, Severity } from '../types.js';
 
 /** A key segment of a field path (`inputSchema.properties.<key>`). */
-export const MAX_PATH_SEGMENT_CHARS = 64;
+const MAX_PATH_SEGMENT_CHARS = 64;
 /** A whole field path. */
 export const MAX_PATH_CHARS = 256;
 /** A finding's message, in UTF-8 bytes. */
-export const MAX_MESSAGE_BYTES = 2048;
-export const MAX_TITLE_BYTES = 512;
-export const MAX_SNIPPET_BYTES = 1024;
+const MAX_MESSAGE_BYTES = 2048;
+const MAX_TITLE_BYTES = 512;
+const MAX_SNIPPET_BYTES = 1024;
 /** One reason, warning or list entry of a server's report. */
 export const MAX_REPORT_STRING_BYTES = 2048;
 export const MAX_LIST_ENTRY_BYTES = 256;
@@ -36,7 +36,7 @@ export const MAX_LIST_ENTRIES = 100;
 
 export const MAX_FINDINGS_PER_SERVER = 50;
 export const MAX_FINDINGS_TOTAL = 500;
-export const CAPPED_RULE_ID = 'mcp-audit-findings-capped';
+const CAPPED_RULE_ID = 'mcp-audit-findings-capped';
 
 const ELLIPSIS = '…';
 const ELLIPSIS_BYTES = 3;
@@ -159,7 +159,7 @@ function summary(tally: Tally, where: string, filePath: string): Finding {
   );
 }
 
-export interface ServerFindings {
+interface ServerFindings {
   /** How the summary names the server: `MCP server 'x'`. */
   label: string;
   /** Its config file: the summary's `file_path`. */

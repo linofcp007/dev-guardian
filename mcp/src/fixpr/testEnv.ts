@@ -29,7 +29,7 @@ import { packageManagerEnv } from './testCommandEnv.js';
 /** How long one dependency install may take. */
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
 
-export type TestEnvironment =
+type TestEnvironment =
   | { ok: true; /** The command run, or null when nothing needed preparing. */ command: string | null }
   | { ok: false; command: string; reason: string };
 

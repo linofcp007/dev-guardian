@@ -75,7 +75,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const ZIZMOR_TOOL_NAME = 'zizmor';
+const ZIZMOR_TOOL_NAME = 'zizmor';
 
 export const zizmorParser: ScannerParser = {
   name: ZIZMOR_TOOL_NAME,

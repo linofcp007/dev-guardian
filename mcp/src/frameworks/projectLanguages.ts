@@ -110,11 +110,11 @@ export interface ProjectLanguages {
 }
 
 /** What `storage.stack` offers, and all this needs of it. */
-export interface StackSnapshotSource {
+interface StackSnapshotSource {
   getLatestForProject(projectPath: string): { captured_at: string; snapshot: unknown } | null;
 }
 
-export interface FileLanguages {
+interface FileLanguages {
   languages: SourceLanguage[] | null;
   /** How the files were listed. */
   listing: 'git' | 'walk';
@@ -123,7 +123,7 @@ export interface FileLanguages {
   skipped?: Record<string, string[]>;
 }
 
-export interface WalkOptions {
+interface WalkOptions {
   /** Directories the walk visits at most. Default {@link MAX_DIRS}. */
   maxDirs?: number;
   /** Read git's listing inside a work tree. Default true. */
@@ -183,7 +183,7 @@ const SEMGREP_DEFAULT_IGNORE = [
  * level only (case-insensitive). A language found only under these is
  * peripheral — counted, named, never fully tested.
  */
-export const PERIPHERAL_TOP_DIRS: ReadonlySet<string> = new Set([
+const PERIPHERAL_TOP_DIRS: ReadonlySet<string> = new Set([
   '__mocks__',
   '__tests__',
   'bower_components',
@@ -530,7 +530,7 @@ export async function languagesFromFilesAsync(root: string, opts: WalkOptions = 
 // ---------------------------------------------------------------- files too large for Semgrep
 
 /** Semgrep's `--max-target-bytes` default (1.176.1: "Defaults to 1000000 bytes"): a larger target is ignored. */
-export const SEMGREP_MAX_TARGET_BYTES = 1_000_000;
+const SEMGREP_MAX_TARGET_BYTES = 1_000_000;
 
 export interface OversizedFile {
   /** Project-relative, `/`-separated. */
@@ -538,7 +538,7 @@ export interface OversizedFile {
   bytes: number;
 }
 
-export interface OversizedFiles {
+interface OversizedFiles {
   files: OversizedFile[];
   /** Why the listing may have missed some. Absent: it did not. */
   incomplete?: string;
@@ -727,7 +727,7 @@ function combine(snapshot: { at: string; languages: SourceLanguage[] } | null, f
   return out;
 }
 
-export interface ResolveOptions {
+interface ResolveOptions {
   /** The tree to list, when it is not the project directory (a review's head checkout). */
   walkRoot?: string;
   walk?: WalkOptions;

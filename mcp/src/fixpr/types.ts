@@ -94,7 +94,7 @@ export interface ScanVerdict {
  *  plus `not_run` for a project with no derivable test command, and
  *  `unattributed` when the fix's run failed and the base-commit tree to
  *  compare against could not be built — no PR either way). */
-export type TestOutcome = 'passed' | 'broken_by_fix' | 'already_failing' | 'not_run' | 'unattributed';
+type TestOutcome = 'passed' | 'broken_by_fix' | 'already_failing' | 'not_run' | 'unattributed';
 
 /** The test differential's verdict — produced by `verify.ts#judgeTests`. */
 export interface TestVerdict {

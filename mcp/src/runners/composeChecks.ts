@@ -13,7 +13,7 @@ import { parseYamlBounded } from '../platform/boundedParse.js';
 import type { Category, Finding } from '../types.js';
 import { makeFinding } from './scannerParsers/index.js';
 
-export const COMPOSE_TOOL_NAME = 'docker-compose';
+const COMPOSE_TOOL_NAME = 'docker-compose';
 const CATEGORY: Category = 'security';
 
 export function checkCompose(text: string, filePath: string): Finding[] {

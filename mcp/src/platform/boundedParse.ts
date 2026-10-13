@@ -85,13 +85,12 @@ export const YAML_SPEC_LIMITS: YamlLimits = { maxBytes: 5 * 1024 * 1024, maxNode
 
 /** Kept for callers that name the bound: the configuration's indicator bound. */
 export const YAML_CONFIG_MAX_NODES = YAML_CONFIG_LIMITS.maxNodes;
-export const YAML_SPEC_MAX_NODES = YAML_SPEC_LIMITS.maxNodes;
 
 /** Every character that can open, separate or decorate a YAML node (see the module doc). */
 const YAML_INDICATORS: ReadonlySet<number> = new Set([...'\n-?:,[]{}&*!|>\'"%@`#'].map((c) => c.charCodeAt(0)));
 
 /** Why a YAML text is refused before parsing, or null. */
-export type YamlRefusal = 'too-large' | 'too-complex' | 'too-deep' | 'too-expanded';
+type YamlRefusal = 'too-large' | 'too-complex' | 'too-deep' | 'too-expanded';
 
 /** Gates 1 and 2 (bytes, indicators) — no parser involved. */
 function preGate(text: string, limits: YamlLimits): YamlRefusal | null {
@@ -249,7 +248,7 @@ function expandedSize(doc: Document.Parsed, max: number, maxAliases: number): nu
   return 0;
 }
 
-export type BoundedYamlDocument =
+type BoundedYamlDocument =
   | { ok: true; doc: Document.Parsed }
   | { ok: false; reason: YamlRefusal | 'invalid'; detail?: string };
 

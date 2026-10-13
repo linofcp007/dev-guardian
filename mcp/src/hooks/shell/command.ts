@@ -177,7 +177,7 @@ export function cmdSwitch(word: string): string {
   return /^\/\/[A-Za-z?]/.test(word) ? word.slice(1) : word;
 }
 
-export interface Redirect {
+interface Redirect {
   /** What precedes the operator in the same word: `''`, an fd number, `&`, or an ordinary word (`x>f`). */
   prefix: string;
   /** `>`, `>>`, `>|`, `>&`, `<`, `<>`, `<<<`, `<&`, … */

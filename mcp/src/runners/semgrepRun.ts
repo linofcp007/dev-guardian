@@ -44,7 +44,7 @@ export const SEMGREP_COMMAND = 'semgrep';
  * read its old reports (review 8, finding 14). Unanchored: a sub-project's
  * `.guardian/` too.
  */
-export const SEMGREP_EXCLUDE_GUARDIAN_DIR = '--exclude=.guardian';
+const SEMGREP_EXCLUDE_GUARDIAN_DIR = '--exclude=.guardian';
 
 /**
  * The flags every Semgrep scan of a project takes besides its rules: the
@@ -76,7 +76,7 @@ export function semgrepSpawn(env: NodeJS.ProcessEnv | undefined): { command: str
   return { command: SEMGREP_COMMAND, env: { ...pythonUtf8Env(env), ...SEMGREP_NO_VERSION_CHECK_ENV } };
 }
 
-export type SemgrepRunOptions = Omit<ProcessRunOptions, 'command'>;
+type SemgrepRunOptions = Omit<ProcessRunOptions, 'command'>;
 
 /** Run Semgrep — through `run` when the caller injects one (create_fix_pr's worktree runner). */
 export function runSemgrep(

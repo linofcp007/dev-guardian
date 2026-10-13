@@ -45,7 +45,7 @@ function describeError(e: unknown, signal: AbortSignal): string {
   return String(e);
 }
 
-export async function fetchJson(url: string, http: HttpOptions, headers: Record<string, string> = {}): Promise<JsonResult> {
+async function fetchJson(url: string, http: HttpOptions, headers: Record<string, string> = {}): Promise<JsonResult> {
   try {
     const res = await http.fetchImpl(url, { headers: { accept: 'application/json', ...headers }, signal: http.signal });
     if (res.status === 404 || res.status === 410) return { kind: 'not_found' };
@@ -85,7 +85,7 @@ function stringRecord(x: unknown): Record<string, string> {
   return out;
 }
 
-export function npmDocUrl(name: string): string {
+function npmDocUrl(name: string): string {
   return `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
 }
 

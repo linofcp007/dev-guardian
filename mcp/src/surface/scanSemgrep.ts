@@ -16,7 +16,7 @@ import { scannerAvailable } from '../tools/scanHelpers.js';
 import type { PartialParse, ToolRun } from '../types.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
 
-export interface SemgrepRunOptions {
+interface SemgrepRunOptions {
   projectPath: string;
   rulesPath: string;
   outFile: string;
@@ -25,7 +25,7 @@ export interface SemgrepRunOptions {
   extraArgs?: readonly string[];
 }
 
-export interface SemgrepInvocation {
+interface SemgrepInvocation {
   /** The PROCESS verdict alone (exit code, outcome) — never the report's; see {@link judgeSurfaceReport}. */
   toolRun: ToolRun;
   /** The process that ran, or null when the Docker fallback could not even stage the rules. */
@@ -246,7 +246,7 @@ function countListedRouteTargets(projectPath: string, files: readonly string[], 
  *   no target, one naming the rule file itself), or per-file errors on a run
  *   that scanned nothing. Nothing persisted.
  */
-export type SurfaceReportVerdict = SemgrepVerdict;
+type SurfaceReportVerdict = SemgrepVerdict;
 
 /**
  * Global Constraint 3 for the surface scan, as the controller ruled it for

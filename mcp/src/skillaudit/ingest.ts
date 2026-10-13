@@ -48,7 +48,7 @@ export interface IngestedFile {
   bytes: number;
 }
 
-export type TargetKind = 'directory' | 'file' | 'zip' | 'git' | 'url';
+type TargetKind = 'directory' | 'file' | 'zip' | 'git' | 'url';
 
 /**
  * A link the walk refused to follow — reported instead of read, per the
@@ -67,7 +67,7 @@ export interface SymlinkEntry {
   kind: 'symlink' | 'escaped_directory';
 }
 
-export interface IngestSuccess {
+interface IngestSuccess {
   ok: true;
   root: string;
   kind: TargetKind;
@@ -81,13 +81,13 @@ export interface IngestSuccess {
   cleanup(): void;
 }
 
-export interface IngestFailure {
+interface IngestFailure {
   ok: false;
   code: 'target_not_found' | 'unsupported_target';
   message: string;
 }
 
-export type IngestResult = IngestSuccess | IngestFailure;
+type IngestResult = IngestSuccess | IngestFailure;
 
 const MAX_FILES = 4000;
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024;

@@ -15,8 +15,8 @@
 import { createHash } from 'node:crypto';
 import type { ProbeRequest, ProbeResult } from './types.js';
 
-export const BODY_PREFIX_BYTES = 8192;
-export const BODY_READ_CAP_BYTES = 256 * 1024;
+const BODY_PREFIX_BYTES = 8192;
+const BODY_READ_CAP_BYTES = 256 * 1024;
 export const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 export const DEFAULT_CONCURRENCY = 4;
 

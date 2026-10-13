@@ -29,7 +29,7 @@ interface SurfaceRow {
   json: string;
 }
 
-export interface InsertSurfaceSnapshotInput {
+interface InsertSurfaceSnapshotInput {
   project_path: string;
   tree_hash: string;
   snapshot: AttackSurfaceSnapshot;

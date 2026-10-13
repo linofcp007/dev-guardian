@@ -45,7 +45,7 @@ export interface SkippedSpec {
  */
 export type PkgVerdict = 'block' | 'warn' | 'unknown' | 'ok';
 
-export type CheckStatus = 'pass' | 'warn' | 'fail' | 'unknown' | 'not_applicable';
+type CheckStatus = 'pass' | 'warn' | 'fail' | 'unknown' | 'not_applicable';
 
 export interface CheckResult {
   status: CheckStatus;

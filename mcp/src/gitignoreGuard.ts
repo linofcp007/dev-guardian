@@ -105,7 +105,7 @@ const OLD_DIRECTORY_PATTERNS: ReadonlySet<string> = new Set([
   '!.guardian/baseline.json',
 ]);
 
-export interface GitignoreGuardResult {
+interface GitignoreGuardResult {
   updated: boolean;
   /**
    * `refused`: the `.gitignore` is a link (a junction or a dangling link
@@ -118,7 +118,7 @@ export interface GitignoreGuardResult {
 }
 
 /** The largest `.gitignore` this reads; a real one is a few KB. */
-export const MAX_GITIGNORE_BYTES = 4 * 1024 * 1024;
+const MAX_GITIGNORE_BYTES = 4 * 1024 * 1024;
 
 function fromWriteFailure(w: Exclude<ProjectWriteResult, { ok: true }>): GitignoreGuardResult {
   return {
@@ -258,7 +258,7 @@ function dominantEol(content: string): '\r\n' | '\n' {
 }
 
 /** Where {@link ensureGuardianDirIgnored} writes, relative to the project. */
-export const DOT_GUARDIAN_GITIGNORE = '.guardian/.gitignore';
+const DOT_GUARDIAN_GITIGNORE = '.guardian/.gitignore';
 
 /**
  * The `.guardian/.gitignore` the CLI drops in a project it scans: everything

@@ -52,11 +52,11 @@ export interface KevCatalogStorage {
   };
 }
 
-export type CachedKevCatalogResult =
+type CachedKevCatalogResult =
   | { ok: true; entries: Map<string, string>; stale: boolean; fetched_at: string }
   | { ok: false; reason: string };
 
-export interface GetKevCatalogOptions {
+interface GetKevCatalogOptions {
   /** Injected clock — never call `Date.now()` here directly. */
   now?: number;
   /** Skips the network step; serves a cached catalog (even stale) if one

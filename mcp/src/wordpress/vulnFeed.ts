@@ -59,14 +59,14 @@ import type { Finding, Severity } from '../types.js';
 import type { WpSourceInventory } from './sourceInventory.js';
 
 /** Written to `findings.tool` for every match this module produces. */
-export const WORDFENCE_TOOL_NAME = 'wordfence';
+const WORDFENCE_TOOL_NAME = 'wordfence';
 
 const WORDFENCE_BASE_URL = 'https://www.wordfence.com/api/intelligence/v3';
 const WORDFENCE_PRODUCTION_PATH = '/vulnerabilities/production';
 
 /** The feed is refreshed at most this often, in aggregate across every
  *  caller — see the module header. */
-export const WORDFENCE_FEED_TTL_MS = 24 * 60 * 60 * 1000;
+const WORDFENCE_FEED_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** The feed is tens of MB over the wire; a default long enough for a slow
  *  connection to finish, short enough not to hang a tool call forever. */
@@ -173,9 +173,9 @@ export function versionInRange(version: string, range: WordfenceVersionRange): b
 
 // ---------------------------------------------------------------------- feed shape
 
-export type WordfenceSoftwareType = 'core' | 'plugin' | 'theme';
+type WordfenceSoftwareType = 'core' | 'plugin' | 'theme';
 
-export interface WordfenceSoftwareEntry {
+interface WordfenceSoftwareEntry {
   type: WordfenceSoftwareType;
   name: string;
   slug: string;
@@ -186,13 +186,13 @@ export interface WordfenceSoftwareEntry {
   remediation?: string;
 }
 
-export interface WordfenceCvss {
+interface WordfenceCvss {
   vector: string;
   score: number;
   rating: string;
 }
 
-export interface WordfenceVulnerabilityRecord {
+interface WordfenceVulnerabilityRecord {
   id: string;
   title: string;
   description?: string;
@@ -212,7 +212,7 @@ export type WordfenceFetchResult =
   | { ok: true; feed: WordfenceFeed }
   | { ok: false; reason: string };
 
-export interface WordfenceFetchOptions {
+interface WordfenceFetchOptions {
   apiKey: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -221,7 +221,7 @@ export interface WordfenceFetchOptions {
 
 /** One HTTP round trip to the production feed. No caching, no offline check
  *  — {@link getWordfenceFeed} below wraps this with both. */
-export async function fetchWordfenceFeed(opts: WordfenceFetchOptions): Promise<WordfenceFetchResult> {
+async function fetchWordfenceFeed(opts: WordfenceFetchOptions): Promise<WordfenceFetchResult> {
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === 'function' ? fetch : undefined);
   if (fetchImpl === undefined) return { ok: false, reason: 'no fetch implementation available' };
 
@@ -264,11 +264,11 @@ interface CachedFeedFile {
   feed: WordfenceFeed;
 }
 
-export type WordfenceFeedResult =
+type WordfenceFeedResult =
   | { ok: true; feed: WordfenceFeed; stale: boolean; fetched_at: string }
   | { ok: false; reason: string };
 
-export interface GetWordfenceFeedOptions {
+interface GetWordfenceFeedOptions {
   /** Wordfence Intelligence API token. Falls back to `WORDFENCE_API_KEY`
    *  env when omitted (via `opts.env`, default `process.env`). No key at
    *  all (env unset and no override) is reported as `{ ok: false }` with a
@@ -445,7 +445,7 @@ function allComponents(inventory: WpSourceInventory): InventoryComponent[] {
   return out;
 }
 
-export interface ComponentCoverage {
+interface ComponentCoverage {
   /** Every installed component considered: core + plugins (incl.
    *  mu-plugins) + themes. */
   total: number;

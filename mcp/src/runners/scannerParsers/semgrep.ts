@@ -36,7 +36,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const SEMGREP_TOOL_NAME = 'semgrep';
+const SEMGREP_TOOL_NAME = 'semgrep';
 
 export const semgrepParser: ScannerParser = {
   name: SEMGREP_TOOL_NAME,

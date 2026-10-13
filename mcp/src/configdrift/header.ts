@@ -26,10 +26,10 @@
  */
 
 /** Present on both delimiter lines; the string drift detection keys on. */
-export const PROVENANCE_MARKER = 'dev-guardian:managed';
+const PROVENANCE_MARKER = 'dev-guardian:managed';
 
 /** Marks the last line of the block. */
-export const PROVENANCE_END_MARKER = `end ${PROVENANCE_MARKER}`;
+const PROVENANCE_END_MARKER = `end ${PROVENANCE_MARKER}`;
 
 /**
  * How far into a file we look for the closing delimiter. A real header is
@@ -62,7 +62,7 @@ export function commentPrefixFor(targetPath: string): string | null {
   return null;
 }
 
-export interface ProvenanceHeaderInput {
+interface ProvenanceHeaderInput {
   /** Path relative to `configs/`, e.g. `semgrep/base.yml`. */
   source: string;
   /** Plugin version at copy time, from `.claude-plugin/plugin.json`. */

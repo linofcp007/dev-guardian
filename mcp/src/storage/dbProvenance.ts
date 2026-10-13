@@ -52,10 +52,10 @@ import { DB_ID_KEY, DB_ID_SHAPE } from './dbRegistry.js';
 import { datedInFutureSql } from './scanClock.js';
 
 /** How long git may take to answer. */
-export const GIT_TIMEOUT_MS = 3000;
+const GIT_TIMEOUT_MS = 3000;
 
 /** The database and the files SQLite reads with it, relative to `.guardian/`. */
-export const DATABASE_FILES = ['guardian.db', 'guardian.db-wal', 'guardian.db-shm', 'guardian.db-journal'] as const;
+const DATABASE_FILES = ['guardian.db', 'guardian.db-wal', 'guardian.db-shm', 'guardian.db-journal'] as const;
 
 const TRACKED_FILE = /^\.guardian\/guardian\.db(?:-wal|-shm|-journal)?$/i;
 
@@ -69,7 +69,7 @@ export interface GitIndexAnswer {
   detail: string;
 }
 
-export interface GitOptions {
+interface GitOptions {
   /** The git executable; tests pass one that does not exist. */
   git?: string;
   timeoutMs?: number;
@@ -218,7 +218,7 @@ function readOnly<T>(dbPath: string, read: (db: RawDatabase, isTable: (name: str
   }
 }
 
-export interface DatabaseProbe {
+interface DatabaseProbe {
   /** The file holds no schema object at all: a database being created, or an empty file. */
   empty: boolean;
   /** Its `schema_meta` db_id when it is a well-formed one, else null. */
@@ -246,7 +246,7 @@ export function probeDatabase(dbPath: string): DatabaseProbe {
 }
 
 /** One project a database holds scans of ({@link DatabaseContents}). */
-export interface ProjectScans {
+interface ProjectScans {
   project_path: string;
   scans: number;
   completed: number;

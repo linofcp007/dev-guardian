@@ -22,8 +22,8 @@ import type { VersionProbe } from './toolProbe.js';
  * where the catalogue has one; winget, scoop and choco follow their own
  * manifests.
  */
-export type WindowsPkgManager = 'release' | 'winget' | 'scoop' | 'choco' | 'wsl';
-export type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl' | 'uv' | 'cargo' | 'go';
+type WindowsPkgManager = 'release' | 'winget' | 'scoop' | 'choco' | 'wsl';
+type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl' | 'uv' | 'cargo' | 'go';
 
 export interface InstallSpec {
   /** Shell command (as a tokenised argv) to install. */
@@ -47,7 +47,7 @@ export interface InstallSpec {
  * a vulnerability. Inclusive bounds; checked against the installed version by
  * `check_toolchain`. Every entry must cite its primary-source advisory.
  */
-export interface CompromisedRange {
+interface CompromisedRange {
   from: string;
   to: string;
   advisory: string;
@@ -56,7 +56,7 @@ export interface CompromisedRange {
   action: string;
 }
 
-export interface ToolMeta {
+interface ToolMeta {
   name: string;
   version_floor: string;
   required_by: string[];
@@ -115,10 +115,10 @@ export const COSIGN_RELEASE_SHA256 = {
 } as const;
 
 /** A platform a pinned release archive is published for. */
-export type ReleasePlatform = 'linux-amd64' | 'linux-arm64' | 'darwin-amd64' | 'darwin-arm64' | 'windows-amd64';
+type ReleasePlatform = 'linux-amd64' | 'linux-arm64' | 'darwin-amd64' | 'darwin-arm64' | 'windows-amd64';
 
 /** A release pinned by its version AND by the sha256 of each archive an install may fetch. */
-export interface PinnedRelease {
+interface PinnedRelease {
   version: string;
   /** `https://github.com/<owner>/<repo>/releases/download/v<version>` */
   base: string;

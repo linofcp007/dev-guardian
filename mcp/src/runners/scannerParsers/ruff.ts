@@ -27,7 +27,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const RUFF_TOOL_NAME = 'ruff';
+const RUFF_TOOL_NAME = 'ruff';
 
 export const ruffParser: ScannerParser = {
   name: RUFF_TOOL_NAME,

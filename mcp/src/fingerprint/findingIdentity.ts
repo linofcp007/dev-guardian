@@ -82,7 +82,7 @@ const IDENTITY_VERSION = 1;
 const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 
 /** Reads a finding's file (a path relative to the project) or returns null. */
-export type SourceReader = (filePath: string) => string | null;
+type SourceReader = (filePath: string) => string | null;
 
 /** The fields identity reads — structural, so any finding-shaped value works. */
 export interface IdentitySubject {
@@ -95,7 +95,7 @@ export interface IdentitySubject {
   snippet?: string;
 }
 
-export interface AssignIdentityOptions {
+interface AssignIdentityOptions {
   /** Canonical project root: absolute paths inside it are made relative. */
   projectPath?: string;
   /** Where source lines come from. Without one, only snippets are used. */
@@ -211,7 +211,7 @@ function identitiesOf<T extends IdentitySubject & { fingerprint: string }>(
 }
 
 /** A stored finding row, as {@link rekeyStoredIdentities} re-keys it. */
-export interface StoredIdentityRow extends IdentitySubject {
+interface StoredIdentityRow extends IdentitySubject {
   fingerprint: string;
   content_key?: string;
 }
@@ -325,12 +325,12 @@ export function resolutionKey(f: IdentitySubject & { content_key?: string }): st
 }
 
 /** Anything a match can be made on. */
-export interface MatchableFinding {
+interface MatchableFinding {
   fingerprint: string;
   identity?: string;
 }
 
-export interface FindingIndex<T> {
+interface FindingIndex<T> {
   /** The indexed item that `f` is — see {@link indexFindings}. */
   find(f: MatchableFinding): T | undefined;
   has(f: MatchableFinding): boolean;
@@ -385,7 +385,7 @@ export function indexFindings<T extends MatchableFinding>(items: readonly T[]): 
 const MATCH_KEY_VERSION = 1;
 
 /** A finding the CI gate keys: identity's subject, with its stored content key. */
-export type GateKeySubject = IdentitySubject & { fingerprint: string; content_key?: string };
+type GateKeySubject = IdentitySubject & { fingerprint: string; content_key?: string };
 
 /** What the CI gate matches one finding to a baseline entry by, besides its identity and fingerprint. */
 export interface GateKeys {

@@ -39,7 +39,7 @@ export function normalizeCwe(raw: unknown): string | null {
   return Number.isSafeInteger(n) && n > 0 ? `CWE-${n}` : null;
 }
 
-export interface FindingTaxonomy {
+interface FindingTaxonomy {
   cwe?: string[];
   owasp?: Owasp2025Id[];
 }

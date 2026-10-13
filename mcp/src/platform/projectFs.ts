@@ -120,14 +120,14 @@ export const PROJECT_LOCKFILE_MAX_BYTES = 64 * 1024 * 1024;
  * Why an existing project path was not read. `read-budget`: the walk it was
  * found by had spent its {@link ReadBudget} before reaching it.
  */
-export type ProjectReadRefusal = RefusalReason | 'outside-project' | 'read-budget';
+type ProjectReadRefusal = RefusalReason | 'outside-project' | 'read-budget';
 
 export type ProjectTextRead =
   | { status: 'absent' }
   | { status: 'ok'; text: string }
   | { status: 'refused'; reason: ProjectReadRefusal };
 
-export type ProjectBytesRead =
+type ProjectBytesRead =
   | { status: 'absent' }
   | { status: 'ok'; bytes: Buffer }
   | { status: 'refused'; reason: ProjectReadRefusal };
@@ -336,7 +336,7 @@ export function hashRegularFileSync(path: string): string | null {
 }
 
 /** What is at a project path, without following a link. */
-export type ProjectEntryKind = 'absent' | 'file' | 'directory' | 'link' | 'other';
+type ProjectEntryKind = 'absent' | 'file' | 'directory' | 'link' | 'other';
 
 /**
  * `lstat`'s answer for `path`: a link (a Windows junction included, which
@@ -356,7 +356,7 @@ export function projectEntryKind(path: string): ProjectEntryKind {
 }
 
 /** What is at a project path, judged without following anything: {@link ProjectEntryKind}, or `remote`. */
-export type ProjectEntryKindIn = ProjectEntryKind | 'remote';
+type ProjectEntryKindIn = ProjectEntryKind | 'remote';
 
 /**
  * {@link projectEntryKind} for a path below `root`, safe on any component:
@@ -418,7 +418,7 @@ export function realpathInProject(root: string, path: string): string | null {
 }
 
 /** What a project path is when followed — through links that stay inside the project only. */
-export type ProjectPathKind = 'absent' | 'file' | 'directory' | 'other' | 'outside';
+type ProjectPathKind = 'absent' | 'file' | 'directory' | 'other' | 'outside';
 
 /**
  * `statSync(path)`'s answer for a project path, except that a link leading
@@ -458,7 +458,7 @@ export function projectPathKind(root: string, path: string): ProjectPathKind {
  * For a walk that must tell a directory link out of the project (a
  * sub-project it did not enter) from a file link it names elsewhere.
  */
-export function linkTargetKind(root: string, path: string): 'directory' | 'file' | 'other' | 'absent' | 'remote' {
+function linkTargetKind(root: string, path: string): 'directory' | 'file' | 'other' | 'absent' | 'remote' {
   const abs = resolve(root, path);
   const walk = walkLinksUnder(root, abs);
   if (!walk.ok) return walk.reason === 'remote-link' ? 'remote' : 'other';
@@ -533,7 +533,7 @@ export function listProjectDirOrNull(root: string, dir: string): ProjectDirEntry
 }
 
 /** Why a project write did not happen. */
-export type ProjectWriteRefusal =
+type ProjectWriteRefusal =
   /** The target is not below the project root. */
   | 'outside-project'
   /** A directory on the way resolves outside the project, or is not a directory. */
@@ -551,7 +551,7 @@ export type ProjectWriteResult =
   | { ok: true; bytes: number }
   | { ok: false; reason: ProjectWriteRefusal; detail?: string };
 
-export interface ProjectWriteOptions {
+interface ProjectWriteOptions {
   /** `create`: only when nothing is at that name. `replace`: create, or replace a regular file. */
   mode: 'create' | 'replace';
 }

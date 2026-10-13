@@ -28,7 +28,7 @@ import { noRateLimitObservedFinding } from './rateLimitFinding.js';
 import type { ProbeResult } from './types.js';
 
 /** Wall-clock ceiling for the whole nuclei pass, not per template. */
-export const NUCLEI_TIMEOUT_MS = 300_000;
+const NUCLEI_TIMEOUT_MS = 300_000;
 
 /* -------------------------------------------------------------------- */
 /* Rate-limit burst                                                      */
@@ -57,11 +57,11 @@ interface RateLimitSummaryBase {
   cut_by_ceiling: boolean;
 }
 
-export type RateLimitSummary =
+type RateLimitSummary =
   | (RateLimitSummaryBase & { observed: true; at_request: number })
   | (RateLimitSummaryBase & { observed: false });
 
-export interface BurstOutcome {
+interface BurstOutcome {
   outcome: RateLimitOutcome;
   finding: DastFinding | null;
   summary: RateLimitSummary | null;
@@ -69,7 +69,7 @@ export interface BurstOutcome {
   evidence: Map<string, EvidenceRecord>;
 }
 
-export interface BurstOptions {
+interface BurstOptions {
   requested: boolean;
   /** Explicit target path, or null to infer one and report the choice. */
   explicitPath: string | null;
@@ -180,7 +180,7 @@ export async function runRateLimitBurst(opts: BurstOptions): Promise<BurstOutcom
 /* nuclei                                                                */
 /* -------------------------------------------------------------------- */
 
-export interface NucleiStep {
+interface NucleiStep {
   outcome: NucleiOutcome;
   findings: DastFinding[];
   toolRun: ToolRun | null;
@@ -188,7 +188,7 @@ export interface NucleiStep {
   missing: boolean;
 }
 
-export interface NucleiOptions {
+interface NucleiOptions {
   requested: boolean;
   /** Resolved binary path, or null when it is not installed. */
   binaryPath: string | null;

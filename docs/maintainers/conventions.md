@@ -21,11 +21,22 @@ Enforced by the compiler where possible, by review where not:
   narrowing costs nothing. The three that were load-bearing were hiding real
   gaps: a WP-CLI call that can succeed and print nothing, and a shell whose
   non-null-ness came from a check in a *different* file.
-- **Type-check the tests too.** `npm run lint` runs `tsconfig.json` and
-  `tsconfig.test.json`. The second exists because nothing ever type-checked
-  `test/` — `tsconfig.json` excludes it and vitest's esbuild strips types
-  without checking them. It excludes `test/fixtures`, which is deliberately
-  broken sample code fed to scanners as input.
+- **Type-check the tests too.** `npm run lint` runs `tsconfig.test.json`,
+  which covers `src/` and `test/` in one pass (`npm run build` type-checks
+  `src/` alone, through `tsconfig.json`). It exists because nothing ever
+  type-checked `test/` — `tsconfig.json` excludes it and vitest's esbuild
+  strips types without checking them. It excludes `test/fixtures`, which is
+  deliberately broken sample code fed to scanners as input.
+- **No export that nothing imports.** `noUnusedLocals` cannot see an export,
+  so `npm run lint` also runs `scripts/unusedExports.mjs`: an export of
+  `src/` no other module of `src/` or `test/` imports, re-exports or reaches
+  through `import *` / `import()` fails it (the bundle entries `engine.ts`,
+  `cli.ts`, `hooksEntry.ts` and `server.ts` excepted). Use it, un-export it,
+  or delete it. `scripts/unusedExports.baseline.json` is a ratchet: the
+  entries left when the check began (the tool modules' and `schemas.ts`',
+  whose surface was being reworked) — an entry that is imported again, or
+  gone, must leave it too (review 8, finding 15: 438 such exports, 9 of them
+  dead code).
 - Note what `tsc` does **not** catch: interpolating a non-string into a
   template (`` `--config=${someArray}` ``) types as `string` at any
   strictness. That needs `@typescript-eslint/restrict-template-expressions`,

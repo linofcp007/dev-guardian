@@ -22,7 +22,7 @@ const EPSS_URL = 'https://api.first.org/data/v1/epss';
 const DEFAULT_TIMEOUT_MS = 6000;
 const CHUNK = 100;
 
-export interface EpssEntry {
+interface EpssEntry {
   score: number;
   percentile: number;
 }

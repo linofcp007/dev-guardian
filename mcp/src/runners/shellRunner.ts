@@ -15,11 +15,9 @@
 import { toShellPath, type ShellChoiceLike } from '../platform/pathTranslate.js';
 import type { ShellChoice } from '../platform/shellProbe.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
+type ShellRunResult = ProcessRunResult;
 
-export type ShellRunOutcome = ProcessRunResult['outcome'];
-export type ShellRunResult = ProcessRunResult;
-
-export interface ShellRunOptions {
+interface ShellRunOptions {
   shell: ShellChoice;
   scriptPath: string;
   args?: string[];

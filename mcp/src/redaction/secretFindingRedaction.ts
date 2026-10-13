@@ -40,7 +40,7 @@ import {
 export const REDACTED_SECRET_SNIPPET = '[redacted — credential value omitted; see rule_id and file_path]';
 
 /** The fields this module reads — a finding-shaped value, nothing scanner-specific. */
-export type RedactableFinding = IdentitySubject;
+type RedactableFinding = IdentitySubject;
 
 /**
  * `f` with its `snippet` replaced by {@link REDACTED_SECRET_SNIPPET} when it

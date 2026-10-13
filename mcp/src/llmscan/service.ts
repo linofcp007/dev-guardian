@@ -51,7 +51,7 @@ export const fail = (code: DomainError['code'], message: string, retry_with?: Re
   error: { code, message, ...(retry_with !== undefined ? { retry_with } : {}) },
 });
 
-export const nowIso = (): string => new Date().toISOString();
+const nowIso = (): string => new Date().toISOString();
 
 /** US-1.AC-4: the third invalid submission closes the task. */
 export const MAX_INVALID_SUBMISSIONS = 3;
@@ -61,7 +61,7 @@ export const MAX_INVALID_SUBMISSIONS = 3;
  * stops only here, so a plan is never silently cut below what the user asked
  * to be told about.
  */
-export const MAX_PLANNED_TASKS = 1_000;
+const MAX_PLANNED_TASKS = 1_000;
 /** A brief is held to this, under the 25 000-token cap a whole response has: JSON escaping and the rest of the response need room. */
 const HOST_BRIEF_MAX_TOKENS = 20_000;
 /** Names listed in one response (not-eligible findings, undelivered tasks); the count is always given. */
@@ -127,7 +127,7 @@ export function reportOf(storage: Storage, plan: LlmScanPlan): LlmScanReport {
 }
 
 /** D-4: `confirm` authorises the start only; delivery still stops at max_estimated_tokens. */
-export const tokenLimitNote = (n: number): string =>
+const tokenLimitNote = (n: number): string =>
   `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). To cover the whole plan, start again with a larger max_estimated_tokens.`;
 
 /**
@@ -170,7 +170,7 @@ const needsConfirm = (plan: LlmScanPlan): boolean => !plan.confirmed && plan.est
 
 // ---- planning ----------------------------------------------------------
 
-export interface StartInput {
+interface StartInput {
   project: string;
   modes: ScanMode[];
   scan_id?: string;
@@ -505,7 +505,7 @@ function stopDelivery(storage: Storage, plan: LlmScanPlan, candidates: readonly 
 
 // ---- answers -----------------------------------------------------------
 
-export interface SubmitInput {
+interface SubmitInput {
   plan_id: string;
   task_id: string;
   lease_token: string;

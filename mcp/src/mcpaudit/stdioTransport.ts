@@ -75,7 +75,7 @@ export interface StdioLaunch {
   cwd: string;
 }
 
-export interface ProcessExit {
+interface ProcessExit {
   exitCode: number | null;
   signal: string | null;
   /** Set when the process never started (`spawn … ENOENT`). */
@@ -83,7 +83,7 @@ export interface ProcessExit {
 }
 
 /** What one server may send before the transport closes itself. */
-export interface InboundLimits {
+interface InboundLimits {
   /** Epoch ms: past it, the transport closes itself from its data handler. */
   deadline: number;
   /** Bytes, stdout and stderr together. */
@@ -115,7 +115,7 @@ const STDERR_TAIL_CHARS = 2048;
 const TERM_GRACE_MS = 2_000;
 const KILL_GRACE_MS = 2_000;
 
-export function formatBytes(n: number): string {
+function formatBytes(n: number): string {
   return n % MiB === 0 ? `${n / MiB} MiB` : `${n} bytes`;
 }
 

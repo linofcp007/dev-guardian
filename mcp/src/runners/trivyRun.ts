@@ -72,7 +72,7 @@ const NEUTRAL_CONFIG_TEXT =
   "# Written by dev-guardian: an empty Trivy configuration, passed as --config so that the\n" +
   "# scanned repository's own trivy.yaml is never read.\n";
 
-export interface TrivyInvocation {
+interface TrivyInvocation {
   /** The subcommand and its flags (`['fs', '--scanners', 'vuln', …]`): never `--config`, never the target. */
   args: readonly string[];
   /** The positional target: an absolute path, or an image reference. */
@@ -104,7 +104,7 @@ export interface TrivyRunResult extends ProcessRunResult {
 }
 
 /** The project's `.trivyignore`, when it is a regular file; else null. */
-export function projectTrivyIgnore(projectPath: string): string | null {
+function projectTrivyIgnore(projectPath: string): string | null {
   // lstat only (links below the project walked first): `existsSync` followed
   // a link to a network path and blocked the server (review of 3.0, W2E).
   return projectEntryKindIn(projectPath, PROJECT_TRIVYIGNORE) === 'file' ? join(projectPath, PROJECT_TRIVYIGNORE) : null;
@@ -131,7 +131,7 @@ export function trivyArgv(
 // ---------------------------------------------------------------- what .trivyignore suppressed
 
 /** The first Trivy with `--show-suppressed` (absent in 0.49.1). */
-export const SHOW_SUPPRESSED_SINCE = '0.50.0';
+const SHOW_SUPPRESSED_SINCE = '0.50.0';
 /** Subcommands that accept it; `trivy config` refuses it as an unknown flag (measured on 0.69.3). */
 const SHOW_SUPPRESSED_COMMANDS: ReadonlySet<string> = new Set([
   'fs',
@@ -253,13 +253,13 @@ export function suppressionNote(s: RepoSuppression): string {
 // cannot be read gets the variables only.
 
 /** Both, always: each alone still sends the request. */
-export const TRIVY_NO_PHONE_HOME_ENV: Readonly<Record<string, string>> = {
+const TRIVY_NO_PHONE_HOME_ENV: Readonly<Record<string, string>> = {
   TRIVY_SKIP_VERSION_CHECK: 'true',
   TRIVY_DISABLE_TELEMETRY: 'true',
 };
 const NO_PHONE_HOME_FLAGS = ['--skip-version-check', '--disable-telemetry'] as const;
 /** The first Trivy with both flags (and with the check). */
-export const NO_PHONE_HOME_FLAGS_SINCE = '0.63.0';
+const NO_PHONE_HOME_FLAGS_SINCE = '0.63.0';
 
 function acceptsNoPhoneHomeFlags(version: string | null): boolean {
   if (version === null) return false;

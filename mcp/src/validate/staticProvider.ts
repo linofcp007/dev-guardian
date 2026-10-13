@@ -141,7 +141,7 @@ import type { AttackSurfaceSnapshot, CoverageEntry, Finding, RouteRecord } from 
  * and proves nothing, so `unreachable` is never emitted for a file in one of
  * them. The positive direction is unaffected — see the module doc comment.
  */
-export const RUNTIME_RESOLUTION_LANGUAGES: ReadonlySet<string> = new Set([
+const RUNTIME_RESOLUTION_LANGUAGES: ReadonlySet<string> = new Set([
   'ruby',
   'java',
   'csharp',

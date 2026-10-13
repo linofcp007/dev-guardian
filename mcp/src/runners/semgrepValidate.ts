@@ -23,9 +23,9 @@
 import { runSemgrep } from './semgrepRun.js';
 
 /** Bound on one `semgrep --validate` run. */
-export const SEMGREP_VALIDATE_TIMEOUT_MS = 60_000;
+const SEMGREP_VALIDATE_TIMEOUT_MS = 60_000;
 
-export type SemgrepValidation =
+type SemgrepValidation =
   | { validated: true; invalid: Map<string, string> }
   | { validated: false; reason: string };
 
@@ -33,7 +33,7 @@ const ANSI = /\u001b\[[0-9;]*m/g;
 const MAX_MESSAGE = 400;
 
 /** Semgrep's own words for why it refused a config: its error lines, else its first lines. */
-export function validateMessage(stderr: string, stdout: string): string {
+function validateMessage(stderr: string, stdout: string): string {
   const lines = `${stderr}\n${stdout}`
     .replace(ANSI, '')
     .split(/\r?\n/)

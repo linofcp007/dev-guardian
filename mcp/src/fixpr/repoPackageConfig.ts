@@ -77,7 +77,7 @@ function dirsUpToRoot(root: string, projectDir: string): string[] {
 }
 
 /** Every package-manager configuration path in scope, absolute. */
-export function repoPackageConfigPaths(root: string, projectDir: string): string[] {
+function repoPackageConfigPaths(root: string, projectDir: string): string[] {
   const out: string[] = [];
   for (const dir of dirsUpToRoot(root, projectDir)) {
     for (const entry of listProjectDir(root, dir)) {
@@ -156,7 +156,7 @@ export function composerChoosesRepository(projectDir: string): string | null {
  * of the project, or is no regular file, is listed too: `checkRequirements`
  * refuses it, by name.
  */
-export function rootRequirementFiles(projectDir: string): string[] {
+function rootRequirementFiles(projectDir: string): string[] {
   const found = findRequirementFiles(projectDir);
   return [...found.files, ...found.outside.filter((rel) => !rel.endsWith('/')), ...found.other];
 }
@@ -168,7 +168,7 @@ export function rootRequirementFiles(projectDir: string): string[] {
  * file they include; `pyproject.toml` and `setup.cfg`. Read within
  * `checkoutRoot`. Empty: installable.
  */
-export function pythonInstallRefusals(projectDir: string, checkoutRoot: string, extra: readonly string[] = []): PipRefusal[] {
+function pythonInstallRefusals(projectDir: string, checkoutRoot: string, extra: readonly string[] = []): PipRefusal[] {
   const handed = rootRequirementFiles(projectDir);
   const requirements = checkRequirements(projectDir, [...handed, ...extra], checkoutRoot).refusals;
   return [
@@ -179,7 +179,7 @@ export function pythonInstallRefusals(projectDir: string, checkoutRoot: string, 
 }
 
 /** The refusal reason for a pip install, naming the first few refusals. */
-export function pipInstallRefusal(refusals: readonly PipRefusal[]): string {
+function pipInstallRefusal(refusals: readonly PipRefusal[]): string {
   const shown = refusals.slice(0, 3).map(describePipRefusal).join('; ');
   const more = refusals.length > 3 ? `; and ${refusals.length - 3} more` : '';
   return (
@@ -218,7 +218,7 @@ export function npmSpecNetworkHost(spec: string): string | null {
 }
 
 /** A network path found, or a file that could not be checked: both refuse an npm install. */
-export interface NpmSourceCheck {
+interface NpmSourceCheck {
   /** `<file>: <where> (\\host)` — a dependency, override or lock entry on a network path. */
   network: string[];
   /** `<file> (<why>)` — present, and not fully read and checked. */

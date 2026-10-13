@@ -26,7 +26,7 @@
  */
 
 /** Replacement text. Fixed, so a redacted artifact is greppable. */
-export const REDACTED = '«redacted»';
+const REDACTED = '«redacted»';
 
 export type Redactor = (value: string) => string;
 

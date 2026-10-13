@@ -21,7 +21,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const JSCPD_TOOL_NAME = 'jscpd';
+const JSCPD_TOOL_NAME = 'jscpd';
 
 export const jscpdParser: ScannerParser = {
   name: JSCPD_TOOL_NAME,

@@ -344,7 +344,7 @@ export function validateHuntSubmission(payload: unknown, ctx: SubmissionContext)
 }
 
 /** One `llm` verdict, as stored for a finding. */
-export interface LlmVerdictRecord {
+interface LlmVerdictRecord {
   fingerprint: string;
   verdict: LlmVerdict;
   independence: Independence;

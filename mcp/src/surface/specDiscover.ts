@@ -23,12 +23,12 @@ import { readSmallText } from '../hooks/configFile.js';
 import { readProjectText } from '../platform/projectFs.js';
 import { FS_EXCLUDE } from '../treeHash/computeTreeHash.js';
 
-export interface DiscoveredSpec {
+interface DiscoveredSpec {
   file: string;
   text: string;
 }
 
-export interface DiscoveryOutcome {
+interface DiscoveryOutcome {
   specs: DiscoveredSpec[];
   /** Files skipped for exceeding the size cap, with their paths. */
   oversized: string[];

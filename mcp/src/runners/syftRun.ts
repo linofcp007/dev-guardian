@@ -45,7 +45,7 @@ export const SYFT_NO_PHONE_HOME_ENV: Readonly<Record<string, string>> = {
   SYFT_CHECK_FOR_APP_UPDATE: 'false',
 };
 
-export interface SyftInvocation {
+interface SyftInvocation {
   /** The directory (or image reference) the SBOM describes. */
   target: string;
   /** Syft's output format (`cyclonedx-json`, `spdx-json`). */

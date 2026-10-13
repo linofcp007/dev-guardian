@@ -148,7 +148,7 @@ const PM_CONFIG_EXACT = new Set([
 ]);
 
 /** Whether `name` is a package manager's own configuration variable. */
-export function isPackageManagerConfigVar(name: string): boolean {
+function isPackageManagerConfigVar(name: string): boolean {
   const upper = name.toUpperCase();
   return PM_CONFIG_EXACT.has(upper) || PM_CONFIG_PREFIXES.some((p) => upper.startsWith(p));
 }
@@ -173,7 +173,7 @@ function lookup(source: NodeJS.ProcessEnv, name: string): [string, string] | und
  * file `NPM_CONFIG_USERCONFIG` names — npm reads that one instead), and
  * Yarn's `~/.yarnrc` and `~/.yarnrc.yml`. Never a file of the repository's.
  */
-export function userPackageManagerConfigFiles(
+function userPackageManagerConfigFiles(
   source: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
 ): string[] {

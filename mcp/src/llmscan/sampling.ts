@@ -23,13 +23,13 @@ import { fail, leaseNext, loadPlan, MAX_INVALID_SUBMISSIONS, reportOf, settlePla
 import type { SamplingFn } from './types.js';
 
 /** A call's time for sampling; the host's budget is commonly 60 s. */
-export const SAMPLING_BUDGET_MS = 50_000;
+const SAMPLING_BUDGET_MS = 50_000;
 /** A request may run this long past the budget; the host's 60 s still holds. */
 const REQUEST_MARGIN_MS = 5_000;
 const MAX_ANSWER_TOKENS = 2_000;
 const SYSTEM_PROMPT = 'You verify one finding. Reply with ONLY the JSON object the brief asks for, no prose and no code fence.';
 
-export interface SamplingOptions {
+interface SamplingOptions {
   /** Milliseconds, monotonic enough for a budget; injectable for tests. */
   clock?: () => number;
   budget_ms?: number;
@@ -40,7 +40,7 @@ export interface SamplingOptions {
 }
 
 /** Why a sampling request produced no answer — coarse on purpose: the client's message may hold its data. */
-export type SamplingFailure = 'timeout' | 'cancelled' | 'client_error';
+type SamplingFailure = 'timeout' | 'cancelled' | 'client_error';
 
 function failureOf(err: unknown, cancelled: boolean): SamplingFailure {
   if (cancelled) return 'cancelled';

@@ -48,7 +48,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const DOTNET_SCA_TOOL_NAME = 'dotnet-list-package';
+const DOTNET_SCA_TOOL_NAME = 'dotnet-list-package';
 
 export const dotnetScaParser: ScannerParser = {
   name: DOTNET_SCA_TOOL_NAME,

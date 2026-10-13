@@ -46,7 +46,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const ACTIONLINT_TOOL_NAME = 'actionlint';
+const ACTIONLINT_TOOL_NAME = 'actionlint';
 
 export const actionlintParser: ScannerParser = {
   name: ACTIONLINT_TOOL_NAME,

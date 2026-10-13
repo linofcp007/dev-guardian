@@ -36,7 +36,7 @@
  * Pure functions. No I/O.
  */
 
-export type CodeKind = 'fenced' | 'indented' | 'pre' | 'inline';
+type CodeKind = 'fenced' | 'indented' | 'pre' | 'inline';
 
 export interface CodeUnit {
   /** 1-based line the unit starts on in the file. */
@@ -47,7 +47,7 @@ export interface CodeUnit {
   block: number | null;
 }
 
-export interface MarkdownViews {
+interface MarkdownViews {
   code: CodeUnit[];
   /** Same length and line numbering as the file; each line as it reads. */
   prose: string[];
@@ -90,7 +90,7 @@ const NAMED_ENTITIES: Record<string, string> = {
 };
 
 /** HTML character references, the way a renderer — and a model — reads them (`&#124;` is `|`). */
-export function decodeEntities(text: string): string {
+function decodeEntities(text: string): string {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[A-Za-z]+);/gi, (whole, ref: string) => {
     if (ref.startsWith('#x') || ref.startsWith('#X')) return safeCodePoint(Number.parseInt(ref.slice(2), 16), whole);
     if (ref.startsWith('#')) return safeCodePoint(Number.parseInt(ref.slice(1), 10), whole);
@@ -136,7 +136,7 @@ type BlockState =
   | { kind: 'pre'; close: RegExp; endsAtBlank: boolean }
   | { kind: 'indented' };
 
-export interface SplitOptions {
+interface SplitOptions {
   /**
    * Read four-space / tab indentation after a blank line as a code block.
    * True for Markdown and plain text; false for other text files (HTML,
@@ -287,7 +287,7 @@ function isClosingFence(line: string, fence: { char: string; length: number }): 
   return run !== undefined && run.charAt(0) === fence.char && run.length >= fence.length;
 }
 
-export interface Span {
+interface Span {
   /** Where the opening backticks start. */
   start: number;
   /** Just past the closing backticks. */

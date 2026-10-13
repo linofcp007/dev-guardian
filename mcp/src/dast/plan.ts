@@ -34,8 +34,8 @@ import { PARAM_SYNTAX } from '../surface/specDiff.js';
 import type { HttpMethod, RouteRecord } from '../types.js';
 import type { PlanOutcome, PlanSkip, ProbeRequest, ProbeVariant } from './types.js';
 
-export const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'] as const;
-export const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'] as const;
+const READ_METHODS = ['GET', 'HEAD', 'OPTIONS'] as const;
+const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'] as const;
 export const DEFAULT_MAX_REQUESTS = 750;
 
 /**
@@ -48,7 +48,7 @@ export const CORS_PROBE_ORIGIN = 'https://dev-guardian-cors-probe.invalid';
 const SYNTHETIC_PARAM_VALUE = '1';
 
 /** `buildProbeUrl`'s result when the path resolves to a request on `origin`. */
-export interface ProbeUrlOk {
+interface ProbeUrlOk {
   ok: true;
   url: string;
   /** The normalised path — always starts with `/`, unlike the input. */
@@ -56,7 +56,7 @@ export interface ProbeUrlOk {
 }
 
 /** `buildProbeUrl`'s result when the path would leave `origin`. */
-export interface ProbeUrlSkip {
+interface ProbeUrlSkip {
   ok: false;
   reason: 'off_origin';
 }
@@ -96,7 +96,7 @@ export function buildProbeUrl(origin: string, path: string): ProbeUrlOk | ProbeU
   return { ok: true, url: url.toString(), path: normalized };
 }
 
-export interface PlanOptions {
+interface PlanOptions {
   origin: string;
   allowWriteMethods: boolean;
   /** Already resolved from `auth_header_env` by the caller; never a var name. */

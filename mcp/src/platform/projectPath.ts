@@ -22,7 +22,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { parse, resolve } from 'node:path';
 
-export type InvalidProjectPathReason = 'not_found' | 'not_a_directory' | 'root_or_home' | 'network_path';
+type InvalidProjectPathReason = 'not_found' | 'not_a_directory' | 'root_or_home' | 'network_path';
 
 const REASON_HINT: Record<InvalidProjectPathReason, string> = {
   not_found: '',
@@ -68,7 +68,7 @@ export function isNetworkPath(p: string, platform: NodeJS.Platform = process.pla
   return platform === 'win32' && /^[\\/]{2}/.test(p);
 }
 
-export interface ResolvedProjectPath {
+interface ResolvedProjectPath {
   path: string;
   warning?: string;
 }

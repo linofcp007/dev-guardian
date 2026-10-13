@@ -36,7 +36,7 @@ export function commandLineLength(command: string, args: readonly string[]): num
   return args.reduce((n, a) => n + argCost(a), argCost(command));
 }
 
-export interface BatchOptions {
+interface BatchOptions {
   /** Arguments every invocation repeats (flags, `--output <file>`, `--`). */
   fixedArgs: readonly string[];
   /** The executable, counted too. Defaults to a generous 260-character path. */

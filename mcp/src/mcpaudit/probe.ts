@@ -52,16 +52,16 @@ import type { McpServerEntry } from '../agentaudit/mcpServers.js';
 import { remoteReasonOf, resolveCommand } from './launch.js';
 import { DEFAULT_INBOUND_LIMITS, ProbeStdioTransport, probeEnvironment, type StdioLaunch } from './stdioTransport.js';
 
-export type ProbeTransportKind = 'stdio' | 'http' | 'sse';
+type ProbeTransportKind = 'stdio' | 'http' | 'sse';
 
-export interface RawListing {
+interface RawListing {
   tools: unknown[];
   prompts: unknown[];
   resources: unknown[];
   resourceTemplates: unknown[];
 }
 
-export interface ProbeListed {
+interface ProbeListed {
   /** `partial`: a budget or a failure stopped the listing after some of it arrived. */
   status: 'ok' | 'partial';
   /** Why the listing is partial. */
@@ -74,7 +74,7 @@ export interface ProbeListed {
   warnings: string[];
 }
 
-export interface ProbeNotOk {
+interface ProbeNotOk {
   status: 'failed' | 'skipped';
   transport?: ProbeTransportKind;
   reason: string;
@@ -92,7 +92,7 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-export interface ProbeOptions {
+interface ProbeOptions {
   /** The project: every stdio server's working directory. */
   projectPath: string;
   timeoutMs: number;
@@ -106,8 +106,8 @@ export interface ProbeOptions {
 const PLUGIN_JSON_LABEL = '.claude-plugin/plugin.json';
 const PLACEHOLDER = /\$\{[^}]*\}/g;
 /** Per list. A server past these is not listing an interface; the rest is not read. */
-export const MAX_PAGES = 100;
-export const MAX_ITEMS = 1000;
+const MAX_PAGES = 100;
+const MAX_ITEMS = 1000;
 
 type ListKey = 'tools' | 'prompts' | 'resources' | 'resourceTemplates';
 const LIST_METHOD: Record<ListKey, string> = {

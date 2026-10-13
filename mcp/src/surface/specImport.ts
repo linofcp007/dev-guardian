@@ -44,7 +44,7 @@ const OPERATION_KEYS: readonly string[] = [
   'get', 'put', 'post', 'delete', 'options', 'head', 'patch',
 ];
 
-export interface SpecImportResult {
+interface SpecImportResult {
   routes: RouteRecord[];
   report: SpecFileReport;
 }

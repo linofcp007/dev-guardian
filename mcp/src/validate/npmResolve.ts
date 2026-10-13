@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import type { NpmResolver, ResolvedPackage } from './dependencyProvider.js';
 
 /** A lockfile larger than this is not read (a large monorepo's is a few MB). */
-export const MAX_LOCKFILE_BYTES = 64 * 1024 * 1024;
+const MAX_LOCKFILE_BYTES = 64 * 1024 * 1024;
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 const LOCKFILES = ['npm-shrinkwrap.json', 'package-lock.json'];
 

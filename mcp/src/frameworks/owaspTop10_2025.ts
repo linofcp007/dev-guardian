@@ -42,7 +42,7 @@ export const OWASP_2025_IDS = [
 ] as const;
 export type Owasp2025Id = (typeof OWASP_2025_IDS)[number];
 
-export interface Owasp2025Category {
+interface Owasp2025Category {
   id: Owasp2025Id;
   title: string;
   /** The category's page on owasp.org. */
@@ -155,7 +155,7 @@ const CATEGORY_OF_CWE: ReadonlyMap<number, Owasp2025Id> = new Map(
   OWASP_TOP10_2025.flatMap((c) => c.cwes.map((n) => [n, c.id] as const)),
 );
 
-export function isOwasp2025Id(value: unknown): value is Owasp2025Id {
+function isOwasp2025Id(value: unknown): value is Owasp2025Id {
   return typeof value === 'string' && BY_ID.has(value);
 }
 

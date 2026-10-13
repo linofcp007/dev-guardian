@@ -102,7 +102,7 @@ export interface ProcessRunOptions {
 }
 
 /** Why a child never ran: not on PATH, a repository whose git configuration was refused, or a spawn error. */
-export interface ProcessNotRun {
+interface ProcessNotRun {
   /** `not_found`, `git_config_refused`, or the spawn error's code (`ENOENT`, `EACCES`, …). */
   code: string;
   message: string;

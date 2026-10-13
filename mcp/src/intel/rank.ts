@@ -63,7 +63,7 @@ export function findingCveIds(finding: CveSubject): string[] {
  * `isUncorrelatedFinding`) is a real coverage gap or an ordinary
  * code-quality finding that was never expected to have one.
  */
-export const CVE_CAPABLE_TOOLS: readonly string[] = ['trivy', 'npm-audit', 'wpscan', 'pip-audit'];
+const CVE_CAPABLE_TOOLS: readonly string[] = ['trivy', 'npm-audit', 'wpscan', 'pip-audit'];
 
 /**
  * True for a finding from a {@link CVE_CAPABLE_TOOLS} scanner that
@@ -82,7 +82,7 @@ export function isUncorrelatedFinding(finding: CveSubject): boolean {
   return CVE_CAPABLE_TOOLS.includes(finding.tool) && findingCveIds(finding).length === 0;
 }
 
-export interface ExploitabilitySignal {
+interface ExploitabilitySignal {
   /** True when any of `cve_ids` is CISA KEV-listed. */
   kev: boolean;
   /** Highest FIRST EPSS score among `cve_ids` that have one. Null when none do. */

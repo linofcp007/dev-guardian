@@ -42,7 +42,7 @@ export const CLI_PATH_PLACEHOLDER = '{{DEV_GUARDIAN_CLI}}';
  *  contains whitespace (this repo's own path does, "CLAUDE SKILLS") —
  *  mirrors `mcpConfig.ts`'s `tomlString`: quote only when the value actually
  *  needs it, never unconditionally. */
-export function formatCliPathForDoc(cliPath: string): string {
+function formatCliPathForDoc(cliPath: string): string {
   return /\s/.test(cliPath) ? `"${cliPath}"` : cliPath;
 }
 
@@ -181,7 +181,7 @@ export const RULES_DESCRIPTION =
   'dev-guardian MCP tools — use for security scans, secrets, dependency CVEs, bug hunts, code quality, ' +
   'compliance, WordPress or .NET audits, and before installing a package, an AI skill or an MCP server.';
 
-export const HOST_FRONTMATTER: Partial<Record<HostName, string>> = {
+const HOST_FRONTMATTER: Partial<Record<HostName, string>> = {
   cursor: ['---', `description: ${RULES_DESCRIPTION}`, 'globs:', 'alwaysApply: false', '---'].join('\n'),
   windsurf: ['---', 'trigger: model_decision', `description: ${RULES_DESCRIPTION}`, '---'].join('\n'),
 };

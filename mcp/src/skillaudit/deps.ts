@@ -14,7 +14,7 @@
 import { exactPin, requirementMentions } from '../deps/pipRequirements.js';
 import type { OsvPackageQuery } from '../runners/osv.js';
 
-export interface ManifestFile {
+interface ManifestFile {
   relPath: string;
   content: string;
 }

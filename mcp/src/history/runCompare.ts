@@ -79,7 +79,7 @@ import type { Finding, PartialParse, ScanRecord, ToolRun } from '../types.js';
 import { KNOWN_FINDING_KEYS, findingKey, keysOfRun, runNameEntry } from './runNames.js';
 import { isOrchestratedFullScan, isScriptEraFullScan, sameImportSlot, scriptEraSlotOfFinding } from './scanRoles.js';
 
-export interface ScanComparison {
+interface ScanComparison {
   /** Whether `f`, a finding of `from`, was not measured again by `to` — a gap, or not run. */
   isNotRemeasured: (f: Finding) => boolean;
   /** Whether `f`, a finding of `to`, falls in a gap of `from` (a scanner it named and did not run ok). */
@@ -430,7 +430,7 @@ export type ChainScope = { kind: 'never' } | { kind: 'open'; admit: Admit };
  * `rules`, or one of `pairs` (a file the plugin's pack only partly measured,
  * with the pack's rules).
  */
-export interface ScopeConstraint {
+interface ScopeConstraint {
   files: ReadonlySet<string>;
   rules: ReadonlySet<string>;
   pairs?: ReadonlyMap<string, ReadonlySet<string>>;
@@ -960,7 +960,7 @@ function targetOf(run: ToolRun): PassTarget {
  * (a `.` or a `:` in it, or `localhost`) — Docker's own rule. Nothing else
  * is changed: `nginx:1.25` and `nginx@sha256:…` stay distinct targets.
  */
-export function normalizeImageRef(ref: string): string {
+function normalizeImageRef(ref: string): string {
   let name = ref.trim();
   let digest = '';
   const at = name.indexOf('@');
@@ -1065,7 +1065,7 @@ function answerFor(holder: Bookkeeping | null, asked: Bookkeeping | null, f: Fin
  * which is all a REFERENCE (a baseline, the previous run) holds "not
  * previously measured".
  */
-export type NotMeasuredScope = 'any' | 'gaps';
+type NotMeasuredScope = 'any' | 'gaps';
 
 /**
  * What `scan` did not measure, for a caller to name — exactly the names
@@ -1162,7 +1162,7 @@ export function compareScansFor(storage: Storage, from: ScanRecord, to: ScanReco
 }
 
 /** The part of a comparison every reader reports, with its caps. */
-export interface ClassifiedDiff<T extends Finding> {
+interface ClassifiedDiff<T extends Finding> {
   new: T[];
   resolved: T[];
   unchanged: T[];
@@ -1217,7 +1217,7 @@ export function classifyDiff<T extends Finding>(
 }
 
 /** What each side of a comparison did not measure, as a reader reports it. */
-export interface MeasurementGaps {
+interface MeasurementGaps {
   /** Everything the newer scan did not measure: its bookkeeping's gaps, then scanners it did not run. */
   byTo: string[];
   /** Of {@link byTo}, what the newer scan did not run (not requested, nothing to scan), rather than failed. */

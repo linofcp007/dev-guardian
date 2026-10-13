@@ -47,7 +47,7 @@ export const PROC_TREE_ENV = 'GUARDIAN_PROC_TREE_ID';
 const TASKKILL_TIMEOUT_MS = 10_000;
 const MSYS_PROBE_TIMEOUT_MS = 3_000;
 
-export interface MsysProcess {
+interface MsysProcess {
   pid: number;
   /** 1 for a process started by a non-MSYS parent (e.g. Git's bash launcher). */
   ppid: number;
@@ -141,7 +141,7 @@ export function selectOwnMsysProcesses(
  * bash being run when the command is one, else the default install location.
  * Null when there is none — then there is no MSYS layer to handle.
  */
-export function findMsysBin(command: string): string | null {
+function findMsysBin(command: string): string | null {
   const candidates: string[] = [];
   const m = /^(.*)[\\/](?:usr[\\/])?bin[\\/]bash(?:\.exe)?$/i.exec(command);
   if (m?.[1] !== undefined) candidates.push(join(m[1], 'usr', 'bin'));

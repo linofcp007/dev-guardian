@@ -79,7 +79,7 @@ const YAML_SNIFF_BYTES = 64 * 1024;
 
 /** What one detection may read in all — see the module doc. */
 export const DETECTION_BUDGET_BYTES = 64 * 1024 * 1024;
-export const DETECTION_BUDGET_FILES = 4_000;
+const DETECTION_BUDGET_FILES = 4_000;
 
 /** `unread_files` lists at most this many; `unread_files_more` counts the rest. */
 const MAX_UNREAD_LISTED = 50;

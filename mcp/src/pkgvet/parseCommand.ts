@@ -973,7 +973,7 @@ function parseReading(text: string, forced: string | null): InstallCommand[] {
  * escapes). Without this, `pip install requests  # for http calls` vetted —
  * and denied — `for`, `http` and `calls`.
  */
-export function stripComments(command: string): string {
+function stripComments(command: string): string {
   let out = '';
   let quote: '"' | "'" | null = null;
   let i = 0;
@@ -1120,7 +1120,7 @@ function notPlain(why: string): string {
  * the tool's {@link ALLOW} list. Returns why the shape is NOT confident, or
  * `null` when it is. Everything that is not confident only warns.
  */
-export function confidentShape(text: string): string | null {
+function confidentShape(text: string): string | null {
   const t = text.trim();
   const words: string[] = [];
   let cur = '';

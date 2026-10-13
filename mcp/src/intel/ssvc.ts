@@ -76,7 +76,7 @@ export const MISSION_WELLBEING_VALUES = ['low', 'medium', 'high'] as const satis
 export const EPSS_POC_THRESHOLD = 0.1;
 
 /** The Mission & Well-being value used when the caller gives none. */
-export const DEFAULT_MISSION_WELLBEING: MissionWellbeing = 'medium';
+const DEFAULT_MISSION_WELLBEING: MissionWellbeing = 'medium';
 
 /** One decision point's value, whether it was assumed, and what it rests on. */
 export interface SsvcPoint<V extends string> {
@@ -85,7 +85,7 @@ export interface SsvcPoint<V extends string> {
   basis: string;
 }
 
-export interface SsvcPoints {
+interface SsvcPoints {
   exploitation: SsvcPoint<Exploitation>;
   automatable: SsvcPoint<Automatable>;
   technical_impact: SsvcPoint<TechnicalImpact>;

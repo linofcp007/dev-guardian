@@ -35,7 +35,7 @@ export interface ShellChoice {
   label: string;
 }
 
-export interface ShellProbeDeps {
+interface ShellProbeDeps {
   /** Returns the version line if the candidate is usable, else null. */
   testShell: (command: string, argsPrefix: string[]) => Promise<string | null>;
 }

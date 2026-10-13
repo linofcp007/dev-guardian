@@ -26,7 +26,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const GITLEAKS_TOOL_NAME = 'gitleaks';
+const GITLEAKS_TOOL_NAME = 'gitleaks';
 
 export const gitleaksParser: ScannerParser = {
   name: GITLEAKS_TOOL_NAME,

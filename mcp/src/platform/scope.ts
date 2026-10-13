@@ -94,7 +94,7 @@ export const ScanScopeInput = z
 
 export type ScanScope = NonNullable<z.infer<typeof ScanScopeInput>>;
 
-export type ScopeErrorCode = 'target_not_found' | 'unsupported_target' | 'not_a_git_repo';
+type ScopeErrorCode = 'target_not_found' | 'unsupported_target' | 'not_a_git_repo';
 
 export class ScopeError extends Error {
   constructor(
@@ -106,7 +106,7 @@ export class ScopeError extends Error {
   }
 }
 
-export type ScopeHistory = { base: string; head: string } | { logOpts: string };
+type ScopeHistory = { base: string; head: string } | { logOpts: string };
 
 export interface ResolvedScope {
   kind: 'paths' | 'diff' | 'since';
@@ -146,7 +146,7 @@ export function suggestScopeForFile(filePath: string): { project_path: string; s
 }
 
 /** A result path in the form the scope's sets use. */
-export function normaliseRelPath(p: string): string {
+function normaliseRelPath(p: string): string {
   return p.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/{2,}/g, '/').replace(/\/+$/, '');
 }
 
@@ -566,7 +566,7 @@ const RELATIVE_DATE = /^(\d{1,4})[ .](second|minute|hour|day|week|month|year)s?[
  * selected EVERY commit (measured, git 2.x), either of which would read as a
  * scoped result.
  */
-export function sinceDate(since: string): string | null {
+function sinceDate(since: string): string | null {
   const s = since.trim();
   if (s.toLowerCase() === 'yesterday') return 'yesterday';
   const rel = RELATIVE_DATE.exec(s);

@@ -44,7 +44,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describeReadRefusal, isWithinDir, listProjectDir, projectPathKind, readProjectBytes } from '../platform/projectFs.js';
 
 /** What made a requirements file not installable. */
-export type PipRefusalKind =
+type PipRefusalKind =
   | 'index option'
   | 'find-links option'
   | 'trusted-host option'
@@ -84,9 +84,9 @@ export interface PipRefusal {
 }
 
 /** Files one check follows, includes included. */
-export const MAX_REQUIREMENT_FILES = 200;
+const MAX_REQUIREMENT_FILES = 200;
 /** One requirements file is read up to this size; a real one is a few KB. */
-export const MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
+const MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
 
 /** `<file>:<line>: <kind> (<host>)` — the one wording every refusal and note uses. */
 export function describePipRefusal(r: PipRefusal): string {
@@ -105,7 +105,7 @@ export function describePipRefusal(r: PipRefusal): string {
  * UTF-8 (with or without a BOM), UTF-16 with a BOM and ASCII are decoded
  * here; anything else would be read differently by pip, and is refused.
  */
-export function decodeRequirements(bytes: Buffer): { ok: true; text: string } | { ok: false; detail: string } {
+function decodeRequirements(bytes: Buffer): { ok: true; text: string } | { ok: false; detail: string } {
   const starts = (sig: number[]): boolean => sig.every((b, i) => bytes[i] === b);
   const strict = (enc: 'utf-8' | 'utf-16le' | 'utf-16be', data: Buffer): { ok: true; text: string } | { ok: false; detail: string } => {
     try {
@@ -165,7 +165,7 @@ const COMMENT = /(^|[ \t]+)#.*$/;
  * `\` at either end of a joined line stripped, and a comment line never
  * joined — then `ignore_comments`.
  */
-export function* logicalLines(text: string): Generator<{ line: number; text: string }> {
+function* logicalLines(text: string): Generator<{ line: number; text: string }> {
   const physical = text.split(/\r\n|\r|\n/);
   if (physical.length > 0 && physical[physical.length - 1] === '' && /[\r\n]$/.test(text)) physical.pop();
   let joined: string[] = [];
@@ -402,7 +402,7 @@ function judgeInclude(target: string): Pick<PipRefusal, 'kind' | 'host'> | null 
   return null;
 }
 
-export interface PipCheck {
+interface PipCheck {
   /** Every refusal found, in the order met (bounded). Empty: installable. */
   refusals: PipRefusal[];
   /** The files read, relative to the project directory, `/`-separated. */
@@ -597,7 +597,7 @@ export function exactPin(specifier: string): string | undefined {
 }
 
 /** One requirement a requirements file names, with the line it starts on. */
-export interface RequirementMention extends RequirementSpec {
+interface RequirementMention extends RequirementSpec {
   line: number;
 }
 

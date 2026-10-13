@@ -16,7 +16,7 @@ import type { Storage } from '../storage/index.js';
 import type { Finding, ToolRun } from '../types.js';
 import type { SarifImportResult, SarifImportRun } from './importSarif.js';
 
-export interface PersistSarifImportOptions {
+interface PersistSarifImportOptions {
   /** The log's path relative to the project, or its basename when it was outside it. */
   sourceFile: string;
 }
@@ -32,7 +32,7 @@ export interface PersistSarifImportOptions {
  * findings as unmeasured rather than resolved — always, for a log whose URIs
  * all point outside the root, as an image scan's do.
  */
-export function importCoverageGaps(counts: SarifImportRun['counts']): string[] {
+function importCoverageGaps(counts: SarifImportRun['counts']): string[] {
   const gaps: string[] = [];
   if (counts.skipped.length > 0) gaps.push('sarif:skipped_results');
   if (counts.truncated > 0) gaps.push('sarif:results_over_limit');

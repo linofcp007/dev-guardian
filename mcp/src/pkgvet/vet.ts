@@ -67,7 +67,7 @@ import {
 } from './types.js';
 import { isExactVersion, resolveVersion } from './versions.js';
 
-export const FRESH_HOURS = 72;
+const FRESH_HOURS = 72;
 export const HOOK_BUDGET_MS = 3000;
 export const TOOL_BUDGET_MS = 10_000;
 
@@ -114,7 +114,7 @@ export interface VetOptions {
 }
 
 /** The reason a check did not run because the vetting deadline had passed. */
-export const TIME_BUDGET = 'vetting time budget exhausted';
+const TIME_BUDGET = 'vetting time budget exhausted';
 
 function popularIndexFor(ecosystem: PkgEcosystem, opts: VetOptions): PopularIndex | null {
   const override = opts.popular?.[ecosystem];
@@ -135,7 +135,7 @@ function hoursAgo(iso: string, now: number): number | undefined {
 }
 
 /** Hours inside the 72 h window, then days to one decimal: ~60 h reads "60 h", never "3 days". */
-export function ageText(hours: number): string {
+function ageText(hours: number): string {
   if (hours < FRESH_HOURS) return `${Math.max(0, Math.round(hours))} h ago`;
   const days = hours / 24;
   return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;

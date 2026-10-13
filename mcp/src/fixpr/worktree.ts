@@ -33,7 +33,7 @@ import { join, resolve } from 'node:path';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
 
-export interface Worktree {
+interface Worktree {
   /** Absolute path to the worktree directory. */
   path: string;
   /** The branch created inside it; null for a detached worktree. */

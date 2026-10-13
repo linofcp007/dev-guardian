@@ -50,7 +50,7 @@ export interface ChildExit {
   spawnError?: NodeJS.ErrnoException;
 }
 
-export interface StartChildOptions {
+interface StartChildOptions {
   cwd: string;
   /** The child's WHOLE environment. Merge with `process.env` before calling, when that is what you mean. */
   env: NodeJS.ProcessEnv;
@@ -125,7 +125,7 @@ export function startChild(command: string, args: readonly string[], options: St
   return child;
 }
 
-export interface StopTreeOptions {
+interface StopTreeOptions {
   /** How long the tree gets after the first signal before it is killed outright. */
   graceMs: number;
   /** After the kill, how long to wait for the pipes before they are no longer read. */
@@ -177,7 +177,7 @@ async function stopOnce(child: ChildState, { graceMs, abandonMs }: StopTreeOptio
 }
 
 /** Signal a POSIX process group (negative pid). ESRCH = already gone. */
-export function signalGroup(pid: number, signal: NodeJS.Signals): void {
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal);
   } catch {

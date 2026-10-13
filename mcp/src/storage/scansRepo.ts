@@ -64,7 +64,7 @@ const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
  * whose pid means nothing on this machine. Long enough that no real scan is
  * still running; short enough that a crashed one does not linger for days.
  */
-export const UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1000;
+const UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1000;
 
 /**
  * How old a `running` scan must be before the reaper fails it even though its
@@ -73,7 +73,7 @@ export const UNKNOWN_OWNER_REAP_AFTER_MS = 6 * 60 * 60 * 1000;
  * process that started the scan. Every scanner run is capped (10 min by
  * default, `GUARDIAN_SCAN_TIMEOUT_MS`), so a day is far beyond any real scan.
  */
-export const LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1000;
+const LIVE_OWNER_REAP_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export interface ReapOptions {
   /** Epoch ms to measure age against. Default: `Date.now()`. */
@@ -109,7 +109,7 @@ interface ScanRow {
   meta: string;
 }
 
-export interface InsertScanInput {
+interface InsertScanInput {
   scan_id: string;
   scan_type: ScanType;
   project_path: string;
@@ -123,7 +123,7 @@ export interface InsertScanInput {
   cache_key?: string;
 }
 
-export interface FinalizeScanInput {
+interface FinalizeScanInput {
   scan_id: string;
   status: Extract<ScanStatus, 'completed' | 'failed' | 'cancelled'>;
   tools_run: ToolRun[];

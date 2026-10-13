@@ -27,7 +27,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const RADON_TOOL_NAME = 'radon';
+const RADON_TOOL_NAME = 'radon';
 
 const RANK_SEVERITY: Record<string, Severity> = { C: 'low', D: 'medium', E: 'high', F: 'high' };
 

@@ -333,7 +333,7 @@ export function remoteReasonOf(entry: McpServerEntry): string | null {
   return null;
 }
 
-export type Resolved = { ok: true; command: string } | { ok: false; reason: string };
+type Resolved = { ok: true; command: string } | { ok: false; reason: string };
 
 /** The value of `name` in `env`, whatever its case (Windows environment names are case-insensitive). */
 function envValue(env: Record<string, string>, name: string): string | undefined {

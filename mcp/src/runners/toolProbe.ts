@@ -53,7 +53,7 @@ export interface ProbeResult {
 
 /** Per-probe ceiling. A version command answers in well under a second; a
  *  loaded machine can stretch Python-based ones (semgrep, bandit) to several. */
-export const PROBE_TIMEOUT_MS = 30_000;
+const PROBE_TIMEOUT_MS = 30_000;
 
 /**
  * Read a version out of a tool's `--version` output.

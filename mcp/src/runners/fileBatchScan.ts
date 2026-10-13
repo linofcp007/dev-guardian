@@ -40,7 +40,7 @@ import {
 import { localRuleIdNormalizer, noRuleLoaded, type RuleIdContext } from './semgrepRuleIds.js';
 import { toRelativeIfPossible } from './scannerParsers/index.js';
 
-export interface BatchCheck {
+interface BatchCheck {
   ok: boolean;
   reason?: string;
   /** Files the batch's report says were analysed, when the scanner reports it. */
@@ -58,7 +58,7 @@ export interface BatchCheck {
   packFixpoint?: PluginPackFixpoint;
 }
 
-export interface FileBatchScanOptions {
+interface FileBatchScanOptions {
   /** Name in `tools_run`. */
   name: string;
   command: string;
@@ -91,7 +91,7 @@ export interface FileBatchScanOptions {
   noRuleLoaded?: (failedRules: readonly FailedRule[]) => boolean;
 }
 
-export interface FileBatchScanResult {
+interface FileBatchScanResult {
   toolRun: ToolRun;
   /** Every report that parsed, including those of failed batches. */
   reports: string[];

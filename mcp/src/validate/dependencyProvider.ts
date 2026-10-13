@@ -116,7 +116,7 @@ export interface ResolvedPackage {
 }
 
 /** No version could be read — and why, in words the provider quotes. */
-export interface UnresolvedPackage {
+interface UnresolvedPackage {
   version: null;
   reason: string;
 }
@@ -584,7 +584,7 @@ export const PYPI_MODULES: Readonly<Record<string, readonly string[]>> = {
  * named, with that other distribution, when they are the only import found
  * (review of part C, M-g).
  */
-export const PYPI_SHARED_MODULES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+const PYPI_SHARED_MODULES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   attrs: { attr: "the 'attr' distribution" },
   pymongo: { bson: "the 'bson' distribution" },
   'python-multipart': { multipart: "the 'multipart' distribution" },
@@ -720,7 +720,7 @@ export function ecosystemOfManifest(path: string): string | null {
  * The provider
  * ---------------------------------------------------------------------- */
 
-export interface DependencyProviderInput {
+interface DependencyProviderInput {
   snapshot: AttackSurfaceSnapshot;
   snapshotId: number;
   treeHash: string;

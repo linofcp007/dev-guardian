@@ -51,7 +51,7 @@
 
 import type { DB } from './db.js';
 
-export type SchemaObjectType = 'table' | 'index' | 'view' | 'trigger';
+type SchemaObjectType = 'table' | 'index' | 'view' | 'trigger';
 
 export interface SchemaSnapshot {
   /** Every sqlite_master object by name. */
@@ -196,7 +196,7 @@ function isSqliteInternal(row: MasterRow): boolean {
   return row.type === 'index' && row.sql === null && row.name.startsWith('sqlite_autoindex_');
 }
 
-export interface TrustOptions {
+interface TrustOptions {
   /**
    * The database records migrations this build does not ship
    * ({@link recordsNewerMigrations}): a later build migrated it. What a later
@@ -397,7 +397,7 @@ function shorten(text: string): string {
 }
 
 /** `sql` without comments, with whitespace collapsed and case folded. */
-export function normaliseSql(sql: string): string {
+function normaliseSql(sql: string): string {
   let out = '';
   let i = 0;
   while (i < sql.length) {
@@ -451,7 +451,7 @@ export function normaliseSql(sql: string): string {
  * constraints), normalised, plus whatever follows the closing parenthesis
  * (`without rowid`, `strict`). Null when the text has no parenthesised body.
  */
-export function tableDefinition(sql: string): { parts: string[]; tail: string } | null {
+function tableDefinition(sql: string): { parts: string[]; tail: string } | null {
   const text = normaliseSql(sql);
   const open = text.indexOf('(');
   if (open < 0) return null;

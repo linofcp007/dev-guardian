@@ -41,7 +41,7 @@ interface BaselineRow {
   slot: string | null;
 }
 
-export interface SetBaselineInput {
+interface SetBaselineInput {
   scan_id: string;
   note?: string;
 }

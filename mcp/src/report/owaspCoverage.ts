@@ -40,7 +40,7 @@ const STATUS_LABEL: Record<OwaspCategoryCoverage['status'], string> = {
   not_tested: 'NOT TESTED',
 };
 
-export function statusLabel(c: Pick<OwaspCategoryCoverage, 'status'>): string {
+function statusLabel(c: Pick<OwaspCategoryCoverage, 'status'>): string {
   return STATUS_LABEL[c.status];
 }
 
