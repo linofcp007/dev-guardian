@@ -4,7 +4,9 @@
  * `fetch`, mirroring `test/integration/securityTools.test.ts`'s pattern for
  * the process-spawning scan tools. No real network — `GUARDIAN_OFFLINE=1`
  * is the suite default (`vitest.config.ts`); tests exercising the online
- * path clear it with `vi.stubEnv('GUARDIAN_OFFLINE', '0')`.
+ * path clear it with `vi.stubEnv('GUARDIAN_OFFLINE', '0')`. Each test's feed
+ * cache is its own — `GUARDIAN_CACHE_DIR` too, which wins over LOCALAPPDATA
+ * when the shell running the suite sets it.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -191,6 +193,7 @@ describe('wp_vuln_check_source', () => {
     vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
     vi.stubEnv('LOCALAPPDATA', cacheDir);
     vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+    vi.stubEnv('GUARDIAN_CACHE_DIR', cacheDir);
     const fetchMock = fakeFetch();
     vi.stubGlobal('fetch', fetchMock);
 
@@ -241,6 +244,7 @@ describe('wp_vuln_check_source', () => {
     vi.stubEnv('WORDFENCE_API_KEY', '');
     vi.stubEnv('LOCALAPPDATA', cacheDir);
     vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+    vi.stubEnv('GUARDIAN_CACHE_DIR', cacheDir);
     const fetchMock = fakeFetch();
     vi.stubGlobal('fetch', fetchMock);
 
@@ -275,6 +279,7 @@ describe('wp_vuln_check_source', () => {
     vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
     vi.stubEnv('LOCALAPPDATA', cacheDir);
     vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+    vi.stubEnv('GUARDIAN_CACHE_DIR', cacheDir);
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
@@ -325,6 +330,7 @@ describe('wp_vuln_check_source', () => {
       vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
       vi.stubEnv('LOCALAPPDATA', cacheDir);
       vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+      vi.stubEnv('GUARDIAN_CACHE_DIR', cacheDir);
       vi.stubGlobal('fetch', fakeFetch());
 
       const tool = getTool('wp_vuln_check_source');
@@ -352,6 +358,7 @@ describe('wp_vuln_check_source', () => {
       vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
       vi.stubEnv('LOCALAPPDATA', cacheDir);
       vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+      vi.stubEnv('GUARDIAN_CACHE_DIR', cacheDir);
       vi.stubGlobal('fetch', fakeFetch());
 
       const tool = getTool('wp_vuln_check_source');
@@ -388,6 +395,7 @@ describe('wp_vuln_check_source', () => {
     vi.stubEnv('WORDFENCE_API_KEY', 'test-token');
     vi.stubEnv('LOCALAPPDATA', cacheDir);
     vi.stubEnv('XDG_CACHE_HOME', cacheDir);
+    vi.stubEnv('GUARDIAN_CACHE_DIR', cacheDir);
     const fetchMock = fakeFetch();
     vi.stubGlobal('fetch', fetchMock);
 
