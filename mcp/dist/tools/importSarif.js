@@ -18,7 +18,7 @@ import { basename, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { readSmallText } from '../hooks/configFile.js';
 import { isWithinDir, readProjectText } from '../platform/projectFs.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { importSarif, SarifImportError } from '../sarif/importSarif.js';
 import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
@@ -77,7 +77,7 @@ function run(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return fail('not_a_git_repo', e.message);
+        return fail(projectPathErrorCode(e), e.message);
     }
     const logPath = resolve(projectPath, inp.sarif_path);
     const inside = isWithinDir(projectPath, logPath);

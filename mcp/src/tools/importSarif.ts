@@ -20,7 +20,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { readSmallText, type TextRead } from '../hooks/configFile.js';
 import { isWithinDir, readProjectText } from '../platform/projectFs.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { importSarif, SarifImportError, type SarifImportCounts } from '../sarif/importSarif.js';
 import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
@@ -99,7 +99,7 @@ function run(input: Record<string, unknown>, ctx: PluginContext): Result {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return fail('not_a_git_repo', (e as Error).message);
+    return fail(projectPathErrorCode(e), (e as Error).message);
   }
 
   const logPath = resolve(projectPath, inp.sarif_path);

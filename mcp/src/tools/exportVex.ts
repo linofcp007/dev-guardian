@@ -38,7 +38,7 @@ import { basename, join, posix, win32 } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { vexSourceScan } from '../vex/scope.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { ProjectPath } from '../schemas.js';
 import type { ScanRecord, ToolResult } from '../types.js';
@@ -115,7 +115,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
 
   const found = vexSourceScan(ctx.storage, projectPath);

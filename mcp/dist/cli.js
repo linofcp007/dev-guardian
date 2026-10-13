@@ -1734,8 +1734,17 @@ var init_osDetect = __esm({
 import { existsSync as existsSync2, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { homedir } from "node:os";
 import { parse as parse3, resolve as resolve6 } from "node:path";
+function projectPathErrorCode(e) {
+  return e instanceof InvalidProjectPathError && e.reason === "not_found" ? "target_not_found" : "unsupported_target";
+}
+function isNetworkPath(p, platform2 = process.platform) {
+  return platform2 === "win32" && /^[\\/]{2}/.test(p);
+}
 function resolveProjectPath(input) {
-  const candidate = resolve6(input && input.length > 0 ? input : process.cwd());
+  const raw = input && input.length > 0 ? input : process.cwd();
+  if (isNetworkPath(raw)) throw new InvalidProjectPathError("network_path", raw);
+  const candidate = resolve6(raw);
+  if (isNetworkPath(candidate)) throw new InvalidProjectPathError("network_path", candidate);
   if (!existsSync2(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
@@ -1766,13 +1775,19 @@ function isRootOrHome(p) {
   const home = resolve6(homedir());
   return p === home || p === canonicalPath(home);
 }
-var InvalidProjectPathError;
+var REASON_HINT, InvalidProjectPathError;
 var init_projectPath = __esm({
   "src/platform/projectPath.ts"() {
     "use strict";
+    REASON_HINT = {
+      not_found: "",
+      not_a_directory: "",
+      root_or_home: "",
+      network_path: " \u2014 a network (UNC) path: dev-guardian scans local directories only, because every file call on a share that does not answer blocks the whole server; scan a local copy of the project"
+    };
     InvalidProjectPathError = class extends Error {
       constructor(reason, path8) {
-        super(`Invalid project_path (${reason}): ${path8}`);
+        super(`Invalid project_path (${reason}): ${path8}${REASON_HINT[reason]}`);
         this.reason = reason;
         this.path = path8;
         this.name = "InvalidProjectPathError";
@@ -37553,7 +37568,7 @@ function invalidProjectPath(config2, e) {
       retry2
     );
   }
-  return failDomain("not_a_git_repo", e.message);
+  return failDomain(projectPathErrorCode(e), e.message);
 }
 function runWarnings(value) {
   return Array.isArray(value) ? value.filter((w) => typeof w === "string") : [];
@@ -48471,7 +48486,7 @@ async function handler(input, ctx, callMeta) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain2("not_a_git_repo", e.message);
+    return failDomain2(projectPathErrorCode(e), e.message);
   }
   const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath);
   const ecosystems = detectEcosystems(projectPath);
@@ -50122,7 +50137,7 @@ async function handler2(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain3("not_a_git_repo", e.message);
+    return failDomain3(projectPathErrorCode(e), e.message);
   }
   const treeHash = await computeTreeHash(projectPath);
   const format2 = inp.format ?? "cyclonedx-json";
@@ -50599,7 +50614,7 @@ async function handler3(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain4("not_a_git_repo", e.message);
+    return failDomain4(projectPathErrorCode(e), e.message);
   }
   const parsed = detectStack(projectPath);
   enrichDotnet(parsed, projectPath);
@@ -50981,7 +50996,7 @@ async function handler4(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain5("not_a_git_repo", e.message);
+    return failDomain5(projectPathErrorCode(e), e.message);
   }
   const profile = inp.profile ?? "standard";
   const apply = inp.apply ?? true;
@@ -51211,7 +51226,7 @@ async function handler5(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain6("not_a_git_repo", e.message);
+    return failDomain6(projectPathErrorCode(e), e.message);
   }
   const apply = inp.apply ?? false;
   const stack = inferStack(projectPath, ctx);
@@ -51576,7 +51591,7 @@ async function handler6(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain7("not_a_git_repo", e.message);
+    return failDomain7(projectPathErrorCode(e), e.message);
   }
   const targetUrl = inp.target_url !== void 0 && inp.target_url.length > 0 ? inp.target_url : void 0;
   const k6Script = inp.k6_script_path !== void 0 && inp.k6_script_path.length > 0 ? inp.k6_script_path : void 0;
@@ -51879,7 +51894,7 @@ async function handler7(input, ctx) {
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return failDomain8("not_a_git_repo", e.message);
+      return failDomain8(projectPathErrorCode(e), e.message);
     }
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
     if (!choice.ok) return failDomain8("unsupported_target", choice.message);
@@ -53442,7 +53457,7 @@ async function handler8(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain9("not_a_git_repo", e.message);
+    return failDomain9(projectPathErrorCode(e), e.message);
   }
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
   if (!located) {
@@ -53694,7 +53709,7 @@ function resolveTo(inp, ctx, skipHits) {
       try {
         projectPath2 = resolveProjectPath(inp.project_path).path;
       } catch (e) {
-        return { ok: false, err: failDomain10("not_a_git_repo", e.message) };
+        return { ok: false, err: failDomain10(projectPathErrorCode(e), e.message) };
       }
       if (scan2.project_path !== projectPath2) {
         return {
@@ -53714,7 +53729,7 @@ function resolveTo(inp, ctx, skipHits) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, err: failDomain10("not_a_git_repo", e.message) };
+    return { ok: false, err: failDomain10(projectPathErrorCode(e), e.message) };
   }
   const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
   if (!choice.ok) return { ok: false, err: failDomain10("unsupported_target", choice.message) };
@@ -53839,7 +53854,7 @@ async function handler10(input, ctx, callMeta) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain11("not_a_git_repo", e.message);
+    return failDomain11(projectPathErrorCode(e), e.message);
   }
   const auditScanId = randomUUID6();
   const treeHash = await computeTreeHash(projectPath);
@@ -55294,7 +55309,7 @@ async function handler13(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain12("not_a_git_repo", e.message);
+    return failDomain12(projectPathErrorCode(e), e.message);
   }
   const projectLicense = detectProjectLicense(projectPath);
   const isProprietary = projectLicense === null || isProprietaryLabel(projectLicense);
@@ -56065,7 +56080,7 @@ async function handler14(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const now = Date.now();
   const storage = ctx.storage;
@@ -56187,7 +56202,7 @@ async function handler15(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain13("not_a_git_repo", e.message);
+    return failDomain13(projectPathErrorCode(e), e.message);
   }
   const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
   const sboms = needsDefaultPair ? ctx.storage.scans.listHistoryForProject(projectPath, 50).filter((s) => s.scan_type === "sbom" && s.status === "completed") : [];
@@ -56377,7 +56392,7 @@ async function handler16(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const skipHits = [];
   const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
@@ -56527,7 +56542,7 @@ async function handler17(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain14("not_a_git_repo", e.message);
+    return failDomain14(projectPathErrorCode(e), e.message);
   }
   const contextLines = inp.context_lines ?? 20;
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
@@ -56629,7 +56644,7 @@ async function handler18(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const set2 = openSetForProject(ctx.storage, projectPath);
   const open = set2.findings;
@@ -56832,7 +56847,7 @@ async function handler19(input, _ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain15("not_a_git_repo", e.message);
+    return failDomain15(projectPathErrorCode(e), e.message);
   }
   const config2 = readProjectText(projectPath, ".pre-commit-config.yaml", 1024 * 1024);
   if (config2.status === "absent") {
@@ -56983,7 +56998,7 @@ async function handler20(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain16("not_a_git_repo", e.message);
+    return failDomain16(projectPathErrorCode(e), e.message);
   }
   if (inp.clear) {
     ctx.storage.runtimeMeta.delete(customRulesMetaKey(projectPath));
@@ -71676,7 +71691,7 @@ async function handler21(input, ctx) {
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
   }
   const latest = ctx.storage.scans.getLatestForProject(projectPath);
@@ -72164,7 +72179,7 @@ async function handler22(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain17("not_a_git_repo", e.message);
+    return failDomain17(projectPathErrorCode(e), e.message);
   }
   if (inp.content_markdown != null) {
     const title = inp.title ?? "Pro Digital Key \u2014 Report";
@@ -72959,7 +72974,7 @@ function run(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return fail("not_a_git_repo", e.message);
+    return fail(projectPathErrorCode(e), e.message);
   }
   const logPath = resolve24(projectPath, inp.sarif_path);
   const inside = isWithinDir(projectPath, logPath);
@@ -73158,7 +73173,7 @@ async function handler24(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const storage = ctx.storage;
   const compliance = findLatestUsable(storage, projectPath, ["compliance"], { skipCoverageNone: false }).scan;
@@ -73526,7 +73541,7 @@ async function handler25(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain18("not_a_git_repo", e.message);
+    return failDomain18(projectPathErrorCode(e), e.message);
   }
   const ghBin = await scannerAvailable("gh");
   if (!ghBin) {
@@ -76057,7 +76072,7 @@ async function handler29(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const audit = findLatestWpAudit(ctx, projectPath);
   if (!audit) {
@@ -76249,7 +76264,7 @@ async function handler30(input, ctx) {
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return failDomain22("not_a_git_repo", e.message);
+      return failDomain22(projectPathErrorCode(e), e.message);
     }
   } else if (inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0) {
     projectPath = canonicalPath(inp.wp_install_path);
@@ -76605,7 +76620,7 @@ async function handler33(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const siteKey = inp.target_url !== void 0 ? wpSiteKey(inp.target_url) : null;
   const installKeys = wpInstallKeys(projectPath, inp.project_path);
@@ -76719,7 +76734,7 @@ async function handler34(input, ctx) {
   } catch (e) {
     return {
       ok: false,
-      error: { code: "not_a_git_repo", message: e.message }
+      error: { code: projectPathErrorCode(e), message: e.message }
     };
   }
   const files = collectConfigFiles(projectPath, 6);
@@ -76943,7 +76958,7 @@ async function handler35(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain23("not_a_git_repo", e.message);
+    return failDomain23(projectPathErrorCode(e), e.message);
   }
   const projects = collectCsprojFiles(projectPath, 6);
   const rows = [];
@@ -77081,7 +77096,7 @@ async function handler36(input, ctx) {
   } catch (e) {
     return {
       ok: false,
-      error: { code: "not_a_git_repo", message: e.message }
+      error: { code: projectPathErrorCode(e), message: e.message }
     };
   }
   const migrationDirs = findMigrationsDirs(projectPath);
@@ -77230,7 +77245,7 @@ async function handler37(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const tfm = findLatest2(ctx, projectPath, "dotnet_target_framework", false);
   const secrets = findLatest2(ctx, projectPath, "dotnet_secrets", true);
@@ -77641,7 +77656,7 @@ async function handler38(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const set2 = openSetForProject(ctx.storage, projectPath);
   const open = set2.findings;
@@ -81952,7 +81967,7 @@ async function handler40(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const treeHash = await computeTreeHash(projectPath);
   const includeEnvVars = inp.include_env_vars !== false;
@@ -83973,7 +83988,7 @@ async function handler41(input, ctx, callMeta) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return fail2("not_a_git_repo", e.message);
+    return fail2(projectPathErrorCode(e), e.message);
   }
   const target = classifyTarget(inp.base_url ?? "", inp.authorized_target === true);
   if (!target.allowed) {
@@ -84612,7 +84627,7 @@ async function handler42(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return fail3("not_a_git_repo", e.message);
+    return fail3(projectPathErrorCode(e), e.message);
   }
   const persisted = ctx.storage.surface.getLatestForProject(projectPath);
   if (persisted === null) {
@@ -86499,7 +86514,7 @@ async function handler43(input, ctx, callMeta) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain24("not_a_git_repo", e.message);
+    return failDomain24(projectPathErrorCode(e), e.message);
   }
   if (!await isGitRepo(projectPath)) {
     return failDomain24("not_a_git_repo", `'${projectPath}' is not inside a git working tree.`);
@@ -88008,7 +88023,7 @@ async function handler44(input, ctx) {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
     if (e instanceof InvalidProjectPathError) {
-      return { ok: false, error: { code: "target_not_found", message: e.message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     throw e;
   }
@@ -93328,7 +93343,7 @@ async function handler45(input, ctx, callMeta) {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
     if (e instanceof InvalidProjectPathError) {
-      return { ok: false, error: { code: "target_not_found", message: e.message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     throw e;
   }
@@ -96325,7 +96340,7 @@ async function handler47(input, ctx) {
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: "not_a_git_repo", message: e.message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
   }
   const found2 = vexSourceScan(ctx.storage, projectPath);
   const depsScan = found2.scan;
@@ -97642,7 +97657,7 @@ async function handler48(input, ctx) {
   try {
     project = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    if (e instanceof InvalidProjectPathError) return fail5("not_a_git_repo", e.message);
+    if (e instanceof InvalidProjectPathError) return fail5(projectPathErrorCode(e), e.message);
     throw e;
   }
   if (inp.plan_id !== void 0) {
@@ -100653,6 +100668,7 @@ async function loadDbModules() {
 }
 export {
   ALL_HOSTS,
+  InvalidProjectPathError,
   PROJECT_LOCKFILE_MAX_BYTES,
   assessBashCommand,
   canonicalPath,
@@ -100669,6 +100685,7 @@ export {
   loadImportSarifModules,
   previewMcpConfig,
   readProjectText,
+  resolveProjectPath,
   scanForSecrets,
   setupHost,
   untrustedText,

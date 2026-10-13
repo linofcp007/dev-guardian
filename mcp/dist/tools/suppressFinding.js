@@ -30,7 +30,7 @@ import { z } from 'zod';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { partitionSuppressed } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, OPENVEX_JUSTIFICATIONS, } from '../types.js';
 import { vexSourceScan } from '../vex/scope.js';
@@ -102,7 +102,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
     if (!located) {

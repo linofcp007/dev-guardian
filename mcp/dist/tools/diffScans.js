@@ -39,7 +39,7 @@
 import { z } from 'zod';
 import { countableFindings, latestStateScan, partitionSuppressed, summarizeSkipped, suppressedOfEither, } from '../history/openSet.js';
 import { classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps } from '../history/runCompare.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { sameImportSlot, sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
@@ -179,7 +179,7 @@ function resolveTo(inp, ctx, skipHits) {
                 projectPath = resolveProjectPath(inp.project_path).path;
             }
             catch (e) {
-                return { ok: false, err: failDomain('not_a_git_repo', e.message) };
+                return { ok: false, err: failDomain(projectPathErrorCode(e), e.message) };
             }
             if (scan.project_path !== projectPath) {
                 return {
@@ -199,7 +199,7 @@ function resolveTo(inp, ctx, skipHits) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return { ok: false, err: failDomain('not_a_git_repo', e.message) };
+        return { ok: false, err: failDomain(projectPathErrorCode(e), e.message) };
     }
     // Default: this project's newest usable state scan.
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);

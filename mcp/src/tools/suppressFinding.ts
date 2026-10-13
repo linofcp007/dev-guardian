@@ -32,7 +32,7 @@ import type { PluginContext } from '../context.js';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { partitionSuppressed } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import {
   CVE_SOURCE_SCAN_TYPES,
@@ -134,7 +134,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);

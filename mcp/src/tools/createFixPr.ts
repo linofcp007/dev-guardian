@@ -158,7 +158,7 @@ import { createWorktree } from '../fixpr/worktree.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { findingCveIds } from '../intel/rank.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
@@ -343,7 +343,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   if (!(await isGitRepo(projectPath))) {

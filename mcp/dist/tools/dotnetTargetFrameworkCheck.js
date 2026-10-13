@@ -18,7 +18,7 @@
 import { randomUUID } from 'node:crypto';
 import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 const SUPPORT = {
@@ -55,7 +55,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     const projects = collectCsprojFiles(projectPath, 6);
     const rows = [];

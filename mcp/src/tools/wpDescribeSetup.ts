@@ -33,7 +33,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { ScanRecord, ScanType, ToolResult } from '../types.js';
 import { latestUnderKeys, wpInstallKeys, wpSiteKey, wpSiteKeys } from '../wordpress/siteKeys.js';
@@ -70,7 +70,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
   const siteKey = inp.target_url !== undefined ? wpSiteKey(inp.target_url) : null;
   const installKeys = wpInstallKeys(projectPath, inp.project_path);

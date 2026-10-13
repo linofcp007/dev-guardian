@@ -47,7 +47,7 @@ import { comparePins, parsePinKey } from '../mcpaudit/pins.js';
 import { isListed, probeServer } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
 import { planTargets, qualifiedName, serverNameOfPinKey, serverPinKey } from '../mcpaudit/select.js';
-import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { computeCoverage } from './scanCoverage.js';
 import { registerToolModule } from './index.js';
@@ -142,7 +142,7 @@ async function handler(input, ctx, callMeta) {
     }
     catch (e) {
         if (e instanceof InvalidProjectPathError) {
-            return { ok: false, error: { code: 'target_not_found', message: e.message } };
+            return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
         }
         throw e;
     }

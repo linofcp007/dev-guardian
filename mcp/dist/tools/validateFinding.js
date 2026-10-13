@@ -22,7 +22,8 @@
  * Four refusals, four different facts — never one empty batch standing in for
  * all of them, because an empty result reads as "nothing to worry about":
  *
- *   1. `not_a_git_repo`        — the project path is unusable.
+ *   1. `target_not_found` / `unsupported_target` — the project path is
+ *                                unusable (`projectPathErrorCode`).
  *   2. `no_surface_snapshot`   — nothing to root a graph at; names the tool
  *                                that fixes it.
  *   3. `target_not_found`      — the named fingerprint is not open.
@@ -45,7 +46,7 @@ import { z } from 'zod';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -150,9 +151,9 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        // Same code map_attack_surface, scan_dast and detect_stack return for an
-        // unusable project_path, so hosts and skills handle one failure, not four.
-        return fail('not_a_git_repo', e.message);
+        // The code every tool answers an unusable project_path with
+        // (`projectPathErrorCode`), so hosts and skills handle one failure.
+        return fail(projectPathErrorCode(e), e.message);
     }
     // PROJECT-SCOPED, deliberately. Everything downstream is keyed to
     // `projectPath`: routes and findings are relativized against it, verdicts

@@ -32,7 +32,7 @@ import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../framework
 import { latestStateScan, llmMarkersOf, splitHuntCandidates } from '../history/openSet.js';
 import type { LlmMarker } from '../llmscan/types.js';
 import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import {
   escapeHtml,
@@ -133,7 +133,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   // Narrative mode — wrap stakeholder Markdown in the branded shell.

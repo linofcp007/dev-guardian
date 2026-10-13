@@ -51,7 +51,7 @@ import { readProjectBytes } from '../platform/projectFs.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
@@ -196,12 +196,9 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    // `not_a_git_repo` is what detect_stack returns for an unusable
-    // project_path (detectStack.ts:45-49), even though resolveProjectPath
-    // actually rejects missing / non-directory / root-or-home paths. Keeping
-    // the same code here means hosts and skills handle one failure, not two.
-    // Do not "fix" this in isolation — it would desync the two tools.
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    // The code every tool answers an unusable project_path with
+    // (`projectPathErrorCode`), so hosts and skills handle one failure.
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
 
   const treeHash = await computeTreeHash(projectPath);

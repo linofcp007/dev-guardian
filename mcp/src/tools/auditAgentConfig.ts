@@ -19,7 +19,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { analyzeAgentConfig } from '../agentaudit/analyze.js';
 import { readConfigSources } from '../agentaudit/configSources.js';
-import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { filterFindings } from '../severity/filter.js';
 import { SeverityMin } from '../schemas.js';
 import type { Finding, FindingsCountBySeverity, ToolResult, ToolRun } from '../types.js';
@@ -91,7 +91,7 @@ async function handler(
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
     if (e instanceof InvalidProjectPathError) {
-      return { ok: false, error: { code: 'target_not_found', message: e.message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     throw e;
   }

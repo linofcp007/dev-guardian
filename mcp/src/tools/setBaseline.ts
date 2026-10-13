@@ -19,7 +19,7 @@ import type { PluginContext } from '../context.js';
 import { latestStateScan } from '../history/openSet.js';
 import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
 import { isScopedScan } from '../history/scanRoles.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type DomainError, type ScanType, type ToolResult } from '../types.js';
@@ -92,7 +92,7 @@ async function handler(
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return failDomain('not_a_git_repo', (e as Error).message);
+      return failDomain(projectPathErrorCode(e), (e as Error).message);
     }
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
     if (!choice.ok) return failDomain('unsupported_target', choice.message);

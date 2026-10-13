@@ -87,7 +87,7 @@ import { filterFindings } from '../severity/filter.js';
 import { SEVERITY_ORDER } from '../types.js';
 import { hashInput, hashRulePacks, scanCacheKey } from '../treeHash/cacheKey.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
-import { InvalidProjectPathError, resolveProjectPath, } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath, } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
 import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
@@ -336,7 +336,7 @@ function invalidProjectPath(config, e) {
         return failDomain('unsupported_target', `project_path ${e.path} is a file, and project_path must be a directory. To scan just that file, ` +
             `pass project_path "${retry.project_path}" with scope: { paths: ["${retry.scope.paths.join('", "')}"] }.`, retry);
     }
-    return failDomain('not_a_git_repo', e.message);
+    return failDomain(projectPathErrorCode(e), e.message);
 }
 /** A run's own warnings (`ScannerInvocation.warnings`) as its row keeps them. */
 function runWarnings(value) {

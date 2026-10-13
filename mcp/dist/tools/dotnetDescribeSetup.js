@@ -14,7 +14,7 @@
  * open findings".
  */
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 const tool = {
@@ -35,7 +35,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
+        return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     // The target-framework check reports through `meta`, so its scanner
     // coverage does not disqualify it; the others are finding scans, and one

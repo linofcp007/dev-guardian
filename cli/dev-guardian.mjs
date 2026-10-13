@@ -116,6 +116,7 @@
  * `mcp/dist/cli.js` (rebuilt by `cd mcp && npm run build`).
  */
 
+import module from 'node:module';
 import {
   closeSync,
   existsSync,
@@ -126,7 +127,6 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -135,6 +135,17 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+
+// Node's on-disk compile cache (Node >= 22.1; a no-op where it is missing or
+// NODE_DISABLE_COMPILE_CACHE is set), turned on BEFORE the bundle below is
+// loaded: the 3.9 MB `mcp/dist/cli.js` is most of every run's start-up, and a
+// module is compiled when it is loaded, so only one loaded after this call is
+// cached — which is why the bundle is loaded by an awaited dynamic import, not a
+// static `import` (those are all loaded before any line of this file runs).
+// Measured (review 8, finding 17): `--help` 160 -> 115 ms, `check` 183 -> 116
+// ms. The cache lives in the OS temp directory; Node checks each entry against
+// the source, so a rebuilt bundle is never served stale.
+module.enableCompileCache?.();
 
 // Everything this CLI uses from the server's code comes from ONE file, the
 // self-contained bundle `mcp/dist/cli.js` (built from `mcp/src/cli.ts` by
@@ -149,7 +160,7 @@ import { spawn } from 'node:child_process';
 // bundle's `load*Modules()` functions, which the bundle keeps lazy: `--help`,
 // `check`, `mcp-config` and `ci-init` never evaluate them, on any Node
 // version (`mcp/test/e2e/cliLazyStorage.test.ts`).
-import {
+const {
   ALL_HOSTS,
   assessBashCommand,
   canonicalPath,
@@ -159,19 +170,21 @@ import {
   detectOs,
   execGitSync,
   hardenCommandSearch,
+  InvalidProjectPathError,
   isWithinDir,
-  loadCiModules as loadCiEngine,
-  loadDashboardModules as loadDashboardEngine,
-  loadDbModules as loadDbEngine,
-  loadImportSarifModules as loadImportSarifEngine,
+  loadCiModules: loadCiEngine,
+  loadDashboardModules: loadDashboardEngine,
+  loadDbModules: loadDbEngine,
+  loadImportSarifModules: loadImportSarifEngine,
   previewMcpConfig,
   PROJECT_LOCKFILE_MAX_BYTES,
   readProjectText,
+  resolveProjectPath,
   scanForSecrets,
   setupHost,
   untrustedText,
   writeProjectFile,
-} from '../mcp/dist/cli.js';
+} = await import('../mcp/dist/cli.js');
 
 // `scan` runs in the project it scans: no spawn by bare name may find a binary
 // there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
@@ -1118,44 +1131,35 @@ function parseBaselineUpdateArgs(argv) {
 }
 
 /**
- * Mirrors `mcp/src/platform/projectPath.ts`'s own `isRootOrHome` exactly
- * (coordinator review, Minor): every MCP tool resolves its `project_path`
- * through `resolveProjectPath`, which refuses a filesystem root or the
- * user's home directory outright — mass scans starting there are almost
- * always a mistake and can take hours. This CLI's own `resolveProjectOrExit`
- * (below) checked existence/directory-ness only, so `--project /` (or
- * `--project ~`) proceeded here where the identical input refuses through an
- * MCP host. Deliberately NOT the same function as `resolveProjectPath` (that
- * one throws `InvalidProjectPathError` for a caller that turns it into a
- * tool response; this CLI turns every usage problem into `usageError`/exit
- * 3) — but the RULE itself must be identical, so it is ported rather than
- * re-invented.
- */
-function isRootOrHome(p) {
-  // Filesystem root (e.g. "C:\\" or "/").
-  if (parse(p).root === p) return true;
-  // User home root (e.g. "/home/foo" or "C:\\Users\\foo").
-  const home = resolve(homedir());
-  return p === home;
-}
-
-/**
- * Steps shared by `cmdScan` and `cmdBaseline` before either one runs the
- * pipeline: resolve+validate `--project`, then the pwn-request guard, then
- * `--start-command`'s own usage rules. Order matters — the repo-config guard
- * runs unconditionally (regardless of what argv says) and BEFORE anything
- * argv-specific, so a malicious repository file can never be shadowed by
- * "well argv didn't ask for it anyway".
+ * `--project`, resolved — or a usage error (exit 3). Judged by the SAME
+ * function every MCP tool resolves its `project_path` through
+ * (`resolveProjectPath`, `mcp/src/platform/projectPath.ts`), so the rule
+ * cannot drift: a missing path or a file, a filesystem root or the user's
+ * home directory (in any spelling — another case, an 8.3 short name, a link:
+ * it compares canonical paths), and on Windows a network (UNC) path, refused
+ * before any file-system call. This CLI's own copy of the root/home rule
+ * compared the lexical path, so `--project C:\users\administrator` and
+ * `--project C:\Users\ADMINI~1` both got past it (review 8, finding 15).
+ *
+ * Returns the path as the user spelled it, resolved — not the canonical one:
+ * every step re-resolves it to the canonical spelling it keys rows by, and
+ * the reports name the directory the way it was given.
  */
 function resolveProjectOrExit(rawProject) {
   const projectPath = resolve(rawProject);
-  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+  try {
+    resolveProjectPath(rawProject);
+  } catch (e) {
+    if (!(e instanceof InvalidProjectPathError)) throw e;
+    if (e.reason === 'root_or_home') {
+      return usageError(`--project must not be a filesystem root or the user's home directory: ${e.path}`);
+    }
+    if (e.reason === 'network_path') {
+      return usageError(
+        `--project is a network (UNC) path: ${e.path} — dev-guardian scans local directories only; scan a local copy`,
+      );
+    }
     return usageError(`--project does not exist or is not a directory: ${projectPath}`);
-  }
-  if (isRootOrHome(projectPath)) {
-    return usageError(
-      `--project must not be a filesystem root or the user's home directory: ${projectPath}`,
-    );
   }
   return projectPath;
 }
@@ -2980,10 +2984,7 @@ async function cmdDb(argv) {
   const parsed = parseDbAdoptArgs(rest);
   if (parsed.error) return usageError(parsed.error);
   const opts = parsed.value;
-  const projectPath = resolve(opts.project);
-  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
-    return usageError(`--project does not exist or is not a directory: ${projectPath}`);
-  }
+  const projectPath = resolveProjectOrExit(opts.project);
   const mods = await loadDbModules();
 
   let report;

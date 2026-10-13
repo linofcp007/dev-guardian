@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { makeFinding, } from '../runners/scannerParsers/index.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
@@ -74,7 +74,7 @@ async function handler(input, ctx) {
     catch (e) {
         return {
             ok: false,
-            error: { code: 'not_a_git_repo', message: e.message },
+            error: { code: projectPathErrorCode(e), message: e.message },
         };
     }
     const migrationDirs = findMigrationsDirs(projectPath);

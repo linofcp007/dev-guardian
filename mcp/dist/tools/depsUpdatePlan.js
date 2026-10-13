@@ -125,7 +125,7 @@ import { compareVersions, compareVersionsLoose, isCleanVersion, isLooseVersion, 
 import { findLatestUsable } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES } from '../types.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
     project_path: ProjectPath,
@@ -161,7 +161,7 @@ async function handler(input, ctx, callMeta) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     // create_fix_pr plans on a disposable checkout of HEAD (Task 11): the
     // files are the checkout's, the CVE history is the origin project's.

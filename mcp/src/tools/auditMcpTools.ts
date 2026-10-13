@@ -66,7 +66,7 @@ import { comparePins, parsePinKey, type PinComparison } from '../mcpaudit/pins.j
 import { isListed, probeServer, type ProbeOutcome } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
 import { planTargets, qualifiedName, serverNameOfPinKey, serverPinKey } from '../mcpaudit/select.js';
-import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import type { McpPin } from '../storage/mcpToolPinsRepo.js';
 import type { Finding, FindingsCountBySeverity, ToolResult, ToolRun } from '../types.js';
@@ -206,7 +206,7 @@ async function handler(
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
     if (e instanceof InvalidProjectPathError) {
-      return { ok: false, error: { code: 'target_not_found', message: e.message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     throw e;
   }

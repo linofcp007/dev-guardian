@@ -23,7 +23,7 @@
  * what local_only does not stop, as SECURITY.md does.
  */
 import { randomUUID } from 'node:crypto';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { z } from 'zod';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import { filterFindings } from '../severity/filter.js';
@@ -70,7 +70,7 @@ async function handler(input, ctx, callMeta) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     // No bash check: none of the sub-tools runs a shell script any more.
     // Pre-record the audit scan so the children can be linked by id even if a

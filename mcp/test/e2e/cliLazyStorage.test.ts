@@ -14,8 +14,10 @@
  * `load*Modules()` functions, whose dynamic `import()`s esbuild keeps lazy.
  * Two independent proofs, because neither alone rules out the defect:
  *
- * 1. STATIC, on the source text: the CLI imports Node builtins and the
- *    bundle, nothing else, and has no `import()` of its own.
+ * 1. STATIC, on the source text: the CLI imports Node builtins statically,
+ *    and the bundle with its one `import()` — after it turns Node's compile
+ *    cache on, which only caches a module loaded after the call (3.3.0,
+ *    review 8 finding 17).
  * 2. BEHAVIOURAL, on an isolated copy of the CLI and the bundle, run with a
  *    preload that makes `node:sqlite` unavailable the way an old Node does
  *    (`ERR_UNKNOWN_BUILTIN_MODULE`): `--help`, `check` and `mcp-config` still
@@ -27,7 +29,7 @@
  * in `mcp/test/unit/cli/lazyStorage.test.ts`.
  */
 
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,14 +51,22 @@ function specifiers(source: string): { staticSpecs: string[]; dynamicSpecs: stri
 }
 
 describe('cli/dev-guardian.mjs — imports Node builtins and the bundle, nothing else', () => {
-  it('every import names a node: builtin or ../mcp/dist/cli.js, and the bundle is among them', () => {
+  it('every static import names a node: builtin', () => {
     const { staticSpecs } = specifiers(readFileSync(REAL_CLI, 'utf8'));
-    expect(staticSpecs).toContain('../mcp/dist/cli.js');
-    expect(staticSpecs.filter((s) => !s.startsWith('node:') && s !== '../mcp/dist/cli.js')).toEqual([]);
+    expect(staticSpecs.length).toBeGreaterThan(0);
+    expect(staticSpecs.filter((s) => !s.startsWith('node:'))).toEqual([]);
   });
 
-  it('has no dynamic import() of its own — the lazy loading is the bundle’s', () => {
-    expect(specifiers(readFileSync(REAL_CLI, 'utf8')).dynamicSpecs).toEqual([]);
+  it('its one dynamic import() is the bundle — the lazy loading inside it is the bundle’s', () => {
+    expect(specifiers(readFileSync(REAL_CLI, 'utf8')).dynamicSpecs).toEqual(['../mcp/dist/cli.js']);
+  });
+
+  it('turns the compile cache on before it loads the bundle', () => {
+    const source = readFileSync(REAL_CLI, 'utf8');
+    const enable = source.indexOf('module.enableCompileCache?.()');
+    const load = source.indexOf("await import('../mcp/dist/cli.js')");
+    expect(enable).toBeGreaterThan(0);
+    expect(load).toBeGreaterThan(enable);
   });
 
   it('positive control: the reader sees a per-file dist import, static or dynamic', () => {
@@ -174,4 +184,26 @@ describe('cli/dev-guardian.mjs — on a Node without node:sqlite', () => {
       expect(r.stderr).toMatch(/^dev-guardian: this command requires Node\.js >= 22\.13 \(built-in node:sqlite support\)\. Current: v[\d.]+\.\n$/);
     });
   }
+});
+
+// Review 8, finding 17: the CLI compiled its 3.9 MB bundle from scratch on
+// every run. With Node's compile cache on before the bundle loads, a run with
+// no NODE_COMPILE_CACHE of its own writes the cache under the OS temp
+// directory — the next run reads it instead of compiling.
+describe('cli/dev-guardian.mjs — Node compile cache', () => {
+  it('writes the compile cache under the OS temp directory, with no NODE_COMPILE_CACHE set', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'guardian-ccache-'));
+    try {
+      const env: NodeJS.ProcessEnv = { ...process.env, TMP: tmp, TEMP: tmp, TMPDIR: tmp };
+      delete env['NODE_COMPILE_CACHE'];
+      delete env['NODE_DISABLE_COMPILE_CACHE'];
+      const r = spawnSyncCapped(process.execPath, [REAL_CLI, '--help'], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
+      expect(r.status).toBe(0);
+      const cache = join(tmp, 'node-compile-cache');
+      expect(existsSync(cache)).toBe(true);
+      expect(readdirSync(cache, { recursive: true }).length).toBeGreaterThan(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

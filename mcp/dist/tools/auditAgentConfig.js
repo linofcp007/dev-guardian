@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { analyzeAgentConfig } from '../agentaudit/analyze.js';
 import { readConfigSources } from '../agentaudit/configSources.js';
-import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { filterFindings } from '../severity/filter.js';
 import { SeverityMin } from '../schemas.js';
 import { computeCoverage } from './scanCoverage.js';
@@ -74,7 +74,7 @@ async function handler(input, ctx) {
     }
     catch (e) {
         if (e instanceof InvalidProjectPathError) {
-            return { ok: false, error: { code: 'target_not_found', message: e.message } };
+            return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
         }
         throw e;
     }

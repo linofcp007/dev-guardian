@@ -53,7 +53,7 @@ import { adoptIdenticalConfigs, installFile, refreshConfigs, } from '../configdr
 import { hashConfigFile } from '../configdrift/hash.js';
 import { emptyManifest, readManifest, upsertManifestEntry, writeManifest, } from '../configdrift/manifest.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { projectEntryKind } from '../platform/projectFs.js';
 import { resolveVersion } from '../platform/version.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
@@ -144,7 +144,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     const profile = inp.profile ?? 'standard';
     const apply = inp.apply ?? true;

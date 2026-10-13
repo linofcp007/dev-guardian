@@ -28,7 +28,7 @@ import { runTrivy } from '../runners/trivyRun.js';
 import { summarize as summariseSbom } from '../runners/scannerParsers/syft.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
   ensureReportDir,
@@ -90,7 +90,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   // The tree the SBOM describes, taken before anything is written: export_vex

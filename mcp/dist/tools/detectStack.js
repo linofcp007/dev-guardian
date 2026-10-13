@@ -19,7 +19,7 @@
  */
 import { listProjectDir, presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { detectStack } from '../runners/stackDetect.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -43,7 +43,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     const parsed = detectStack(projectPath);
     // .NET / C# / F# enrichment — kept separate from stackDetect.ts's manifest

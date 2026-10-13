@@ -34,7 +34,7 @@ export { previewMcpConfig, setupHost } from './hostsetup/setup.js';
 export { execGitSync } from './platform/gitSafety.js';
 export { detectOs } from './platform/osDetect.js';
 export { hardenCommandSearch } from './platform/binaryPath.js';
-export { canonicalPath } from './platform/projectPath.js';
+export { canonicalPath, InvalidProjectPathError, resolveProjectPath } from './platform/projectPath.js';
 export { scanForSecrets } from './hooks/secretScan.js';
 export { assessBashCommand } from './hooks/bashGuard.js';
 export { decodeText } from './hooks/textEncoding.js';

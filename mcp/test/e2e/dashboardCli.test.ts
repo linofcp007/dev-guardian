@@ -23,7 +23,7 @@ import {
   mkdtempSync, mkdirSync, rmSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, parse, resolve } from 'node:path';
+import { dirname, join, parse, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Seeding-only imports, straight from src (TypeScript), exactly like
@@ -763,6 +763,43 @@ describe('dev-guardian status / dashboard — the root/home guard every MCP tool
     const r = runCli(['status', '--project', homedir()]);
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/--project/);
+  });
+
+  // Review 8, finding 15: the CLI's own copy of the rule compared the lexical
+  // path, so the home directory in another case or by its 8.3 short name got
+  // past it — and `baseline update` would have written ~/.guardian/. The CLI
+  // now asks `resolveProjectPath` itself, which compares canonical paths.
+  it.runIf(process.platform === 'win32')('refuses the home directory spelled in another case, for scan and baseline update too', () => {
+    const other = homedir().toLowerCase() === homedir() ? homedir().toUpperCase() : homedir().toLowerCase();
+    for (const args of [['status'], ['scan'], ['baseline', 'update'], ['db', 'adopt']]) {
+      const r = runCli([...args, '--project', other]);
+      expect(r.status, args.join(' ')).toBe(3);
+      expect(r.stderr).toMatch(/--project must not be a filesystem root or the user's home directory/);
+    }
+  });
+
+  // The 8.3 short name of home, derived from the suite's raw temp directory
+  // (`C:\Users\ADMINI~1\AppData\Local\Temp` — test/setup/canonicalTmpdir.ts);
+  // where the OS has no such alias the case cannot arise.
+  const rawTmp = process.env['GUARDIAN_TEST_RAW_TMPDIR'];
+  const underHome = relative(homedir(), tmpdir());
+  const shortHome =
+    rawTmp !== undefined && !underHome.startsWith('..') && rawTmp.toLowerCase().endsWith(`\\${underHome.toLowerCase()}`)
+      ? rawTmp.slice(0, rawTmp.length - underHome.length - 1)
+      : undefined;
+  // Review 8, finding 8: a network path is refused on its spelling — a share
+  // that does not answer blocks every file call for ~21 s.
+  it.runIf(process.platform === 'win32')('refuses a network (UNC) --project before touching it', () => {
+    const bs = String.fromCharCode(92);
+    const r = runCli(['scan', '--project', `${bs}${bs}10.255.255.7${bs}share`]);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--project is a network \(UNC\) path/);
+  });
+
+  it.runIf(shortHome !== undefined && shortHome !== homedir())('refuses the home directory by its 8.3 short name', () => {
+    const r = runCli(['scan', '--project', shortHome ?? '']);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--project must not be a filesystem root or the user's home directory/);
   });
 
   it('still accepts a real subdirectory of home — the guard is not over-broad', () => {

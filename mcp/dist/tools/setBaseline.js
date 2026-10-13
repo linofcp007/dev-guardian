@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { latestStateScan } from '../history/openSet.js';
 import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
 import { isScopedScan } from '../history/scanRoles.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES } from '../types.js';
@@ -78,7 +78,7 @@ async function handler(input, ctx) {
             projectPath = resolveProjectPath(inp.project_path).path;
         }
         catch (e) {
-            return failDomain('not_a_git_repo', e.message);
+            return failDomain(projectPathErrorCode(e), e.message);
         }
         const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
         if (!choice.ok)

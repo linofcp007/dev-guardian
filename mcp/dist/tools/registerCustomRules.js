@@ -46,7 +46,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { CUSTOM_RULES_META_KEY, customRulesMetaKey, validateSemgrepRulesFile, yamlFilesUnder, } from '../platform/customRules.js';
 import { expandGlob, hasGlobMagic } from '../platform/glob.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { validateRuleFiles } from '../runners/semgrepValidate.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -86,7 +86,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     if (inp.clear) {
         ctx.storage.runtimeMeta.delete(customRulesMetaKey(projectPath));

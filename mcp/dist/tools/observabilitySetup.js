@@ -13,7 +13,7 @@
  * etc.) — actual install is left to the user / their package manager.
  */
 import { z } from 'zod';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { describeWriteRefusal, listProjectDir, presentInProject, writeProjectFile } from '../platform/projectFs.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
@@ -40,7 +40,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     const apply = inp.apply ?? false;
     const stack = inferStack(projectPath, ctx);

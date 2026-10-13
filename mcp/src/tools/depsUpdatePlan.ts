@@ -150,7 +150,7 @@ import {
 import { findLatestUsable } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
 
 type Classification = 'security' | 'patch' | 'minor' | 'major';
@@ -317,7 +317,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   // create_fix_pr plans on a disposable checkout of HEAD (Task 11): the

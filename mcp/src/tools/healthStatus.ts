@@ -19,7 +19,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 import type { PluginContext } from '../context.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
@@ -71,7 +71,7 @@ async function handler(
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
     }
   }
   const latest = ctx.storage.scans.getLatestForProject(projectPath);

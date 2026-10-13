@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { LLM_SCAN_DEFAULTS, type ScanMode } from '../llmscan/types.js';
 import { fail, planStatus, startPlan } from '../llmscan/service.js';
-import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -67,7 +67,7 @@ async function handler(input: Record<string, unknown>, ctx: PluginContext) {
   try {
     project = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    if (e instanceof InvalidProjectPathError) return fail('not_a_git_repo', e.message);
+    if (e instanceof InvalidProjectPathError) return fail(projectPathErrorCode(e), e.message);
     throw e;
   }
   if (inp.plan_id !== undefined) {

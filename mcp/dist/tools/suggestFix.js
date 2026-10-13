@@ -25,7 +25,7 @@
 import { z } from 'zod';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 const ROTATION_GUIDANCE = 'This finding flags a credential (a password, key or token), not a code-shape bug — suggest_fix ' +
@@ -66,7 +66,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     const contextLines = inp.context_lines ?? 20;
     // Locate the finding in this project's newest scan that carries it.

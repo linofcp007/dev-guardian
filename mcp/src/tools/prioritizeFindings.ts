@@ -56,7 +56,7 @@ import {
   type SsvcPoint,
 } from '../intel/ssvc.js';
 import type { CveIntelResult } from '../intel/types.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { Category, Finding, Severity, ToolResult } from '../types.js';
 import { assessDependency, dependencySubjectOf, prepareDependencyIndex } from '../validate/dependencyProvider.js';
@@ -151,7 +151,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
 
   const set = openSetForProject(ctx.storage, projectPath);

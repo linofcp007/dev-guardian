@@ -8,7 +8,7 @@
  */
 import { hookInstallTarget } from '../platform/hookInstallTarget.js';
 import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
@@ -29,7 +29,7 @@ async function handler(input, _ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     // pre-commit reads the config and writes the hooks wherever the
     // repository's metadata says; both are judged here first — a config that

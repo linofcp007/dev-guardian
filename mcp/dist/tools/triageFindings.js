@@ -27,7 +27,7 @@
  */
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { describeOpenSet, isDemoting, openSetForProject } from '../history/openSet.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 /** Entries returned per bucket; `summary` counts are never capped. */
@@ -75,7 +75,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
+        return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     const set = openSetForProject(ctx.storage, projectPath);
     const open = set.findings;

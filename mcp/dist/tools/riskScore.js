@@ -34,7 +34,7 @@ import { scoreRisk } from '../dashboard/risk.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { isUncorrelatedFinding } from '../intel/rank.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan } from '../types.js';
 import { registerToolModule } from './index.js';
@@ -63,7 +63,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
+        return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     const now = Date.now();
     const storage = ctx.storage;

@@ -41,7 +41,7 @@ import { describeOpenSet, openSetForProject } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { exploitabilitySignal, findingCveIds, isUncorrelatedFinding } from '../intel/rank.js';
 import { MISSION_WELLBEING_VALUES, SSVC_DECISIONS, assessSsvc, automatablePoint, exploitationPoint, missionWellbeingPoint, technicalImpactPoint, } from '../intel/ssvc.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { assessDependency, dependencySubjectOf, prepareDependencyIndex } from '../validate/dependencyProvider.js';
 import { buildImportGraph } from '../validate/importGraph.js';
@@ -115,7 +115,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
+        return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     const set = openSetForProject(ctx.storage, projectPath);
     const open = set.findings;

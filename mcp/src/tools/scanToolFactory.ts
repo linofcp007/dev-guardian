@@ -122,6 +122,7 @@ import { hashInput, hashRulePacks, scanCacheKey } from '../treeHash/cacheKey.js'
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
   InvalidProjectPathError,
+  projectPathErrorCode,
   resolveProjectPath,
 } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
@@ -573,7 +574,7 @@ function invalidProjectPath<TInput extends ScanToolBaseInput>(
       retry,
     );
   }
-  return failDomain('not_a_git_repo', e.message);
+  return failDomain(projectPathErrorCode(e), e.message);
 }
 
 /** A run's own warnings (`ScannerInvocation.warnings`) as its row keeps them. */

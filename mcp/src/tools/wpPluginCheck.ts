@@ -48,7 +48,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
+import { canonicalPath, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { serverProjectPath } from '../resources/paging.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
@@ -131,7 +131,7 @@ async function handler(
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return failDomain('not_a_git_repo', (e as Error).message);
+      return failDomain(projectPathErrorCode(e), (e as Error).message);
     }
   } else if (inp.wp_install_path !== undefined && inp.wp_install_path.length > 0) {
     projectPath = canonicalPath(inp.wp_install_path);

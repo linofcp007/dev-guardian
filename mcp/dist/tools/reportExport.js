@@ -29,7 +29,7 @@ import { owaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { latestStateScan, llmMarkersOf, splitHuntCandidates } from '../history/openSet.js';
 import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import { escapeHtml, markdownToSafeHtml, renderHtmlDocument, severityBar, severityChip, } from '../report/htmlTheme.js';
 import { owaspCoverageHtml, owaspCoverageMarkdown, taxonomyCell } from '../report/owaspCoverage.js';
@@ -94,7 +94,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     // Narrative mode — wrap stakeholder Markdown in the branded shell.
     if (inp.content_markdown != null) {

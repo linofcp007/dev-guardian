@@ -37,7 +37,7 @@ import { DEFAULT_MAX_REQUESTS, planProbes } from '../dast/plan.js';
 import { DEFAULT_CONCURRENCY, DEFAULT_PROBE_TIMEOUT_MS, executeProbe, executeProbes, } from '../dast/probe.js';
 import { collectSecrets, makeRedactor, redactObject } from '../dast/redact.js';
 import { classifyTarget } from '../dast/target.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { nameAFew } from '../runners/semgrepReport.js';
@@ -187,9 +187,9 @@ async function handler(input, ctx, callMeta) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        // Same code map_attack_surface and detect_stack return for an unusable
-        // project_path, so hosts and skills handle one failure and not three.
-        return fail('not_a_git_repo', e.message);
+        // The code every tool answers an unusable project_path with
+        // (`projectPathErrorCode`), so hosts and skills handle one failure.
+        return fail(projectPathErrorCode(e), e.message);
     }
     // ---- 2. Target authorization, BEFORE any network I/O -----------------
     const target = classifyTarget(inp.base_url ?? '', inp.authorized_target === true);

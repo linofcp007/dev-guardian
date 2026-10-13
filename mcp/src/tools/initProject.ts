@@ -67,7 +67,7 @@ import {
 } from '../configdrift/manifest.js';
 import type { PluginContext } from '../context.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { projectEntryKind } from '../platform/projectFs.js';
 import { resolveVersion } from '../platform/version.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
@@ -184,7 +184,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   const profile: Profile = inp.profile ?? 'standard';

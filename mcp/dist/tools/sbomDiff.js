@@ -65,7 +65,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 /** Response arrays are capped here; `summary` counts are never capped on a
@@ -112,7 +112,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return failDomain('not_a_git_repo', e.message);
+        return failDomain(projectPathErrorCode(e), e.message);
     }
     const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
     const sboms = needsDefaultPair

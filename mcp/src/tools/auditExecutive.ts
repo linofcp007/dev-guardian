@@ -25,7 +25,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { PluginContext } from '../context.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { z } from 'zod';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import { filterFindings } from '../severity/filter.js';
@@ -106,7 +106,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   // No bash check: none of the sub-tools runs a shell script any more.

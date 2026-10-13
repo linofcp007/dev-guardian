@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import { LLM_SCAN_DEFAULTS } from '../llmscan/types.js';
 import { fail, planStatus, startPlan } from '../llmscan/service.js';
-import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { registerToolModule } from './index.js';
 const inputSchema = {
@@ -60,7 +60,7 @@ async function handler(input, ctx) {
     }
     catch (e) {
         if (e instanceof InvalidProjectPathError)
-            return fail('not_a_git_repo', e.message);
+            return fail(projectPathErrorCode(e), e.message);
         throw e;
     }
     if (inp.plan_id !== undefined) {

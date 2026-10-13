@@ -36,7 +36,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, posix, win32 } from 'node:path';
 import { z } from 'zod';
 import { vexSourceScan } from '../vex/scope.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { ProjectPath } from '../schemas.js';
 import { prepareDependencyIndex } from '../validate/dependencyProvider.js';
@@ -94,7 +94,7 @@ async function handler(input, ctx) {
         projectPath = resolveProjectPath(inp.project_path).path;
     }
     catch (e) {
-        return { ok: false, error: { code: 'not_a_git_repo', message: e.message } };
+        return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     const found = vexSourceScan(ctx.storage, projectPath);
     const depsScan = found.scan;
