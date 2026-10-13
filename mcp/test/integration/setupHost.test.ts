@@ -24,7 +24,7 @@ function makeHostRules(): string {
   // Frontmatter here too — Windsurf requires it as the file's literal first
   // bytes exactly like Cursor does (fix round 1, item 1), so the fixture
   // needs one for the "starts with the frontmatter" test to mean anything.
-  writeFileSync(join(dir, 'windsurf.md'), '---\ntrigger: always_on\n---\nbody: run {{DEV_GUARDIAN_CLI}} status', 'utf8');
+  writeFileSync(join(dir, 'windsurf.md'), '---\ntrigger: model_decision\n---\nbody: run {{DEV_GUARDIAN_CLI}} status', 'utf8');
   writeFileSync(join(dir, 'copilot-instructions.md'), '# copilot', 'utf8');
   writeFileSync(join(dir, 'clinerules'), '# cline', 'utf8');
   writeFileSync(join(dir, 'AGENTS.md'), '# codex', 'utf8');
@@ -88,7 +88,7 @@ describe('setupHost — rules files', () => {
     expect(r?.status).toBe('written');
     const content = readFileSync(join(project, '.windsurf/rules/dev-guardian.md'), 'utf8');
     expect(content.startsWith('---\n')).toBe(true);
-    expect(content).toContain('trigger: always_on');
+    expect(content).toContain('trigger: model_decision');
     expect(content).toContain(`run ${CLI} status`);
     expect(content).not.toContain('{{DEV_GUARDIAN_CLI}}');
     expect(content).not.toContain('<!-- dev-guardian:begin -->');
