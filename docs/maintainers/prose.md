@@ -17,7 +17,7 @@ what the model needs **now**; history goes to `CHANGELOG.md` and the rule packs'
 | `skills/<name>/references/*.md` | ≤ 6 KB each, and linked from its `SKILL.md` | same |
 | `host-rules/AGENTS.md` (the rendered body) | ≤ 8 000 bytes — Codex reads 32 KiB of AGENTS.md in all, dev-spec-driven's block included | `hostRulesDrift.test.ts` |
 | The Windsurf rule | ≤ 11 000 characters — Windsurf truncates at 12 000 | same |
-| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (70 977 at 3.3.0: 70 184 + 793) | `descriptionLimits.test.ts` |
+| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (70 992 at 3.3.0: 70 199 + 793) | `descriptionLimits.test.ts` |
 | A listed tool's `description` / `title` | ≤ 600 / ≤ 60 characters | same |
 | A parameter's description (nested ones too) | ≤ 200 characters | same |
 | The MCP `instructions` (`mcp/src/tools/instructions.ts`) | ≤ 900 characters | same |
