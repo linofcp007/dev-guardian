@@ -29,7 +29,7 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 
-import { lstatSync } from 'node:fs';
+import { lstatSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { walkLinksUnder } from '../hooks/configFile.js';
@@ -192,20 +192,44 @@ function presentBelow(under: string, path: string): boolean {
 }
 
 /**
+ * Whether `path` is a regular FILE below `under` — `stat`, so a local link is
+ * followed to what it names (npm's own `.bin` entries are links on POSIX) —
+ * with no link on the way to a network or device path.
+ */
+function fileBelow(under: string, path: string): boolean {
+  if (!walkLinksUnder(under, path).ok) return false;
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether `npx` / `npm exec` / `bunx` would run `name` from the project
- * rather than fetch it (review P1): a `node_modules/<name>` package, or a
- * `node_modules/.bin/<bin>` (the name without its scope; `.cmd` on Windows),
- * in the working directory or an ancestor up to the repository root. Not
- * found — or behind a link to a network path — means it would be fetched,
+ * rather than fetch it (review P1), in the working directory or an ancestor up
+ * to the repository root: a `node_modules/<name>/package.json`, or — for the
+ * unscoped program name a launcher runs (not a `-p` package, `byPackageFlag`)
+ * — a `node_modules/.bin/<name>` (bun's `.exe` on Windows too). Each only as a
+ * FILE, as npm checks it (review of 3.3.0: a directory at `.bin/<name>`, which
+ * a repository can commit as `.bin/<name>/.keep`, a lone `<name>.cmd`, the
+ * unscoped bin of a scoped name and the bin of a `-p` package all skipped the
+ * vetting — the malicious-package deny included — while npm fetched).
+ * Not found, or behind a link to a network path, means it would be fetched,
  * and is vetted.
  */
-function installedLocally(name: string, cwd: string): boolean {
-  const bin = name.replace(/^@[^/]+\//, '');
+function installedLocally(name: string, cwd: string, byPackageFlag = false, manager = ''): boolean {
+  const scoped = name.startsWith('@');
   let dir = resolve(cwd);
   for (let i = 0; i < 32; i += 1) {
     const modules = join(dir, 'node_modules');
-    for (const candidate of [join(modules, name, 'package.json'), join(modules, '.bin', bin), join(modules, '.bin', `${bin}.cmd`)]) {
-      if (presentBelow(dir, candidate)) return true;
+    const candidates = [join(modules, name, 'package.json')];
+    if (!scoped && !byPackageFlag) {
+      candidates.push(join(modules, '.bin', name));
+      if (manager === 'bun') candidates.push(join(modules, '.bin', `${name}.exe`));
+    }
+    for (const candidate of candidates) {
+      if (fileBelow(dir, candidate)) return true;
     }
     if (presentBelow(dir, join(dir, '.git'))) return false;
     const parent = dirname(dir);
@@ -227,7 +251,7 @@ function installedLocally(name: string, cwd: string): boolean {
 function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions): boolean {
   if (pkg.range !== undefined || pkg.raw !== pkg.name) return false;
   const dir = commandDir(c, opts);
-  return dir !== null && installedLocally(pkg.name, dir);
+  return dir !== null && installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
 }
 
 /**

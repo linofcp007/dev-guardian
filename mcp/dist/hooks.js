@@ -4933,10 +4933,13 @@ function collectLaunch(d, launch, context) {
   const has = (names) => names !== void 0 && flags.some((f) => names.has(f.flag));
   const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
+  let byPackageFlag = false;
   if (!has(table.noFetchFlags)) {
     const named = values(table.packageFlags);
-    if (named.length > 0) raws.push(...named);
-    else if (!has(table.shellFlags)) raws.push(...w.positionals.map((p) => p.value));
+    if (named.length > 0) {
+      raws.push(...named);
+      byPackageFlag = true;
+    } else if (!has(table.shellFlags)) raws.push(...w.positionals.map((p) => p.value));
     raws.push(...values(table.extraPackageFlags));
   }
   const packages = [];
@@ -4957,6 +4960,7 @@ function collectLaunch(d, launch, context) {
   const registry = pre.customRegistry ?? w.customRegistry;
   if (registry !== void 0) out.customRegistry = registry;
   if (launch.localFirst === true) out.localFirst = true;
+  if (byPackageFlag) out.byPackageFlag = true;
   return out;
 }
 function collect2(d, context) {
@@ -5056,6 +5060,7 @@ function parseReading(text, forced) {
   const envChange = changesEnvironment(text, split.statements);
   let dirChanged = false;
   let workdir;
+  const outer = [];
   for (const statement of split.statements) {
     for (const words of statement.commands) {
       const d = detect(words);
@@ -5070,9 +5075,12 @@ function parseReading(text, forced) {
       }
       if (changesDirectory(words)) {
         dirChanged = true;
-        workdir = directoryAfter(workdir, words);
+        workdir = statement.commands.length > 1 || statement.end === "&" ? null : directoryAfter(workdir, words);
       }
     }
+    if (statement.end === "(") outer.push(workdir);
+    else if (statement.end === ")") workdir = outer.length > 0 ? outer.pop() : workdir === void 0 ? void 0 : null;
+    else if (statement.end === "`") workdir = workdir === void 0 ? void 0 : null;
   }
   return out;
 }
@@ -7772,7 +7780,7 @@ __export(hookDecision_exports, {
   escapeHatch: () => escapeHatch,
   vetDeadlineMs: () => vetDeadlineMs
 });
-import { lstatSync as lstatSync3 } from "node:fs";
+import { lstatSync as lstatSync3, statSync as statSync2 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { dirname as dirname4, join as join8, resolve as resolve5 } from "node:path";
 function vetDeadlineMs(env) {
@@ -7838,13 +7846,26 @@ function presentBelow(under, path) {
     return false;
   }
 }
-function installedLocally(name, cwd) {
-  const bin = name.replace(/^@[^/]+\//, "");
+function fileBelow(under, path) {
+  if (!walkLinksUnder(under, path).ok) return false;
+  try {
+    return statSync2(path).isFile();
+  } catch {
+    return false;
+  }
+}
+function installedLocally(name, cwd, byPackageFlag = false, manager = "") {
+  const scoped = name.startsWith("@");
   let dir = resolve5(cwd);
   for (let i = 0; i < 32; i += 1) {
     const modules = join8(dir, "node_modules");
-    for (const candidate of [join8(modules, name, "package.json"), join8(modules, ".bin", bin), join8(modules, ".bin", `${bin}.cmd`)]) {
-      if (presentBelow(dir, candidate)) return true;
+    const candidates = [join8(modules, name, "package.json")];
+    if (!scoped && !byPackageFlag) {
+      candidates.push(join8(modules, ".bin", name));
+      if (manager === "bun") candidates.push(join8(modules, ".bin", `${name}.exe`));
+    }
+    for (const candidate of candidates) {
+      if (fileBelow(dir, candidate)) return true;
     }
     if (presentBelow(dir, join8(dir, ".git"))) return false;
     const parent = dirname4(dir);
@@ -7856,7 +7877,7 @@ function installedLocally(name, cwd) {
 function runsInstalledCopy(pkg, c, opts) {
   if (pkg.range !== void 0 || pkg.raw !== pkg.name) return false;
   const dir = commandDir(c, opts);
-  return dir !== null && installedLocally(pkg.name, dir);
+  return dir !== null && installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
 }
 function commandDir(c, opts) {
   if (c.workdir === void 0) return resolve5(opts.cwd);
@@ -8509,7 +8530,7 @@ var init_settingsGuard = __esm({
 });
 
 // src/platform/binaryPath.ts
-import { accessSync, constants as constants2, lstatSync as lstatSync4, statSync as statSync2 } from "node:fs";
+import { accessSync, constants as constants2, lstatSync as lstatSync4, statSync as statSync3 } from "node:fs";
 import { extname, join as join9 } from "node:path";
 function envValue2(env, name, platform) {
   if (platform !== "win32") return env[name];
@@ -8534,7 +8555,7 @@ function extensionsFor(name, env) {
 }
 function runnable(file, platform) {
   try {
-    const st = statSync2(file);
+    const st = statSync3(file);
     if (!st.isFile()) return false;
     if (platform === "win32") return true;
     accessSync(file, constants2.X_OK);
@@ -9301,7 +9322,7 @@ var init_gitSafety = __esm({
 });
 
 // src/platform/projectPath.ts
-import { existsSync as existsSync2, realpathSync as realpathSync3, statSync as statSync3 } from "node:fs";
+import { existsSync as existsSync2, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
 import { parse as parse7, resolve as resolve8 } from "node:path";
 function canonicalPath(p) {
   const resolved = resolve8(p);
@@ -9343,7 +9364,7 @@ var init_dbError = __esm({
 });
 
 // src/storage/userData.ts
-import { chmodSync, lstatSync as lstatSync6, mkdirSync as mkdirSync2, statSync as statSync4 } from "node:fs";
+import { chmodSync, lstatSync as lstatSync6, mkdirSync as mkdirSync2, statSync as statSync5 } from "node:fs";
 import { join as join12 } from "node:path";
 function notPrivate(path, why) {
   return new GuardianDbError("data-dir", path, `'${path}' ${why}`);
@@ -9372,7 +9393,7 @@ function assertPrivateDir(path, st) {
 }
 function statOrNull(path, follow) {
   try {
-    return follow ? statSync4(path) : lstatSync6(path);
+    return follow ? statSync5(path) : lstatSync6(path);
   } catch (error) {
     const code = error.code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;

@@ -66,6 +66,12 @@ export interface InstallCommand {
    */
   localFirst?: boolean;
   /**
+   * The packages were named by the launcher's package flag (`npx -p pkg cmd`),
+   * not as the program it runs: a `node_modules/.bin/<pkg>` says nothing about
+   * whether `pkg` is installed (review of 3.3.0).
+   */
+  byPackageFlag?: boolean;
+  /**
    * Where the command runs when a directory change earlier in the line moved
    * it: the targets of those `cd` / `pushd` / `Set-Location` words in order,
    * each relative to the one before (the hook resolves them against its own
@@ -787,10 +793,13 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
           .map((v) => v.trim())
           .filter((v) => v !== '');
   const raws: string[] = [];
+  let byPackageFlag = false;
   if (!has(table.noFetchFlags)) {
     const named = values(table.packageFlags);
-    if (named.length > 0) raws.push(...named);
-    else if (!has(table.shellFlags)) raws.push(...w.positionals.map((p) => p.value));
+    if (named.length > 0) {
+      raws.push(...named);
+      byPackageFlag = true;
+    } else if (!has(table.shellFlags)) raws.push(...w.positionals.map((p) => p.value));
     raws.push(...values(table.extraPackageFlags));
   }
   const packages: PackageSpec[] = [];
@@ -811,6 +820,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   const registry = pre.customRegistry ?? w.customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
   if (launch.localFirst === true) out.localFirst = true;
+  if (byPackageFlag) out.byPackageFlag = true;
   return out;
 }
 
@@ -945,6 +955,8 @@ function parseReading(text: string, forced: string | null): InstallCommand[] {
   const envChange = changesEnvironment(text, split.statements);
   let dirChanged = false;
   let workdir: readonly string[] | null | undefined;
+  // Where the command was when each subshell (`(`, `$(`) it is inside began.
+  const outer: Array<readonly string[] | null | undefined> = [];
   for (const statement of split.statements) {
     for (const words of statement.commands) {
       const d = detect(words);
@@ -959,9 +971,20 @@ function parseReading(text: string, forced: string | null): InstallCommand[] {
       }
       if (changesDirectory(words)) {
         dirChanged = true;
-        workdir = directoryAfter(workdir, words);
+        // A `cd` in a pipeline or sent to the background moves a subshell,
+        // not the command after it — in bash; a PowerShell pipeline is the
+        // same runspace. Not known, then: nothing is taken as installed
+        // (review of 3.3.0: `cd web | cat; npx x`, `cd web & npx x` ran the
+        // check in `web`).
+        workdir = statement.commands.length > 1 || statement.end === '&' ? null : directoryAfter(workdir, words);
       }
     }
+    // A subshell's `cd` ends with it: `(cd web && npm ci) && npx x` runs `x`
+    // where the line began. A `)` whose `(` this split did not mark (one at
+    // the start of the line) leaves no way to tell what moved inside it.
+    if (statement.end === '(') outer.push(workdir);
+    else if (statement.end === ')') workdir = outer.length > 0 ? outer.pop() : workdir === undefined ? undefined : null;
+    else if (statement.end === '`') workdir = workdir === undefined ? undefined : null;
   }
   return out;
 }

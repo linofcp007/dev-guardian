@@ -777,6 +777,98 @@ describe('decideInstallCommand — launchers are vetted like installs (review P1
   });
 });
 
+// Review of 3.3.0 (HIGH): the "npx of a locally installed bin" skip dropped a
+// package npm still fetches — and with it the malicious-package deny, which
+// has no escape hatch. A `cd` that never moves the shell (a subshell, a
+// pipeline, the background) was taken as the launcher's directory, and a
+// `.bin/<name>` that is a directory, a lone `.cmd`, the unscoped bin of a
+// scoped name and the bin of a `-p` package all counted as installed.
+describe('decideInstallCommand — the local-bin skip never drops a package npm fetches (review of 3.3.0)', () => {
+  /** Every npm name exists, and every one is malicious (an OSV `MAL-` advisory). */
+  function maliciousRegistry(): { fetchImpl: typeof fetch; calls: string[] } {
+    const calls: string[] = [];
+    const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200 });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      calls.push(url);
+      if (url === OSV) {
+        const queries = (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries;
+        return json({ results: queries.map(() => ({ vulns: [{ id: 'MAL-2026-33' }] })) });
+      }
+      if (url.startsWith('https://registry.npmjs.org/')) return json(npmDoc('1.0.0').body);
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, calls };
+  }
+  const binFile = (dir: string, name: string): void => {
+    mkdirSync(join(dir, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules', '.bin', name), '#!/bin/sh\n');
+  };
+  const denied = async (command: string, shell: 'bash' | 'powershell' = 'bash'): Promise<void> => {
+    const d = await decideInstallCommand(command, opts(maliciousRegistry().fetchImpl, { popular: {}, shell }));
+    expect(d?.deny, command).toMatch(/MAL-2026-33/);
+  };
+
+  beforeEach(() => {
+    mkdirSync(join(project, '.git'));
+  });
+
+  it.each([
+    '(cd web && npm ci) && npx zz-evil',
+    '(cd web; true); npx zz-evil',
+    'cd web & npx zz-evil',
+    'cd web | cat; npx zz-evil',
+    'echo $(cd web) && npx zz-evil',
+    'echo `cd web` && npx zz-evil',
+  ])('%s — the `cd` never moved the shell: vetted, and denied', async (command) => {
+    binFile(join(project, 'web'), 'zz-evil');
+    await denied(command);
+  });
+
+  it('a `cd` inside a subshell still moves the launcher inside it', async () => {
+    binFile(join(project, 'web'), 'zz-evil');
+    const f = maliciousRegistry();
+    expect(await decideInstallCommand('(cd web && npx zz-evil)', opts(f.fetchImpl, { popular: {} }))).toBeNull();
+    expect(f.calls).toEqual([]);
+  });
+
+  it('`.bin/<name>` that is a directory (a committed `.bin/<name>/.keep`) is not an installed bin', async () => {
+    mkdirSync(join(project, 'node_modules', '.bin', 'zz-evil'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'zz-evil', '.keep'), '');
+    await denied('npx zz-evil');
+  });
+
+  it('a lone `.bin/<name>.cmd` is not one either', async () => {
+    mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'zz-evil.cmd'), '@echo off\n');
+    await denied('npx zz-evil');
+  });
+
+  it('a scoped name is never matched against an unscoped bin', async () => {
+    binFile(project, 'eslint');
+    await denied('npx @zz-evil/eslint --fix');
+    await denied('bunx @zz-evil/eslint');
+  });
+
+  it('a `-p` package is never matched against a bin of its name', async () => {
+    binFile(project, 'zz-evil');
+    await denied('npx -p zz-evil tool');
+    await denied('npx --package=zz-evil tool');
+  });
+
+  it('a package installed by name still runs locally, scoped or under -p', async () => {
+    for (const name of ['@zz-evil/eslint', 'zz-evil']) {
+      mkdirSync(join(project, 'node_modules', name), { recursive: true });
+      writeFileSync(join(project, 'node_modules', name, 'package.json'), `{"name":"${name}"}`);
+    }
+    const f = maliciousRegistry();
+    for (const command of ['npx @zz-evil/eslint --fix', 'npx -p zz-evil tool', 'npx zz-evil']) {
+      expect(await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} })), command).toBeNull();
+    }
+    expect(f.calls).toEqual([]);
+  });
+});
+
 // Review of 3.0.0, I4: whether a local workspace explains a 404 was computed
 // for EVERY package, before the network, by walking up to 3000 workspace
 // directories each time — 17 packages in a 3000-directory monorepo took
