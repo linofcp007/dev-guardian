@@ -69096,14 +69096,39 @@ async function handler26(inp, ctx) {
   };
   const gaps = [];
   const configFlags = includeOptions ? ["DISALLOW_FILE_EDIT", "WP_DEBUG", "WP_DEBUG_LOG", "FORCE_SSL_ADMIN"] : [];
-  const [
-    versionResult,
-    coreVerify,
-    pluginVerify,
-    adminResult,
-    pluginListResult,
-    ...configResults
-  ] = await Promise.all([
+  const answers2 = await askWpCli(installPath, ctx, includeUsers, configFlags);
+  readAnswers(answers2, { includeUsers, riskyLogins, configFlags }, meta, gaps);
+  const { version: version2, coreVerify, pluginVerify, pluginList, config: config2 } = answers2;
+  const answered2 = [version2, coreVerify, pluginVerify, pluginList, ...config2].some((r) => r.ok);
+  const toolRun = gaps.length === 0 ? { name: "wp-cli", status: "ok" } : { name: "wp-cli", status: answered2 ? "ok" : "failed", reason: gaps.join("; ") };
+  const tools_run = [toolRun];
+  const missing_tools = gaps.length > 0 ? ["wp-cli"] : [];
+  const coverage = computeCoverage(tools_run, missing_tools);
+  const scanId = randomUUID8();
+  ctx.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: "wp_audit",
+    project_path: installPath,
+    tree_hash: ""
+  });
+  ctx.storage.scans.finalize({
+    scan_id: scanId,
+    status: answered2 ? "completed" : "failed",
+    tools_run,
+    missing_tools,
+    meta
+  });
+  return {
+    ok: true,
+    scan_id: scanId,
+    coverage,
+    tools_run,
+    missing_tools,
+    ...meta
+  };
+}
+async function askWpCli(installPath, ctx, includeUsers, configFlags) {
+  const [version2, coreVerify, pluginVerify, admins, pluginList, ...config2] = await Promise.all([
     retry(() => wpCall(["core", "version", `--path=${installPath}`], installPath, ctx)),
     retry(
       () => wpCall(
@@ -69152,63 +69177,66 @@ async function handler26(inp, ctx) {
       (flag) => retry(() => wpCall(["config", "get", flag, `--path=${installPath}`], installPath, ctx))
     )
   ]);
-  if (versionResult.ok) {
-    meta.wp_version = versionResult.stdout.trim() || null;
+  return { version: version2, coreVerify, pluginVerify, admins, pluginList, config: config2 };
+}
+function readAnswers(a, opts, meta, gaps) {
+  if (a.version.ok) {
+    meta.wp_version = a.version.stdout.trim() || null;
   } else {
-    meta.warnings.push(`core version: ${versionResult.reason}`);
+    meta.warnings.push(`core version: ${a.version.reason}`);
     gaps.push("core version not read");
   }
-  if (coreVerify.ok) {
-    meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
+  if (a.coreVerify.ok) {
+    meta.checksum_mismatches.core = parseChecksumOutput(a.coreVerify);
   } else {
-    meta.warnings.push(`core verify-checksums: ${coreVerify.reason}`);
+    meta.warnings.push(`core verify-checksums: ${a.coreVerify.reason}`);
     gaps.push("core checksums not verified");
   }
-  if (pluginVerify.ok) {
-    meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
-    meta.checksums_not_checked.plugins = skippedPlugins(pluginVerify.stderr);
+  if (a.pluginVerify.ok) {
+    meta.checksum_mismatches.plugins = groupByComponent(a.pluginVerify);
+    meta.checksums_not_checked.plugins = skippedPlugins(a.pluginVerify.stderr);
     if (meta.checksums_not_checked.plugins.length > 0) {
       gaps.push(
         `${meta.checksums_not_checked.plugins.length} plugin(s) not verified: ` + meta.checksums_not_checked.plugins.map((p) => p.plugin).join(", ")
       );
     }
   } else {
-    meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
+    meta.warnings.push(`plugin verify-checksums: ${a.pluginVerify.reason}`);
     gaps.push("plugin checksums not verified");
   }
   meta.warnings.push(`theme checksums: ${THEMES_NOT_CHECKED} \u2014 theme files were not verified`);
-  if (includeUsers) {
-    if (adminResult.ok) {
+  if (opts.includeUsers) {
+    if (a.admins.ok) {
       try {
-        const arr = JSON.parse(adminResult.stdout);
+        const arr = JSON.parse(a.admins.stdout);
         meta.admins = arr.map((u) => ({
           user_login: u.user_login,
           user_email: u.user_email,
-          risky: riskyLogins.has((u.user_login ?? "").toLowerCase())
+          risky: opts.riskyLogins.has((u.user_login ?? "").toLowerCase())
         }));
       } catch {
         meta.warnings.push("user list: stdout not JSON");
         gaps.push("admin users not read");
       }
     } else {
-      meta.warnings.push(`user list: ${adminResult.reason}`);
+      meta.warnings.push(`user list: ${a.admins.reason}`);
       gaps.push("admin users not read");
     }
   }
-  if (pluginListResult.ok) {
+  if (a.pluginList.ok) {
     try {
-      const arr = JSON.parse(pluginListResult.stdout);
+      const arr = JSON.parse(a.pluginList.stdout);
       meta.plugins_with_auto_update = arr.filter((p) => (p.auto_update ?? "").toLowerCase() === "on").map((p) => p.name);
     } catch {
       meta.warnings.push("plugin list: stdout not JSON");
       gaps.push("plugin list not read");
     }
   } else {
-    meta.warnings.push(`plugin list: ${pluginListResult.reason}`);
+    meta.warnings.push(`plugin list: ${a.pluginList.reason}`);
     gaps.push("plugin list not read");
   }
-  configFlags.forEach((flag, i) => {
-    const r = configResults[i];
+  opts.configFlags.forEach((flag, i) => {
+    const r = a.config[i];
     if (!r) return;
     if (r.ok) {
       const val = r.stdout.trim().toLowerCase();
@@ -69218,33 +69246,6 @@ async function handler26(inp, ctx) {
       gaps.push(`config ${flag} not read`);
     }
   });
-  const answered2 = [versionResult, coreVerify, pluginVerify, pluginListResult, ...configResults].some((r) => r.ok);
-  const toolRun = gaps.length === 0 ? { name: "wp-cli", status: "ok" } : { name: "wp-cli", status: answered2 ? "ok" : "failed", reason: gaps.join("; ") };
-  const tools_run = [toolRun];
-  const missing_tools = gaps.length > 0 ? ["wp-cli"] : [];
-  const coverage = computeCoverage(tools_run, missing_tools);
-  const scanId = randomUUID8();
-  ctx.storage.scans.insert({
-    scan_id: scanId,
-    scan_type: "wp_audit",
-    project_path: installPath,
-    tree_hash: ""
-  });
-  ctx.storage.scans.finalize({
-    scan_id: scanId,
-    status: answered2 ? "completed" : "failed",
-    tools_run,
-    missing_tools,
-    meta
-  });
-  return {
-    ok: true,
-    scan_id: scanId,
-    coverage,
-    tools_run,
-    missing_tools,
-    ...meta
-  };
 }
 async function wpCall(args, cwd, ctx, opts = {}) {
   const r = await runProcess({
