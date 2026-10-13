@@ -1,310 +1,99 @@
 # dev-guardian
 
-This project has the **dev-guardian MCP server** registered. It exposes
-63 tools and 18 resources for security, quality, bugfix, deps,
-compliance, observability, performance, plus first-class WordPress and
-.NET (C#/F#) support. All scanners run locally. dev-guardian sends no
-telemetry of its own; Semgrep's registry mode sends metrics — pass
-`local_only: true` to avoid it. Results persist in `.guardian/guardian.db`.
+This project has the **dev-guardian MCP server**: 63 tools and 18 resources for security, bugs, quality,
+dependencies, compliance, observability, performance, WordPress and .NET. Every scanner runs locally and results
+persist in `.guardian/guardian.db`. dev-guardian sends no telemetry of its own;
+Semgrep's registry mode sends metrics — pass `local_only: true` to avoid it.
 
-When working in this project, **prefer invoking dev-guardian MCP tools over
-running scanners directly via shell**. The MCP layer adds: regression
-diffing, baselines, suppressions, severity-weighted risk scoring, and a
-cache that avoids re-running unchanged scans.
+## Rules
+
+- **Prefer these MCP tools over running a scanner in the shell** — they keep baselines, regression diffs,
+  suppressions, risk scores and a cache.
+- **A scanner that did not run is a gap, never "0 findings."** Read `tools_run`, `missing_tools` and `coverage`
+  before the findings.
+- `severity_min` filters the response only: the scan records everything, so a baseline taken from a filtered
+  scan is complete. `severity_filter` on the result says how many were held back.
+- About to add a package? `vet_packages` BEFORE the install: the name exists, OSV malware and
+  vulnerabilities, publish age, install scripts, typosquatting. `unknown` means a check could not run — never ok.
+- `create_fix_pr` defaults to a dry run (`apply: false`); it opens a pull request only with `apply: true`, after
+  the user agrees. It applies only fixes a scanner emitted — `deps_update_plan` bumps and Semgrep autofixes
+  (`fix_available`) — and `filtered` / `filtered_reason` say what it skipped and why.
+- `scan_secrets` with `verify_live: true` sends each secret to its provider: ask the user first.
+- `audit_mcp_tools` STARTS the servers it audits: pass only the names the user gave.
+- `scan_dast` probes an app that is already running, after `map_attack_surface`; loopback only unless the user
+  attests `authorized_target: true`. A clean result is no proof of injection safety.
+- `validate_finding`'s `unreachable` is a static, file-level signal blind to dynamic imports — never on its
+  own a reason to suppress a finding.
+- **Never run `db adopt` yourself.** If `health_status` returns `storage_warning`, or a scan warns that the
+  project's database is not used, history goes to a per-user fallback: tell the user, and give them
+  `node {{DEV_GUARDIAN_CLI}} db adopt --project <project>` to run in their own terminal (`--yes` registers the database).
+  Point them at `suppressions.all_projects` and `storage.future_dated_scans_ignored` first.
+- Don't `suppress_finding` before `triage_findings`; don't write a fix before `suggest_fix`; don't run
+  `scan_wordpress` before `detect_stack` says WordPress.
 
 ## Intent → MCP tool
 
-**Security**
-- "is this safe?" / "audit security" → `security_scan_full`
-- "secrets leaked?" → `scan_secrets`
-- "vulnerable deps?" / "CVEs?" → `scan_deps` or `deps_audit`
-- "Dockerfile / container" → `scan_containers`
-- "Terraform / K8s / IaC" / "are my GitHub Actions workflows safe?" → `scan_iac`
-  (Trivy config, plus zizmor + actionlint on `.github/workflows/*.yml` when present)
-- "deep bug hunt" → `bug_hunt`
-- "is this AI skill / MCP server / agent safe to install?" → `scan_skill`
-  (directory, file, .zip or git/HTTP(S) URL; prompt injection, exfiltration,
-  excessive agency, tool poisoning, MCP least-privilege, plus OSV CVEs on
-  declared deps - returns 0-100 risk and SAFE / REVIEW / CAUTION /
-  DO_NOT_INSTALL. Run it BEFORE installing, not after)
-- about to add a package (npm/pnpm/yarn/bun, pip/uv/poetry, composer, dotnet) →
-  `vet_packages` BEFORE running the install: does the name exist (a hallucinated
-  name is a squatting target), OSV malware (MAL-) and known vulns, publish age,
-  npm install scripts, typosquatting. `unknown` means a check could not run —
-  never read it as ok. Only Claude Code's plugin hook does this on its own
-- "is our AI agent config safe?" (`.mcp.json`, `.claude/settings.json`,
-  `.cursor/mcp.json`, …) → `audit_agent_config` (reads, runs nothing)
-- "are the tools MCP server X serves safe / did they change?" →
-  `audit_mcp_tools` with `servers: ["X"]` — it STARTS that server (only the
-  names given), lists its tools and never calls them
-- "what routes/endpoints does this app expose?" → `map_attack_surface`
-- "active DAST / pen-test the running app" → `map_attack_surface` first for the
-  route inventory, then `scan_dast` against the already-running app (loopback
-  only unless `authorized_target: true` is set; a clean result is not evidence
-  of injection safety — see its tool description)
-- "is this finding actually reachable / exploitable?" → `map_attack_surface`
-  (if no recent snapshot) then `validate_finding` — reachable / unreachable /
-  unknown per finding with evidence, report-only, never suppresses or touches
-  severity; `unreachable` is never available for Ruby, Java, C#, or PHP. It
-  IS produced — and can be wrong — for a file reached only by a CLI/cron/queue
-  entry point, or an unresolvable dynamic import — see its tool description
-  for the full limits. For a dependency CVE (npm, PyPI) its `dependency`
-  provider says whether a file a route reaches imports the package
-- "have a model check what the scanners found" / "verify the findings" / "what do the
-  scanners miss?" → `llm_scan_start` (plan; `modes`: `verify`, `hunt`), then the
-  loop in "LLM-assisted scan" below. The server calls no model: yours does the
-  reasoning, one brief at a time
+- **Security** — the whole code: `security_scan_full` (a small change: `review_pr`) · SAST only:
+  `scan_sast` · secrets: `scan_secrets` · dependency CVEs: `scan_deps`, `deps_audit` · Dockerfile / image /
+  compose: `scan_containers` · Terraform, Kubernetes, GitHub Actions: `scan_iac` · implementation bugs:
+  `bug_hunt` · a third-party skill or MCP server before installing it: `scan_skill` · the agent's own config (`.mcp.json`, …): `audit_agent_config` (reads, runs nothing) · the tools an
+  MCP server serves, or whether they changed: `audit_mcp_tools` with `servers: ["X"]` · routes and endpoints:
+  `map_attack_surface` · runtime probing: `scan_dast` · is a finding reachable: `validate_finding` · a model
+  verifies the findings or hunts what scanners miss: `llm_scan_start` (below) · another tool's SARIF:
+  `import_sarif`.
+- **Quality** — duplication, complexity, smells: `quality_check`.
+- **Dependencies** — upgrade plan: `deps_update_plan` · audit: `deps_audit` · VEX / "are we affected?":
+  `export_vex`; a CVE is stated not_affected with `suppress_finding` (`vex_status: not_affected` + a
+  justification).
+- **Compliance** — GDPR / SOC 2 / ISO 27001: `compliance_check`, `compliance_evidence` · SBOM: `generate_sbom`,
+  `sbom_diff` · licences: `license_compatibility`.
+- **Setup** — bootstrap: `detect_stack` → `init_project` (configs out of date: `init_project` with refresh=true,
+  `apply=false` first) → `install_toolchain` · installed scanners: `check_toolchain` · git hooks:
+  `precommit_install` · custom Semgrep rules: `register_custom_rules` · logging / metrics: `observability_setup` ·
+  performance: `perf_check`.
+- **WordPress** — code: `scan_wordpress` · a live install: `wp_audit` (needs WP-CLI) ·
+  CVEs from a live URL: `wp_vuln_check`, from source: `wp_vuln_check_source` · cron backdoors: `wp_cron_audit` ·
+  REST exposure: `wp_rest_audit` · posture: `wp_describe_setup` · hardening: `wp_recommend_hardening` · one
+  plugin: `wp_plugin_check` · many sites: `bulk_audit_wordpress_sites`.
+- **.NET** — secrets in configs: `scan_dotnet_secrets` · end-of-life frameworks: `dotnet_target_framework_check` ·
+  EF Core migrations: `dotnet_efcore_audit` · posture: `dotnet_describe_setup`.
+- **History and reports** — full audit: `audit_executive` · `risk_score` · what is new: `diff_scans` ·
+  regressions: `regression_alert` · `set_baseline` · noise: `triage_findings` · order: `prioritize_findings` ·
+  how to fix X: `suggest_fix` (context; you write the patch) · scanner
+  fixes as PRs: `create_fix_pr` · `report_export` · GitHub issues: `create_github_issues` · server health:
+  `health_status`.
+- **CLI** — a one-screen summary: `node {{DEV_GUARDIAN_CLI}} status`; the same as a self-contained HTML page:
+  `node {{DEV_GUARDIAN_CLI}} dashboard` (both read-only) · another AI host: `node {{DEV_GUARDIAN_CLI}} mcp-config <host>`.
 
-**Quality**
-- "review before PR" → `review_pr`
-- "code quality / duplication" → `quality_check`
-
-**Deps**
-- "upgrade plan" → `deps_update_plan` (npm/pip/composer/cargo/go/bundler/dotnet)
-- "audit deps" → `deps_audit`
-- "VEX / are we affected by this CVE?" → `export_vex` (OpenVEX or CycloneDX, from
-  the latest deps scan); `suppress_finding` with `vex_status: not_affected` and a
-  justification is how a CVE is stated not_affected
-
-**Compliance**
-- "GDPR / SOC2 / ISO27001" → `compliance_check` + `compliance_evidence`
-- "SBOM" → `generate_sbom`
-- "license compatibility" → `license_compatibility`
-
-**Ops**
-- "bootstrap project" → `init_project`
-- "my dev-guardian configs are out of date" / a scan warned about config drift →
-  `init_project` with `refresh=true` (`apply=false` first — it reports what would
-  change; `apply=true` never overwrites a config the user edited)
-- "install scanners" → `install_toolchain`
-- "which scanners are installed?" → `check_toolchain`
-- "detect stack" → `detect_stack`
-- "logging / metrics" → `observability_setup`
-- "performance" → `perf_check`
-
-**WordPress**
-- "scan WP code" → `scan_wordpress`
-- "audit live WP install" → `wp_audit`
-- "any WP CVEs?" → `wp_vuln_check` (live URL, WPScan)
-- "WP CVEs from source, no live URL / offline?" → `wp_vuln_check_source` (Wordfence feed + wp.org)
-- "WP cron / backdoor check" → `wp_cron_audit`
-- "WP REST API exposed?" → `wp_rest_audit`
-- "WP posture overview" → `wp_describe_setup`
-- "hardening checklist" → `wp_recommend_hardening`
-- "check one plugin" → `wp_plugin_check`
-- "audit N WP sites" → `bulk_audit_wordpress_sites`
-
-**.NET / C#**
-- ".NET secrets in configs?" → `scan_dotnet_secrets`
-- "EOL frameworks?" → `dotnet_target_framework_check`
-- "EF Core migration safety" → `dotnet_efcore_audit`
-- ".NET posture overview" → `dotnet_describe_setup`
-
-**Meta**
-- "full audit" → `audit_executive` (stack-aware: includes WP / .NET tools)
-- "risk score" → `risk_score`
-- "what's new since last scan?" → `diff_scans`
-- "set baseline" → `set_baseline`
-- "import another scanner's SARIF" → `import_sarif` (one `sarif_import` scan per run;
-  `set_baseline`, `diff_scans`, `regression_alert` and `report_export` take
-  `source_tool` to say which tool's imports they read)
-- "noise reduction" → `triage_findings`
-- "prioritise" → `prioritize_findings` (a CISA SSVC decision per CVE finding, beside the score)
-- "how do I fix X?" → `suggest_fix` (returns context; you write the patch)
-- "apply the fixes a scanner already has and open a PR" → `create_fix_pr` —
-  applies `deps_update_plan`'s pinned version bumps and Semgrep `--autofix`
-  (only those two — it is not a patch author) inside an isolated git
-  worktree, proves each with a scan differential and a test run, and opens
-  one pull request per ecosystem/scanner via the local `gh` CLI. **`apply`
-  defaults to `false`**: a dry run still creates the worktree, applies the
-  fix and runs both differentials, but leaves nothing behind — not a
-  branch, not a commit, not a worktree — and opens no PR until `apply: true`.
-  Its own verification re-scan never becomes the project's latest scan
-  either, so previewing can't repoint `guardian://findings/open` or
-  `risk_score`
-- "export report" → `report_export`
-- "create GitHub issues" → `create_github_issues` (local `gh` CLI)
-- "pre-commit hooks" → `precommit_install`
-- "register custom Semgrep rules" → `register_custom_rules`
-- "health check" → `health_status`
-- "regression check" → `regression_alert`
-- "SBOM diff" → `sbom_diff`
-- "project health at a glance?" → `node {{DEV_GUARDIAN_CLI}} status` (CLI,
-  one-screen summary) or `dashboard` (CLI, same data as a self-contained HTML
-  page) — both read-only, report rather than gate
-- "set up another AI host" → run `node {{DEV_GUARDIAN_CLI}} mcp-config <host>` (CLI)
+Resources are read-only views of the same history: `guardian://findings/open`, `guardian://scans/latest`,
+`guardian://wp/audit/{scan_id}` and the rest of `findings/`, `scans/`, `cves/`, `wp/`, `dotnet/`, `surface/`.
 
 ## LLM-assisted scan (`llm_scan_start` → `llm_scan_task` → `llm_scan_submit`)
 
-Your model checks the scanners' findings (`verify`) and hunts what they miss from
-the entry points (`hunt`, needs `map_attack_surface` first). The loop is the same
-on every host; only WHERE each task's brief runs differs.
+`llm_scan_start { project_path, modes }` plans (`verify`; `hunt` after `map_attack_surface`): show the user the
+token estimate and `token_limit_note` first, and pass `confirm: true` above `max_estimated_tokens` only after the
+user agrees. Then `llm_scan_task { plan_id }` leases one task (`brief`, `lease_token`, 20 minutes); run THAT brief
+as below and `llm_scan_submit { plan_id, task_id, lease_token, independence, payload }`; repeat until `done`.
 
-1. `llm_scan_start { project_path, modes }` returns `plan_id`, the task count, what
-   was left out and a token estimate. **Show the user the estimate and
-   `token_limit_note` before anything else.** Above `max_estimated_tokens` the plan
-   says `needs_confirm`: pass `confirm: true` only after the user agrees.
-   `confirm` opens the gate; it never raises the limit, which stays a hard ceiling
-   on what is handed out (`deliverable_within_token_limit` says how many tasks fit).
-2. `llm_scan_task { plan_id }` returns one task: a `brief` and a `lease_token`
-   (20 minutes).
-3. Run THAT brief where the host's recipe below says, and `llm_scan_submit
-   { plan_id, task_id, lease_token, independence, payload }` with its JSON answer.
-4. Repeat until `llm_scan_task` says `done`; `llm_scan_start { plan_id }` reads the
-   report at any time. Coverage is `full` only when every task closed.
-
-Recipe per host:
-
-- **Claude Code** — run each task in a fresh subagent, one subagent per task
-  (parallel is fine), and submit with `independence: "subagent"`. The subagent
-  gets the brief and nothing else of this conversation.
-- **Codex** — Codex spawns a subagent only when it is asked to, so ask explicitly:
-  "spawn a subagent for each `llm_scan_task` brief, one task per subagent, and
-  have it return the JSON answer". Without that instruction, Codex answers in its
-  own context: then declare `same_context`.
-- **Cline** — no subagent that can use MCP: run the tasks sequentially, one task
-  after another, in the same context, and declare `independence: "same_context"`.
-- **Claude Desktop / Cowork chat** — no subagents: run the tasks sequentially, one
-  at a time, in the same context, and declare `same_context`.
-- **A client that declares MCP sampling (VS Code Copilot does)** —
-  `llm_scan_task { plan_id, execute: "sampling" }` runs the verification tasks
-  inside the server through the client's model, recorded as `sampling`. Without
-  the capability the call answers `sampling_unavailable`; hunt tasks are never
-  sampled. Run whatever is left the way the rest of this list says.
-- **Any other host (Cursor, Gemini CLI, Windsurf, …)** — if you can start a fresh
-  subagent that can call these tools, one per task, declare `subagent`;
-  otherwise run the tasks sequentially, one at a time, and declare
+- **Claude Code** — each `llm_scan_task` brief in a fresh subagent, one task per subagent: `subagent`.
+- **Codex** — spawns a subagent only when asked: ask it to spawn one per `llm_scan_task` brief; otherwise
   `same_context`.
+- **Cline** — no MCP-capable subagent: run the tasks sequentially, one after another: `same_context`.
+- **Claude Desktop / Cowork chat** — no subagents: sequentially, one at a time: `same_context`.
+- **MCP sampling (VS Code Copilot)** — `llm_scan_task { plan_id, execute: "sampling" }` runs verification
+  tasks through the client's model.
+- **Other hosts** — a fresh subagent per task if one can call these tools, else `same_context`.
 
-Declare independence honestly. A `same_context` verdict is shown in the report but
-never demotes or confirms a finding — in those hosts the scan is advisory. Claiming
-`subagent` for an answer you gave yourself corrupts the report.
+Declare independence honestly: a `same_context` verdict never demotes or confirms a finding.
 
-## Resources
+## CI and the dev-spec-driven gate
 
-- Findings: `guardian://findings/open`, `guardian://findings/critical`,
-  `guardian://findings/by-severity/{level}` (paginated via `?page=N&page_size=M`)
-- Scans: `guardian://scans/latest`, `guardian://scans/history`,
-  `guardian://scans/{scan_id}`
-- Other: `guardian://cves/active`, `guardian://sbom`, `guardian://stack`,
-  `guardian://compliance/status`, `guardian://baseline`
-- WordPress: `guardian://wp/audit/latest`, `guardian://wp/audit/{scan_id}`,
-  `guardian://wp/cron`
-- .NET: `guardian://dotnet/target-frameworks`, `guardian://dotnet/efcore`
-- Attack surface: `guardian://surface/latest`, `guardian://surface/{scan_id}`
-
-## Typical sequences
-
-- **Bootstrap**: `detect_stack` → `init_project` → `install_toolchain` →
-  `security_scan_full` (or `scan_wordpress`) → `set_baseline`
-- **Before PR**: `review_pr` → `triage_findings` → `prioritize_findings` →
-  `suggest_fix`
-- **Adding a dependency**: `vet_packages` → the install → `scan_deps` with
-  `packages` for what it pulled in
-- **Audit**: `audit_executive` (stack-aware) → `risk_score` →
-  `compliance_evidence framework=…`
-- **WP-specific**: `scan_wordpress` + `wp_audit` + `wp_cron_audit` +
-  `wp_rest_audit` → `wp_recommend_hardening`
-- **.NET-specific**: `dotnet_target_framework_check` + `scan_dotnet_secrets`
-  + `scan_sast` + `dotnet_efcore_audit` → `dotnet_describe_setup`
-- **Active DAST**: `map_attack_surface` → `scan_dast` (the target app must
-  already be running; `scan_dast` never starts, builds or stops it)
-- **Reachability**: `map_attack_surface` → `validate_finding` — requires a
-  prior surface snapshot; validates the open findings from whichever scan
-  completed most recently, so run it right after a SAST scan, not right after
-  `scan_dast`
-
-## CI (headless, no MCP connection)
-
-For a pipeline, not a conversation: `node {{DEV_GUARDIAN_CLI}} scan` runs the same
-scan pipeline as the MCP tools, gated against a committed `.guardian/baseline.json`;
-`node {{DEV_GUARDIAN_CLI}} baseline update` is the only command that writes it. Exit codes: `0`
-pass, `1` gate failed, `2` incomplete scan (a scanner didn't run — never read as a
-pass), `3` usage error. On a pull request, pass `--baseline-ref <base>`,
-`--rules-ref <base>` and, in the disposable CI checkout only,
-`--reset-exclusions-from <base>` (the `ci-init` pipelines do): without them the pull
-request's own baseline, Semgrep rules and ignore files gate it. Distribution is `git clone --depth 1` at a pinned tag (not
-`npx`) plus `npm ci` in `mcp/` — see the README's "Run scans in CI" section for a
-copy-pasteable GitHub Actions job. `--start-command` (starts the app for the DAST
-pass) is accepted **only on argv, never from `.guardian/ci.json`** — a repository
-file declaring it is refused outright, because a fork's pull request could otherwise
-run arbitrary code on the runner. A CI run leaves `.guardian/reports/` in the working
-tree (only the SQLite database is ephemeral) — add `**/.guardian/*` and
-`!**/.guardian/baseline.json` to `.gitignore` by hand (never a bare `.guardian/`: git
-cannot re-include the baseline below an ignored directory; `**/` covers a sub-project's too); the MCP server writes
-them every time it starts against a project, but the CLI never starts that server.
-
-## Local dashboard (offline, read-only)
-
-For a developer at their own laptop, not a CI artifact and not a client
-deliverable: `node {{DEV_GUARDIAN_CLI}} status` prints a one-screen summary
-(risk score and band, open findings/CVEs by severity, both deltas, up to 3
-hotspots ranked by finding count, missing-scanner consequences, active
-suppressions); `node {{DEV_GUARDIAN_CLI}} dashboard` writes the same snapshot as a
-self-contained `.guardian/dashboard.html` (no CDN, no network call of any
-kind), opened automatically only when stdout is a TTY — `--no-open`
-suppresses that, `--out <path>` relocates the file. Neither runs a scan,
-mutates the database, or opens a socket, and both always exit `0` once they
-render — including over a project full of criticals, or one never scanned —
-because they report; `scan` is what gates. `3` is the only other exit code,
-on a usage error. The page is a **snapshot, not live**: it does not update
-when a later scan runs, so regenerate it to see one. The window itself is
-bounded too — the latest scan plus two deltas, no multi-week trend (the
-plugin's own trend command still asks for history nothing here computes).
-
-## When the project's database is not used (upgrading from 3.0.0)
-
-If `health_status` returns a `storage_warning`, or a scan's `warnings` say the
-project's `.guardian/guardian.db` is not used, history is going to a per-user
-fallback: a database from before 3.1.0, or a copy, is never trusted automatically.
-Tell the user, and give them the command the warning names to run **themselves, in a
-terminal**, if the database is theirs — `node {{DEV_GUARDIAN_CLI}} db adopt --project <project>`
-shows what it holds; the same with `--yes` registers it. **Never run it yourself**,
-with or without `--yes`: it decides whose data dev-guardian trusts. Point them first at
-`suppressions.all_projects` (suppressions with no project hide findings in every
-project) and `storage.future_dated_scans_ignored` in the same result.
-
-## Anti-patterns
-
-- Don't run `security_scan_full` for tiny changes — `review_pr` is 10×+ faster.
-- Don't `suppress_finding` before `triage_findings`.
-- Don't synthesise fixes without `suggest_fix` first.
-- Don't shell out to scanners directly when an MCP tool exists.
-- Don't run `scan_wordpress` on a non-WP project — `detect_stack` first.
-- Don't run `wp_audit` without WP-CLI — `install_toolchain tools=["wp-cli"]`.
-- Don't run `scan_dast` before `map_attack_surface` — it refuses with
-  `no_surface_snapshot` and has no route inventory to probe.
-- Don't read a scan's `severity_min` as "the rest was not found". It filters
-  the response only: the scan records everything it saw, so a baseline taken
-  from a filtered scan is complete and `diff_scans` against it will not call
-  the below-floor findings new. Read `severity_filter` on the result for how
-  many were held back and which floor recovers them.
-- Don't read a clean `scan_dast` result as "no injection vulnerabilities" —
-  the own engine sends no injection payloads at all; that class is delegated
-  to an opt-in nuclei pass whose default templates test the origin, not this
-  project's specific routes.
-- Don't treat `validate_finding`'s `unreachable` as proof nothing can call the
-  code, or suppress a finding on the strength of it alone — it is a
-  reachability signal from an over-approximating import graph, unavailable for
-  four stacks and blind to dynamic imports.
-- Don't expect `create_fix_pr` to fix a finding with no `fix_available` —
-  gitleaks, bandit, jscpd, the DAST checks and the .NET tools never set it,
-  and a Semgrep rule with no `fix:` field can't be autofixed either; only
-  `deps_update_plan` bumps and Semgrep `--autofix` are in reach. And it
-  won't open a PR unless you pass `apply: true` — the default run is a
-  dry run that proves the fix and reports it, nothing more. When it acts on
-  fewer findings than you expected, read `filtered` / `filtered_reason` on
-  the result rather than guessing: they count every open finding it skipped,
-  split by reason (below `severity_min`, no scanner-produced fix, no
-  requested source), and name a lower `severity_min` only when one would
-  genuinely recover something. `create_github_issues` reports the same two
-  fields for its own `severity_min` (default `high`) and `max_issues`
-  (default 10).
-- Three more `create_fix_pr` limits worth knowing before you rely on it:
-  maven and gradle bumps are out of reach (inherited from
-  `deps_update_plan`'s own ecosystem gap); a second hit of the same rule
-  landing in a file it already fixed is not seen as a NEW finding, because
-  the "no new finding" check compares `(rule_id, file_path)` rather than
-  fingerprint (a fingerprint moves whenever the fix shifts a line); and
-  `fix_applied` never flips to `1` — it is a dead column on `findings`, and
-  the opened pull request is the record instead.
+`node {{DEV_GUARDIAN_CLI}} scan` runs the same pipeline headless, gated against a committed `.guardian/baseline.json`
+(exit `0` pass, `1` blocked, `2` incomplete — never a pass, `3` usage error); only
+`node {{DEV_GUARDIAN_CLI}} baseline update` writes that file, and it accepts EVERY current finding — never run it to accept
+one finding, and leave it to the user. Accept one reviewed finding with an inline suppression and a reason
+(`nosemgrep: <rule> -- <reason>`, `# nosec`). Pipelines and pull requests: the plugin's `docs/ci.md`.
+`.gitignore` keeps `.guardian/` out of git but its shared files: `**/.guardian/*`, `!**/.guardian/baseline.json`,
+`!**/.guardian/budgets.yml`, `!**/.guardian/hooks.config.json`, `!**/.guardian/hooks-allowlist.json`,
+`!**/.guardian/scan.yml` (never a bare `.guardian/`). dev-spec-driven 1.29+ runs this gate when it closes a feature; from
+such a project the runnable line is `node .specs/guardian.cjs <arguments>`.

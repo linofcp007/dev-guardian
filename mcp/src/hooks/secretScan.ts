@@ -67,6 +67,15 @@ export interface SecretScanOptions {
   allowlist?: string[];
   /** Report hits at this confidence or above. Default 'medium'. */
   minConfidence?: SecretConfidence;
+  /**
+   * Skip what reads as documentation rather than a credential (default true,
+   * review 8, items 10-11): a provider-shaped token with a placeholder marker
+   * (AWS's `…EXAMPLE` keys, `sk-your-…`, `sk-ant-xxxx…`), an `sk-` key with no
+   * mixed case and digits (a CSS class), a quoted value that is a sentence.
+   * `false` for redaction, where a false positive costs a line and a miss
+   * leaks a secret.
+   */
+  skipPlaceholders?: boolean;
 }
 
 const CONFIDENCE_RANK: Record<SecretConfidence, number> = { medium: 0, high: 1 };
@@ -96,7 +105,15 @@ export const SECRET_RULES: SecretRule[] = [
   { id: 'npm-token', title: 'npm access token', confidence: 'high', pattern: /\bnpm_[A-Za-z0-9]{36}\b/ },
   { id: 'pypi-token', title: 'PyPI upload token', confidence: 'high', pattern: /\bpypi-AgEIcHlwaS[A-Za-z0-9_-]{10,}/ },
   { id: 'twilio-account-sid', title: 'Twilio account SID', confidence: 'high', pattern: /\bAC[0-9a-fA-F]{32}\b/ },
-  { id: 'private-key-block', title: 'Private key', confidence: 'high', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/ },
+  // `PRIVATE KEY BLOCK`: a PGP key's own header — the `PGP ` alternative never
+  // matched without it (review 8, item 12).
+  { id: 'private-key-block', title: 'Private key', confidence: 'high', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/ },
+  { id: 'putty-private-key', title: 'PuTTY private key', confidence: 'high', pattern: /\bPuTTY-User-Key-File-\d+: / },
+  { id: 'huggingface-token', title: 'Hugging Face token', confidence: 'high', pattern: /\bhf_[A-Za-z]{34}\b/ },
+  { id: 'digitalocean-token', title: 'DigitalOcean token', confidence: 'high', pattern: /\bdo[opr]_v1_[a-f0-9]{64}\b/ },
+  { id: 'shopify-token', title: 'Shopify access token', confidence: 'high', pattern: /\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b/ },
+  { id: 'azure-storage-key', title: 'Azure storage account key', confidence: 'high', pattern: /\bAccountKey=[A-Za-z0-9+/]{86}==/ },
+  { id: 'telegram-bot-token', title: 'Telegram bot token', confidence: 'high', pattern: /\b\d{8,10}:AA[A-Za-z0-9_-]{33}\b/ },
 
   // ── Heuristics (ambiguous → 'medium', warn only) ─────────────────────────
   //
@@ -168,6 +185,26 @@ export const SECRET_RULES: SecretRule[] = [
     pattern:
       /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i,
     find: (text, from) => findEnvAssignment(text, from),
+  },
+  {
+    id: 'bearer-token',
+    title: 'Bearer token in an Authorization header',
+    confidence: 'medium',
+    // `Authorization: Bearer <token>` written into a file — a curl line, a
+    // .http request, a test fixture (review 8, item 12). The token is vetted
+    // like the other captured values (placeholders, entropy).
+    pattern: /\bAuthorization\s*:\s*Bearer\s+([A-Za-z0-9._~+/-]{20,}=*)/i,
+  },
+  {
+    id: 'yaml-credential',
+    title: 'Hard-coded credential',
+    confidence: 'medium',
+    // An unquoted YAML value (`password: Zx9…`) on a line of its own — the
+    // quoted rules need quotes and the `.env` rule an `=` (review 8, item
+    // 12). The value must hold a digit and a letter, so a type annotation
+    // (`token: AccessToken`) or a reference (`password: ${DB_PASS}`) is not one.
+    pattern:
+      /^\s*(?:[\w-]*[_-])?(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*:\s*([^\s'"`#{}[\]$<>(),;|&*!%@]{8,})\s*$/i,
   },
   {
     id: 'uri-credentials',
@@ -290,7 +327,55 @@ const VALUE_CAPTURE_RULES = new Set([
   'generic-assignment-camel',
   'generic-assignment-env',
   'uri-credentials',
+  'bearer-token',
+  'yaml-credential',
 ]);
+
+/** The quoted rules, whose value may hold spaces — and then is a sentence more often than a password. */
+const QUOTED_VALUE_RULES = new Set(['generic-assignment', 'generic-assignment-camel']);
+
+/**
+ * What marks a provider-shaped token as documentation rather than a credential
+ * (review 8, item 10): AWS's own example pair ends in `EXAMPLE` / `EXAMPLEKEY`,
+ * an `.env.example` says `sk-your-…-here` or `sk-ant-xxxx…`. A random token
+ * holds none of these.
+ */
+const TOKEN_PLACEHOLDER_MARKERS = [
+  'example',
+  'xxxxx',
+  'your-',
+  'your_',
+  'yourkey',
+  'yourtoken',
+  'placeholder',
+  'changeme',
+  'change-me',
+  'redacted',
+  'dummy',
+  'sample',
+  'fake',
+  'notreal',
+  'not-real',
+  'replace',
+  'insert',
+  '<your',
+];
+
+/** The provider rules whose token is a random string of mixed case and digits — a lowercase-and-dashes `sk-…` is a CSS class. */
+const MIXED_TOKEN_RULES = new Set(['openai-api-key', 'anthropic-api-key', 'huggingface-token']);
+
+/** Whether a provider-shaped token is a placeholder: a marker, a run of one character, or — for an `sk-` key — no mixed case and digits. */
+function tokenIsPlaceholder(ruleId: string, token: string): boolean {
+  const lower = token.toLowerCase();
+  if (TOKEN_PLACEHOLDER_MARKERS.some((m) => lower.includes(m))) return true;
+  if (/(.)\1{7,}/.test(token)) return true;
+  if (MIXED_TOKEN_RULES.has(ruleId)) {
+    const body = token.replace(/^(?:sk-(?:ant-|proj-|svcacct-|admin-)?|hf_)/, '');
+    if (ruleId === 'huggingface-token') return !(/[a-z]/.test(body) && /[A-Z]/.test(body));
+    return !(/[0-9]/.test(body) && /[A-Z]/.test(body) && /[a-z]/.test(body));
+  }
+  return false;
+}
 
 /** Lowercased markers that mean "this is a placeholder, not a real secret". */
 const PLACEHOLDER_MARKERS = [
@@ -426,6 +511,7 @@ function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow): SecretMatch | 
 export function scanForSecrets(text: string, options: SecretScanOptions = {}): SecretHit[] {
   if (!text) return [];
   const minRank = CONFIDENCE_RANK[options.minConfidence ?? 'medium'];
+  const skipPlaceholders = options.skipPlaceholders !== false;
   const allow = (options.allowlist ?? []).map((a) => a.toLowerCase()).filter(Boolean);
   const rules = SECRET_RULES.filter((rule) => CONFIDENCE_RANK[rule.confidence] >= minRank).map((rule) => ({
     rule,
@@ -456,7 +542,7 @@ export function scanForSecrets(text: string, options: SecretScanOptions = {}): S
         if (allow.some((a) => lower.includes(a))) continue;
         for (const { rule, re } of group) {
           if (found.has(rule)) continue;
-          const hit = judge(rule, firstMatch(rule, re, w), i);
+          const hit = judge(rule, firstMatch(rule, re, w), i, skipPlaceholders);
           if (hit !== null) found.set(rule, hit);
         }
       }
@@ -470,15 +556,27 @@ export function scanForSecrets(text: string, options: SecretScanOptions = {}): S
 }
 
 /** A match as a hit on line `i` (0-based), or `null` when its value is a placeholder or too plain. */
-function judge(rule: SecretRule, m: SecretMatch | null, i: number): SecretHit | null {
+function judge(rule: SecretRule, m: SecretMatch | null, i: number, skipPlaceholders = true): SecretHit | null {
   if (!m) return null;
 
   // For the value-capturing rules, the captured group is the credential
   // itself (not the whole match, which includes the key name / URI
   // prefix too); vet it before reporting.
+  // A provider token is vetted too (review 8, item 10): AWS's documented
+  // example key, an `.env.example` placeholder and a CSS class shaped like
+  // `sk-…` were reported at high confidence — which `secrets.block` denies.
+  if (skipPlaceholders && !VALUE_CAPTURE_RULES.has(rule.id) && rule.id !== 'jwt' && rule.id !== 'private-key-block' && rule.id !== 'putty-private-key') {
+    if (tokenIsPlaceholder(rule.id, m.text)) return null;
+  }
+
   if (VALUE_CAPTURE_RULES.has(rule.id)) {
     const value = m.value ?? '';
     if (looksLikePlaceholder(value)) return null;
+    // Two spaces make a sentence — an i18n label (`"password": "Palavra-passe
+    // do utilizador"`), a passphrase example — not a hard-coded credential
+    // (review 8, item 11).
+    if (skipPlaceholders && QUOTED_VALUE_RULES.has(rule.id) && /\s\S*\s/.test(value)) return null;
+    if (rule.id === 'yaml-credential' && !(/\d/.test(value) && /[A-Za-z]/.test(value))) return null;
     // The entropy floor is skipped for the unquoted `.env`-style rule
     // specifically: a human-chosen password (the brief's own example,
     // `DB_PASSWORD=hunter2hunter2`, is ~2.8 bits/char) is real and

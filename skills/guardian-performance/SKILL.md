@@ -1,11 +1,11 @@
 ---
 name: guardian-performance
-description: Performance through the perf_check MCP tool — Lighthouse Core Web Vitals checked against the perf budgets in .guardian/budgets.yml, k6 load tests — plus profiling and bottleneck hunting (N+1, slow queries, bundle size, memory leaks). EN triggers — "it's slow", "load test", "stress test", "benchmark", "Lighthouse", "Core Web Vitals", "N+1 queries", "bottleneck", "high cpu", "how much can this handle?". PT — "está lento", "teste de carga", "benchmark", "Lighthouse", "Core Web Vitals", "queries N+1", "estrangulamento", "cpu alto", "quanto aguenta isto?". ES — "está lento", "prueba de carga", "benchmark", "Lighthouse", "Core Web Vitals", "queries N+1", "cuello de botella", "cpu alta", "¿cuánto aguanta esto?". Respond in the user's language.
+description: "Performance — Lighthouse Core Web Vitals against the budgets, k6 load tests, and hunting bottlenecks (N+1 queries, slow endpoints, bundle size, high CPU) — for \"it's slow\" or \"how much load can this take?\". Not for a leak found as a code bug (guardian-bugfix)."
 ---
 
 # Guardian Performance
 
-Validação de performance contínua: define performance budgets, corre load tests, identifica regressões e bottlenecks.
+Validação de performance contínua: define performance budgets, corre load tests, identifica regressões e bottlenecks. Responde no idioma do utilizador.
 
 ## Princípios
 

@@ -3,6 +3,7 @@ import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { isNetworkPath, localShareAsLocal } from '../../../src/hooks/configFile.js';
 import { fileIdentity, guardedPath, hardLinkedTo, windowsName } from '../../../src/hooks/guardedPath.js';
 
 // Review of 3.0.0, M1: Windows reads each of these spellings as the file
@@ -94,5 +95,45 @@ describe('guardedPath', () => {
     if (short === '' || short.toLowerCase() === file.toLowerCase()) return; // 8.3 names off on this volume
     expect(guardedPath(short).toLowerCase()).toBe(file.toLowerCase());
     expect(guardedPath(`${short}::$DATA`).toLowerCase()).toBe(file.toLowerCase());
+  });
+});
+
+// Review 8, items 13 and 19: a path on the network is never asked of the
+// filesystem (an unreachable host held a Write 21 s), and this machine's admin
+// share is the local path it names.
+describe('a network path', () => {
+  const never = (): string => {
+    throw new Error('the filesystem was asked');
+  };
+
+  it.each([
+    ['\\\\10.255.255.1\\share\\notes\\a.txt', true],
+    ['//host/share/a.txt', true],
+    ['\\\\?\\UNC\\host\\share\\a.txt', true],
+    ['\\\\.\\pipe\\x', true],
+    ['\\\\?\\C:\\p\\a.txt', false],
+    ['\\\\.\\C:\\p\\a.txt', false],
+    ['C:\\p\\a.txt', false],
+    ['/home/u/a.txt', false],
+  ])('isNetworkPath(%s) is %s', (path, expected) => expect(isNetworkPath(path)).toBe(expected));
+
+  it('is compared as written on Windows, with no filesystem call', () => {
+    const unc = '\\\\10.255.255.1\\share\\notes\\a.txt';
+    expect(guardedPath(unc, { platform: 'win32', realpath: never, hostname: 'box' })).toBe(unc);
+    expect(fileIdentity(unc)).toBeUndefined();
+  });
+
+  it.each([
+    ['\\\\localhost\\C$\\Users\\u\\.config\\dev-guardian\\hooks.json', 'C:\\Users\\u\\.config\\dev-guardian\\hooks.json'],
+    ['\\\\127.0.0.1\\d$\\x', 'D:\\x'],
+    ['\\\\[::1]\\c$', 'C:\\'],
+    ['\\\\BOX\\c$\\p', 'C:\\p'],
+    ['\\\\?\\UNC\\localhost\\C$\\p', 'C:\\p'],
+  ])("this machine's admin share %s is %s", (share, local) => {
+    expect(localShareAsLocal(share, 'box')).toBe(local);
+  });
+
+  it.each(['\\\\otherhost\\C$\\p', '\\\\localhost\\share\\p', 'C:\\p'])('%s is not a local share', (path) => {
+    expect(localShareAsLocal(path, 'box')).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 ---
-description: Reports from Guardian's scans and history — exec (default), handoff, trend, debt, changelog, soc2. Relatórios. Informes.
+description: "Reports from the scan history — exec, handoff, trend, debt, changelog, soc2."
 argument-hint: "[exec | handoff | trend | debt | changelog | soc2] [audience, period or reference]"
 ---
 
@@ -51,7 +51,7 @@ Arguments: $ARGUMENTS
 2. When the latest quality scan is stale: `quality_check { project_path: "<project>" }`.
 3. Churn: `git log --since="6 months ago" --name-only --format=`. No tool ranks files — you do: findings per file × severity × churn.
 4. The **top 10 hotspots**, each with a one-line why, one move (🛠️ refactor / 🧪 add tests / 📚 document the gotcha / 🗑️ delete) and an effort-versus-impact estimate. Favour small moves; never a mass rewrite; if the project is clean, say so.
-5. To turn the top items into improvement specs, hand over to the `guardian-improve` skill.
+5. To turn the top items into improvement specs, suggest `/guardian-improve` — the user starts it.
 
 ## `changelog` — release notes
 

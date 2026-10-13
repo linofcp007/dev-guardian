@@ -25,11 +25,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { ALL_HOSTS, HOST_SPECS } from '../../../src/hostsetup/hostSpecs.js';
+import { parse as parseYaml } from 'yaml';
 import {
   CLI_PATH_PLACEHOLDER,
   DOGFOOD_RULE_TARGETS,
   renderHostRulesFile,
   RULES_BODY,
+  RULES_DESCRIPTION,
   substituteCliPath,
 } from '../../../src/hostsetup/rulesTemplate.js';
 
@@ -129,5 +131,65 @@ describe('the canonical body carries every required fix (item 7)', () => {
     expect(RULES_BODY).not.toMatch(/(?<!node )dev-guardian (baseline|dashboard|status|scan|mcp-config)\b/);
     expect(RULES_BODY).toContain(`${CLI_PATH_PLACEHOLDER} baseline update`);
     expect(RULES_BODY).toContain(`${CLI_PATH_PLACEHOLDER} dashboard`);
+  });
+});
+
+// Review 8: the rules body was 18.5 KB in every host. Codex reads AGENTS.md
+// up to 32 KiB in all, and dev-spec-driven's block sits in the same file, so
+// dev-guardian's left 391 bytes to the user's own content; Windsurf caps a
+// rule file at 12 000 characters and silently dropped everything after the CI
+// section, the "never run db adopt" rule included; Cursor and Windsurf loaded
+// it on every request. The CI and dashboard manuals live in docs/, the
+// safety rules come first, and the two hosts with activation frontmatter load
+// it when the task matches.
+describe('what the rules files cost the host', () => {
+  const AGENTS_MAX_BYTES = 8000;
+  const WINDSURF_MAX_CHARS = 11_000;
+
+  function frontmatterOf(text: string): Record<string, unknown> {
+    const m = /^---\n([\s\S]*?)\n---\n/.exec(text);
+    expect(m, 'starts with YAML frontmatter').not.toBeNull();
+    return parseYaml(m?.[1] ?? '') as Record<string, unknown>;
+  }
+
+  it(`host-rules/AGENTS.md is at most ${AGENTS_MAX_BYTES} bytes`, () => {
+    expect(Buffer.byteLength(renderHostRulesFile('codex'), 'utf8')).toBeLessThanOrEqual(AGENTS_MAX_BYTES);
+  });
+
+  it(`the Windsurf rule is at most ${WINDSURF_MAX_CHARS} characters (Windsurf truncates at 12 000)`, () => {
+    expect(renderHostRulesFile('windsurf').length).toBeLessThanOrEqual(WINDSURF_MAX_CHARS);
+  });
+
+  it('Cursor loads the rule when the agent asks for it: a description, no globs, alwaysApply false', () => {
+    const fm = frontmatterOf(renderHostRulesFile('cursor'));
+    expect(fm['alwaysApply']).toBe(false);
+    expect(fm['description']).toBe(RULES_DESCRIPTION);
+    expect(fm['globs'] ?? null).toBeNull();
+  });
+
+  it('Windsurf decides by the description: trigger model_decision', () => {
+    const fm = frontmatterOf(renderHostRulesFile('windsurf'));
+    expect(fm['trigger']).toBe('model_decision');
+    expect(fm['description']).toBe(RULES_DESCRIPTION);
+  });
+
+  it('the description names installing a package and an AI skill', () => {
+    expect(RULES_DESCRIPTION).toMatch(/before installing a package, an AI skill/);
+  });
+
+  it('the safety rules come before the intent map', () => {
+    const intent = RULES_BODY.indexOf('## Intent');
+    expect(intent).toBeGreaterThan(0);
+    for (const rule of ['Never run `db adopt` yourself', '`vet_packages`', '`apply: false`', '`verify_live: true`', '`audit_mcp_tools` STARTS']) {
+      const at = RULES_BODY.indexOf(rule);
+      expect(at, rule).toBeGreaterThan(0);
+      expect(at, rule).toBeLessThan(intent);
+    }
+  });
+
+  it('never advises baseline update to accept one finding, and points CI at docs/ci.md', () => {
+    expect(RULES_BODY).toMatch(/accepts EVERY current finding/);
+    expect(RULES_BODY).not.toMatch(/npm ci|Run scans in CI/);
+    expect(RULES_BODY).toContain('docs/ci.md');
   });
 });

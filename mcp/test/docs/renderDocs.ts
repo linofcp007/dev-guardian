@@ -323,7 +323,7 @@ export function renderRulePacksDoc(packs: readonly PackInput[]): string {
       'header comment records what was measured, against which corpus, and why each exclusion exists.',
     '',
     `**${totals.withNone} of the ${totals.rules} rules** have no clause the ablation harness ` +
-      `(\`npm run ablate\`, see [CLAUDE.md](../CLAUDE.md)) can remove — ${totals.bare} are a bare ` +
+      `(\`npm run ablate\`, see [maintainers/ablation.md](maintainers/ablation.md)) can remove — ${totals.bare} are a bare ` +
       `\`pattern\` / \`pattern-regex\` and ${totals.positiveOnly} a \`patterns\` group of positive terms only. ` +
       'Those rules are checked by axis 0 (the rule fires on its `hits/` fixtures) and nothing else.',
     '',

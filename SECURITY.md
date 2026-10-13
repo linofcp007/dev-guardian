@@ -82,7 +82,8 @@ their respective projects.
   effect. Switching a protective hook off takes the user-level
   `~/.config/dev-guardian/hooks.json` or the environment (`GUARDIAN_HOOKS=off`,
   `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`). The write guard denies
-  an assistant's `Write` / `Edit` / `MultiEdit` of any hook configuration file,
+  an assistant's `Write` / `Edit` / `MultiEdit` (or a third-party MCP server's
+  write tool) of any hook configuration file,
   and the shell guard denies what it can see a command do to one: write it
   (`>`, `tee`, `sed -i`, `perl -pi`, `rsync`, `cp` / `mv` onto it, PowerShell
   `Set-Content` / `[IO.File]::WriteAllText`, cmd `>` inside `cmd /c "…"`, …),
@@ -104,7 +105,7 @@ their respective projects.
   configuration (`.npmrc`, `pip.conf`, `nuget.config`, …) through the same
   link walk; one that is there but could not be read counts as possibly a
   private registry, so a missing name warns. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
-  `MultiEdit` of `.claude/settings.json` or `settings.local.json` is denied
+  `MultiEdit` (or MCP write) of `.claude/settings.json` or `settings.local.json` is denied
   when it would newly set `disableAllHooks`, an `env` entry setting
   `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0` or `GUARDIAN_PKG_VET=0`,
   or an `enabledPlugins` entry turning dev-guardian off; every other edit of

@@ -1,5 +1,5 @@
 ---
-description: C# / .NET audit — SAST with the SDK analyzers, .NET secrets, EF Core migrations, target frameworks, NuGet CVEs and upgrades. Foco .NET. Foco .NET.
+description: "C# / .NET audit — SAST, .NET secrets, EF Core migrations, target frameworks, NuGet CVEs."
 argument-hint: "[project or solution path]"
 ---
 

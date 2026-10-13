@@ -94,6 +94,35 @@ export function isRemoteOrDeviceTarget(target: string): boolean {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
 
+/**
+ * A path that is itself on the network or a device — `\\host\share\…`,
+ * `//host/share/…`, `\\?\UNC\…`, `\\.\pipe\…` — rather than a local drive
+ * spelled in the device namespace (`\\?\C:\…`, `\\.\C:\…`, which stay local).
+ * Nothing is asked of the filesystem about such a path (review 8, item 13): a
+ * `Write` to an unreachable `\\10.255.255.1\share\…` held the hook 21 s in
+ * `lstat`, past Claude Code's 15 s, and the write then went unguarded.
+ */
+export function isNetworkPath(path: string): boolean {
+  if (!/^(?:[\\/]{2}|\\\?\?\\)/.test(path)) return false;
+  return !/^(?:[\\/]{2}[?.]|\\\?\?)[\\/][A-Za-z]:(?:[\\/]|$)/.test(path);
+}
+
+/**
+ * `\\localhost\C$\x` (also `127.0.0.1`, `[::1]`, `.` and this machine's own
+ * name, and the `\\?\UNC\…` spelling) as the local path it is — `C:\x` — or
+ * `undefined` for any other path (review 8, item 19: the admin share reached
+ * the user-level hook configuration past the Write guard).
+ */
+export function localShareAsLocal(path: string, hostname = ''): string | undefined {
+  const m = /^[\\/]{2}(?:\?[\\/]UNC[\\/])?([^\\/]+)[\\/]([A-Za-z])\$(?=[\\/]|$)(.*)$/i.exec(path);
+  if (m === null) return undefined;
+  const host = (m[1] ?? '').toLowerCase().replace(/^\[|\]$/g, '');
+  const local = ['localhost', '127.0.0.1', '::1', '0:0:0:0:0:0:0:1'].includes(host) || (hostname !== '' && host === hostname.toLowerCase());
+  if (!local) return undefined;
+  const rest = m[3] ?? '';
+  return `${(m[2] ?? '').toUpperCase()}:${rest === '' ? '\\' : rest}`;
+}
+
 export type LinkWalk = { ok: true } | { ok: false; reason: 'remote-link' | 'unreadable'; at: string };
 
 /**

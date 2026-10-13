@@ -140,7 +140,6 @@ O clone acima fixa a 3.2.1; para seguir uma versão posterior, clona antes a tag
 ## CI
 
 ```text
-npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                                  # uma vez: pacotes de runtime do scan
 node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write                # também gitlab, bitbucket
 node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .           # faz commit de .guardian/baseline.json
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
@@ -148,7 +147,7 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high -
 
 O `ci-init` gera um pipeline com cada action fixada por SHA de commit e cada scanner por versão e checksum. O `scan` termina com 0 quando passa, 1 quando um finding novo face à baseline atinge `--fail-on`, **2 quando um scanner não correu** (nunca leias isso como aprovado) e 3 num erro de utilização. Num pull request, o pipeline gerado avalia contra a baseline e as regras Semgrep do commit base (`--baseline-ref`, `--rules-ref`), nunca contra as do próprio pull request. Ver [docs/ci.md](docs/ci.md). Corre-os a partir do teu projeto, com o caminho do teu clone (a cópia do próprio plugin também serve). Para uma vista local: `status` e `dashboard` (uma página HTML autónoma, sem rede). Para trazer o log SARIF de outro analisador para o mesmo histórico, usa a ferramenta `import_sarif` ou `import-sarif <ficheiro>` — ver [docs/sarif-import.md](docs/sarif-import.md) (em inglês).
 
-**Com o dev-spec-driven.** O `/spec-finish` dele pode correr este gate como check do projeto (`dev-spec init --guardian`, ou `spec_init { guardian: true }` numa sessão): só um finding novo face à baseline, de severidade `high` ou acima, bloqueia o fecho, e o exit 2 é um scan incompleto, nunca aprovado. Um finding que já reviste aceita-se com `baseline update` ou com uma supressão que o próprio scanner lê, nunca forçando o fecho — ver [docs/ci.md](docs/ci.md) (em inglês).
+**Com o dev-spec-driven (1.29+).** O `/spec-finish` dele pode correr este gate como check do projeto (`spec_init { guardian: true }` numa sessão, ou `node "<plugin dev-spec-driven>/cli/dev-spec.js" init --guardian` num terminal): só um finding novo face à baseline, de severidade `high` ou acima, bloqueia o fecho, e o exit 2 é um scan incompleto, nunca aprovado. Regista a baseline na branch base antes de ligares o check. Um finding que já reviste aceita-se com uma supressão que o próprio scanner lê (`nosemgrep: <regra> -- <motivo>`, `.trivyignore`, `.gitleaksignore`), nunca com `baseline update` — esse aceita todos os findings atuais, incluindo os da própria feature — e nunca forçando o fecho; ver [docs/ci.md](docs/ci.md) (em inglês).
 
 ## Privacidade e rede
 

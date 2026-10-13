@@ -60,3 +60,44 @@ describe('European Portuguese, AO90', () => {
     expect(hits).toEqual([]);
   });
 });
+
+// Review 8: the markers above are all spelled with their accents, so an
+// unaccented typo ("codigo", "inicio" — guardian-bugfix had both) passed. The
+// Semgrep packs are exempt: some of their comments drop accents on purpose
+// (the cp1252 hazard CLAUDE.md describes).
+const UNACCENTED: readonly [RegExp, string][] = [
+  [/\bcodigo\b/i, 'código'],
+  [/\binicio\b/i, 'início'],
+  [/\bnao\b/i, 'não'],
+  [/\bfunc(ao|oes)\b/i, 'função / funções'],
+  [/\bexcec(ao|oes)\b/i, 'exceção / exceções'],
+  [/\bvers(ao|oes)\b/i, 'versão / versões'],
+  [/\bsessao\b/i, 'sessão'],
+  [/\binformacao\b/i, 'informação'],
+  [/\bconfiguracao\b/i, 'configuração'],
+  [/\baplicacao\b/i, 'aplicação'],
+  [/\btambem\b/i, 'também'],
+  [/\bentao\b/i, 'então'],
+  [/\bsao\b/i, 'são'],
+];
+
+describe('European Portuguese, with its accents', () => {
+  it('the matcher catches an unaccented word and leaves the accented one alone', () => {
+    expect(UNACCENTED.some(([re]) => re.test('o codigo no inicio'))).toBe(true);
+    expect(UNACCENTED.some(([re]) => re.test('o código no início não é a versão'))).toBe(false);
+  });
+
+  it.each(portugueseTexts().filter((d) => !d.rel.startsWith('configs/')).map((d) => [d.rel, d] as const))(
+    '%s: no word missing its accent',
+    (_rel, doc) => {
+      const hits: string[] = [];
+      doc.text.split('\n').forEach((line, i) => {
+        for (const [re, pt] of UNACCENTED) {
+          const m = re.exec(line);
+          if (m) hits.push(`${i + 1}: "${m[0]}" → ${pt}`);
+        }
+      });
+      expect(hits).toEqual([]);
+    },
+  );
+});

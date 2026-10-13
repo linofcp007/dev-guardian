@@ -67,3 +67,6 @@ build/
 # settings, stays committable.
 .claude/settings.local.json
 .claude/worktrees/
+
+# Plugin eval results (claude plugin eval) — local runs, never committed
+evals/results/

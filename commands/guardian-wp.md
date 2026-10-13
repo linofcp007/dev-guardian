@@ -1,5 +1,5 @@
 ---
-description: WordPress audit — source scan, vulnerabilities from source or a live URL, live-install checks and hardening. Foco WordPress. Foco WordPress.
+description: "WordPress audit — code scan, vulnerabilities from source or a live URL, hardening."
 argument-hint: "[WordPress install path or site URL]"
 ---
 

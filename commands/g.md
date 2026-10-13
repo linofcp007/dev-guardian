@@ -1,6 +1,7 @@
 ---
-description: Short alias for the guardian router skill. Atalho para o router. Atajo al router.
+description: "Shortcut to the guardian router."
 argument-hint: "[what you want checked]"
+disable-model-invocation: true
 ---
 
 Alias of the `guardian` router skill. There is deliberately no `commands/guardian.md`: a command named like a skill shadows it, so `/guardian` is the skill itself and `/g` is only the short way in.
