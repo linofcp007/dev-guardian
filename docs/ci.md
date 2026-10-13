@@ -58,7 +58,10 @@ Semgrep sometimes reads a file only in part and says so with a warning — PHP's
 ```text
 coverage gaps:
   - security_scan_full: semgrep ran with reduced coverage (partial: 1 file(s) only partly parsed — … (PartialParsing: wp/rest-controller.php)) — not accepted: wp/rest-controller.php (--accept-partial-parse <path> accepts one file, matched exactly)
+    fix: Review the named file; if the gap is acceptable, pass `--accept-partial-parse <path>` on the scan command line (never from a repository file).
 ```
+
+Every gap line is followed by its `fix:` — the same remedy the JSON carries in `coverage_gap_details` ([below](#the-json-verdict)).
 
 Once you have looked at the file and decided the gap is acceptable, name it:
 
@@ -66,7 +69,7 @@ Once you have looked at the file and decided the gap is acceptable, name it:
 node dev-guardian.mjs scan --project . --accept-partial-parse wp/rest-controller.php
 ```
 
-- When **every** file a Semgrep step only partly parsed is accepted, that gap prints under `accepted (--accept-partial-parse):` and no longer forces exit 2 (JSON: `accepted_gaps`). A path you accepted that nothing reported is printed as unused (JSON: `unused_partial_parse_acceptances`).
+- When **every** file a Semgrep step only partly parsed is accepted, that gap prints under `accepted (not gating):`, naming `--accept-partial-parse`, and no longer forces exit 2 (JSON: `accepted_gaps`, and a `coverage_gap_details` entry with `gating: false`). A path you accepted that nothing reported is printed as unused (JSON: `unused_partial_parse_acceptances`).
 - Coverage still reads `partial` — in the human report, the JSON and the SARIF (`executionSuccessful: false`). Accepting a gap is not measuring it.
 - Paths are relative to `--project` and matched exactly: `/` or `\` separators and a leading `./` are fine; no globs, no directories, no case folding. An absolute path or one with `..` is a usage error (exit 3).
 - A YAML target is a file like any other: a GitHub Actions workflow whose `run:` block a rule reads as shell (`typescript@${{ env.X }}`) is a `PartialParsing` on that workflow, not a failed Semgrep.

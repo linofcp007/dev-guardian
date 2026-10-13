@@ -37,6 +37,7 @@ beforeAll(async () => {
 });
 
 const READY = process.platform === 'win32' && (await isInstalled('semgrep'));
+const BANDIT_READY = READY && (await isInstalled('bandit'));
 
 const RULES =
   'rules:\n  - id: js-eval\n    languages: [javascript]\n    severity: ERROR\n    message: eval of data\n' +
@@ -81,5 +82,40 @@ describe('scan_sast: a file at a path too long for Windows is scanned or named, 
       expect(out.missing_tools).toContain('semgrep');
       expect(semgrep?.reason).toMatch(/at a path of 260 characters or more were not scanned/);
     }
+  });
+
+  // Bandit too: it sometimes reported such a file and sometimes dropped it
+  // silently. A Python file at a long path is analysed (in its `metrics`) or
+  // named — never neither.
+  it.skipIf(!BANDIT_READY)('Bandit: the long-path Python file is either analysed or named as a Path too long gap', async () => {
+    const dir = resolveProjectPath(makeTempDir('sast-longpath-py-')).path;
+    writeFileSync(join(dir, '.semgrep.yml'), RULES);
+    writeFileSync(join(dir, 'short.py'), 'import pickle\n\n\ndef f(x):\n    return pickle.loads(x)\n');
+    const segments: string[] = [];
+    while (join(dir, ...segments, 'deep.py').length < 300) segments.push('p'.repeat(40));
+    mkdirSync(join(dir, ...segments), { recursive: true });
+    writeFileSync(join(dir, ...segments, 'deep.py'), 'import pickle\n\n\ndef g(y):\n    return pickle.loads(y)\n');
+    const longRel = [...segments, 'deep.py'].join('/');
+
+    const tool = TOOLS.find((t) => t.name === 'scan_sast');
+    if (!tool) throw new Error('scan_sast not registered');
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const storage = new Storage(db);
+    const p: PluginContext = { storage, shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
+    const r = await tool.handler({ project_path: dir, force: true, local_only: true }, p);
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    const out = r as unknown as { scan_id: string; tools_run: ToolRun[]; missing_tools: string[] };
+    const bandit = out.tools_run.find((t) => t.name === 'bandit');
+    expect(bandit?.status).toBe('ok');
+    const files = storage.findings
+      .listByScan(out.scan_id)
+      .filter((f) => f.tool === 'bandit')
+      .map((f) => (f.file_path ?? '').split(String.fromCharCode(92)).join('/'));
+    expect(files.some((f) => f.endsWith('short.py'))).toBe(true);
+    const found = files.some((f) => f.endsWith(longRel));
+    const named = (bandit?.partially_parsed ?? []).some((pp) => pp.file === longRel && pp.type === PATH_TOO_LONG_TYPE);
+    expect(found || named).toBe(true);
+    if (named) expect(out.missing_tools).toContain('bandit');
   });
 });

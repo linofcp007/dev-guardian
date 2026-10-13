@@ -430,7 +430,7 @@ function recoveryToolRun(recovery) {
         {
             name: RECOVERY_STEP,
             status: 'failed',
-            reason: `${base}; ${routesLost} route match(es) could not be read and are MISSING ` +
+            reason: `${base}; ${routesLost} match(es) could not be read and are MISSING ` +
                 `from the surface (see coverage[].unreadable_matches for which languages)` +
                 (edgesNote !== '' ? `; ${edgesNote}` : '') +
                 ` — ${REDACTION_REMEDY}`,

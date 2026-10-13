@@ -227,7 +227,7 @@ function dominantEol(content) {
     return first > 0 && content[first - 1] === '\r' ? '\r\n' : '\n';
 }
 /** Where {@link ensureGuardianDirIgnored} writes, relative to the project. */
-export const GUARDIAN_DIR_GITIGNORE = '.guardian/.gitignore';
+export const DOT_GUARDIAN_GITIGNORE = '.guardian/.gitignore';
 /**
  * The `.guardian/.gitignore` the CLI drops in a project it scans: everything
  * in `.guardian/` ignored — reports, the database, itself — but the files a
@@ -251,7 +251,7 @@ export function ensureGuardianDirIgnored(projectPath) {
         '*\n' +
         SHARED_GUARDIAN_FILES.map((f) => `!${f}\n`).join('');
     try {
-        return writeProjectFile(projectPath, GUARDIAN_DIR_GITIGNORE, content, { mode: 'create' }).ok;
+        return writeProjectFile(projectPath, DOT_GUARDIAN_GITIGNORE, content, { mode: 'create' }).ok;
     }
     catch {
         return false;

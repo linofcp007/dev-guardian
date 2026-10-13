@@ -39891,15 +39891,34 @@ async function runBandit(args) {
   const raw = readJsonSafe(outFile);
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
   const check2 = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
-  const partial3 = (check2.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
-  const run2 = !check2.ok ? { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" } : partial3.length > 0 ? {
-    name: "bandit",
-    status: "ok",
-    reason: describePartialParse(partial3, "findings in the unparsed files may be missing"),
-    partially_parsed: partial3
-  } : { name: "bandit", status: "ok" };
+  const parsed = (check2.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
+  const tooLong = check2.ok ? await banditLongPaths(ctx, raw, parsed) : [];
+  const partial3 = [...parsed, ...tooLong];
+  const reason = [
+    ...parsed.length > 0 ? [describePartialParse(parsed, "findings in the unparsed files may be missing")] : [],
+    ...tooLong.length > 0 ? [describeTooLong(tooLong.map((p) => p.file))] : []
+  ].join("; ");
+  const run2 = !check2.ok ? { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" } : partial3.length > 0 ? { name: "bandit", status: "ok", reason, partially_parsed: partial3 } : { name: "bandit", status: "ok" };
   if (partial3.length > 0 && check2.ok) missing_tools.push("bandit");
   tools_run.push(ini.honoured ? await nameRepoConfig(run2, ctx.configRoot, "bandit") : run2);
+}
+async function banditLongPaths(ctx, raw, named2) {
+  if (process.platform !== "win32") return [];
+  const candidates2 = ((await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx))).longPaths ?? []).filter(
+    (f) => f.toLowerCase().endsWith(".py")
+  );
+  if (candidates2.length === 0) return [];
+  const root = raw === null ? null : parseInputAsJson(raw);
+  const metrics = getProp(root, "metrics");
+  const analysed = metrics !== null && typeof metrics === "object" ? Object.keys(metrics).map((k) => k.split("\\").join("/").toLowerCase()) : [];
+  return candidates2.filter((f) => {
+    const key = f.toLowerCase();
+    return !named2.some((p) => p.file.toLowerCase() === key) && !analysed.some((a2) => a2 === key || a2.endsWith(`/${key}`));
+  }).map((file) => ({
+    file,
+    type: PATH_TOO_LONG_TYPE,
+    message: "the path is 260 characters or longer, and Bandit did not analyse the file"
+  }));
 }
 function ignoreFrom(ctx) {
   return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
@@ -82862,7 +82881,7 @@ function recoveryToolRun(recovery) {
     {
       name: RECOVERY_STEP,
       status: "failed",
-      reason: `${base}; ${routesLost} route match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages)` + (edgesNote !== "" ? `; ${edgesNote}` : "") + ` \u2014 ${REDACTION_REMEDY}`
+      reason: `${base}; ${routesLost} match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages)` + (edgesNote !== "" ? `; ${edgesNote}` : "") + ` \u2014 ${REDACTION_REMEDY}`
     }
   ];
 }
@@ -101326,12 +101345,12 @@ var SHARED_GUARDIAN_FILES = [
 ];
 var NEGATIONS = SHARED_GUARDIAN_FILES.map((f) => `!**/.guardian/${f}`);
 var MAX_GITIGNORE_BYTES = 4 * 1024 * 1024;
-var GUARDIAN_DIR_GITIGNORE = ".guardian/.gitignore";
+var DOT_GUARDIAN_GITIGNORE = ".guardian/.gitignore";
 function ensureGuardianDirIgnored(projectPath) {
   const content = "# Written by dev-guardian: its working files (reports, the database) stay out of git,\n# the files a team shares stay in. Written when missing, never changed: edit it freely.\n*\n" + SHARED_GUARDIAN_FILES.map((f) => `!${f}
 `).join("");
   try {
-    return writeProjectFile(projectPath, GUARDIAN_DIR_GITIGNORE, content, { mode: "create" }).ok;
+    return writeProjectFile(projectPath, DOT_GUARDIAN_GITIGNORE, content, { mode: "create" }).ok;
   } catch {
     return false;
   }
