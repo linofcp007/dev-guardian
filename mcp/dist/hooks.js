@@ -508,6 +508,16 @@ var init_powershellText = __esm({
   }
 });
 
+// src/hooks/shell/arrays.ts
+function pushAll(into, from) {
+  for (const x of from) into.push(x);
+}
+var init_arrays = __esm({
+  "src/hooks/shell/arrays.ts"() {
+    "use strict";
+  }
+});
+
 // src/hooks/shell/command.ts
 function basename2(value) {
   const parts = value.split(/[\\/]/);
@@ -640,6 +650,134 @@ var init_command = __esm({
       watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) }
     };
     ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+  }
+});
+
+// src/hooks/shell/cmd.ts
+function splitCmdLine(line) {
+  const commands = [];
+  let words = [];
+  let redirects = [];
+  let cur = "";
+  let inQuote = false;
+  let has = false;
+  let role = "arg";
+  const endWord = () => {
+    if (has) {
+      if (role === "write") redirects.push(cur);
+      else if (role === "arg") words.push(cur);
+      role = "arg";
+    }
+    cur = "";
+    has = false;
+  };
+  const endCommand = () => {
+    endWord();
+    role = "arg";
+    if (words.length > 0 || redirects.length > 0) commands.push({ words, redirects });
+    words = [];
+    redirects = [];
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
+    if (ch === '"') {
+      inQuote = !inQuote;
+      has = true;
+    } else if (!inQuote && ch === "^" && i + 1 < line.length) {
+      i += 1;
+      cur += line.charAt(i);
+      has = true;
+    } else if (!inQuote && (ch === "&" || ch === "|")) {
+      endCommand();
+      if (line.charAt(i + 1) === ch) i += 1;
+    } else if (!inQuote && (ch === ">" || ch === "<")) {
+      if (has && /^\d$/.test(cur)) {
+        cur = "";
+        has = false;
+      } else endWord();
+      if (ch === ">" && line.charAt(i + 1) === ">") i += 1;
+      if (line.charAt(i + 1) === "&") {
+        i += 1;
+        while (/\d/.test(line.charAt(i + 1))) i += 1;
+        continue;
+      }
+      role = ch === ">" ? "write" : "read";
+    } else if (!inQuote && /\s/.test(ch)) {
+      if (has) endWord();
+    } else {
+      cur += ch;
+      has = true;
+    }
+  }
+  endCommand();
+  return commands;
+}
+function cmdCommandWords(words) {
+  const out = [...words];
+  const first = out[0];
+  if (first !== void 0 && first.startsWith("@")) {
+    if (first.length > 1) out[0] = first.slice(1);
+    else out.shift();
+  }
+  while (out.length > 0 && (out[0] ?? "").toLowerCase() === "call") out.shift();
+  return out;
+}
+function posixWord(word) {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+}
+function cmdLineText(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return void 0;
+  const [first, ...more] = args.slice(at + 1);
+  if (first === void 0) return void 0;
+  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
+  return [head, ...more.map(posixWord)].join(" ");
+}
+function cmdTextAsPosix(line) {
+  let out = "";
+  let inQuote = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
+    if (ch === '"') inQuote = !inQuote;
+    if (ch === "\\") out += "\\\\";
+    else if (ch === "^" && !inQuote && i + 1 < line.length) {
+      i += 1;
+      out += `\\${line.charAt(i)}`;
+    } else out += ch;
+  }
+  return out;
+}
+function cmdLine(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return [];
+  const first = args[at + 1];
+  if (first === void 0) return [];
+  const head = first.trim();
+  const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
+  const last = commands[commands.length - 1];
+  if (last !== void 0) pushAll(last.words, args.slice(at + 2));
+  return commands;
+}
+function cmdInnerCommands(args, depth = 0) {
+  if (depth > MAX_CMD_NESTING) return [];
+  const out = [];
+  for (const command of cmdLine(args)) {
+    const words = cmdCommandWords(command.words);
+    const name = (words[0] ?? "").toLowerCase().replace(/\.exe$/, "");
+    if (name === "cmd") pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
+    else out.push(words.map((value) => ({ value, quoted: false })));
+  }
+  return out;
+}
+var MAX_CMD_NESTING;
+var init_cmd = __esm({
+  "src/hooks/shell/cmd.ts"() {
+    "use strict";
+    init_arrays();
+    init_command();
+    MAX_CMD_NESTING = 8;
   }
 });
 
@@ -1381,9 +1519,6 @@ function wildcardMatch(pattern, name) {
 function noEffects() {
   return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
 }
-function pushAll(into, from) {
-  for (const x of from) into.push(x);
-}
 function mergeEffects(into, from) {
   pushAll(into.writes, from.writes);
   pushAll(into.removes, from.removes);
@@ -1486,123 +1621,6 @@ function newItemArgs(args) {
 function mklinkDestinations(args) {
   const link = args.find((a) => !a.startsWith("/"));
   return link === void 0 ? [] : [link];
-}
-function splitCmdLine(line) {
-  const commands = [];
-  let words = [];
-  let redirects = [];
-  let cur = "";
-  let inQuote = false;
-  let has = false;
-  let role = "arg";
-  const endWord = () => {
-    if (has) {
-      if (role === "write") redirects.push(cur);
-      else if (role === "arg") words.push(cur);
-      role = "arg";
-    }
-    cur = "";
-    has = false;
-  };
-  const endCommand = () => {
-    endWord();
-    role = "arg";
-    if (words.length > 0 || redirects.length > 0) commands.push({ words, redirects });
-    words = [];
-    redirects = [];
-  };
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') {
-      inQuote = !inQuote;
-      has = true;
-    } else if (!inQuote && ch === "^" && i + 1 < line.length) {
-      i += 1;
-      cur += line.charAt(i);
-      has = true;
-    } else if (!inQuote && (ch === "&" || ch === "|")) {
-      endCommand();
-      if (line.charAt(i + 1) === ch) i += 1;
-    } else if (!inQuote && (ch === ">" || ch === "<")) {
-      if (has && /^\d$/.test(cur)) {
-        cur = "";
-        has = false;
-      } else endWord();
-      if (ch === ">" && line.charAt(i + 1) === ">") i += 1;
-      if (line.charAt(i + 1) === "&") {
-        i += 1;
-        while (/\d/.test(line.charAt(i + 1))) i += 1;
-        continue;
-      }
-      role = ch === ">" ? "write" : "read";
-    } else if (!inQuote && /\s/.test(ch)) {
-      if (has) endWord();
-    } else {
-      cur += ch;
-      has = true;
-    }
-  }
-  endCommand();
-  return commands;
-}
-function cmdCommandWords(words) {
-  const out = [...words];
-  const first = out[0];
-  if (first !== void 0 && first.startsWith("@")) {
-    if (first.length > 1) out[0] = first.slice(1);
-    else out.shift();
-  }
-  while (out.length > 0 && (out[0] ?? "").toLowerCase() === "call") out.shift();
-  return out;
-}
-function posixWord(word) {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
-}
-function cmdLineText(rawArgs) {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return void 0;
-  const [first, ...more] = args.slice(at + 1);
-  if (first === void 0) return void 0;
-  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
-  return [head, ...more.map(posixWord)].join(" ");
-}
-function cmdTextAsPosix(line) {
-  let out = "";
-  let inQuote = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') inQuote = !inQuote;
-    if (ch === "\\") out += "\\\\";
-    else if (ch === "^" && !inQuote && i + 1 < line.length) {
-      i += 1;
-      out += `\\${line.charAt(i)}`;
-    } else out += ch;
-  }
-  return out;
-}
-function cmdLine(rawArgs) {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return [];
-  const first = args[at + 1];
-  if (first === void 0) return [];
-  const head = first.trim();
-  const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
-  const last = commands[commands.length - 1];
-  if (last !== void 0) pushAll(last.words, args.slice(at + 2));
-  return commands;
-}
-function cmdInnerCommands(args, depth = 0) {
-  if (depth > MAX_CMD_NESTING) return [];
-  const out = [];
-  for (const command of cmdLine(args)) {
-    const words = cmdCommandWords(command.words);
-    const name = (words[0] ?? "").toLowerCase().replace(/\.exe$/, "");
-    if (name === "cmd") pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
-    else out.push(words.map((value) => ({ value, quoted: false })));
-  }
-  return out;
 }
 function cmdEffects(args, cwd, depth = 0) {
   const e = noEffects();
@@ -3693,13 +3711,15 @@ function assessReadings(readings, cut, now, deadline, where) {
     ...ask === void 0 ? {} : { ask }
   };
 }
-var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, MAX_CWD, CD_COMMANDS, CD_RETURNS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, MAX_CMD_NESTING, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, MAX_CWD, CD_COMMANDS, CD_RETURNS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
     init_dataRegistry();
     init_guardedPath();
     init_powershellText();
+    init_arrays();
+    init_cmd();
     init_command();
     init_split();
     init_command();
@@ -3979,7 +3999,6 @@ var init_bashGuard = __esm({
       ["target", ["value", "target"]],
       ["credential", ["credential"]]
     ];
-    MAX_CMD_NESTING = 8;
     COPY_VALUED = /* @__PURE__ */ new Set(["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"]);
     PS_PATH_PARAMS = ["path", "literalpath", "destination"];
     PS_VALUE_PARAMS = ["filter", "include", "exclude", "credential", "fromsession", "tosession"];

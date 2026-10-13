@@ -95368,6 +95368,134 @@ function userDataDir2(ctx = {}) {
 
 // src/hooks/bashGuard.ts
 init_powershellText();
+
+// src/hooks/shell/arrays.ts
+function pushAll(into, from) {
+  for (const x of from) into.push(x);
+}
+
+// src/hooks/shell/cmd.ts
+init_command();
+function splitCmdLine(line) {
+  const commands = [];
+  let words = [];
+  let redirects = [];
+  let cur = "";
+  let inQuote = false;
+  let has = false;
+  let role = "arg";
+  const endWord = () => {
+    if (has) {
+      if (role === "write") redirects.push(cur);
+      else if (role === "arg") words.push(cur);
+      role = "arg";
+    }
+    cur = "";
+    has = false;
+  };
+  const endCommand = () => {
+    endWord();
+    role = "arg";
+    if (words.length > 0 || redirects.length > 0) commands.push({ words, redirects });
+    words = [];
+    redirects = [];
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
+    if (ch === '"') {
+      inQuote = !inQuote;
+      has = true;
+    } else if (!inQuote && ch === "^" && i + 1 < line.length) {
+      i += 1;
+      cur += line.charAt(i);
+      has = true;
+    } else if (!inQuote && (ch === "&" || ch === "|")) {
+      endCommand();
+      if (line.charAt(i + 1) === ch) i += 1;
+    } else if (!inQuote && (ch === ">" || ch === "<")) {
+      if (has && /^\d$/.test(cur)) {
+        cur = "";
+        has = false;
+      } else endWord();
+      if (ch === ">" && line.charAt(i + 1) === ">") i += 1;
+      if (line.charAt(i + 1) === "&") {
+        i += 1;
+        while (/\d/.test(line.charAt(i + 1))) i += 1;
+        continue;
+      }
+      role = ch === ">" ? "write" : "read";
+    } else if (!inQuote && /\s/.test(ch)) {
+      if (has) endWord();
+    } else {
+      cur += ch;
+      has = true;
+    }
+  }
+  endCommand();
+  return commands;
+}
+function cmdCommandWords(words) {
+  const out = [...words];
+  const first = out[0];
+  if (first !== void 0 && first.startsWith("@")) {
+    if (first.length > 1) out[0] = first.slice(1);
+    else out.shift();
+  }
+  while (out.length > 0 && (out[0] ?? "").toLowerCase() === "call") out.shift();
+  return out;
+}
+var MAX_CMD_NESTING = 8;
+function posixWord(word) {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+}
+function cmdLineText(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return void 0;
+  const [first, ...more] = args.slice(at + 1);
+  if (first === void 0) return void 0;
+  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
+  return [head, ...more.map(posixWord)].join(" ");
+}
+function cmdTextAsPosix(line) {
+  let out = "";
+  let inQuote = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
+    if (ch === '"') inQuote = !inQuote;
+    if (ch === "\\") out += "\\\\";
+    else if (ch === "^" && !inQuote && i + 1 < line.length) {
+      i += 1;
+      out += `\\${line.charAt(i)}`;
+    } else out += ch;
+  }
+  return out;
+}
+function cmdLine(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return [];
+  const first = args[at + 1];
+  if (first === void 0) return [];
+  const head = first.trim();
+  const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
+  const last = commands[commands.length - 1];
+  if (last !== void 0) pushAll(last.words, args.slice(at + 2));
+  return commands;
+}
+function cmdInnerCommands(args, depth = 0) {
+  if (depth > MAX_CMD_NESTING) return [];
+  const out = [];
+  for (const command of cmdLine(args)) {
+    const words = cmdCommandWords(command.words);
+    const name = (words[0] ?? "").toLowerCase().replace(/\.exe$/, "");
+    if (name === "cmd") pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
+    else out.push(words.map((value) => ({ value, quoted: false })));
+  }
+  return out;
+}
+
+// src/hooks/bashGuard.ts
 init_command();
 init_split();
 init_command();
@@ -96036,9 +96164,6 @@ function wildcardMatch(pattern, name) {
 function noEffects() {
   return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
 }
-function pushAll(into, from) {
-  for (const x of from) into.push(x);
-}
 function mergeEffects(into, from) {
   pushAll(into.writes, from.writes);
   pushAll(into.removes, from.removes);
@@ -96148,124 +96273,6 @@ function newItemArgs(args) {
 function mklinkDestinations(args) {
   const link = args.find((a) => !a.startsWith("/"));
   return link === void 0 ? [] : [link];
-}
-function splitCmdLine(line) {
-  const commands = [];
-  let words = [];
-  let redirects = [];
-  let cur = "";
-  let inQuote = false;
-  let has = false;
-  let role = "arg";
-  const endWord = () => {
-    if (has) {
-      if (role === "write") redirects.push(cur);
-      else if (role === "arg") words.push(cur);
-      role = "arg";
-    }
-    cur = "";
-    has = false;
-  };
-  const endCommand = () => {
-    endWord();
-    role = "arg";
-    if (words.length > 0 || redirects.length > 0) commands.push({ words, redirects });
-    words = [];
-    redirects = [];
-  };
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') {
-      inQuote = !inQuote;
-      has = true;
-    } else if (!inQuote && ch === "^" && i + 1 < line.length) {
-      i += 1;
-      cur += line.charAt(i);
-      has = true;
-    } else if (!inQuote && (ch === "&" || ch === "|")) {
-      endCommand();
-      if (line.charAt(i + 1) === ch) i += 1;
-    } else if (!inQuote && (ch === ">" || ch === "<")) {
-      if (has && /^\d$/.test(cur)) {
-        cur = "";
-        has = false;
-      } else endWord();
-      if (ch === ">" && line.charAt(i + 1) === ">") i += 1;
-      if (line.charAt(i + 1) === "&") {
-        i += 1;
-        while (/\d/.test(line.charAt(i + 1))) i += 1;
-        continue;
-      }
-      role = ch === ">" ? "write" : "read";
-    } else if (!inQuote && /\s/.test(ch)) {
-      if (has) endWord();
-    } else {
-      cur += ch;
-      has = true;
-    }
-  }
-  endCommand();
-  return commands;
-}
-function cmdCommandWords(words) {
-  const out = [...words];
-  const first = out[0];
-  if (first !== void 0 && first.startsWith("@")) {
-    if (first.length > 1) out[0] = first.slice(1);
-    else out.shift();
-  }
-  while (out.length > 0 && (out[0] ?? "").toLowerCase() === "call") out.shift();
-  return out;
-}
-var MAX_CMD_NESTING = 8;
-function posixWord(word) {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
-}
-function cmdLineText(rawArgs) {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return void 0;
-  const [first, ...more] = args.slice(at + 1);
-  if (first === void 0) return void 0;
-  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
-  return [head, ...more.map(posixWord)].join(" ");
-}
-function cmdTextAsPosix(line) {
-  let out = "";
-  let inQuote = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') inQuote = !inQuote;
-    if (ch === "\\") out += "\\\\";
-    else if (ch === "^" && !inQuote && i + 1 < line.length) {
-      i += 1;
-      out += `\\${line.charAt(i)}`;
-    } else out += ch;
-  }
-  return out;
-}
-function cmdLine(rawArgs) {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return [];
-  const first = args[at + 1];
-  if (first === void 0) return [];
-  const head = first.trim();
-  const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
-  const last = commands[commands.length - 1];
-  if (last !== void 0) pushAll(last.words, args.slice(at + 2));
-  return commands;
-}
-function cmdInnerCommands(args, depth = 0) {
-  if (depth > MAX_CMD_NESTING) return [];
-  const out = [];
-  for (const command of cmdLine(args)) {
-    const words = cmdCommandWords(command.words);
-    const name = (words[0] ?? "").toLowerCase().replace(/\.exe$/, "");
-    if (name === "cmd") pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
-    else out.push(words.map((value) => ({ value, quoted: false })));
-  }
-  return out;
 }
 function cmdEffects(args, cwd, depth = 0) {
   const e = noEffects();
