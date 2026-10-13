@@ -813,6 +813,7 @@ function parseReading(text, forced) {
     const notConfident = forced ?? confidentShape(text);
     const envChange = changesEnvironment(text, split.statements);
     let dirChanged = false;
+    let workdir;
     for (const statement of split.statements) {
         for (const words of statement.commands) {
             const d = detect(words);
@@ -824,10 +825,14 @@ function parseReading(text, forced) {
                     context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
                 const c = collect(d, context);
                 c.uncertain = notConfident === null ? [] : [...new Set([notConfident, ...c.uncertain])];
+                if (workdir !== undefined)
+                    c.workdir = workdir;
                 out.push(c);
             }
-            if (changesDirectory(words))
+            if (changesDirectory(words)) {
                 dirChanged = true;
+                workdir = directoryAfter(workdir, words);
+            }
         }
     }
     return out;
@@ -1156,6 +1161,34 @@ const DIR_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'p
 function changesDirectory(words) {
     const head = words[commandStart(words)];
     return head !== undefined && DIR_COMMANDS.has(base(head.value));
+}
+/** A target this parse cannot read literally: an expansion, a glob, a cmd.exe `%VAR%`. */
+const UNREAD_TARGET = /[$`%*?[\]{}]/;
+/**
+ * The working directory after one directory command ({@link changesDirectory}),
+ * as {@link InstallCommand.workdir} spells it: `prev` with its target appended,
+ * or `null` when the target cannot be read (an expansion, `cd -`, `popd`, no
+ * operand or several). The flags of `cd` (`-L`, `-P`, `-e`, `-@`), of
+ * `Set-Location` (`-Path`, `-LiteralPath`) and cmd.exe's `cd /d` are skipped.
+ */
+function directoryAfter(prev, words) {
+    if (prev === null)
+        return null;
+    const at = commandStart(words);
+    const name = base(words[at]?.value ?? '');
+    if (name === 'popd' || name === 'pop-location')
+        return null;
+    const steps = prev ?? [];
+    if (name === 'cd..')
+        return [...steps, '..'];
+    const operands = words
+        .slice(at + 1)
+        .map((w) => w.value)
+        .filter((v, _, all) => !/^-[LPe@]+$/.test(v) && !/^-(?:path|literalpath)$/i.test(v) && !(all.length > 1 && /^\/d$/i.test(v)));
+    const target = operands[0];
+    if (operands.length !== 1 || target === undefined || target === '' || target === '-' || UNREAD_TARGET.test(target))
+        return null;
+    return [...steps, target];
 }
 const ENV_COMMANDS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx']);
 /**

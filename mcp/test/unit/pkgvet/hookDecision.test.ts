@@ -667,6 +667,99 @@ describe('decideInstallCommand — launchers are vetted like installs (review P1
     expect(f.calls).toEqual([]);
   });
 
+  // Review 8, extra item: `cd mcp && npx vitest run …` from the repository
+  // root got a "published 31 h ago" warning about the registry's newest
+  // vitest — while npx ran mcp/node_modules/.bin/vitest and fetched nothing.
+  describe('the directory the launcher runs in: the cwd moved by the `cd`s before it', () => {
+    const installIn = (dir: string, bin: string): void => {
+      mkdirSync(join(dir, 'node_modules', '.bin'), { recursive: true });
+      writeFileSync(join(dir, 'node_modules', '.bin', bin), '#!/bin/sh\n');
+    };
+
+    it('`cd sub && npx tool` runs sub/node_modules/.bin/tool: nothing is looked up', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const f = fakeRegistry();
+      for (const command of [
+        'cd sub && npx zz-no-such-pkg run',
+        'cd ./sub; npx zz-no-such-pkg',
+        'cd "sub" && npm exec zz-no-such-pkg',
+        'pushd sub && bunx zz-no-such-pkg',
+        `cd '${join(project, 'sub')}' && npx zz-no-such-pkg`,
+      ]) {
+        expect(await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} })), command).toBeNull();
+      }
+      expect(f.calls).toEqual([]);
+    });
+
+    it('a PowerShell `Set-Location` moves it the same way', async () => {
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const f = fakeRegistry();
+      const d = await decideInstallCommand('Set-Location -Path sub; npx zz-no-such-pkg', opts(f.fetchImpl, { popular: {}, shell: 'powershell' }));
+      expect(d).toBeNull();
+      expect(f.calls).toEqual([]);
+    });
+
+    it('a deeper `cd` still finds the copy an ancestor holds, up to the repository root', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      mkdirSync(join(project, 'sub', 'deep', 'er'), { recursive: true });
+      const f = fakeRegistry();
+      expect(await decideInstallCommand('cd sub/deep && cd er && npx zz-no-such-pkg', opts(f.fetchImpl, { popular: {} }))).toBeNull();
+      expect(f.calls).toEqual([]);
+    });
+
+    it('without the `cd`, the same bin installed only in sub is fetched — and vetted', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const f = fakeRegistry();
+      const d = await decideInstallCommand('npx zz-no-such-pkg', opts(f.fetchImpl, { popular: {} }));
+      expect(d?.deny).toMatch(/zz-no-such-pkg/);
+    });
+
+    it('a `cd` into a directory without the bin: vetted, even when the starting directory has it', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(project, 'zz-no-such-pkg');
+      const outside = mkdtempSync(join(tmpdir(), 'pkgvet-elsewhere-'));
+      try {
+        const f = fakeRegistry();
+        const d = await decideInstallCommand(`cd '${outside}' && npx zz-no-such-pkg`, opts(f.fetchImpl, { popular: {} }));
+        expect(d?.context ?? d?.deny).toMatch(/zz-no-such-pkg/);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['cd "$WORK" && npx zz-no-such-pkg', 'cd - && npx zz-no-such-pkg', 'popd && npx zz-no-such-pkg', 'cd `pwd` && npx zz-no-such-pkg'])(
+      '%s — a move this parse cannot read: vetted, whatever is installed here',
+      async (command) => {
+        installIn(project, 'zz-no-such-pkg');
+        const f = fakeRegistry();
+        const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} }));
+        expect(d?.context ?? d?.deny).toMatch(/zz-no-such-pkg/);
+      },
+    );
+
+    it.each(['npx -y zz-no-such-pkg@1.0.0', 'npx zz-no-such-pkg@latest', 'cd sub && npx -y zz-no-such-pkg@^2'])(
+      '%s — a version asked for: npx fetches unless the copy matches, so it is vetted',
+      async (command) => {
+        installIn(project, 'zz-no-such-pkg');
+        installIn(join(project, 'sub'), 'zz-no-such-pkg');
+        const f = fakeRegistry();
+        const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} }));
+        expect(d?.context ?? d?.deny).toMatch(/zz-no-such-pkg/);
+      },
+    );
+
+    it.skipIf(process.platform !== 'win32')('on Windows, an MSYS `/c/…` target is the drive path', async () => {
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const msys = join(project, 'sub').replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d: string) => `/${d.toLowerCase()}`);
+      const f = fakeRegistry();
+      expect(await decideInstallCommand(`cd '${msys}' && npx zz-no-such-pkg`, opts(f.fetchImpl, { popular: {} }))).toBeNull();
+      expect(f.calls).toEqual([]);
+    });
+  });
+
   it('…but pnpm dlx and yarn dlx always fetch, so they are vetted all the same', async () => {
     mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
     writeFileSync(join(project, 'node_modules', '.bin', 'zz-no-such-pkg'), '#!/bin/sh\n');

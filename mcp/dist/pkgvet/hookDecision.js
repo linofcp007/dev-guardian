@@ -29,6 +29,7 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 import { lstatSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { walkLinksUnder } from '../hooks/configFile.js';
 import { parseInstallCommands } from './parseCommand.js';
@@ -83,7 +84,7 @@ function boundedInstalls(command, shell, isPopular, runsLocally) {
     const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell }).map((c) => 
     // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
     // fetch nothing: there is nothing to vet (review P1).
-    c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p)) } : c);
+    c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c);
     const key = (pkg) => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
     const seen = new Set();
     const unique = [];
@@ -166,6 +167,47 @@ function installedLocally(name, cwd) {
     }
     return false;
 }
+/**
+ * Whether a launcher would run `pkg` from the project (review 8, extra item):
+ * an unversioned name — `npx vitest`, never `npx -y vitest@5.0.4` or
+ * `vitest@latest`, which npx fetches unless the installed copy matches — found
+ * installed ({@link installedLocally}) in the directory the command runs in. That
+ * is the hook's working directory moved by the `cd`s before the command
+ * ({@link commandDir}): `cd mcp && npx vitest run` from the repository root ran
+ * `mcp`'s own vitest, and the hook warned about the registry's newest one.
+ */
+function runsInstalledCopy(pkg, c, opts) {
+    if (pkg.range !== undefined || pkg.raw !== pkg.name)
+        return false;
+    const dir = commandDir(c, opts);
+    return dir !== null && installedLocally(pkg.name, dir);
+}
+/**
+ * The directory an install command runs in: the hook's `cwd`, moved by every
+ * `cd` before it on the line ({@link InstallCommand.workdir}) — a `~` read as the
+ * home directory and, on Windows, an MSYS `/c/…` as `C:/…`. `null` when a move
+ * cannot be read: nothing is then taken as installed.
+ */
+function commandDir(c, opts) {
+    if (c.workdir === undefined)
+        return resolve(opts.cwd);
+    if (c.workdir === null)
+        return null;
+    const home = opts.homeDir ?? homedir();
+    const windows = (opts.platform ?? process.platform) === 'win32';
+    let dir = resolve(opts.cwd);
+    for (const step of c.workdir) {
+        let target = step;
+        if (target === '~' || /^~[\\/]/.test(target))
+            target = join(home, target.slice(1));
+        else if (target.startsWith('~'))
+            return null; // `~user`
+        else if (windows)
+            target = target.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`);
+        dir = resolve(dir, target);
+    }
+    return dir;
+}
 /** The note for a command read only to its first 512 KB. */
 const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
 /**
@@ -174,7 +216,7 @@ const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command w
  */
 export async function decideInstallCommand(command, opts) {
     const shell = opts.shell ?? 'bash';
-    const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg) => installedLocally(pkg.name, opts.cwd));
+    const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts));
     // A cut command whose start installs nothing still says what was not read.
     if (commands.length === 0)
         return cut ? { context: CUT_NOTE } : null;
