@@ -15930,7 +15930,7 @@ var require_cross_spawn = __commonJS({
     var cp = __require("child_process");
     var parse11 = require_parse();
     var enoent = require_enoent();
-    function spawn4(command, args, options) {
+    function spawn5(command, args, options) {
       const parsed = parse11(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
@@ -15942,8 +15942,8 @@ var require_cross_spawn = __commonJS({
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
     }
-    module.exports = spawn4;
-    module.exports.spawn = spawn4;
+    module.exports = spawn5;
+    module.exports.spawn = spawn5;
     module.exports.sync = spawnSync2;
     module.exports._parse = parse11;
     module.exports._enoent = enoent;
@@ -15951,16 +15951,34 @@ var require_cross_spawn = __commonJS({
 });
 
 // src/runners/spawn.ts
+import { spawn as spawn2 } from "node:child_process";
+import { basename as basename2 } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+function cmdUnsafePart(command, args) {
+  const parts = [command, ...args];
+  for (const [index, part] of parts.entries()) {
+    const hit = CMD_UNSAFE.find(([char]) => part.includes(char));
+    if (hit !== void 0) return `${index === 0 ? "a command path" : `an argument (#${index})`} holding ${hit[1]}`;
+  }
+  return null;
+}
 function spawnNoShell(command, args, options) {
-  return (0, import_cross_spawn.default)(command, args, {
+  const spawnOptions = {
     ...options.cwd !== void 0 ? { cwd: options.cwd } : {},
     env: options.env,
     shell: false,
     windowsHide: true,
     detached: options.detached === true && process.platform !== "win32",
     stdio: options.stdio
-  });
+  };
+  const parsed = import_cross_spawn.default._parse(command, args, spawnOptions);
+  if (parsed.options.windowsVerbatimArguments === true) {
+    const unsafe = cmdUnsafePart(command, args);
+    if (unsafe !== null) throw new BatchArgumentRefused(command, unsafe);
+  }
+  const child = spawn2(parsed.command, parsed.args, parsed.options);
+  import_cross_spawn.default._enoent.hookChildProcess(child, parsed);
+  return child;
 }
 function isSpawnFailure(proc, error2) {
   return proc.pid === void 0 || String(error2.syscall ?? "").startsWith("spawn");
@@ -15996,8 +16014,14 @@ function captureOutput(command, args, options) {
   if (file === null) {
     return Promise.resolve({ exitCode: null, stdout: "", stderr: "", timedOut: false, spawnError: `${command}: not found on PATH` });
   }
+  let proc;
+  try {
+    proc = spawnNoShell(file, args, { ...options.cwd !== void 0 ? { cwd: options.cwd } : {}, env, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    if (!(e instanceof BatchArgumentRefused)) throw e;
+    return Promise.resolve({ exitCode: null, stdout: "", stderr: "", timedOut: false, spawnError: e.message });
+  }
   return new Promise((resolve37) => {
-    const proc = spawnNoShell(file, args, { ...options.cwd !== void 0 ? { cwd: options.cwd } : {}, env, stdio: ["ignore", "pipe", "pipe"] });
     const max = options.maxBytes ?? 16 * 1024 * 1024;
     let stdout = "";
     let stderr = "";
@@ -16033,12 +16057,29 @@ function captureOutput(command, args, options) {
     });
   });
 }
-var import_cross_spawn, CAPTURE_ABANDON_MS;
+var import_cross_spawn, CMD_UNSAFE, BatchArgumentRefused, CAPTURE_ABANDON_MS;
 var init_spawn = __esm({
   "src/runners/spawn.ts"() {
     "use strict";
     import_cross_spawn = __toESM(require_cross_spawn(), 1);
     init_binaryPath();
+    CMD_UNSAFE = [
+      ['"', "a double quote"],
+      ["%", "a percent sign"],
+      ["\r", "a carriage return"],
+      ["\n", "a line feed"],
+      ["\0", "a NUL character"]
+    ];
+    BatchArgumentRefused = class extends Error {
+      code = "batch_argument_refused";
+      syscall = "spawn";
+      constructor(command, what) {
+        super(
+          `on Windows ${basename2(command)} runs through cmd.exe, which cannot be handed ${what} without risking a second command, so dev-guardian refused to start it`
+        );
+        this.name = "BatchArgumentRefused";
+      }
+    };
     CAPTURE_ABANDON_MS = 500;
   }
 });
@@ -16168,7 +16209,21 @@ import { randomUUID } from "node:crypto";
 function startChild(command, args, options) {
   const treeToken = POSIX_GROUP ? null : randomUUID();
   const env = treeToken === null ? options.env : { ...options.env, [PROC_TREE_ENV]: treeToken };
-  const proc = spawnNoShell(command, args, { cwd: options.cwd, env, detached: true, stdio: [options.stdin ?? "ignore", "pipe", "pipe"] });
+  let proc;
+  try {
+    proc = spawnNoShell(command, args, { cwd: options.cwd, env, detached: true, stdio: [options.stdin ?? "ignore", "pipe", "pipe"] });
+  } catch (e) {
+    if (!(e instanceof BatchArgumentRefused)) throw e;
+    const refused2 = {
+      process: null,
+      command,
+      done: Promise.resolve({ exitCode: null, signal: null, spawnError: e }),
+      settled: () => true,
+      treeToken: null,
+      stopping: null
+    };
+    return refused2;
+  }
   let isSettled = false;
   let removeExitHook = null;
   const done = new Promise((resolve37) => {
@@ -16201,8 +16256,8 @@ function stopTree(child, options) {
 }
 async function stopOnce(child, { graceMs, abandonMs }) {
   const proc = child.process;
-  const pid = proc.pid;
-  if (pid === void 0 || child.settled()) {
+  const pid = proc?.pid;
+  if (proc === null || pid === void 0 || child.settled()) {
     await child.done;
     return;
   }
@@ -16253,7 +16308,7 @@ var init_childProcess = __esm({
 });
 
 // src/runners/processRunner.ts
-import { basename as basename2 } from "node:path";
+import { basename as basename3 } from "node:path";
 async function runProcess(options) {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? (Number(process.env["GUARDIAN_SCAN_TIMEOUT_MS"]) || DEFAULT_TIMEOUT_MS2);
@@ -16269,7 +16324,7 @@ async function runProcess(options) {
     const full = await gitSafetyFor([options.cwd, ...options.gitRepos ?? []], { env: childEnv });
     const safety = options.gitHardening === "except-hooks-path" ? withoutHooksPath(full) : full;
     if (safety.refused !== null) {
-      const message2 = `dev-guardian did not run ${basename2(options.command)}: ${safety.refused}`;
+      const message2 = `dev-guardian did not run ${basename3(options.command)}: ${safety.refused}`;
       return notRun({ code: "git_config_refused", message: message2 }, message2);
     }
     childEnv = applyGitSafety(safety, childEnv);
@@ -16284,7 +16339,7 @@ async function runProcess(options) {
   const stop = () => {
     void stopTree(child, { graceMs: KILL_GRACE_MS, abandonMs: PIPE_ABANDON_MS });
   };
-  readText3(child.process.stdout, (text2, totalBytes) => {
+  readText3(child.process?.stdout, (text2, totalBytes) => {
     if (totalBytes > cap) {
       if (outcome === "completed") outcome = "output_too_large";
       truncated = true;
@@ -16294,7 +16349,7 @@ async function runProcess(options) {
     stdoutBuf += text2;
   });
   const stderrCap = Math.max(64 * 1024, Math.floor(cap / 10));
-  readText3(child.process.stderr, (text2, totalBytes) => {
+  readText3(child.process?.stderr, (text2, totalBytes) => {
     if (totalBytes <= stderrCap) {
       stderrBuf += text2;
     } else if (!stderrBuf.endsWith("\u2026(truncated)\n")) {
@@ -16336,7 +16391,7 @@ async function runProcess(options) {
     options.signal.removeEventListener("abort", abortListener);
   }
   if (exit.spawnError !== void 0) {
-    const message2 = `${basename2(command)}: ${exit.spawnError.message}`;
+    const message2 = `${basename3(command)}: ${exit.spawnError.message}`;
     return { ...notRun({ code: exit.spawnError.code ?? "spawn_failed", message: message2 }, `${stderrBuf}${message2}
 `), ...gitNotAppliedField(gitNotApplied) };
   }
@@ -16357,7 +16412,7 @@ function gitNotAppliedField(keys) {
   return keys.length > 0 ? { gitNotApplied: keys } : {};
 }
 function envFor(command, env) {
-  const name = basename2(command.replace(/\\/g, "/")).replace(/\.(exe|cmd|bat)$/i, "").toLowerCase();
+  const name = basename3(command.replace(/\\/g, "/")).replace(/\.(exe|cmd|bat)$/i, "").toLowerCase();
   if (name !== "docker") return env;
   return { ...env, MSYS_NO_PATHCONV: "1", MSYS2_ARG_CONV_EXCL: "*" };
 }
@@ -35155,7 +35210,7 @@ var init_customRules = __esm({
 
 // src/runners/semgrepConfigs.ts
 import { existsSync as existsSync11, readdirSync as readdirSync9 } from "node:fs";
-import { basename as basename3, join as join30 } from "node:path";
+import { basename as basename4, join as join30 } from "node:path";
 function pluginPackPath(file) {
   return join30(pluginPacksDir(), file);
 }
@@ -35213,7 +35268,7 @@ function planSemgrepConfigs(projectPath, plugin, localOnly, scannedPath = projec
       ...inspection.unusable.map((u) => `${u.target} not loaded (${u.reason})`),
       ...custom3.unusable.map((u) => `${u.path} not loaded (${u.reason})`),
       ...legacy !== null ? [legacy] : [],
-      ...missingPacks.map((p) => `the plugin's pack ${basename3(p)} was not found at ${p} \u2014 its rules did not run`)
+      ...missingPacks.map((p) => `the plugin's pack ${basename4(p)} was not found at ${p} \u2014 its rules did not run`)
     ],
     nothingToRun: registry2.length === 0 && local.length === 0
   };
@@ -36884,7 +36939,7 @@ var init_scanToolFactory = __esm({
 
 // src/deps/dotnetRestore.ts
 import { unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename4, dirname as dirname14, extname as extname2, isAbsolute as isAbsolute11, join as join34, relative as relative12, resolve as resolve16 } from "node:path";
+import { basename as basename5, dirname as dirname14, extname as extname2, isAbsolute as isAbsolute11, join as join34, relative as relative12, resolve as resolve16 } from "node:path";
 function findDotnetTargets(projectPath) {
   const rootEntries = listProjectDir(projectPath, projectPath).filter((e) => e.kind === "file").map((e) => e.name).sort();
   const sln = rootEntries.find((n) => n.toLowerCase().endsWith(".sln")) ?? rootEntries.find((n) => n.toLowerCase().endsWith(".slnx"));
@@ -36956,7 +37011,7 @@ function projectsForTarget(target) {
 }
 function lockFileCandidates(project) {
   const dir = dirname14(project);
-  const name = basename4(project, extname2(project));
+  const name = basename5(project, extname2(project));
   const names = /* @__PURE__ */ new Set(["packages.lock.json", `packages.${name}.lock.json`, `packages.${name.replace(/ /g, "_")}.lock.json`]);
   return [...names].map((n) => join34(dir, n));
 }
@@ -37807,7 +37862,7 @@ var init_semgrep = __esm({
 // src/tools/scanSast.ts
 import { lstatSync as lstatSync11, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readdirSync as readdirSync12, readFileSync as readFileSync5, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { basename as basename5, dirname as dirname16, join as join38, relative as relative13, resolve as resolve17, sep as sep10 } from "node:path";
+import { basename as basename6, dirname as dirname16, join as join38, relative as relative13, resolve as resolve17, sep as sep10 } from "node:path";
 async function runSemgrep2(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
   const outFile = join38(reportDir, "sast.json");
@@ -37882,7 +37937,7 @@ async function runSemgrep2(args) {
     return;
   }
   const loadedFrom = [...dockerConfigs];
-  const packConfigs = plan.pluginPacks.map((p) => `${CONTAINER_PACKS_ROOT}/${basename5(p)}`);
+  const packConfigs = plan.pluginPacks.map((p) => `${CONTAINER_PACKS_ROOT}/${basename6(p)}`);
   const result = await runProcess({
     command: "docker",
     args: buildSemgrepDockerArgs({
@@ -38247,7 +38302,7 @@ async function runDotnetAnalyzers(args) {
   let reports = 0;
   try {
     for (const target of findDotnetTargets(ctx.projectPath)) {
-      const rel2 = relative13(ctx.projectPath, target) || basename5(target);
+      const rel2 = relative13(ctx.projectPath, target) || basename6(target);
       const plan = planDotnetRestore(ctx.projectPath, target);
       if (plan.blocked) {
         failures.push(`${rel2}: ${plan.blocked.reason}`);
@@ -38849,7 +38904,7 @@ var init_gitleaks = __esm({
 // src/runners/gitleaksScan.ts
 import { lstatSync as lstatSync13, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync5, rmSync as rmSync8, writeFileSync as writeFileSync7 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { basename as basename6, dirname as dirname17, join as join40, relative as relative14, resolve as resolve18 } from "node:path";
+import { basename as basename7, dirname as dirname17, join as join40, relative as relative14, resolve as resolve18 } from "node:path";
 async function runGitleaksScan(opts) {
   const result = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
   let raw = null;
@@ -39257,7 +39312,7 @@ function recordFilesRun(result, name, run2, report, location, okReason, gaps, no
 }
 function reportTarget(opts, outFile) {
   if (opts.raw === null) return { path: outFile, redact: ["--redact"] };
-  return { path: opts.raw.pathFor(basename6(outFile)), redact: [] };
+  return { path: opts.raw.pathFor(basename7(outFile)), redact: [] };
 }
 function takeReport(opts, written, outFile) {
   if (opts.raw === null) return { text: readJsonSafe(written), secrets: null };
@@ -43887,7 +43942,7 @@ var init_qualityCheck = __esm({
 
 // src/tools/reviewPr.ts
 import { lstatSync as lstatSync14 } from "node:fs";
-import { basename as basename7, join as join48 } from "node:path";
+import { basename as basename8, join as join48 } from "node:path";
 async function runSemgrep3(ctx, input, out, args) {
   const withGaps = async (scannedNothing2) => {
     const at = out.tools_run.length - 1;
@@ -44213,7 +44268,7 @@ var init_reviewPr = __esm({
       }
     });
     isPython2 = (f) => f.toLowerCase().endsWith(".py");
-    isManifest = (f) => MANIFEST_RE.test(basename7(f));
+    isManifest = (f) => MANIFEST_RE.test(basename8(f));
     MAX_PREEXISTING_NAMED = 5;
     tool3 = {
       ...reviewPr,
@@ -67760,7 +67815,7 @@ var init_persistImport = __esm({
 
 // src/tools/importSarif.ts
 var importSarif_exports = {};
-import { basename as basename8, relative as relative24, resolve as resolve24, sep as sep15 } from "node:path";
+import { basename as basename9, relative as relative24, resolve as resolve24, sep as sep15 } from "node:path";
 function handler23(input, ctx) {
   return Promise.resolve(run(input, ctx));
 }
@@ -67793,7 +67848,7 @@ function run(input, ctx) {
     if (e instanceof SarifImportError) return fail("invalid_sarif", e.message);
     throw e;
   }
-  const sourceFile = inside ? relative24(projectPath, logPath).split(sep15).join("/") : basename8(logPath);
+  const sourceFile = inside ? relative24(projectPath, logPath).split(sep15).join("/") : basename9(logPath);
   const scans = persistSarifImport(ctx.storage, projectPath, imported, { sourceFile });
   const runs = scans.map(({ scan_id }, i) => {
     const counts = imported.runs[i]?.counts;
@@ -74989,7 +75044,7 @@ import {
   writeFileSync as writeFileSync14
 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename9, dirname as dirname23, isAbsolute as isAbsolute17, join as join76, relative as relative29, resolve as resolve26 } from "node:path";
+import { basename as basename10, dirname as dirname23, isAbsolute as isAbsolute17, join as join76, relative as relative29, resolve as resolve26 } from "node:path";
 function extOf(name) {
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot).toLowerCase();
@@ -75022,7 +75077,7 @@ async function ingestTarget(targetRaw) {
   if (st.isFile()) {
     if (extOf(target) === ".zip") return ingestZip(target, false);
     const real = safeRealpath(target) ?? target;
-    const read3 = readOne(dirname23(real), real, basename9(target));
+    const read3 = readOne(dirname23(real), real, basename10(target));
     if (read3.kind !== "ok") {
       const why = read3.kind === "refused" ? describeReadRefusal(read3.reason) : "it is binary";
       return { ok: false, code: "unsupported_target", message: `File not reviewed: ${why}.` };
@@ -75073,7 +75128,7 @@ async function ingestUrl(url2) {
   }
   const dir = mkdtempSync6(join76(tmpdir6(), "guardian-scanskill-url-"));
   const isZip = /\.zip($|\?)/i.test(url2);
-  const fileName = isZip ? "download.zip" : basename9(url2.split("?")[0] ?? "download") || "download";
+  const fileName = isZip ? "download.zip" : basename10(url2.split("?")[0] ?? "download") || "download";
   const dest = join76(dir, fileName);
   try {
     const controller = new AbortController();
@@ -75256,7 +75311,7 @@ function safeRealpath(abs) {
 function rel(root, abs) {
   let r = abs.slice(root.length).replace(/\\/g, "/");
   if (r.startsWith("/")) r = r.slice(1);
-  return r || basename9(abs);
+  return r || basename10(abs);
 }
 function readOne(root, abs, relPath) {
   const read3 = readProjectBytes(root, resolve26(abs), MAX_FILE_BYTES3);
@@ -75265,7 +75320,7 @@ function readOne(root, abs, relPath) {
   const raw = read3.bytes;
   if (looksBinary(raw)) return { kind: "binary" };
   const content = raw.toString("utf8");
-  const name = basename9(abs);
+  const name = basename10(abs);
   const ext = extOf(name);
   const shebang = content.startsWith("#!");
   const isCode = CODE_EXT.has(ext) || (DOC_EXT.has(ext) ? false : shebang);
@@ -75644,7 +75699,7 @@ var init_envVars = __esm({
 
 // src/surface/collectors/ports.ts
 import { realpathSync as realpathSync6 } from "node:fs";
-import { basename as basename10, join as join78 } from "node:path";
+import { basename as basename11, join as join78 } from "node:path";
 function collectPorts(projectPath) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
@@ -75662,7 +75717,7 @@ function collectPorts(projectPath) {
     if (canonical2 === void 0) continue;
     if (seenDockerfiles.has(canonical2)) continue;
     seenDockerfiles.add(canonical2);
-    const source = basename10(canonical2);
+    const source = basename11(canonical2);
     for (const line of readLines(projectPath, canonical2)) {
       const match = /^\s*EXPOSE\s+(.+)$/i.exec(line);
       if (match?.[1] === void 0) continue;
@@ -80605,12 +80660,12 @@ var init_pr = __esm({
 // src/fixpr/semgrepFix.ts
 import { mkdirSync as mkdirSync12, mkdtempSync as mkdtempSync7, rmSync as rmSync12, statSync as statSync12, writeFileSync as writeFileSync17 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { basename as basename11, dirname as dirname25, join as join87 } from "node:path";
+import { basename as basename12, dirname as dirname25, join as join87 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
   const prefix = checkId.slice(0, checkId.length - id.length - 1);
-  const tail2 = basename11(dirname25(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
+  const tail2 = basename12(dirname25(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
   return tail2.length > 0 && (prefix === tail2 || prefix.endsWith(`.${tail2}`));
 }
 function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
@@ -80652,10 +80707,10 @@ function planSemgrepFix(sources, tmpRoot = tmpdir7()) {
   for (const [file, picked] of byFile) {
     const sub = join87(dir, `rules-${String(n++).padStart(3, "0")}`);
     mkdirSync12(sub);
-    const copy = join87(sub, basename11(file));
+    const copy = join87(sub, basename12(file));
     writeFileSync17(copy, (0, import_yaml3.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
-    configLabels.push(`${[...picked.keys()].join(", ")} from ${basename11(file)}`);
+    configLabels.push(`${[...picked.keys()].join(", ")} from ${basename12(file)}`);
   }
   for (const id of [...registry2].sort()) {
     configs.push(`r/${id}`);
@@ -87417,7 +87472,7 @@ var init_streamableHttp = __esm({
 });
 
 // src/mcpaudit/launch.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
 import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute22, resolve as resolve33 } from "node:path";
 function urlAt(text2, start) {
@@ -87574,7 +87629,7 @@ function raceDeadline(p, deadline, onTimeout) {
 }
 function reachableFromChild(path3, deadline) {
   return new Promise((done) => {
-    const child = spawn2(process.execPath, ["-e", 'process.exit(require("fs").statSync(process.argv[1]).isFile() ? 0 : 1)', path3], {
+    const child = spawn3(process.execPath, ["-e", 'process.exit(require("fs").statSync(process.argv[1]).isFile() ? 0 : 1)', path3], {
       stdio: "ignore",
       windowsHide: true
     });
@@ -87797,7 +87852,9 @@ var init_stdioTransport = __esm({
           signalOnParentExit: "SIGKILL"
         });
         this.child = child;
-        const { stdout, stderr, stdin } = child.process;
+        const stdout = child.process?.stdout;
+        const stderr = child.process?.stderr;
+        const stdin = child.process?.stdin;
         stdout?.on("data", (chunk) => {
           const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
           if (!this.admit(buf.length)) return;
@@ -87835,7 +87892,7 @@ var init_stdioTransport = __esm({
           this.resumeLater(stderr);
         });
         stdin?.on("error", (e) => this.onerror?.(e));
-        const spawned = new Promise((resolve37) => child.process.once("spawn", () => resolve37("spawned")));
+        const spawned = new Promise((resolve37) => child.process?.once("spawn", () => resolve37("spawned")));
         this.done = child.done.then((exit) => {
           this.exited = {
             exitCode: exit.exitCode,
@@ -87876,7 +87933,7 @@ var init_stdioTransport = __esm({
       }
       send(message2) {
         return new Promise((resolve37, reject) => {
-          const stdin = this.child?.process.stdin;
+          const stdin = this.child?.process?.stdin;
           if (stdin === void 0 || stdin === null || this.exited !== null || this.closing !== null) {
             reject(new Error("Not connected"));
             return;
@@ -87897,11 +87954,11 @@ var init_stdioTransport = __esm({
           return;
         }
         try {
-          child.process.stdin?.end();
+          child.process?.stdin?.end();
         } catch {
         }
-        child.process.stdout?.resume();
-        child.process.stderr?.resume();
+        child.process?.stdout?.resume();
+        child.process?.stderr?.resume();
         await stopTree(child, { graceMs: TERM_GRACE_MS, abandonMs: KILL_GRACE_MS2 });
         this.readBuffer.clear();
         this.notifyClosed();
@@ -90930,7 +90987,7 @@ var init_render = __esm({
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
 import { existsSync as existsSync25, readFileSync as readFileSync11, writeFileSync as writeFileSync18 } from "node:fs";
-import { basename as basename12, join as join94, posix as posix4, win32 as win322 } from "node:path";
+import { basename as basename13, join as join94, posix as posix4, win32 as win322 } from "node:path";
 async function handler47(input, ctx) {
   const inp = input;
   const format = inp.format ?? "openvex";
@@ -91115,7 +91172,7 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
   };
 }
 function productOf(projectPath, sbom) {
-  const directory = basename12(projectPath);
+  const directory = basename13(projectPath);
   const sbomName = sbom?.product_name ?? null;
   const name = sbomName === null ? directory : isAbsolutePath2(sbomName) ? win322.basename(sbomName) || directory : sbomName;
   const productPurl = sbom?.product_purl ?? null;
@@ -93564,8 +93621,8 @@ function attachOutputTail(child) {
       tail2 = tail2.slice(tail2.length - OUTPUT_TAIL_BYTES);
     }
   };
-  readText3(child.process.stdout, onText);
-  readText3(child.process.stderr, onText);
+  readText3(child.process?.stdout, onText);
+  readText3(child.process?.stderr, onText);
   return () => tail2;
 }
 function sleep(ms) {

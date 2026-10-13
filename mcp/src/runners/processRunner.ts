@@ -170,7 +170,7 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
     void stopTree(child, { graceMs: KILL_GRACE_MS, abandonMs: PIPE_ABANDON_MS });
   };
 
-  readText(child.process.stdout, (text, totalBytes) => {
+  readText(child.process?.stdout, (text, totalBytes) => {
     if (totalBytes > cap) {
       if (outcome === 'completed') outcome = 'output_too_large';
       truncated = true;
@@ -184,7 +184,7 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
   // tools with `--verbose` flags can spew MBs of stderr; without a cap the
   // server would grow unbounded.
   const stderrCap = Math.max(64 * 1024, Math.floor(cap / 10));
-  readText(child.process.stderr, (text, totalBytes) => {
+  readText(child.process?.stderr, (text, totalBytes) => {
     if (totalBytes <= stderrCap) {
       stderrBuf += text;
     } else if (!stderrBuf.endsWith('…(truncated)\n')) {
