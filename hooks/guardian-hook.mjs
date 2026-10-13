@@ -834,19 +834,22 @@ async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
  * never from a project file, for the same reason the bash block cannot be
  * downgraded from one (see `projectOverrides`).
  */
-async function vetInstallCommand(command, cwd, toolName) {
+async function vetInstallCommand(command, cwd, toolName, nested = []) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
   // A command that names no installer installs nothing: the vetting modules
   // are not even loaded (review 8, item 17 — `mcp/src/pkgvet/mayInstall.ts`).
-  // Without the gate, every command is vetted, as before it.
+  // Without the gate, every command is vetted, as before it. The scripts the
+  // command hands a shell (`bash -c '…'`, `cmd /c …`, `echo '…' | sh` — the
+  // shell guard's reading) count too: one of them may be base64 the command
+  // line does not spell (review of 3.3.0).
   const gate = await detector('loadInstallGate').catch(() => undefined);
-  if (typeof gate?.mayInstall === 'function' && !gate.mayInstall(command)) return null;
+  if (typeof gate?.mayInstall === 'function' && !gate.mayInstall(command) && !nested.some((s) => gate.mayInstall(s.text))) return null;
   try {
     const mod = await detector('loadInstallVetting');
     // The PowerShell tool's commands are also read the way PowerShell reads
     // them (comma lists, backtick continuations) — see `parseInstallCommands`.
     const shell = toolName === 'PowerShell' ? 'powershell' : 'bash';
-    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR, shell, startedAt: HOOK_STARTED });
+    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR, shell, nested, startedAt: HOOK_STARTED });
   } catch (err) {
     debug(`package vetting skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
     return null;
@@ -893,7 +896,7 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   // point (emit() exits), so it is never vetted. From here on the network
   // may have been used, so the answer goes out through respond(), never
   // emit()/noop() — see respond() for why.
-  const vet = await vetInstallCommand(command, cwd, toolName);
+  const vet = await vetInstallCommand(command, cwd, toolName, Array.isArray(a.scripts) ? a.scripts : []);
   if (vet?.deny) {
     return respond('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: vet.deny });
   }

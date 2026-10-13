@@ -3934,3 +3934,30 @@ describe('assessBashCommand — a script handed to a shell through cat, tee or a
     expect(assessBashCommand(command, { shell }).level).toBe('ok');
   });
 });
+
+// Review of 3.3.0: the install hook vets the scripts a command hands a shell,
+// as the shell guard reads them — `scripts` lists them.
+describe('assessBashCommand — the scripts a command hands a shell (review of 3.3.0)', () => {
+  it.each([
+    ["bash -c 'npm i zz-evil'", 'bash', { text: 'npm i zz-evil', shell: 'bash' }],
+    ['cmd //c npm i zz-evil', 'bash', { text: 'npm i zz-evil', shell: 'bash' }],
+    ["pwsh -c 'npm i zz-evil'", 'powershell', { text: 'npm i zz-evil', shell: 'powershell' }],
+    ["echo 'npx zz-evil' | sh", 'bash', { text: 'npx zz-evil', shell: 'bash' }],
+    ["echo 'npm i zz-evil' | pwsh", 'bash', { text: 'npm i zz-evil', shell: 'powershell' }],
+    ["cat <<'EOF' | bash\npip install zz-evil\nEOF", 'bash', { text: 'pip install zz-evil', shell: 'bash' }],
+    [`echo ${Buffer.from('npm i zz-evil').toString('base64')} | base64 -d | sh`, 'bash', { text: 'npm i zz-evil', shell: 'bash' }],
+    ["bash -c \"bash -c 'npm i zz-evil'\"", 'bash', { text: 'npm i zz-evil', shell: 'bash' }],
+  ] as const)('%j hands %s', (command, shell, script) => {
+    expect(assessBashCommand(command, { shell }).scripts).toContainEqual(script);
+  });
+
+  it('a command that hands a shell nothing lists none', () => {
+    expect(assessBashCommand('npm i zz-evil').scripts).toBeUndefined();
+    expect(assessBashCommand("git commit -m 'bash -c npm i x'").scripts).toBeUndefined();
+  });
+
+  it('at most 64, however many the command holds', () => {
+    const command = Array.from({ length: 100 }, (_, k) => `bash -c 'echo ${k}'`).join('; ');
+    expect(assessBashCommand(command).scripts).toHaveLength(64);
+  });
+});

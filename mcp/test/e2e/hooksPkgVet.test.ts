@@ -502,6 +502,22 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
     });
+
+    // Review of 3.3.0: a script handed to a shell was never vetted.
+    it.each([
+      ["bash -c 'npx -y evil-cli-zz'", 'Bash'],
+      ["echo 'npx -y evil-cli-zz' | sh", 'Bash'],
+      ['cmd //c npx -y evil-cli-zz', 'Bash'],
+      ["pwsh -Command 'npx -y evil-cli-zz'", 'PowerShell'],
+    ])('%s — a malicious version in a nested script is denied', (command, tool) => {
+      const r = runHook(
+        command,
+        { 'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'), [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } } },
+        { tool },
+      );
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
+    });
   });
 
   // Review of 3.0.0, I4: 17 packages in a 3000-directory monorepo took 16.5 s

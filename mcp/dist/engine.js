@@ -98832,18 +98832,27 @@ function collect2(command, depth, out, scope) {
           if (isBareRemoteFetch(script)) out.push(RULE_FETCH_EXEC);
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
+          noteScript(scope, script, powershell);
           collect2(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect2(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
         }
-        if (line !== void 0) collect2(line, depth + 1, out, { ...scope, cmdLine: true });
+        if (line !== void 0) {
+          noteScript(scope, line, false);
+          collect2(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
+        }
       }
       moveCwd(scope, words, resolved.index);
     }
     const fed = fedScripts(statement, isBareShellStdin, scope.powershell === true);
     if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
     if (depth < MAX_NESTING) {
-      for (const { text: text2, opaque } of fed) if (opaque !== true) collect2(text2, depth + 1, out, { ...scope, cmdLine: false });
+      for (const { text: text2, reader, opaque } of fed) {
+        if (opaque === true) continue;
+        const powershell = /^(?:pwsh|powershell)$/.test(commandName(reader[0]?.value ?? ""));
+        noteScript(scope, text2, powershell);
+        collect2(text2, depth + 1, out, { ...scope, cmdLine: false, powershell });
+      }
     } else if (fed.length > 0) scope.notes.depth = true;
     for (const { text: text2, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
@@ -98856,7 +98865,10 @@ function collectGenerated(texts, depth, out, scope) {
     if (text2 === void 0) continue;
     if (text2 === "opaque") out.push({ ...RULE_DECODED_SCRIPT });
     else if (depth >= MAX_NESTING) scope.notes.depth = true;
-    else collect2(text2, depth + 1, out, { ...scope, cmdLine: false });
+    else {
+      noteScript(scope, text2, false);
+      collect2(text2, depth + 1, out, { ...scope, cmdLine: false, powershell: false });
+    }
   }
 }
 var MAX_STATEMENT_LENGTH = 16 * 1024;
@@ -98882,6 +98894,15 @@ function partialRule(notes) {
 }
 function collapseBlanks(text2) {
   return text2.replace(/[ \t]{2,}/g, " ");
+}
+var MAX_NOTED_SCRIPTS = 64;
+function noteScript(scope, text2, powershell) {
+  const scripts = scope.notes.scripts;
+  const shell = powershell ? "powershell" : "bash";
+  const t = text2.trim();
+  if (t === "" || scripts.size >= MAX_NOTED_SCRIPTS) return;
+  const key = `${shell}\0${t}`;
+  if (!scripts.has(key)) scripts.set(key, { text: t, shell });
 }
 function capText(text2, notes) {
   if (text2.length <= MAX_STATEMENT_LENGTH) return text2;
@@ -98930,7 +98951,8 @@ function assessReadings(readings, cut, now, deadline, where) {
     failed: false,
     calls: false,
     deadline,
-    now
+    now,
+    scripts: /* @__PURE__ */ new Map()
   };
   const matched = [];
   for (const [n, cmd] of readings.entries()) {
@@ -98944,7 +98966,8 @@ function assessReadings(readings, cut, now, deadline, where) {
   }
   const partial3 = partialRule(notes);
   if (partial3 !== null) matched.push(partial3);
-  if (matched.length === 0) return { level: "ok", reasons: [], rules: [] };
+  const scripts = notes.scripts.size > 0 ? { scripts: [...notes.scripts.values()] } : {};
+  if (matched.length === 0) return { level: "ok", reasons: [], rules: [], ...scripts };
   const byId = /* @__PURE__ */ new Map();
   for (const m of matched) if (!byId.has(m.id)) byId.set(m.id, m);
   if (byId.has("rm-rf-root")) byId.delete("rm-rf-broad");
@@ -98958,7 +98981,8 @@ function assessReadings(readings, cut, now, deadline, where) {
     reasons: effective.map((r) => r.reason),
     rules: effective.map((r) => r.id),
     ...own === void 0 ? {} : { denyMessage: own },
-    ...ask === void 0 ? {} : { ask }
+    ...ask === void 0 ? {} : { ask },
+    ...scripts
   };
 }
 

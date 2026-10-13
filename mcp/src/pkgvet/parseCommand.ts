@@ -919,11 +919,43 @@ function packageKey(p: PackageSpec): string {
  * no-break space separates words. A package only that second reading finds is
  * added — and marked uncertain, so it can only ever be denied as MALICIOUS,
  * never as missing (follow-up Part Y, item 5).
+ *
+ * `nested`: the scripts the command hands a shell, as the shell guard reads
+ * them (`BashAssessment.scripts` — `bash -c '…'`, a `cmd /c` line,
+ * `pwsh -c '…'`, `echo '…' | sh`). Their installs are added the same way, each
+ * script read as its own shell reads it, and marked uncertain: a nested install
+ * is never one plain install statement (review of 3.3.0: `bash -c 'npm i x'`
+ * was not vetted at all, while `npm i x` was). Where the outer command changes
+ * directory, a launcher in a nested script is not taken as running an
+ * installed copy: where it runs is not known here.
  */
-export function parseInstallCommands(command: string, opts: { shell?: CommandShell } = {}): InstallCommand[] {
+export function parseInstallCommands(
+  command: string,
+  opts: { shell?: CommandShell; nested?: ReadonlyArray<{ text: string; shell: CommandShell }> } = {},
+): InstallCommand[] {
+  const out = readingsOf(command, opts.shell ?? 'bash', null);
+  if (opts.nested === undefined || opts.nested.length === 0) return out;
+  const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
+  const moved = movesDirectory(stripComments(command));
+  for (const script of opts.nested) {
+    for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT)) {
+      const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
+      if (packages.length === 0) continue;
+      for (const p of packages) seen.add(packageKey(p));
+      out.push({ ...c, packages, ...(moved && c.localFirst === true ? { workdir: null } : {}) });
+    }
+  }
+  return out;
+}
+
+/** Why a package found in a script the command hands a shell is never denied as missing. */
+const NESTED_SCRIPT = 'found in a script the command hands a shell (bash -c, cmd /c, pwsh -c, a script piped to a shell) — vetted, never denied as missing';
+
+/** The install commands of `command` read the POSIX way and — for PowerShell — the way PowerShell reads it. */
+function readingsOf(command: string, shell: CommandShell, forced: string | null): InstallCommand[] {
   const text = stripComments(command);
-  const out = parseReading(text, null);
-  if (opts.shell !== 'powershell') return out;
+  const out = parseReading(text, forced);
+  if (shell !== 'powershell') return out;
   const asPowerShell = powershellAsPosix(text);
   if (asPowerShell === text) return out;
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
@@ -934,6 +966,15 @@ export function parseInstallCommands(command: string, opts: { shell?: CommandShe
     out.push({ ...c, packages, skipped: [] });
   }
   return out;
+}
+
+/** Whether any statement of `text` changes directory ({@link changesDirectory}); an unreadable text may. */
+function movesDirectory(text: string): boolean {
+  try {
+    return splitShell(text).statements.some((s) => s.commands.some((words) => changesDirectory(words)));
+  } catch {
+    return true;
+  }
 }
 
 /**

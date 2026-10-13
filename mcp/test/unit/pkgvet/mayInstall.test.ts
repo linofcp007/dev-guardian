@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { assessBashCommand } from '../../../src/hooks/bashGuard.js';
 import { mayInstall } from '../../../src/pkgvet/mayInstall.js';
 import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 
@@ -70,6 +71,32 @@ describe('mayInstall', () => {
       expect({ command, gate: mayInstall(command) }).toEqual({ command, gate: true });
     }
     expect(installing).toBeGreaterThan(300);
+  });
+
+  // Review of 3.3.0: the hook also vets the scripts a command hands a shell
+  // (`BashAssessment.scripts`), and gates each one on its own text — which may
+  // be base64 the outer command never spells.
+  it('never says no to a nested script the shell guard hands the vetting', () => {
+    const outer = [
+      "bash -c 'npm i zz-evil'",
+      'cmd //c npm i zz-evil',
+      "echo 'npx zz-evil' | sh",
+      "cat <<'EOF' | bash\npip install zz-evil\nEOF",
+      `pwsh -EncodedCommand ${Buffer.from('npm i zz-evil', 'utf16le').toString('base64')}`,
+      `echo ${Buffer.from('pnpm add zz-evil').toString('base64')} | base64 -d | sh`,
+    ];
+    let installing = 0;
+    for (const command of outer) {
+      for (const shell of ['bash', 'powershell'] as const) {
+        const scripts = assessBashCommand(command, { shell }).scripts ?? [];
+        for (const script of scripts) {
+          if (!parseInstallCommands(script.text, { shell: script.shell }).some((c) => c.packages.length > 0)) continue;
+          installing += 1;
+          expect({ script: script.text, gate: mayInstall(script.text) }).toEqual({ script: script.text, gate: true });
+        }
+      }
+    }
+    expect(installing).toBeGreaterThanOrEqual(outer.length);
   });
 
   it.each(['git status', 'ls -la src', 'echo "npm-ish" > notes.txt', 'node dist/server.js', 'cat package-lock.json', 'rm -rf node_modules'])(

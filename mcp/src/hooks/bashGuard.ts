@@ -165,6 +165,16 @@ export interface BashAssessment {
    * block is switched off report.
    */
   ask?: string;
+  /**
+   * The scripts the command hands a shell, each as that shell reads it — a
+   * `bash -c` / `eval` / `pwsh -c` / `-EncodedCommand` script, a `cmd /c` line,
+   * a script fed to a shell (`echo '…' | sh`, `cat <<EOF | bash`), a process
+   * substitution — to the guard's nesting depth, at most
+   * {@link MAX_NOTED_SCRIPTS}. The hook vets the installs in them as it does
+   * the command's own (review of 3.3.0: `bash -c 'npm i x'` was never vetted).
+   * Absent when there is none.
+   */
+  scripts?: ReadonlyArray<{ text: string; shell: 'bash' | 'powershell' }>;
 }
 
 /**
@@ -3587,6 +3597,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // `iex "& { $(irm …) }"`: whatever `iex` is handed is code, so a
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
+          noteScript(scope, script, powershell);
           collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
@@ -3594,7 +3605,10 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         // Every command of a `cmd /c` line gets the full assessment, like a
         // top-level statement: deletes, pattern rules, nested shells (fix
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
-        if (line !== undefined) collect(line, depth + 1, out, { ...scope, cmdLine: true });
+        if (line !== undefined) {
+          noteScript(scope, line, false);
+          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
+        }
       }
       moveCwd(scope, words, resolved.index);
     }
@@ -3610,7 +3624,13 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     const fed = fedScripts(statement, isBareShellStdin, scope.powershell === true);
     if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
     if (depth < MAX_NESTING) {
-      for (const { text, opaque } of fed) if (opaque !== true) collect(text, depth + 1, out, { ...scope, cmdLine: false });
+      for (const { text, reader, opaque } of fed) {
+        if (opaque === true) continue;
+        // `echo '…' | pwsh` hands the text to PowerShell.
+        const powershell = /^(?:pwsh|powershell)$/.test(commandName(reader[0]?.value ?? ''));
+        noteScript(scope, text, powershell);
+        collect(text, depth + 1, out, { ...scope, cmdLine: false, powershell });
+      }
     } else if (fed.length > 0) scope.notes.depth = true;
     for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
@@ -3630,7 +3650,10 @@ function collectGenerated(texts: ReadonlyArray<string | 'opaque' | undefined>, d
     if (text === undefined) continue;
     if (text === 'opaque') out.push({ ...RULE_DECODED_SCRIPT });
     else if (depth >= MAX_NESTING) scope.notes.depth = true;
-    else collect(text, depth + 1, out, { ...scope, cmdLine: false });
+    else {
+      noteScript(scope, text, false);
+      collect(text, depth + 1, out, { ...scope, cmdLine: false, powershell: false });
+    }
   }
 }
 
@@ -3727,6 +3750,21 @@ interface Notes {
   calls: boolean;
   deadline: number;
   now: () => number;
+  /** The scripts handed to a shell so far ({@link BashAssessment.scripts}), by `shell\0text`. */
+  scripts: Map<string, { text: string; shell: 'bash' | 'powershell' }>;
+}
+
+/** The most nested scripts {@link BashAssessment.scripts} lists. */
+const MAX_NOTED_SCRIPTS = 64;
+
+/** Records a script the command hands a shell, for the install vetting ({@link BashAssessment.scripts}). */
+function noteScript(scope: Scope, text: string, powershell: boolean): void {
+  const scripts = scope.notes.scripts;
+  const shell = powershell ? 'powershell' : 'bash';
+  const t = text.trim();
+  if (t === '' || scripts.size >= MAX_NOTED_SCRIPTS) return;
+  const key = `${shell}\0${t}`;
+  if (!scripts.has(key)) scripts.set(key, { text: t, shell });
 }
 
 /** `text` cut at the cap, noting that something was dropped. */
@@ -3822,6 +3860,7 @@ function assessReadings(
     calls: false,
     deadline,
     now,
+    scripts: new Map(),
   };
 
   const matched: MatchedRule[] = [];
@@ -3840,8 +3879,9 @@ function assessReadings(
   }
   const partial = partialRule(notes);
   if (partial !== null) matched.push(partial);
+  const scripts = notes.scripts.size > 0 ? { scripts: [...notes.scripts.values()] } : {};
 
-  if (matched.length === 0) return { level: 'ok', reasons: [], rules: [] };
+  if (matched.length === 0) return { level: 'ok', reasons: [], rules: [], ...scripts };
 
   // De-dupe by id, then most severe first.
   const byId = new Map<string, MatchedRule>();
@@ -3860,5 +3900,6 @@ function assessReadings(
     rules: effective.map((r) => r.id),
     ...(own === undefined ? {} : { denyMessage: own }),
     ...(ask === undefined ? {} : { ask }),
+    ...scripts,
   };
 }

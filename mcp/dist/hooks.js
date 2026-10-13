@@ -3860,18 +3860,27 @@ function collect(command, depth, out, scope) {
           if (isBareRemoteFetch(script)) out.push(RULE_FETCH_EXEC);
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
+          noteScript(scope, script, powershell);
           collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
         }
-        if (line !== void 0) collect(line, depth + 1, out, { ...scope, cmdLine: true });
+        if (line !== void 0) {
+          noteScript(scope, line, false);
+          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
+        }
       }
       moveCwd(scope, words, resolved.index);
     }
     const fed = fedScripts(statement, isBareShellStdin, scope.powershell === true);
     if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
     if (depth < MAX_NESTING) {
-      for (const { text, opaque } of fed) if (opaque !== true) collect(text, depth + 1, out, { ...scope, cmdLine: false });
+      for (const { text, reader, opaque } of fed) {
+        if (opaque === true) continue;
+        const powershell = /^(?:pwsh|powershell)$/.test(commandName(reader[0]?.value ?? ""));
+        noteScript(scope, text, powershell);
+        collect(text, depth + 1, out, { ...scope, cmdLine: false, powershell });
+      }
     } else if (fed.length > 0) scope.notes.depth = true;
     for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
@@ -3884,7 +3893,10 @@ function collectGenerated(texts, depth, out, scope) {
     if (text === void 0) continue;
     if (text === "opaque") out.push({ ...RULE_DECODED_SCRIPT });
     else if (depth >= MAX_NESTING) scope.notes.depth = true;
-    else collect(text, depth + 1, out, { ...scope, cmdLine: false });
+    else {
+      noteScript(scope, text, false);
+      collect(text, depth + 1, out, { ...scope, cmdLine: false, powershell: false });
+    }
   }
 }
 function safeHomedir() {
@@ -3907,6 +3919,14 @@ function partialRule(notes) {
 }
 function collapseBlanks(text) {
   return text.replace(/[ \t]{2,}/g, " ");
+}
+function noteScript(scope, text, powershell) {
+  const scripts = scope.notes.scripts;
+  const shell = powershell ? "powershell" : "bash";
+  const t = text.trim();
+  if (t === "" || scripts.size >= MAX_NOTED_SCRIPTS) return;
+  const key = `${shell}\0${t}`;
+  if (!scripts.has(key)) scripts.set(key, { text: t, shell });
 }
 function capText(text, notes) {
   if (text.length <= MAX_STATEMENT_LENGTH) return text;
@@ -3955,7 +3975,8 @@ function assessReadings(readings, cut, now, deadline, where) {
     failed: false,
     calls: false,
     deadline,
-    now
+    now,
+    scripts: /* @__PURE__ */ new Map()
   };
   const matched = [];
   for (const [n, cmd] of readings.entries()) {
@@ -3969,7 +3990,8 @@ function assessReadings(readings, cut, now, deadline, where) {
   }
   const partial2 = partialRule(notes);
   if (partial2 !== null) matched.push(partial2);
-  if (matched.length === 0) return { level: "ok", reasons: [], rules: [] };
+  const scripts = notes.scripts.size > 0 ? { scripts: [...notes.scripts.values()] } : {};
+  if (matched.length === 0) return { level: "ok", reasons: [], rules: [], ...scripts };
   const byId = /* @__PURE__ */ new Map();
   for (const m of matched) if (!byId.has(m.id)) byId.set(m.id, m);
   if (byId.has("rm-rf-root")) byId.delete("rm-rf-broad");
@@ -3983,10 +4005,11 @@ function assessReadings(readings, cut, now, deadline, where) {
     reasons: effective.map((r) => r.reason),
     rules: effective.map((r) => r.id),
     ...own === void 0 ? {} : { denyMessage: own },
-    ...ask === void 0 ? {} : { ask }
+    ...ask === void 0 ? {} : { ask },
+    ...scripts
   };
 }
-var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, MAX_PLAIN_TARGET, ROOT_VARIABLES, HOME_VARIABLES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, MAX_PLAIN_TARGET, ROOT_VARIABLES, HOME_VARIABLES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS, MAX_NOTED_SCRIPTS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
@@ -4606,6 +4629,7 @@ var init_bashGuard = __esm({
     MAX_STATEMENT_LENGTH = 16 * 1024;
     MAX_COMMAND_LENGTH = 512 * 1024;
     DEFAULT_BUDGET_MS = 2500;
+    MAX_NOTED_SCRIPTS = 64;
   }
 });
 
@@ -5034,9 +5058,24 @@ function packageKey(p) {
   return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ""}`;
 }
 function parseInstallCommands(command, opts = {}) {
+  const out = readingsOf(command, opts.shell ?? "bash", null);
+  if (opts.nested === void 0 || opts.nested.length === 0) return out;
+  const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
+  const moved = movesDirectory(stripComments(command));
+  for (const script of opts.nested) {
+    for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT)) {
+      const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
+      if (packages.length === 0) continue;
+      for (const p of packages) seen.add(packageKey(p));
+      out.push({ ...c, packages, ...moved && c.localFirst === true ? { workdir: null } : {} });
+    }
+  }
+  return out;
+}
+function readingsOf(command, shell, forced) {
   const text = stripComments(command);
-  const out = parseReading(text, null);
-  if (opts.shell !== "powershell") return out;
+  const out = parseReading(text, forced);
+  if (shell !== "powershell") return out;
   const asPowerShell = powershellAsPosix(text);
   if (asPowerShell === text) return out;
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
@@ -5047,6 +5086,13 @@ function parseInstallCommands(command, opts = {}) {
     out.push({ ...c, packages, skipped: [] });
   }
   return out;
+}
+function movesDirectory(text) {
+  try {
+    return splitShell(text).statements.some((s) => s.commands.some((words) => changesDirectory(words)));
+  } catch {
+    return true;
+  }
 }
 function parseReading(text, forced) {
   const out = [];
@@ -5332,7 +5378,7 @@ function changesEnvironment(command, statements) {
   }
   return false;
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, ARCHIVE, SCP_GIT, PEP440_OP, set, NPM_COMMON_BOOL, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, SHORT_CLUSTER, ASSIGNMENT2, NPM_INSTALL, COMPOSER_REQUIRE, BUN_ADD, COMPOSER_CONSTRAINT, POWERSHELL_READING, NPM_ALLOW_BOOL, ALLOW, NOT_SIMPLE, DIR_COMMANDS, UNREAD_TARGET, ENV_COMMANDS;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, ARCHIVE, SCP_GIT, PEP440_OP, set, NPM_COMMON_BOOL, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, SHORT_CLUSTER, ASSIGNMENT2, NPM_INSTALL, COMPOSER_REQUIRE, BUN_ADD, COMPOSER_CONSTRAINT, POWERSHELL_READING, NESTED_SCRIPT, NPM_ALLOW_BOOL, ALLOW, NOT_SIMPLE, DIR_COMMANDS, UNREAD_TARGET, ENV_COMMANDS;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -5960,6 +6006,7 @@ var init_parseCommand = __esm({
     BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
     COMPOSER_CONSTRAINT = /^(?:[\^~<>=!*]|v?\d|dev-|@)/;
     POWERSHELL_READING = "found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space) \u2014 vetted for malicious versions only";
+    NESTED_SCRIPT = "found in a script the command hands a shell (bash -c, cmd /c, pwsh -c, a script piped to a shell) \u2014 vetted, never denied as missing";
     NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
     ALLOW = {
       npm: {
@@ -7794,9 +7841,9 @@ function label(r) {
 function firstLine(r) {
   return r.reasons[0] ?? "no reason recorded";
 }
-function boundedInstalls(command, shell, isPopular, runsLocally) {
+function boundedInstalls(command, shell, isPopular, runsLocally, nested = []) {
   const cut = command.length > MAX_PARSED_LENGTH;
-  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell }).map(
+  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested }).map(
     (c) => (
       // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
       // fetch nothing: there is nothing to vet (review P1).
@@ -7896,7 +7943,7 @@ function commandDir(c, opts) {
 }
 async function decideInstallCommand(command, opts) {
   const shell = opts.shell ?? "bash";
-  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts));
+  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts), opts.nested);
   if (commands.length === 0) return cut ? { context: CUT_NOTE } : null;
   const env = opts.env ?? process.env;
   const offline = env["GUARDIAN_OFFLINE"] === "1";

@@ -867,6 +867,45 @@ describe('decideInstallCommand — the local-bin skip never drops a package npm 
     }
     expect(f.calls).toEqual([]);
   });
+
+  // Review of 3.3.0 (MEDIUM): `bash -c 'npm i x'`, `cmd //c npm i x`,
+  // `pwsh -c 'npm i x'` and `echo 'npx x' | sh` were never vetted, while
+  // `npm i x` was denied. The hook hands the shell guard's nested scripts in.
+  describe('the installs of a script the command hands a shell', () => {
+    it.each([
+      ["bash -c 'npm i zz-evil'", [{ text: 'npm i zz-evil', shell: 'bash' }], 'bash'],
+      ['cmd //c npm i zz-evil', [{ text: 'npm i zz-evil', shell: 'bash' }], 'bash'],
+      ["pwsh -c 'npm i zz-evil'", [{ text: 'npm i zz-evil', shell: 'powershell' }], 'powershell'],
+      ["echo 'npx zz-evil' | sh", [{ text: 'npx zz-evil', shell: 'bash' }], 'bash'],
+    ] as const)('%s — a malicious package is denied', async (command, nested, shell) => {
+      const d = await decideInstallCommand(command, opts(maliciousRegistry().fetchImpl, { popular: {}, shell, nested }));
+      expect(d?.deny).toMatch(/MAL-2026-33/);
+    });
+
+    it('a missing name in a nested script warns, never denies: it is not one plain install statement', async () => {
+      const f = fakeRegistry();
+      const d = await decideInstallCommand("bash -c 'npm i zz-no-such-pkg'", opts(f.fetchImpl, { popular: {}, nested: [{ text: 'npm i zz-no-such-pkg', shell: 'bash' }] }));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry/s);
+    });
+
+    it('after the outer command changes directory, a nested launcher is not taken as an installed copy', async () => {
+      binFile(project, 'zz-evil');
+      const nested = [{ text: 'npx zz-evil', shell: 'bash' as const }];
+      await expect(
+        decideInstallCommand("cd web && bash -c 'npx zz-evil'", opts(maliciousRegistry().fetchImpl, { popular: {}, nested })),
+      ).resolves.toMatchObject({ deny: expect.stringMatching(/MAL-2026-33/) });
+      // …while with no outer `cd` the copy installed where the hook runs is what runs.
+      expect(await decideInstallCommand("bash -c 'npx zz-evil'", opts(maliciousRegistry().fetchImpl, { popular: {}, nested }))).toBeNull();
+    });
+
+    it('a package the command line installs itself is looked up once', async () => {
+      const f = maliciousRegistry();
+      const d = await decideInstallCommand("npm i zz-evil && bash -c 'npm i zz-evil'", opts(f.fetchImpl, { popular: {}, nested: [{ text: 'npm i zz-evil', shell: 'bash' }] }));
+      expect(d?.deny).toMatch(/MAL-2026-33/);
+      expect(f.calls.filter((u) => u.startsWith('https://registry.npmjs.org/'))).toHaveLength(1);
+    });
+  });
 });
 
 // Review of 3.0.0, I4: whether a local workspace explains a 404 was computed

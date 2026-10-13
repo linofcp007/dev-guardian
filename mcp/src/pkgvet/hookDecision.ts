@@ -64,6 +64,12 @@ export interface HookVetOptions {
    * (`parseInstallCommands`), and its escape hatch is spelled for it.
    */
   shell?: CommandShell;
+  /**
+   * The scripts the command hands a shell, as the shell guard read them
+   * (`BashAssessment.scripts`): their installs are vetted too
+   * (`parseInstallCommands`'s `nested`).
+   */
+  nested?: ReadonlyArray<{ text: string; shell: CommandShell }>;
   /** When the hook call started (epoch ms); the deadline counts from here. Default: now. */
   startedAt?: number;
   /** The deadline itself (epoch ms), overriding `startedAt` + {@link vetDeadlineMs} (tests). */
@@ -127,9 +133,10 @@ function boundedInstalls(
   shell: CommandShell,
   isPopular: (pkg: PackageSpec) => boolean,
   runsLocally: (pkg: PackageSpec, c: InstallCommand) => boolean,
+  nested: ReadonlyArray<{ text: string; shell: CommandShell }> = [],
 ): { commands: InstallCommand[]; notVetted: number; cut: boolean } {
   const cut = command.length > MAX_PARSED_LENGTH;
-  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell }).map((c) =>
+  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested }).map((c) =>
     // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
     // fetch nothing: there is nothing to vet (review P1).
     c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c,
@@ -285,7 +292,7 @@ const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command w
  */
 export async function decideInstallCommand(command: string, opts: HookVetOptions): Promise<HookDecision | null> {
   const shell = opts.shell ?? 'bash';
-  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts));
+  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts), opts.nested);
   // A cut command whose start installs nothing still says what was not read.
   if (commands.length === 0) return cut ? { context: CUT_NOTE } : null;
 
