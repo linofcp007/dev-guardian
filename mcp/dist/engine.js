@@ -3346,6 +3346,24 @@ var init_dbRegistry = __esm({
 });
 
 // src/storage/scanClock.ts
+function setScanClockLog(log) {
+  clockLog = log;
+}
+function scanStartedAt(nowMs = Date.now()) {
+  let stamp = nowMs;
+  if (lastStampMs !== null && nowMs < lastStampMs) {
+    const behind = lastStampMs - nowMs;
+    if (behind < MONOTONIC_HOLD_MS) {
+      stamp = lastStampMs + 1;
+    } else {
+      clockLog(
+        `the wall clock stepped back ${behind} ms since this process's last scan stamp \u2014 beyond the ${MONOTONIC_HOLD_MS} ms it holds stamps across, so it is trusted as corrected: scans started before the step may sort after scans started since`
+      );
+    }
+  }
+  lastStampMs = stamp;
+  return new Date(stamp).toISOString();
+}
 function datedInFutureSql(alias = "") {
   const col = (name) => alias === "" ? name : `${alias}.${name}`;
   const limit = `julianday('now', '+${FUTURE_SKEW_MINUTES} minutes')`;
@@ -3358,11 +3376,15 @@ function futureDatedNote(count) {
   if (count <= 0) return null;
   return `${count} scan(s) dated in the future were ignored (more than ${FUTURE_SKEW_MINUTES} minutes past this machine's clock): a clock that was wrong where they ran, or rows written to outrank the real history.`;
 }
-var FUTURE_SKEW_MINUTES;
+var FUTURE_SKEW_MINUTES, MONOTONIC_HOLD_MS, lastStampMs, clockLog;
 var init_scanClock = __esm({
   "src/storage/scanClock.ts"() {
     "use strict";
     FUTURE_SKEW_MINUTES = 5;
+    MONOTONIC_HOLD_MS = 5e3;
+    lastStampMs = null;
+    clockLog = () => {
+    };
   }
 });
 
@@ -11871,7 +11893,7 @@ var init_scansRepo = __esm({
       countForProjectStmt;
       completedOfTypesCache = /* @__PURE__ */ new Map();
       insert(input) {
-        const started = nowIso();
+        const started = scanStartedAt();
         this.insertStmt.run(
           input.scan_id,
           input.scan_type,
@@ -95027,6 +95049,7 @@ async function main() {
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
+  setScanClockLog((line) => logErr(`clock: ${line}`));
   reapOrphanedScans(storage, logErr);
   canonicalizeProjectPathsAtStartup(storage, logErr);
   db.setBusyTimeout(SESSION_BUSY_TIMEOUT_MS);
@@ -95122,6 +95145,7 @@ var init_server3 = __esm({
     init_storage();
     init_db();
     init_maintenance();
+    init_scanClock();
     init_resources();
     init_tools();
     init_instructions();
