@@ -19475,78 +19475,87 @@ function remedyFor(kind, tool54, detail) {
 function detailOf(tool54, kind, detail, gating) {
   return { tool: tool54, kind, detail, remedy: remedyFor(kind, tool54, detail), gating };
 }
-function evaluateGate(input) {
-  const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
-  const acceptParse = new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath));
-  const acceptTimeouts = new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath));
-  const reported = /* @__PURE__ */ new Set();
-  const timedOut = /* @__PURE__ */ new Set();
-  const allToolsRun = [];
-  const allMissingTools = [];
-  const gatingMissingTools = [];
-  const coverageGaps = [];
-  const gapDetails = [];
-  const acceptedGaps = [];
-  const acceptedDetails = [];
-  const coverageNotes = [];
-  const noteDetails = [];
-  const pushGap = (line, tool54, kind, gating) => {
-    coverageGaps.push(line);
-    gapDetails.push(detailOf(tool54, kind, line, gating));
+function pushGap(t, line, tool54, kind, gating) {
+  t.coverageGaps.push(line);
+  t.gapDetails.push(detailOf(tool54, kind, line, gating));
+}
+function pushNote(t, note, tool54, kind) {
+  t.coverageNotes.push(note);
+  t.noteDetails.push(detailOf(tool54, kind, note, false));
+}
+function tallySteps(steps, accept) {
+  const t = {
+    allToolsRun: [],
+    allMissingTools: [],
+    gatingMissingTools: [],
+    coverageGaps: [],
+    gapDetails: [],
+    acceptedGaps: [],
+    acceptedDetails: [],
+    coverageNotes: [],
+    noteDetails: [],
+    suppressedByRepoConfig: [],
+    reported: /* @__PURE__ */ new Set(),
+    timedOut: /* @__PURE__ */ new Set()
   };
-  const suppressedByRepoConfig = [];
-  for (const step of steps) {
-    allToolsRun.push(...step.tools_run);
-    for (const run2 of step.tools_run) {
-      const s = run2.suppressed_by_repo_config;
-      if (s !== void 0) suppressedByRepoConfig.push({ step: step.tool, tool: run2.name, ...s });
-    }
-    if (!step.ran) {
-      allMissingTools.push(step.tool);
-      gatingMissingTools.push(step.tool);
-      pushGap(`${step.tool}: ${step.reason ?? "did not run"}`, step.tool, kindOfRefusal(step.reason), true);
-      continue;
-    }
-    for (const missing of step.missing_tools) {
-      allMissingTools.push(missing);
-      const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
-      for (const ref of refs) {
-        reported.add(ref.file);
-        if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) timedOut.add(ref.file);
-      }
-      const judged = judgeMissing(step.tool, missing, refs, step.tools_run, acceptParse, acceptTimeouts);
-      for (const note of judged.notes) {
-        coverageNotes.push(note);
-        noteDetails.push(detailOf(missing, "taint_timeout", note, false));
-      }
-      if (!judged.gating) {
-        for (const a of judged.accepted) {
-          acceptedGaps.push(a.line);
-          acceptedDetails.push(detailOf(missing, a.kind, a.line, false));
-        }
-        continue;
-      }
-      gatingMissingTools.push(missing);
-      const described = describeMissing(missing, step.tools_run);
-      if (described.line !== null) {
-        pushGap(`${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true);
-      }
-    }
-    for (const run2 of step.tools_run) {
-      if (run2.status === "failed") {
-        pushGap(`${step.tool}: ${run2.name} failed${run2.reason ? ` (${run2.reason})` : ""}`, run2.name, "scanner_failed", true);
-      }
+  for (const step of steps) tallyStep(t, step, accept);
+  return t;
+}
+function tallyStep(t, step, accept) {
+  t.allToolsRun.push(...step.tools_run);
+  for (const run2 of step.tools_run) {
+    const s = run2.suppressed_by_repo_config;
+    if (s !== void 0) t.suppressedByRepoConfig.push({ step: step.tool, tool: run2.name, ...s });
+  }
+  if (!step.ran) {
+    t.allMissingTools.push(step.tool);
+    t.gatingMissingTools.push(step.tool);
+    pushGap(t, `${step.tool}: ${step.reason ?? "did not run"}`, step.tool, kindOfRefusal(step.reason), true);
+    return;
+  }
+  for (const missing of step.missing_tools) tallyMissing(t, step, missing, accept);
+  for (const run2 of step.tools_run) {
+    if (run2.status === "failed") {
+      pushGap(t, `${step.tool}: ${run2.name} failed${run2.reason ? ` (${run2.reason})` : ""}`, run2.name, "scanner_failed", true);
     }
   }
+}
+function tallyMissing(t, step, missing, accept) {
+  t.allMissingTools.push(missing);
+  const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
+  for (const ref of refs) {
+    t.reported.add(ref.file);
+    if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) t.timedOut.add(ref.file);
+  }
+  const judged = judgeMissing(step.tool, missing, refs, step.tools_run, accept.parse, accept.timeouts);
+  for (const note of judged.notes) pushNote(t, note, missing, "taint_timeout");
+  if (!judged.gating) {
+    for (const a of judged.accepted) {
+      t.acceptedGaps.push(a.line);
+      t.acceptedDetails.push(detailOf(missing, a.kind, a.line, false));
+    }
+    return;
+  }
+  t.gatingMissingTools.push(missing);
+  const described = describeMissing(missing, step.tools_run);
+  if (described.line !== null) {
+    pushGap(t, `${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true);
+  }
+}
+function evaluateGate(input) {
+  const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
+  const accept = {
+    parse: new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath)),
+    timeouts: new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath))
+  };
+  const t = tallySteps(steps, accept);
   if (droppedBaselineEntries > 0) {
     const noun = droppedBaselineEntries === 1 ? "entry" : "entries";
     const verb = droppedBaselineEntries === 1 ? "is" : "are";
-    const note = `baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`;
-    coverageNotes.push(note);
-    noteDetails.push(detailOf("baseline", "other", note, false));
+    pushNote(t, `baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`, "baseline", "other");
   }
-  const coverage = computeCoverage(allToolsRun, allMissingTools);
-  const gatingCoverage = computeCoverage(allToolsRun, gatingMissingTools);
+  const coverage = computeCoverage(t.allToolsRun, t.allMissingTools);
+  const gatingCoverage = computeCoverage(t.allToolsRun, t.gatingMissingTools);
   const newlyFound = newFindings(findings, baseline, input.renamedFrom);
   const blocking = newlyFound.filter(
     (finding4) => SEVERITY_ORDER[finding4.severity] >= SEVERITY_ORDER[failOn]
@@ -19558,14 +19567,14 @@ function evaluateGate(input) {
     blocking,
     coverage,
     gatingCoverage,
-    coverageGaps,
-    coverageGapDetails: [...gapDetails, ...acceptedDetails, ...noteDetails],
-    coverageNotes,
+    coverageGaps: t.coverageGaps,
+    coverageGapDetails: [...t.gapDetails, ...t.acceptedDetails, ...t.noteDetails],
+    coverageNotes: t.coverageNotes,
     baselineAbsent: baseline === null,
-    acceptedGaps,
-    unusedPartialParseAcceptances: [...acceptParse].filter((path3) => !reported.has(path3)),
-    unusedTimeoutAcceptances: [...acceptTimeouts].filter((path3) => !timedOut.has(path3)),
-    suppressedByRepoConfig,
+    acceptedGaps: t.acceptedGaps,
+    unusedPartialParseAcceptances: [...accept.parse].filter((path3) => !t.reported.has(path3)),
+    unusedTimeoutAcceptances: [...accept.timeouts].filter((path3) => !t.timedOut.has(path3)),
+    suppressedByRepoConfig: t.suppressedByRepoConfig,
     baselineSource: input.baselineSource ?? { from: "tree", path: BASELINE_RELATIVE_PATH },
     rulesSource: input.rulesSource ?? { from: "tree" },
     exclusionsReset: input.exclusionsReset ?? null
