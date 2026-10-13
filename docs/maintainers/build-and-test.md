@@ -40,7 +40,7 @@ of it committed:
   everything the CLI uses (`src/cli.ts`), every npm package inlined. The server
   and the CLI shared 98.8% of their code as two 3.7 MB bundles; one bundle
   cannot ship them from different builds.
-- `server.js` — two lines that import `engine.js` and call `startServer()`
+- `server.js` — the server's entry: it turns Node's compile cache on (in a directory only the account can write — the block it shares with the hook and the CLI), imports `engine.js`, has the cache written at once (a killed server never wrote it) and calls `startServer()`
   (`SERVER_JS` in `scripts/bundleOptions.mjs`), at the path `plugin.json` and
   every host configuration name.
 - `hooks.js` — the bundle of `src/hooksEntry.ts`: what every hook event needs

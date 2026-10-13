@@ -51,7 +51,7 @@ Enforced by the compiler where possible, by review where not:
   `src/`. Run `npm run build` and stage `mcp/dist/` in the *same* commit.
   `test/unit/pluginSurface/distSync.test.ts` fails when the committed `dist/`
   is not, byte for byte, what the build makes of `src/` (the bundles, the
-  server's two-line entry, copy-assets — and nothing else). The build layout
+  server's entry, copy-assets — and nothing else). The build layout
   is in [build-and-test.md](build-and-test.md).
 - **Everything runs on a bundle; nothing ships per-file.** A plugin install is
   a checkout with no `node_modules`, and tsc's per-file output imports the npm

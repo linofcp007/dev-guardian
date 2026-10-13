@@ -15,7 +15,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -2044,5 +2044,53 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
     const r = hook(preToolUse('Bash', { command: 'git status' }, projectDir), { TMPDIR: missing, TEMP: missing, TMP: missing });
     expect(r.status).toBe(0);
     expect(readdirSync(projectDir)).not.toContain('no-such-tmp');
+  });
+
+  // Review of 3.3.0: Node's default cache, `<tmp>/node-compile-cache/<version>-<uid>`,
+  // is used as it is found — in a temp directory every account shares, another
+  // account can create it first, writable, and plant compiled code (measured
+  // on Node 22.13 and 24). Since 3.4.0 the cache is a directory of this
+  // account's own, 0700, used only when nobody else can write it.
+  describe('the compile cache lives where only this account can write (review of 3.3.0)', () => {
+    const block = (file: string): string => {
+      const text = readFileSync(file, 'utf8');
+      return text.slice(text.indexOf('// compile-cache:begin'), text.indexOf('// compile-cache:end'));
+    };
+
+    it('the hook, the CLI and the server turn it on with one block of code', () => {
+      const hookBlock = block(join(REPO_ROOT, 'hooks', 'guardian-hook.mjs'));
+      expect(hookBlock.length).toBeGreaterThan(200);
+      expect(block(join(REPO_ROOT, 'cli', 'dev-guardian.mjs'))).toBe(hookBlock);
+      expect(block(join(REPO_ROOT, 'mcp', 'dist', 'server.js'))).toBe(hookBlock);
+    });
+
+    it.runIf(process.platform !== 'win32')('a fresh temp directory gets the account’s own cache, 0700, and the cache is written there', () => {
+      const tmp = mkdtempSync(join(projectDir, 'tmp-'));
+      const r = hook(preToolUse('Bash', { command: 'git status' }, projectDir), { TMPDIR: tmp, TEMP: tmp, TMP: tmp });
+      expect(r.status).toBe(0);
+      const uid = process.getuid?.() ?? -1;
+      const dir = join(tmp, `dev-guardian-node-compile-cache-${String(uid)}`);
+      expect(lstatSync(dir).mode & 0o777).toBe(0o700);
+      expect(readdirSync(dir).length).toBeGreaterThan(0);
+      expect(readdirSync(tmp)).not.toContain('node-compile-cache');
+    });
+
+    it.runIf(process.platform !== 'win32')('a cache directory others can write is not used', () => {
+      const tmp = mkdtempSync(join(projectDir, 'tmp-'));
+      const uid = process.getuid?.() ?? -1;
+      const planted = join(tmp, `dev-guardian-node-compile-cache-${String(uid)}`);
+      mkdirSync(planted);
+      chmodSync(planted, 0o777);
+      const r = hook(preToolUse('Bash', { command: 'git status' }, projectDir), { TMPDIR: tmp, TEMP: tmp, TMP: tmp });
+      expect(r.status).toBe(0);
+      expect(readdirSync(planted)).toEqual([]);
+    });
+
+    it.runIf(process.platform === 'win32')('on Windows, Node’s own default under the account’s temp directory', () => {
+      const tmp = mkdtempSync(join(projectDir, 'tmp-'));
+      const r = hook(preToolUse('Bash', { command: 'git status' }, projectDir), { TMPDIR: tmp, TEMP: tmp, TMP: tmp });
+      expect(r.status).toBe(0);
+      expect(readdirSync(tmp)).toContain('node-compile-cache');
+    });
   });
 });

@@ -8,7 +8,7 @@
  * - The CLI (`cli/dev-guardian.mjs`) imports it for everything `cli.ts`
  *   exports — the light helpers directly, the scan pipeline and the storage
  *   layer through its lazy `load*Modules()`.
- * - `dist/server.js` is a two-line file that imports it and calls
+ * - `dist/server.js` is a short file that turns the compile cache on, imports it and calls
  *   {@link startServer} (`scripts/bundleOptions.mjs#SERVER_JS`), so every path
  *   that names the server — `plugin.json`, the host configurations
  *   `mcp-config` writes — stays what it was.

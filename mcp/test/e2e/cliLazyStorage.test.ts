@@ -64,7 +64,7 @@ describe('cli/dev-guardian.mjs — imports Node builtins and the bundle, nothing
 
   it('turns the compile cache on before it loads the bundle', () => {
     const source = readFileSync(REAL_CLI, 'utf8');
-    const enable = source.indexOf('module.enableCompileCache?.()');
+    const enable = source.indexOf('module.enableCompileCache?.(');
     const load = source.indexOf("await import('../mcp/dist/engine.js')");
     expect(enable).toBeGreaterThan(0);
     expect(load).toBeGreaterThan(enable);
@@ -224,5 +224,41 @@ describe('cli/dev-guardian.mjs — Node compile cache', () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+// Review of 3.3.0: with mcp/dist/engine.js missing or cut short the CLI threw
+// out of its top-level import — a stack trace and exit 1, which is `scan`'s
+// "the gate failed": a caller read a broken install as a new finding.
+describe('cli/dev-guardian.mjs — a missing or damaged engine bundle', () => {
+  let sandbox: string;
+  beforeAll(() => {
+    sandbox = mkdtempSync(join(tmpdir(), 'guardian-noengine-'));
+  });
+  afterAll(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  /** A copy of the CLI beside an engine bundle that is `missing` or `cut` short. */
+  function install(name: string, engine: 'missing' | 'cut'): string {
+    const root = join(sandbox, name);
+    mkdirSync(join(root, 'cli'), { recursive: true });
+    mkdirSync(join(root, 'mcp', 'dist'), { recursive: true });
+    cpSync(REAL_CLI, join(root, 'cli', 'dev-guardian.mjs'));
+    cpSync(join(REAL_DIST, '..', 'package.json'), join(root, 'mcp', 'package.json'));
+    if (engine === 'cut') writeFileSync(join(root, 'mcp', 'dist', 'engine.js'), readFileSync(join(REAL_DIST, 'engine.js'), 'utf8').slice(0, 200_000));
+    return join(root, 'cli', 'dev-guardian.mjs');
+  }
+
+  it.each([
+    ['missing', ['--help']],
+    ['missing', ['scan', '--project', '.']],
+    ['cut', ['--help']],
+    ['cut', ['check', '--bash', 'ls']],
+  ] as const)('engine %s, %j: exit 3 and one line that says what to do — no stack', (engine, args) => {
+    const cli = install(`${engine}-${args[0]}`, engine);
+    const r = spawnSyncCapped(process.execPath, [cli, ...args], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' }, timeout: TIMEOUT_MS, cwd: sandbox });
+    expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 3, stdout: '' });
+    expect(r.stderr).toMatch(/^dev-guardian: its engine, mcp\/dist\/engine\.js, could not be loaded \(.+\) — the plugin install is incomplete or damaged\. Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build\.\n$/);
   });
 });

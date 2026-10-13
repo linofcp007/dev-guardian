@@ -33,7 +33,7 @@ performance and compliance:
 - **Commit the compiled `mcp/dist/`, rebuilt in the same commit** as the `src/` change: the repository is the
   distribution (`distSync.test.ts` fails on a stale `dist/`).
 - **`mcp/dist/` is two bundles and nothing per-file**: `engine.js` (server + CLI), `hooks.js` (the hooks' detectors,
-  with its four per-event parts `hooksBash.js`, `hooksVet.js`, `hooksWrite.js`, `hooksSession.js`), the two-line
+  with its four per-event parts `hooksBash.js`, `hooksVet.js`, `hooksWrite.js`, `hooksSession.js`), the short
   `server.js` and the copied assets — no tsc output, no source maps (`distSync.test.ts`). The CLI imports Node builtins
   and `mcp/dist/engine.js` only, the dispatcher `mcp/dist/hooks.js` only (which loads its parts); `git add` a new
   file an install needs (`pluginInstall.test.ts`).

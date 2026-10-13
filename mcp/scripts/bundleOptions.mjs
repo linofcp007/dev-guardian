@@ -27,7 +27,9 @@
  * package is inlined.
  */
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 /** Every bundle's entry: `dist/<out>.js` from `src/<in>.ts`. */
@@ -46,15 +48,45 @@ export const HOOK_PART_IMPORT = new RegExp(`^\\./(?:${HOOK_PARTS.join('|')})\\.j
 export const ENGINE_DIGEST = '__GUARDIAN_ENGINE_DIGEST__';
 
 /**
+ * Turning Node's compile cache on in a directory only this account can write:
+ * the block from `// compile-cache:begin` to `// compile-cache:end` of
+ * `hooks/guardian-hook.mjs`, which `cli/dev-guardian.mjs` holds too
+ * (`hooksDispatcher.test.ts` holds the two equal) and {@link SERVER_JS} is
+ * written with.
+ */
+export const COMPILE_CACHE_BLOCK = (() => {
+  const hook = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'guardian-hook.mjs'), 'utf8');
+  const begin = hook.indexOf('// compile-cache:begin');
+  const end = hook.indexOf('// compile-cache:end');
+  if (begin < 0 || end < begin) throw new Error('hooks/guardian-hook.mjs holds no compile-cache block');
+  return hook.slice(begin, end + '// compile-cache:end'.length);
+})();
+
+/**
  * `dist/server.js`, written as it is by the build: the MCP server, started
  * from the engine bundle. The process's entry module is this file, and
  * `engine.js` is loaded by it — so `import.meta.url` inside the engine is
  * `dist/engine.js`, the depth every path probe in `src/` expects of a bundle.
+ *
+ * It turns Node's compile cache on before it loads the 4 MB engine
+ * ({@link COMPILE_CACHE_BLOCK}), and has the cache written as soon as the
+ * engine is loaded: Node writes it at an orderly exit, and a server is usually
+ * stopped otherwise — killed, on Windows — so it was never written, and every
+ * start compiled the engine anew (3.4.0: `initialize` ~70 ms sooner).
  */
 export const SERVER_JS = [
   '#!/usr/bin/env node',
   '// The dev-guardian MCP server: started from the engine bundle (mcp/src/engine.ts), built by `npm run build`.',
-  "await (await import('./engine.js')).startServer();",
+  "import { existsSync, lstatSync, mkdirSync } from 'node:fs';",
+  "import module from 'node:module';",
+  "import { tmpdir } from 'node:os';",
+  "import { join } from 'node:path';",
+  '',
+  COMPILE_CACHE_BLOCK,
+  '',
+  "const engine = await import('./engine.js');",
+  'module.flushCompileCache?.();',
+  'await engine.startServer();',
   '',
 ].join('\n');
 

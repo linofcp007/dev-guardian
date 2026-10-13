@@ -92,6 +92,18 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'repo-safe',
     reason: "hooks/ (another reviewer's): a stat of an already-opened path's identity; opens nothing",
   },
+  'src/hooks/distCheck.ts': {
+    apis: { readFileSync: 1 },
+    kind: 'own',
+    reason: "the plugin's own mcp/dist/engine.js, hashed against the digest the build wrote; never a project file",
+  },
+  'src/pkgvet/hookDecision.ts': {
+    apis: { statSync: 1 },
+    kind: 'repo-safe',
+    reason:
+      'whether node_modules/.bin/<name> or node_modules/<name>/package.json is a FILE (npm runs only a file), after ' +
+      'walkLinksUnder refused any link to a network or device path on the way; a stat opens nothing',
+  },
   'src/hostsetup/setup.ts': {
     apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2 },
     kind: 'own',

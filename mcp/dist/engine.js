@@ -94826,7 +94826,14 @@ async function main() {
   db.setBusyTimeout(SESSION_BUSY_TIMEOUT_MS);
   const userBin = ensureUserBinOnPath();
   if (userBin.added && userBin.dir !== null) logErr(`PATH: appended ${userBin.dir} (the pinned installers' directory)`);
-  const shell = await probeShell(storage.runtimeMeta);
+  const shellProbe = probeShell(storage.runtimeMeta);
+  const guard = ensureGuardianIgnored(projectPath);
+  if (guard.updated) logErr(`.gitignore ${guard.reason} for .guardian/`);
+  else if (guard.reason === "refused" || guard.reason === "unwritable") {
+    logErr(`.gitignore left alone (${guard.reason}): ${guard.detail ?? "no detail"}`);
+  }
+  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION2 }, { instructions: SERVER_INSTRUCTIONS });
+  const shell = await shellProbe;
   if (shell === null) {
     logErr(
       "no usable bash found \u2014 script-invoking tools will return no_bash_shell. Install Git Bash or WSL, then restart."
@@ -94834,12 +94841,6 @@ async function main() {
   } else {
     logErr(`shell: ${shell.label}`);
   }
-  const guard = ensureGuardianIgnored(projectPath);
-  if (guard.updated) logErr(`.gitignore ${guard.reason} for .guardian/`);
-  else if (guard.reason === "refused" || guard.reason === "unwritable") {
-    logErr(`.gitignore left alone (${guard.reason}): ${guard.detail ?? "no detail"}`);
-  }
-  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION2 }, { instructions: SERVER_INSTRUCTIONS });
   const progressNotifier = {
     send: (payload) => {
       void mcp.server.notification({

@@ -151,7 +151,43 @@ import { spawn } from 'node:child_process';
 // broken environment, a test pointing it nowhere) came back as a directory
 // tree the CLI had made — and a later `mkdtemp` there then succeeded where it
 // must fail. With no temp directory, the CLI runs uncached and creates nothing.
-if (existsSync(tmpdir())) module.enableCompileCache?.();
+// compile-cache:begin — the same in hooks/guardian-hook.mjs, cli/dev-guardian.mjs and
+// dist/server.js (mcp/scripts/bundleOptions.mjs, SERVER_JS); hooksDispatcher.test.ts holds them equal.
+/**
+ * Where Node's on-disk compile cache may live: `undefined` for Node's own
+ * default, `null` for no cache at all. Never a temp directory that is not
+ * there (Node creates the cache's directory with every missing parent, and a
+ * TMPDIR that is not there must stay not there). On Windows, Node's default
+ * under the account's own `%TEMP%`. Elsewhere, a directory of this account's
+ * own in the temp directory, made `0700` and used only when it is a directory
+ * this account owns that nobody else can write: in a temp directory every
+ * account shares (Linux's `/tmp`), Node's default `node-compile-cache/<version>-<uid>`
+ * is used as it is found — another account can create it first, writable,
+ * and plant compiled code this process then runs (measured, Node 22.13 and 24).
+ *
+ * @returns {string | null | undefined}
+ */
+function compileCacheDir() {
+  const tmp = tmpdir();
+  if (!existsSync(tmp)) return null;
+  if (process.platform === 'win32') return undefined;
+  const uid = process.getuid?.() ?? -1;
+  const dir = join(tmp, `dev-guardian-node-compile-cache-${uid}`);
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'EEXIST') return null;
+  }
+  const st = lstatSync(dir);
+  return st.isDirectory() && st.uid === uid && (st.mode & 0o077) === 0 ? dir : null;
+}
+try {
+  const dir = compileCacheDir();
+  if (dir !== null) module.enableCompileCache?.(dir);
+} catch {
+  /* no cache: it only runs slower */
+}
+// compile-cache:end
 
 // Everything this CLI uses from the server's code comes from ONE file, the
 // self-contained bundle `mcp/dist/engine.js` (built from `mcp/src/engine.ts`,
@@ -168,6 +204,22 @@ if (existsSync(tmpdir())) module.enableCompileCache?.();
 // bundle's `load*Modules()` functions, which the bundle keeps lazy: `--help`,
 // `check`, `mcp-config` and `ci-init` never evaluate them, on any Node
 // version (`mcp/test/e2e/cliLazyStorage.test.ts`).
+//
+// A bundle that is missing or damaged is an install to repair, said in one
+// line with exit 3 (review of 3.3.0): the import used to throw out of the
+// module — a stack trace and exit 1, which is `scan`'s "the gate failed", so a
+// caller read a broken install as a new finding.
+const engine = await import('../mcp/dist/engine.js').catch(async (/** @type {unknown} */ err) => {
+  const why = err instanceof Error ? (/** @type {NodeJS.ErrnoException} */ (err).code ?? err.message) : String(err);
+  await new Promise((done) =>
+    process.stderr.write(
+      `dev-guardian: its engine, mcp/dist/engine.js, could not be loaded (${why}) — the plugin install is incomplete ` +
+        'or damaged. Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build.\n',
+      () => done(undefined),
+    ),
+  );
+  return process.exit(3);
+});
 const {
   ALL_HOSTS,
   assessBashCommand,
@@ -193,7 +245,7 @@ const {
   setupHost,
   untrustedText,
   writeProjectFile,
-} = await import('../mcp/dist/engine.js');
+} = engine;
 
 // `scan` runs in the project it scans: no spawn by bare name may find a binary
 // there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.

@@ -123,10 +123,15 @@ describe('the committed mcp/dist is the build of mcp/src', () => {
     expect(texts.get(join(DIST, 'hooksSession.js')) ?? '').toContain(`bytes: ${String(bytes)}`);
   });
 
-  it('dist/server.js is the two lines that start the server from dist/engine.js', () => {
+  it('dist/server.js starts the server from dist/engine.js, the compile cache on and written once the engine is loaded', () => {
     expect(readFileSync(SERVER_PATH, 'utf8')).toBe(options.SERVER_JS);
     expect(options.SERVER_JS).toMatch(/^#!\/usr\/bin\/env node\n/);
-    expect(options.SERVER_JS).toContain("import('./engine.js')");
+    const enable = options.SERVER_JS.indexOf('module.enableCompileCache?.(dir)');
+    const load = options.SERVER_JS.indexOf("await import('./engine.js')");
+    const flush = options.SERVER_JS.indexOf('module.flushCompileCache?.()');
+    const start = options.SERVER_JS.indexOf('await engine.startServer()');
+    expect(enable).toBeGreaterThan(0);
+    expect([enable < load, load < flush, flush < start]).toEqual([true, true, true]);
   });
 
   it('the bundles import nothing but Node builtins, and the hooks entry its parts — every package is inlined, as an install without node_modules needs', async () => {

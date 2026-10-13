@@ -29,22 +29,49 @@
  *     (`GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`).
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import module from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// Node's on-disk compile cache for the detectors this hook imports on every
-// call (review 8, dg-core 17): a no-op where Node lacks it, and a failure to
-// write it changes nothing but the time. Only under a temp directory that
-// exists: Node creates the cache's directory with every missing parent, and a
-// TMPDIR that is not there must stay not there.
-try {
-  if (existsSync(tmpdir())) module.enableCompileCache?.();
-} catch {
-  /* no cache: the hook only runs slower */
+// compile-cache:begin — the same in hooks/guardian-hook.mjs, cli/dev-guardian.mjs and
+// dist/server.js (mcp/scripts/bundleOptions.mjs, SERVER_JS); hooksDispatcher.test.ts holds them equal.
+/**
+ * Where Node's on-disk compile cache may live: `undefined` for Node's own
+ * default, `null` for no cache at all. Never a temp directory that is not
+ * there (Node creates the cache's directory with every missing parent, and a
+ * TMPDIR that is not there must stay not there). On Windows, Node's default
+ * under the account's own `%TEMP%`. Elsewhere, a directory of this account's
+ * own in the temp directory, made `0700` and used only when it is a directory
+ * this account owns that nobody else can write: in a temp directory every
+ * account shares (Linux's `/tmp`), Node's default `node-compile-cache/<version>-<uid>`
+ * is used as it is found — another account can create it first, writable,
+ * and plant compiled code this process then runs (measured, Node 22.13 and 24).
+ *
+ * @returns {string | null | undefined}
+ */
+function compileCacheDir() {
+  const tmp = tmpdir();
+  if (!existsSync(tmp)) return null;
+  if (process.platform === 'win32') return undefined;
+  const uid = process.getuid?.() ?? -1;
+  const dir = join(tmp, `dev-guardian-node-compile-cache-${uid}`);
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'EEXIST') return null;
+  }
+  const st = lstatSync(dir);
+  return st.isDirectory() && st.uid === uid && (st.mode & 0o077) === 0 ? dir : null;
 }
+try {
+  const dir = compileCacheDir();
+  if (dir !== null) module.enableCompileCache?.(dir);
+} catch {
+  /* no cache: it only runs slower */
+}
+// compile-cache:end
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
 // The plugin root is derived from this file's own location rather than read
