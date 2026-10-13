@@ -35325,7 +35325,7 @@ var init_toolArgs = __esm({
 });
 
 // src/schemas.ts
-var ProjectPath, SeverityMin, Force, AutoFix, AllowDirty, httpUrlField, Categories, SeverityEnum, CategoryEnum, DomainErrorCodeEnum, BaseScanInput, BaseScanWithFixInput;
+var ProjectPath, SeverityMin, Force, AutoFix, AllowDirty, httpUrlField;
 var init_schemas4 = __esm({
   "src/schemas.ts"() {
     "use strict";
@@ -35340,19 +35340,6 @@ var init_schemas4 = __esm({
     AutoFix = external_exports.boolean().optional().default(false).describe("Apply Semgrep's autofixes to the source (a clean tree, unless allow_dirty).");
     AllowDirty = external_exports.boolean().optional().default(false).describe("With auto_fix: allow uncommitted changes in the tree.");
     httpUrlField = () => external_exports.string().url().refine((text2) => httpUrl(text2) !== null, { message: "must be an http:// or https:// URL" });
-    Categories = external_exports.array(external_exports.enum(CATEGORIES)).optional().describe("Restrict the run to these categories only.");
-    SeverityEnum = external_exports.enum(SEVERITIES);
-    CategoryEnum = external_exports.enum(CATEGORIES);
-    DomainErrorCodeEnum = external_exports.enum(DOMAIN_ERROR_CODES);
-    BaseScanInput = external_exports.object({
-      project_path: ProjectPath,
-      severity_min: SeverityMin,
-      force: Force
-    });
-    BaseScanWithFixInput = BaseScanInput.extend({
-      auto_fix: AutoFix,
-      allow_dirty: AllowDirty
-    });
   }
 });
 

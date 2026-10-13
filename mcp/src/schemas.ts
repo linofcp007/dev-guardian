@@ -8,7 +8,7 @@
 
 import { z } from 'zod';
 import { httpUrl } from './platform/toolArgs.js';
-import { SEVERITIES, CATEGORIES, DOMAIN_ERROR_CODES } from './types.js';
+import { SEVERITIES } from './types.js';
 
 export const ProjectPath = z
   .string()
@@ -52,30 +52,3 @@ export const httpUrlField = (): z.ZodEffects<z.ZodString, string, string> =>
     .string()
     .url()
     .refine((text) => httpUrl(text) !== null, { message: 'must be an http:// or https:// URL' });
-
-export const Categories = z
-  .array(z.enum(CATEGORIES))
-  .optional()
-  .describe('Restrict the run to these categories only.');
-
-export const SeverityEnum = z.enum(SEVERITIES);
-export const CategoryEnum = z.enum(CATEGORIES);
-export const DomainErrorCodeEnum = z.enum(DOMAIN_ERROR_CODES);
-
-/**
- * Common scan-tool input shape. Individual tools extend this with
- * tool-specific fields (e.g. `dockerfile_path`, `target_url`).
- */
-export const BaseScanInput = z.object({
-  project_path: ProjectPath,
-  severity_min: SeverityMin,
-  force: Force,
-});
-
-export const BaseScanWithFixInput = BaseScanInput.extend({
-  auto_fix: AutoFix,
-  allow_dirty: AllowDirty,
-});
-
-export type BaseScanInputT = z.infer<typeof BaseScanInput>;
-export type BaseScanWithFixInputT = z.infer<typeof BaseScanWithFixInput>;
