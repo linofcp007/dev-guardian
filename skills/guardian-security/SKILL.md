@@ -91,8 +91,8 @@ For obvious, reversible fixes, offer to apply — always showing the diff and as
 - Dependency upgrades with a fixed version: `/guardian-fix --pr` (`create_fix_pr` with `sources: ["deps"]`,
   a dry run first) — applies `deps_update_plan`'s plan in an isolated worktree, proved by a re-scan and the tests.
 - Autofixes the Semgrep rule itself ships: `/guardian-fix --pr` (`sources: ["semgrep"]`).
-- Code changes (`crypto.createCipher` → `crypto.createCipheriv`), a secret moved to `.env` + `.env.example`
-  + `.gitignore`.
+- Code changes (`crypto.createCipher` → `crypto.createCipheriv`), a secret moved to `.env`, `.env.example` and
+  `.gitignore`.
 
 In an emergency — a live production key exposed — interrupt and say so plainly: "⛔ STOP — this key looks live
 and in production. Revoke it now: <the provider's revocation page>. Then we fix the rest."
