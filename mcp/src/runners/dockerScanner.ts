@@ -9,7 +9,7 @@
  * `-v host:container`. On Windows `-v C:\proj:/src` is ambiguous (the drive
  * colon collides with the v-flag's own `:` separator); `--mount`'s comma-keyed
  * syntax has no such problem and tolerates spaces in the path (this repo lives
- * under "CLAUDE SKILLS"). Because we invoke Docker via execa with shell:false,
+ * under "CLAUDE SKILLS"). Because we invoke Docker with no shell (runProcess),
  * each arg is a single argv element — no shell quoting needed.
  */
 

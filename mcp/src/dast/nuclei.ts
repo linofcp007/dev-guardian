@@ -142,7 +142,7 @@ export async function invokeNuclei(
     cwd: dirname(opts.outputPath),
     // An allowlisted environment, and `extendEnv: false` so it REPLACES the
     // parent's rather than being merged over it. Without the second half the
-    // first is decorative: execa extends `process.env` by default, and the
+    // first is decorative: runProcess extends `process.env` by default, and the
     // child would inherit the value of whatever variable `auth_header_env`
     // named — a credential this tool goes out of its way never to put on
     // nuclei's command line.

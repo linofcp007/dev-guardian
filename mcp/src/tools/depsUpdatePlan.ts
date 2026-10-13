@@ -189,7 +189,7 @@ interface UpgradeStep {
   /** The SAME command as `upgrade_command`, shell-quoted for a human to
    *  paste into a terminal (a shell that globs by default, e.g. zsh, reads
    *  an unquoted `overrides[...]` as a filename pattern) — never used by
-   *  `create_fix_pr`'s own unquoted, non-shell `execa` invocation. Set only
+   *  `create_fix_pr`'s own unquoted, non-shell invocation (runProcess). Set only
    *  where quoting would otherwise matter (an npm `overrides` step); absent
    *  when `upgrade_command` is already shell-safe as written. */
   shell_command?: string;

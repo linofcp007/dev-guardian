@@ -103,8 +103,8 @@ export async function runVersionProbe(probe: VersionProbe, cwd: string): Promise
   }
   if (r.outcome !== 'completed') {
     // A failure is either "not there" or "there but broken", and the exit
-    // code cannot tell them apart on Windows: execa resolves the command
-    // through cross-spawn, which runs an UNRESOLVED command via `cmd.exe /c`
+    // code cannot tell them apart on Windows: the runner resolves the command
+    // first, but cross-spawn runs an UNRESOLVED one via `cmd.exe /c`
     // — so a missing tool comes back as exit 1 with a localised "is not
     // recognized" message, not as a spawn error. The PATH lookup decides:
     // nothing found means not installed, and says nothing more.
