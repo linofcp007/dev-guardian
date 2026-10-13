@@ -361,8 +361,13 @@ actually makes.
   (`mcp/src/runners/semgrepReport.ts`) reads the field from every run's plain
   report — never `--time`, which only adds profiling (94 MB against 1.7 MB on
   LibreChat): the run is partial with the files named, type `Fixpoint
-  timeout`, gated exactly like a per-rule `Timeout`, and on an engine without
-  the field the run carries a named note instead. The exception is a timeout
+  timeout`, and on an engine without the field the run carries a named note
+  instead. The CI gate does NOT gate on them (3.3.0, review 8): no Semgrep
+  setting tunes them, and dev-spec-driven's own tree had them in 49 files on
+  every run, so no mid-size codebase could reach exit 0. They are notes there
+  (`coverage_notes`, `coverage_gap_details` kind `taint_timeout`, `gating:
+  false`), coverage still `partial`; a per-file `Timeout` still gates unless
+  the project's committed `.guardian/scan.yml` accepts it (`docs/ci.md`). The exception is a timeout
   whose only rule is one of the plugin's own packs', as the pack's rule is
   spelled in that run (its config-path prefix, or `guardian-packs.` in
   Docker — never a bare id, which a project-root rule of the same name has):

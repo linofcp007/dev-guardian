@@ -11,7 +11,7 @@
  * not call. `devSpecNames.test.ts` holds every name the prose cites to these
  * lists.
  *
- * Where they come from — dev-spec-driven 1.28.0 (DEV_SPEC_FIXTURE_VERSION):
+ * Where they come from — dev-spec-driven 1.29.1 (DEV_SPEC_FIXTURE_VERSION; the lists are unchanged since 1.28.0):
  *
  *   - DEV_SPEC_TOOLS: the `TOOLS` array of its `mcp/server.js`, as
  *     `tools/list` returns it in Claude Code plugin mode
@@ -32,7 +32,7 @@
  * then holds the list to that version or newer.
  */
 
-export const DEV_SPEC_FIXTURE_VERSION = '1.28.0';
+export const DEV_SPEC_FIXTURE_VERSION = '1.29.1';
 
 export const DEV_SPEC_TOOLS: readonly string[] = [
   'spec_init',
