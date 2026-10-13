@@ -19,7 +19,6 @@
 
 import { existsSync, statSync } from 'node:fs';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
@@ -28,6 +27,7 @@ import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
 import { defineTool, listedTools, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const startedAt = Date.now();
 
@@ -62,16 +62,9 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
   // A diagnostic must answer even when the server runs somewhere no scan
   // would (a home directory): only an EXPLICIT path is validated.
-  let projectPath: string;
-  if (inp.project_path === undefined || inp.project_path.length === 0) {
-    projectPath = serverProjectPath();
-  } else {
-    try {
-      projectPath = resolveProjectPath(inp.project_path).path;
-    } catch (e) {
-      return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-    }
-  }
+  const explicit = inp.project_path !== undefined && inp.project_path.length > 0;
+  const projectPath = explicit ? toolProjectPath(inp.project_path) : serverProjectPath();
+  if (typeof projectPath !== 'string') return projectPath;
   const latest = ctx.storage.scans.getLatestForProject(projectPath);
   const limiter = getScanLimiter();
   const dbPath = (ctx.storage as unknown as { rawHandle: () => { name: string } })

@@ -67,10 +67,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 /** Response arrays are capped here; `summary` counts are never capped on a
  *  `full_file` comparison (see the module comment for the fallback case). */
@@ -130,12 +130,8 @@ async function handler(
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
   const sboms = needsDefaultPair

@@ -25,7 +25,6 @@
 
 import { randomUUID } from 'node:crypto';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { z } from 'zod';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import { filterFindings } from '../severity/filter.js';
@@ -40,6 +39,7 @@ import {
 } from '../types.js';
 import { listedCall } from './fold.js';
 import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput, TOOLS } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
@@ -102,12 +102,8 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
   const localOnly = inp.local_only === true;
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // No bash check: none of the sub-tools runs a shell script any more.
 

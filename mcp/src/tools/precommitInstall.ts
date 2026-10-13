@@ -10,12 +10,12 @@
 import type { PluginContext } from '../context.js';
 import { hookInstallTarget } from '../platform/hookInstallTarget.js';
 import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { scannerAvailable } from './scanHelpers.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = { project_path: ProjectPath };
 
@@ -35,12 +35,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   _ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // pre-commit reads the config and writes the hooks wherever the
   // repository's metadata says; both are judged here first — a config that

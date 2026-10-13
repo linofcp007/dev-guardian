@@ -48,7 +48,6 @@ import type { PluginContext } from '../context.js';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -61,6 +60,7 @@ import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary, type DastCrossReference } from '../validate/summary.js';
 import { IMPLEMENTED_PROVIDERS, type FindingValidation } from '../validate/types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 /** The one `scan_dast` check whose finding is evidence of live, anonymous
  *  reachability — see `dast/analyze.ts`'s `checkAnonymousExposure`. */
@@ -171,14 +171,8 @@ async function handler(
   const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
   const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    // The code every tool answers an unusable project_path with
-    // (`projectPathErrorCode`), so hosts and skills handle one failure.
-    return fail(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // PROJECT-SCOPED, deliberately. Everything downstream is keyed to
   // `projectPath`: routes and findings are relativized against it, verdicts

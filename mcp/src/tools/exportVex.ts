@@ -38,7 +38,6 @@ import { basename, join, posix, win32 } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { vexSourceScan } from '../vex/scope.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { ProjectPath } from '../schemas.js';
 import type { ScanRecord, ToolResult } from '../types.js';
@@ -50,6 +49,7 @@ import { renderCycloneDxVex, renderOpenVex } from '../vex/render.js';
 import { parseSbomInventory, type SbomInventory } from '../vex/sbom.js';
 import { buildVexStatements, type VexStatement } from '../vex/statements.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { ensureReportDir } from './scanHelpers.js';
 
 const SAMPLE_SIZE = 20;
@@ -102,12 +102,8 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
   const format = inp.format ?? 'openvex';
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const found = vexSourceScan(ctx.storage, projectPath);
   const depsScan = found.scan;

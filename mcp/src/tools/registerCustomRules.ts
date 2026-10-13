@@ -53,11 +53,11 @@ import {
   yamlFilesUnder,
 } from '../platform/customRules.js';
 import { expandGlob, hasGlobMagic } from '../platform/glob.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { validateRuleFiles } from '../runners/semgrepValidate.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
+import type { ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { scannerAvailable } from './scanHelpers.js';
 
 const inputSchema = {
@@ -98,12 +98,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   if (inp.clear) {
     ctx.storage.runtimeMeta.delete(customRulesMetaKey(projectPath));
@@ -279,11 +275,4 @@ function collectDiscovered(projectPath: string): { registered: string[]; rejecte
     consider(abs, registered, rejected);
   }
   return { registered, rejected };
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

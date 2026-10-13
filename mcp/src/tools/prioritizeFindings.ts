@@ -56,7 +56,6 @@ import {
   type SsvcPoint,
 } from '../intel/ssvc.js';
 import type { CveIntelResult } from '../intel/types.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { Category, Finding, Severity, ToolResult } from '../types.js';
 import { assessDependency, dependencySubjectOf, prepareDependencyIndex } from '../validate/dependencyProvider.js';
@@ -64,6 +63,7 @@ import { buildImportGraph } from '../validate/importGraph.js';
 import { makeNpmResolver } from '../validate/npmResolve.js';
 import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 /** Added once when ANY of a finding's correlated CVEs is CISA KEV-listed —
  *  between `security`'s category weight (200) and `critical`'s severity
@@ -146,12 +146,8 @@ async function handler(
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const limit = inp.limit ?? 50;
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const set = openSetForProject(ctx.storage, projectPath);
   const open = set.findings;

@@ -18,7 +18,6 @@ import { randomUUID } from 'node:crypto';
 import { describeReadRefusal, listProjectDir, readProjectText } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import {
   makeFinding,
@@ -27,6 +26,7 @@ import {
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { computeCoverage } from './scanCoverage.js';
 
 interface PatternRule {
@@ -145,15 +145,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return {
-      ok: false,
-      error: { code: projectPathErrorCode(e), message: (e as Error).message },
-    };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const files = collectConfigFiles(projectPath, 6);
   const findings: Finding[] = [];

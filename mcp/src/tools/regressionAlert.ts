@@ -43,12 +43,12 @@ import {
   describeMeasurementGaps,
   measurementGaps,
 } from '../history/runCompare.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type Finding, type Severity, type ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { countBySeverity } from '../severity/counts.js';
 
 const SEVERITY_WEIGHT: Record<Severity, number> = {
@@ -101,12 +101,8 @@ async function handler(
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const threshold = inp.threshold ?? 5;
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const skipHits: SkipHit[] = [];
   const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);

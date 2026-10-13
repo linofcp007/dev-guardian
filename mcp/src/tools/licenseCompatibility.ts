@@ -14,10 +14,10 @@
 import { listProjectDir, readProjectJson, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
+import type { ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 interface LicenseEntry {
   license: string;
@@ -71,12 +71,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const projectLicense = detectProjectLicense(projectPath);
   // No declared license (the normal case for proprietary client work) and a
@@ -699,11 +695,4 @@ function groupByLicense(rows: IncompatibilityRow[]): Record<string, number> {
     out[r.dep_license] = (out[r.dep_license] ?? 0) + r.packages.length;
   }
   return out;
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

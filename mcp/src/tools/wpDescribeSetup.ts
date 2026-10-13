@@ -32,11 +32,11 @@
 import type { PluginContext } from '../context.js';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { httpUrlField, ProjectPath } from '../schemas.js';
 import type { ScanRecord, ScanType, ToolResult } from '../types.js';
 import { latestUnderKeys, wpInstallKeys, wpSiteKey, wpSiteKeys } from '../wordpress/siteKeys.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -64,12 +64,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
   const siteKey = inp.target_url !== undefined ? wpSiteKey(inp.target_url) : null;
   const installKeys = wpInstallKeys(projectPath, inp.project_path);
   const siteKeys = inp.target_url !== undefined ? wpSiteKeys(inp.target_url) : [];

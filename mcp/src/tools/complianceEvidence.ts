@@ -35,10 +35,10 @@ import { CSF_CATEGORIES, owaspForCsfCategory } from '../frameworks/nistCsf2.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
 import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { COVERAGE_RULE, languagesLine, testedByText, unmappedSentence, untestedHint } from '../report/owaspCoverage.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type Finding, type ScanRecord, type ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const FRAMEWORKS = ['gdpr', 'soc2', 'iso27001', 'owasp-top10-2025', 'nist-csf-2.0', 'generic'] as const;
 type Framework = (typeof FRAMEWORKS)[number];
@@ -74,12 +74,8 @@ async function handler(
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
   const framework = inp.framework ?? 'generic';
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const storage = ctx.storage;
   // Policy documents and licenses are read from files, not scanner output,

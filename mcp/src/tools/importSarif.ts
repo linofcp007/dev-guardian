@@ -20,13 +20,13 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { readSmallText, type TextRead } from '../hooks/configFile.js';
 import { isWithinDir, readProjectText } from '../platform/projectFs.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { importSarif, SarifImportError, type SarifImportCounts } from '../sarif/importSarif.js';
 import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ScanResult, ToolResult } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 /** Largest log read: 50 MiB (US-1.AC-13). */
@@ -74,12 +74,8 @@ function handler(input: ToolInput<typeof inputSchema>, ctx: PluginContext): Prom
 }
 
 function run(inp: ToolInput<typeof inputSchema>, ctx: PluginContext): Result {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return fail(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const logPath = resolve(projectPath, inp.sarif_path);
   const inside = isWithinDir(projectPath, logPath);

@@ -21,15 +21,11 @@
 import { listProjectDir, presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { detectStack } from '../runners/stackDetect.js';
 import { ProjectPath } from '../schemas.js';
-import type {
-  DomainError,
-  StackSnapshot,
-  ToolResult,
-} from '../types.js';
+import type { StackSnapshot, ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = { project_path: ProjectPath };
 
@@ -50,12 +46,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const parsed: StackSnapshot = detectStack(projectPath);
 
@@ -73,13 +65,6 @@ async function handler(
     captured_at: persisted.captured_at,
     snapshot_id: persisted.id,
   };
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }
 
 /**

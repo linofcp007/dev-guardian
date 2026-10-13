@@ -51,7 +51,6 @@ import {
 import { collectSecrets, makeRedactor, redactObject } from '../dast/redact.js';
 import { classifyTarget } from '../dast/target.js';
 import type { ProbeResult } from '../dast/types.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { nameAFew } from '../runners/semgrepReport.js';
@@ -64,6 +63,7 @@ import {
   type ToolRun,
 } from '../types.js';
 import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { assessCoverage } from './scanCoverage.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
 import { countBySeverity } from '../severity/counts.js';
@@ -231,14 +231,8 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
 
   // ---- 1. Project path -------------------------------------------------
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    // The code every tool answers an unusable project_path with
-    // (`projectPathErrorCode`), so hosts and skills handle one failure.
-    return fail(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // ---- 2. Target authorization, BEFORE any network I/O -----------------
   const target = classifyTarget(inp.base_url ?? '', inp.authorized_target === true);

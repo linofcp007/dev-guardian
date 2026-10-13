@@ -46,6 +46,14 @@ Enforced by the compiler where possible, by review where not:
   helpers: the SDK and a fold hand a handler the strict parse of exactly that
   schema (dg-maint finding 12 found 51 hand-written `input as {…}` casts).
   The LLM scan's three tools are not converted yet.
+- **A tool's `project_path` is `toolProjectPath(inp.project_path)`**
+  (`tools/projectArg.ts`): the resolved path, or the `{ ok: false, error }`
+  refusal (`projectPathErrorCode`'s code) a handler returns as it is — not a
+  `resolveProjectPath` try / catch per tool (dg-maint finding 14). A tool that
+  answers an unusable path otherwise keeps its own: the WordPress install
+  audits (`not_a_wordpress_install`), the wrappers that let the scan pipeline
+  report it (`review_pr`, `scan_secrets`, `scan_containers`), and the two
+  agent-config audits, which rethrow anything but an invalid path.
 - Note what `tsc` does **not** catch: interpolating a non-string into a
   template (`` `--config=${someArray}` ``) types as `string` at any
   strictness. That needs `@typescript-eslint/restrict-template-expressions`,

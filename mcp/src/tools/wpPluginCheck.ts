@@ -54,7 +54,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { canonicalPath, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
+import { canonicalPath } from '../platform/projectPath.js';
 import { serverProjectPath } from '../resources/paging.js';
 import { runProcess } from '../runners/processRunner.js';
 import { httpUrlField, ProjectPath } from '../schemas.js';
@@ -64,6 +64,7 @@ import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, typ
 import { computeCoverage } from './scanCoverage.js';
 import { latestUnderKeys, wpInstallKeys, wpInstallPathProblem, wpSiteKeys } from '../wordpress/siteKeys.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = {
   slug: z
@@ -135,19 +136,14 @@ async function handler(
     toolsRun.push({ name: 'wp-cli', status: 'skipped', reason: 'wp_install_path names no install on this machine' });
   }
   const probePath = installProblem === null ? inp.wp_install_path : undefined;
-  let projectPath: string;
   const rawProject = inp.project_path ?? inp.wp_install_path;
-  if (inp.project_path !== undefined && hasProject) {
-    try {
-      projectPath = resolveProjectPath(inp.project_path).path;
-    } catch (e) {
-      return failDomain(projectPathErrorCode(e), (e as Error).message);
-    }
-  } else if (inp.wp_install_path !== undefined && inp.wp_install_path.length > 0) {
-    projectPath = canonicalPath(inp.wp_install_path);
-  } else {
-    projectPath = serverProjectPath();
-  }
+  const projectPath =
+    inp.project_path !== undefined && hasProject
+      ? toolProjectPath(inp.project_path)
+      : inp.wp_install_path !== undefined && inp.wp_install_path.length > 0
+        ? canonicalPath(inp.wp_install_path)
+        : serverProjectPath();
+  if (typeof projectPath !== 'string') return projectPath;
 
   let installed: boolean | null = null;
   let installedVersion: string | null = null;

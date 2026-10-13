@@ -158,7 +158,6 @@ import { createWorktree } from '../fixpr/worktree.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { findingCveIds } from '../intel/rank.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
@@ -169,6 +168,7 @@ import type { DomainError, Finding, Severity, ToolResult } from '../types.js';
 import { bugHuntLocalConfigs } from './bugHunt.js';
 import { isGitRepo } from './gitState.js';
 import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput, TOOLS } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const DEFAULT_SOURCES: readonly FixSource[] = ['deps', 'semgrep'];
 const DEFAULT_SEVERITY_MIN: Severity = 'high';
@@ -317,12 +317,8 @@ async function handler(
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   if (!(await isGitRepo(projectPath))) {
     return failDomain('not_a_git_repo', `'${projectPath}' is not inside a git working tree.`);

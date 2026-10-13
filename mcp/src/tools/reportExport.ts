@@ -32,7 +32,6 @@ import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../framework
 import { latestStateScan, llmMarkersOf, splitHuntCandidates } from '../history/openSet.js';
 import type { LlmMarker } from '../llmscan/types.js';
 import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import {
   escapeHtml,
@@ -55,6 +54,7 @@ import {
   type ToolResult,
 } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -111,12 +111,8 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
   const format = inp.format ?? 'markdown';
   const lang: Lang = inp.lang ?? 'en';
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // Narrative mode — wrap stakeholder Markdown in the branded shell.
   if (inp.content_markdown != null) {

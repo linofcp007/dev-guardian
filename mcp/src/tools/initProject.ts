@@ -67,19 +67,15 @@ import {
 } from '../configdrift/manifest.js';
 import type { PluginContext } from '../context.js';
 import { configsDirFromScriptsDir } from '../platform/configsDir.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { projectEntryKind } from '../platform/projectFs.js';
 import { resolveVersion } from '../platform/version.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runShellScript } from '../runners/shellRunner.js';
 import { ProjectPath } from '../schemas.js';
-import type {
-  DomainError,
-  StackSnapshot,
-  ToolResult,
-} from '../types.js';
+import type { StackSnapshot, ToolResult } from '../types.js';
 import { ensureReportDir, scannerAvailable } from './scanHelpers.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 type Profile = 'minimal' | 'standard' | 'paranoid';
 
@@ -166,12 +162,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const profile: Profile = inp.profile ?? 'standard';
   const apply = inp.apply ?? true;
@@ -372,11 +364,4 @@ async function computeSecretsStatusLine(projectPath: string): Promise<string | n
   } catch {
     return null;
   }
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

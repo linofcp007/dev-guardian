@@ -27,14 +27,14 @@ import { runSyft } from '../runners/syftRun.js';
 import { runTrivy } from '../runners/trivyRun.js';
 import { summarize as summariseSbom } from '../runners/scannerParsers/syft.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
+import type { ToolResult } from '../types.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
   ensureReportDir,
   scannerAvailable,
 } from './scanHelpers.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 type SbomFormat = 'cyclonedx-json' | 'spdx-json';
 
@@ -76,12 +76,8 @@ async function handler(
   inp: ToolInput<typeof inputSchema>,
   ctx: import('../context.js').PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // The tree the SBOM describes, taken before anything is written: export_vex
   // compares it with the dependency scan's before trusting the SBOM's product.
@@ -184,11 +180,4 @@ async function handler(
   payload['inline_max_kb'] = inlineMaxBytes / 1024;
 
   return payload as ToolResult<Record<string, unknown>>;
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

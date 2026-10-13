@@ -47749,15 +47749,26 @@ var init_openSet = __esm({
   }
 });
 
+// src/tools/projectArg.ts
+function toolProjectPath(raw) {
+  try {
+    return resolveProjectPath(raw).path;
+  } catch (e) {
+    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
+  }
+}
+var init_projectArg = __esm({
+  "src/tools/projectArg.ts"() {
+    "use strict";
+    init_projectPath();
+  }
+});
+
 // src/tools/depsUpdatePlan.ts
 import { dirname as dirname20, join as join53, relative as relative20, sep as sep13 } from "node:path";
 async function handler(inp, ctx, callMeta) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain2(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath);
   const ecosystems = detectEcosystems(projectPath);
   const plansByEcosystem = await Promise.all(
@@ -48910,9 +48921,6 @@ function summarize2(plan) {
     has_security_updates: by_classification.security > 0
   };
 }
-function failDomain2(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
-}
 var inputSchema4, tool4, LOCKFILES_READ, OUTDATED_COMMAND, PNPM_WORKSPACE_SETTINGS_SINCE, PM_OUTPUT_CAP_BYTES;
 var init_depsUpdatePlan = __esm({
   "src/tools/depsUpdatePlan.ts"() {
@@ -48930,8 +48938,8 @@ var init_depsUpdatePlan = __esm({
     init_openSet();
     init_schemas4();
     init_types2();
-    init_projectPath();
     init_tools();
+    init_projectArg();
     inputSchema4 = {
       project_path: ProjectPath,
       prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
@@ -49361,12 +49369,8 @@ import { existsSync as existsSync14, readFileSync as readFileSync6, statSync as 
 import { join as join56 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 async function handler2(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain3(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const treeHash = await computeTreeHash(projectPath);
   const format = inp.format ?? "cyclonedx-json";
   const inlineMaxBytes = Math.min(inp.inline_max_kb ?? DEFAULT_INLINE_KB, MAX_INLINE_KB) * 1024;
@@ -49452,9 +49456,6 @@ async function handler2(inp, ctx) {
   payload["inline_max_kb"] = inlineMaxBytes / 1024;
   return payload;
 }
-function failDomain3(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
-}
 var DEFAULT_INLINE_KB, MAX_INLINE_KB, inputSchema5, tool5;
 var init_generateSbom = __esm({
   "src/tools/generateSbom.ts"() {
@@ -49464,10 +49465,10 @@ var init_generateSbom = __esm({
     init_trivyRun();
     init_syft();
     init_schemas4();
-    init_projectPath();
     init_computeTreeHash();
     init_scanHelpers();
     init_tools();
+    init_projectArg();
     DEFAULT_INLINE_KB = 64;
     MAX_INLINE_KB = 1024;
     inputSchema5 = {
@@ -49835,12 +49836,8 @@ var init_stackDetect = __esm({
 // src/tools/detectStack.ts
 import { join as join58 } from "node:path";
 async function handler3(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain4(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const parsed = detectStack(projectPath);
   enrichDotnet(parsed, projectPath);
   const persisted = ctx.storage.stack.insert({ project_path: projectPath, snapshot: parsed });
@@ -49850,9 +49847,6 @@ async function handler3(inp, ctx) {
     captured_at: persisted.captured_at,
     snapshot_id: persisted.id
   };
-}
-function failDomain4(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
 }
 function enrichDotnet(snap, projectPath) {
   const addOnce = (arr, value) => {
@@ -49912,10 +49906,10 @@ var init_detectStack = __esm({
   "src/tools/detectStack.ts"() {
     "use strict";
     init_projectFs();
-    init_projectPath();
     init_stackDetect();
     init_schemas4();
     init_tools();
+    init_projectArg();
     inputSchema6 = { project_path: ProjectPath };
     tool6 = defineTool({
       name: "detect_stack",
@@ -50217,12 +50211,8 @@ import { existsSync as existsSync16 } from "node:fs";
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { join as join60 } from "node:path";
 async function handler4(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain5(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const profile = inp.profile ?? "standard";
   const apply = inp.apply ?? true;
   const refresh = inp.refresh === true;
@@ -50366,9 +50356,6 @@ async function computeSecretsStatusLine(projectPath) {
     return null;
   }
 }
-function failDomain5(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
-}
 var GITLEAKS, GITLEAKS_PARANOID, RENOVATE, RENOVATE_PARANOID, SEMGREP, PRECOMMIT, PROFILE_FILES, inputSchema7, tool7;
 var init_initProject = __esm({
   "src/tools/initProject.ts"() {
@@ -50378,7 +50365,6 @@ var init_initProject = __esm({
     init_hash();
     init_manifest();
     init_configsDir();
-    init_projectPath();
     init_projectFs();
     init_version();
     init_gitleaksScan();
@@ -50386,6 +50372,7 @@ var init_initProject = __esm({
     init_schemas4();
     init_scanHelpers();
     init_tools();
+    init_projectArg();
     GITLEAKS = {
       source: "gitleaks/gitleaks.toml",
       target: ".gitleaks.toml",
@@ -50447,12 +50434,8 @@ var init_initProject = __esm({
 
 // src/tools/observabilitySetup.ts
 async function handler5(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain6(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const apply = inp.apply ?? false;
   const stack = inferStack(projectPath, ctx);
   const proposals = buildProposals(stack);
@@ -50553,18 +50536,15 @@ function buildProposals(stack) {
       ];
   }
 }
-function failDomain6(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
-}
 var inputSchema8, tool8, NODE_LOGGER_TS, NODE_METRICS_TS, PY_LOGGER_PY, PHP_LOGGER_PHP, GENERIC_ADVISORY_MD, GO_LOGGER_GO, GO_METRICS_GO, RUST_OBSERV_RS, JAVA_LOGBACK_XML, RUBY_OBSERV_RB, DOTNET_LOGGING_CS, DOTNET_METRICS_CS;
 var init_observabilitySetup = __esm({
   "src/tools/observabilitySetup.ts"() {
     "use strict";
     init_zod();
-    init_projectPath();
     init_projectFs();
     init_schemas4();
     init_tools();
+    init_projectArg();
     inputSchema8 = {
       project_path: ProjectPath,
       apply: external_exports.boolean().optional().describe("When true, write the proposed files to disk. Default: false (dry-run).")
@@ -50812,24 +50792,20 @@ import { existsSync as existsSync17, readFileSync as readFileSync7, writeFileSyn
 import { join as join61, relative as relative22 } from "node:path";
 import { randomUUID as randomUUID5 } from "node:crypto";
 async function handler6(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain7(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const targetUrl = inp.target_url !== void 0 && inp.target_url.length > 0 ? inp.target_url : void 0;
   const k6Script = inp.k6_script_path !== void 0 && inp.k6_script_path.length > 0 ? inp.k6_script_path : void 0;
   if (targetUrl === void 0 === (k6Script === void 0)) {
-    return failDomain7(
+    return failDomain2(
       "scanner_failed",
       "Provide exactly one of target_url (Lighthouse) or k6_script_path (k6)."
     );
   }
   const lighthouseUrl = targetUrl === void 0 ? void 0 : httpUrl(targetUrl);
-  if (lighthouseUrl === null) return failDomain7("invalid_input", "target_url must be an http:// or https:// URL.");
+  if (lighthouseUrl === null) return failDomain2("invalid_input", "target_url must be an http:// or https:// URL.");
   const scriptProblem = k6Script === void 0 ? null : pathArgProblem("k6_script_path", k6Script);
-  if (scriptProblem !== null) return failDomain7("invalid_input", `${scriptProblem}.`);
+  if (scriptProblem !== null) return failDomain2("invalid_input", `${scriptProblem}.`);
   const scanId = randomUUID5();
   const reportDir = ensureReportDir(projectPath, scanId, "perf");
   if (lighthouseUrl !== void 0) {
@@ -50842,14 +50818,14 @@ async function handler6(inp, ctx) {
     });
   }
   if (k6Script === void 0) {
-    return failDomain7("scanner_failed", "Provide exactly one of target_url or k6_script_path.");
+    return failDomain2("scanner_failed", "Provide exactly one of target_url or k6_script_path.");
   }
   return runK6({ scriptPath: k6Script, reportDir, projectPath, ctx });
 }
 async function runLighthouse(opts) {
   const bin = await scannerAvailable("lighthouse");
   if (!bin) {
-    return failDomain7(
+    return failDomain2(
       "missing_scanner",
       "Lighthouse CLI is not installed. Install with `npm i -g lighthouse`."
     );
@@ -50873,7 +50849,7 @@ async function runLighthouse(opts) {
     timeoutMs: 5 * 6e4
   });
   if (!existsSync17(outFile)) {
-    return failDomain7(
+    return failDomain2(
       "scanner_failed",
       `Lighthouse did not produce a report. stderr: ${result.stderr.split(/\r?\n/)[0] ?? ""}`
     );
@@ -50883,20 +50859,20 @@ async function runLighthouse(opts) {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return failDomain7("scanner_failed", "Lighthouse output was not valid JSON.");
+    return failDomain2("scanner_failed", "Lighthouse output was not valid JSON.");
   }
   const runtimeError = getProp(parsed, "runtimeError");
   if (runtimeError !== void 0 && runtimeError !== null) {
     const code = getString(runtimeError, "code") ?? "UNKNOWN";
     const message2 = getString(runtimeError, "message") ?? "";
-    return failDomain7(
+    return failDomain2(
       "scanner_failed",
       `Lighthouse could not measure ${opts.url}: ${code}${message2 ? ` \u2014 ${message2}` : ""} (report: ${outFile})`
     );
   }
   if (result.exitCode !== 0) {
     const line = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? result.outcome;
-    return failDomain7("scanner_failed", `Lighthouse exit ${String(result.exitCode)}: ${line} (report: ${outFile})`);
+    return failDomain2("scanner_failed", `Lighthouse exit ${String(result.exitCode)}: ${line} (report: ${outFile})`);
   }
   const summary2 = summariseLighthouse(parsed);
   const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary2.core_web_vitals);
@@ -50986,13 +50962,13 @@ function summariseLighthouse(root) {
 async function runK6(opts) {
   const bin = await scannerAvailable("k6");
   if (!bin) {
-    return failDomain7(
+    return failDomain2(
       "missing_scanner",
       "k6 CLI is not installed. Install from https://k6.io/docs/getting-started/installation/."
     );
   }
   if (!existsSync17(opts.scriptPath)) {
-    return failDomain7("scanner_failed", `k6 script not found: ${opts.scriptPath}`);
+    return failDomain2("scanner_failed", `k6 script not found: ${opts.scriptPath}`);
   }
   const summaryFile = join61(opts.reportDir, "k6-summary.json");
   const result = await runProcess({
@@ -51009,7 +50985,7 @@ async function runK6(opts) {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return failDomain7("scanner_failed", "k6 summary was not valid JSON.");
+    return failDomain2("scanner_failed", "k6 summary was not valid JSON.");
   }
   const summary2 = summariseK6(parsed);
   return {
@@ -51035,7 +51011,7 @@ function summariseK6(root) {
     thresholds_configured: thresholds.filter((t) => t !== void 0)
   };
 }
-function failDomain7(code, message2) {
+function failDomain2(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema9, tool9;
@@ -51044,13 +51020,13 @@ var init_perfCheck = __esm({
     "use strict";
     init_zod();
     init_budgets();
-    init_projectPath();
     init_processRunner();
     init_toolArgs();
     init_schemas4();
     init_scanHelpers();
     init_scannerParsers();
     init_tools();
+    init_projectArg();
     inputSchema9 = {
       project_path: ProjectPath,
       target_url: httpUrlField().optional().describe("URL to probe with Lighthouse. Mutually exclusive with k6_script_path."),
@@ -51098,38 +51074,34 @@ var init_sourceToolArg = __esm({
 
 // src/tools/setBaseline.ts
 async function handler7(inp, ctx) {
-  if (inp.scan_id && inp.source_tool !== void 0) return failDomain8("unsupported_target", SOURCE_TOOL_WITH_SCAN_ID);
+  if (inp.scan_id && inp.source_tool !== void 0) return failDomain3("unsupported_target", SOURCE_TOOL_WITH_SCAN_ID);
   let targetScanId;
   if (inp.scan_id) {
     const scan2 = ctx.storage.scans.getById(inp.scan_id);
     if (!scan2) {
-      return failDomain8("unknown_scan_id", `No scan with id '${inp.scan_id}'.`);
+      return failDomain3("unknown_scan_id", `No scan with id '${inp.scan_id}'.`);
     }
     if (scan2.status !== "completed") {
-      return failDomain8(
+      return failDomain3(
         "unknown_scan_id",
         `Scan '${inp.scan_id}' is status='${scan2.status}'. Baselines require completed scans.`
       );
     }
     if (isScopedScan(scan2)) {
-      return failDomain8(
+      return failDomain3(
         "unsupported_target",
         `Scan '${inp.scan_id}' is a scoped scan (meta.scope) \u2014 it measured part of the project only, so it cannot be a baseline. Baseline a whole-project scan of the same type.`
       );
     }
     targetScanId = inp.scan_id;
   } else {
-    let projectPath;
-    try {
-      projectPath = resolveProjectPath(inp.project_path).path;
-    } catch (e) {
-      return failDomain8(projectPathErrorCode(e), e.message);
-    }
+    const projectPath = toolProjectPath(inp.project_path);
+    if (typeof projectPath !== "string") return projectPath;
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
-    if (!choice.ok) return failDomain8("unsupported_target", choice.message);
+    if (!choice.ok) return failDomain3("unsupported_target", choice.message);
     const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type, choice.sourceTool !== void 0 ? { sourceTool: choice.sourceTool } : {});
     if (!latest.scan) {
-      return failDomain8(
+      return failDomain3(
         "unknown_scan_id",
         `No usable completed ${inp.scan_type ?? "finding-producing"} scan exists for ${projectPath} yet; run a scan tool before setting a baseline.` + (latest.skipped.count > 0 ? ` Skipped ${latest.skipped.count} scan(s) whose scanners did not run (coverage none).` : "")
       );
@@ -51156,7 +51128,7 @@ async function handler7(inp, ctx) {
     } : {}
   };
 }
-function failDomain8(code, message2) {
+function failDomain3(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema10, tool10;
@@ -51167,11 +51139,11 @@ var init_setBaseline = __esm({
     init_openSet();
     init_runCompare();
     init_scanRoles();
-    init_projectPath();
     init_schemas4();
     init_sourceToolArg();
     init_types2();
     init_tools();
+    init_projectArg();
     inputSchema10 = {
       project_path: ProjectPath,
       scan_id: external_exports.string().uuid().optional().describe("Scan to mark as the baseline. Defaults to project_path's newest usable scan."),
@@ -52674,29 +52646,25 @@ var init_statements = __esm({
 // src/tools/suppressFinding.ts
 async function handler8(inp, ctx) {
   if (!inp.finding_fingerprint || !inp.reason) {
-    return failDomain9(
+    return failDomain4(
       "unknown_finding",
       "finding_fingerprint and reason are required."
     );
   }
   const vexProblem = vexArgumentProblem(inp);
-  if (vexProblem !== null) return failDomain9("unsupported_target", vexProblem);
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain9(projectPathErrorCode(e), e.message);
-  }
+  if (vexProblem !== null) return failDomain4("unsupported_target", vexProblem);
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
   if (!located) {
-    return failDomain9(
+    return failDomain4(
       "unknown_finding",
       `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
     );
   }
   const vulnIds = findingVulnIds(located.finding);
   if (inp.vex_status !== void 0 && vulnIds.length === 0) {
-    return failDomain9(
+    return failDomain4(
       "unsupported_target",
       `vex_status needs a finding with a vulnerability id of its own (CVE, GHSA, PYSEC, \u2026), and ${inp.finding_fingerprint} (${located.finding.tool}${located.finding.rule_id !== void 0 ? ` ${located.finding.rule_id}` : ""}) has none. Suppress it without vex_status.`
     );
@@ -52822,7 +52790,7 @@ function vexArgumentProblem(inp) {
   }
   return null;
 }
-function failDomain9(code, message2) {
+function failDomain4(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema11, tool11, MAX_NAMED_COPIES2, MAX_LISTED_COPIES;
@@ -52833,12 +52801,12 @@ var init_suppressFinding = __esm({
     init_findingIdentity();
     init_openSet();
     init_vulnIds();
-    init_projectPath();
     init_schemas4();
     init_types2();
     init_scope2();
     init_statements();
     init_tools();
+    init_projectArg();
     inputSchema11 = {
       project_path: ProjectPath,
       finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("SHA-256 fingerprint of the finding to suppress (from a previous scan response)."),
@@ -52871,13 +52839,13 @@ async function handler9(inp, ctx) {
   const fromId = resolveFrom2(inp, toScan.value, ctx, skipHits);
   if (!fromId.ok) return fromId.err;
   if (fromId.value === toScan.value.scan_id) {
-    return failDomain10(
+    return failDomain5(
       "unknown_scan_id",
       `Cannot diff a scan against itself (${toScan.value.scan_id}).`
     );
   }
   const fromScan = ctx.storage.scans.getById(fromId.value);
-  if (!fromScan) return failDomain10("unknown_scan_id", `from scan '${fromId.value}' not found`);
+  if (!fromScan) return failDomain5("unknown_scan_id", `from scan '${fromId.value}' not found`);
   const project = toScan.value.project_path;
   const rowsOf = (scanId) => countableFindings(ctx.storage, project, ctx.storage.findings.listByScan(scanId));
   const fromSplit = partitionSuppressed(ctx.storage, project, rowsOf(fromId.value));
@@ -52925,23 +52893,19 @@ async function handler9(inp, ctx) {
 }
 function resolveTo(inp, ctx, skipHits) {
   if (inp.to_scan_id && inp.source_tool !== void 0) {
-    return { ok: false, err: failDomain10("unsupported_target", SOURCE_TOOL_WITH_SCAN_ID) };
+    return { ok: false, err: failDomain5("unsupported_target", SOURCE_TOOL_WITH_SCAN_ID) };
   }
   if (inp.to_scan_id) {
     const scan2 = ctx.storage.scans.getById(inp.to_scan_id);
     if (!scan2)
-      return { ok: false, err: failDomain10("unknown_scan_id", `to scan '${inp.to_scan_id}' not found`) };
+      return { ok: false, err: failDomain5("unknown_scan_id", `to scan '${inp.to_scan_id}' not found`) };
     if (inp.project_path !== void 0) {
-      let projectPath2;
-      try {
-        projectPath2 = resolveProjectPath(inp.project_path).path;
-      } catch (e) {
-        return { ok: false, err: failDomain10(projectPathErrorCode(e), e.message) };
-      }
+      const projectPath2 = toolProjectPath(inp.project_path);
+      if (typeof projectPath2 !== "string") return { ok: false, err: projectPath2 };
       if (scan2.project_path !== projectPath2) {
         return {
           ok: false,
-          err: failDomain10(
+          err: failDomain5(
             "unknown_scan_id",
             `to scan '${scan2.scan_id}' is a scan of ${scan2.project_path}, not of ${projectPath2}; a diff compares scans of one project.`
           )
@@ -52949,23 +52913,19 @@ function resolveTo(inp, ctx, skipHits) {
       }
     }
     const incomplete = incompleteReason2(scan2, "to");
-    if (incomplete !== null) return { ok: false, err: failDomain10("unknown_scan_id", incomplete) };
+    if (incomplete !== null) return { ok: false, err: failDomain5("unknown_scan_id", incomplete) };
     return { ok: true, value: scan2 };
   }
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, err: failDomain10(projectPathErrorCode(e), e.message) };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return { ok: false, err: projectPath };
   const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
-  if (!choice.ok) return { ok: false, err: failDomain10("unsupported_target", choice.message) };
+  if (!choice.ok) return { ok: false, err: failDomain5("unsupported_target", choice.message) };
   const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type, choice.sourceTool !== void 0 ? { sourceTool: choice.sourceTool } : {});
   skipHits.push(...latest.hits);
   if (!latest.scan) {
     return {
       ok: false,
-      err: failDomain10(
+      err: failDomain5(
         "unknown_scan_id",
         `No usable completed ${inp.scan_type ?? "finding-producing"} scan for ${projectPath} yet.` + describeSkipped(latest.skipped)
       )
@@ -52979,10 +52939,10 @@ function resolveFrom2(inp, toScan, ctx, skipHits) {
     if (!scan2)
       return {
         ok: false,
-        err: failDomain10("unknown_scan_id", `from scan '${inp.from_scan_id}' not found`)
+        err: failDomain5("unknown_scan_id", `from scan '${inp.from_scan_id}' not found`)
       };
     const refusal = scan2.project_path !== toScan.project_path ? `from scan '${scan2.scan_id}' belongs to another project (${scan2.project_path}) than to scan '${toScan.scan_id}' (${toScan.project_path}); a diff compares scans of one project.` : scan2.scan_type !== toScan.scan_type ? `from scan '${scan2.scan_id}' is a '${scan2.scan_type}' scan and to scan '${toScan.scan_id}' is '${toScan.scan_type}': findings of different scan types come from different rule families, so a diff compares scans of one type.` : !sameImportSlot(scan2, toScan) ? `from scan '${scan2.scan_id}' and to scan '${toScan.scan_id}' are SARIF imports of different tools: a diff compares the imports of one tool.` : incompleteReason2(scan2, "from");
-    if (refusal !== null) return { ok: false, err: failDomain10("unknown_scan_id", refusal) };
+    if (refusal !== null) return { ok: false, err: failDomain5("unknown_scan_id", refusal) };
     return { ok: true, value: inp.from_scan_id };
   }
   const mode = inp.from ?? "previous";
@@ -52995,7 +52955,7 @@ function resolveFrom2(inp, toScan, ctx, skipHits) {
     if (!baseline)
       return {
         ok: false,
-        err: failDomain10(
+        err: failDomain5(
           "unknown_scan_id",
           `No '${toScan.scan_type}' baseline is set for ${toScan.project_path}. Call \`set_baseline\` on a scan of that type first.`
         )
@@ -53009,7 +52969,7 @@ function resolveFrom2(inp, toScan, ctx, skipHits) {
   if (!previous.scan)
     return {
       ok: false,
-      err: failDomain10(
+      err: failDomain5(
         "unknown_scan_id",
         `No previous usable '${toScan.scan_type}' scan of ${toScan.project_path} exists before ${toScan.scan_id}.${describeSkipped(previous.skipped)}`
       )
@@ -53029,7 +52989,7 @@ function describeSkipped(skipped2) {
   const more = skipped2.count > skipped2.newest.length ? `, and ${skipped2.count - skipped2.newest.length} older` : "";
   return ` Skipped ${skipped2.count} scan(s) whose scanners did not run (coverage none): ${named2}${more}.`;
 }
-function failDomain10(code, message2) {
+function failDomain5(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var ITEMS_PER_BUCKET, FromEnum, ToEnum, inputSchema12, tool12;
@@ -53039,12 +52999,12 @@ var init_diffScans = __esm({
     init_zod();
     init_openSet();
     init_runCompare();
-    init_projectPath();
     init_scanRoles();
     init_schemas4();
     init_sourceToolArg();
     init_types2();
     init_tools();
+    init_projectArg();
     ITEMS_PER_BUCKET = 50;
     FromEnum = external_exports.enum(["baseline", "previous"]);
     ToEnum = external_exports.enum(["latest"]);
@@ -53205,12 +53165,8 @@ var init_fold = __esm({
 import { randomUUID as randomUUID6 } from "node:crypto";
 async function handler10(inp, ctx, callMeta) {
   const localOnly = inp.local_only === true;
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain11(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const auditScanId = randomUUID6();
   const treeHash = await computeTreeHash(projectPath);
   ctx.storage.scans.insert({
@@ -53277,7 +53233,7 @@ async function handler10(inp, ctx, callMeta) {
       missing_tools: [],
       meta: { sub_scan_ids: subScanIds, ...localOnly ? { local_only: true } : {} }
     });
-    return failDomain11(
+    return failDomain6(
       "cancelled",
       "The audit was cancelled by the host; its sub-scans were stopped and nothing was aggregated."
     );
@@ -53425,20 +53381,20 @@ function findPreviousAudit(ctx, projectPath, thisAuditId) {
   });
   return prev?.scan_id ?? null;
 }
-function failDomain11(code, message2) {
+function failDomain6(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var BASE_SUB_TOOLS, WP_EXTRA_SUB_TOOLS, DOTNET_EXTRA_SUB_TOOLS, inputSchema13, tool13, NO_LOCAL_ONLY_MODE;
 var init_auditExecutive = __esm({
   "src/tools/auditExecutive.ts"() {
     "use strict";
-    init_projectPath();
     init_zod();
     init_schemas4();
     init_filter();
     init_computeTreeHash();
     init_fold();
     init_tools();
+    init_projectArg();
     init_counts();
     BASE_SUB_TOOLS = ["security_scan_full", "quality_check", "deps_audit", "compliance_check"];
     WP_EXTRA_SUB_TOOLS = ["scan_wordpress"];
@@ -54639,12 +54595,8 @@ var init_installToolchain = __esm({
 // src/tools/licenseCompatibility.ts
 import { join as join63 } from "node:path";
 async function handler13(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain12(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const projectLicense = detectProjectLicense(projectPath);
   const isProprietary = projectLicense === null || isProprietaryLabel(projectLicense);
   const compliance = findLatestCompliance(ctx, projectPath);
@@ -54949,17 +54901,14 @@ function groupByLicense(rows) {
   }
   return out;
 }
-function failDomain12(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
-}
 var inputSchema15, tool16, PERMISSIVE, AGPL, VIRAL, WEAK_COPYLEFT, COMMERCIAL, KNOWN_LICENSES, GNU_VERSIONS;
 var init_licenseCompatibility = __esm({
   "src/tools/licenseCompatibility.ts"() {
     "use strict";
     init_projectFs();
-    init_projectPath();
     init_schemas4();
     init_tools();
+    init_projectArg();
     inputSchema15 = { project_path: ProjectPath };
     tool16 = defineTool({
       name: "license_compatibility",
@@ -55410,12 +55359,8 @@ var init_rank = __esm({
 
 // src/tools/riskScore.ts
 async function handler14(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const now = Date.now();
   const storage = ctx.storage;
   const open = openSetForProject(storage, projectPath, { now });
@@ -55513,10 +55458,10 @@ var init_riskScore = __esm({
     init_openSet();
     init_enrich();
     init_rank();
-    init_projectPath();
     init_schemas4();
     init_types2();
     init_tools();
+    init_projectArg();
     inputSchema16 = { project_path: ProjectPath };
     tool17 = defineTool({
       name: "risk_score",
@@ -55532,16 +55477,12 @@ var init_riskScore = __esm({
 // src/tools/sbomDiff.ts
 import { existsSync as existsSync18, readFileSync as readFileSync8 } from "node:fs";
 async function handler15(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain13(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
   const sboms = needsDefaultPair ? ctx.storage.scans.listHistoryForProject(projectPath, 50).filter((s) => s.scan_type === "sbom" && s.status === "completed") : [];
   if (needsDefaultPair && sboms.length < 2) {
-    return failDomain13(
+    return failDomain7(
       "unknown_scan_id",
       `Need at least two completed SBOM scans of '${projectPath}' (found ${sboms.length}). Call generate_sbom twice or pass explicit ids.`
     );
@@ -55549,19 +55490,19 @@ async function handler15(inp, ctx) {
   const toId = inp.to_scan_id ?? sboms[0]?.scan_id;
   const fromId = inp.from_scan_id ?? sboms[1]?.scan_id;
   if (!toId || !fromId) {
-    return failDomain13("unknown_scan_id", "Could not resolve both ends of the SBOM diff.");
+    return failDomain7("unknown_scan_id", "Could not resolve both ends of the SBOM diff.");
   }
   if (toId === fromId) {
-    return failDomain13("unknown_scan_id", `Cannot diff a scan against itself (${toId}).`);
+    return failDomain7("unknown_scan_id", `Cannot diff a scan against itself (${toId}).`);
   }
   const fromLoaded = loadComponents(ctx, fromId);
   const toLoaded = loadComponents(ctx, toId);
   if (!fromLoaded || !toLoaded) {
-    return failDomain13("unknown_scan_id", "One or both SBOM scans have no components recorded.");
+    return failDomain7("unknown_scan_id", "One or both SBOM scans have no components recorded.");
   }
   if (fromLoaded.source !== toLoaded.source) {
     const describe2 = (s) => s === "full_file" ? "its full SBOM file" : "a capped summary (its SBOM file no longer exists on disk)";
-    return failDomain13(
+    return failDomain7(
       "unknown_scan_id",
       `Refusing to compare: '${fromId}' was read from ${describe2(fromLoaded.source)}, while '${toId}' was read from ${describe2(toLoaded.source)}. Comparing a full component list against a capped, ecosystem-untagged summary would report every component as spuriously removed and re-added. Re-run generate_sbom for whichever scan lost its file, or pass two scan ids whose files are both still on disk.`
     );
@@ -55684,7 +55625,7 @@ function extractFromSbomJson(raw) {
   }
   return [];
 }
-function failDomain13(code, message2) {
+function failDomain7(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var RESPONSE_CAP, inputSchema17, tool18;
@@ -55692,9 +55633,9 @@ var init_sbomDiff = __esm({
   "src/tools/sbomDiff.ts"() {
     "use strict";
     init_zod();
-    init_projectPath();
     init_schemas4();
     init_tools();
+    init_projectArg();
     RESPONSE_CAP = 50;
     inputSchema17 = {
       project_path: ProjectPath,
@@ -55721,12 +55662,8 @@ var init_sbomDiff = __esm({
 // src/tools/regressionAlert.ts
 async function handler16(inp, ctx) {
   const threshold = inp.threshold ?? 5;
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const skipHits = [];
   const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
   if (!choice.ok) return { ok: false, error: { code: "unsupported_target", message: choice.message } };
@@ -55831,12 +55768,12 @@ var init_regressionAlert = __esm({
     init_zod();
     init_openSet();
     init_runCompare();
-    init_projectPath();
     init_scanRoles();
     init_schemas4();
     init_sourceToolArg();
     init_types2();
     init_tools();
+    init_projectArg();
     init_counts();
     SEVERITY_WEIGHT = {
       info: 0.5,
@@ -55866,16 +55803,12 @@ var init_regressionAlert = __esm({
 
 // src/tools/suggestFix.ts
 async function handler17(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain14(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const contextLines = inp.context_lines ?? 20;
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
   if (!located) {
-    return failDomain14(
+    return failDomain8(
       "unknown_finding",
       `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
     );
@@ -55935,7 +55868,7 @@ async function handler17(inp, ctx) {
     instructions_for_model: credential ? "Do not propose a patch that echoes, logs or re-derives the credential value \u2014 none was given here on purpose. Recommend removing the hardcoded value, referencing a secret store or an environment variable instead, and rotating the credential at its source; see rotation_guidance." : "Propose a unified-diff patch (or describe the minimal edit) that addresses this finding without changing unrelated behaviour. Reference the line range, explain the fix, and call out any side effects the maintainer should review."
   };
 }
-function failDomain14(code, message2) {
+function failDomain8(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var ROTATION_GUIDANCE, inputSchema19, tool20;
@@ -55945,9 +55878,9 @@ var init_suggestFix = __esm({
     init_zod();
     init_projectFs();
     init_findingIdentity();
-    init_projectPath();
     init_schemas4();
     init_tools();
+    init_projectArg();
     ROTATION_GUIDANCE = "This finding flags a credential (a password, key or token), not a code-shape bug \u2014 suggest_fix withholds surrounding source for it so the value is never echoed back into this response. Do not ask for or paste the secret value into further tooling. Rotate/revoke it at its source (the provider dashboard or secret manager), remove it from the file, and replace it with a reference to a secret store or an environment variable placeholder.";
     inputSchema19 = {
       project_path: ProjectPath,
@@ -55967,12 +55900,8 @@ var init_suggestFix = __esm({
 
 // src/tools/triageFindings.ts
 async function handler18(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const set2 = openSetForProject(ctx.storage, projectPath);
   const open = set2.findings;
   const likely_false_positive = [];
@@ -56043,9 +55972,9 @@ var init_triageFindings = __esm({
     "use strict";
     init_findingIdentity();
     init_openSet();
-    init_projectPath();
     init_schemas4();
     init_tools();
+    init_projectArg();
     ITEMS_PER_BUCKET2 = 50;
     TEST_PATTERNS = [
       /(^|\/)tests?\//i,
@@ -56170,29 +56099,25 @@ var init_hookInstallTarget = __esm({
 
 // src/tools/precommitInstall.ts
 async function handler19(inp, _ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain15(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const config2 = readProjectText(projectPath, ".pre-commit-config.yaml", 1024 * 1024);
   if (config2.status === "absent") {
-    return failDomain15(
+    return failDomain9(
       "scanner_failed",
       "No .pre-commit-config.yaml in project. Run init_project first."
     );
   }
   if (config2.status === "refused") {
-    return failDomain15("scanner_failed", `.pre-commit-config.yaml was refused: ${describeReadRefusal(config2.reason)}.`);
+    return failDomain9("scanner_failed", `.pre-commit-config.yaml was refused: ${describeReadRefusal(config2.reason)}.`);
   }
   const target = hookInstallTarget(projectPath);
   if (!target.ok) {
-    return failDomain15("not_a_git_repo", target.reason);
+    return failDomain9("not_a_git_repo", target.reason);
   }
   const bin = await scannerAvailable("pre-commit");
   if (!bin) {
-    return failDomain15(
+    return failDomain9(
       "missing_scanner",
       'pre-commit is not installed. Run install_toolchain with tools=["pre-commit"].'
     );
@@ -56205,7 +56130,7 @@ async function handler19(inp, _ctx) {
     gitHardening: "except-hooks-path"
   });
   if (result.outcome !== "completed") {
-    return failDomain15(
+    return failDomain9(
       "scanner_failed",
       `pre-commit install failed: ${result.stderr.split(/\r?\n/)[0] ?? "(no stderr)"}`
     );
@@ -56240,7 +56165,7 @@ async function handler19(inp, _ctx) {
     stdout: result.stdout.split(/\r?\n/).slice(0, 20).join("\n")
   };
 }
-function failDomain15(code, message2) {
+function failDomain9(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema21, tool22;
@@ -56249,11 +56174,11 @@ var init_precommitInstall = __esm({
     "use strict";
     init_hookInstallTarget();
     init_projectFs();
-    init_projectPath();
     init_processRunner();
     init_schemas4();
     init_scanHelpers();
     init_tools();
+    init_projectArg();
     inputSchema21 = { project_path: ProjectPath };
     tool22 = defineTool({
       name: "precommit_install",
@@ -56321,12 +56246,8 @@ var init_semgrepValidate = __esm({
 import { statSync as statSync9 } from "node:fs";
 import { isAbsolute as isAbsolute14, join as join65, resolve as resolve22 } from "node:path";
 async function handler20(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain16(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   if (inp.clear) {
     ctx.storage.runtimeMeta.delete(customRulesMetaKey(projectPath));
     ctx.storage.runtimeMeta.delete(CUSTOM_RULES_META_KEY);
@@ -56465,9 +56386,6 @@ function collectDiscovered(projectPath) {
   }
   return { registered, rejected };
 }
-function failDomain16(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
-}
 var inputSchema22, tool23;
 var init_registerCustomRules = __esm({
   "src/tools/registerCustomRules.ts"() {
@@ -56476,10 +56394,10 @@ var init_registerCustomRules = __esm({
     init_zod();
     init_customRules();
     init_glob();
-    init_projectPath();
     init_semgrepValidate();
     init_schemas4();
     init_tools();
+    init_projectArg();
     init_scanHelpers();
     inputSchema22 = {
       project_path: ProjectPath,
@@ -66683,16 +66601,9 @@ var init_resources = __esm({
 // src/tools/healthStatus.ts
 import { existsSync as existsSync19, statSync as statSync10 } from "node:fs";
 async function handler21(inp, ctx) {
-  let projectPath;
-  if (inp.project_path === void 0 || inp.project_path.length === 0) {
-    projectPath = serverProjectPath();
-  } else {
-    try {
-      projectPath = resolveProjectPath(inp.project_path).path;
-    } catch (e) {
-      return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-    }
-  }
+  const explicit = inp.project_path !== void 0 && inp.project_path.length > 0;
+  const projectPath = explicit ? toolProjectPath(inp.project_path) : serverProjectPath();
+  if (typeof projectPath !== "string") return projectPath;
   const latest = ctx.storage.scans.getLatestForProject(projectPath);
   const limiter2 = getScanLimiter();
   const dbPath = ctx.storage.rawHandle().name;
@@ -66755,7 +66666,6 @@ var startedAt, SERVER_VERSION, inputSchema23, tool24;
 var init_healthStatus = __esm({
   "src/tools/healthStatus.ts"() {
     "use strict";
-    init_projectPath();
     init_version();
     init_concurrencyLimiter();
     init_resources();
@@ -66763,6 +66673,7 @@ var init_healthStatus = __esm({
     init_openSet();
     init_schemas4();
     init_tools();
+    init_projectArg();
     startedAt = Date.now();
     SERVER_VERSION = resolveVersion();
     inputSchema23 = { project_path: ProjectPath };
@@ -67174,12 +67085,8 @@ import { join as join66 } from "node:path";
 async function handler22(inp, ctx) {
   const format = inp.format ?? "markdown";
   const lang = inp.lang ?? "en";
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain17(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   if (inp.content_markdown != null) {
     const title = inp.title ?? "Pro Digital Key \u2014 Report";
     const narrativeFormat = format === "markdown" ? "markdown" : "html";
@@ -67191,7 +67098,7 @@ async function handler22(inp, ctx) {
     });
     const fileName2 = narrativeFormat === "markdown" ? "report.md" : "report.html";
     const written2 = writeReport(projectPath, `report-${slugify(title)}`, fileName2, content2);
-    if (!written2.ok) return failDomain17("unsupported_target", written2.reason);
+    if (!written2.ok) return failDomain10("unsupported_target", written2.reason);
     const outFile2 = written2.path;
     return {
       ok: true,
@@ -67202,17 +67109,17 @@ async function handler22(inp, ctx) {
       bytes: Buffer.byteLength(content2, "utf8")
     };
   }
-  if (inp.scan_id !== void 0 && inp.source_tool !== void 0) return failDomain17("unsupported_target", SOURCE_TOOL_WITH_SCAN_ID);
+  if (inp.scan_id !== void 0 && inp.source_tool !== void 0) return failDomain10("unsupported_target", SOURCE_TOOL_WITH_SCAN_ID);
   const latest = inp.scan_id !== void 0 ? null : inp.source_tool !== void 0 ? latestStateScan(ctx.storage, projectPath, "sarif_import", { sourceTool: inp.source_tool }) : latestStateScan(ctx.storage, projectPath);
   const scanId = inp.scan_id ?? latest?.scan?.scan_id;
   if (!scanId) {
-    return failDomain17(
+    return failDomain10(
       "unknown_scan_id",
       `No usable completed scan of ${projectPath} to export.` + ((latest?.skipped.count ?? 0) > 0 ? ` ${latest?.skipped.count ?? 0} scan(s) were skipped because their scanners did not run (coverage none).` : "")
     );
   }
   const scan2 = ctx.storage.scans.getById(scanId);
-  if (!scan2) return failDomain17("unknown_scan_id", `Scan '${scanId}' not found.`);
+  if (!scan2) return failDomain10("unknown_scan_id", `Scan '${scanId}' not found.`);
   if (scan2.project_path !== projectPath && !TARGET_SCAN_TYPES.has(scan2.scan_type)) {
     return {
       ok: false,
@@ -67224,7 +67131,7 @@ async function handler22(inp, ctx) {
     };
   }
   if (scan2.status === "running") {
-    return failDomain17("unknown_scan_id", `Scan '${scanId}' is still running: its findings are not all stored yet.`);
+    return failDomain10("unknown_scan_id", `Scan '${scanId}' is still running: its findings are not all stored yet.`);
   }
   const stored = redactCredentialSnippets(ctx.storage.findings.listByScan(scanId));
   const { counted: findings, unconfirmed } = splitHuntCandidates(ctx.storage, scan2.project_path, stored);
@@ -67238,7 +67145,7 @@ async function handler22(inp, ctx) {
   );
   const { content, fileName } = renderReport(format, scan2, findings, cves, lang, owasp, llm);
   const written = writeReport(projectPath, `export-${scanId.slice(0, 8)}`, fileName, content);
-  if (!written.ok) return failDomain17("unsupported_target", written.reason);
+  if (!written.ok) return failDomain10("unsupported_target", written.reason);
   const outFile = written.path;
   return {
     ok: true,
@@ -67497,7 +67404,7 @@ function severityOrder(s) {
 function slugify(s) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "report";
 }
-function failDomain17(code, message2) {
+function failDomain10(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema24, tool25, locationOf, MD_INLINE_MAX, mdCode, SCAN_TITLE;
@@ -67510,7 +67417,6 @@ var init_reportExport = __esm({
     init_projectLanguages();
     init_openSet();
     init_scanRoles();
-    init_projectPath();
     init_secretFindingRedaction();
     init_htmlTheme();
     init_owaspCoverage();
@@ -67519,6 +67425,7 @@ var init_reportExport = __esm({
     init_sourceToolArg();
     init_types2();
     init_tools();
+    init_projectArg();
     inputSchema24 = {
       project_path: ProjectPath,
       scan_id: external_exports.string().uuid().optional().describe("Scan to export. Default: project_path's newest usable scan."),
@@ -67968,12 +67875,8 @@ function handler23(input, ctx) {
   return Promise.resolve(run(input, ctx));
 }
 function run(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return fail(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const logPath = resolve24(projectPath, inp.sarif_path);
   const inside = isWithinDir(projectPath, logPath);
   if (!inside && inp.allow_outside_project !== true) {
@@ -68073,12 +67976,12 @@ var init_importSarif2 = __esm({
     init_zod();
     init_configFile();
     init_projectFs();
-    init_projectPath();
     init_importSarif();
     init_persistImport();
     init_schemas4();
     init_scanCoverage();
     init_tools();
+    init_projectArg();
     init_counts();
     LOG_MAX_BYTES = 50 * 1024 * 1024;
     TOP_FINDINGS = 10;
@@ -68158,12 +68061,8 @@ var init_nistCsf2 = __esm({
 // src/tools/complianceEvidence.ts
 async function handler24(inp, ctx) {
   const framework = inp.framework ?? "generic";
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const storage = ctx.storage;
   const compliance = findLatestUsable(storage, projectPath, ["compliance"], { skipCoverageNone: false }).scan;
   const deps = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" }).scan;
@@ -68494,10 +68393,10 @@ var init_complianceEvidence = __esm({
     init_openSet();
     init_projectLanguages();
     init_owaspCoverage();
-    init_projectPath();
     init_schemas4();
     init_types2();
     init_tools();
+    init_projectArg();
     FRAMEWORKS = ["gdpr", "soc2", "iso27001", "owasp-top10-2025", "nist-csf-2.0", "generic"];
     inputSchema26 = {
       project_path: ProjectPath,
@@ -68545,15 +68444,11 @@ var init_argFile = __esm({
 
 // src/tools/createGithubIssues.ts
 async function handler25(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain18(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const ghBin = await scannerAvailable("gh");
   if (!ghBin) {
-    return failDomain18(
+    return failDomain11(
       "missing_scanner",
       "GitHub CLI (`gh`) is not installed. See https://cli.github.com/. No API keys are handled here \u2014 gh uses your local auth."
     );
@@ -68564,7 +68459,7 @@ async function handler25(inp, ctx) {
   const labels = inp.labels ?? ["dev-guardian", "security"];
   const open = openSetForProject(ctx.storage, projectPath);
   if (open.sources.length === 0) {
-    return failDomain18(
+    return failDomain11(
       "unknown_scan_id",
       `No usable completed scan of ${projectPath} yet \u2014 nothing to file as issues.` + (open.skipped.count > 0 ? ` ${open.skipped.count} scan(s) were skipped because their scanners did not run (coverage none).` : "")
     );
@@ -68610,7 +68505,7 @@ async function handler25(inp, ctx) {
   }
   const failedPlans = plans.filter((p) => p.status === "failed");
   if (plans.length > 0 && failedPlans.length === plans.length) {
-    return failDomain18(
+    return failDomain11(
       "scanner_failed",
       `All ${plans.length} issue(s) failed to file. First error: ${failedPlans[0]?.error ?? "unknown"}`
     );
@@ -68792,7 +68687,7 @@ async function createIssue(cwd, title, body, labels) {
     error: firstLine7(r.stderr) ?? `gh exited ${r.outcome}`
   };
 }
-function failDomain18(code, message2) {
+function failDomain11(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema27, tool28, ISSUE_LIST_LIMIT;
@@ -68802,7 +68697,6 @@ var init_createGithubIssues = __esm({
     init_zod();
     init_findingIdentity();
     init_openSet();
-    init_projectPath();
     init_argFile();
     init_processRunner();
     init_schemas4();
@@ -68810,6 +68704,7 @@ var init_createGithubIssues = __esm({
     init_breakdown();
     init_types2();
     init_tools();
+    init_projectArg();
     inputSchema27 = {
       project_path: ProjectPath,
       severity_min: external_exports.enum(["info", "low", "medium", "high", "critical"]).optional().describe(
@@ -69151,23 +69046,23 @@ var init_scanWordpress = __esm({
 import { randomUUID as randomUUID8 } from "node:crypto";
 async function handler26(inp, ctx) {
   if (!inp.wp_install_path) {
-    return failDomain19("not_a_wordpress_install", "wp_install_path is required.");
+    return failDomain12("not_a_wordpress_install", "wp_install_path is required.");
   }
   let installPath;
   try {
     installPath = resolveProjectPath(inp.wp_install_path).path;
   } catch (e) {
-    return failDomain19("not_a_wordpress_install", e.message);
+    return failDomain12("not_a_wordpress_install", e.message);
   }
   if (!presentInProject(installPath, "wp-config.php")) {
-    return failDomain19(
+    return failDomain12(
       "not_a_wordpress_install",
       `No wp-config.php in ${installPath}`
     );
   }
   const wpBin = await scannerAvailable("wp");
   if (!wpBin) {
-    return failDomain19(
+    return failDomain12(
       "missing_scanner",
       'WP-CLI (`wp`) is not installed. Run install_toolchain with tools=["wp-cli"].'
     );
@@ -69433,7 +69328,7 @@ function normaliseStatus(raw) {
   }
   return "unknown";
 }
-function failDomain19(code, message2) {
+function failDomain12(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var RETRY_DELAYS_MS, DEFAULT_RISKY_LOGINS, THEMES_NOT_CHECKED, inputSchema28, tool29, str3;
@@ -70198,17 +70093,17 @@ import { createHash as createHash12, randomUUID as randomUUID10 } from "node:cry
 import { dirname as dirname22, join as join70 } from "node:path";
 async function handler27(inp, ctx) {
   if (!inp.target_url && !inp.wp_install_path) {
-    return failDomain20(
+    return failDomain13(
       "unknown_scan_id",
       "Provide either target_url or wp_install_path."
     );
   }
   const installProblem = inp.wp_install_path ? wpInstallPathProblem(inp.wp_install_path) : null;
-  if (installProblem !== null) return failDomain20("unsupported_target", installProblem);
+  if (installProblem !== null) return failDomain13("unsupported_target", installProblem);
   const localInstall = inp.wp_install_path && existsSync21(inp.wp_install_path) ? inp.wp_install_path : void 0;
   const wpscanBin = await scannerAvailable("wpscan");
   if (!wpscanBin) {
-    return failDomain20(
+    return failDomain13(
       "missing_scanner",
       'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].'
     );
@@ -70217,7 +70112,7 @@ async function handler27(inp, ctx) {
   if (!url2 && inp.wp_install_path) {
     const wpBin = await scannerAvailable("wp");
     if (!wpBin) {
-      return failDomain20(
+      return failDomain13(
         "missing_scanner",
         "wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url."
       );
@@ -70231,25 +70126,25 @@ async function handler27(inp, ctx) {
     if (r.outcome === "completed") {
       url2 = r.stdout.trim();
     } else {
-      return failDomain20(
+      return failDomain13(
         "scanner_failed",
         `wp option get home failed: ${r.stderr.split(/\r?\n/)[0] ?? r.outcome}`
       );
     }
   }
   if (!url2) {
-    return failDomain20("scanner_failed", "Could not resolve a target URL for WPScan.");
+    return failDomain13("scanner_failed", "Could not resolve a target URL for WPScan.");
   }
   const scanUrl = httpUrl(url2);
   if (scanUrl === null) {
-    return inp.target_url ? failDomain20("invalid_input", "target_url must be an http:// or https:// URL.") : failDomain20(
+    return inp.target_url ? failDomain13("invalid_input", "target_url must be an http:// or https:// URL.") : failDomain13(
       "scanner_failed",
       `The site's home option is not an http:// or https:// URL (WP-CLI read ${JSON.stringify(url2.slice(0, 200))}); pass target_url.`
     );
   }
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
   if (token !== "" && !API_TOKEN.test(token)) {
-    return failDomain20(
+    return failDomain13(
       "invalid_input",
       `${inp.api_token !== void 0 ? "api_token" : "WPSCAN_API_TOKEN"} is not a WPScan API token (letters and digits only).`
     );
@@ -70473,7 +70368,7 @@ ${r.stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const pick2 = WHY_LINE.map((re) => lines.find((l) => re.test(l))).find((l) => l !== void 0) ?? lines.find((l) => !l.startsWith("[i]")) ?? lines[0];
   return pick2 === void 0 ? null : pick2.slice(0, 300);
 }
-function failDomain20(code, message2) {
+function failDomain13(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema29, tool30, URL_REPORT_DIR, MISSING_DB, WHY_LINE;
@@ -71119,14 +71014,14 @@ async function handler28(inp, ctx) {
   try {
     installPath = resolveProjectPath(inp.wp_install_path).path;
   } catch (e) {
-    return failDomain21("not_a_wordpress_install", e.message);
+    return failDomain14("not_a_wordpress_install", e.message);
   }
   if (!presentInProject(installPath, "wp-config.php")) {
-    return failDomain21("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
+    return failDomain14("not_a_wordpress_install", `No wp-config.php in ${installPath}`);
   }
   const wpBin = await scannerAvailable("wp");
   if (!wpBin) {
-    return failDomain21(
+    return failDomain14(
       "missing_scanner",
       'WP-CLI (`wp`) is required for wp_audit {mode: "cron"}. Run install_toolchain with tools=["wp-cli"].'
     );
@@ -71138,7 +71033,7 @@ async function handler28(inp, ctx) {
     timeoutMs: 6e4
   });
   if (cronResult.outcome !== "completed") {
-    return failDomain21(
+    return failDomain14(
       "scanner_failed",
       `wp cron event list failed: ${cronResult.stderr.split(/\r?\n/)[0] ?? cronResult.outcome}`
     );
@@ -71228,7 +71123,7 @@ function matchesInactivePlugin(hook, inactivePlugins) {
   }
   return false;
 }
-function failDomain21(code, message2) {
+function failDomain14(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema30, KNOWN_PREFIXES, BASE64_RE, tool31;
@@ -71278,12 +71173,8 @@ var init_wpCronAudit = __esm({
 
 // src/tools/wpRecommendHardening.ts
 async function handler29(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const audit = findLatestWpAudit(ctx, projectPath);
   if (!audit) {
     return {
@@ -71436,9 +71327,9 @@ var init_wpRecommendHardening = __esm({
   "src/tools/wpRecommendHardening.ts"() {
     "use strict";
     init_openSet();
-    init_projectPath();
     init_schemas4();
     init_tools();
+    init_projectArg();
     inputSchema31 = { project_path: ProjectPath };
     tool32 = defineTool({
       name: "wp_recommend_hardening",
@@ -71454,13 +71345,13 @@ var init_wpRecommendHardening = __esm({
 // src/tools/wpPluginCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
 async function handler30(inp, ctx) {
-  if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
+  if (!inp.slug) return failDomain15("unknown_scan_id", "slug is required.");
   if (!WP_PLUGIN_SLUG.test(inp.slug)) {
-    return failDomain22("invalid_input", 'slug must be a plugin slug: letters, digits, "_" and "-" (e.g. "contact-form-7").');
+    return failDomain15("invalid_input", 'slug must be a plugin slug: letters, digits, "_" and "-" (e.g. "contact-form-7").');
   }
   const hasProject = inp.project_path !== void 0 && inp.project_path.length > 0;
   const installProblem = inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? wpInstallPathProblem(inp.wp_install_path) : null;
-  if (installProblem !== null && !hasProject) return failDomain22("unsupported_target", installProblem);
+  if (installProblem !== null && !hasProject) return failDomain15("unsupported_target", installProblem);
   const warnings = [];
   const toolsRun = [{ name: "wp_plugin_check", status: "ok" }];
   const missingTools = [];
@@ -71471,19 +71362,9 @@ async function handler30(inp, ctx) {
     toolsRun.push({ name: "wp-cli", status: "skipped", reason: "wp_install_path names no install on this machine" });
   }
   const probePath = installProblem === null ? inp.wp_install_path : void 0;
-  let projectPath;
   const rawProject = inp.project_path ?? inp.wp_install_path;
-  if (inp.project_path !== void 0 && hasProject) {
-    try {
-      projectPath = resolveProjectPath(inp.project_path).path;
-    } catch (e) {
-      return failDomain22(projectPathErrorCode(e), e.message);
-    }
-  } else if (inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0) {
-    projectPath = canonicalPath(inp.wp_install_path);
-  } else {
-    projectPath = serverProjectPath();
-  }
+  const projectPath = inp.project_path !== void 0 && hasProject ? toolProjectPath(inp.project_path) : inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? canonicalPath(inp.wp_install_path) : serverProjectPath();
+  if (typeof projectPath !== "string") return projectPath;
   let installed = null;
   let installedVersion = null;
   let active = null;
@@ -71603,7 +71484,7 @@ function cveSources(ctx, installKeys, targetUrl) {
   ];
   return found2.filter((s) => s !== null);
 }
-function failDomain22(code, message2) {
+function failDomain15(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var inputSchema32, tool33;
@@ -71621,6 +71502,7 @@ var init_wpPluginCheck = __esm({
     init_scanCoverage();
     init_siteKeys();
     init_tools();
+    init_projectArg();
     inputSchema32 = {
       slug: external_exports.string().regex(WP_PLUGIN_SLUG, 'slug must be a plugin slug: letters, digits, "_" and "-"').describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
       wp_install_path: external_exports.string().optional().describe(
@@ -71828,12 +71710,8 @@ var init_bulkAuditWordpressSites = __esm({
 
 // src/tools/wpDescribeSetup.ts
 async function handler33(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const siteKey = inp.target_url !== void 0 ? wpSiteKey(inp.target_url) : null;
   const installKeys = wpInstallKeys(projectPath, inp.project_path);
   const siteKeys = inp.target_url !== void 0 ? wpSiteKeys(inp.target_url) : [];
@@ -71914,10 +71792,10 @@ var init_wpDescribeSetup = __esm({
     "use strict";
     init_findingIdentity();
     init_openSet();
-    init_projectPath();
     init_schemas4();
     init_siteKeys();
     init_tools();
+    init_projectArg();
     inputSchema35 = {
       project_path: ProjectPath,
       target_url: httpUrlField().optional().describe("The live site URL wp_vuln_check (live or rest mode) was run against, to include those rows.")
@@ -71939,15 +71817,8 @@ var init_wpDescribeSetup = __esm({
 import { randomUUID as randomUUID14 } from "node:crypto";
 import { join as join72, relative as relative26 } from "node:path";
 async function handler34(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return {
-      ok: false,
-      error: { code: projectPathErrorCode(e), message: e.message }
-    };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const files = collectConfigFiles(projectPath, 6);
   const findings = [];
   const notScanned2 = [];
@@ -72054,11 +71925,11 @@ var init_scanDotnetSecrets = __esm({
   "src/tools/scanDotnetSecrets.ts"() {
     "use strict";
     init_projectFs();
-    init_projectPath();
     init_schemas4();
     init_scannerParsers();
     init_secretFindingRedaction();
     init_tools();
+    init_projectArg();
     init_scanCoverage();
     PATTERNS = [
       {
@@ -72164,12 +72035,8 @@ var init_scanDotnetSecrets = __esm({
 import { randomUUID as randomUUID15 } from "node:crypto";
 import { join as join73, relative as relative27 } from "node:path";
 async function handler35(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain23(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const projects = collectCsprojFiles(projectPath, 6);
   const rows = [];
   for (const file of projects) {
@@ -72254,17 +72121,14 @@ function collectCsprojFiles(root, maxDepth) {
   walk5(root, 0);
   return out;
 }
-function failDomain23(code, message2) {
-  return { ok: false, error: { code, message: message2 } };
-}
 var SUPPORT, inputSchema37, tool38, SKIP_DIRS4;
 var init_dotnetTargetFrameworkCheck = __esm({
   "src/tools/dotnetTargetFrameworkCheck.ts"() {
     "use strict";
     init_projectFs();
-    init_projectPath();
     init_schemas4();
     init_tools();
+    init_projectArg();
     SUPPORT = {
       "net10.0": { tfm: "net10.0", status: "lts-current", hint: "LTS until Nov 2028." },
       "net9.0": { tfm: "net9.0", status: "sts-current", hint: "STS until May 2026." },
@@ -72299,15 +72163,8 @@ var init_dotnetTargetFrameworkCheck = __esm({
 import { randomUUID as randomUUID16 } from "node:crypto";
 import { join as join74, relative as relative28 } from "node:path";
 async function handler36(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return {
-      ok: false,
-      error: { code: projectPathErrorCode(e), message: e.message }
-    };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const migrationDirs = findMigrationsDirs(projectPath);
   const findings = [];
   for (const dir of migrationDirs) {
@@ -72398,11 +72255,11 @@ var init_dotnetEfcoreAudit = __esm({
   "src/tools/dotnetEfcoreAudit.ts"() {
     "use strict";
     init_projectFs();
-    init_projectPath();
     init_schemas4();
     init_scannerParsers();
     init_secretFindingRedaction();
     init_tools();
+    init_projectArg();
     RULES = [
       {
         id: "efcore-drop-table",
@@ -72449,12 +72306,8 @@ var init_dotnetEfcoreAudit = __esm({
 
 // src/tools/dotnetDescribeSetup.ts
 async function handler37(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const tfm = findLatest2(ctx, projectPath, "dotnet_target_framework", false);
   const secrets = findLatest2(ctx, projectPath, "dotnet_secrets", true);
   const efcore = findLatest2(ctx, projectPath, "dotnet_efcore_audit", true);
@@ -72501,9 +72354,9 @@ var init_dotnetDescribeSetup = __esm({
   "src/tools/dotnetDescribeSetup.ts"() {
     "use strict";
     init_openSet();
-    init_projectPath();
     init_schemas4();
     init_tools();
+    init_projectArg();
     inputSchema39 = { project_path: ProjectPath };
     tool40 = defineTool({
       name: "dotnet_describe_setup",
@@ -72858,12 +72711,8 @@ var init_pypiPins = __esm({
 // src/tools/prioritizeFindings.ts
 async function handler38(inp, ctx) {
   const limit = inp.limit ?? 50;
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const set2 = openSetForProject(ctx.storage, projectPath);
   const open = set2.findings;
   const latest = set2.newest;
@@ -73004,13 +72853,13 @@ var init_prioritizeFindings = __esm({
     init_enrich();
     init_rank();
     init_ssvc();
-    init_projectPath();
     init_schemas4();
     init_dependencyProvider();
     init_importGraph();
     init_npmResolve();
     init_pypiPins();
     init_tools();
+    init_projectArg();
     KEV_BOOST = 220;
     EPSS_BOOST_MAX = 100;
     SEVERITY_WEIGHT2 = {
@@ -77167,12 +77016,8 @@ var init_specImport = __esm({
 // src/tools/mapAttackSurface.ts
 import { isAbsolute as isAbsolute18, join as join82, resolve as resolve28 } from "node:path";
 async function handler40(inp, ctx) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const treeHash = await computeTreeHash(projectPath);
   const includeEnvVars = inp.include_env_vars !== false;
   const rulesPath = join82(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
@@ -77683,7 +77528,6 @@ var init_mapAttackSurface = __esm({
     "use strict";
     init_projectFs();
     init_zod();
-    init_projectPath();
     init_schemas4();
     init_envVars();
     init_ports();
@@ -77702,6 +77546,7 @@ var init_mapAttackSurface = __esm({
     init_cacheKey();
     init_computeTreeHash();
     init_tools();
+    init_projectArg();
     init_scanHelpers();
     init_semgrepCoverageGaps();
     init_semgrepRun();
@@ -79196,12 +79041,8 @@ function fail2(code, message2, retryWith) {
   };
 }
 async function handler41(inp, ctx, callMeta) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return fail2(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const target = classifyTarget(inp.base_url ?? "", inp.authorized_target === true);
   if (!target.allowed) {
     const code = target.origin === "" ? "unsupported_target" : "target_not_authorized";
@@ -79574,12 +79415,12 @@ var init_scanDast = __esm({
     init_probe();
     init_redact();
     init_target();
-    init_projectPath();
     init_schemas4();
     init_computeTreeHash();
     init_semgrepReport();
     init_types2();
     init_tools();
+    init_projectArg();
     init_scanCoverage();
     init_scanHelpers();
     init_counts();
@@ -79830,12 +79671,8 @@ async function handler42(inp, ctx) {
   const fingerprint = inp.fingerprint ?? inp.finding_fingerprint;
   const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
   const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return fail3(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const persisted = ctx.storage.surface.getLatestForProject(projectPath);
   if (persisted === null) {
     return fail3(
@@ -79941,7 +79778,6 @@ var init_validateFinding = __esm({
     init_findingIdentity();
     init_openSet();
     init_vulnIds();
-    init_projectPath();
     init_schemas4();
     init_extract();
     init_computeTreeHash();
@@ -79953,6 +79789,7 @@ var init_validateFinding = __esm({
     init_summary();
     init_types6();
     init_tools();
+    init_projectArg();
     ANONYMOUS_EXPOSURE = "anonymous_exposure";
     Fingerprint = external_exports.string().min(1).optional().describe(
       "Validate only this finding. Default: every open finding."
@@ -81719,14 +81556,10 @@ var init_worktree = __esm({
 import { rmSync as rmSync16 } from "node:fs";
 import { isAbsolute as isAbsolute20, join as join91, relative as relative33 } from "node:path";
 async function handler43(inp, ctx, callMeta) {
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain24(projectPathErrorCode(e), e.message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   if (!await isGitRepo(projectPath)) {
-    return failDomain24("not_a_git_repo", `'${projectPath}' is not inside a git working tree.`);
+    return failDomain16("not_a_git_repo", `'${projectPath}' is not inside a git working tree.`);
   }
   const severityMin = inp.severity_min ?? DEFAULT_SEVERITY_MIN;
   const sources = inp.sources ?? DEFAULT_SOURCES;
@@ -81742,7 +81575,7 @@ async function handler43(inp, ctx, callMeta) {
     if (origin !== null) origins.set(f.fingerprint, origin);
   }
   const tree = await projectTreeState(projectPath);
-  if (!tree.ok) return failDomain24("not_a_git_repo", tree.reason);
+  if (!tree.ok) return failDomain16("not_a_git_repo", tree.reason);
   const uncommitted = (f) => f.file_path !== void 0 && f.file_path.length > 0 && tree.dirty.has(tree.prefix + projectRelative(projectPath, f.file_path));
   const verifiable = (f) => origins.has(f.fingerprint) && !uncommitted(f);
   const needsPlan = sources.includes("deps") && allFindings.some(
@@ -82284,7 +82117,7 @@ function findingsForGroup(allFindings, group) {
 function errorMessage4(e) {
   return e instanceof Error ? e.message : String(e);
 }
-function failDomain24(code, message2) {
+function failDomain16(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
 var DEFAULT_SOURCES, DEFAULT_SEVERITY_MIN, DEFAULT_MAX_PRS, PR_STATUS_OUTCOME, KEEPS_BRANCH, inputSchema45, tool46;
@@ -82310,7 +82143,6 @@ var init_createFixPr = __esm({
     init_openSet();
     init_enrich();
     init_rank();
-    init_projectPath();
     init_processRunner();
     init_gitSafety();
     init_semgrepConfigs();
@@ -82320,6 +82152,7 @@ var init_createFixPr = __esm({
     init_bugHunt();
     init_gitState();
     init_tools();
+    init_projectArg();
     DEFAULT_SOURCES = ["deps", "semgrep"];
     DEFAULT_SEVERITY_MIN = "high";
     DEFAULT_MAX_PRS = 3;
@@ -91173,12 +91006,8 @@ import { existsSync as existsSync25, readFileSync as readFileSync11, writeFileSy
 import { basename as basename13, join as join95, posix as posix4, win32 as win322 } from "node:path";
 async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
-  let projectPath;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== "string") return projectPath;
   const found2 = vexSourceScan(ctx.storage, projectPath);
   const depsScan = found2.scan;
   if (depsScan === null) {
@@ -91387,7 +91216,6 @@ var init_exportVex = __esm({
     "use strict";
     init_zod();
     init_scope2();
-    init_projectPath();
     init_version();
     init_schemas4();
     init_dependencyProvider();
@@ -91398,6 +91226,7 @@ var init_exportVex = __esm({
     init_sbom();
     init_statements();
     init_tools();
+    init_projectArg();
     init_scanHelpers();
     SAMPLE_SIZE2 = 20;
     DEFAULT_AUTHOR = "Unknown Author";
