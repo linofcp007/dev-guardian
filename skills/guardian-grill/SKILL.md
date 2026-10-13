@@ -1,6 +1,7 @@
 ---
 name: guardian-grill
-description: Understanding gate on a diff or PR — the AI grills YOU, one question at a time, on the domain-significant decisions the code introduced, before you merge. Linters check style, Semgrep checks security, tests check behaviour; this checks that a human still understands the branches and rules the diff added — for long autonomous loops where nobody read every line. Records the verdict in .guardian/last-grill.md. EN triggers — "grill me on this diff / PR", "do I understand this change?", "I didn't read all this code", "quiz me before I merge", "am I merging blind?". PT — "sabatina ao diff / PR", "será que percebo esta mudança?", "não li este código todo", "questiona-me antes do merge", "estou a fazer merge às cegas?". ES — "interrógame sobre este diff / PR", "¿entiendo este cambio?", "no leí todo este código", "pregúntame antes del merge", "¿estoy haciendo merge a ciegas?". Respond in the user's language.
+description: "Understanding gate on a diff — the AI grills you, one question at a time, on the domain decisions the code introduced, and records the verdict in .guardian/last-grill.md. Not for requirements (dev-spec-driven's /clarify --grill)."
+disable-model-invocation: true
 ---
 
 # Guardian Grill — the understanding gate
@@ -22,6 +23,11 @@ goes** (a merge verdict). If `dev-grill` is installed, load it in `diff` mode wi
 - Pairs with `guardian-review` (which checks the code) — run both for a full pre-merge gate
 
 For style, security, or test coverage, use `guardian-review` / `guardian-security` / `guardian-quality`.
+
+In a dev-spec-driven project (a `.specs/` folder, its tools available): on a feature branch, call
+`spec_next_action { name: "<feature>" }` first (`spec_status {}` lists the features) and grill the diff against
+what that feature's spec says. Grilling the **requirements**, before there is a diff, is dev-spec-driven's
+`/clarify --grill`, not this gate.
 
 ## Flow
 

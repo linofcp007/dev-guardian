@@ -9,10 +9,13 @@
  *   - `docs/tools.md` and `docs/rule-packs.md` are GENERATED (`npm run build`
  *     runs `test/docs/generate.ts`); a committed page that differs from what
  *     the generator would write fails here;
- *   - every tool, resource, skill and command count the READMEs, CLAUDE.md
- *     and `mcp/README.md` state equals the registry / the tree — a stale
- *     count anywhere in those files fails, not only the first one;
- *   - CLAUDE.md's rule-pack table and its totals equal the pack files, as the
+ *   - every tool, resource, skill and command count the READMEs, CLAUDE.md,
+ *     `mcp/README.md` and the hand-written docs (docs/maintainers/ included)
+ *     state equals the registry / the tree — a stale count anywhere in those
+ *     files fails, not only the first one;
+ *   - CLAUDE.md is an index of at most 8 KB that links every maintainer note;
+ *   - the ablation notes' rule-pack table (docs/maintainers/ablation.md,
+ *     moved out of CLAUDE.md) and its totals equal the pack files, as the
  *     ablation harness itself enumerates them;
  *   - `docs/env.md` names every `GUARDIAN_*` environment variable the code
  *     reads.
@@ -107,11 +110,16 @@ const COUNTED_FILES: readonly [string, readonly string[]][] = [
   ['mcp/README.md', ['tools', 'resources']],
 ];
 
-/** Hand-written pages under docs/: any count they state must be right too. */
+/** Hand-written pages under docs/ and docs/maintainers/: any count they state must be right too. */
 function handWrittenDocs(): string[] {
-  return readdirSync(DOCS_DIR)
+  const pages = readdirSync(DOCS_DIR)
     .filter((f) => f.endsWith('.md') && f !== 'tools.md' && f !== 'rule-packs.md')
     .map((f) => `docs/${f}`);
+  const maintainers = resolve(DOCS_DIR, 'maintainers');
+  if (existsSync(maintainers)) {
+    pages.push(...readdirSync(maintainers).filter((f) => f.endsWith('.md')).map((f) => `docs/maintainers/${f}`));
+  }
+  return pages;
 }
 
 function statedCounts(text: string, c: CountSpec): number[] {
@@ -213,15 +221,18 @@ describe('counts the docs state equal the code', () => {
   });
 });
 
-// -------------------------------------------------------- CLAUDE.md packs
+// ------------------------------------------------ the ablation notes' packs
 
-describe("CLAUDE.md's rule-pack table", () => {
+/** The ablation harness's maintainer notes — moved out of CLAUDE.md, which is now an index (review 8). */
+const ABLATION_NOTES = 'docs/maintainers/ablation.md';
+
+describe("the ablation notes' rule-pack table", () => {
   const TABLE_ROW = /^\|\s*`([a-z0-9-]+)`\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*$/;
 
   function tableRows(): Map<string, [number, number, number]> {
-    const lines = read('CLAUDE.md').split(/\r?\n/);
+    const lines = read(ABLATION_NOTES).split(/\r?\n/);
     const header = lines.findIndex((l) => /^\|\s*pack\s*\|\s*rules\s*\|\s*with ablatable clauses\s*\|\s*with none\s*\|/i.test(l));
-    expect(header, 'CLAUDE.md has the "| pack | rules | with ablatable clauses | with none |" table').toBeGreaterThanOrEqual(0);
+    expect(header, `${ABLATION_NOTES} has the "| pack | rules | with ablatable clauses | with none |" table`).toBeGreaterThanOrEqual(0);
     const rows = new Map<string, [number, number, number]>();
     for (const line of lines.slice(header + 2)) {
       const m = TABLE_ROW.exec(line);
@@ -242,7 +253,7 @@ describe("CLAUDE.md's rule-pack table", () => {
   });
 
   it('states the totals the pack files add up to', () => {
-    const text = read('CLAUDE.md');
+    const text = read(ABLATION_NOTES);
     const t = packTotals(packs);
     const ofTheRules = [...text.matchAll(/\*\*(\d+) of the (\d+) rules\*\*/g)].map((m) => [Number(m[1]), Number(m[2])]);
     expect(ofTheRules.length).toBeGreaterThan(0);
@@ -250,6 +261,28 @@ describe("CLAUDE.md's rule-pack table", () => {
     const split = [...text.matchAll(/(\d+) bare and (\d+) positive-only/g)].map((m) => [Number(m[1]), Number(m[2])]);
     expect(split.length).toBeGreaterThan(0);
     for (const pair of split) expect(pair).toEqual([t.bare, t.positiveOnly]);
+  });
+});
+
+// ------------------------------------------------------------- CLAUDE.md
+
+// CLAUDE.md is loaded into every session in this repository. It was 41.5 KB,
+// two thirds of it the ablation harness's manual; it is an index now, and the
+// notes live in docs/maintainers/ — linked, never `@`-imported (an import
+// would inline them into every session again).
+describe('CLAUDE.md is an index', () => {
+  const INDEX_MAX_BYTES = 8 * 1024;
+  const text = (): string => read('CLAUDE.md');
+
+  it(`is at most ${INDEX_MAX_BYTES} bytes`, () => {
+    expect(Buffer.byteLength(text(), 'utf8')).toBeLessThanOrEqual(INDEX_MAX_BYTES);
+  });
+
+  it('links every docs/maintainers/ topic file, and imports none', () => {
+    const topics = readdirSync(resolve(DOCS_DIR, 'maintainers')).filter((f) => f.endsWith('.md'));
+    expect(topics.length).toBeGreaterThan(3);
+    expect(topics.filter((f) => !text().includes(`](docs/maintainers/${f})`))).toEqual([]);
+    expect(text()).not.toMatch(/^@\S/m);
   });
 });
 

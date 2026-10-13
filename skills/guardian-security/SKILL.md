@@ -1,357 +1,142 @@
 ---
 name: guardian-security
-description: Security scan and triage through the dev-guardian MCP tools — SAST (Semgrep, Bandit, .NET analyzers), secrets (gitleaks), dependency CVEs and IaC (Trivy), optional DAST and reachability — with real-severity triage and false-positive demotion. EN triggers — "audit security", "check for vulnerabilities", "scan for secrets", "any security holes?", "SAST / DAST scan", "is this safe to ship?", "quick pen test", "this smells bad". PT — "audita a segurança", "vê se há vulnerabilidades", "scan de secrets", "tem buracos de segurança?", "scan de SAST / DAST", "isto pode ir para produção?", "pen test rápido", "isto cheira-me mal". ES — "auditoría de seguridad", "comprueba vulnerabilidades", "escaneo de secretos", "¿hay agujeros de seguridad?", "escaneo SAST / DAST", "¿es seguro lanzarlo?", "pen test rápido", "huele mal". Respond in the user's language.
+description: Whole-project security scan with real-severity triage — SAST, secrets, dependency CVEs, IaC and containers, optional DAST and reachability. Use for "is my code secure?" or a vulnerability or secret scan. Not for a pending diff (guardian-review) or code smells (guardian-quality).
 ---
 
 # Guardian Security
 
-Scan profundo de segurança. Combina vários scanners open-source e contextualiza os resultados — ao contrário de correr ferramentas a cega, esta skill correlaciona findings, despromove falsos positivos óbvios e prioriza pelo risco real.
+A deep security scan that correlates the scanners' findings, demotes the obvious false positives and
+ranks by real risk — rather than dumping raw tool output. Respond in the user's language.
 
-## Tipos de scan
+## What runs
 
-Pergunta ao utilizador qual (ou corre tudo se ele disser "tudo"). Cada tipo é uma tool MCP:
+| Kind | Finds | MCP tool |
+| --- | --- | --- |
+| SAST | application code flaws | `scan_sast` (Semgrep; Bandit for Python; the SDK analyzers for .NET) |
+| Secrets | keys, tokens, passwords in the code and the git history | `scan_secrets` (gitleaks) |
+| Dependencies | CVEs in libraries | `scan_deps` (Trivy); `deps_audit` adds npm audit / pip-audit |
+| Containers / IaC | Dockerfile, image, compose, Terraform, Kubernetes, Helm | `scan_containers` (Trivy + hadolint; cosign for the image signature), `scan_iac` (Trivy) |
+| DAST (optional) | a running app, probed at runtime | `scan_dast` (+ nuclei) |
 
-| Tipo                | O que faz                                                 | Tool MCP (o que corre)                                                                       |
-| ------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| **SAST**            | Análise estática de código aplicacional                   | `scan_sast` (Semgrep; Bandit em Python; analyzers do SDK em .NET)                            |
-| **Secrets**         | API keys, tokens, passwords no código e no histórico Git  | `scan_secrets` (gitleaks)                                                                    |
-| **Dependencies**    | CVEs em bibliotecas/packages                              | `scan_deps` (Trivy); `deps_audit` acrescenta npm audit / pip-audit                           |
-| **Container/IaC**   | Dockerfile, imagens, compose, Terraform, Kubernetes, Helm | `scan_containers` (Trivy + hadolint; cosign para a assinatura da imagem), `scan_iac` (Trivy) |
-| **DAST** (opcional) | Scan runtime contra uma app JÁ a correr                   | `scan_dast` (+ nuclei)                                                                       |
+No brakeman, gosec or Checkov run — never claim them.
 
-Não há brakeman, gosec nem Checkov no que as tools correm — não os anuncies como corridos.
+## Flow
 
-## Fluxo
+### 1. Prerequisites
 
-### 1. Pré-requisitos
+`check_toolchain {}` lists each scanner's version, known-compromised versions and this system's install
+command. If something is missing, `install_toolchain { dry_run: true }` shows the plan; a project with no
+dev-guardian configs yet starts with `/guardian-init` — suggest it; the user runs it.
 
-Verifica o toolchain com `check_toolchain {}` (versão de cada scanner, versões comprometidas conhecidas e o comando de instalação para este sistema). Se faltar algo, `install_toolchain { dry_run: true }` mostra o plano; num projeto ainda sem configs, a skill `guardian-init` vem primeiro.
+### 2. Scan
 
-### 2. Executar scans
+Run the full scan — don't ask which kind first: `security_scan_full { project_path: "<project>" }`. It runs
+`scan_sast`, `scan_secrets`, `scan_deps` and `scan_iac`, each as its own scan (`meta.parent_scan_id`), and
+stores the merged findings on the parent, listing the children in `child_scans`. A scanner that did not run
+or failed shows in `tools_run` and makes coverage `partial` / `none` — never a clean "0 findings".
 
-Corre `security_scan_full { project_path: "<project>" }` (`local_only: true` para não usar o registry do Semgrep). Ela corre `scan_sast`, `scan_secrets`, `scan_deps` e `scan_iac`, cada um como um scan próprio (`meta.parent_scan_id`), e guarda os findings fundidos no scan pai, com a lista em `child_scans`. Um scanner que não correu ou falhou aparece como tal em `tools_run` e a cobertura fica `partial`/`none` — nunca "0 findings" limpo.
+- Only part of the project (the diff, a branch, a file): `/guardian-scan` and its flags pass `scope` to
+  `scan_sast`, `scan_secrets` and `bug_hunt`.
+- Semgrep's registry mode, the default, sends usage metrics to Semgrep Inc. (it cannot run with
+  `--metrics=off`). `local_only: true` avoids it: rules on disk only — the project's `.semgrep.yml`, rules
+  registered with `register_custom_rules` and the plugin's LLM pack — with fewer rules; without project rules
+  that part is reported as skipped, not clean. Trivy's database and a .NET restore still reach the network.
+- Every `scan_sast` run (and so `security_scan_full` and `review_pr`), `local_only` or not, also runs the
+  plugin's LLM-application pack for Python and JS/TS: model output reaching `eval` / `exec`, a shell or SQL;
+  a model-chosen tool name used without an allow-list; `trust_remote_code=True` without a pinned revision;
+  unsafe `torch.load`; HTTP request data in the system prompt; OpenAI calls with no token limit. Findings are
+  `security` with an `llm-*` subcategory and the OWASP Top 10 for LLM category. It does not see prompt
+  injection through documents or tool results, model output with other side effects, quotas or unbounded
+  agent loops — `guardian-review`'s AI checklist covers those by reading.
+- No MCP server at all? [`references/manual-fallback.md`](references/manual-fallback.md) has the raw
+  commands, and the user must hear that there is then no baseline, delta or history.
 
-Para só uma parte do projeto (o diff, uma branch, um ficheiro), usa o comando `/guardian-scan` com as flags dele — passa `scope` a `scan_sast`, `scan_secrets` e `bug_hunt`.
+### 3. Triage
 
-Fallback **só quando o servidor MCP não está disponível** — diz ao utilizador que assim não há baseline, delta nem histórico:
+Never dump the raw results. For each finding:
 
-```bash
-# SAST — repara nos DOIS --config: ver a nota abaixo
-semgrep --config=auto --config=.semgrep.yml --json --output=.guardian/sast.json .
+1. **Real severity** (not the CVSS alone):
+   - 🔴 Critical — RCE, SQL injection, a live production secret, auth bypass
+   - 🟡 High — XSS / CSRF / SSRF, a CVE with a public PoC, a vulnerable dependency with no patch
+   - 🟢 Medium — residual-risk smells, secrets in test or example files
+   - ℹ️ Low / Info — best practice, likely false positives
+2. **Demote common false positives**: secrets under `examples/`, `*test*`, `fixtures/`, `*.md` → Low (still
+   mention them); CVEs in dev / test dependencies → one level down; a Semgrep rule known to be noisy in this
+   context → say so; `console.log` / `print` of data → Info.
+3. **Correlate** across scanners: Semgrep's "use of crypto X" plus Trivy's CVE in library X is one problem
+   with more weight, not two.
 
-# Secrets: histórico Git E ficheiros ainda por commitar (a ferramenta copia-os
-# para um diretório temporário e corre `gitleaks detect --no-git` lá)
-gitleaks detect --no-banner --report-format=json --report-path=.guardian/secrets.json
+### 4. Report
 
-# Dependências
-trivy fs --scanners vuln,license --format json --output .guardian/deps.json .
-
-# Container (se houver Dockerfile)
-[ -f Dockerfile ] && trivy config --format json --output .guardian/dockerfile.json Dockerfile
-
-# IaC (se houver)
-trivy config --format json --output .guardian/iac.json .
-```
-
-#### `--config=auto` não carrega o `.semgrep.yml` do projeto
-
-Medido no semgrep 1.164.0, num projeto com o pack `base.yml` e uma linha de
-`<?php echo $_GET['name'];`:
-
-| Comando                | Findings |
-| ---------------------- | -------- |
-| `--config=<ficheiro>`  | 1        |
-| `--config=auto`        | 0        |
-
-As treze regras que o `init_project` instala como `.semgrep.yml` **não têm
-consumidor** se só se passar `--config=auto`. É por isso que os dois `--config`
-estão ali em cima, e é por isso que a tool `scan_sast` passou a carregar as
-regras do projeto (do manifesto `.dev-guardian/configs.json`, ou dos nomes
-convencionais). Prefere sempre a tool ao comando em bruto.
-
-Um `--config` que o Semgrep não consiga carregar aborta a corrida **inteira**
-(`paths.scanned: []`, exit 7), não só esse pack — por isso a tool valida a
-estrutura do ficheiro antes de o passar, e reporta em `tools_run` o que
-descartou. Uma regra que não compila é outro caso: exit 2, tudo scaneado,
-perde-se essa regra e mais nada.
-
-#### Privacidade: o modo por defeito envia telemetria
-
-`--config=auto` vai buscar as regras ao registry do Semgrep e envia métricas de
-uso à Semgrep Inc. **como condição** disso: `--metrics=off` em conjunto falha
-com "Cannot create auto config when metrics are off". Não é evitável no modo
-por defeito, e vale a pena dizê-lo ao utilizador quando ele pergunta se algo
-sai da máquina.
-
-Alternativa: `scan_sast` com `local_only: true` — sem registry, com
-`--metrics=off`, só regras já em disco (o `.semgrep.yml` do projeto, o que
-tenha sido registado com `register_custom_rules` e o pack LLM do plugin). Menos
-regras que o modo por defeito; nada sai da máquina. Sem regras do projeto, o
-scan é reportado como skipped e não como resultado limpo.
-
-#### Aplicações com LLM
-
-Em todas as corridas, com e sem `local_only`, o `scan_sast` corre também o
-pack do plugin `configs/semgrep/llm.yml` (Python e JS/TS): saída de um modelo
-que chega a `eval`/`exec`, à shell, ao programa ou ao script `-c` de um
-processo, ou a SQL; o nome de uma ferramenta escolhido pelo modelo usado com
-`getattr`/`import` sem lista de permitidos; `trust_remote_code=True` sem revisão
-fixada num commit; `torch.load` com `weights_only=False` (ou sem o argumento,
-em baixa severidade: só é inseguro antes do torch 2.6); dados do pedido HTTP no
-prompt de sistema; chamadas à OpenAI sem limite de tokens. Os findings são `security`, com a subcategoria
-`llm-*` e a categoria da OWASP Top 10 para LLM 2025 nos metadados da regra. O
-fallback de Docker monta a pasta dos packs do plugin só de leitura e corre-o
-também. Como no `local_only`, o pack sozinho não faz um scan SAST: se todas as
-regras do projeto falharem a carregar, o scan continua `failed`.
-
-### 3. Triagem inteligente
-
-Não despeja apenas os resultados brutos — isso é ruído. Para cada finding:
-
-1. **Classifica severidade** real (não confiar 100% no CVSS):
-   - `🔴 Critical` — RCE/SQLi/secrets vivos em produção/auth bypass
-   - `🟡 High` — XSS/CSRF/SSRF, CVEs com PoC público, deps com vulnerability sem patch
-   - `🟢 Medium` — code smell com risco residual, secrets em ficheiros de teste/exemplo
-   - `ℹ️ Low/Info` — best-practices, falsos positivos óbvios
-
-2. **Despromove falsos positivos comuns**:
-   - Secrets em `examples/`, `*test*`, `fixtures/`, `*.md` → Low (mas mencionar)
-   - CVEs em deps `dev`/`test` → reduzir um nível
-   - Regras Semgrep com má reputação de FP no contexto → contextualizar
-   - `console.log` ou `print` com dados → Info, não High
-
-3. **Correlaciona** findings de diferentes scanners. Se Semgrep encontra "use of crypto X" e Trivy diz que a biblioteca X tem CVE, isso é um único problema com mais peso, não dois.
-
-### 4. Apresentar relatório
-
-Sempre nesta estrutura, em ordem decrescente de prioridade:
+Highest priority first:
 
 ```markdown
-# Relatório de Segurança — <projeto>
-<data> · <duração> · <ficheiros analisados>
+# Security report — <project>
+<date> · <duration> · <files scanned>
 
-## 🔴 Crítico (N) — bloqueia deploy
+## 🔴 Critical (N) — blocks deploy
+### 1. Exposed secret: AWS access key
+- File: src/config/aws.js:14 — key AKIA… committed 3 days ago (commit abc123)
+- Now: revoke it in the AWS console; remove it from history (`git filter-repo --invert-paths --path src/config/aws.js`); move it to an environment variable; treat it as compromised
 
-### 1. Secret exposto: AWS Access Key
-- Ficheiro: src/config/aws.js:14
-- Detalhe: chave AKIA... commitada
-- Está no histórico Git desde commit abc123 (3 dias)
-- Ação imediata:
-  1. Revoga a chave AGORA na AWS Console
-  2. `git filter-repo --invert-paths --path src/config/aws.js`
-  3. Move para variável de ambiente
-  4. Considera-a comprometida — assume que terceiros já a viram
-
-### 2. SQL Injection em search endpoint
-- Ficheiro: app/routes/search.py:42
-- Padrão: f-string com input de utilizador em query SQL
-- Risco: extração total da DB
-- Fix sugerido: usar parameterized queries (mostra o diff)
-
-## 🟡 Alto (N) — corrigir antes de release
-
-[...]
-
-## 🟢 Médio (N) — backlog
-
-[...resumido, agrupado por categoria...]
-
-## ℹ️ Despromovidos como falsos positivos prováveis (N)
-[expandir se utilizador pedir]
+## 🟡 High (N) — fix before release
+## 🟢 Medium (N) — backlog, grouped by category
+## ℹ️ Demoted as likely false positives (N) — expand on request
 ```
 
-### 5. Oferecer fix automático
+### 5. Offer fixes
 
-Para coisas óbvias e reversíveis, oferece aplicar:
+For obvious, reversible fixes, offer to apply — always showing the diff and asking first:
 
-- Upgrades de dependências com versão corrigida: `/guardian-fix --pr` (`create_fix_pr` com `sources: ["deps"]`, dry run primeiro) — aplica o plano do `deps_update_plan` numa worktree isolada e prova-o com re-scan e testes
-- Autofixes que a própria regra Semgrep traz: `/guardian-fix --pr` (`sources: ["semgrep"]`)
-- Substituir `crypto.createCipher` → `crypto.createCipheriv` (com diff a mostrar antes)
-- Mover secret para `.env` + `.env.example` + atualizar `.gitignore`
+- Dependency upgrades with a fixed version: `/guardian-fix --pr` (`create_fix_pr` with `sources: ["deps"]`,
+  a dry run first) — applies `deps_update_plan`'s plan in an isolated worktree, proved by a re-scan and the tests.
+- Autofixes the Semgrep rule itself ships: `/guardian-fix --pr` (`sources: ["semgrep"]`).
+- Code changes (`crypto.createCipher` → `crypto.createCipheriv`), a secret moved to `.env`, `.env.example` and
+  `.gitignore`.
 
-**Nunca aplicar sem perguntar.** Mostra sempre o diff e pergunta "aplicar este fix?".
+In an emergency — a live production key exposed — interrupt and say so plainly: "⛔ STOP — this key looks live
+and in production. Revoke it now: <the provider's revocation page>. Then we fix the rest."
 
-Em casos de **emergência absoluta** (chave de produção viva exposta), interrompe a conversa e diz claramente:
+## Paranoid mode
 
-```text
-⛔ STOP — Esta chave parece estar VIVA e em PRODUÇÃO.
-Antes de mais nada, revoga-a já:
-  → <link direto ao painel de revogação se conseguires inferir o provider>
-Depois voltamos a configurar tudo.
-```
+Only when the user asks for "paranoid" or "full deep":
 
-## Modos paranoid
+- Secrets in the history of every ref: `scan_secrets { project_path: "<project>", log_opts: "--all" }`.
+- Is a found secret still valid? `scan_secrets { project_path: "<project>", verify_live: true }` sends each
+  GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm or SendGrid secret to that provider's own read API
+  (nowhere else) and marks it `live` (raised to critical), `revoked` or `unknown`. The secret leaves the
+  machine: ask the user first. `security_scan_full` never verifies; `unknown` never means revoked.
+- Per-language Semgrep security packs: `bug_hunt { project_path: "<project>", include_language_packs: true }`.
+- No `severity_min`: show the medium and low findings too.
+- Stricter configs: `init_project { project_path: "<project>", profile: "paranoid", apply: false }` shows what
+  would change.
+- Licences: `compliance_check { project_path: "<project>" }`, then `license_compatibility { project_path: "<project>" }`.
+- A quick STRIDE pass over the entry points `map_attack_surface` finds (your reasoning — no tool does it).
+- DAST, if the app is a web app and is running.
 
-Se o utilizador pedir explicitamente "paranoid" ou "full deep":
+## On request
 
-- Secrets no histórico de **todas** as refs, não só da branch atual: `scan_secrets { project_path: "<project>", log_opts: "--all" }`
-- Um secret encontrado ainda funciona? `scan_secrets { project_path: "<project>", verify_live: true }` envia cada secret GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm ou SendGrid à API de leitura do **próprio** fornecedor (e a mais nenhum sítio) e marca o finding `live` (sobe a critical), `revoked` ou `unknown`. **Desligado por omissão**: o secret sai da máquina, por isso pede confirmação ao utilizador antes. `security_scan_full` nunca verifica; `unknown` nunca quer dizer revogado.
-- Packs de segurança Semgrep por linguagem além do default: `bug_hunt { project_path: "<project>", include_language_packs: true }` (`p/typescript` ou `p/javascript`, `p/python`, `p/java`, `p/golang`)
-- Nenhum `severity_min` na resposta — mostra também os médios e baixos
-- Configs mais estritas no projeto: `init_project { project_path: "<project>", profile: "paranoid", apply: false }` mostra o que mudaria (gitleaks sem allowlists de conteúdo; Renovate sem automerge e com 7 dias de idade mínima)
-- Licenças: `compliance_check { project_path: "<project>" }` e depois `license_compatibility { project_path: "<project>" }` (GPL em projeto comercial, etc.)
-- Threat modeling rápido com STRIDE para os entry-points que `map_attack_surface` encontrar — isto é raciocínio teu, nenhuma tool o faz
-- DAST (`scan_dast`) se a app for web **e estiver a correr**
+- **DAST** ("DAST scan", "pen test the running app"): [`references/dast.md`](references/dast.md) —
+  `map_attack_surface`, then `scan_dast` against an app that is already running.
+- **Is this finding reachable?** [`references/reachability.md`](references/reachability.md) —
+  `validate_finding`, context for the triage, never a reason to suppress.
+- **Are the project's MCP servers safe?** [`references/mcp-servers.md`](references/mcp-servers.md) —
+  `audit_agent_config` reads; `audit_mcp_tools` starts the servers the user names.
+- **Have a model verify the findings, or hunt what the scanners miss:**
+  [`references/llm-scan.md`](references/llm-scan.md) — `llm_scan_start` / `llm_scan_task` / `llm_scan_submit`.
 
-## DAST (runtime) — `scan_dast`
+## When not to run a full scan
 
-Um pedido de "DAST scan" / "scan de DAST" / "escaneo DAST" resolve-se com a
-tool MCP `scan_dast`. Não invoques scanners à mão: `scan_dast` guarda
-baselines, faz diff e persiste histórico em SQLite, o que uma invocação
-direta não faz.
+- A trivial 1–2 line commit: the pre-commit hooks are enough.
+- An experimental / spike branch: warn that the results may be noise.
+- A huge monorepo: offer `/guardian-scan --branch` (only the diff against the base branch).
 
-`scan_dast` é o **passo seguinte** a `map_attack_surface` — probe o inventário
-de rotas que este produziu, e recusa com `no_surface_snapshot` se não houver
-inventário. A app tem de já estar a correr: esta tool nunca a arranca,
-constrói ou pára.
+## History
 
-1. Corre `map_attack_surface` primeiro, se ainda não houver snapshot.
-2. Pergunta o URL da app **já em execução** (staging, dev local, etc.).
-3. Confirma autorização. Alvos loopback (localhost / 127.0.0.0/8 / ::1) passam
-   direto; qualquer outro host exige `authorized_target: true`, que o
-   utilizador tem de atestar — nunca o definas por ele.
-4. Corre `scan_dast` com `base_url`. Opcionalmente:
-   - `auth_header_env` (recomendado) para probes autenticados — o nome da
-     variável de ambiente, nunca o segredo em si;
-   - `probe_rate_limit: true` para o burst de rate-limit;
-   - `use_nuclei: true` para uma passagem adicional com **nuclei**, o scanner
-     externo que este plugin instala (`install_toolchain`).
-5. Lê o `coverage` antes dos findings: `partial` ou `none` significa que o scan
-   não viu tudo, e um "0 findings" aí não é um resultado limpo.
-6. Resume os findings, prioriza, sugere fixes — e diz que **um resultado limpo
-   não é prova de segurança contra injeção**: o motor próprio não testa
-   injeção, e os templates por defeito do nuclei testam a origem, não as rotas
-   específicas do projeto.
-
-Envelope de segurança (não o contornes): métodos só de leitura
-(GET/HEAD/OPTIONS) salvo se `allow_write_methods` estiver ativo, e mesmo assim
-com corpo vazio — mais o burst opcional de `probe_rate_limit`, a única
-exceção, que envia POST a exatamente uma rota. Redirects nunca são seguidos.
-
-## Alcançabilidade (estática) — `validate_finding`
-
-Depois de triares os findings (Secção 3), `validate_finding` acrescenta um
-sinal extra por finding — **nunca substitui a triagem acima, e nunca suprime
-nem altera severidade sozinho**. Responde se algo fora do processo consegue
-alcançar o ficheiro onde o finding vive, a partir de um grafo de imports com
-raiz nas rotas que `map_attack_surface` já mapeou.
-
-1. Corre `map_attack_surface` primeiro, se ainda não houver snapshot — sem
-   ele, `validate_finding` recusa com `no_surface_snapshot`.
-2. Corre `validate_finding` (sem `fingerprint` valida de uma vez todos os
-   findings abertos — é o comportamento por omissão).
-3. Lê o veredito por finding — `reachable` / `unreachable` / `unknown` — **ao
-   lado** de `coverage_gaps`, nunca sozinho: uma contagem de vereditos sem os
-   gaps ao lado não é uma resposta. Um CVE de dependência (npm, PyPI) tem
-   também o veredito do provider `dependency`: `reachable` (um ficheiro que
-   uma rota alcança importa o package), `imported` ou `unknown` — nunca
-   `unreachable`.
-4. Usa isto como CONTEXTO na conversa com o utilizador ("este finding não
-   parece alcançável por nenhuma rota, mas é uma leitura estática — quer
-   mesmo assim mantê-lo como prioridade?"), nunca como justificação
-   automática para o despromover na Secção 3.
-
-Limites a respeitar sempre que apresentares um `unreachable`:
-
-- **Nunca é emitido** para Ruby, Java, C# ou PHP — resolvem código em
-  runtime (autoload / injeção por anotação / DI / service container), não
-  por import.
-- **Não vê imports dinâmicos** (`import(expr)`, `require(variable)`,
-  reflection, registos de plugins) em nenhuma stack — nesses casos o
-  `unreachable` pode estar errado, sem forma de o detetar.
-- **Só conta rotas HTTP como ponto de entrada.** Um ficheiro chamado apenas
-  por CLI, cron job ou consumidor de fila lê `unreachable`-por-rota — isso
-  não é uma afirmação de que o código nunca corre.
-- **Granularidade de ficheiro, não de função.** Um finding dentro de um
-  helper nunca chamado, mas cujo ficheiro É importado, lê `reachable`.
-
-## Servidores MCP — `audit_agent_config` e `audit_mcp_tools`
-
-Quando o utilizador pergunta se os servidores MCP do projeto são seguros:
-
-1. `audit_agent_config { project_path: "<project>" }` primeiro. Lê as
-   configurações (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`,
-   `.gemini/settings.json`, `.claude-plugin/plugin.json`; com
-   `include_user_config: true` também as do utilizador — Claude Code, Claude
-   Desktop, Cursor, Windsurf, Gemini) **sem executar nada**, e diz que
-   servidores estão declarados.
-2. `audit_mcp_tools { project_path: "<project>", servers: ["<nome>"] }` só
-   para os servidores que o utilizador pediu para auditar — os nomes são
-   dele, nunca os escolhas nem passes a lista inteira sem perguntar. **Esta
-   tool executa código de terceiros**: arranca o comando de cada servidor
-   nomeado com um ambiente mínimo (mais o `env` da própria entrada), envia
-   `initialize` e os pedidos de listagem de tools, prompts e resources,
-   **nunca chama `tools/call`**, e mata a árvore de processos no fim.
-   Servidores remotos só com `allow_remote: true`, que o utilizador tem de
-   pedir — remoto é uma entrada com URL, um comando num caminho de rede, um
-   URL na linha de comando ou num valor de `env` (`mcp-remote` e outros
-   proxies, um URL de base de dados), `ssh` ou `kubectl` em qualquer ponto
-   da linha de comando, ou `docker`/`podman` apontado a outro motor. Um URL
-   cujo host é exatamente `localhost`, `127.x.x.x` ou `[::1]` é local
-   (`postgres://localhost/app` não pede `allow_remote`), mas pode ser um
-   túnel (`ssh -L`, um proxy local) que a configuração não mostra.
-   Se vários ficheiros declaram o mesmo nome com comandos diferentes, a tool
-   recusa e lista os nomes qualificados (`.mcp.json::github`): pergunta ao
-   utilizador qual quer e passa esse.
-3. Lê `coverage` e `servers[].status` antes dos findings: um servidor
-   `skipped` (não declarado, ambíguo, remoto sem `allow_remote`, cancelado,
-   sem orçamento), `failed` (não arrancou, não respondeu em `timeout_ms`) ou
-   `partial` (uma listagem cortada por um limite) não foi auditado por
-   inteiro — não é um resultado limpo. E mesmo um resultado limpo cobre só o
-   que o servidor quis mostrar a esta auditoria: ela identifica-se como
-   `dev-guardian-audit`, e um servidor pode reconhecê-la e mostrar outra
-   coisa ao anfitrião. Diz isso ao utilizador.
-4. Os findings dizem em que tool e em que campo (descrição, `inputSchema`,
-   …) está o problema: instruções ao modelo, Unicode escondido, pedidos para
-   ler chaves ou configurações, para esconder algo do utilizador, para enviar
-   dados para um URL ou num parâmetro, instruções sobre outras tools
-   (*shadowing*). `mcp-tool-definition-changed` (high) é um *rug pull*: a
-   mesma tool com outra definição (título, descrição, esquemas de entrada ou
-   de saída, anotações) desde a auditoria anterior — reportado uma vez, e a
-   nova definição passa a ser a referência; uma tool que desaparece e volta
-   diferente também conta. As `instructions` do servidor (que vão para o
-   system prompt) contam como uma tool (`mcp-server-instructions-changed`,
-   high). Prompts, resources e templates também ficam registados
-   (`mcp-prompt-definition-changed` e afins, medium). Duas tools com o
-   mesmo nome são `mcp-tool-duplicate-name` (high): o cliente escolhe uma
-   delas de forma ambígua. `mcp-tool-sensitive-file-access` em medium
-   significa que a tool manda o modelo ler um ficheiro de credenciais ou de
-   configuração: confirma com o utilizador se esse é o propósito da tool
-   (um cliente SSH ou de registry pode precisar disso); em high, manda
-   também passá-lo a outro sítio ou escondê-lo — isso nenhuma tool precisa.
-
-## Verificação por modelo — `llm_scan_start` / `llm_scan_task` / `llm_scan_submit`
-
-Quando o utilizador quer que **o teu modelo** confirme o que os scanners acharam
-("verifica estes findings", "o que é que os scanners não veem?"): este passo vem
-**depois** da triagem da Secção 3 e não a substitui. O servidor não chama nenhum
-modelo; quem raciocina és tu, uma tarefa de cada vez.
-
-1. `llm_scan_start { project_path: "<project>", modes: ["verify"] }` (`"hunt"`
-   também, depois de `map_attack_surface`). Mostra ao utilizador a estimativa de
-   tokens e o `token_limit_note` **antes** de continuar. Acima de
-   `max_estimated_tokens` o plano pede `confirm: true` — só depois de o utilizador
-   concordar. O `confirm` abre a porta; o limite continua a ser um teto.
-2. `llm_scan_task { plan_id: "<plan_id>" }` devolve uma tarefa com `brief` e `lease_token`
-   (concessão de 20 minutos).
-3. **Uma tarefa por subagente novo**: lança o `Agent` com o brief e nada mais desta
-   conversa (podes lançar vários em paralelo), e submete a resposta JSON dele com
-   `llm_scan_submit { plan_id: "<plan_id>", task_id: "<task_id>", lease_token: "<lease_token>", independence: "subagent", payload: <resposta JSON> }`.
-4. Repete até `llm_scan_task` dizer `done`; `llm_scan_start { plan_id: "<plan_id>" }` devolve o
-   relatório (cobertura `full` só quando todas as tarefas fecharam).
-
-Declara a independência com verdade: se respondeste tu, no teu contexto,
-`independence: "same_context"` — o veredicto aparece no relatório mas nunca
-despromove nem confirma um finding. Nunca declares `subagent` por uma resposta tua.
-Noutros hosts a receita é a das regras do dev-guardian (Codex só lança subagentes
-se lho pedirem; Cline e Claude Desktop correm em sequência com `same_context`).
-
-## Quando não correr scans completos
-
-- Em commits triviais (1-2 linhas): só hooks pre-commit chegam
-- Em ramos experimentais/spike: avisar que pode ser ruído
-- Em monorepos enormes: oferecer scan parcial — `/guardian-scan --branch` (só o diff contra a branch base)
-
-## Output persistente
-
-As tools guardam cada scan em `.guardian/guardian.db` e os relatórios brutos em `.guardian/reports/`. Para medir a evolução, `diff_scans { project_path: "<project>", from: "baseline" }` compara com a baseline e `/guardian-report trend` mostra a tendência — não compares ficheiros JSON à mão. Um finding sob uma supressão ativa aparece à parte (`suppressed_findings`, `summary.suppressed`), nunca como resolvido: um salto aí é uma supressão, não uma correção. E cada entrada de `tools_run` nomeia os ficheiros do projeto que decidiram parte do scan (`honoured_config`: `.trivyignore`, `.gitleaks.toml`, `.gitleaksignore`, `.bandit`, `.semgrepignore`, `.guardianignore`) e o que o `.trivyignore` suprimiu (`suppressed_by_repo_config`) — di-lo ao utilizador quando um deles pesa no resultado.
+Every scan is stored in `.guardian/guardian.db`, raw reports in `.guardian/reports/`. To measure progress,
+`diff_scans { project_path: "<project>", from: "baseline" }` and `/guardian-report trend` — never compare JSON
+files by hand. A finding under an active suppression is counted apart (`suppressed_findings`,
+`summary.suppressed`), never as resolved. Each `tools_run` entry names the project files that decided part of
+the scan (`honoured_config`: `.trivyignore`, `.gitleaks.toml`, `.gitleaksignore`, `.bandit`, `.semgrepignore`,
+`.guardianignore`) and what `.trivyignore` suppressed (`suppressed_by_repo_config`) — tell the user when one
+of them weighs on the result.

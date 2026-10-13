@@ -47,7 +47,7 @@ Exit codes: 0 done, 1 missing or unknown host, 2 usage error.
 ### How rules files are merged
 
 - `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.clinerules` are files you may already have. dev-guardian manages only a delimited block inside them (`<!-- dev-guardian:begin -->` … `<!-- dev-guardian:end -->`); everything outside it is never touched. A stale block is reported as `needs_update` until you pass `--update-mcp`. A file that mentions dev-guardian without the markers and is not byte-for-byte a template an earlier release installed is reported as `manual_merge_required` and left alone.
-- `.cursor/rules/dev-guardian.mdc` and `.windsurf/rules/dev-guardian.md` belong to dev-guardian alone and are written whole, because both hosts only honour a rules file whose YAML frontmatter is its very first bytes.
+- `.cursor/rules/dev-guardian.mdc` and `.windsurf/rules/dev-guardian.md` belong to dev-guardian alone and are written whole, because both hosts only honour a rules file whose YAML frontmatter is its very first bytes. Both are agent-requested (Cursor: a description, `alwaysApply: false`; Windsurf: `trigger: model_decision`): the host loads them when the task matches their description — security, dependencies, bugs, quality, compliance, or installing a package, an AI skill or an MCP server — instead of on every request.
 - Codex's TOML entry is compared by content; `--update-mcp` replaces every `[mcp_servers.dev-guardian]` table and sub-table in the file, wherever they are.
 
 ## Manual configuration

@@ -1,7 +1,8 @@
 # Contributing to dev-guardian
 
 Thanks for helping. This is a Claude Code / Cowork plugin plus an MCP server;
-[CLAUDE.md](CLAUDE.md) is the orientation, and holds the conventions in full.
+[CLAUDE.md](CLAUDE.md) is the orientation and its hard rules; the conventions in full are in
+[docs/maintainers/](docs/maintainers/), one file per area.
 
 ## Build & test
 

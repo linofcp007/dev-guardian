@@ -1,6 +1,6 @@
 ---
 name: guardian-scanskill
-description: Vet a third-party AI skill, MCP server, plugin or agent BEFORE installing it, with the scan_skill MCP tool — prompt injection, data exfiltration, privilege escalation, excessive agency, MCP tool poisoning, dangerous code, OSV CVEs — rolled into a 0-100 risk score and a SAFE → DO NOT INSTALL verdict. EN triggers — "is this skill safe?", "scan this skill", "audit this MCP server", "should I install this plugin?", "vet this agent", "is this plugin malicious?". PT — "esta skill é segura?", "scaneia esta skill", "audita este MCP", "devo instalar este plugin?", "este plugin é malicioso?", "verifica esta skill antes de instalar". ES — "¿esta skill es segura?", "escanea esta skill", "audita este MCP", "¿debo instalar este plugin?", "¿este plugin es malicioso?", "verifica esta skill antes de instalar". Respond in the user's language.
+description: "Vet a third-party AI skill, MCP server, plugin or agent before installing it — prompt injection, exfiltration, excessive agency, tool poisoning, dangerous code, CVEs — scored 0-100 with a SAFE to DO NOT INSTALL verdict. Not for the project's own MCP configuration (guardian-security)."
 ---
 
 # Guardian Skill — verificar skills de IA / servidores MCP / agentes antes de instalar
@@ -13,7 +13,7 @@ correr no teu ambiente.
 Uma skill é só texto e scripts que o modelo lê e executa com os privilégios do
 utilizador. Uma skill maliciosa pode trazer prompt injection, exfiltrar segredos,
 envenenar a memória ou esconder instruções dentro da descrição de uma tool MCP.
-Este módulo encontra isso antes de o utilizador confiar nela.
+Este módulo encontra isso antes de o utilizador confiar nela. Responde no idioma do utilizador.
 
 ## Motor
 

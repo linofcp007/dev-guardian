@@ -1,130 +1,97 @@
 ---
 name: guardian
-description: Guardian router — picks the right dev-guardian command or skill for security, bugs, code quality, dependencies, compliance, performance and observability, all backed by the dev-guardian MCP tools and open-source scanners (Semgrep, Trivy, gitleaks). Use for a holistic checkup or when it is unclear which module fits. EN triggers — "guardian", "full checkup", "audit the project", "is this safe?", "what's broken?", "check everything", "before push / deploy / release", "production is down", "we leaked a key", "project health". PT — "faz um checkup", "audita o projeto", "está seguro?", "o que está mal?", "verifica tudo", "antes do push / deploy / release", "rebentou em produção", "vazou uma chave", "estado do projeto". ES — "haz un chequeo", "audita el proyecto", "¿es seguro?", "¿qué está roto?", "revisa todo", "antes del push / despliegue / release", "se cayó producción", "se filtró una clave", "estado del proyecto". Responds in the user's language.
+description: dev-guardian's router — a full project checkup (security, bugs, quality, dependencies, compliance) or the right dev-guardian command when it is unclear which fits; also "production is down", "we leaked a key", "project health". Not for one clear task another guardian skill owns.
 ---
 
-# Guardian — Security, Bugfix & Quality
+# Guardian — router
 
-Skill principal: encaminha o pedido para o comando ou a skill certa. Tudo o que o Guardian faz passa pelas **tools MCP do dev-guardian** — elas guardam baselines, deltas, supressões e histórico em `.guardian/guardian.db`, coisa que correr um scanner à mão não faz. Correr Semgrep / Trivy / gitleaks diretamente é só o fallback de quando o servidor MCP não está disponível, e diz-se isso ao utilizador.
+Route the request to the right command or skill. Respond in the user's language (EN, PT or ES); keep terms
+such as SAST, CVE or secrets in English.
 
-## Idioma da resposta
+## Invariants
 
-O Guardian opera em **EN, PT e ES**. Responde sempre no idioma da última mensagem do utilizador; se ele trocar de idioma, troca também. Termos técnicos universais (SAST, CVE, RCE, CI/CD, secrets, supply chain) ficam em inglês. Os módulos para onde encaminhas herdam esta regra.
+1. **Use the dev-guardian MCP tools**, never a scanner run by hand: they keep baselines, deltas, suppressions and
+   history in `.guardian/guardian.db`. A raw scanner run is only the fallback when the MCP server is down — say so.
+   A scanner that did not run is a gap, never "0 findings".
+2. **Fix only with confirmation**, showing the diff — except a live secret, which you flag at once.
+3. **Never run `db adopt` yourself.** On a `storage_warning` (the project's `.guardian/guardian.db` is not used),
+   tell the user and give them the command to run in their own terminal:
+   [`references/storage.md`](references/storage.md).
 
-## Filosofia
+## Commands
 
-**Pragmático por defeito, paranoid quando crítico.**
-
-- Não bloqueia trabalho por coisas cosméticas.
-- Alerta com clareza quando algo é genuinamente perigoso (secrets, RCE, SQL injection, supply chain, quebra de produção).
-- Corrige o que dá para corrigir — sempre com confirmação; o resto reporta com prioridade clara.
-- Explica o porquê: o utilizador deve sair a perceber, não só a obedecer.
-- Um scanner que não correu é uma lacuna, nunca um "0 findings".
-
-## Comandos
-
-| Comando | Modos / argumentos | O que faz |
+| Command | Modes / arguments | What it does |
 | --- | --- | --- |
-| `/guardian-scan` | nenhum, `--staged`, `--uncommitted`, `--unpushed`, `--branch [base]`, `--since <ref>`, `--incoming`, `<path>…` | Scan de segurança do projeto inteiro (`security_scan_full`) ou só do que mudou (`scan_sast`, `scan_secrets`, `bug_hunt` com `scope`) |
-| `/guardian-fix` | hint, fingerprint, `--pr [--apply]`, `--verify` | Encontra e corrige bugs, aplica fixes dos scanners em PRs (`create_fix_pr`), prova a correção (re-scan + `diff_scans`) |
-| `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Relatórios a partir dos scans e do histórico |
-| `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Resposta a incidentes |
-| `/guardian-release` | `predeploy`, `prerelease` | Gates de go / no-go antes de deploy e de release |
-| `/guardian-status` | — | Dashboard de uma página (último scan, deltas, baseline, supressões) |
-| `/guardian-infra` | `docker`, `iac` | Containers (Dockerfile, imagem, compose) e IaC |
-| `/guardian-wp` | caminho ou URL | Auditoria WordPress |
-| `/guardian-dotnet` | caminho | Auditoria C# / .NET |
-| `/g` | — | Atalho para esta skill |
+| `/guardian-scan` | none, `--staged`, `--uncommitted`, `--unpushed`, `--branch`, `--since`, `--incoming`, paths | Security scan, whole or only what changed |
+| `/guardian-fix` | hint, fingerprint, `--pr [--apply]`, `--verify` | Find and fix bugs, scanner fixes as PRs, prove a fix |
+| `/guardian-report` | `exec`, `handoff`, `trend`, `debt`, `changelog`, `soc2` | Reports from the scans and the history |
+| `/guardian-incident` | `panic`, `leak`, `rollback`, `postmortem` | Incident response |
+| `/guardian-release` | `predeploy`, `prerelease` | Go / no-go before a deploy or a release |
+| `/guardian-status` | — | One-page health dashboard |
+| `/guardian-infra` | `docker`, `iac` | Containers and IaC |
+| `/guardian-wp` | path or URL | WordPress audit |
+| `/guardian-dotnet` | path | C# / .NET audit |
+| `/g` | — | Shortcut to this router |
 
-## Skills (invocáveis diretamente, por exemplo `/guardian-review`)
+## Skills
 
-| Skill | Quando |
+| Skill | When |
 | --- | --- |
-| `/guardian-security` | Scan de segurança com triagem (severidade real, falsos positivos, DAST, alcançabilidade) |
-| `/guardian-bugfix` | Caçar bugs de implementação com método (reproduzir → isolar → diagnosticar → corrigir) |
-| `/guardian-init` | Primeira vez num projeto: toolchain, configs, hooks de pre-commit |
-| `/guardian-review` | Revisão sénior antes de PR, merge ou deploy (`review_pr`) |
-| `/guardian-deps` | CVEs, plano de upgrades, vetting depois de um install, Renovate, licenças, SBOM |
-| `/guardian-quality` | Qualidade, dívida técnica e os budgets de `.guardian/budgets.yml` |
-| `/guardian-compliance` | RGPD, licenças, SBOM, evidência para auditoria |
-| `/guardian-observability` | Logging estruturado, métricas, error tracking, alertas |
-| `/guardian-performance` | Lighthouse, k6, budgets de performance, profiling |
-| `/guardian-grill` | Sabatina ao diff: o humano ainda percebe as decisões de domínio? |
-| `/guardian-improve` | Dívida medida → specs de melhoria para o dev-spec-driven |
-| `/guardian-scanskill` | Vet de skill / servidor MCP / agente de terceiros antes de instalar |
+| `guardian-security` | "is my code secure?" — whole-project scan and triage |
+| `guardian-bugfix` | find unknown bugs, reproduce → isolate → fix |
+| `guardian-review` | review pending changes before a PR or merge |
+| `guardian-quality` | smells, complexity, duplication, tech debt, budgets |
+| `guardian-deps` | CVEs, upgrades, vetting a package, Renovate |
+| `guardian-compliance` | GDPR in the code, licences, SBOM, audit evidence |
+| `guardian-performance` | slow pages and endpoints, Lighthouse, k6 |
+| `guardian-observability` | logging, metrics, error tracking, alerts |
+| `guardian-scanskill` | vet a third-party skill / MCP server / plugin before installing |
+| `/guardian-init` | first setup in a project (user-started, as the next two) |
+| `/guardian-grill` | the human explains the diff's decisions before merge |
+| `/guardian-improve` | measured debt → dev-spec-driven improvement specs |
 
-## Momentos do fluxo de trabalho
+## Workflow moments
 
-| O utilizador diz | Encaminha para |
+| The user says | Route to |
 | --- | --- |
-| "vou fazer push" / "before push" | `/guardian-scan --unpushed` |
-| "vê o que tenho staged" / "check my diff" | `/guardian-scan --staged` ou `--uncommitted` |
-| "scan desta branch" | `/guardian-scan --branch` |
-| "o que mudou desde a v1.2?" | `/guardian-scan --since v1.2` e `/guardian-report changelog` |
-| "puxei a main" / "merged a PR" | `/guardian-scan --incoming` |
-| "verifica este ficheiro" | `/guardian-scan <ficheiro>` |
-| "antes do PR / merge" | `guardian-review` e, para as decisões de domínio, `guardian-grill` |
-| "posso instalar o X?" / "vou adicionar esta dependência" | `vet_packages { ecosystem: "npm", packages: ["X"] }` antes do install (`guardian-deps`, secção 3) |
-| "acabei de instalar deps" | `guardian-deps` (secção pós-install) |
-| "já corrigi, confirma" | `/guardian-fix --verify` |
-| "antes do deploy" | `/guardian-release predeploy` |
-| "antes da release" | `/guardian-release prerelease` |
-| "rebentou em produção" | `/guardian-incident panic` |
-| "vazou um secret" | `/guardian-incident leak` |
-| "é seguro fazer rollback?" | `/guardian-incident rollback` |
-| "post-mortem" | `/guardian-incident postmortem` |
-| "vou de férias" / "passa o projeto" | `/guardian-report handoff` |
-| "estamos a melhorar?" | `/guardian-report trend` |
-| "qual é a dívida técnica?" | `/guardian-report debt`, depois `guardian-improve` |
-| "estamos dentro do budget?" | `guardian-quality` (budgets) e `guardian-performance` |
-| "relatório executivo" | `/guardian-report exec` |
-| "evidência SOC 2 / ISO 27001" | `/guardian-report soc2` |
-| "vê o Dockerfile / o terraform" | `/guardian-infra docker` / `/guardian-infra iac` |
-| "esta skill é segura?" | `guardian-scanskill` |
-| "o `.mcp.json` / as settings do agente são seguras?" | `audit_agent_config { project_path: "<project>" }` |
-| "as tools que o servidor MCP X expõe são seguras?" / "mudaram?" | `guardian-security` → `audit_mcp_tools { servers: ["X"] }` (executa o servidor — só os nomes que o utilizador indicar) |
-| "um modelo que confirme estes findings" / "o que é que os scanners não veem?" | `guardian-security` → `llm_scan_start` (uma tarefa por subagente novo; `same_context` declarado onde não há subagentes) |
+| "before push" | `/guardian-scan --unpushed` |
+| "check my diff" / "scan this branch" | `/guardian-scan --staged`, `--uncommitted` or `--branch` |
+| "what changed since v1.2?" | `/guardian-scan --since v1.2`, then `/guardian-report changelog` |
+| "I pulled main" / "check this file" | `/guardian-scan --incoming` / `/guardian-scan <file>` |
+| "before the PR / merge" | `guardian-review`; for the domain decisions, `/guardian-grill` |
+| "close this feature" in a `.specs/` project | dev-spec-driven's `/spec-finish` — see [`references/dev-spec.md`](references/dev-spec.md) |
+| "can I install X?" / "adding this dependency" | `vet_packages { ecosystem: "npm", packages: ["X"] }` before the install (`guardian-deps`) |
+| "I just installed deps" | `guardian-deps` (post-install) |
+| "fixed it, confirm" | `/guardian-fix --verify` |
+| "before deploy" / "can this go to production?" | `/guardian-release predeploy` |
+| "before the release / tag" | `/guardian-release prerelease` |
+| "production is down" / "a secret leaked" | `/guardian-incident panic` / `leak` |
+| "is a rollback safe?" / "post-mortem" | `/guardian-incident rollback` / `postmortem` |
+| "handing the project over" / "are we improving?" | `/guardian-report handoff` / `trend` |
+| "how much tech debt?" | `/guardian-report debt`, then `/guardian-improve` |
+| "within budget?" | `guardian-quality` and `guardian-performance` |
+| "executive report" / "SOC 2 evidence" | `/guardian-report exec` / `soc2` |
+| "check the Dockerfile / Terraform" | `/guardian-infra docker` / `iac` |
+| "is the agent config / `.mcp.json` safe?" | `audit_agent_config { project_path: "<project>" }` |
+| "are MCP server X's tools safe?" | `guardian-security` → `audit_mcp_tools { servers: ["X"] }` (it starts X) |
+| "have a model verify the findings" | `guardian-security` → `llm_scan_start` |
+| AI / LLM features in the app | `/guardian-scan` — see [`references/llm-apps.md`](references/llm-apps.md) |
 
-**Features de AI / LLM dentro da app** (prompt injection, custo, evals): `/guardian-scan` — o `scan_sast`, e por isso o `security_scan_full` e o `review_pr`, corre sempre o pack LLM do plugin (Python e JS/TS, também com `local_only`): saída do modelo a chegar a `eval`/`exec`, à shell ou a SQL, o nome de uma ferramenta escolhido pelo modelo sem lista de permitidos, `trust_remote_code=True`, `torch.load` inseguro, dados do pedido HTTP no prompt de sistema e chamadas à OpenAI sem limite de tokens (a lista completa está no `guardian-security`). O que o pack não vê — prompt injection vinda de documentos ou de resultados de tools, efeitos do output do modelo fora desses sinks (escritas na DB, chamadas externas), quotas e ciclos agênticos sem teto, evals — revê-se à mão com a secção "Features de AI / LLM" da checklist do `guardian-review`. Di-lo ao utilizador em vez de fingir cobertura total.
+When the request is ambiguous, ask one short question — never assume silently.
 
-**Checkup completo** ("faz um checkup", "verifica tudo", "diagnóstico do projeto", "do a full checkup", "haz un chequeo"): `audit_executive { project_path: "<project>" }` (segurança, qualidade, dependências, compliance) mais `bug_hunt { project_path: "<project>" }`, num único relatório consolidado. O `audit_executive` corre os sub-scans em paralelo, envia métricas ao registo do Semgrep, descarrega a base de dados do Trivy e, no `deps_audit`, instala os requirements do PyPI num virtualenv temporário. Se o utilizador não quiser nada disso, passa `local_only: true`: o Semgrep fica só com as regras em disco e o `scan_wordpress` é saltado, mas o Trivy, o `deps_audit` e um restore .NET continuam a sair para a rede — o resultado lista-os em `local_only_gaps`; di-lo ao utilizador.
+## Full checkup
 
-**Com o dev-spec-driven:** o `/spec-finish` dele pode correr o gate do dev-guardian como check do projeto (`spec_init { guardian: true }`; na CLI dele, `init --guardian`) — o `scan --fail-on high` contra o `.guardian/baseline.json`: só um finding novo de severidade `high` ou acima bloqueia o fecho, e um exit 2 é um scan incompleto, nunca aprovado. Se bloquear, mostra o finding; depois de o utilizador o rever, aceita-se com `baseline update` (e o commit do `.guardian/baseline.json`) ou com uma supressão que o próprio scanner lê (`nosemgrep`, `.trivyignore`, `.gitleaksignore`) — nunca forçando o fecho. O `suppress_finding` não chega a este gate: o `scan` corre numa base de dados descartável.
+"Full checkup", "check everything", "audit the project": `audit_executive { project_path: "<project>" }`
+(security, quality, dependencies, compliance — stack-aware) plus `bug_hunt { project_path: "<project>" }`, in
+one consolidated report. `local_only: true` keeps Semgrep on the rules on disk (and skips `scan_wordpress`);
+Trivy, `deps_audit` and a .NET restore still reach the network — the result lists them in `local_only_gaps`.
 
-Se o pedido é ambíguo, pergunta de forma curta — não assumas em silêncio.
+## General flow
 
-## Fluxo geral
+1. `detect_stack { project_path: "<project>" }` (stacks and scanners: [`references/stacks.md`](references/stacks.md)).
+2. Respect what is already configured (`.semgrep.yml`, `.gitleaks.toml`, `renovate.json`, `.pre-commit-config.yaml`).
+3. Route (tables above).
+4. Report by priority — 🔴 blocks deploy / merge · 🟡 fix before release · 🟢 backlog · ℹ️ info — and offer
+   the fix (`/guardian-fix`), with confirmation.
 
-1. **Detetar o stack** primeiro: `detect_stack { project_path: "<project>" }` — linguagens, package managers, frameworks, ferramentas existentes, `has_docker`, `has_compose`, `has_iac` (`has_terraform`, `has_kubernetes`, `has_ansible`), CI, e `projects` por sub-diretório.
-2. **Ver o que já está configurado** (`.semgrep.yml`, `.gitleaks.toml`, `renovate.json`, `dependabot.yml`, `.pre-commit-config.yaml`) e respeitá-lo.
-3. **Encaminhar** para o comando ou a skill certa (tabelas acima).
-4. **Reportar com prioridade clara**:
-   - 🔴 **Crítico** — bloqueia deploy / merge (RCE, secrets expostos, SQL injection, vulnerabilidades exploráveis ativas)
-   - 🟡 **Alto** — corrigir antes da release (XSS, CSRF, dependências com CVE)
-   - 🟢 **Médio / Baixo** — backlog (lint, code smells, refactors)
-   - ℹ️ **Info** — observações úteis, não acionáveis
-5. **Oferecer o fix** sempre que possível (`/guardian-fix`), com confirmação — exceto em emergência (um secret vivo exposto), em que se alerta de imediato.
-
-## Quando a base de dados do projeto não é usada (atualização da 3.0.0)
-
-Se o `health_status` devolver `storage_warning`, ou os `warnings` de um scan disserem que o `.guardian/guardian.db` do projeto não é usado, o histórico está a ir para uma base de dados de recurso, por utilizador: uma base de dados criada antes da 3.1.0, ou copiada de outro sítio, nunca é aceite automaticamente. Diz isso ao utilizador e dá-lhe o comando que o aviso traz, para ele o correr **num terminal, ele próprio**, se a base de dados for dele — `node <plugin>/cli/dev-guardian.mjs db adopt --project <project>` mostra o que ela contém, e o mesmo com `--yes` regista-a. **Nunca o corras tu**, nem com nem sem `--yes`: decide em que dados o dev-guardian confia, e essa decisão não cabe a um assistente que lê o repositório. Aponta-lhe primeiro o que pesar, no mesmo `health_status`: `suppressions.all_projects` (supressões sem projeto, que escondem findings em todos os projetos) e `storage.future_dated_scans_ignored`.
-
-## Stacks suportadas
-
-JavaScript/TypeScript (npm, yarn, pnpm, bun), Python (pip, poetry, uv), PHP (composer, incluindo WordPress), Go, Rust, Ruby, Java/Kotlin (maven, gradle), C# / .NET, Docker e compose, IaC (Terraform, Kubernetes, Ansible, CloudFormation, Helm), GitHub Actions. Projetos polyglot são suportados.
-
-## Ferramentas
-
-Corridas pelas tools MCP: Semgrep, Trivy, gitleaks, Syft, Bandit, ruff, radon, jscpd, ESLint (quando instalado no projeto), staticcheck, hadolint, cosign, Lighthouse, k6, nuclei, PHPCS, WP-CLI, WPScan, os analyzers do .NET SDK, OSV.dev.
-
-Recomendadas mas configuradas à mão (as tools não as correm): Renovate (o `init_project` instala o `renovate.json`), GlitchTip / Sentry, Prometheus + Grafana, Uptime Kuma, Artillery, Playwright.
-
-## Cross-platform
-
-Linux, macOS e Windows. `check_toolchain {}` mostra o que está instalado e o comando de instalação para este sistema; `install_toolchain { dry_run: true }` mostra o plano — em Linux/macOS usa os scripts em `scripts/install/`, em Windows usa winget, scoop ou choco (ou WSL). O Syft, o Trivy e o gitleaks vêm de uma release fixada, com o sha256 verificado (em Windows, um ZIP descarregado pelo PowerShell para `%USERPROFILE%\.local\bin`, onde o dev-guardian os procura mesmo fora do `PATH`); no macOS, o Syft e o gitleaks vêm primeiro do Homebrew.
-
-## Quando NÃO usar
-
-- Tarefas puramente conversacionais ou de design, sem código para inspecionar.
-- Projetos que ainda não existem — primeiro escreve-se algo, depois `guardian-init`.
-- "Lê este ficheiro" ou "explica este código" — isso não justifica scans.
+No scan for a design chat with no code, a project that does not exist yet, or "explain this file".

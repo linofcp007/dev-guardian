@@ -1,5 +1,5 @@
 ---
-description: Incident response — panic (prod broke), leak (secret exposed), rollback (is it safe?), postmortem. Incidente. Incidente.
+description: "Incident response — production down (panic), a leaked secret (leak), rollback, postmortem."
 argument-hint: "<panic | leak | rollback | postmortem> [symptom, suspected secret, rollback target or incident description]"
 ---
 

@@ -1,7 +1,9 @@
 /**
- * Readers for the plugin's prose surface — `commands/*.md` and
- * `skills/<name>/SKILL.md` — shared by the tests that hold that surface to the
- * MCP tools it drives.
+ * Readers for the plugin's prose surface — `commands/*.md`,
+ * `skills/<name>/SKILL.md` and the `skills/<name>/references/*.md` a skill
+ * loads on demand — shared by the tests that hold that surface to the MCP
+ * tools it drives. A reference file is model-facing prose like its SKILL.md,
+ * so `allDocs()` holds it to every check the skill gets.
  *
  * Two things live here and nowhere else:
  *
@@ -16,7 +18,7 @@
  *     schema, nested keys (`scope.diff.base`) and enum values included.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
@@ -29,8 +31,8 @@ export const SKILLS_DIR = resolve(REPO_ROOT, 'skills');
 export interface PluginDoc {
   /** Repo-relative, POSIX. */
   rel: string;
-  kind: 'command' | 'skill';
-  /** Command file stem or skill directory name — what `/name` invokes. */
+  kind: 'command' | 'skill' | 'reference';
+  /** Command file stem or skill directory name — what `/name` invokes; for a reference, `<skill>/<file stem>`. */
   name: string;
   text: string;
   /** The raw frontmatter block, without the `---` fences. */
@@ -61,8 +63,20 @@ export function skillDocs(): PluginDoc[] {
     .map((name) => load(`skills/${name}/SKILL.md`, 'skill', name));
 }
 
+/** `skills/<name>/references/*.md` — read by the model only when its SKILL.md points there. */
+export function referenceDocs(): PluginDoc[] {
+  return skillDocs().flatMap((skill) => {
+    const dir = resolve(SKILLS_DIR, skill.name, 'references');
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.md'))
+      .sort()
+      .map((f) => load(`skills/${skill.name}/references/${f}`, 'reference', `${skill.name}/${f.slice(0, -'.md'.length)}`));
+  });
+}
+
 export function allDocs(): PluginDoc[] {
-  return [...commandDocs(), ...skillDocs()];
+  return [...commandDocs(), ...skillDocs(), ...referenceDocs()];
 }
 
 /** The frontmatter as a strict YAML loader sees it; throws on invalid YAML. */
