@@ -1,11 +1,12 @@
 /**
- * The spawn primitive the children dev-guardian starts through its runners
- * go through (review 8, finding 4) — git's own spawns are
- * `platform/gitSafety.ts`'s, and `mcpaudit/launch.ts` starts one `node -e`:
- * `cross-spawn` — Node's `spawn` with Windows' command resolution done right,
- * a `.cmd` / `.bat` file such as `npm.cmd` run through `cmd.exe` with its
- * arguments escaped, a shebang read; the spawn the MCP SDK's own stdio client
- * uses — with `shell: false` always and `windowsHide`.
+ * The spawn primitive under dev-guardian's runners (review 8, finding 4):
+ * every child `runProcess`, `startChild` and `captureOutput` start goes
+ * through it — not git's own spawns (`platform/gitSafety.ts`) nor the one
+ * `node -e` of `mcpaudit/launch.ts`. It is `cross-spawn` — Node's `spawn`
+ * with Windows' command resolution done right, a `.cmd` / `.bat` file such as
+ * `npm.cmd` run through `cmd.exe` with its arguments escaped, a shebang read;
+ * the spawn the MCP SDK's own stdio client uses — with `shell: false` always
+ * and `windowsHide`.
  *
  * ## A batch file is handed only arguments `cmd.exe` cannot misread
  *
