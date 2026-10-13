@@ -39336,6 +39336,78 @@ async function workingTreePass(opts, result, hasCommits) {
   }
   await filesPass(opts, result, files);
 }
+function copyForScan(opts, candidates2, tmp, limits) {
+  const { maxFile, maxTotal } = limits;
+  const unreadable = [];
+  let copied = 0;
+  let oversized = 0;
+  let overTotal = 0;
+  let total = 0;
+  for (const rel2 of candidates2) {
+    const from = join40(opts.projectPath, rel2);
+    let size;
+    try {
+      const st = lstatSync13(from);
+      if (!st.isFile()) continue;
+      size = st.size;
+    } catch {
+      continue;
+    }
+    if (size > maxFile) {
+      oversized += 1;
+      continue;
+    }
+    if (total + size > maxTotal) {
+      overTotal += 1;
+      continue;
+    }
+    const read3 = readProjectBytes(opts.projectPath, rel2, maxFile);
+    if (read3.status === "absent") continue;
+    if (read3.status === "refused") {
+      if (read3.reason === "too-large") oversized += 1;
+      else unreadable.push(`${rel2} (${describeReadRefusal(read3.reason)})`);
+      continue;
+    }
+    try {
+      const to = join40(tmp, rel2);
+      mkdirSync8(dirname17(to), { recursive: true });
+      writeFileSync7(to, read3.bytes);
+      copied += 1;
+      total += read3.bytes.length;
+    } catch (e) {
+      unreadable.push(`${rel2} (${errorCode(e)})`);
+    }
+  }
+  const gaps = [];
+  if (unreadable.length > 0) {
+    gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(", ")}${unreadable.length > 5 ? ", \u2026" : ""}`);
+  }
+  if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
+  if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
+  return { copied, gaps };
+}
+async function scanCopy(opts, result, tmp, okReason, gaps) {
+  const outFile = join40(opts.reportDir, "secrets-working-tree.json");
+  rmSync8(outFile, { force: true });
+  const target = reportTarget(opts, outFile);
+  const args = [
+    "detect",
+    "--no-git",
+    "--no-banner",
+    "--report-format=json",
+    `--report-path=${target.path}`,
+    ...target.redact,
+    "-s",
+    ".",
+    `--gitleaks-ignore-path=${opts.projectPath}`
+  ];
+  const projectConfig = join40(opts.projectPath, ".gitleaks.toml");
+  if (presentInProject(opts.projectPath, ".gitleaks.toml")) args.push(`--config=${projectConfig}`);
+  const run2 = await runProcess({ command: "gitleaks", args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
+  if (run2.outcome === "cancelled") result.cancelled = true;
+  const report = takeReport(opts, target.path, outFile);
+  recordFilesRun(result, GITLEAKS_WORKING_TREE, run2, report, "working_tree", okReason, gaps, []);
+}
 async function filesPass(opts, result, files, labels = {
   none: "no uncommitted or untracked files",
   scanned: (n) => `working tree: ${n} uncommitted or untracked file(s) scanned`
@@ -39355,54 +39427,8 @@ async function filesPass(opts, result, files, labels = {
     result.tools_run.push({ name, status: "failed", reason: `working tree: no temporary directory: ${message(e)}` });
     return;
   }
-  const gaps = [];
-  const notes = [];
-  let copied = 0;
   try {
-    const unreadable = [];
-    let oversized = 0;
-    let overTotal = 0;
-    let total = 0;
-    for (const rel2 of candidates2) {
-      const from = join40(opts.projectPath, rel2);
-      let size;
-      try {
-        const st = lstatSync13(from);
-        if (!st.isFile()) continue;
-        size = st.size;
-      } catch {
-        continue;
-      }
-      if (size > maxFile) {
-        oversized += 1;
-        continue;
-      }
-      if (total + size > maxTotal) {
-        overTotal += 1;
-        continue;
-      }
-      const read3 = readProjectBytes(opts.projectPath, rel2, maxFile);
-      if (read3.status === "absent") continue;
-      if (read3.status === "refused") {
-        if (read3.reason === "too-large") oversized += 1;
-        else unreadable.push(`${rel2} (${describeReadRefusal(read3.reason)})`);
-        continue;
-      }
-      try {
-        const to = join40(tmp, rel2);
-        mkdirSync8(dirname17(to), { recursive: true });
-        writeFileSync7(to, read3.bytes);
-        copied += 1;
-        total += read3.bytes.length;
-      } catch (e) {
-        unreadable.push(`${rel2} (${errorCode(e)})`);
-      }
-    }
-    if (unreadable.length > 0) {
-      gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(", ")}${unreadable.length > 5 ? ", \u2026" : ""}`);
-    }
-    if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
-    if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
+    const { copied, gaps } = copyForScan(opts, candidates2, tmp, { maxFile, maxTotal });
     if (copied === 0) {
       result.tools_run.push({
         name,
@@ -39411,26 +39437,7 @@ async function filesPass(opts, result, files, labels = {
       });
       return;
     }
-    const outFile = join40(opts.reportDir, "secrets-working-tree.json");
-    rmSync8(outFile, { force: true });
-    const target = reportTarget(opts, outFile);
-    const args = [
-      "detect",
-      "--no-git",
-      "--no-banner",
-      "--report-format=json",
-      `--report-path=${target.path}`,
-      ...target.redact,
-      "-s",
-      ".",
-      `--gitleaks-ignore-path=${opts.projectPath}`
-    ];
-    const projectConfig = join40(opts.projectPath, ".gitleaks.toml");
-    if (presentInProject(opts.projectPath, ".gitleaks.toml")) args.push(`--config=${projectConfig}`);
-    const run2 = await runProcess({ command: "gitleaks", args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
-    if (run2.outcome === "cancelled") result.cancelled = true;
-    const report = takeReport(opts, target.path, outFile);
-    recordFilesRun(result, name, run2, report, "working_tree", labels.scanned(copied), gaps, notes);
+    await scanCopy(opts, result, tmp, labels.scanned(copied), gaps);
   } finally {
     try {
       rmSync8(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

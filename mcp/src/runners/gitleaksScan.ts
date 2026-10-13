@@ -521,6 +521,94 @@ async function workingTreePass(opts: ScanRun, result: GitleaksScanResult, hasCom
 }
 
 /**
+ * {@link filesPass}'s copy: each candidate that is still a regular file, read
+ * through `platform/projectFs.ts` and written below `tmp` — or counted in the
+ * gaps (unreadable, over the per-file size, over the total).
+ */
+function copyForScan(
+  opts: ScanRun,
+  candidates: readonly string[],
+  tmp: string,
+  limits: { maxFile: number; maxTotal: number },
+): { copied: number; gaps: string[] } {
+  const { maxFile, maxTotal } = limits;
+  const unreadable: string[] = [];
+  let copied = 0;
+  let oversized = 0;
+  let overTotal = 0;
+  let total = 0;
+  for (const rel of candidates) {
+    const from = join(opts.projectPath, rel);
+    let size: number;
+    try {
+      const st = lstatSync(from);
+      if (!st.isFile()) continue;
+      size = st.size;
+    } catch {
+      continue; // deleted since git listed it: nothing to read
+    }
+    if (size > maxFile) {
+      oversized += 1;
+      continue;
+    }
+    if (total + size > maxTotal) {
+      overTotal += 1;
+      continue;
+    }
+    // `platform/projectFs.ts`: judged on the descriptor it reads, so a
+    // file swapped for a FIFO or a link since the lstat above is refused,
+    // never waited on or followed out of the project (review of 3.0, W2E).
+    const read = readProjectBytes(opts.projectPath, rel, maxFile);
+    if (read.status === 'absent') continue; // deleted since git listed it
+    if (read.status === 'refused') {
+      if (read.reason === 'too-large') oversized += 1;
+      else unreadable.push(`${rel} (${describeReadRefusal(read.reason)})`);
+      continue;
+    }
+    try {
+      const to = join(tmp, rel);
+      mkdirSync(dirname(to), { recursive: true });
+      writeFileSync(to, read.bytes);
+      copied += 1;
+      total += read.bytes.length;
+    } catch (e) {
+      unreadable.push(`${rel} (${errorCode(e)})`);
+    }
+  }
+  const gaps: string[] = [];
+  if (unreadable.length > 0) {
+    gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(', ')}${unreadable.length > 5 ? ', …' : ''}`);
+  }
+  if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
+  if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
+  return { copied, gaps };
+}
+
+/** gitleaks over {@link copyForScan}'s copy at `tmp`, recorded as the working-tree pass. */
+async function scanCopy(opts: ScanRun, result: GitleaksScanResult, tmp: string, okReason: string, gaps: readonly string[]): Promise<void> {
+  const outFile = join(opts.reportDir, 'secrets-working-tree.json');
+  rmSync(outFile, { force: true });
+  const target = reportTarget(opts, outFile);
+  const args = [
+    'detect',
+    '--no-git',
+    '--no-banner',
+    '--report-format=json',
+    `--report-path=${target.path}`,
+    ...target.redact,
+    '-s',
+    '.',
+    `--gitleaks-ignore-path=${opts.projectPath}`,
+  ];
+  const projectConfig = join(opts.projectPath, '.gitleaks.toml');
+  if (presentInProject(opts.projectPath, '.gitleaks.toml')) args.push(`--config=${projectConfig}`);
+  const run = await runProcess({ command: 'gitleaks', args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
+  if (run.outcome === 'cancelled') result.cancelled = true;
+  const report = takeReport(opts, target.path, outFile);
+  recordFilesRun(result, GITLEAKS_WORKING_TREE, run, report, 'working_tree', okReason, gaps, []);
+}
+
+/**
  * gitleaks over a list of uncommitted project files, copied to a temporary
  * directory (see the module comment for the size limits and what a file that
  * cannot be read costs).
@@ -550,58 +638,8 @@ async function filesPass(
     result.tools_run.push({ name, status: 'failed', reason: `working tree: no temporary directory: ${message(e)}` });
     return;
   }
-  const gaps: string[] = [];
-  const notes: string[] = [];
-  let copied = 0;
   try {
-    const unreadable: string[] = [];
-    let oversized = 0;
-    let overTotal = 0;
-    let total = 0;
-    for (const rel of candidates) {
-      const from = join(opts.projectPath, rel);
-      let size: number;
-      try {
-        const st = lstatSync(from);
-        if (!st.isFile()) continue;
-        size = st.size;
-      } catch {
-        continue; // deleted since git listed it: nothing to read
-      }
-      if (size > maxFile) {
-        oversized += 1;
-        continue;
-      }
-      if (total + size > maxTotal) {
-        overTotal += 1;
-        continue;
-      }
-      // `platform/projectFs.ts`: judged on the descriptor it reads, so a
-      // file swapped for a FIFO or a link since the lstat above is refused,
-      // never waited on or followed out of the project (review of 3.0, W2E).
-      const read = readProjectBytes(opts.projectPath, rel, maxFile);
-      if (read.status === 'absent') continue; // deleted since git listed it
-      if (read.status === 'refused') {
-        if (read.reason === 'too-large') oversized += 1;
-        else unreadable.push(`${rel} (${describeReadRefusal(read.reason)})`);
-        continue;
-      }
-      try {
-        const to = join(tmp, rel);
-        mkdirSync(dirname(to), { recursive: true });
-        writeFileSync(to, read.bytes);
-        copied += 1;
-        total += read.bytes.length;
-      } catch (e) {
-        unreadable.push(`${rel} (${errorCode(e)})`);
-      }
-    }
-    if (unreadable.length > 0) {
-      gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(', ')}${unreadable.length > 5 ? ', …' : ''}`);
-    }
-    if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
-    if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
-
+    const { copied, gaps } = copyForScan(opts, candidates, tmp, { maxFile, maxTotal });
     if (copied === 0) {
       result.tools_run.push({
         name,
@@ -610,27 +648,7 @@ async function filesPass(
       });
       return;
     }
-
-    const outFile = join(opts.reportDir, 'secrets-working-tree.json');
-    rmSync(outFile, { force: true });
-    const target = reportTarget(opts, outFile);
-    const args = [
-      'detect',
-      '--no-git',
-      '--no-banner',
-      '--report-format=json',
-      `--report-path=${target.path}`,
-      ...target.redact,
-      '-s',
-      '.',
-      `--gitleaks-ignore-path=${opts.projectPath}`,
-    ];
-    const projectConfig = join(opts.projectPath, '.gitleaks.toml');
-    if (presentInProject(opts.projectPath, '.gitleaks.toml')) args.push(`--config=${projectConfig}`);
-    const run = await runProcess({ command: 'gitleaks', args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
-    if (run.outcome === 'cancelled') result.cancelled = true;
-    const report = takeReport(opts, target.path, outFile);
-    recordFilesRun(result, name, run, report, 'working_tree', labels.scanned(copied), gaps, notes);
+    await scanCopy(opts, result, tmp, labels.scanned(copied), gaps);
   } finally {
     try {
       rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
