@@ -654,7 +654,7 @@ Audit a WordPress install with WP-CLI, changing nothing. mode install (default):
 
 ### `wp_report`
 
-What dev-guardian recorded about one WordPress install (project\_path = its root); no network. kind setup: the latest install, cron and REST audits (target\_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp\_install\_path, its version and state from WP-CLI. Run wp\_audit or wp\_vuln\_check first for fresh data.
+What dev-guardian recorded about one WordPress install (project\_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target\_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp\_install\_path, its version and state from WP-CLI, which boots the site (its PHP, its database). Run wp\_audit or wp\_vuln\_check first for fresh data.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -682,6 +682,8 @@ Known WordPress vulnerabilities and exposure. mode live (default): WPScan agains
 ## Hidden aliases
 
 Each of these names still answers `tools/call` with its own parameters, but `tools/list` does not show it: the listed tool runs it, with the same parameters, as one of its modes.
+
+A host permission matches the name that is called. A rule written for an alias (Claude Code: `mcp__plugin_dev-guardian_dev-guardian__wp_rest_audit`) does not apply to its fold call (`wp_vuln_check { mode: "rest" }`), which is what a model calls now. Write the rule for the listed name (`mcp__plugin_dev-guardian_dev-guardian__wp_vuln_check`): it covers every mode of the fold, since a permission cannot tell one mode's arguments from another's. Keep the alias's own rule as well, for anything that still calls the alias directly.
 
 | Name | Listed as |
 | --- | --- |

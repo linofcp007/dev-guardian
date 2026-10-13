@@ -47,6 +47,20 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   member. A fold's annotations cover every member's (`toolFolds.test.ts`); never fold across risk classes —
   Claude Code asks permission per tool name. The LLM scan's three steps stay separate: its versioned prompts
   name `llm_scan_submit`.
+- **A permission follows the name called, not the handler.** A user's allow / ask / deny rule written for a
+  member (`mcp__plugin_dev-guardian_dev-guardian__wp_rest_audit`) does not apply when the model calls the
+  fold (`wp_vuln_check { mode: "rest" }`): the rule to keep is the fold's name
+  (`mcp__plugin_dev-guardian_dev-guardian__wp_vuln_check`), which covers all its modes — no permission rule
+  reads a mode. `docs/tools.md` (Hidden aliases, from `test/docs/renderDocs.ts`) says so to users; a fold
+  that adds or moves a member says so in the upgrade notes too.
+- **Responses name what a model can call** (`responseToolNames.test.ts`): a prose string in `src/` — a hint,
+  a warning, a description, a suggested reason — names the fold call (`tools/fold.ts#listedCall`), never a
+  hidden alias. A string that IS the bare name is an identity and keeps the member's name: a finding's
+  `tool` (in every fingerprint), a `tools_run` / `missing_tools` entry, a scan type, `meta.sub_scan_ids`.
+  `audit_executive` answers both: `sub_scans.<member>.call`.
+- **Annotations are exact per member** (`annotations.ts`): a member that only reads files and the history is
+  never open-world, and anything that runs WP-CLI is — WP-CLI boots the site (its PHP, its database, the
+  update check of `wp plugin list`).
 - The MCP `instructions` say which family serves which job, that a scanner that did not run is a gap, the safety
   rules and the dev-spec-driven routing; the rules template says the same at length.
 

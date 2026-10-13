@@ -39,15 +39,24 @@ import {
   type ToolResult,
   type ToolRun,
 } from '../types.js';
+import { listedCall } from './fold.js';
 import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
 const WP_EXTRA_SUB_TOOLS = ['scan_wordpress'] as const;
+/**
+ * The .NET children, by the member names their scans, `tools_run` entries
+ * and `meta.sub_scan_ids` are recorded under; a response names each by the
+ * call a model makes (`call`: `dotnet_check { check: "secrets" }`).
+ */
 const DOTNET_EXTRA_SUB_TOOLS = ['scan_dotnet_secrets', 'dotnet_target_framework_check'] as const;
 
 interface SubScanSummary {
+  /** The member name the sub-scan is recorded under. */
   tool: string;
+  /** How a model runs it again: the listed call (`tools/fold.ts#listedCall`). */
+  call?: string;
   scan_id?: string;
   ok: boolean;
   /** Not run, on purpose: why (only under `local_only`). */
@@ -180,7 +189,7 @@ async function handler(
   );
 
   for (const [name, summary] of subResultsArr) {
-    subResults[name] = summary;
+    subResults[name] = { ...summary, call: listedCall(name) };
   }
 
   // Update audit row meta to link children.
@@ -267,13 +276,13 @@ async function handler(
   for (const summary of Object.values(subResults)) {
     if (summary.skipped !== undefined) {
       coverageList.push('partial');
-      coverage_warnings.push(`${summary.tool}: skipped — ${summary.skipped}`);
+      coverage_warnings.push(`${summary.call ?? summary.tool}: skipped — ${summary.skipped}`);
       continue;
     }
     if (!summary.ok) {
       coverageList.push('none');
       coverage_warnings.push(
-        `${summary.tool}: did not run (${summary.error?.code ?? 'failed'}) — not covered.`,
+        `${summary.call ?? summary.tool}: did not run (${summary.error?.code ?? 'failed'}) — not covered.`,
       );
       continue;
     }
@@ -281,7 +290,7 @@ async function handler(
     for (const m of summary.missing_tools ?? []) aggregateMissing.add(m);
     if (summary.coverage && summary.coverage !== 'full') {
       const loud = (summary.warnings ?? []).find((w) => w.startsWith('⚠️'));
-      coverage_warnings.push(loud ?? `${summary.tool}: coverage=${summary.coverage}.`);
+      coverage_warnings.push(loud ?? `${summary.call ?? summary.tool}: coverage=${summary.coverage}.`);
     }
   }
   const overallCoverage = worstCoverage(coverageList);

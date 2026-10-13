@@ -35,8 +35,13 @@
  *   - `openWorldHint` — it can reach beyond this machine on a default call:
  *     Semgrep's registry rules, Trivy's vulnerability database, OSV, EPSS /
  *     CISA KEV, package registries, NuGet feeds (a .NET build), WordPress.org,
- *     GitHub, or a URL under test. `local_only` / `GUARDIAN_OFFLINE=1` narrow
- *     some of these; the hint describes the default.
+ *     GitHub, or a URL under test — and WP-CLI, which boots the WordPress
+ *     site it is pointed at: its wp-config.php and plugins run, it connects
+ *     to the site's database (`DB_HOST` may be another machine) and `wp
+ *     plugin list` asks api.wordpress.org for updates. `local_only` /
+ *     `GUARDIAN_OFFLINE=1` narrow some of these; the hint describes the
+ *     default. A tool that only reads files and the history is never
+ *     open-world (review 10: `dotnet_check` claimed it for four local checks).
  */
 
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
@@ -88,8 +93,9 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, Hints>> = {
   generate_sbom: records(false),
   sbom_diff: records(false),
   dotnet_target_framework_check: records(false),
-  wp_cron_audit: records(false),
-  wp_plugin_check: records(false),
+  scan_dotnet_secrets: records(false), // reads appsettings*.json, *.config, nuget.config: no build, no feed
+  dotnet_efcore_audit: records(false), // reads the Migrations/ sources
+  dotnet_check: records(false), // fold: its four members read files or the history, nothing more
   audit_agent_config: records(false),
   register_custom_rules: records(false),
   export_vex: records(false),
@@ -101,11 +107,11 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, Hints>> = {
   scan_iac: records(true),
   scan_containers: records(true), // registry images, Trivy's database, Sigstore
   scan_secrets: records(true), // `verify_live` asks each provider whether a key is live
-  scan_dotnet_secrets: records(true), // a .NET build restores from NuGet feeds
-  dotnet_efcore_audit: records(true),
+  // WP-CLI boots the site (see the module doc).
+  wp_cron_audit: records(true),
+  wp_plugin_check: records(true),
   // Folds (./folds.ts): every member's hints covered — read-only only when all are, open-world when any is.
-  dotnet_check: records(true),
-  wp_report: records(false), // the plugin kind runs WP-CLI and records a row
+  wp_report: records(true), // the plugin kind runs WP-CLI (see the module doc) and records a row
   scan_skill: records(true), // OSV
   scan_wordpress: records(true), // Semgrep's registry PHP rules
   wp_vuln_check: records(true), // WordPress.org / WPScan

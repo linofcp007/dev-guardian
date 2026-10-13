@@ -45,13 +45,13 @@ const tool: ToolModule = {
     "Aggregate read of one WordPress project's accumulated state (project_path = the install " +
     "root, default: the server's working directory; target_url = the live site, for the scans " +
     'keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest ' +
-    'wp_cron_audit (flagged events), latest wp_rest_audit (needs target_url), open WP-related ' +
+    'wp_audit {mode: "cron"} (flagged events), latest wp_vuln_check {mode: "rest"} (needs target_url), open WP-related ' +
     'findings, and active CVEs on wp packages. No scanner spawn.',
   inputSchema: {
     project_path: ProjectPath,
     target_url: httpUrlField()
       .optional()
-      .describe('The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.'),
+      .describe('The live site URL wp_vuln_check (live or rest mode) was run against, to include those rows.'),
   },
   handler: async (input, ctx) => handler(input, ctx),
 };

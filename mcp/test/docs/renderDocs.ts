@@ -244,6 +244,13 @@ export function renderToolsDoc(
       'Each of these names still answers `tools/call` with its own parameters, but `tools/list` does not show ' +
         'it: the listed tool runs it, with the same parameters, as one of its modes.',
       '',
+      'A host permission matches the name that is called. A rule written for an alias (Claude Code: ' +
+        '`mcp__plugin_dev-guardian_dev-guardian__wp_rest_audit`) does not apply to its fold call ' +
+        '(`wp_vuln_check { mode: "rest" }`), which is what a model calls now. Write the rule for the listed name ' +
+        '(`mcp__plugin_dev-guardian_dev-guardian__wp_vuln_check`): it covers every mode of the fold, since a ' +
+        "permission cannot tell one mode's arguments from another's. Keep the alias's own rule as well, for " +
+        'anything that still calls the alias directly.',
+      '',
       '| Name | Listed as |',
       '| --- | --- |',
     );

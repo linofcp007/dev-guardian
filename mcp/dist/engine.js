@@ -34361,8 +34361,12 @@ var init_annotations = __esm({
       generate_sbom: records(false),
       sbom_diff: records(false),
       dotnet_target_framework_check: records(false),
-      wp_cron_audit: records(false),
-      wp_plugin_check: records(false),
+      scan_dotnet_secrets: records(false),
+      // reads appsettings*.json, *.config, nuget.config: no build, no feed
+      dotnet_efcore_audit: records(false),
+      // reads the Migrations/ sources
+      dotnet_check: records(false),
+      // fold: its four members read files or the history, nothing more
       audit_agent_config: records(false),
       register_custom_rules: records(false),
       export_vex: records(false),
@@ -34378,13 +34382,12 @@ var init_annotations = __esm({
       // registry images, Trivy's database, Sigstore
       scan_secrets: records(true),
       // `verify_live` asks each provider whether a key is live
-      scan_dotnet_secrets: records(true),
-      // a .NET build restores from NuGet feeds
-      dotnet_efcore_audit: records(true),
+      // WP-CLI boots the site (see the module doc).
+      wp_cron_audit: records(true),
+      wp_plugin_check: records(true),
       // Folds (./folds.ts): every member's hints covered — read-only only when all are, open-world when any is.
-      dotnet_check: records(true),
-      wp_report: records(false),
-      // the plugin kind runs WP-CLI and records a row
+      wp_report: records(true),
+      // the plugin kind runs WP-CLI (see the module doc) and records a row
       scan_skill: records(true),
       // OSV
       scan_wordpress: records(true),
@@ -53080,6 +53083,135 @@ var init_diffScans = __esm({
   }
 });
 
+// src/tools/fold.ts
+function base(field2) {
+  let cur = field2;
+  for (; ; ) {
+    const def = cur._def;
+    if (def.typeName === void 0 || !WRAPPERS.has(def.typeName)) return cur;
+    const next = def.innerType ?? def.schema;
+    if (next === void 0) return cur;
+    cur = next;
+  }
+}
+function asFoldParam(field2, description) {
+  const inner = field2 instanceof ZodDefault ? field2.removeDefault() : field2;
+  const optional2 = inner.isOptional() ? inner : inner.optional();
+  return description !== void 0 ? optional2.describe(description) : optional2;
+}
+function invalid(message2) {
+  return { ok: false, error: { code: "invalid_input", message: message2 } };
+}
+function registerFold(spec) {
+  const members = /* @__PURE__ */ new Map();
+  for (const [mode, memberName] of Object.entries(spec.modes)) {
+    const member = TOOLS.find((t) => t.name === memberName);
+    if (member === void 0) throw new Error(`fold ${spec.name}: member '${memberName}' is not registered`);
+    members.set(mode, member);
+  }
+  const modeValues = [...members.keys()];
+  const [firstMode, ...otherModes] = modeValues;
+  if (firstMode === void 0) throw new Error(`fold ${spec.name}: no modes`);
+  const headIndex = TOOLS.findIndex((t) => t.name === spec.name);
+  if (headIndex >= 0 && (spec.defaultMode === void 0 || spec.modes[spec.defaultMode] !== spec.name)) {
+    throw new Error(`fold ${spec.name} keeps a member's name, so that member must be its defaultMode`);
+  }
+  if (spec.defaultMode !== void 0 && !members.has(spec.defaultMode)) {
+    throw new Error(`fold ${spec.name}: defaultMode '${spec.defaultMode}' is not one of its modes`);
+  }
+  const modeField = external_exports.enum([firstMode, ...otherModes]);
+  const shape = {
+    [spec.modeKey]: (spec.defaultMode !== void 0 ? modeField.optional() : modeField).describe(spec.modeDescription)
+  };
+  for (const member of members.values()) {
+    for (const [key, field2] of Object.entries(member.inputSchema)) {
+      if (key === spec.modeKey) throw new Error(`fold ${spec.name}: member ${member.name} already takes '${key}'`);
+      const seen = shape[key];
+      if (seen !== void 0) {
+        const [a, b] = [base(seen), base(field2)];
+        const typeA = a._def.typeName;
+        const typeB = b._def.typeName;
+        const sameEnum = !(a instanceof ZodEnum) || !(b instanceof ZodEnum) || JSON.stringify(a.options) === JSON.stringify(b.options);
+        if (typeA !== typeB || !sameEnum) {
+          throw new Error(`fold ${spec.name}: '${key}' has different types in its members`);
+        }
+        continue;
+      }
+      shape[key] = asFoldParam(field2, spec.params?.[key] ?? field2.description);
+    }
+  }
+  for (const key of Object.keys(spec.params ?? {})) {
+    if (shape[key] === void 0) throw new Error(`fold ${spec.name}: no member takes '${key}'`);
+  }
+  const pick2 = (input) => {
+    const mode = input[spec.modeKey] ?? spec.defaultMode;
+    return typeof mode === "string" ? members.get(mode) : void 0;
+  };
+  const fold = {
+    name: spec.name,
+    title: spec.title,
+    description: spec.description,
+    inputSchema: shape,
+    route: pick2,
+    handler: async (input, ctx, callMeta) => {
+      const member = pick2(input);
+      const mode = String(input[spec.modeKey] ?? spec.defaultMode ?? "");
+      if (member === void 0) {
+        return invalid(`${spec.name} needs ${spec.modeKey}: one of ${modeValues.map((v) => `"${v}"`).join(", ")}`);
+      }
+      const rest = Object.fromEntries(
+        Object.entries(input).filter(([key, value]) => key !== spec.modeKey && value !== void 0)
+      );
+      const takes = Object.keys(member.inputSchema);
+      const foreign = Object.keys(rest).filter((key) => !takes.includes(key));
+      if (foreign.length > 0) {
+        return invalid(
+          `${spec.name} {${spec.modeKey}: "${mode}"} does not take ${foreign.join(", ")}; ` + (takes.length > 0 ? `it takes ${takes.join(", ")}` : "it takes no other parameter")
+        );
+      }
+      const parsed = await strictInputSchema(member).safeParseAsync(rest);
+      if (!parsed.success) {
+        const why = parsed.error.issues.map((i) => `${i.path.join(".") || "input"}: ${i.message}`).join("; ");
+        return invalid(`${spec.name} {${spec.modeKey}: "${mode}"}: ${why}`);
+      }
+      return member.handler(parsed.data, ctx, callMeta);
+    }
+  };
+  if (headIndex >= 0) TOOLS.splice(headIndex, 1);
+  for (const member of members.values()) {
+    if (member.name !== spec.name) member.listed = false;
+  }
+  const at = headIndex >= 0 ? headIndex : Math.min(...[...members.values()].map((m) => TOOLS.indexOf(m)));
+  registerToolModule(fold);
+  const added = TOOLS.pop();
+  if (added !== void 0) TOOLS.splice(at, 0, added);
+  FOLDS.push({
+    name: spec.name,
+    modeKey: spec.modeKey,
+    modes: { ...spec.modes },
+    ...spec.defaultMode !== void 0 ? { defaultMode: spec.defaultMode } : {}
+  });
+  return fold;
+}
+function listedCall(name) {
+  for (const fold of FOLDS) {
+    if (fold.name === name) return name;
+    const mode = Object.entries(fold.modes).find(([, member]) => member === name)?.[0];
+    if (mode !== void 0) return `${fold.name} { ${fold.modeKey}: "${mode}" }`;
+  }
+  return name;
+}
+var FOLDS, WRAPPERS;
+var init_fold = __esm({
+  "src/tools/fold.ts"() {
+    "use strict";
+    init_zod();
+    init_tools();
+    FOLDS = [];
+    WRAPPERS = /* @__PURE__ */ new Set(["ZodOptional", "ZodDefault", "ZodNullable", "ZodEffects"]);
+  }
+});
+
 // src/tools/auditExecutive.ts
 import { randomUUID as randomUUID6 } from "node:crypto";
 async function handler10(input, ctx, callMeta) {
@@ -53143,7 +53275,7 @@ async function handler10(input, ctx, callMeta) {
     })
   );
   for (const [name, summary2] of subResultsArr) {
-    subResults[name] = summary2;
+    subResults[name] = { ...summary2, call: listedCall(name) };
   }
   const subScanIds = {};
   for (const [name, summary2] of Object.entries(subResults)) {
@@ -53199,13 +53331,13 @@ async function handler10(input, ctx, callMeta) {
   for (const summary2 of Object.values(subResults)) {
     if (summary2.skipped !== void 0) {
       coverageList.push("partial");
-      coverage_warnings.push(`${summary2.tool}: skipped \u2014 ${summary2.skipped}`);
+      coverage_warnings.push(`${summary2.call ?? summary2.tool}: skipped \u2014 ${summary2.skipped}`);
       continue;
     }
     if (!summary2.ok) {
       coverageList.push("none");
       coverage_warnings.push(
-        `${summary2.tool}: did not run (${summary2.error?.code ?? "failed"}) \u2014 not covered.`
+        `${summary2.call ?? summary2.tool}: did not run (${summary2.error?.code ?? "failed"}) \u2014 not covered.`
       );
       continue;
     }
@@ -53213,7 +53345,7 @@ async function handler10(input, ctx, callMeta) {
     for (const m of summary2.missing_tools ?? []) aggregateMissing.add(m);
     if (summary2.coverage && summary2.coverage !== "full") {
       const loud = (summary2.warnings ?? []).find((w) => w.startsWith("\u26A0\uFE0F"));
-      coverage_warnings.push(loud ?? `${summary2.tool}: coverage=${summary2.coverage}.`);
+      coverage_warnings.push(loud ?? `${summary2.call ?? summary2.tool}: coverage=${summary2.coverage}.`);
     }
   }
   const overallCoverage = worstCoverage(coverageList);
@@ -53317,6 +53449,7 @@ var init_auditExecutive = __esm({
     init_schemas4();
     init_filter();
     init_computeTreeHash();
+    init_fold();
     init_tools();
     init_counts();
     BASE_SUB_TOOLS = ["security_scan_full", "quality_check", "deps_audit", "compliance_check"];
@@ -55917,7 +56050,7 @@ function toBucket(f, reason) {
     title: f.title,
     rule_id: f.rule_id ?? null,
     reason,
-    suggested_suppression_reason: `triage_findings: ${reason}`
+    suggested_suppression_reason: `prioritize_findings triage: ${reason}`
   };
 }
 var ITEMS_PER_BUCKET2, TEST_PATTERNS, GENERATED_PATTERNS, FIXTURE_PATTERNS, tool21;
@@ -71505,7 +71638,7 @@ var init_wpPluginCheck = __esm({
     tool33 = {
       name: "wp_plugin_check",
       title: "WordPress plugin check (1 plugin)",
-      description: `What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp_vuln_check and newest wp_vuln_check_source. It makes no network call \u2014 no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) or wp_vuln_check_source (plugin sources) first. With a local wp_install_path, WP-CLI reports the installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.`,
+      description: `What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp_vuln_check (live) and newest wp_vuln_check (source). It makes no network call \u2014 no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) or wp_vuln_check {mode: "source"} (plugin sources) first. With a local wp_install_path, WP-CLI reports the installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.`,
       inputSchema: inputSchema19,
       handler: async (input, ctx) => handler30(input, ctx)
     };
@@ -71793,10 +71926,10 @@ var init_wpDescribeSetup = __esm({
     tool36 = {
       name: "wp_describe_setup",
       title: "WordPress posture summary",
-      description: "Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
+      description: `Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_audit {mode: "cron"} (flagged events), latest wp_vuln_check {mode: "rest"} (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.`,
       inputSchema: {
         project_path: ProjectPath,
-        target_url: httpUrlField().optional().describe("The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.")
+        target_url: httpUrlField().optional().describe("The live site URL wp_vuln_check (live or rest mode) was run against, to include those rows.")
       },
       handler: async (input, ctx) => handler33(input, ctx)
     };
@@ -72382,7 +72515,7 @@ var init_dotnetDescribeSetup = __esm({
     tool40 = {
       name: "dotnet_describe_setup",
       title: ".NET posture summary",
-      description: "Aggregate read of one project's accumulated .NET state (project_path, default: the server's working directory): latest dotnet_target_framework_check (EOL frameworks), scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
+      description: "Aggregate read of one project's accumulated .NET state (project_path, default: the server's working directory): latest dotnet_check checks target_framework (EOL frameworks), secrets and efcore, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
       inputSchema: { project_path: ProjectPath },
       handler: async (input, ctx) => handler37(input, ctx)
     };
@@ -92613,127 +92746,6 @@ var init_llmScanSubmit = __esm({
   }
 });
 
-// src/tools/fold.ts
-function base(field2) {
-  let cur = field2;
-  for (; ; ) {
-    const def = cur._def;
-    if (def.typeName === void 0 || !WRAPPERS.has(def.typeName)) return cur;
-    const next = def.innerType ?? def.schema;
-    if (next === void 0) return cur;
-    cur = next;
-  }
-}
-function asFoldParam(field2, description) {
-  const inner = field2 instanceof ZodDefault ? field2.removeDefault() : field2;
-  const optional2 = inner.isOptional() ? inner : inner.optional();
-  return description !== void 0 ? optional2.describe(description) : optional2;
-}
-function invalid(message2) {
-  return { ok: false, error: { code: "invalid_input", message: message2 } };
-}
-function registerFold(spec) {
-  const members = /* @__PURE__ */ new Map();
-  for (const [mode, memberName] of Object.entries(spec.modes)) {
-    const member = TOOLS.find((t) => t.name === memberName);
-    if (member === void 0) throw new Error(`fold ${spec.name}: member '${memberName}' is not registered`);
-    members.set(mode, member);
-  }
-  const modeValues = [...members.keys()];
-  const [firstMode, ...otherModes] = modeValues;
-  if (firstMode === void 0) throw new Error(`fold ${spec.name}: no modes`);
-  const headIndex = TOOLS.findIndex((t) => t.name === spec.name);
-  if (headIndex >= 0 && (spec.defaultMode === void 0 || spec.modes[spec.defaultMode] !== spec.name)) {
-    throw new Error(`fold ${spec.name} keeps a member's name, so that member must be its defaultMode`);
-  }
-  if (spec.defaultMode !== void 0 && !members.has(spec.defaultMode)) {
-    throw new Error(`fold ${spec.name}: defaultMode '${spec.defaultMode}' is not one of its modes`);
-  }
-  const modeField = external_exports.enum([firstMode, ...otherModes]);
-  const shape = {
-    [spec.modeKey]: (spec.defaultMode !== void 0 ? modeField.optional() : modeField).describe(spec.modeDescription)
-  };
-  for (const member of members.values()) {
-    for (const [key, field2] of Object.entries(member.inputSchema)) {
-      if (key === spec.modeKey) throw new Error(`fold ${spec.name}: member ${member.name} already takes '${key}'`);
-      const seen = shape[key];
-      if (seen !== void 0) {
-        const [a, b] = [base(seen), base(field2)];
-        const typeA = a._def.typeName;
-        const typeB = b._def.typeName;
-        const sameEnum = !(a instanceof ZodEnum) || !(b instanceof ZodEnum) || JSON.stringify(a.options) === JSON.stringify(b.options);
-        if (typeA !== typeB || !sameEnum) {
-          throw new Error(`fold ${spec.name}: '${key}' has different types in its members`);
-        }
-        continue;
-      }
-      shape[key] = asFoldParam(field2, spec.params?.[key] ?? field2.description);
-    }
-  }
-  for (const key of Object.keys(spec.params ?? {})) {
-    if (shape[key] === void 0) throw new Error(`fold ${spec.name}: no member takes '${key}'`);
-  }
-  const pick2 = (input) => {
-    const mode = input[spec.modeKey] ?? spec.defaultMode;
-    return typeof mode === "string" ? members.get(mode) : void 0;
-  };
-  const fold = {
-    name: spec.name,
-    title: spec.title,
-    description: spec.description,
-    inputSchema: shape,
-    route: pick2,
-    handler: async (input, ctx, callMeta) => {
-      const member = pick2(input);
-      const mode = String(input[spec.modeKey] ?? spec.defaultMode ?? "");
-      if (member === void 0) {
-        return invalid(`${spec.name} needs ${spec.modeKey}: one of ${modeValues.map((v) => `"${v}"`).join(", ")}`);
-      }
-      const rest = Object.fromEntries(
-        Object.entries(input).filter(([key, value]) => key !== spec.modeKey && value !== void 0)
-      );
-      const takes = Object.keys(member.inputSchema);
-      const foreign = Object.keys(rest).filter((key) => !takes.includes(key));
-      if (foreign.length > 0) {
-        return invalid(
-          `${spec.name} {${spec.modeKey}: "${mode}"} does not take ${foreign.join(", ")}; ` + (takes.length > 0 ? `it takes ${takes.join(", ")}` : "it takes no other parameter")
-        );
-      }
-      const parsed = await strictInputSchema(member).safeParseAsync(rest);
-      if (!parsed.success) {
-        const why = parsed.error.issues.map((i) => `${i.path.join(".") || "input"}: ${i.message}`).join("; ");
-        return invalid(`${spec.name} {${spec.modeKey}: "${mode}"}: ${why}`);
-      }
-      return member.handler(parsed.data, ctx, callMeta);
-    }
-  };
-  if (headIndex >= 0) TOOLS.splice(headIndex, 1);
-  for (const member of members.values()) {
-    if (member.name !== spec.name) member.listed = false;
-  }
-  const at = headIndex >= 0 ? headIndex : Math.min(...[...members.values()].map((m) => TOOLS.indexOf(m)));
-  registerToolModule(fold);
-  const added = TOOLS.pop();
-  if (added !== void 0) TOOLS.splice(at, 0, added);
-  FOLDS.push({
-    name: spec.name,
-    modeKey: spec.modeKey,
-    modes: { ...spec.modes },
-    ...spec.defaultMode !== void 0 ? { defaultMode: spec.defaultMode } : {}
-  });
-  return fold;
-}
-var FOLDS, WRAPPERS;
-var init_fold = __esm({
-  "src/tools/fold.ts"() {
-    "use strict";
-    init_zod();
-    init_tools();
-    FOLDS = [];
-    WRAPPERS = /* @__PURE__ */ new Set(["ZodOptional", "ZodDefault", "ZodNullable", "ZodEffects"]);
-  }
-});
-
 // src/tools/folds.ts
 var init_folds = __esm({
   "src/tools/folds.ts"() {
@@ -92786,7 +92798,7 @@ var init_folds = __esm({
     registerFold({
       name: "wp_report",
       title: "WordPress recorded state",
-      description: "What dev-guardian recorded about one WordPress install (project_path = its root); no network. kind setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI. Run wp_audit or wp_vuln_check first for fresh data.",
+      description: "What dev-guardian recorded about one WordPress install (project_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI, which boots the site (its PHP, its database). Run wp_audit or wp_vuln_check first for fresh data.",
       modeKey: "kind",
       modeDescription: "setup, hardening or plugin.",
       modes: { setup: "wp_describe_setup", hardening: "wp_recommend_hardening", plugin: "wp_plugin_check" },

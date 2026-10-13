@@ -26,8 +26,8 @@ const tool: ToolModule = {
   title: '.NET posture summary',
   description:
     "Aggregate read of one project's accumulated .NET state (project_path, default: the server's " +
-    'working directory): latest dotnet_target_framework_check (EOL frameworks), ' +
-    'scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open ' +
+    'working directory): latest dotnet_check checks target_framework (EOL frameworks), secrets and ' +
+    'efcore, deps_audit if a NuGet lockfile exists. Plus open ' +
     '.NET-relevant findings. No scanner spawn.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),

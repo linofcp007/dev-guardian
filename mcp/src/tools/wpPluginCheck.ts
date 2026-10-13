@@ -93,9 +93,9 @@ const tool: ToolModule = {
   title: 'WordPress plugin check (1 plugin)',
   description:
     'What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this ' +
-    "project's newest dependency scan, newest wp_vuln_check and newest wp_vuln_check_source. It makes no " +
+    "project's newest dependency scan, newest wp_vuln_check (live) and newest wp_vuln_check (source). It makes no " +
     'network call — no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) ' +
-    'or wp_vuln_check_source (plugin sources) first. With a local wp_install_path, WP-CLI reports the ' +
+    'or wp_vuln_check {mode: "source"} (plugin sources) first. With a local wp_install_path, WP-CLI reports the ' +
     'installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a ' +
     'warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the ' +
     'site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.',

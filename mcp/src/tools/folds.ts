@@ -88,11 +88,11 @@ registerFold({
   name: 'wp_report',
   title: 'WordPress recorded state',
   description:
-    'What dev-guardian recorded about one WordPress install (project_path = its root); no network. kind setup: ' +
-    'the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, ' +
+    'What dev-guardian recorded about one WordPress install (project_path = its root); no service queried. kind ' +
+    'setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, ' +
     "CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's " +
-    'recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI. Run wp_audit or ' +
-    'wp_vuln_check first for fresh data.',
+    'recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI, which boots the site ' +
+    '(its PHP, its database). Run wp_audit or wp_vuln_check first for fresh data.',
   modeKey: 'kind',
   modeDescription: 'setup, hardening or plugin.',
   modes: { setup: 'wp_describe_setup', hardening: 'wp_recommend_hardening', plugin: 'wp_plugin_check' },

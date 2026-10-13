@@ -173,7 +173,7 @@ function toBucket(f: Finding, reason: string): Bucket {
     title: f.title,
     rule_id: f.rule_id ?? null,
     reason,
-    suggested_suppression_reason: `triage_findings: ${reason}`,
+    suggested_suppression_reason: `prioritize_findings triage: ${reason}`,
   };
 }
 
