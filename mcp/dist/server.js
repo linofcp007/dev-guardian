@@ -83300,7 +83300,15 @@ var SECRET_RULES = [
   { id: "npm-token", title: "npm access token", confidence: "high", pattern: /\bnpm_[A-Za-z0-9]{36}\b/ },
   { id: "pypi-token", title: "PyPI upload token", confidence: "high", pattern: /\bpypi-AgEIcHlwaS[A-Za-z0-9_-]{10,}/ },
   { id: "twilio-account-sid", title: "Twilio account SID", confidence: "high", pattern: /\bAC[0-9a-fA-F]{32}\b/ },
-  { id: "private-key-block", title: "Private key", confidence: "high", pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/ },
+  // `PRIVATE KEY BLOCK`: a PGP key's own header — the `PGP ` alternative never
+  // matched without it (review 8, item 12).
+  { id: "private-key-block", title: "Private key", confidence: "high", pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/ },
+  { id: "putty-private-key", title: "PuTTY private key", confidence: "high", pattern: /\bPuTTY-User-Key-File-\d+: / },
+  { id: "huggingface-token", title: "Hugging Face token", confidence: "high", pattern: /\bhf_[A-Za-z]{34}\b/ },
+  { id: "digitalocean-token", title: "DigitalOcean token", confidence: "high", pattern: /\bdo[opr]_v1_[a-f0-9]{64}\b/ },
+  { id: "shopify-token", title: "Shopify access token", confidence: "high", pattern: /\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b/ },
+  { id: "azure-storage-key", title: "Azure storage account key", confidence: "high", pattern: /\bAccountKey=[A-Za-z0-9+/]{86}==/ },
+  { id: "telegram-bot-token", title: "Telegram bot token", confidence: "high", pattern: /\b\d{8,10}:AA[A-Za-z0-9_-]{33}\b/ },
   // ── Heuristics (ambiguous → 'medium', warn only) ─────────────────────────
   //
   // Quantifiers bounded at 2000 (a real JWT segment is a few hundred base64
@@ -83368,6 +83376,25 @@ var SECRET_RULES = [
     // uses `findEnvAssignment`, which reads each run once (review I3).
     pattern: /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*([^\s"'`${}<>()]{8,})(?=\s|$)/i,
     find: (text2, from) => findEnvAssignment(text2, from)
+  },
+  {
+    id: "bearer-token",
+    title: "Bearer token in an Authorization header",
+    confidence: "medium",
+    // `Authorization: Bearer <token>` written into a file — a curl line, a
+    // .http request, a test fixture (review 8, item 12). The token is vetted
+    // like the other captured values (placeholders, entropy).
+    pattern: /\bAuthorization\s*:\s*Bearer\s+([A-Za-z0-9._~+/-]{20,}=*)/i
+  },
+  {
+    id: "yaml-credential",
+    title: "Hard-coded credential",
+    confidence: "medium",
+    // An unquoted YAML value (`password: Zx9…`) on a line of its own — the
+    // quoted rules need quotes and the `.env` rule an `=` (review 8, item
+    // 12). The value must hold a digit and a letter, so a type annotation
+    // (`token: AccessToken`) or a reference (`password: ${DB_PASS}`) is not one.
+    pattern: /^\s*(?:[\w-]*[_-])?(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*:\s*([^\s'"`#{}[\]$<>(),;|&*!%@]{8,})\s*$/i
   },
   {
     id: "uri-credentials",
@@ -83450,8 +83477,43 @@ var VALUE_CAPTURE_RULES = /* @__PURE__ */ new Set([
   "generic-assignment",
   "generic-assignment-camel",
   "generic-assignment-env",
-  "uri-credentials"
+  "uri-credentials",
+  "bearer-token",
+  "yaml-credential"
 ]);
+var QUOTED_VALUE_RULES = /* @__PURE__ */ new Set(["generic-assignment", "generic-assignment-camel"]);
+var TOKEN_PLACEHOLDER_MARKERS = [
+  "example",
+  "xxxxx",
+  "your-",
+  "your_",
+  "yourkey",
+  "yourtoken",
+  "placeholder",
+  "changeme",
+  "change-me",
+  "redacted",
+  "dummy",
+  "sample",
+  "fake",
+  "notreal",
+  "not-real",
+  "replace",
+  "insert",
+  "<your"
+];
+var MIXED_TOKEN_RULES = /* @__PURE__ */ new Set(["openai-api-key", "anthropic-api-key", "huggingface-token"]);
+function tokenIsPlaceholder(ruleId, token) {
+  const lower = token.toLowerCase();
+  if (TOKEN_PLACEHOLDER_MARKERS.some((m) => lower.includes(m))) return true;
+  if (/(.)\1{7,}/.test(token)) return true;
+  if (MIXED_TOKEN_RULES.has(ruleId)) {
+    const body = token.replace(/^(?:sk-(?:ant-|proj-|svcacct-|admin-)?|hf_)/, "");
+    if (ruleId === "huggingface-token") return !(/[a-z]/.test(body) && /[A-Z]/.test(body));
+    return !(/[0-9]/.test(body) && /[A-Z]/.test(body) && /[a-z]/.test(body));
+  }
+  return false;
+}
 var PLACEHOLDER_MARKERS = [
   "example",
   "changeme",
@@ -83534,6 +83596,7 @@ function firstMatch2(rule, re, w) {
 function scanForSecrets(text2, options = {}) {
   if (!text2) return [];
   const minRank = CONFIDENCE_RANK[options.minConfidence ?? "medium"];
+  const skipPlaceholders = options.skipPlaceholders !== false;
   const allow = (options.allowlist ?? []).map((a2) => a2.toLowerCase()).filter(Boolean);
   const rules2 = SECRET_RULES.filter((rule) => CONFIDENCE_RANK[rule.confidence] >= minRank).map((rule) => ({
     rule,
@@ -83556,7 +83619,7 @@ function scanForSecrets(text2, options = {}) {
         if (allow.some((a2) => lower.includes(a2))) continue;
         for (const { rule, re } of group) {
           if (found2.has(rule)) continue;
-          const hit = judge5(rule, firstMatch2(rule, re, w), i2);
+          const hit = judge5(rule, firstMatch2(rule, re, w), i2, skipPlaceholders);
           if (hit !== null) found2.set(rule, hit);
         }
       }
@@ -83568,11 +83631,16 @@ function scanForSecrets(text2, options = {}) {
   }
   return hits;
 }
-function judge5(rule, m, i2) {
+function judge5(rule, m, i2, skipPlaceholders = true) {
   if (!m) return null;
+  if (skipPlaceholders && !VALUE_CAPTURE_RULES.has(rule.id) && rule.id !== "jwt" && rule.id !== "private-key-block" && rule.id !== "putty-private-key") {
+    if (tokenIsPlaceholder(rule.id, m.text)) return null;
+  }
   if (VALUE_CAPTURE_RULES.has(rule.id)) {
     const value = m.value ?? "";
     if (looksLikePlaceholder(value)) return null;
+    if (skipPlaceholders && QUOTED_VALUE_RULES.has(rule.id) && /\s\S*\s/.test(value)) return null;
+    if (rule.id === "yaml-credential" && !(/\d/.test(value) && /[A-Za-z]/.test(value))) return null;
     if (rule.id !== "generic-assignment-env" && shannonEntropy(value) < 3.2) return null;
   }
   const matched = VALUE_CAPTURE_RULES.has(rule.id) ? m.value ?? m.text : m.text;
@@ -92996,7 +93064,7 @@ function isKeyBodyLine(line) {
   return /^[A-Za-z0-9+/=]{8,}$/.test(content);
 }
 function scrubSecrets(text2, firstLine7 = 1) {
-  const hits = scanForSecrets(text2);
+  const hits = scanForSecrets(text2, { skipPlaceholders: false });
   if (hits.length === 0) return text2;
   const lines = text2.split(/\r?\n/);
   const rulesByLine = /* @__PURE__ */ new Map();

@@ -23,6 +23,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { PERF_STRICT } from '../helpers/timing.js';
 
+/** A fake AWS key the scan reports: AWS's own `AKIAIOSFODNN7EXAMPLE` is a documented placeholder it skips (review 8). */
+const FAKE_AWS_KEY = ['AKIA', 'Q7XZ2M9KDP4RWT3B'].join('');
+
 const here = dirname(fileURLToPath(import.meta.url));
 // mcp/test/e2e -> mcp/test -> mcp -> repo root
 const REPO_ROOT = resolve(here, '..', '..', '..');
@@ -367,7 +370,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const r = runHook(
         preToolUse(
           'Write',
-          { file_path: target, content: 'const key = "AKIAIOSFODNN7EXAMPLE";' },
+          { file_path: target, content: `const key = "${FAKE_AWS_KEY}";` },
           projectDir,
         ),
         { cwd: projectDir, homeDir },
@@ -511,7 +514,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     it('a project file can still make the guard stricter ("secrets": { "block": true })', () => {
       projectConfig({ enabled: false, secrets: { block: true } });
       const target = join(projectDir, 'src', 'config.ts');
-      const r = runHook(preToolUse('Write', { file_path: target, content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, projectDir), {
+      const r = runHook(preToolUse('Write', { file_path: target, content: `const k = "${FAKE_AWS_KEY}";` }, projectDir), {
         cwd: projectDir,
         homeDir,
       });
@@ -524,7 +527,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         {
           hook_event_name: 'PostToolUse',
           tool_name: 'Write',
-          tool_input: { file_path: join(projectDir, 'src', 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          tool_input: { file_path: join(projectDir, 'src', 'a.ts'), content: `const k = "${FAKE_AWS_KEY}";` },
           cwd: projectDir,
         },
         { cwd: projectDir, homeDir },
@@ -575,7 +578,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     // narrows the warning only; a user-enabled block honours the user's own
     // ignore list (or the defaults), never the project's.
     const tokenWriteTo = (rel: string): HookResult =>
-      runHook(preToolUse('Write', { file_path: join(projectDir, rel), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, projectDir), {
+      runHook(preToolUse('Write', { file_path: join(projectDir, rel), content: `const k = "${FAKE_AWS_KEY}";` }, projectDir), {
         cwd: projectDir,
         homeDir,
       });
@@ -593,7 +596,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         {
           hook_event_name: 'PostToolUse',
           tool_name: 'Write',
-          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: `const k = "${FAKE_AWS_KEY}";` },
           cwd: projectDir,
         },
         { cwd: projectDir, homeDir },
@@ -633,7 +636,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       userConfig({ secrets: { block: true } });
       projectAllowlist(['AKIA']);
       expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
-      projectAllowlist({ secrets: ['AKIAIOSFODNN7EXAMPLE'] });
+      projectAllowlist({ secrets: [FAKE_AWS_KEY] });
       expect(decision(tokenWriteTo('src/k.ts'))).toBe('deny');
     });
 
@@ -644,7 +647,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         {
           hook_event_name: 'PostToolUse',
           tool_name: 'Write',
-          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: `const k = "${FAKE_AWS_KEY}";` },
           cwd: projectDir,
         },
         { cwd: projectDir, homeDir },
@@ -683,7 +686,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     };
     const tokenWrite = (): HookResult =>
       runHook(
-        preToolUse('Write', { file_path: join(projectDir, 'src', 'k.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, projectDir),
+        preToolUse('Write', { file_path: join(projectDir, 'src', 'k.ts'), content: `const k = "${FAKE_AWS_KEY}";` }, projectDir),
         { cwd: projectDir, homeDir },
       );
 
@@ -1036,7 +1039,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       it("the project's secrets.block applies from a subdirectory", () => {
         mkdirSync(join(projectDir, '.guardian'), { recursive: true });
         writeFileSync(join(projectDir, '.guardian', 'hooks.config.json'), JSON.stringify({ secrets: { block: true } }));
-        const r = write(join(sub, 'src', 'config.ts'), 'const k = "AKIAIOSFODNN7EXAMPLE";', projectEnv());
+        const r = write(join(sub, 'src', 'config.ts'), `const k = "${FAKE_AWS_KEY}";`, projectEnv());
         expect(decision(r)).toBe('deny');
       });
 
@@ -1140,7 +1143,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         {
           hook_event_name: 'PostToolUse',
           tool_name: 'Write',
-          tool_input: { file_path: join(projectDir, 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' },
+          tool_input: { file_path: join(projectDir, 'a.ts'), content: `const k = "${FAKE_AWS_KEY}";` },
           cwd: projectDir,
         },
         { cwd: projectDir, homeDir, hook: join(plug, 'hooks', 'guardian-hook.mjs') },
@@ -1298,7 +1301,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       writeFileSync(join(dir, '.guardian', 'hooks.config.json'), JSON.stringify({ secrets: { block: true } }));
     };
     const writeSecret = (cwd: string, env: Record<string, string> = {}): HookResult =>
-      runHook(preToolUse('Write', { file_path: join(cwd, 'src', 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, cwd), {
+      runHook(preToolUse('Write', { file_path: join(cwd, 'src', 'a.ts'), content: `const k = "${FAKE_AWS_KEY}";` }, cwd), {
         cwd,
         homeDir,
         projectDir: '',
@@ -1318,7 +1321,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       blockConfig(homeDir);
       const proj = join(above, 'proj');
       mkdirSync(proj, { recursive: true });
-      const r = runHook(preToolUse('Write', { file_path: join(proj, 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, proj), {
+      const r = runHook(preToolUse('Write', { file_path: join(proj, 'a.ts'), content: `const k = "${FAKE_AWS_KEY}";` }, proj), {
         cwd: proj,
         homeDir: above,
         projectDir: '',
@@ -1346,7 +1349,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
 
     it('CLAUDE_PROJECT_DIR may still name the home directory', () => {
       blockConfig(homeDir);
-      const r = runHook(preToolUse('Write', { file_path: join(homeDir, 'a.ts'), content: 'const k = "AKIAIOSFODNN7EXAMPLE";' }, homeDir), {
+      const r = runHook(preToolUse('Write', { file_path: join(homeDir, 'a.ts'), content: `const k = "${FAKE_AWS_KEY}";` }, homeDir), {
         cwd: homeDir,
         homeDir,
         projectDir: homeDir,
