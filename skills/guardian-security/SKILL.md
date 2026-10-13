@@ -1,6 +1,6 @@
 ---
 name: guardian-security
-description: Whole-project security scan and triage — SAST, secrets, dependency CVEs, IaC and containers, optional DAST and reachability — through dev-guardian's MCP tools, with real-severity triage. Use for "is my code secure?" or a vulnerability / secret scan. Not for a pending diff (guardian-review) or code smells (guardian-quality).
+description: Whole-project security scan with real-severity triage — SAST, secrets, dependency CVEs, IaC and containers, optional DAST and reachability. Use for "is my code secure?" or a vulnerability or secret scan. Not for a pending diff (guardian-review) or code smells (guardian-quality).
 ---
 
 # Guardian Security
@@ -26,7 +26,7 @@ No brakeman, gosec or Checkov run — never claim them.
 
 `check_toolchain {}` lists each scanner's version, known-compromised versions and this system's install
 command. If something is missing, `install_toolchain { dry_run: true }` shows the plan; a project with no
-dev-guardian configs yet starts with the `guardian-init` skill.
+dev-guardian configs yet starts with `/guardian-init` — suggest it; the user runs it.
 
 ### 2. Scan
 

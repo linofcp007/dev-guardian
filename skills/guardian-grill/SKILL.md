@@ -1,6 +1,7 @@
 ---
 name: guardian-grill
-description: Understanding gate on a diff or PR — the AI grills YOU, one question at a time, on the domain-significant decisions the code introduced, before you merge. Linters check style, Semgrep checks security, tests check behaviour; this checks that a human still understands the branches and rules the diff added — for long autonomous loops where nobody read every line. Records the verdict in .guardian/last-grill.md. EN triggers — "grill me on this diff / PR", "do I understand this change?", "I didn't read all this code", "quiz me before I merge", "am I merging blind?". PT — "sabatina ao diff / PR", "será que percebo esta mudança?", "não li este código todo", "questiona-me antes do merge", "estou a fazer merge às cegas?". ES — "interrógame sobre este diff / PR", "¿entiendo este cambio?", "no leí todo este código", "pregúntame antes del merge", "¿estoy haciendo merge a ciegas?". Respond in the user's language.
+description: "Understanding gate on a diff — the AI grills you, one question at a time, on the domain decisions the code introduced, and records the verdict in .guardian/last-grill.md. Not for requirements (dev-spec-driven's /clarify --grill)."
+disable-model-invocation: true
 ---
 
 # Guardian Grill — the understanding gate

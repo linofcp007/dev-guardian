@@ -1,9 +1,9 @@
 ---
-description: Project health dashboard — latest scans, deltas, baseline, expiring suppressions. Estado do projeto. Estado del proyecto.
+description: "One-page project health — latest scans, deltas, baseline, expiring suppressions."
 argument-hint: "[focus for the interpretation, e.g. only security]"
 ---
 
-Show the **current health** of the project in one screen. Read-only — no scan runs, no mutation.
+Show the **current health** of the project in one screen. Read-only — no scan runs, no mutation. Respond in the user's language (EN/PT/ES).
 
 Run `node "${CLAUDE_PLUGIN_ROOT}/cli/dev-guardian.mjs" status --project .` and show its output **verbatim** — that one screen is the deterministic source of truth (a single query pass over `.guardian/guardian.db`), not improvised here. It already covers:
 

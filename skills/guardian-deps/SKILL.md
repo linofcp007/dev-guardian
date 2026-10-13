@@ -1,11 +1,11 @@
 ---
 name: guardian-deps
-description: Dependency management through the dev-guardian MCP tools — CVE audit, ordered upgrade plan, upgrade PRs, vetting what an install just added, supply-chain checks, licences, SBOM, Renovate. EN triggers — "update dependencies", "any CVEs?", "vulnerable packages", "outdated deps", "I just ran npm install", "what did that install add?", "review this Dependabot / Renovate PR", "set up Renovate", "supply chain". PT — "atualiza as dependências", "tem CVEs?", "packages vulneráveis", "deps desatualizadas", "acabei de instalar deps", "o que entrou com este install?", "revê este PR do Dependabot / Renovate", "configura o Renovate". ES — "actualiza las dependencias", "¿tiene CVEs?", "paquetes vulnerables", "deps desactualizadas", "acabo de instalar deps", "¿qué entró con este install?", "revisa este PR de Dependabot / Renovate", "configura Renovate". Respond in the user's language.
+description: "Dependencies — CVE audit, an ordered upgrade plan and upgrade PRs, vetting a package before or right after an install, supply-chain checks, Dependabot / Renovate PRs and setup. Not for licences or an SBOM (guardian-compliance)."
 ---
 
 # Guardian Deps
 
-Gestão de dependências: CVEs, plano de upgrades, vetting do que acabou de entrar, supply chain, licenças, SBOM e Renovate. Tudo passa pelas tools MCP do dev-guardian — são elas que guardam os CVEs em `.guardian/guardian.db`, e é daí que o plano de upgrades e o `create_fix_pr` os leem. Os comandos em bruto no fim são só o fallback de quando o servidor MCP não está disponível.
+Gestão de dependências: CVEs, plano de upgrades, vetting do que acabou de entrar, supply chain, licenças, SBOM e Renovate. Tudo passa pelas tools MCP do dev-guardian — são elas que guardam os CVEs em `.guardian/guardian.db`, e é daí que o plano de upgrades e o `create_fix_pr` os leem. Os comandos em bruto no fim são só o fallback de quando o servidor MCP não está disponível. Responde no idioma do utilizador.
 
 ## 1. Scan de vulnerabilidades
 

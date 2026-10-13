@@ -1,11 +1,11 @@
 ---
 name: guardian-quality
-description: Code quality and tech debt through the quality_check MCP tool — duplication, complexity, smells, naming, refactor opportunities ranked by ROI — plus the quality and performance budgets in .guardian/budgets.yml. EN triggers — "is this clean?", "tech debt", "code smells", "too complex", "is this maintainable?", "is it worth refactoring?", "are we within budget?", "set quality budgets". PT — "isto está limpo?", "dívida técnica", "code smells", "está demasiado complexo", "vale a pena refazer?", "estamos dentro do budget?", "define budgets de qualidade". ES — "¿esto está limpio?", "deuda técnica", "code smells", "demasiado complejo", "¿vale la pena refactorizar?", "¿estamos dentro del presupuesto?", "define presupuestos de calidad". Respond in the user's language.
+description: "Code quality and tech debt — duplication, complexity, smells, naming, refactors ranked by ROI — and the quality budgets in .guardian/budgets.yml; \"is this clean?\", \"this smells bad\". Not for security (guardian-security) or turning debt into specs (/guardian-improve)."
 ---
 
 # Guardian Quality
 
-Análise de qualidade de código com foco em legibilidade, manutenibilidade e dívida técnica. Não confundir com `guardian-bugfix` (procura bugs) ou `guardian-security` (procura vulnerabilidades) — esta skill foca em "é fácil entender, mudar e estender este código?".
+Análise de qualidade de código com foco em legibilidade, manutenibilidade e dívida técnica. Responde no idioma do utilizador. Não confundir com `guardian-bugfix` (procura bugs) ou `guardian-security` (procura vulnerabilidades) — esta skill foca em "é fácil entender, mudar e estender este código?".
 
 ## O que esta skill avalia
 
@@ -53,7 +53,7 @@ Coverage de testes: 42 % (medida pela suite do projeto, não pela tool)
 TODOs antigos: 23 (alguns > 1 ano)
 ```
 
-Pergunta onde focar antes de propor refactors gigantes. Para o ranking consolidado de hotspots por ROI (findings × severidade × churn), `/guardian-report debt`; para transformar os melhores em specs de melhoria, a skill `guardian-improve`.
+Pergunta onde focar antes de propor refactors gigantes. Para o ranking consolidado de hotspots por ROI (findings × severidade × churn), `/guardian-report debt`; para transformar os melhores em specs de melhoria, sugere ao utilizador o `/guardian-improve`.
 
 ### 3. Priorização
 

@@ -1,11 +1,12 @@
 ---
 name: guardian-init
-description: Bootstrap a project with dev-guardian through its MCP tools — detect the stack, install the scanners (Semgrep, Trivy, gitleaks, Syft, pre-commit) on Linux, macOS or Windows, install the gitleaks / Semgrep / Renovate / pre-commit configs with provenance tracking (minimal, standard or paranoid profile), wire the git hooks, and report the first security status. EN triggers — "set up the project", "protect the repo", "install everything", "security setup", "starting a new project", "make this production-ready", "install dev-guardian here". PT — "configura o projeto", "protege o repo", "instala tudo", "setup de segurança", "vou começar um projeto novo", "como deixo isto pronto", "instala o dev-guardian aqui". ES — "configura el proyecto", "protege el repo", "instala todo", "setup de seguridad", "voy a empezar un proyecto nuevo", "¿cómo dejo esto listo para producción?". Respond in the user's language.
+description: "Bootstrap dev-guardian in a project — detect the stack, install the scanners, install the gitleaks / Semgrep / Renovate / pre-commit configs (minimal, standard or paranoid), wire the hooks, report the first status."
+disable-model-invocation: true
 ---
 
 # Guardian Init
 
-Inicializa um projeto com a infraestrutura de segurança e qualidade do dev-guardian. Tudo passa pelas tools MCP — ao contrário de um `cp` ou de um script à mão, deixam registo do que foi instalado e de onde veio.
+Inicializa um projeto com a infraestrutura de segurança e qualidade do dev-guardian. Tudo passa pelas tools MCP — ao contrário de um `cp` ou de um script à mão, deixam registo do que foi instalado e de onde veio. Responde no idioma do utilizador.
 
 ## Fluxo
 

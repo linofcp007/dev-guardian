@@ -1,5 +1,5 @@
 ---
-description: Release gates — predeploy (before a production deploy) and prerelease (before tagging a release). Antes do deploy ou da release. Antes del despliegue o del release.
+description: "Go / no-go before a production deploy (predeploy) or a release tag (prerelease)."
 argument-hint: "<predeploy | prerelease> [deploy target or version]"
 ---
 

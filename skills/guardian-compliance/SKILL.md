@@ -1,6 +1,6 @@
 ---
 name: guardian-compliance
-description: Compliance through the dev-guardian MCP tools — GDPR / RGPD technical checklist, open-source licence audit and compatibility, SBOM, policy documents, and audit evidence for SOC 2 / ISO 27001. EN triggers — "GDPR", "personal data", "check the licences", "I need an SBOM", "cookie consent", "privacy policy", "data retention", "right to be forgotten", "SOC 2 prep", "ISO 27001". PT — "RGPD", "dados pessoais", "verifica as licenças", "preciso de um SBOM", "cookie consent", "política de privacidade", "retenção de dados", "direito ao esquecimento", "preparar SOC 2". ES — "RGPD", "LOPD", "datos personales", "revisa las licencias", "necesito un SBOM", "política de privacidad", "retención de datos", "derecho al olvido", "preparar SOC 2". Respond in the user's language.
+description: "Technical compliance checks in the code — GDPR (personal data in logs, trackers before consent, data-subject rights), licence audit and compatibility, SBOM, SOC 2 / ISO 27001 evidence. Not for legal advice (juridico-pt) or a dependency CVE audit (guardian-deps)."
 ---
 
 # Guardian Compliance

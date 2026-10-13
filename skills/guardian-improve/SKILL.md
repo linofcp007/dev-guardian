@@ -1,6 +1,7 @@
 ---
 name: guardian-improve
-description: Turn measured tech debt into improvement specs — the bridge from dev-guardian's findings to the dev-spec-driven backlog. Takes the ROI-ranked hotspots, quality findings, duplication, over-budget metrics and systemic security weaknesses, and drafts each top item as an improvement spec seed (problem, affected files, current metric → target metric, draft EARS acceptance criteria) that the same scans can re-measure. Closes the loop measure → spec → fix → re-measure. EN triggers — "turn the debt into specs", "what should I refactor next and how", "make specs from the violations", "plan the cleanup", "spec the tech debt". PT — "transforma a dívida em specs", "o que refatoro a seguir e como", "cria specs das violações", "planeia a limpeza", "especifica a dívida técnica". ES — "convierte la deuda en specs", "qué refactorizo y cómo", "crea specs de las violaciones", "planifica la limpieza", "especifica la deuda técnica". Respond in the user's language.
+description: "Turn measured tech debt into improvement-spec seeds on the dev-spec-driven backlog — problem, files, current to target metric, draft EARS criteria — re-measurable by the same scans."
+disable-model-invocation: true
 ---
 
 # Guardian Improve — from debt to specs

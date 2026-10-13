@@ -1,5 +1,5 @@
 ---
-description: Find and fix bugs, apply scanner-produced fixes as PRs, and verify a fix (re-scan + delta). Corrige e verifica. Corrige y verifica.
+description: "Fix a bug or finding, open scanner fixes as PRs (--pr), or verify a fix (--verify)."
 argument-hint: "[<hint or path> | <finding fingerprint> | --pr [--apply] | --verify [<fingerprint or description>]]"
 ---
 

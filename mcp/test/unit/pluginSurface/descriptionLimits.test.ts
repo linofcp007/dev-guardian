@@ -22,7 +22,7 @@ import { RULES_BODY } from '../../../src/hostsetup/rulesTemplate.js';
 import { RESOURCES } from '../../../src/resources/index.js';
 import { TOOLS } from '../../../src/tools/index.js';
 import { MCP_ROOT } from '../../helpers/tsxNode.js';
-import { commandDocs, frontmatter, skillDocs } from './pluginDocs.js';
+import { commandDocs, frontmatter, referenceDocs, skillDocs } from './pluginDocs.js';
 
 beforeAll(async () => {
   await import('../../../src/registerAll.js');
@@ -138,6 +138,102 @@ describe('command frontmatter', () => {
       expect(String(hint).length).toBeLessThanOrEqual(200);
     },
   );
+});
+
+// The skill and command listing — every model-invocable entry's name and
+// description — is in the model's context in every session, in every
+// project. It was 12 910 characters across 23 entries, two thirds of them
+// trilingual trigger lists, with four commands ending in a doubled suffix
+// ("Foco .NET. Foco .NET.") and no entry saying what it was NOT for, so the
+// "is this safe to ship?" family had four owners. Now: each skill says what
+// it does, when, and what it is not for, in at most 300 characters; each
+// command in at most 100; entries the user starts (the `g` alias, grill,
+// improve, init) are not model-invocable at all; and the whole listing has a
+// budget. Claude understands a PT / ES request against an EN intent, so the
+// per-language trigger lists went; "respond in the user's language" is said
+// once, in each body.
+describe('the skill and command listing', () => {
+  const SKILL_LISTING_MAX = 300;
+  const COMMAND_LISTING_MAX = 100;
+  const LISTING_TOTAL_MAX = 4000;
+  /** Started by the user, never by the model (`disable-model-invocation: true`). */
+  const USER_ONLY = ['g', 'guardian-grill', 'guardian-improve', 'guardian-init'];
+
+  const entries = [...skillDocs(), ...commandDocs()].map((d) => {
+    const fm = frontmatter(d);
+    return {
+      doc: d,
+      description: String(fm['description'] ?? ''),
+      invocable: fm['disable-model-invocation'] !== true,
+    };
+  });
+
+  it.each(entries.map((e) => [e.doc.rel, e] as const))('%s: description within its listing limit', (_rel, e) => {
+    const max = e.doc.kind === 'command' ? COMMAND_LISTING_MAX : SKILL_LISTING_MAX;
+    expect(e.description.length).toBeLessThanOrEqual(max);
+  });
+
+  it('the entries the user starts are not model-invocable, and every other one is', () => {
+    expect(entries.filter((e) => !e.invocable).map((e) => e.doc.name).sort()).toEqual(USER_ONLY);
+  });
+
+  it(`the model-visible listing is at most ${LISTING_TOTAL_MAX} characters`, () => {
+    const total = entries.filter((e) => e.invocable).reduce((n, e) => n + e.doc.name.length + e.description.length + 4, 0);
+    expect(total).toBeLessThanOrEqual(LISTING_TOTAL_MAX);
+  });
+
+  it.each(entries.map((e) => [e.doc.rel, e] as const))(
+    '%s: no repeated sentence, no language instruction, no per-language trigger list',
+    (_rel, e) => {
+      const sentences = e.description.split(/(?<=\.)\s+/).map((s) => s.trim()).filter((s) => s !== '');
+      expect(sentences.filter((s, i) => sentences.indexOf(s) !== i)).toEqual([]);
+      expect(e.description).not.toMatch(/user's language|idioma/i);
+      expect(e.description).not.toMatch(/\b(?:EN|PT|ES) triggers?\b|\bPT —|\bES —/);
+    },
+  );
+
+  it.each(entries.filter((e) => e.invocable && e.doc.kind === 'skill').map((e) => [e.doc.rel, e] as const))(
+    '%s: says what it is not for',
+    (_rel, e) => {
+      expect(e.description).toMatch(/\bNot for\b/);
+    },
+  );
+
+  it.each([...skillDocs(), ...commandDocs()].map((d) => [d.rel, d] as const))(
+    "%s: the body says to answer in the user's language",
+    (_rel, d) => {
+      if (/^Alias of the `[a-z-]+` (?:router )?skill\b/m.test(d.body)) return;
+      expect(d.body).toMatch(/user's language|idioma do utilizador/i);
+    },
+  );
+});
+
+// What a skill costs once it fires. guardian-bugfix was 58.9 KB — 87% of it
+// the rule packs' design history — and loaded 64 KB into "find bugs" before
+// any work; guardian-security was 22.7 KB, the router 13.2 KB. What only some
+// runs need lives in the skill's references/, read on demand.
+describe('SKILL.md and reference sizes', () => {
+  const SKILL_MAX = 12 * 1024;
+  const PER_SKILL_MAX: Record<string, number> = {
+    guardian: 6 * 1024,
+    'guardian-bugfix': 8 * 1024,
+    'guardian-security': 10 * 1024,
+  };
+  const REFERENCE_MAX = 6 * 1024;
+
+  it.each(skillDocs().map((d) => [d.name, d] as const))('%s: SKILL.md within its size budget', (name, d) => {
+    expect(Buffer.byteLength(d.text, 'utf8')).toBeLessThanOrEqual(PER_SKILL_MAX[name] ?? SKILL_MAX);
+  });
+
+  it.each(referenceDocs().map((d) => [d.rel, d] as const))('%s: within the reference budget', (_rel, d) => {
+    expect(Buffer.byteLength(d.text, 'utf8')).toBeLessThanOrEqual(REFERENCE_MAX);
+  });
+
+  it.each(referenceDocs().map((d) => [d.rel, d] as const))('%s: is linked from its SKILL.md', (rel, d) => {
+    const [skillName, file] = d.name.split('/');
+    const skill = skillDocs().find((s) => s.name === skillName);
+    expect(skill?.body ?? '', rel).toContain(`references/${file ?? ''}.md`);
+  });
 });
 
 // Resource descriptions reach the model's context the same way tool

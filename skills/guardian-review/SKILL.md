@@ -1,6 +1,6 @@
 ---
 name: guardian-review
-description: Review pending changes before a PR or merge — review_pr runs the scanners on the diff, plus a scoped bug hunt and quality check and a correctness / security / tests / migrations checklist, ending in a recorded merge verdict. Not for a whole-project audit (guardian-security) or a deploy go / no-go (/guardian-release).
+description: "Review pending changes before a PR or merge — review_pr scans the diff and records it, plus a scoped bug hunt, a quality check and a correctness / security / tests checklist, ending in a merge verdict. Not for a whole-project audit (guardian-security) or a deploy go / no-go (/guardian-release)."
 ---
 
 # Guardian Review
