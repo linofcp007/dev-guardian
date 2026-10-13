@@ -61,6 +61,19 @@ Enforced by the compiler where possible, by review where not:
 
 ## Conventions that bite if ignored
 
+- **Text a tool hands a program is validated where it enters, and a batch file
+  never gets an argument `cmd.exe` can misread** (review 10, finding 3,
+  "BatBadBut"). On Windows WP-CLI, WPScan, Lighthouse, npm, composer and
+  bundle are `.bat` / `.cmd` files, which `cmd.exe` parses twice; a `"` before
+  an `&` in a slug or a URL ran a second command. `runners/spawn.ts` refuses,
+  for every caller, an argument with `"`, `%`, CR, LF or NUL when the command
+  runs through `cmd.exe` (`notRun.code: 'batch_argument_refused'`); a tool
+  parses a URL and hands over its `href` (`platform/toolArgs.ts#httpUrl`,
+  `schemas.ts#httpUrlField`), takes a slug or a token by its alphabet, refuses
+  a `"` in a path, and passes a body (`gh … --body-file`, `runners/argFile.ts`)
+  in a file, never on the command line. A new tool that passes user or
+  repository text to a program does the same, with a test that puts the `"`
+  BEFORE the `&` (`test/integration/batchArgumentTools.test.ts`).
 - **Commit the compiled `mcp/dist/`.** The repo *is* the distribution — Claude
   Code runs `mcp/dist/server.js` directly, with no install-time build. `dist/` is
   gitignored globally *except* `mcp/dist/` (see [`.gitignore`](../../.gitignore)).
