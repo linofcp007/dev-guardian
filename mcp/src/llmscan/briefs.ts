@@ -36,14 +36,19 @@ export const VERIFY_BRIEF_P95_TOKENS = 8_000;
 const MAX_EXCERPT_LINES = 200;
 /**
  * The prompt version a brief is rendered with unless the plan names another.
- * v5 (D-11, D-12): the model writes its working in prose before the answer
- * object, and the object comes last. v3 (ReDoS in validation code, the key
- * list, the last message, evidence references) found every planted
+ * v6: v5 with its answer channel moved to the listed fold, `llm_scan` with
+ * `step: "submit"` (the payload alone, the call's other arguments out of it),
+ * and the fold's other steps named as not the subagent's to call — a model
+ * in Claude Code cannot call the hidden alias `llm_scan_submit` that v1–v5
+ * name. v5 (D-11, D-12): the model writes its working in prose before the
+ * answer object, and the object comes last. v3 (ReDoS in validation code, the
+ * key list, the last message, evidence references) found every planted
  * vulnerability but committed to a verdict in the object's first key and
  * corrected itself after it; v4's key order did not move that. A plan keeps
- * the version it was made with, so v1–v4 stay shipped.
+ * the version it was made with, so v1–v5 stay shipped, and `llm_scan_submit`
+ * still answers for a brief of an older plan.
  */
-export const CURRENT_PROMPT_VERSION = 'v5';
+export const CURRENT_PROMPT_VERSION = 'v6';
 
 /**
  * Size caps per part, so a brief stays far under {@link MAX_BRIEF_TOKENS}

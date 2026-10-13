@@ -62,7 +62,7 @@ export function substituteCliPath(body: string, cliPath: string): string {
  */
 export const RULES_BODY = `# dev-guardian
 
-This project has the **dev-guardian MCP server**: 52 tools and 18 resources for security, bugs, quality,
+This project has the **dev-guardian MCP server**: 50 tools and 18 resources for security, bugs, quality,
 dependencies, compliance, observability, performance, WordPress and .NET. Every scanner runs locally and results
 persist in \`.guardian/guardian.db\`. dev-guardian sends no telemetry of its own;
 Semgrep's registry mode sends metrics — pass \`local_only: true\` to avoid it.
@@ -101,7 +101,7 @@ Semgrep's registry mode sends metrics — pass \`local_only: true\` to avoid it.
   \`bug_hunt\` · a third-party skill or MCP server before installing it: \`scan_skill\` · the agent's own config (\`.mcp.json\`, …): \`audit_agent_config\` (reads, runs nothing) · the tools an
   MCP server serves, or whether they changed: \`audit_mcp_tools\` with \`servers: ["X"]\` · routes and endpoints:
   \`map_attack_surface\` · runtime probing: \`scan_dast\` · is a finding reachable: \`validate_finding\` · a model
-  verifies the findings or hunts what scanners miss: \`llm_scan_start\` (below) · another tool's SARIF:
+  verifies the findings or hunts what scanners miss: \`llm_scan\` (below) · another tool's SARIF:
   \`import_sarif\`.
 - **Quality** — duplication, complexity, smells: \`quality_check\`.
 - **Dependencies** — upgrade plan: \`deps_update_plan\` · audit: \`deps_audit\` · VEX / "are we affected?":
@@ -130,20 +130,20 @@ Semgrep's registry mode sends metrics — pass \`local_only: true\` to avoid it.
 Resources are read-only views of the same history: \`guardian://findings/open\`, \`guardian://scans/latest\`,
 \`guardian://wp/audit/{scan_id}\` and the rest of \`findings/\`, \`scans/\`, \`cves/\`, \`wp/\`, \`dotnet/\`, \`surface/\`.
 
-## LLM-assisted scan (\`llm_scan_start\` → \`llm_scan_task\` → \`llm_scan_submit\`)
+## LLM-assisted scan (\`llm_scan\`, \`step\`: start → task → submit)
 
-\`llm_scan_start { project_path, modes }\` plans (\`verify\`; \`hunt\` after \`map_attack_surface\`): show the user the
-token estimate and \`token_limit_note\` first, and pass \`confirm: true\` above \`max_estimated_tokens\` only after the
-user agrees. Then \`llm_scan_task { plan_id }\` leases one task (\`brief\`, \`lease_token\`, 20 minutes); run THAT brief
-as below and \`llm_scan_submit { plan_id, task_id, lease_token, independence, payload }\`; repeat until \`done\`.
+\`llm_scan { step: "start", project_path, modes }\` plans (\`verify\`; \`hunt\` after \`map_attack_surface\`): show the
+user the token estimate and \`token_limit_note\` first, and pass \`confirm: true\` above \`max_estimated_tokens\` only
+after the user agrees. Then \`llm_scan { step: "task", plan_id }\` leases one task (\`brief\`, \`lease_token\`, 20
+minutes); run THAT brief as below and \`llm_scan { step: "submit", plan_id, task_id, lease_token, independence,
+payload }\`; repeat until \`done\`.
 
-- **Claude Code** — each \`llm_scan_task\` brief in a fresh subagent, one task per subagent: \`subagent\`.
-- **Codex** — spawns a subagent only when asked: ask it to spawn one per \`llm_scan_task\` brief; otherwise
-  \`same_context\`.
+- **Claude Code** — each \`llm_scan\` task brief in a fresh subagent, one task per subagent: \`subagent\`.
+- **Codex** — spawns a subagent only when asked: ask it to spawn one per task brief; otherwise \`same_context\`.
 - **Cline** — no MCP-capable subagent: run the tasks sequentially, one after another: \`same_context\`.
 - **Claude Desktop / Cowork chat** — no subagents: sequentially, one at a time: \`same_context\`.
-- **MCP sampling (VS Code Copilot)** — \`llm_scan_task { plan_id, execute: "sampling" }\` runs verification
-  tasks through the client's model.
+- **MCP sampling (VS Code Copilot)** — \`llm_scan { step: "task", plan_id, execute: "sampling" }\` runs
+  verification tasks through the client's model.
 - **Other hosts** — a fresh subagent per task if one can call these tools, else \`same_context\`.
 
 Declare independence honestly: a \`same_context\` verdict never demotes or confirms a finding.

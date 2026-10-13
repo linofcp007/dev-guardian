@@ -124,6 +124,22 @@ describe('stale at hand-out (US-1.AC-9)', () => {
   });
 });
 
+describe('a submit without a payload (US-1.AC-4: attempts count invalid answers)', () => {
+  it('is refused as invalid_input before the task is touched: the task stays leased, no try spent', async () => {
+    const h = harness();
+    seedStandard(h);
+    const out = await start(h, { modes: ['verify'] });
+    const t = await lease(h, out.plan_id);
+    const r = await callTool(h, 'llm_scan_submit', { plan_id: out.plan_id, task_id: t.task_id, lease_token: t.lease_token, independence: 'subagent' });
+    expectDomainError(r, 'invalid_input');
+    expect(JSON.stringify(r)).toMatch(/payload: Required/);
+    expect(h.repo.getTask(out.plan_id, t.task_id)).toMatchObject({ status: 'leased', attempts: 0 });
+    // A payload that IS an answer, however wrong, still spends a try.
+    const wrong = okResult<SubmitOut>(await submit(h, out.plan_id, t, null));
+    expect(wrong).toMatchObject({ accepted: false, attempts_left: 2 });
+  });
+});
+
 describe('a hunt submission is atomic (US-2.AC-4)', () => {
   const huntValid = submissionFixture('hunt-valid.json') as HuntResult;
 

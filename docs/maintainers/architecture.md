@@ -10,7 +10,7 @@ quality, deps, observability, performance and compliance. Two halves:
 
 - **Plugin front-end** — `skills/` (13 skills) + `commands/` (10 slash commands),
   declared in [`.claude-plugin/plugin.json`](../../.claude-plugin/plugin.json).
-- **MCP server** — `mcp/` (TypeScript on `node:sqlite`), the real engine: 52 tools (and 13 hidden aliases),
+- **MCP server** — `mcp/` (TypeScript on `node:sqlite`), the real engine: 50 tools (and 16 hidden aliases),
   18 resources, registered by the import list in `mcp/src/registerAll.ts` (the folds,
   `mcp/src/tools/folds.ts`, decide which names `tools/list` shows — see prose.md). Built
   into one bundle, `mcp/dist/engine.js`, which the CLI runs too (`dist/server.js`
