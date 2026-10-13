@@ -101,9 +101,10 @@ describe('T-34 constraints (NFR-1, NFR-3, NFR-4)', () => {
     expect(problems).toEqual([]);
   });
 
+  // execa left the runtime in 3.3.0 (review 8, finding 4): cross-spawn, which it and the SDK used, spawns directly.
   it('T-34 NFR-1: no new runtime dependency', () => {
     const pkg = JSON.parse(readFileSync(join(MCP, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
-    expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual(['@modelcontextprotocol/sdk', 'execa', 'signal-exit', 'yaml', 'zod']);
+    expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual(['@modelcontextprotocol/sdk', 'cross-spawn', 'signal-exit', 'yaml', 'zod']);
   });
 
   it('T-34 NFR-3: the three tools are registered, each described in at most 1500 characters', () => {

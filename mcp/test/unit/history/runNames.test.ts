@@ -78,8 +78,8 @@ const NOT_FINDING_TOOLS = new Set([
 /** Every finding `tool` value the source can produce. */
 function findingTools(): string[] {
   const found = [
-    // Parser constants: `export const BANDIT_TOOL_NAME = 'bandit'`.
-    ...collect(/export const [A-Z_]+_TOOL_NAME\s*=\s*'([^']+)'/g),
+    // Parser constants: `const BANDIT_TOOL_NAME = 'bandit'` — exported only where another module imports it.
+    ...collect(/(?:export )?const [A-Z_]+_TOOL_NAME\s*=\s*'([^']+)'/g),
     // Module constants used as `tool: TOOL` (skillaudit).
     ...collect(/\bconst TOOL\s*=\s*'([^']+)'/g),
     // Literal `tool: 'dast'` in findings built by hand (dast, dotnet).
