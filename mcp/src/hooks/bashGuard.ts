@@ -1845,6 +1845,8 @@ interface Scope {
   cmdLine?: boolean;
   /** `~name` is another account's home: a POSIX shell's reading, never the PowerShell tool's. */
   tildeUsers?: boolean;
+  /** These statements are PowerShell's — the PowerShell tool's, or a script handed to `pwsh -c` / `iex`. */
+  powershell?: boolean;
   /** Where a guarded path is this session's ({@link placeOf}); none: everywhere. */
   places?: Places | undefined;
   /** Where the command was before its last `cd` — what `cd -` returns to ({@link moveCwd}). */
@@ -2033,11 +2035,14 @@ function isBareShellStdin(words: readonly ShellWord[]): boolean {
  *     `printf`'s own format-vs-arguments split is not modelled; the last
  *     argument is used, which is exactly right for the common single- or
  *     two-argument form (`printf '%s' 'rm -rf ~'`) and merely imprecise,
- *     not wrong, for anything fancier.
+ *     not wrong, for anything fancier. What `cat` passes on counts too —
+ *     `cat <<'EOF' | bash`, `cat <<< '…' | sh` — and, read as PowerShell
+ *     (`powershell`), a string that begins the pipeline (`'…' | bash`).
  */
 function fedScripts(
   statement: ShellStatement,
   reads: (words: readonly ShellWord[]) => boolean,
+  powershell = false,
 ): Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> {
   const scripts: Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> = [];
 
@@ -2049,7 +2054,7 @@ function fedScripts(
   if (statement.commands.length >= 2) {
     const last = statement.commands[statement.commands.length - 1];
     if (last !== undefined && reads(last)) {
-      const fed = textOutputOf(statement.commands.slice(0, -1));
+      const fed = textOutputOf(statement.commands.slice(0, -1), { heredocs: statement.heredocBodies, powershell });
       if (fed === 'opaque') scripts.push({ text: '', reader: last, opaque: true });
       else if (fed !== undefined && fed.trim().length > 0) scripts.push({ text: fed.trim(), reader: last });
     }
@@ -2115,20 +2120,39 @@ function hereStringText(words: readonly ShellWord[]): string | undefined {
  * writes `rm -rf /`. `opaque` when a decoder writes text that cannot be read
  * here (`base64 -d payload.b64`, `xxd -r`, `gunzip`); `undefined` for anything
  * else (`cat f`), which is no different from running a file.
+ *
+ * What a member only passes on is read through it (review of 3.3.0: these were
+ * silent): `cat` with no file to read — its here-string (`cat <<< '…'`), the
+ * statement's heredoc (`cat <<'EOF' | bash`; a heredoc's operator leaves no
+ * word, so the statement's bodies are taken as `cat`'s), or the member before
+ * it — and `tee`, which copies its input to stdout. Read as PowerShell
+ * (`feed.powershell`), a pipeline that begins with a string writes it:
+ * `'rm -rf /' | bash`.
  */
-function textOutputOf(members: readonly ShellWord[][]): string | 'opaque' | undefined {
+function textOutputOf(
+  members: readonly ShellWord[][],
+  feed: { heredocs?: readonly string[] | undefined; powershell?: boolean } = {},
+): string | 'opaque' | undefined {
   const last = members[members.length - 1];
   if (last === undefined) return undefined;
+  const lone = last.length === 1 ? last[0] : undefined;
+  if (feed.powershell === true && members.length === 1 && lone !== undefined && lone.quoted) return lone.value;
   const at = resolveCommand(last).index;
   const name = commandName(last[at]?.value ?? '');
   const args = withoutRedirections(last.slice(at + 1));
   if (name === 'echo') return args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(' ');
   if (name === 'printf') return args[args.length - 1] ?? '';
+  const before = (): string | 'opaque' | undefined => {
+    const here = hereStringText(last);
+    if (here !== undefined) return here;
+    if (feed.heredocs !== undefined && feed.heredocs.length > 0) return feed.heredocs.join('\n');
+    return members.length > 1 ? textOutputOf(members.slice(0, -1), feed) : undefined;
+  };
+  if ((name === 'cat' && args.every((a) => a === '-')) || name === 'tee') return before();
   const decoder = decoderOf(last);
   if (decoder === undefined) return undefined;
   if (decoder === 'other') return 'opaque';
-  const here = hereStringText(last);
-  const input = here ?? (members.length > 1 ? textOutputOf(members.slice(0, -1)) : undefined);
+  const input = before();
   if (typeof input !== 'string') return 'opaque';
   return decodeBase64(input) ?? 'opaque';
 }
@@ -2172,7 +2196,7 @@ function processSubstitutionScripts(statements: readonly ShellStatement[]): Arra
     for (let j = k + 1; j < statements.length; j += 1) {
       const body = statements[j];
       if (body === undefined) break;
-      const text = textOutputOf(body.commands.map(expandWords));
+      const text = textOutputOf(body.commands.map(expandWords), { heredocs: body.heredocBodies });
       if (text === 'opaque') opaque = true;
       else if (text !== undefined) texts.push(text);
       if (body.end === ')') break;
@@ -3563,9 +3587,9 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // `iex "& { $(irm …) }"`: whatever `iex` is handed is code, so a
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
         }
         // Every command of a `cmd /c` line gets the full assessment, like a
         // top-level statement: deletes, pattern rules, nested shells (fix
@@ -3583,12 +3607,12 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // statement or the *preceding* pipeline member). A program an
     // interpreter reads the same way (`python - <<EOF`) is judged as program
     // text, like `python -c`.
-    const fed = fedScripts(statement, isBareShellStdin);
+    const fed = fedScripts(statement, isBareShellStdin, scope.powershell === true);
     if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
     if (depth < MAX_NESTING) {
       for (const { text, opaque } of fed) if (opaque !== true) collect(text, depth + 1, out, { ...scope, cmdLine: false });
     } else if (fed.length > 0) scope.notes.depth = true;
-    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin)) {
+    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
       else pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope));
     }
@@ -3737,6 +3761,7 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
     configDirName: configDirNameOf(configDir),
     dataDir: dataDir === '' ? undefined : dataDir,
     tildeUsers: opts.shell !== 'powershell',
+    powershell: opts.shell === 'powershell',
     places:
       opts.cwd === undefined && opts.projectDir === undefined
         ? undefined
@@ -3760,6 +3785,8 @@ interface Where {
   dataDir: string | undefined;
   /** `~name` names a home directory — false for the PowerShell tool. */
   tildeUsers: boolean;
+  /** The command is PowerShell's (the PowerShell tool): a string that begins a pipeline is its output. */
+  powershell: boolean;
   /** Where the guarded paths are this session's, when the caller said where it runs. */
   places: Places | undefined;
 }

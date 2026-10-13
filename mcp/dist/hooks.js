@@ -2930,7 +2930,7 @@ function isBareShellStdin(words) {
   if (head === void 0 || !SHELLS.has(basename2(head.value))) return false;
   return words.slice(1).every((w) => w.value.startsWith("-"));
 }
-function fedScripts(statement, reads) {
+function fedScripts(statement, reads, powershell = false) {
   const scripts = [];
   if (statement.commands.length === 1 && statement.heredocBodies) {
     const only = statement.commands[0];
@@ -2939,7 +2939,7 @@ function fedScripts(statement, reads) {
   if (statement.commands.length >= 2) {
     const last = statement.commands[statement.commands.length - 1];
     if (last !== void 0 && reads(last)) {
-      const fed = textOutputOf(statement.commands.slice(0, -1));
+      const fed = textOutputOf(statement.commands.slice(0, -1), { heredocs: statement.heredocBodies, powershell });
       if (fed === "opaque") scripts.push({ text: "", reader: last, opaque: true });
       else if (fed !== void 0 && fed.trim().length > 0) scripts.push({ text: fed.trim(), reader: last });
     }
@@ -2978,19 +2978,27 @@ function hereStringText(words) {
   }
   return void 0;
 }
-function textOutputOf(members) {
+function textOutputOf(members, feed = {}) {
   const last = members[members.length - 1];
   if (last === void 0) return void 0;
+  const lone = last.length === 1 ? last[0] : void 0;
+  if (feed.powershell === true && members.length === 1 && lone !== void 0 && lone.quoted) return lone.value;
   const at = resolveCommand(last).index;
   const name = commandName(last[at]?.value ?? "");
   const args = withoutRedirections(last.slice(at + 1));
   if (name === "echo") return args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(" ");
   if (name === "printf") return args[args.length - 1] ?? "";
+  const before = () => {
+    const here = hereStringText(last);
+    if (here !== void 0) return here;
+    if (feed.heredocs !== void 0 && feed.heredocs.length > 0) return feed.heredocs.join("\n");
+    return members.length > 1 ? textOutputOf(members.slice(0, -1), feed) : void 0;
+  };
+  if (name === "cat" && args.every((a) => a === "-") || name === "tee") return before();
   const decoder = decoderOf(last);
   if (decoder === void 0) return void 0;
   if (decoder === "other") return "opaque";
-  const here = hereStringText(last);
-  const input = here ?? (members.length > 1 ? textOutputOf(members.slice(0, -1)) : void 0);
+  const input = before();
   if (typeof input !== "string") return "opaque";
   return decodeBase64(input) ?? "opaque";
 }
@@ -3020,7 +3028,7 @@ function processSubstitutionScripts(statements) {
     for (let j = k + 1; j < statements.length; j += 1) {
       const body = statements[j];
       if (body === void 0) break;
-      const text = textOutputOf(body.commands.map(expandWords));
+      const text = textOutputOf(body.commands.map(expandWords), { heredocs: body.heredocBodies });
       if (text === "opaque") opaque = true;
       else if (text !== void 0) texts.push(text);
       if (body.end === ")") break;
@@ -3852,20 +3860,20 @@ function collect(command, depth, out, scope) {
           if (isBareRemoteFetch(script)) out.push(RULE_FETCH_EXEC);
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
         }
         if (line !== void 0) collect(line, depth + 1, out, { ...scope, cmdLine: true });
       }
       moveCwd(scope, words, resolved.index);
     }
-    const fed = fedScripts(statement, isBareShellStdin);
+    const fed = fedScripts(statement, isBareShellStdin, scope.powershell === true);
     if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
     if (depth < MAX_NESTING) {
       for (const { text, opaque } of fed) if (opaque !== true) collect(text, depth + 1, out, { ...scope, cmdLine: false });
     } else if (fed.length > 0) scope.notes.depth = true;
-    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin)) {
+    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
       else pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? "")), scope));
     }
@@ -3924,6 +3932,7 @@ function assessBashCommand(command, opts = {}) {
     configDirName: configDirNameOf(configDir),
     dataDir: dataDir === "" ? void 0 : dataDir,
     tildeUsers: opts.shell !== "powershell",
+    powershell: opts.shell === "powershell",
     places: opts.cwd === void 0 && opts.projectDir === void 0 ? void 0 : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) }
   };
   if (opts.shell !== "powershell") return assessReadings([text], cut, now, deadline, where);

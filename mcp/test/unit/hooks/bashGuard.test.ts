@@ -3905,3 +3905,32 @@ describe('assessBashCommand — a delete target in any spelling of the same path
     );
   });
 });
+
+// Review of 3.3.0: what `cat` passes on to a shell was not read — its heredoc,
+// its here-string — nor, from PowerShell, a string piped to a shell.
+describe('assessBashCommand — a script handed to a shell through cat, tee or a PowerShell string (review of 3.3.0)', () => {
+  it.each([
+    ["cat <<'EOF' | bash\nrm -rf /\nEOF", 'bash'],
+    ['cat <<EOF | sh -s\nrm -rf ~\nEOF', 'bash'],
+    ["cat <<< 'rm -rf /' | bash", 'bash'],
+    ["cat - <<< 'rm -rf /' | bash", 'bash'],
+    ["echo 'rm -rf /' | cat | sh", 'bash'],
+    ["echo 'rm -rf /' | tee run.log | sh", 'bash'],
+    ['cat <<EOF | base64 -d | sh\ncm0gLXJmIC8K\nEOF', 'bash'],
+    ["'rm -rf /' | bash", 'powershell'],
+    ['"rm -rf /" | bash', 'powershell'],
+    ["powershell -Command \"'rm -rf /' | bash\"", 'bash'],
+  ] as const)('%j blocks', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    ["cat <<'EOF' | git commit -F -\nrm -rf /\nEOF", 'bash'],
+    ["cat <<'EOF' > notes.md\nrm -rf /\nEOF", 'bash'],
+    ['cat notes.txt | bash', 'bash'],
+    ["cat -n <<< 'rm -rf /' | bash", 'bash'],
+    ["'rm -rf /' | bash", 'bash'],
+  ] as const)('%j stays ok: the text is data, or not what the shell reads', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+});
