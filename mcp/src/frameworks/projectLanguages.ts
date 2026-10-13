@@ -80,7 +80,7 @@
 
 import { readdirSync, type Dirent } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
@@ -542,6 +542,33 @@ export interface OversizedFiles {
   files: OversizedFile[];
   /** Why the listing may have missed some. Absent: it did not. */
   incomplete?: string;
+  /**
+   * Windows only: the same listing's files whose absolute path is
+   * {@link WINDOWS_MAX_PATH} characters or longer (project-relative,
+   * `/`-separated) — candidates a scanner may not have opened
+   * (`runners/semgrepCoverageGaps.ts`). Absent: none, or not Windows.
+   */
+  longPaths?: string[];
+}
+
+/**
+ * Windows' `MAX_PATH`: a path of this many characters or more cannot be
+ * opened by a program that is not long-path aware, which is the default
+ * (`LongPathsEnabled=0`). Review 8, finding 2: a file at a 301-character path
+ * holding `exec('ls ' + req.query.dir)` was missing from Semgrep's
+ * `paths.scanned`, with no error, and the gate read coverage full, exit 0.
+ */
+export const WINDOWS_MAX_PATH = 260;
+
+/** The files of `rels` (project-relative) whose absolute path under `root` is too long for Windows, sorted; none elsewhere. */
+export function longPathsOf(
+  root: string,
+  rels: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  if (platform !== 'win32') return [];
+  const base = resolve(root);
+  return rels.filter((rel) => join(base, ...rel.split('/')).length >= WINDOWS_MAX_PATH).sort();
 }
 
 /** Whether `rel` is a file the scanners read with a source language — see the module comment. */
@@ -591,16 +618,21 @@ export async function oversizedSourceFilesAsync(
 ): Promise<OversizedFiles> {
   const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
   const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
+  const withLongPaths = (out: OversizedFiles, rels: readonly string[]): OversizedFiles => {
+    const long = longPathsOf(root, rels);
+    return long.length > 0 ? { ...out, longPaths: long } : out;
+  };
   if (opts.only !== undefined) {
     const rels = opts.only.map((p) => p.split('\\').join('/')).filter((rel) => isScannedSource(rel, exclusions));
-    return { files: await sizesOver(root, rels, limit) };
+    return withLongPaths({ files: await sizesOver(root, rels, limit) }, rels);
   }
   const listed = await gitListAsync(root);
   const walked = listed === null ? await walkAsync(root, exclusions, {}) : null;
   const files = listed ?? walked?.files ?? [];
-  const out: OversizedFiles = { files: await sizesOver(root, files.filter((rel) => isScannedSource(rel, exclusions)), limit) };
+  const sources = files.filter((rel) => isScannedSource(rel, exclusions));
+  const out: OversizedFiles = { files: await sizesOver(root, sources, limit) };
   if (walked?.incomplete !== undefined) out.incomplete = walked.incomplete;
-  return out;
+  return withLongPaths(out, sources);
 }
 
 /** `src/big.py (1.2 MB)`, the first few, then "and N more". */

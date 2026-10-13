@@ -113,6 +113,7 @@ registerToolModule(makeScanTool({
                 if (entry !== undefined) {
                     const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
                         scannedNothing: entry.status === 'skipped',
+                        reports: raw !== null ? [raw] : [],
                     });
                     tools_run[at] = applied.toolRun;
                     if (applied.missing)

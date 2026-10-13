@@ -79,7 +79,7 @@
  */
 import { readdirSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
@@ -452,6 +452,21 @@ export async function languagesFromFilesAsync(root, opts = {}) {
 // ---------------------------------------------------------------- files too large for Semgrep
 /** Semgrep's `--max-target-bytes` default (1.176.1: "Defaults to 1000000 bytes"): a larger target is ignored. */
 export const SEMGREP_MAX_TARGET_BYTES = 1_000_000;
+/**
+ * Windows' `MAX_PATH`: a path of this many characters or more cannot be
+ * opened by a program that is not long-path aware, which is the default
+ * (`LongPathsEnabled=0`). Review 8, finding 2: a file at a 301-character path
+ * holding `exec('ls ' + req.query.dir)` was missing from Semgrep's
+ * `paths.scanned`, with no error, and the gate read coverage full, exit 0.
+ */
+export const WINDOWS_MAX_PATH = 260;
+/** The files of `rels` (project-relative) whose absolute path under `root` is too long for Windows, sorted; none elsewhere. */
+export function longPathsOf(root, rels, platform = process.platform) {
+    if (platform !== 'win32')
+        return [];
+    const base = resolve(root);
+    return rels.filter((rel) => join(base, ...rel.split('/')).length >= WINDOWS_MAX_PATH).sort();
+}
 /** Whether `rel` is a file the scanners read with a source language — see the module comment. */
 function isScannedSource(rel, exclusions) {
     if (languageOfFile(rel) === null && !/\.h$/i.test(rel))
@@ -496,17 +511,22 @@ async function sizesOver(root, rels, limit) {
 export async function oversizedSourceFilesAsync(root, opts = {}) {
     const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
     const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
+    const withLongPaths = (out, rels) => {
+        const long = longPathsOf(root, rels);
+        return long.length > 0 ? { ...out, longPaths: long } : out;
+    };
     if (opts.only !== undefined) {
         const rels = opts.only.map((p) => p.split('\\').join('/')).filter((rel) => isScannedSource(rel, exclusions));
-        return { files: await sizesOver(root, rels, limit) };
+        return withLongPaths({ files: await sizesOver(root, rels, limit) }, rels);
     }
     const listed = await gitListAsync(root);
     const walked = listed === null ? await walkAsync(root, exclusions, {}) : null;
     const files = listed ?? walked?.files ?? [];
-    const out = { files: await sizesOver(root, files.filter((rel) => isScannedSource(rel, exclusions)), limit) };
+    const sources = files.filter((rel) => isScannedSource(rel, exclusions));
+    const out = { files: await sizesOver(root, sources, limit) };
     if (walked?.incomplete !== undefined)
         out.incomplete = walked.incomplete;
-    return out;
+    return withLongPaths(out, sources);
 }
 /** `src/big.py (1.2 MB)`, the first few, then "and N more". */
 export function describeOversized(files, limit = SEMGREP_MAX_TARGET_BYTES) {

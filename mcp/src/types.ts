@@ -149,6 +149,15 @@ export interface ToolRun {
    */
   failed_rules?: FailedRule[];
   /**
+   * What a Semgrep run could not see that no file of `partially_parsed`
+   * stands for (`runners/semgrepCoverageGaps.ts`): how many files were over
+   * the size limit, how many initialised submodules hold files no listing
+   * has, and whether the file listing stopped early. Named in `reason` too;
+   * here as data, because the CI gate never lets an acceptance of named
+   * files cover them (`ci/gate.ts`). Absent: none.
+   */
+  unscanned?: { oversized?: number; submodules?: number; listing_incomplete?: true };
+  /**
    * The scanner is installed and ran, but its RULES did not load — none of
    * them (a Semgrep run in which every local rule failed to compile and no
    * registry pack ran), or its configuration was refused outright (an

@@ -427,7 +427,9 @@ function recordSemgrepRun(args: SemgrepRunRecord): void {
   // The shared gaps (runners/semgrepCoverageGaps.ts), on the entry just judged.
   const last = args.tools_run.at(-1);
   if (last !== undefined && last.name === 'semgrep') {
-    const applied = applySemgrepCoverageGaps(last, args.gaps);
+    // Its report says which too-long paths it did open (long paths enabled).
+    const report = args.gaps.longPaths !== undefined ? readJsonSafe(args.outFile) : null;
+    const applied = applySemgrepCoverageGaps(last, args.gaps, { reports: report !== null ? [report] : [] });
     args.tools_run[args.tools_run.length - 1] = applied.toolRun;
     if (applied.missing) markMissing(args.missing_tools, 'semgrep');
   }
@@ -758,6 +760,7 @@ async function runSemgrepOnScope(args: Collect & {
   // (runners/semgrepCoverageGaps.ts): named, a gap.
   const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files, ...ignoreFrom(ctx) }), {
     scannedNothing: run.nothingScanned,
+    reports: run.reports,
   });
   tools_run[tools_run.length - 1] = gapped.toolRun;
   if (gapped.missing) markMissing(missing_tools, 'semgrep');

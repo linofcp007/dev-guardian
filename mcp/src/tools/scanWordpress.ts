@@ -138,6 +138,7 @@ registerToolModule(
             if (entry !== undefined) {
               const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
                 scannedNothing: entry.status === 'skipped',
+                reports: raw !== null ? [raw] : [],
               });
               tools_run[at] = applied.toolRun;
               if (applied.missing) markMissing(missing_tools, 'semgrep-wp');

@@ -367,6 +367,7 @@ async function handler(
   const gaps = await semgrepCoverageGaps(projectPath, fromRef !== undefined ? { guardianIgnoreFrom: fromRef } : {});
   const gapped = applySemgrepCoverageGaps(judged.toolRun, gaps, {
     scannedNothing: judged.verdict === 'scanned_nothing',
+    reports: raw !== null ? [raw] : [],
   });
   const semgrepRun = gapped.toolRun;
   if (judged.verdict === 'scanned_nothing') {

@@ -31,10 +31,12 @@
  * .test.ts` fails when a file in `src/` spawns Semgrep for a result without
  * calling {@link applySemgrepCoverageGaps}.
  */
-import { describeOversized, oversizedSourceFilesAsync } from '../frameworks/projectLanguages.js';
+import { describeOversized, oversizedSourceFilesAsync, WINDOWS_MAX_PATH, } from '../frameworks/projectLanguages.js';
 import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
 import { honouredFiles, withProjectConfig } from './repoConfig.js';
 import { describeSubmodules, initialisedSubmodules } from './git.js';
+import { asArray, getProp, parseInputAsJson } from './scannerParsers/index.js';
+import { nameAFew } from './semgrepReport.js';
 export const NO_SEMGREP_GAPS = { oversized: [], submodules: [] };
 /**
  * The gaps of a Semgrep run over `projectPath` — the whole project, or with
@@ -51,7 +53,10 @@ export async function semgrepCoverageGaps(projectPath, opts = {}) {
     });
     // A directory target reads them; explicit file targets do not.
     const honoured = opts.files === undefined ? await honouredFiles(projectPath, 'semgrep') : [];
-    const withHonoured = (gaps) => honoured.length > 0 ? { ...gaps, honoured } : gaps;
+    const withHonoured = (gaps) => {
+        const out = sized.longPaths !== undefined ? { ...gaps, longPaths: sized.longPaths } : gaps;
+        return honoured.length > 0 ? { ...out, honoured } : out;
+    };
     if (opts.submodules !== undefined) {
         const out = {
             oversized: sized.files,
@@ -103,22 +108,79 @@ export function scannedNothingBecause(gaps) {
  * {@link scannedNothingBecause}.
  */
 export function applySemgrepCoverageGaps(run, gaps, opts = {}) {
-    const applied = applyGaps(run, gaps, opts);
+    const ran = !(run.status === 'skipped' && run.reason === 'not_installed');
+    const tooLong = ran ? notScanned(gaps.longPaths ?? [], opts.reports ?? []) : [];
+    const applied = applyGaps(run, gaps, opts, tooLong);
     // What the run honoured is named whatever its gaps — on a run that scanned
     // nothing too: a .semgrepignore may be why. Not when Semgrep never ran.
-    const ran = !(run.status === 'skipped' && run.reason === 'not_installed');
     const named = ran ? withProjectConfig(applied.toolRun, gaps.honoured ?? []) : applied.toolRun;
     return { toolRun: named, missing: applied.missing };
 }
-function applyGaps(run, gaps, opts) {
-    const notes = semgrepGapNotes(gaps);
+/**
+ * `ToolRun.partially_parsed`'s type for a file whose path is too long for
+ * Windows to open (`frameworks/projectLanguages.ts#WINDOWS_MAX_PATH`): it was
+ * never read. The CI gate names it a `path_too_long` gap, which no flag
+ * accepts (`ci/gate.ts`).
+ */
+export const PATH_TOO_LONG_TYPE = 'Path too long';
+/** `N file(s) at a path of 260 characters or more were not scanned …` — a few named. */
+export function describeTooLong(files) {
+    return (`${files.length} file(s) at a path of ${WINDOWS_MAX_PATH} characters or more were not scanned ` +
+        `(Windows MAX_PATH): ${nameAFew(files)} — enable long paths (LongPathsEnabled=1) or move the project to a shorter path`);
+}
+/**
+ * The candidates the report does not list as scanned — every one when there
+ * is no readable report, or it lists nothing. Compared case-insensitively:
+ * they are Windows paths.
+ */
+function notScanned(candidates, reports) {
+    if (candidates.length === 0)
+        return [];
+    const listed = reports.flatMap((report) => {
+        const root = report === undefined || report === null ? null : parseInputAsJson(report);
+        return asArray(getProp(getProp(root, 'paths'), 'scanned')).filter((p) => typeof p === 'string');
+    });
+    if (listed.length === 0)
+        return [...candidates];
+    const seen = listed.map((p) => p.split('\\').join('/').replace(/^\.\//, '').toLowerCase());
+    const exact = new Set(seen);
+    // Semgrep names a target relative to its working directory (the project),
+    // or absolute — which ends with the relative path.
+    return candidates.filter((rel) => {
+        const key = rel.toLowerCase();
+        return !exact.has(key) && !seen.some((s) => s.endsWith(`/${key}`));
+    });
+}
+function applyGaps(run, gaps, opts, tooLong) {
+    const notes = [...semgrepGapNotes(gaps), ...(tooLong.length > 0 ? [describeTooLong(tooLong)] : [])];
     if (notes.length === 0)
         return { toolRun: run, missing: false };
     const because = opts.scannedNothing === true ? scannedNothingBecause(gaps) : null;
     const base = because ?? run.reason;
     const added = notes.filter((n) => base === undefined || !base.includes(n));
     const reason = [base, ...added].filter((s) => s !== undefined && s.length > 0).join('; ');
-    return { toolRun: { ...run, reason }, missing: run.status !== 'failed' };
+    // What no file acceptance can cover, as data (the CI gate reads it).
+    const unscanned = {
+        ...(gaps.oversized.length > 0 ? { oversized: gaps.oversized.length } : {}),
+        ...(gaps.submodules.length > 0 ? { submodules: gaps.submodules.length } : {}),
+        ...(gaps.incomplete !== undefined ? { listing_incomplete: true } : {}),
+    };
+    // A file never opened is not re-measured either: named per file, as a
+    // partly parsed one is, under its own type.
+    const longEntries = tooLong.map((file) => ({
+        file,
+        type: PATH_TOO_LONG_TYPE,
+        message: `the path is ${WINDOWS_MAX_PATH} characters or longer, and the scanner could not open it`,
+    }));
+    return {
+        toolRun: {
+            ...run,
+            reason,
+            ...(Object.keys(unscanned).length > 0 ? { unscanned } : {}),
+            ...(longEntries.length > 0 ? { partially_parsed: [...(run.partially_parsed ?? []), ...longEntries] } : {}),
+        },
+        missing: run.status !== 'failed',
+    };
 }
 /** Push `name` into `missing` once. */
 export function markMissing(missing, name) {

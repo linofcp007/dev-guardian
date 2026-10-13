@@ -9,10 +9,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { longPathsOf } from '../../../src/frameworks/projectLanguages.js';
 import {
   applySemgrepCoverageGaps,
   markMissing,
   NO_SEMGREP_GAPS,
+  PATH_TOO_LONG_TYPE,
   scannedNothingBecause,
   semgrepGapNotes,
   type SemgrepCoverageGaps,
@@ -66,6 +68,62 @@ describe('applySemgrepCoverageGaps', () => {
     const because = scannedNothingBecause(BIG) ?? '';
     const r = applySemgrepCoverageGaps({ name: 'semgrep', status: 'skipped', reason: because }, BIG);
     expect(r.toolRun.reason).toBe(because);
+  });
+
+  // Review 8, finding 2: on Windows a file at a path of 260 characters or more
+  // was missing from Semgrep's paths.scanned with no error, and the gate read
+  // coverage full. A long path the report does not list is a named gap, per
+  // file, under its own type; one it lists (long paths enabled) is none.
+  describe('paths too long for Windows', () => {
+    const LONG = 'deep/nested/app.js';
+    const GAPS: SemgrepCoverageGaps = { oversized: [], submodules: [], longPaths: [LONG] };
+    const report = (scanned: string[]): string => JSON.stringify({ results: [], errors: [], paths: { scanned } });
+
+    it('a long path the report does not list is a gap: named, partial, typed Path too long', () => {
+      const r = applySemgrepCoverageGaps({ name: 'semgrep', status: 'ok' }, GAPS, { reports: [report(['short.js'])] });
+      expect(r.missing).toBe(true);
+      expect(r.toolRun.reason).toMatch(/1 file\(s\) at a path of 260 characters or more were not scanned \(Windows MAX_PATH\): deep\/nested\/app\.js/);
+      expect(r.toolRun.partially_parsed).toEqual([expect.objectContaining({ file: LONG, type: PATH_TOO_LONG_TYPE })]);
+      expect(r.toolRun.unscanned).toBeUndefined();
+    });
+
+    it('one the report lists as scanned — relative, absolute or in another case — is no gap', () => {
+      const bs = String.fromCharCode(92);
+      for (const listed of [LONG, `C:${bs}proj${bs}deep${bs}nested${bs}app.js`, 'DEEP/Nested/App.js', `./${LONG}`]) {
+        const r = applySemgrepCoverageGaps({ name: 'semgrep', status: 'ok' }, GAPS, { reports: [report(['short.js', listed])] });
+        expect(r.missing, listed).toBe(false);
+      }
+    });
+
+    it('with no readable report, every long path is a gap — never a silent pass', () => {
+      expect(applySemgrepCoverageGaps({ name: 'semgrep', status: 'ok' }, GAPS).missing).toBe(true);
+      expect(applySemgrepCoverageGaps({ name: 'semgrep', status: 'ok' }, GAPS, { reports: ['not json'] }).missing).toBe(true);
+    });
+
+    it('a batched run: scanned by any of its reports is scanned', () => {
+      const r = applySemgrepCoverageGaps({ name: 'semgrep', status: 'ok' }, GAPS, { reports: [report(['a.js']), report([LONG])] });
+      expect(r.missing).toBe(false);
+    });
+
+    it('a Semgrep that never ran adds no long-path gap', () => {
+      const r = applySemgrepCoverageGaps({ name: 'semgrep', status: 'skipped', reason: 'not_installed' }, GAPS);
+      expect(r.toolRun.partially_parsed).toBeUndefined();
+    });
+
+    it('the other gaps are recorded as data on the run (unscanned), for the CI gate', () => {
+      expect(applySemgrepCoverageGaps({ name: 'semgrep', status: 'ok' }, BOTH).toolRun.unscanned).toEqual({
+        oversized: 1,
+        submodules: 1,
+        listing_incomplete: true,
+      });
+    });
+
+    it('longPathsOf: Windows only, at 260 characters and over', () => {
+      const root = `C:${String.fromCharCode(92)}p`;
+      const at = (n: number): string => 'a'.repeat(n - root.length - 1);
+      expect(longPathsOf(root, [at(259), at(260), at(300)], 'win32')).toEqual([at(260), at(300)].sort());
+      expect(longPathsOf(root, [at(300)], 'linux')).toEqual([]);
+    });
   });
 
   it('markMissing lists a name once', () => {
