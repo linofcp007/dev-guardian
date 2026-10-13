@@ -99,6 +99,7 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withTextFile } from '../runners/argFile.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { GIT_COMMAND, gitSafetyFor, isRepositoryScope, localReceivePackCommand, parseConfigListing } from '../platform/gitSafety.js';
 import type { FixSource } from './types.js';
@@ -331,12 +332,15 @@ export async function openPr(opts: {
     });
   }
 
-  // cwd: projectPath, per the brief — see the module comment.
-  const create = await run({
-    command: 'gh',
-    args: ['pr', 'create', '--head', branch, '--title', title, '--body', body],
-    cwd: projectPath,
-  });
+  // cwd: projectPath, per the brief — see the module comment. The body is
+  // read from a file (`runners/argFile.ts`): it is markdown built from findings.
+  const create = await withTextFile(body, (bodyFile) =>
+    run({
+      command: 'gh',
+      args: ['pr', 'create', '--head', branch, '--title', title, '--body-file', bodyFile],
+      cwd: projectPath,
+    }),
+  );
   if (hasFailed(create)) {
     return withNotApplied({
       status: 'create_failed',

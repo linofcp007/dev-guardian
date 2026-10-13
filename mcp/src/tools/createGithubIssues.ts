@@ -46,6 +46,7 @@ import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
+import { withTextFile } from '../runners/argFile.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
@@ -451,9 +452,12 @@ async function createIssue(
   body: string,
   labels: string[],
 ): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
-  const args = ['issue', 'create', '--title', title, '--body', body];
-  for (const l of labels) args.push('--label', l);
-  const r = await runProcess({ command: 'gh', args, cwd, timeoutMs: 30_000 });
+  // The body from a file (`runners/argFile.ts`): it is markdown built from findings.
+  const r = await withTextFile(body, (bodyFile) => {
+    const args = ['issue', 'create', '--title', title, '--body-file', bodyFile];
+    for (const l of labels) args.push('--label', l);
+    return runProcess({ command: 'gh', args, cwd, timeoutMs: 30_000 });
+  });
   if (r.outcome === 'completed') {
     // gh prints the URL of the created issue.
     const url = r.stdout

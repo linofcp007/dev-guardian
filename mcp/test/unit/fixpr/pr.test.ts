@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { branchName, deleteLocalBranch, EXCLUDE_GUARDIAN_DIR, existsOutcome, prExists, openPr } from '../../../src/fixpr/pr.js';
 
@@ -214,10 +215,18 @@ function fakeRunWithCwd(script: Record<string, { outcome: string; exitCode: numb
   // comment), extended only to also record `cwd` per call — the brief's
   // helper does not capture it at all, so it cannot be used to assert the
   // isolation boundary between `projectPath` and `worktreePath`.
-  const calls: { command: string; args: string[]; cwd: string }[] = [];
+  const calls: { command: string; args: string[]; cwd: string; bodyFile?: string }[] = [];
   const run = async (opts: { command: string; args?: string[]; cwd: string }) => {
     const args = opts.args ?? [];
-    calls.push({ command: opts.command, args, cwd: opts.cwd });
+    // A --body-file is removed once gh returns: its text is recorded while it exists.
+    const bodyAt = args.indexOf('--body-file');
+    const bodyPath = bodyAt >= 0 ? args[bodyAt + 1] : undefined;
+    calls.push({
+      command: opts.command,
+      args,
+      cwd: opts.cwd,
+      ...(bodyPath !== undefined ? { bodyFile: readFileSync(bodyPath, 'utf8') } : {}),
+    });
     const line = [opts.command, ...args].join(' ');
     const key = Object.keys(script)
       .sort((a, b) => b.length - a.length)
@@ -446,7 +455,7 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     expect(r.detail).toContain(base.branch);
   });
 
-  it('commits with the PR title as the message, and passes head/title/body through to gh pr create', async () => {
+  it('commits with the PR title as the message, and passes head/title through to gh pr create, the body in a file', async () => {
     const { run, calls } = fakeRunWithCwd({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
       'git status': REAL_CHANGES,
@@ -459,8 +468,11 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     // rest are kept from running by core.hooksPath, platform/gitSafety.ts).
     expect(commitCall?.args).toEqual(['commit', '--no-verify', '-m', 'Bump lodash']);
     const createCall = calls.find((c) => c.command === 'gh' && c.args[1] === 'create');
-    expect(createCall?.args).toEqual(['pr', 'create', '--head', base.branch,
-      '--title', 'Bump lodash', '--body', 'Resolves CVE-1234']);
+    expect(createCall?.args.slice(0, 7)).toEqual(['pr', 'create', '--head', base.branch,
+      '--title', 'Bump lodash', '--body-file']);
+    // The body never rides the command line (review 10, finding 3: a gh.cmd hands it to cmd.exe).
+    expect(createCall?.bodyFile).toBe('Resolves CVE-1234');
+    expect(existsSync(createCall?.args[7] ?? ''), 'the body file is removed after the call').toBe(false);
   });
 
   it('still reports created, with a null url, when gh pr create succeeds without a parseable URL line', async () => {
