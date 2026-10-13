@@ -8,11 +8,12 @@
  * `hookSpecificOutput` JSON on stdout.
  *
  * Design rules:
- *   - **Dependency-free.** Imports only `node:` builtins plus the pure,
- *     pre-compiled detectors in `../mcp/dist/hooks/*` (regex only, no native
- *     modules). This guarantees the hook runs in the *installed* plugin,
- *     where `mcp/node_modules` (storage is `node:sqlite`, no native deps —
- *     but still not shipped) is not present.
+ *   - **Dependency-free.** Imports only `node:` builtins plus the pure
+ *     detectors in the self-contained bundle `../mcp/dist/hooks.js` (built
+ *     from `mcp/src/hooksEntry.ts`; regex only, no native modules). This
+ *     guarantees the hook runs in the *installed* plugin, where
+ *     `mcp/node_modules` (storage is `node:sqlite`, no native deps — but
+ *     still not shipped) is not present.
  *   - **Fail-open.** Any unexpected error → exit 0 with no output. A guardrail
  *     must never break the user's workflow. Set GUARDIAN_HOOKS_DEBUG=1 to see
  *     diagnostics on stderr.
@@ -52,9 +53,7 @@ const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
 // the variable is set, and this form also works when it is not (a manual run,
 // `dev-guardian check`, the e2e tests).
 const PLUGIN_ROOT = resolve(HERE, '..'); // <plugin>
-const DIST_HOOKS = join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks');
-const DIST_PKGVET = join(PLUGIN_ROOT, 'mcp', 'dist', 'pkgvet');
-const DIST_PLATFORM = join(PLUGIN_ROOT, 'mcp', 'dist', 'platform');
+const HOOKS_BUNDLE = join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks.js');
 const POPULAR_DIR = join(PLUGIN_ROOT, 'configs', 'popular-packages');
 
 const DEBUG = process.env.GUARDIAN_HOOKS_DEBUG === '1';
@@ -128,8 +127,28 @@ async function readStdin() {
 }
 
 /**
+ * The detectors' bundle, `mcp/dist/hooks.js` (`mcp/src/hooksEntry.ts`),
+ * imported once per call. Each detector module is behind one of its `load*`
+ * functions, which the bundle keeps lazy: an event evaluates only what it
+ * uses (review 8, item 17). `pathToFileURL`, never `file://${…}` by
+ * concatenation: a `#` in the install path read as a URL fragment, the import
+ * failed, and the shell guard and the secret scan failed open (review M2). A
+ * missing or damaged bundle rejects every {@link detector} call: each guard
+ * then fails open, and SessionStart names the ones that are off.
+ */
+let hooksBundle;
+
+/** The exports of one detector module, by its loader in the bundle (`loadBashGuard`, …). */
+async function detector(loader) {
+  hooksBundle ??= import(pathToFileURL(HOOKS_BUNDLE).href);
+  const bundle = await hooksBundle;
+  if (typeof bundle[loader] !== 'function') throw new Error(`${loader} is missing from mcp/dist/hooks.js`);
+  return bundle[loader]();
+}
+
+/**
  * How a hook configuration file is read: `readSmallJsonFile` from
- * `mcp/dist/hooks/configFile.js`, loaded in `main()` by `loadConfigReader`.
+ * `mcp/src/hooks/configFile.ts` (in the bundle), loaded in `main()` by `loadConfigReader`.
  * Given the directory the file lives under (the project, or the home
  * directory for the user-level file), it first walks the path's components
  * below it with `lstat` + `readlink` — never touching a link's target — and
@@ -141,8 +160,8 @@ async function readStdin() {
  * replaced read whatever was there: a FIFO or a link to `/dev/zero` at
  * `.guardian/hooks.config.json` blocked the hook until Claude Code killed it
  * at 15 s — and the tool call then ran unguarded (Task 23 fix round 2, N1).
- * Until it is loaded, and if it cannot be (no built `mcp/dist`), every file
- * reads as absent: the protective defaults.
+ * Until it is loaded, and if it cannot be (no built `mcp/dist/hooks.js`),
+ * every file reads as absent: the protective defaults.
  */
 let readSmallJsonFile = () => ({ status: 'absent' });
 /** `walkLinksUnder` from the same module — see `handleSessionStart`. */
@@ -150,7 +169,7 @@ let walkLinksUnder = () => ({ ok: true });
 /** `readSmallTextFile` from the same module — see `claudeSettingsWriteGuard`. */
 let readSmallTextFile = () => undefined;
 /**
- * `guardedPath` from `mcp/dist/hooks/guardedPath.js`: the file a write really
+ * `guardedPath` from `mcp/src/hooks/guardedPath.ts`: the file a write really
  * reaches — on Windows without an NTFS stream suffix or trailing dots and
  * spaces, and everywhere resolved through 8.3 names and links (review M1).
  * Until it is loaded, a path is taken as written.
@@ -165,7 +184,7 @@ let hardLinkedTo = () => undefined;
  */
 let isNetworkPath = (p) => /^[\\/]{2}/.test(String(p));
 /**
- * `writesRegistry` from `mcp/dist/hooks/dataRegistry.js`: whether a write
+ * `writesRegistry` from `mcp/src/hooks/dataRegistry.ts`: whether a write
  * reaches dev-guardian's registry of trusted databases (review 3.0 wave 2,
  * round 2). Loaded by the write guards only ({@link loadRegistryGuard}); until
  * it is, and if it cannot be, nothing does (fail-open, and SessionStart says
@@ -180,12 +199,12 @@ let writesRegistry = () => false;
  */
 async function loadConfigReader() {
   try {
-    const mod = await import(pathToFileURL(join(DIST_HOOKS, 'configFile.js')).href);
+    const mod = await detector('loadConfigFile');
     if (typeof mod.readSmallJsonFile === 'function') readSmallJsonFile = mod.readSmallJsonFile;
     if (typeof mod.walkLinksUnder === 'function') walkLinksUnder = mod.walkLinksUnder;
     if (typeof mod.readSmallTextFile === 'function') readSmallTextFile = mod.readSmallTextFile;
     if (typeof mod.isNetworkPath === 'function') isNetworkPath = mod.isNetworkPath;
-    const paths = await import(pathToFileURL(join(DIST_HOOKS, 'guardedPath.js')).href);
+    const paths = await detector('loadGuardedPath');
     if (typeof paths.guardedPath === 'function') guardedPath = paths.guardedPath;
     if (typeof paths.hardLinkedTo === 'function') hardLinkedTo = paths.hardLinkedTo;
   } catch (err) {
@@ -195,7 +214,7 @@ async function loadConfigReader() {
 
 async function loadRegistryGuard() {
   try {
-    const registry = await import(pathToFileURL(join(DIST_HOOKS, 'dataRegistry.js')).href);
+    const registry = await detector('loadDataRegistry');
     if (typeof registry.writesRegistry === 'function') writesRegistry = registry.writesRegistry;
   } catch (err) {
     debug(`registry guard unavailable (fail-open): ${err instanceof Error ? err.message : String(err)}`);
@@ -203,7 +222,7 @@ async function loadRegistryGuard() {
 }
 
 /**
- * `databaseRegistration` from `mcp/dist/storage/dbRegistry.js`: whether a
+ * `databaseRegistration` from `mcp/src/storage/dbRegistry.ts`: whether a
  * project's `.guardian/guardian.db` is registered as the user's, read from
  * the user's own registry — the database itself is never opened here. Loaded
  * for SessionStart only; until then, and if it cannot be, `unknown` (no line).
@@ -212,7 +231,7 @@ let databaseRegistration = () => 'unknown';
 
 async function loadRegistryReader() {
   try {
-    const mod = await import(pathToFileURL(join(PLUGIN_ROOT, 'mcp', 'dist', 'storage', 'dbRegistry.js')).href);
+    const mod = await detector('loadDbRegistry');
     if (typeof mod.databaseRegistration === 'function') databaseRegistration = mod.databaseRegistration;
   } catch (err) {
     debug(`registry reader unavailable: ${err instanceof Error ? err.message : String(err)}`);
@@ -405,7 +424,7 @@ function relativeTime(ms) {
 }
 
 /**
- * `execGitSync` from `mcp/dist/platform/gitSafety.js`: git hardened against
+ * `execGitSync` from `mcp/src/platform/gitSafety.ts`: git hardened against
  * the project's own git configuration (review 3.0, W2E-git). SessionStart's
  * `git status` in a project opened for the first time — an archive, a
  * download — used to run that project's `core.fsmonitor` and
@@ -416,7 +435,7 @@ let execGitSync = null;
 
 async function loadGitSafety() {
   try {
-    const mod = await import(pathToFileURL(join(DIST_PLATFORM, 'gitSafety.js')).href);
+    const mod = await detector('loadGitSafety');
     if (typeof mod.execGitSync === 'function') execGitSync = mod.execGitSync;
   } catch (err) {
     debug(`git hardening unavailable — git not run: ${err instanceof Error ? err.message : String(err)}`);
@@ -598,28 +617,24 @@ function projectRootOf(cwd) {
 /*
  * The detectors, each imported by the event that uses it and no other (review
  * 8, item 17: every Bash call loaded the secret scan, every write the 220 KB
- * shell guard). Dynamic imports, so a missing/un-built dist fails open rather
- * than throwing at module load. `pathToFileURL`, never `file://${…}` by
- * concatenation: a `#` in the install path read as a URL fragment, the import
- * failed, and the shell guard and the secret scan failed open (review M2).
+ * shell guard). Through the bundle's loaders, so a missing/un-built dist
+ * fails open rather than throwing at module load.
  */
 async function loadSecretScan() {
-  const secret = await import(pathToFileURL(join(DIST_HOOKS, 'secretScan.js')).href);
-  return secret.scanForSecrets;
+  return (await detector('loadSecretScan')).scanForSecrets;
 }
 
 async function loadBashGuard() {
-  const bash = await import(pathToFileURL(join(DIST_HOOKS, 'bashGuard.js')).href);
-  return bash.assessBashCommand;
+  return (await detector('loadBashGuard')).assessBashCommand;
 }
 
-/** The guards whose compiled modules the hooks load, and what each one is called in a notice. */
+/** The guards the hooks load from the bundle, by loader, and what each one is called in a notice. */
 const GUARD_MODULES = [
-  { file: join(DIST_HOOKS, 'bashGuard.js'), name: 'the shell guard', export: 'assessBashCommand' },
-  { file: join(DIST_HOOKS, 'secretScan.js'), name: 'the secret scan', export: 'scanForSecrets' },
-  { file: join(DIST_PKGVET, 'hookDecision.js'), name: 'package vetting', export: 'decideInstallCommand' },
-  { file: join(DIST_HOOKS, 'settingsGuard.js'), name: "the Claude Code settings guard", export: 'newlyLoosened' },
-  { file: join(DIST_HOOKS, 'dataRegistry.js'), name: 'the database registry guard', export: 'writesRegistry' },
+  { loader: 'loadBashGuard', name: 'the shell guard', export: 'assessBashCommand' },
+  { loader: 'loadSecretScan', name: 'the secret scan', export: 'scanForSecrets' },
+  { loader: 'loadInstallVetting', name: 'package vetting', export: 'decideInstallCommand' },
+  { loader: 'loadSettingsGuard', name: "the Claude Code settings guard", export: 'newlyLoosened' },
+  { loader: 'loadDataRegistry', name: 'the database registry guard', export: 'writesRegistry' },
 ];
 
 /**
@@ -632,7 +647,7 @@ async function unloadableGuardsNotice() {
   let reason = '';
   for (const g of GUARD_MODULES) {
     try {
-      const mod = await import(pathToFileURL(g.file).href);
+      const mod = await detector(g.loader);
       if (typeof mod[g.export] !== 'function') throw new Error(`${g.export} missing`);
     } catch (err) {
       broken.push(g.name);
@@ -809,7 +824,7 @@ async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
  * `bunx`, `uvx`, `uv tool install|run`, `pipx install|run`). The logic — command parsing,
  * the registry/OSV lookups under a 3 s total network budget and one 8 s
  * deadline for the whole hook call, the verdict and
- * the wording — lives in `mcp/dist/pkgvet/hookDecision.js`; this only calls
+ * the wording — lives in `mcp/src/pkgvet/hookDecision.ts` (in the bundle); this only calls
  * it. Returns `{ deny?, context? }`, or `null` when there is nothing to say
  * (no install command, every package clean) or anything at all went wrong:
  * a guardrail that cannot run lets the command through.
@@ -824,10 +839,10 @@ async function vetInstallCommand(command, cwd, toolName) {
   // A command that names no installer installs nothing: the vetting modules
   // are not even loaded (review 8, item 17 — `mcp/src/pkgvet/mayInstall.ts`).
   // Without the gate, every command is vetted, as before it.
-  const gate = await import(pathToFileURL(join(DIST_PKGVET, 'mayInstall.js')).href).catch(() => undefined);
+  const gate = await detector('loadInstallGate').catch(() => undefined);
   if (typeof gate?.mayInstall === 'function' && !gate.mayInstall(command)) return null;
   try {
-    const mod = await import(pathToFileURL(join(DIST_PKGVET, 'hookDecision.js')).href);
+    const mod = await detector('loadInstallVetting');
     // The PowerShell tool's commands are also read the way PowerShell reads
     // them (comma lists, backtick continuations) — see `parseInstallCommands`.
     const shell = toolName === 'PowerShell' ? 'powershell' : 'bash';
@@ -1095,7 +1110,7 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root) {
   if (!/settings(?:\.local)?\.json$/i.test(abs)) return;
   let added = [];
   try {
-    const guard = await import(pathToFileURL(join(DIST_HOOKS, 'settingsGuard.js')).href);
+    const guard = await detector('loadSettingsGuard');
     // With CLAUDE_CONFIG_DIR set, the user's settings live there, not in
     // ~/.claude (review round 2) — resolved the way the written path is.
     const configDir = process.env.CLAUDE_CONFIG_DIR ? guardedPath(resolve(process.env.CLAUDE_CONFIG_DIR)) : undefined;

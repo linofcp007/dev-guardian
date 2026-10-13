@@ -16,11 +16,12 @@ performance and compliance:
 - **Plugin front-end** — `skills/` (13 skills: a `SKILL.md`, plus `references/` read on demand) and `commands/`
   (10 slash commands), declared in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).
 - **MCP server** — `mcp/` (TypeScript on `node:sqlite`; Node ≥ 22.13, never `--experimental-sqlite`): 63 tools
-  and 18 resources, registered by `mcp/src/registerAll.ts`, built to `mcp/dist/`.
+  and 18 resources, registered by `mcp/src/registerAll.ts`, built to `mcp/dist/engine.js` (`dist/server.js` starts it).
 - **Guardrail hooks** — `hooks/hooks.json` (auto-discovered) and the `hooks/guardian-hook.mjs` dispatcher:
-  dependency-free, fail-open; detection in `mcp/src/hooks/`. User-facing detail: [`docs/hooks.md`](docs/hooks.md).
-- **CLI** — `cli/dev-guardian.mjs`, running on the bundle `mcp/dist/cli.js` (`scan`, `baseline update`, `status`,
-  `dashboard`, `db adopt`, `mcp-config`, `ci-init`, …).
+  dependency-free, fail-open; detection in `mcp/src/hooks/`, bundled to `mcp/dist/hooks.js`. User-facing detail:
+  [`docs/hooks.md`](docs/hooks.md).
+- **CLI** — `cli/dev-guardian.mjs`, running on the server's own bundle `mcp/dist/engine.js` (`scan`, `baseline
+  update`, `status`, `dashboard`, `db adopt`, `mcp-config`, `ci-init`, …).
 - **Plugin evals** — [`evals/`](evals/README.md), run with `claude plugin eval` (maintainer-side, local).
 
 ## Hard rules
@@ -31,8 +32,10 @@ performance and compliance:
   points belong in `hooks/`, `commands/`, `cli/` or `mcpServers`.
 - **Commit the compiled `mcp/dist/`, rebuilt in the same commit** as the `src/` change: the repository is the
   distribution (`distSync.test.ts` fails on a stale `dist/`).
-- **The CLI runs on its bundle, never on tsc's per-file output**: `cli/dev-guardian.mjs` imports Node builtins and
-  `mcp/dist/cli.js` only; `git add` a new file an install needs (`pluginInstall.test.ts`).
+- **`mcp/dist/` is two bundles and nothing per-file**: `engine.js` (server + CLI), `hooks.js` (the hooks' detectors),
+  the two-line `server.js` and the copied assets — no tsc output, no source maps (`distSync.test.ts`). The CLI imports
+  Node builtins and `mcp/dist/engine.js` only, the dispatcher `mcp/dist/hooks.js` only; `git add` a new file an
+  install needs (`pluginInstall.test.ts`).
 - **Generated files are never edited by hand**: `host-rules/*` and the in-repo rules copies (from
   `mcp/src/hostsetup/rulesTemplate.ts`), `docs/tools.md`, `docs/rule-packs.md`. `npm run build` writes them; drift
   tests fail otherwise.
@@ -51,8 +54,8 @@ performance and compliance:
 
 ```bash
 npm ci                # first time only — no native modules
-npm run lint          # tsc over src/ AND test/
-npm run build         # tsc -> dist, copy-assets, host-rules, esbuild bundles, docs
+npm run lint          # tsc over src/ AND test/ (one pass)
+npm run build         # type-check, esbuild bundles -> dist, copy-assets, host-rules, docs
 npm test              # vitest (full suite)
 npm run ablate -- <pack>   # rule-pack ablation harness (not a vitest test)
 ```

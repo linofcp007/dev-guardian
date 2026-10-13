@@ -20,7 +20,7 @@ Any other MCP host starts the same file by absolute path — see [`docs/hosts.md
 
 ## Requirements
 
-Node.js **≥ 22.13** (`engines`). Storage is the built-in `node:sqlite`, used without any flag; on an older Node the server prints `dev-guardian requires Node.js >= 22.13 (node:sqlite)` and exits 1. `dist/server.js` is an esbuild bundle with no runtime `node_modules`, and it is committed: installing the plugin needs no build.
+Node.js **≥ 22.13** (`engines`). Storage is the built-in `node:sqlite`, used without any flag; on an older Node the server prints `dev-guardian requires Node.js >= 22.13 (node:sqlite)` and exits 1. `dist/server.js` starts the server from `dist/engine.js`, an esbuild bundle with no runtime `node_modules` that the CLI runs too, and both are committed: installing the plugin needs no build.
 
 ## Layout
 
@@ -44,7 +44,7 @@ mcp/
 │   └── docs/            generator and tests for docs/tools.md and docs/rule-packs.md
 ├── scripts/             build steps: copy-assets, generateHostRules, bundle; smoke.mjs;
 │                        generatePopularPackages.mjs (refreshes configs/popular-packages/)
-└── dist/                compiled output, committed
+└── dist/                the build, committed: engine.js (server + CLI), hooks.js, server.js, SQL migrations
 ```
 
 ## Build, run, test
@@ -53,7 +53,7 @@ mcp/
 cd mcp
 npm ci                 # dev dependencies: tsc, esbuild, vitest, tsx
 npm run lint           # tsc over src/ and test/
-npm run build          # tsc, copy SQL migrations, regenerate host rules, bundle, regenerate docs/
+npm run build          # type-check, bundle, copy SQL migrations, regenerate host rules and docs/
 npm test               # vitest (the whole suite)
 node scripts/smoke.mjs # stdio handshake against the built server
 npm run dev            # tsx src/server.ts, no build

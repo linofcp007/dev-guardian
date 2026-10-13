@@ -92,8 +92,8 @@ import { fileURLToPath } from 'node:url';
 /**
  * Where the `NNN_name.sql` files live at runtime. Resolved by probing, because
  * the path differs across the three ways this module runs:
- *   - tsc output / tsx tests → this module sits beside the .sql files;
- *   - esbuild bundle (dist/server.js) → `import.meta.url` collapses to `dist/`,
+ *   - tsx / tests → this module sits beside the .sql files;
+ *   - esbuild bundle (dist/engine.js) → `import.meta.url` collapses to `dist/`,
  *     so the assets are one level down in `dist/storage/migrations/` (where
  *     `scripts/copy-assets.mjs` mirrors them).
  */

@@ -67,9 +67,9 @@ import { substituteCliPath } from './rulesTemplate.js';
  * (`mcp/dist/hostsetup/legacyRulesTemplates/`, copied there by
  * `scripts/copy-assets.mjs` — same convention as `storage/migrations/*.sql`).
  * Two candidates, tried in order, like the migrations
- * (`storage/migrations/runner.ts`): run as its own file (`src/` under tsx, or
- * tsc's `dist/hostsetup/`), this module's directory holds it; bundled into
- * `dist/cli.js` — what the CLI's `mcp-config` runs — `import.meta.url` is the
+ * (`storage/migrations/runner.ts`): run as its own file (`src/` under tsx),
+ * this module's directory holds it; bundled into `dist/engine.js` — what the
+ * CLI's `mcp-config` runs — `import.meta.url` is the
  * bundle's, so it is one level down, in `dist/hostsetup/`.
  */
 const LEGACY_TEMPLATES_DIRS: readonly string[] = (() => {

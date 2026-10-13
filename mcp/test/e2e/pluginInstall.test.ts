@@ -14,8 +14,10 @@
  * no install. Every test was green, because every test ran the CLI from here.
  * dev-spec-driven 1.29's `/spec-finish` runs `scan --project . --fail-on high
  * --format json` from the installed plugin as its gate — with 3.2.0 it could
- * only fail. The CLI now runs on the self-contained bundle `mcp/dist/cli.js`
- * (`mcp/src/cli.ts`), as the server runs on `mcp/dist/server.js`.
+ * only fail. The CLI then ran on its own self-contained bundle; since 3.3.0
+ * the CLI and the server share one, `mcp/dist/engine.js` (`mcp/src/engine.ts`;
+ * `mcp/dist/server.js` starts it), the hooks load theirs, `mcp/dist/hooks.js`,
+ * and the build ships no per-file output at all (review 8, findings 2 and 3).
  *
  * ---- How the install is made --------------------------------------------------
  *
@@ -114,11 +116,23 @@ describe('a plugin install — the tracked files, no node_modules', () => {
     expect(statuses, `exit ${String(r.status)}\n${r.stderr}`).toContain(r.status);
   }
 
+  it('what ships in mcp/dist: the two bundles, the server’s entry and the assets — no per-file output, no source map', () => {
+    const dist = join(install, 'mcp', 'dist');
+    const shipped = execGitSync(REPO_ROOT, ['ls-files', '-z', '--', 'mcp/dist'], { timeoutMs: 60_000 })
+      .stdout.split('\0')
+      .filter((f) => f !== '')
+      .map((f) => f.slice('mcp/dist/'.length));
+    expect(shipped.filter((f) => f.endsWith('.js')).sort()).toEqual(['engine.js', 'hooks.js', 'server.js']);
+    expect(shipped.filter((f) => f.endsWith('.map'))).toEqual([]);
+    expect(shipped.filter((f) => !/^(?:engine|hooks|server)\.js$|^storage\/migrations\/\d{3}_\w+\.sql$|^hostsetup\/legacyRulesTemplates\//.test(f))).toEqual([]);
+    expect(existsSync(join(dist, 'engine.js')) && existsSync(join(dist, 'hooks.js'))).toBe(true);
+  });
+
   it('positive control: the copy is an install — none of mcp/package.json’s dependencies resolves from it', () => {
     const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'mcp', 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
     const deps = Object.keys(pkg.dependencies);
     expect(deps).toContain('yaml');
-    // Resolved from inside the copy's mcp/dist, where tsc's output resolves its packages.
+    // Resolved from inside the copy's mcp/dist, where the bundles are.
     const probe = join(install, 'mcp', 'dist', 'resolve-probe.mjs');
     writeFileSync(
       probe,
@@ -255,6 +269,27 @@ describe('a plugin install — the tracked files, no node_modules', () => {
     it('PreToolUse denies rm -rf /', () => {
       const { output } = hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
       expect(output).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    });
+
+    // Each from its own loader in mcp/dist/hooks.js: the install gate and package vetting, the secret scan.
+    it('PreToolUse vets an npx download — offline, it says so: the vetting loaded', () => {
+      const { output, run: r } = hook({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'npx -y zz-no-such-pkg-install-test' },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(JSON.stringify(output)).toMatch(/could not vet zz-no-such-pkg-install-test/);
+    });
+
+    it('PostToolUse warns about a secret just written', () => {
+      const key = ['AKIA', 'Z7Q4', 'XR2M', 'P9LK', 'W3TB'].join('');
+      const { output } = hook({
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: join(project, 'aws.js'), content: `const k = "${key}";\n` },
+      });
+      expect(JSON.stringify(output)).toMatch(/AWS access key/);
     });
   });
 

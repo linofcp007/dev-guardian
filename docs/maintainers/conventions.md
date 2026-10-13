@@ -39,18 +39,21 @@ Enforced by the compiler where possible, by review where not:
 - **Rebuild before committing TS changes.** A stale `dist/` silently desyncs from
   `src/`. Run `npm run build` and stage `mcp/dist/` in the *same* commit.
   `test/unit/pluginSurface/distSync.test.ts` fails when the committed `dist/`
-  is not, byte for byte, what the build makes of `src/` (tsc, the bundles,
-  copy-assets — and nothing stale).
-- **The CLI runs on its bundle, never on tsc's per-file output.** A plugin
-  install is a checkout with no `node_modules`, and `dist/<area>/*.js` imports
-  the npm packages by name: 3.2.0's `scan` and `status` failed in every install
-  with `Cannot find package 'yaml'` while every test passed. So
-  `cli/dev-guardian.mjs` imports Node builtins and `mcp/dist/cli.js` — the
-  esbuild bundle of `mcp/src/cli.ts`, built beside `dist/server.js` with the
-  same options — and nothing else (`test/e2e/cliLazyStorage.test.ts`). What the
-  CLI needs from `src/` is exported from `src/cli.ts`: re-exported when it is
-  light, through one of its lazy `load*Modules()` when it reaches the storage
-  layer or the scan pipeline. `test/e2e/pluginInstall.test.ts` runs the CLI's
+  is not, byte for byte, what the build makes of `src/` (the bundles, the
+  server's two-line entry, copy-assets — and nothing else). The build layout
+  is in [build-and-test.md](build-and-test.md).
+- **Everything runs on a bundle; nothing ships per-file.** A plugin install is
+  a checkout with no `node_modules`, and tsc's per-file output imports the npm
+  packages by name: 3.2.0's `scan` and `status` failed in every install with
+  `Cannot find package 'yaml'` while every test passed. Since 3.3.0 the build
+  emits no per-file output at all. `cli/dev-guardian.mjs` imports Node
+  builtins and `mcp/dist/engine.js` — the esbuild bundle of `mcp/src/engine.ts`,
+  which re-exports `src/cli.ts` and starts the server — and nothing else
+  (`test/e2e/cliLazyStorage.test.ts`). What the CLI needs from `src/` is
+  exported from `src/cli.ts`: re-exported when it is light, through one of its
+  lazy `load*Modules()` when it reaches the storage layer or the scan
+  pipeline. The hook dispatcher loads `mcp/dist/hooks.js` (`src/hooksEntry.ts`)
+  and nothing else from the build: a detector it needs is a new `load*` there. `test/e2e/pluginInstall.test.ts` runs the CLI's
   subcommands, the hooks and the server from a copy of the files git tracks —
   so `git add` a new file the install needs (a build output too) before it
   passes, as it must be committed to ship.

@@ -12,7 +12,9 @@ quality, deps, observability, performance and compliance. Two halves:
   declared in [`.claude-plugin/plugin.json`](../../.claude-plugin/plugin.json).
 - **MCP server** — `mcp/` (TypeScript on `node:sqlite`), the real engine: 63 tools,
   18 resources, registered by the import list in `mcp/src/registerAll.ts`. Built
-  to `mcp/dist/`; [`docs/tools.md`](../../docs/tools.md) is generated from the registry.
+  into one bundle, `mcp/dist/engine.js`, which the CLI runs too (`dist/server.js`
+  starts the server from it — [build-and-test.md](build-and-test.md));
+  [`docs/tools.md`](../../docs/tools.md) is generated from the registry.
   Node ≥ 22.13 is the floor (`engines`), and nothing may need
   `--experimental-sqlite`.
 - **Guardrail hooks** — `hooks/hooks.json` (auto-discovered at the plugin root)
@@ -28,7 +30,8 @@ quality, deps, observability, performance and compliance. Two halves:
   false` and `bash.warn: false` are ignored, and SessionStart says so) —
   because a shell command can still write that file. Detection lives in
   `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure, unit-tested) and is shared
-  with the `dev-guardian check` CLI subcommand. Every file a hook reads from
+  with the `dev-guardian check` CLI subcommand; the dispatcher loads it from
+  its own bundle, `mcp/dist/hooks.js` (`src/hooksEntry.ts`). Every file a hook reads from
   the project or the user's home goes through `mcp/src/hooks/configFile.ts`:
   open (non-blocking), `fstat` the DESCRIPTOR, read at most cap + 1 bytes —
   only a regular file of at most 64 KiB (1 MiB for registry configuration).

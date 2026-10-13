@@ -2,12 +2,13 @@
 /**
  * Post-build asset copier.
  *
- * `tsc` only emits .ts files. Anything else our code reads from disk at
- * runtime (SQL migrations; the known-legacy-rules-template snapshots — fix
- * round 2, item 1 — used to recognise a pre-item-7 dev-guardian install
- * without risking a whole-file rewrite of unrelated content) has to be
- * mirrored into `dist/` after the build. This script does that,
- * cross-platform.
+ * The bundles (`scripts/bundle.mjs`) carry the code. Anything else the code
+ * reads from disk at runtime (SQL migrations; the known-legacy-rules-template
+ * snapshots — fix round 2, item 1 — used to recognise a pre-item-7
+ * dev-guardian install without risking a whole-file rewrite of unrelated
+ * content) has to be mirrored into `dist/` after them, where the bundles look
+ * for it (`dist/storage/migrations/`, `dist/hostsetup/legacyRulesTemplates/`:
+ * one level below `dist/engine.js`). This script does that, cross-platform.
  */
 
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';

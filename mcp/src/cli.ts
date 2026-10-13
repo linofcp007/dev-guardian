@@ -1,7 +1,7 @@
 /**
  * Everything `cli/dev-guardian.mjs` uses from the server's code, in one
- * module — the entry `scripts/bundle.mjs` bundles into the self-contained
- * `dist/cli.js`, as it bundles `server.ts` into `dist/server.js`.
+ * module — re-exported by `engine.ts`, the entry `scripts/bundle.mjs` bundles
+ * into the self-contained `dist/engine.js` the CLI and the MCP server share.
  *
  * Why a bundle: a plugin install is a git checkout with no `node_modules`
  * (the repository is the distribution — CLAUDE.md). The CLI used to import

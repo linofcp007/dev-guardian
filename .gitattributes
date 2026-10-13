@@ -17,3 +17,6 @@
 *.jpeg binary
 *.gif binary
 *.ico binary
+
+# The build: generated, committed — reviewed through its source, never as a text diff.
+mcp/dist/** -diff linguist-generated=true

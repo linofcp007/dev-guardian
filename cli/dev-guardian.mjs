@@ -113,7 +113,7 @@
  *
  * Runs from a plain checkout — a plugin install has no `node_modules`: what it
  * uses from the server's code is the committed, self-contained bundle
- * `mcp/dist/cli.js` (rebuilt by `cd mcp && npm run build`).
+ * `mcp/dist/engine.js` (rebuilt by `cd mcp && npm run build`).
  */
 
 import module from 'node:module';
@@ -138,7 +138,7 @@ import { spawn } from 'node:child_process';
 
 // Node's on-disk compile cache (Node >= 22.1; a no-op where it is missing or
 // NODE_DISABLE_COMPILE_CACHE is set), turned on BEFORE the bundle below is
-// loaded: the 3.9 MB `mcp/dist/cli.js` is most of every run's start-up, and a
+// loaded: the 4 MB `mcp/dist/engine.js` is most of every run's start-up, and a
 // module is compiled when it is loaded, so only one loaded after this call is
 // cached — which is why the bundle is loaded by an awaited dynamic import, not a
 // static `import` (those are all loaded before any line of this file runs).
@@ -154,13 +154,15 @@ import { spawn } from 'node:child_process';
 if (existsSync(tmpdir())) module.enableCompileCache?.();
 
 // Everything this CLI uses from the server's code comes from ONE file, the
-// self-contained bundle `mcp/dist/cli.js` (built from `mcp/src/cli.ts` by
-// `npm run build`, every npm package inlined): a plugin install is a git
-// checkout with no `node_modules`. Never import a `../mcp/dist/<area>/*.js`
-// module here — tsc's per-file output imports the packages by name, which is
-// how 3.2.0's `scan` and `status` failed in every install with `Cannot find
-// package 'yaml'` (`mcp/test/e2e/pluginInstall.test.ts` runs this CLI from a
-// copy of the tracked files, with no `node_modules` in reach).
+// self-contained bundle `mcp/dist/engine.js` (built from `mcp/src/engine.ts`,
+// which re-exports `mcp/src/cli.ts`, by `npm run build`, every npm package
+// inlined): a plugin install is a git checkout with no `node_modules`. The
+// MCP server runs the same file (`mcp/dist/server.js` starts it). 3.2.0's
+// `scan` and `status` imported tsc's per-file output, which imports the
+// packages by name, and failed in every install with `Cannot find package
+// 'yaml'`; the build emits no per-file output any more
+// (`mcp/test/e2e/pluginInstall.test.ts` runs this CLI from a copy of the
+// tracked files, with no `node_modules` in reach).
 //
 // The scan pipeline and the storage layer (`node:sqlite`) come through the
 // bundle's `load*Modules()` functions, which the bundle keeps lazy: `--help`,
@@ -191,7 +193,7 @@ const {
   setupHost,
   untrustedText,
   writeProjectFile,
-} = await import('../mcp/dist/cli.js');
+} = await import('../mcp/dist/engine.js');
 
 // `scan` runs in the project it scans: no spawn by bare name may find a binary
 // there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
@@ -3043,7 +3045,7 @@ function fatal(e) {
  * a crash in dev-guardian, so it is printed alone — with exit 3, what
  * `status`/`dashboard` exit with when they refuse an unusable database
  * themselves. Recognised by name: the storage layer is loaded lazily, inside
- * the bundle `mcp/dist/cli.js`, so this file holds no class to test
+ * the bundle `mcp/dist/engine.js`, so this file holds no class to test
  * `instanceof` against.
  * Anything else is still unexpected, exit 3.
  */

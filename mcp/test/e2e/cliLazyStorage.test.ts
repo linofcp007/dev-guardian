@@ -8,8 +8,9 @@
  * floor, 22.13), where a CLI that loaded it at start crashed every
  * invocation, before `main()` ran, with a raw `ERR_UNKNOWN_BUILTIN_MODULE`.
  *
- * Since 3.2.1 the CLI imports one module, the self-contained bundle
- * `mcp/dist/cli.js` (`mcp/src/cli.ts`; why: `pluginInstall.test.ts`), and
+ * Since 3.2.1 the CLI imports one module, the self-contained bundle — since
+ * 3.3.0 `mcp/dist/engine.js`, which the MCP server runs too (`mcp/src/engine.ts`
+ * re-exports `mcp/src/cli.ts`; why: `pluginInstall.test.ts`) — and
  * reaches the scan pipeline and the storage layer only through its
  * `load*Modules()` functions, whose dynamic `import()`s esbuild keeps lazy.
  * Two independent proofs, because neither alone rules out the defect:
@@ -58,13 +59,13 @@ describe('cli/dev-guardian.mjs — imports Node builtins and the bundle, nothing
   });
 
   it('its one dynamic import() is the bundle — the lazy loading inside it is the bundle’s', () => {
-    expect(specifiers(readFileSync(REAL_CLI, 'utf8')).dynamicSpecs).toEqual(['../mcp/dist/cli.js']);
+    expect(specifiers(readFileSync(REAL_CLI, 'utf8')).dynamicSpecs).toEqual(['../mcp/dist/engine.js']);
   });
 
   it('turns the compile cache on before it loads the bundle', () => {
     const source = readFileSync(REAL_CLI, 'utf8');
     const enable = source.indexOf('module.enableCompileCache?.()');
-    const load = source.indexOf("await import('../mcp/dist/cli.js')");
+    const load = source.indexOf("await import('../mcp/dist/engine.js')");
     expect(enable).toBeGreaterThan(0);
     expect(load).toBeGreaterThan(enable);
   });
@@ -97,7 +98,7 @@ describe('cli/dev-guardian.mjs — on a Node without node:sqlite', () => {
     mkdirSync(dist, { recursive: true });
     cli = join(sandbox, 'cli', 'dev-guardian.mjs');
     cpSync(REAL_CLI, cli);
-    for (const file of ['cli.js', 'server.js']) cpSync(join(REAL_DIST, file), join(dist, file));
+    for (const file of ['engine.js', 'server.js']) cpSync(join(REAL_DIST, file), join(dist, file));
     cpSync(join(REAL_DIST, 'storage', 'migrations'), join(dist, 'storage', 'migrations'), { recursive: true });
 
     // What an old Node does on `node:sqlite` — through every require, which
@@ -186,7 +187,7 @@ describe('cli/dev-guardian.mjs — on a Node without node:sqlite', () => {
   }
 });
 
-// Review 8, finding 17: the CLI compiled its 3.9 MB bundle from scratch on
+// Review 8, finding 17: the CLI compiled its 4 MB bundle from scratch on
 // every run. With Node's compile cache on before the bundle loads, a run with
 // no NODE_COMPILE_CACHE of its own writes the cache under the OS temp
 // directory — the next run reads it instead of compiling.

@@ -189,11 +189,14 @@ describe('every raw spawn is classified (platform/gitSafety.ts)', () => {
 
   it('the hook and the CLI run git only through the helper they import from dist', () => {
     const hook = SOURCES.find((s) => s.rel === 'hooks/guardian-hook.mjs')?.text ?? '';
-    expect(hook).toMatch(/import\(pathToFileURL\(join\(DIST_PLATFORM, 'gitSafety\.js'\)\)\.href\)/);
-    // The CLI imports it from its bundle, dist/cli.js, which re-exports the helper (src/cli.ts) —
+    // The hook loads it from its bundle, dist/hooks.js (src/hooksEntry.ts), since 3.3.0.
+    expect(hook).toMatch(/await detector\('loadGitSafety'\)/);
+    const hooksEntry = SOURCES.find((s) => s.rel === 'mcp/src/hooksEntry.ts')?.text ?? '';
+    expect(hooksEntry).toMatch(/^export const loadGitSafety = \(\) => import\('\.\/platform\/gitSafety\.js'\);$/m);
+    // The CLI imports it from its bundle, dist/engine.js, which re-exports the helper (src/cli.ts) —
     // an awaited dynamic import since 3.3.0, so Node's compile cache is on before the bundle loads.
     const cli = SOURCES.find((s) => s.rel === 'cli/dev-guardian.mjs')?.text ?? '';
-    expect(cli).toMatch(/^const \{[^}]*\bexecGitSync,[^}]*\} = await import\('\.\.\/mcp\/dist\/cli\.js'\);$/m);
+    expect(cli).toMatch(/^const \{[^}]*\bexecGitSync,[^}]*\} = await import\('\.\.\/mcp\/dist\/engine\.js'\);$/m);
     const entry = SOURCES.find((s) => s.rel === 'mcp/src/cli.ts')?.text ?? '';
     expect(entry).toMatch(/^export \{ execGitSync \} from '\.\/platform\/gitSafety\.js';$/m);
   });

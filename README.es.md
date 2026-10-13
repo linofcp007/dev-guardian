@@ -22,7 +22,7 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 - **Opcional: Docker.** Sin un `semgrep` nativo, `scan_sast` y `map_attack_surface` recurren a la imagen `semgrep/semgrep`.
 - **Windows:** todos los escaneos se ejecutan de forma nativa, sin shell. Solo hace falta un bash para el informe de estado inicial de `init_project` y para el recurso a WSL de `install_toolchain` cuando no hay winget, scoop ni choco. dev-guardian busca primero Git Bash, luego WSL y luego cualquier `bash` en el `PATH`.
 
-No hace falta `npm install`: el servidor MCP y la CLI se ejecutan sobre `mcp/dist/server.js` y `mcp/dist/cli.js`, que están en el repositorio como bundles autónomos.
+No hace falta `npm install`: el servidor MCP y la CLI se ejecutan sobre `mcp/dist/engine.js`, y los hooks sobre `mcp/dist/hooks.js`, que están en el repositorio como bundles autónomos.
 
 ## Inicio rápido (Claude Code)
 

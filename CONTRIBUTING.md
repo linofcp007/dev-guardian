@@ -11,9 +11,9 @@ Node.js ≥ 22.13. All work happens from `mcp/`:
 ```bash
 cd mcp
 npm ci               # reproducible install — no native modules, storage is node:sqlite
-npm run lint         # tsc over src/ and test/ (two tsconfigs)
-npm run build        # tsc -> mcp/dist, copy SQL migrations, regenerate host rules,
-                     # esbuild bundles (dist/server.js, dist/cli.js), regenerate docs/tools.md and docs/rule-packs.md
+npm run lint         # tsc over src/ and test/ (tsconfig.test.json)
+npm run build        # type-check src/, esbuild bundles (dist/engine.js, dist/hooks.js, dist/server.js),
+                     # copy SQL migrations, regenerate host rules, docs/tools.md and docs/rule-packs.md
 npm test             # vitest run (full suite)
 ```
 
@@ -32,7 +32,8 @@ npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "do
 - **Commit the compiled `mcp/dist/`.** The repo *is* the distribution — Claude
   Code runs `mcp/dist/server.js` directly, no install-time build. Rebuild
   (`npm run build`) and stage `mcp/dist/` in the **same** commit as the `src/`
-  change — a comment-only change too, since comments reach the sourcemaps.
+  change — a comment-only change too: esbuild keeps a `//` comment inside a
+  function body (`distSync.test.ts` says whether the bundles moved).
   There is no CI to catch drift, so it is on you to verify before committing.
 - **Generated files are regenerated, never edited**: `host-rules/*`, the in-repo
   rules copies (root `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurf/rules/`,

@@ -346,9 +346,9 @@ describe('dev-guardian on the same repository runs none of them', () => {
   });
 });
 
-/** The real SessionStart dispatcher (from `dist/`), in `root`, with a fake home. */
+/** The real SessionStart dispatcher (its detectors from `dist/hooks.js`), in `root`, with a fake home. */
 function sessionStart(root: string, base: string): { status: number | null; stdout: string } {
-  expect(existsSync(join(REPO_ROOT, 'mcp', 'dist', 'platform', 'gitSafety.js'))).toBe(true);
+  expect(existsSync(join(REPO_ROOT, 'mcp', 'dist', 'hooks.js'))).toBe(true);
   const home = join(base, 'hook-home');
   mkdirSync(home, { recursive: true });
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: root };

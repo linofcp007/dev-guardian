@@ -11,7 +11,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/generateHostRules.mjs && node scripts/bundle.mjs && npm run docs",
+    "build": "tsc -p tsconfig.json && node scripts/bundle.mjs && node scripts/copy-assets.mjs && tsx scripts/generateHostRules.mjs && npm run docs",
     "docs": "tsx test/docs/generate.ts",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
@@ -20,9 +20,8 @@
     "ablate": "tsx test/ablate/cli.ts",
     "eval:llm-scan": "tsx test/evals/llmScan/run.ts",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",

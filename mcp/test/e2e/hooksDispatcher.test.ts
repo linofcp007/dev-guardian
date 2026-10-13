@@ -1151,18 +1151,38 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(JSON.stringify(r.stdout)).toMatch(/AWS access key/);
     });
 
-    it('SessionStart says the guards are off when their modules cannot be loaded — fail-open, not silent', () => {
-      const broken = join(base, 'broken');
-      install(broken);
-      rmSync(join(broken, 'mcp', 'dist', 'hooks', 'bashGuard.js'));
-      const r = runHook(
-        { hook_event_name: 'SessionStart', cwd: projectDir },
-        { cwd: projectDir, homeDir, hook: join(broken, 'hooks', 'guardian-hook.mjs') },
-      );
-      const context = (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput
-        ?.additionalContext;
-      expect(context).toMatch(/could not be loaded/);
-      expect(context).toMatch(/shell guard/);
+    // Since 3.3.0 the detectors come from one bundle, mcp/dist/hooks.js: a
+    // missing one, or one cut short, takes every guard down — and says so.
+    it('SessionStart says the guards are off when their bundle cannot be loaded — fail-open, not silent', () => {
+      const missing = join(base, 'broken');
+      install(missing);
+      rmSync(join(missing, 'mcp', 'dist', 'hooks.js'));
+      const damaged = join(base, 'damaged');
+      install(damaged);
+      const bundle = join(damaged, 'mcp', 'dist', 'hooks.js');
+      writeFileSync(bundle, readFileSync(bundle, 'utf8').slice(0, 4096));
+      for (const plugin of [missing, damaged]) {
+        const r = runHook(
+          { hook_event_name: 'SessionStart', cwd: projectDir },
+          { cwd: projectDir, homeDir, hook: join(plugin, 'hooks', 'guardian-hook.mjs') },
+        );
+        expect(r.status, plugin).toBe(0);
+        const context = (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput
+          ?.additionalContext;
+        expect(context).toMatch(/running with guards OFF/);
+        expect(context).toMatch(/could not be loaded/);
+        for (const guard of [/shell guard/, /secret scan/, /package vetting/, /settings guard/, /database registry guard/]) {
+          expect(context).toMatch(guard);
+        }
+        // Fail-open: the shell guard cannot run, so nothing is denied.
+        const bash = runHook(preToolUse('Bash', { command: 'rm -rf /' }, projectDir), {
+          cwd: projectDir,
+          homeDir,
+          hook: join(plugin, 'hooks', 'guardian-hook.mjs'),
+        });
+        expect(bash.status).toBe(0);
+        expect(JSON.stringify(bash.stdout ?? '')).not.toMatch(/deny/);
+      }
       // And the healthy install says nothing of the kind.
       const ok = runHook(
         { hook_event_name: 'SessionStart', cwd: projectDir },
