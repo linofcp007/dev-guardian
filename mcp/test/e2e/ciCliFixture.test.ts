@@ -656,8 +656,15 @@ function readPidPair(path: string): PidPair {
  * with every missing parent — under the temp directory, which used to make
  * that `mkdtemp()` succeed. Nothing can create a directory below a file.
  */
+const BROKEN_TMP_HOLDERS: string[] = [];
+afterAll(() => {
+  for (const dir of BROKEN_TMP_HOLDERS) rmDir(dir);
+});
+
 function envWithBrokenTmpdir(): NodeJS.ProcessEnv {
-  const blocker = join(makeBareDir('guardian-ci-cli-tmpdir-blocker-'), 'a-file');
+  const holder = makeBareDir('guardian-ci-cli-tmpdir-blocker-');
+  BROKEN_TMP_HOLDERS.push(holder);
+  const blocker = join(holder, 'a-file');
   writeFileSync(blocker, '');
   const bogus = join(blocker, 'nested');
   return { ...process.env, TMPDIR: bogus, TEMP: bogus, TMP: bogus };

@@ -206,4 +206,22 @@ describe('cli/dev-guardian.mjs — Node compile cache', () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  // Node creates the cache directory with every missing parent: a TMPDIR naming
+  // a directory that is not there came back as a tree the CLI had made (it broke
+  // ciCliFixture's broken-TMP test for the next run). No temp directory: no cache,
+  // nothing created.
+  it('with a temp directory that does not exist, creates nothing and still runs', () => {
+    const base = mkdtempSync(join(tmpdir(), 'guardian-ccache-missing-'));
+    const missing = join(base, 'not-there', 'nested');
+    try {
+      const env: NodeJS.ProcessEnv = { ...process.env, TMP: missing, TEMP: missing, TMPDIR: missing };
+      delete env['NODE_COMPILE_CACHE'];
+      const r = spawnSyncCapped(process.execPath, [REAL_CLI, '--help'], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
+      expect(r.status).toBe(0);
+      expect(existsSync(join(base, 'not-there'))).toBe(false);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });

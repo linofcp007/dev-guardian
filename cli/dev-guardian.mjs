@@ -145,7 +145,13 @@ import { spawn } from 'node:child_process';
 // Measured (review 8, finding 17): `--help` 160 -> 115 ms, `check` 183 -> 116
 // ms. The cache lives in the OS temp directory; Node checks each entry against
 // the source, so a rebuilt bundle is never served stale.
-module.enableCompileCache?.();
+//
+// Only when that directory exists: Node creates the cache directory with every
+// missing parent, so a TMPDIR/TEMP naming a directory that is not there (a
+// broken environment, a test pointing it nowhere) came back as a directory
+// tree the CLI had made — and a later `mkdtemp` there then succeeded where it
+// must fail. With no temp directory, the CLI runs uncached and creates nothing.
+if (existsSync(tmpdir())) module.enableCompileCache?.();
 
 // Everything this CLI uses from the server's code comes from ONE file, the
 // self-contained bundle `mcp/dist/cli.js` (built from `mcp/src/cli.ts` by
