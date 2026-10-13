@@ -64,8 +64,8 @@ For each unit, produce this seed. Keep it **language-agnostic** and metric-ancho
 - THE refactor SHALL NOT change observable behaviour (characterization tests stay green).
 
 **Suggested track:** core (+tdd if behaviour must be pinned before refactor)
-**Grill first:** yes — run /guardian-grill on the current code (dev-spec-driven's `/clarify --grill`
-once the spec exists) so you understand the branches before you move them.
+**Grill first:** yes — the user runs /guardian-grill on the current code (dev-spec-driven's `/clarify --grill`
+once the spec exists) to understand the branches before moving them.
 ```
 
 The **Current → Target block is the spec's success criterion**: the same measurement that found the
@@ -120,7 +120,7 @@ Then offer to scaffold the chosen unit into a full feature with `/spec <name>` (
 seed's EARS criteria and its current → target block into `requirements.md` yourself — don't rely on the backlog
 note reaching the feature.
 
-If `dev-spec-driven` isn't installed, write the seeds to `docs/improvement-specs/<title>.md` and tell
+If `dev-spec-driven` isn't installed, write the seeds to `docs/improvement-specs/<name>.md` and tell
 the user they can feed them to any spec workflow.
 
 ### 5. Recommend order and stop
