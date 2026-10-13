@@ -53182,41 +53182,9 @@ async function handler10(inp, ctx, callMeta) {
   if (inp.severity_min) subInput["severity_min"] = inp.severity_min;
   const subTools = buildSubToolsForStack(ctx, projectPath);
   const subResultsArr = await Promise.all(
-    subTools.map(async (toolName) => {
-      const skipped2 = localOnly ? NO_LOCAL_ONLY_MODE[toolName] : void 0;
-      if (skipped2 !== void 0) {
-        return [toolName, { tool: toolName, ok: false, skipped: skipped2 }];
-      }
-      const subTool = TOOLS.find((t) => t.name === toolName);
-      if (!subTool) {
-        return [
-          toolName,
-          {
-            tool: toolName,
-            ok: false,
-            error: { code: "scanner_failed", message: `Tool '${toolName}' is not registered.` }
-          }
-        ];
-      }
-      const childInput2 = localOnly && "local_only" in subTool.inputSchema ? { ...subInput, local_only: true } : subInput;
-      const result = await subTool.handler(childInput2, ctx, callMeta);
-      if (result.ok) {
-        const r = result;
-        const summary2 = { tool: toolName, ok: true };
-        if (r.scan_id !== void 0) summary2.scan_id = r.scan_id;
-        if (r.findings_count_by_severity !== void 0)
-          summary2.findings_count_by_severity = r.findings_count_by_severity;
-        if (r.top_findings !== void 0) summary2.top_findings = r.top_findings;
-        if (r.coverage !== void 0) summary2.coverage = r.coverage;
-        if (r.missing_tools !== void 0) summary2.missing_tools = r.missing_tools;
-        if (r.warnings !== void 0) summary2.warnings = r.warnings;
-        return [toolName, summary2];
-      }
-      return [
-        toolName,
-        { tool: toolName, ok: false, error: result.error }
-      ];
-    })
+    subTools.map(
+      async (toolName) => [toolName, await runSubScan(toolName, { subInput, localOnly, ctx, callMeta })]
+    )
   );
   for (const [name, summary2] of subResultsArr) {
     subResults[name] = { ...summary2, call: listedCall(name) };
@@ -53246,22 +53214,7 @@ async function handler10(inp, ctx, callMeta) {
   const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
   const aggregate_counts = countBySeverity(filteredAggregate);
   const top_findings = topFindings(filteredAggregate, 10);
-  const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
-  let deltas;
-  if (previousAudit) {
-    const prevFindings = ctx.storage.findings.listByScan(previousAudit);
-    const prevFingerprints = new Set(prevFindings.map((f) => f.fingerprint));
-    const curFingerprints = new Set(aggregateFindings.map((f) => f.fingerprint));
-    let newCount = 0;
-    let resolvedCount = 0;
-    for (const fp of curFingerprints) if (!prevFingerprints.has(fp)) newCount += 1;
-    for (const fp of prevFingerprints) if (!curFingerprints.has(fp)) resolvedCount += 1;
-    deltas = {
-      since_audit_scan_id: previousAudit,
-      new_findings: newCount,
-      resolved_findings: resolvedCount
-    };
-  }
+  const deltas = auditDelta(ctx, projectPath, auditScanId, aggregateFindings);
   if (aggregateFindings.length > 0) {
     ctx.storage.findings.bulkInsert(
       // Re-key under the audit scan_id; INSERT OR IGNORE handles the cases
@@ -53269,30 +53222,7 @@ async function handler10(inp, ctx, callMeta) {
       aggregateFindings.map((f) => ({ ...f, scan_id: auditScanId }))
     );
   }
-  const aggregateMissing = /* @__PURE__ */ new Set();
-  const coverageList = [];
-  const coverage_warnings = [];
-  for (const summary2 of Object.values(subResults)) {
-    if (summary2.skipped !== void 0) {
-      coverageList.push("partial");
-      coverage_warnings.push(`${summary2.call ?? summary2.tool}: skipped \u2014 ${summary2.skipped}`);
-      continue;
-    }
-    if (!summary2.ok) {
-      coverageList.push("none");
-      coverage_warnings.push(
-        `${summary2.call ?? summary2.tool}: did not run (${summary2.error?.code ?? "failed"}) \u2014 not covered.`
-      );
-      continue;
-    }
-    coverageList.push(summary2.coverage ?? "full");
-    for (const m of summary2.missing_tools ?? []) aggregateMissing.add(m);
-    if (summary2.coverage && summary2.coverage !== "full") {
-      const loud = (summary2.warnings ?? []).find((w) => w.startsWith("\u26A0\uFE0F"));
-      coverage_warnings.push(loud ?? `${summary2.call ?? summary2.tool}: coverage=${summary2.coverage}.`);
-    }
-  }
-  const overallCoverage = worstCoverage(coverageList);
+  const { overallCoverage, coverage_warnings, aggregateMissing } = rollUpCoverage(subResults);
   const local_only_gaps = localOnly ? localOnlyGaps(subTools) : [];
   ctx.storage.scans.finalize({
     scan_id: auditScanId,
@@ -53324,6 +53254,78 @@ async function handler10(inp, ctx, callMeta) {
     top_findings,
     ...deltas ? { deltas } : {}
   };
+}
+async function runSubScan(toolName, run2) {
+  const { subInput, localOnly, ctx, callMeta } = run2;
+  const skipped2 = localOnly ? NO_LOCAL_ONLY_MODE[toolName] : void 0;
+  if (skipped2 !== void 0) {
+    return { tool: toolName, ok: false, skipped: skipped2 };
+  }
+  const subTool = TOOLS.find((t) => t.name === toolName);
+  if (!subTool) {
+    return {
+      tool: toolName,
+      ok: false,
+      error: { code: "scanner_failed", message: `Tool '${toolName}' is not registered.` }
+    };
+  }
+  const childInput2 = localOnly && "local_only" in subTool.inputSchema ? { ...subInput, local_only: true } : subInput;
+  const result = await subTool.handler(childInput2, ctx, callMeta);
+  if (result.ok) {
+    const r = result;
+    const summary2 = { tool: toolName, ok: true };
+    if (r.scan_id !== void 0) summary2.scan_id = r.scan_id;
+    if (r.findings_count_by_severity !== void 0)
+      summary2.findings_count_by_severity = r.findings_count_by_severity;
+    if (r.top_findings !== void 0) summary2.top_findings = r.top_findings;
+    if (r.coverage !== void 0) summary2.coverage = r.coverage;
+    if (r.missing_tools !== void 0) summary2.missing_tools = r.missing_tools;
+    if (r.warnings !== void 0) summary2.warnings = r.warnings;
+    return summary2;
+  }
+  return { tool: toolName, ok: false, error: result.error };
+}
+function auditDelta(ctx, projectPath, auditScanId, aggregateFindings) {
+  const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
+  if (!previousAudit) return void 0;
+  const prevFindings = ctx.storage.findings.listByScan(previousAudit);
+  const prevFingerprints = new Set(prevFindings.map((f) => f.fingerprint));
+  const curFingerprints = new Set(aggregateFindings.map((f) => f.fingerprint));
+  let newCount = 0;
+  let resolvedCount = 0;
+  for (const fp of curFingerprints) if (!prevFingerprints.has(fp)) newCount += 1;
+  for (const fp of prevFingerprints) if (!curFingerprints.has(fp)) resolvedCount += 1;
+  return {
+    since_audit_scan_id: previousAudit,
+    new_findings: newCount,
+    resolved_findings: resolvedCount
+  };
+}
+function rollUpCoverage(subResults) {
+  const aggregateMissing = /* @__PURE__ */ new Set();
+  const coverageList = [];
+  const coverage_warnings = [];
+  for (const summary2 of Object.values(subResults)) {
+    if (summary2.skipped !== void 0) {
+      coverageList.push("partial");
+      coverage_warnings.push(`${summary2.call ?? summary2.tool}: skipped \u2014 ${summary2.skipped}`);
+      continue;
+    }
+    if (!summary2.ok) {
+      coverageList.push("none");
+      coverage_warnings.push(
+        `${summary2.call ?? summary2.tool}: did not run (${summary2.error?.code ?? "failed"}) \u2014 not covered.`
+      );
+      continue;
+    }
+    coverageList.push(summary2.coverage ?? "full");
+    for (const m of summary2.missing_tools ?? []) aggregateMissing.add(m);
+    if (summary2.coverage && summary2.coverage !== "full") {
+      const loud = (summary2.warnings ?? []).find((w) => w.startsWith("\u26A0\uFE0F"));
+      coverage_warnings.push(loud ?? `${summary2.call ?? summary2.tool}: coverage=${summary2.coverage}.`);
+    }
+  }
+  return { overallCoverage: worstCoverage(coverageList), coverage_warnings, aggregateMissing };
 }
 function localOnlyGaps(subTools) {
   const gaps = [];
