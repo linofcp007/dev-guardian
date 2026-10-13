@@ -171,7 +171,7 @@ function archive() {
 
 function runIn(ref, image, o, tar) {
   const coverage = o.coverage && image === FLOOR_IMAGE;
-  const vitest = ['npx', 'vitest', 'run', `--maxWorkers=${o.workers}`, ...(coverage ? ['--coverage', '--coverage.reporter=text-summary'] : []), ...o.only];
+  const vitest = ['npx', 'vitest', 'run', `--maxWorkers=${o.workers}`, ...(coverage ? ['--coverage', '--coverage.reporter=text-summary', '--coverage.reportOnFailure'] : []), ...o.only];
   const script = [
     'set -e',
     'mkdir -p /tmp/dg && tar -C /tmp/dg -xf -',
@@ -227,9 +227,16 @@ async function main() {
     const minutes = ((Date.now() - started) / 60000).toFixed(1);
     const log = join(LOG_DIR, `${p.ref.split(':')[1]}.log`);
     writeFileSync(log, r.out);
-    const files = /Test Files\s+([^\n]+)/.exec(r.out)?.[1]?.trim() ?? '?';
-    const tests = /Tests\s+([^\n]+)/.exec(r.out)?.[1]?.trim() ?? '?';
-    const cov = r.coverage ? (/ERROR: Coverage for .*/.exec(r.out)?.[0] ?? 'coverage thresholds met') : '';
+    // vitest colours its summary: read it without the escapes.
+    const out = r.out.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+    const files = /Test Files\s+([^\n]+)/.exec(out)?.[1]?.trim() ?? '?';
+    const tests = /\n\s*Tests\s+([^\n]+)/.exec(out)?.[1]?.trim() ?? '?';
+    const pct = (label) => new RegExp(`${label}\\s*:\\s*([\\d.]+%)`).exec(out)?.[1] ?? '?';
+    const failedThresholds = [...out.matchAll(/ERROR: Coverage for (\w+) \(([\d.]+%)\) does not meet global threshold \(([\d.]+%)\)/g)];
+    const cov = !r.coverage
+      ? ''
+      : `coverage ${pct('Statements')} / ${pct('Branches')} / ${pct('Functions')} / ${pct('Lines')}` +
+        (failedThresholds.length > 0 ? ` — BELOW: ${failedThresholds.map((m) => `${m[1]} ${m[2]} < ${m[3]}`).join(', ')}` : '');
     const ok = r.code === 0;
     console.log(`  ${ok ? '✓' : '✗'} exit ${String(r.code)} · files ${files} · tests ${tests}${cov ? ` · ${cov}` : ''} · ${minutes} min`);
     if (!ok) {

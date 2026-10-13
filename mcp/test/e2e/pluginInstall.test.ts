@@ -209,7 +209,9 @@ describe('a plugin install — the tracked files, no node_modules', () => {
         loaded(r, 0, 1, 2);
         const verdict = JSON.parse(r.stdout) as { exit_code: number; coverage: string };
         expect(verdict.exit_code).toBe(r.status);
-        expect(['full', 'partial']).toContain(verdict.coverage);
+        // `none` where no scanner is installed at all (the first Linux container run): exit 2, never a pass.
+        expect(['full', 'partial', 'none']).toContain(verdict.coverage);
+        if (verdict.coverage === 'none') expect(r.status).toBe(2);
       },
       timeoutAbove(SCAN_TIMEOUT_MS),
     );

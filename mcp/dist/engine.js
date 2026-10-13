@@ -15547,12 +15547,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve38, reject) {
+        return new Promise(function(resolve37, reject) {
           isexe(path3, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve38(is);
+              resolve37(is);
             }
           });
         });
@@ -15618,27 +15618,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found2 = [];
-      const step = (i) => new Promise((resolve38, reject) => {
+      const step = (i) => new Promise((resolve37, reject) => {
         if (i === pathEnv.length)
-          return opt.all && found2.length ? resolve38(found2) : reject(getNotFoundError(cmd));
+          return opt.all && found2.length ? resolve37(found2) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path3.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve38(subStep(p, i, 0));
+        resolve37(subStep(p, i, 0));
       });
-      const subStep = (p, i, ii) => new Promise((resolve38, reject) => {
+      const subStep = (p, i, ii) => new Promise((resolve37, reject) => {
         if (ii === pathExt.length)
-          return resolve38(step(i + 1));
+          return resolve37(step(i + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found2.push(p + ext);
             else
-              return resolve38(p + ext);
+              return resolve37(p + ext);
           }
-          return resolve38(subStep(p, i, ii + 1));
+          return resolve37(subStep(p, i, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -15982,8 +15982,8 @@ function readText3(stream, onText) {
 }
 async function settlesWithin(p, ms) {
   let timer;
-  const timeout = new Promise((resolve38) => {
-    timer = setTimeout(() => resolve38(false), ms);
+  const timeout = new Promise((resolve37) => {
+    timer = setTimeout(() => resolve37(false), ms);
     timer.unref();
   });
   const settled = await Promise.race([p.then(() => true, () => true), timeout]);
@@ -15996,7 +15996,7 @@ function captureOutput(command, args, options) {
   if (file === null) {
     return Promise.resolve({ exitCode: null, stdout: "", stderr: "", timedOut: false, spawnError: `${command}: not found on PATH` });
   }
-  return new Promise((resolve38) => {
+  return new Promise((resolve37) => {
     const proc = spawnNoShell(file, args, { ...options.cwd !== void 0 ? { cwd: options.cwd } : {}, env, stdio: ["ignore", "pipe", "pipe"] });
     const max = options.maxBytes ?? 16 * 1024 * 1024;
     let stdout = "";
@@ -16013,7 +16013,7 @@ function captureOutput(command, args, options) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve38({ exitCode, stdout, stderr, timedOut, ...spawnError !== void 0 ? { spawnError } : {} });
+      resolve37({ exitCode, stdout, stderr, timedOut, ...spawnError !== void 0 ? { spawnError } : {} });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -16171,12 +16171,12 @@ function startChild(command, args, options) {
   const proc = spawnNoShell(command, args, { cwd: options.cwd, env, detached: true, stdio: [options.stdin ?? "ignore", "pipe", "pipe"] });
   let isSettled = false;
   let removeExitHook = null;
-  const done = new Promise((resolve38) => {
+  const done = new Promise((resolve37) => {
     const settle = (exit) => {
       if (isSettled) return;
       isSettled = true;
       removeExitHook?.();
-      resolve38(exit);
+      resolve37(exit);
     };
     proc.once("close", (code, signal) => settle({ exitCode: code, signal }));
     proc.on("error", (error2) => {
@@ -18449,7 +18449,7 @@ var init_coverage = __esm({
 // src/frameworks/projectLanguages.ts
 import { readdirSync as readdirSync8 } from "node:fs";
 import { lstat, readdir as readdir2 } from "node:fs/promises";
-import { join as join26, resolve as resolve14 } from "node:path";
+import { join as join26, win32 } from "node:path";
 function readTextSync(root, name) {
   return readProjectTextOrUndefined(root, name, MAX_IGNORE_FILE_BYTES) ?? null;
 }
@@ -18687,8 +18687,8 @@ async function languagesFromFilesAsync(root, opts = {}) {
 }
 function longPathsOf(root, rels, platform = process.platform) {
   if (platform !== "win32") return [];
-  const base2 = resolve14(root);
-  return rels.filter((rel2) => join26(base2, ...rel2.split("/")).length >= WINDOWS_MAX_PATH).sort();
+  const base2 = win32.resolve(root);
+  return rels.filter((rel2) => win32.join(base2, ...rel2.split("/")).length >= WINDOWS_MAX_PATH).sort();
 }
 function isScannedSource(rel2, exclusions) {
   if (languageOfFile(rel2) === null && !/\.h$/i.test(rel2)) return false;
@@ -19367,7 +19367,7 @@ __export(version_exports, {
   resolveVersion: () => resolveVersion
 });
 import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname11, resolve as resolve15 } from "node:path";
+import { dirname as dirname11, resolve as resolve14 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function readVersion(path3) {
   try {
@@ -19383,13 +19383,13 @@ function resolveVersion() {
     // .claude-plugin/plugin.json — the real release version — tried at both
     // depths before falling back to mcp/package.json at either depth, same
     // preference order the pre-lift server.ts-local version used.
-    resolve15(here, "..", "..", ".claude-plugin", "plugin.json"),
+    resolve14(here, "..", "..", ".claude-plugin", "plugin.json"),
     // bundled (dist/engine.js)
-    resolve15(here, "..", "..", "..", ".claude-plugin", "plugin.json"),
+    resolve14(here, "..", "..", "..", ".claude-plugin", "plugin.json"),
     // unbundled (this module's own file)
-    resolve15(here, "..", "package.json"),
+    resolve14(here, "..", "package.json"),
     // bundled / tsx dev — mcp/package.json (standalone npm use)
-    resolve15(here, "..", "..", "package.json")
+    resolve14(here, "..", "..", "package.json")
     // unbundled — mcp/package.json
   ];
   for (const candidate of candidates2) {
@@ -35541,9 +35541,9 @@ var init_glob = __esm({
 // src/platform/scope.ts
 import { createHash as createHash9 } from "node:crypto";
 import { lstatSync as lstatSync9, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname13, isAbsolute as isAbsolute10, join as join32, relative as relative10, resolve as resolve16 } from "node:path";
+import { dirname as dirname13, isAbsolute as isAbsolute10, join as join32, relative as relative10, resolve as resolve15 } from "node:path";
 function suggestScopeForFile(filePath) {
-  const file = resolve16(filePath);
+  const file = resolve15(filePath);
   let root = dirname13(file);
   for (let dir = root; ; dir = dirname13(dir)) {
     if (projectEntryKind(join32(dir, ".git")) !== "absent") {
@@ -35684,8 +35684,8 @@ function escapes(rel2) {
   return isAbsolute10(rel2) || rel2.split(/[\\/]/)[0] === "..";
 }
 function toProjectRelative(projectPath, entry) {
-  const abs = isAbsolute10(entry) ? resolve16(entry) : resolve16(projectPath, entry.replace(/\\/g, "/"));
-  const rel2 = relative10(resolve16(projectPath), abs);
+  const abs = isAbsolute10(entry) ? resolve15(entry) : resolve15(projectPath, entry.replace(/\\/g, "/"));
+  const rel2 = relative10(resolve15(projectPath), abs);
   if (escapes(rel2)) return null;
   return normaliseRelPath(rel2);
 }
@@ -35693,7 +35693,7 @@ function realOrSelf(p) {
   try {
     return realpathSync4.native(p);
   } catch {
-    return resolve16(p);
+    return resolve15(p);
   }
 }
 function staysInside(abs, root) {
@@ -36050,7 +36050,7 @@ var init_concurrencyLimiter = __esm({
           this.active += 1;
           return;
         }
-        await new Promise((resolve38) => this.waiting.push(resolve38));
+        await new Promise((resolve37) => this.waiting.push(resolve37));
         this.active += 1;
       }
       release() {
@@ -36884,7 +36884,7 @@ var init_scanToolFactory = __esm({
 
 // src/deps/dotnetRestore.ts
 import { unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename4, dirname as dirname14, extname as extname2, isAbsolute as isAbsolute11, join as join34, relative as relative12, resolve as resolve17 } from "node:path";
+import { basename as basename4, dirname as dirname14, extname as extname2, isAbsolute as isAbsolute11, join as join34, relative as relative12, resolve as resolve16 } from "node:path";
 function findDotnetTargets(projectPath) {
   const rootEntries = listProjectDir(projectPath, projectPath).filter((e) => e.kind === "file").map((e) => e.name).sort();
   const sln = rootEntries.find((n) => n.toLowerCase().endsWith(".sln")) ?? rootEntries.find((n) => n.toLowerCase().endsWith(".slnx"));
@@ -36908,7 +36908,7 @@ function findProjectFiles(projectPath) {
 }
 function resolveFromFile(file, written) {
   const normalised2 = written.trim().replace(/\\/g, "/");
-  return isAbsolute11(normalised2) ? resolve17(normalised2) : resolve17(dirname14(file), normalised2);
+  return isAbsolute11(normalised2) ? resolve16(normalised2) : resolve16(dirname14(file), normalised2);
 }
 function readText4(path3) {
   if (entryKindAnywhere(path3) === "remote") return "";
@@ -36941,7 +36941,7 @@ function projectReferences(project) {
 }
 function projectsForTarget(target) {
   const lower = target.toLowerCase();
-  const start = lower.endsWith(".sln") || lower.endsWith(".slnx") ? solutionProjects(target) : [resolve17(target)];
+  const start = lower.endsWith(".sln") || lower.endsWith(".slnx") ? solutionProjects(target) : [resolve16(target)];
   const out = [];
   const seen = /* @__PURE__ */ new Set();
   const queue = [...start];
@@ -36963,8 +36963,8 @@ function lockFileCandidates(project) {
 function optsIntoLockFile(project, root) {
   const optIn = /<RestorePackagesWithLockFile>\s*true\s*<\/RestorePackagesWithLockFile>/i;
   if (optIn.test(readText4(project))) return true;
-  const stop = resolve17(root);
-  for (let dir = dirname14(resolve17(project)); ; dir = dirname14(dir)) {
+  const stop = resolve16(root);
+  for (let dir = dirname14(resolve16(project)); ; dir = dirname14(dir)) {
     if (optIn.test(readText4(join34(dir, "Directory.Build.props")))) return true;
     if (dir === stop || dirname14(dir) === dir || relative12(stop, dir).startsWith("..")) return false;
   }
@@ -37807,7 +37807,7 @@ var init_semgrep = __esm({
 // src/tools/scanSast.ts
 import { lstatSync as lstatSync11, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readdirSync as readdirSync12, readFileSync as readFileSync5, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { basename as basename5, dirname as dirname16, join as join38, relative as relative13, resolve as resolve18, sep as sep10 } from "node:path";
+import { basename as basename5, dirname as dirname16, join as join38, relative as relative13, resolve as resolve17, sep as sep10 } from "node:path";
 async function runSemgrep2(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
   const outFile = join38(reportDir, "sast.json");
@@ -38336,11 +38336,11 @@ function customAfterTargetsSetters(projectPath) {
     const text2 = readSmallTextFile(file, MAX_DOTNET_PROJECT_FILE_BYTES);
     if (text2 !== void 0 && sets.test(text2)) out.add(relative13(projectPath, file).split(sep10).join("/"));
   };
-  const root = resolve18(projectPath);
+  const root = resolve17(projectPath);
   for (const target of findDotnetTargets(projectPath)) {
     for (const project of projectsForTarget(target)) {
       check2(project);
-      for (let dir = dirname16(resolve18(project)); ; dir = dirname16(dir)) {
+      for (let dir = dirname16(resolve17(project)); ; dir = dirname16(dir)) {
         check2(join38(dir, "Directory.Build.props"));
         check2(join38(dir, "Directory.Build.targets"));
         if (dir === root || dirname16(dir) === dir || relative13(root, dir).startsWith("..")) break;
@@ -38849,7 +38849,7 @@ var init_gitleaks = __esm({
 // src/runners/gitleaksScan.ts
 import { lstatSync as lstatSync13, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync5, rmSync as rmSync8, writeFileSync as writeFileSync7 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { basename as basename6, dirname as dirname17, join as join40, relative as relative14, resolve as resolve19 } from "node:path";
+import { basename as basename6, dirname as dirname17, join as join40, relative as relative14, resolve as resolve18 } from "node:path";
 async function runGitleaksScan(opts) {
   const result = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
   let raw = null;
@@ -39350,7 +39350,7 @@ async function repoPrefix(projectPath) {
   return state.kind === "has_commits" || state.kind === "no_commits" ? posixRelative(state.toplevel, projectPath) : "";
 }
 function posixRelative(toplevel, projectPath) {
-  const rel2 = relative14(resolve19(toplevel), resolve19(projectPath)).replace(/\\/g, "/");
+  const rel2 = relative14(resolve18(toplevel), resolve18(projectPath)).replace(/\\/g, "/");
   return rel2.startsWith("..") ? "" : rel2;
 }
 function locate4(f, location, projectPrefix) {
@@ -42046,7 +42046,7 @@ var init_hadolint = __esm({
 });
 
 // src/tools/scanContainers.ts
-import { isAbsolute as isAbsolute12, join as join44, relative as relative16, resolve as resolve20, sep as sep11 } from "node:path";
+import { isAbsolute as isAbsolute12, join as join44, relative as relative16, resolve as resolve19, sep as sep11 } from "node:path";
 function findComposeFile(projectPath) {
   for (const name of COMPOSE_FILE_NAMES) {
     if (presentInProject(projectPath, name)) return join44(projectPath, name);
@@ -42105,7 +42105,7 @@ function isInside2(root, candidate) {
     const rel2 = relative16(base2, target);
     return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep11}`) && !isAbsolute12(rel2);
   };
-  const abs = resolve20(root, candidate);
+  const abs = resolve19(root, candidate);
   if (!within(root, abs)) return false;
   return projectPathKind(root, abs) !== "outside";
 }
@@ -42182,7 +42182,7 @@ var init_scanContainers = __esm({
         let imageSignature;
         const invalid2 = invalidInput(ctx.projectPath, inp);
         if (invalid2) throw new Error(invalid2);
-        const dockerfile = inp.dockerfile_path !== void 0 ? resolve20(ctx.projectPath, inp.dockerfile_path) : presentInProject(ctx.projectPath, "Dockerfile") ? join44(ctx.projectPath, "Dockerfile") : void 0;
+        const dockerfile = inp.dockerfile_path !== void 0 ? resolve19(ctx.projectPath, inp.dockerfile_path) : presentInProject(ctx.projectPath, "Dockerfile") ? join44(ctx.projectPath, "Dockerfile") : void 0;
         if (dockerfile !== void 0 || inp.image !== void 0) {
           const trivyBin = await scannerAvailable("trivy");
           if (!trivyBin) {
@@ -44922,7 +44922,7 @@ var init_pipAudit = __esm({
 });
 
 // src/deps/pipRequirements.ts
-import { dirname as dirname19, join as join49, relative as relative18, resolve as resolve21, sep as sep12 } from "node:path";
+import { dirname as dirname19, join as join49, relative as relative18, resolve as resolve20, sep as sep12 } from "node:path";
 function describePipRefusal(r) {
   const where = r.line > 0 ? `${r.file}:${r.line}` : r.file;
   const extra = [r.detail, r.host].filter((x) => x !== void 0 && x !== "");
@@ -45117,7 +45117,7 @@ function checkRequirements(projectDir, starts, checkoutRoot = projectDir, opts =
   const refusals = [];
   const read3 = [];
   const shown = (abs) => relative18(projectDir, abs).split(sep12).join("/");
-  const queue = [...new Set(starts)].map((f) => ({ abs: resolve21(projectDir, f) }));
+  const queue = [...new Set(starts)].map((f) => ({ abs: resolve20(projectDir, f) }));
   const seen = /* @__PURE__ */ new Set();
   const refuse = (r) => {
     if (refusals.length < MAX_REFUSALS) refusals.push(r);
@@ -45180,7 +45180,7 @@ function checkRequirements(projectDir, starts, checkoutRoot = projectDir, opts =
           }
           continue;
         }
-        queue.push({ abs: resolve21(dirname19(abs), target), from: { file, line, target } });
+        queue.push({ abs: resolve20(dirname19(abs), target), from: { file, line, target } });
       }
       if (stop) break;
     }
@@ -47802,7 +47802,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve38 = (name, ecosystem, file, version2) => {
+  const resolve37 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -47859,7 +47859,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve38(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve37(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -47869,7 +47869,7 @@ function readDependencyEvidence(projectPath) {
     if (n?.[1]) cargoName = n[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve38(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve37(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -47877,10 +47877,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve38(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve37(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText7("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve38(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve37(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -47892,7 +47892,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve38(name, "dotnet", relative20(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve37(name, "dotnet", relative20(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -55879,7 +55879,7 @@ var init_triageFindings = __esm({
 
 // src/platform/hookInstallTarget.ts
 import { lstatSync as lstatSync15 } from "node:fs";
-import { dirname as dirname21, isAbsolute as isAbsolute13, join as join64, resolve as resolve22 } from "node:path";
+import { dirname as dirname21, isAbsolute as isAbsolute13, join as join64, resolve as resolve21 } from "node:path";
 function lstatOrNull3(p) {
   try {
     return lstatSync15(p);
@@ -55900,14 +55900,14 @@ function gitDirFromFile(projectPath) {
   const m = /^gitdir:\s*(.+?)\s*$/m.exec(read3.text);
   const named2 = m?.[1];
   if (named2 === void 0) return { ok: false, reason: ".git is a file without a gitdir: line" };
-  const gitDir = resolve22(projectPath, named2);
-  const dotGit = resolve22(projectPath, ".git");
+  const gitDir = resolve21(projectPath, named2);
+  const dotGit = resolve21(projectPath, ".git");
   const back = readPointer(join64(gitDir, "gitdir"));
-  if (back !== null && samePath2(resolve22(gitDir, back), dotGit)) {
+  if (back !== null && samePath2(resolve21(gitDir, back), dotGit)) {
     const common = readPointer(join64(gitDir, "commondir"));
-    return { ok: true, gitDir, commonDir: common === null ? gitDir : resolve22(gitDir, common) };
+    return { ok: true, gitDir, commonDir: common === null ? gitDir : resolve21(gitDir, common) };
   }
-  for (let dir = dirname21(resolve22(projectPath)); dir !== dirname21(dir); dir = dirname21(dir)) {
+  for (let dir = dirname21(resolve21(projectPath)); dir !== dirname21(dir); dir = dirname21(dir)) {
     const modules = join64(dir, ".git", "modules");
     if (isWithinDir(modules, gitDir) && gitDir !== modules) return { ok: true, gitDir, commonDir: gitDir };
   }
@@ -56114,7 +56114,7 @@ var init_semgrepValidate = __esm({
 
 // src/tools/registerCustomRules.ts
 import { statSync as statSync9 } from "node:fs";
-import { isAbsolute as isAbsolute14, join as join65, resolve as resolve23 } from "node:path";
+import { isAbsolute as isAbsolute14, join as join65, resolve as resolve22 } from "node:path";
 async function handler20(input, ctx) {
   const inp = input;
   let projectPath;
@@ -56246,7 +56246,7 @@ function collectExplicit(projectPath, paths) {
       for (const match of matches3) consider(match, registered, rejected);
       continue;
     }
-    consider(resolve23(projectPath, raw), registered, rejected);
+    consider(resolve22(projectPath, raw), registered, rejected);
   }
   return { registered: [...new Set(registered)], rejected };
 }
@@ -56852,7 +56852,7 @@ var init_protocol = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve38) => setTimeout(resolve38, pollInterval));
+            await new Promise((resolve37) => setTimeout(resolve37, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error2) {
@@ -56869,7 +56869,7 @@ var init_protocol = __esm({
        */
       request(request, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve37, reject) => {
           const earlyReject = (error2) => {
             reject(error2);
           };
@@ -56947,7 +56947,7 @@ var init_protocol = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve38(parseResult.data);
+                resolve37(parseResult.data);
               }
             } catch (error2) {
               reject(error2);
@@ -57209,12 +57209,12 @@ var init_protocol = __esm({
           }
         } catch {
         }
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve37, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve38, interval);
+          const timeoutId = setTimeout(resolve37, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -60241,7 +60241,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve38.call(this, root, ref);
+      let _sch = resolve37.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -60268,7 +60268,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve38(root, ref) {
+    function resolve37(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -61098,7 +61098,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve38(baseURI, relativeURI, options) {
+    function resolve37(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -61467,7 +61467,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize: normalize2,
-      resolve: resolve38,
+      resolve: resolve37,
       resolveComponent,
       equal,
       serialize,
@@ -65838,7 +65838,7 @@ var init_mcp = __esm({
         let task = createTaskResult.task;
         const pollInterval = task.pollInterval ?? 5e3;
         while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-          await new Promise((resolve38) => setTimeout(resolve38, pollInterval));
+          await new Promise((resolve37) => setTimeout(resolve37, pollInterval));
           const updatedTask = await extra.taskStore.getTask(taskId);
           if (!updatedTask) {
             throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -67353,7 +67353,7 @@ var init_reportExport = __esm({
 
 // src/sarif/importSarif.ts
 import { createHash as createHash11 } from "node:crypto";
-import { isAbsolute as isAbsolute15, relative as relative23, resolve as resolve24 } from "node:path";
+import { isAbsolute as isAbsolute15, relative as relative23, resolve as resolve23 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 function importSarif(text2, ctx) {
   const runs = parseLog(text2);
@@ -67641,23 +67641,23 @@ function insideRoot(p, root) {
   return rel2.replace(/\\/g, "/");
 }
 function relativeInProject(uri, baseId, rc) {
-  const root = resolve24(rc.projectPath);
+  const root = resolve23(rc.projectPath);
   if (DRIVE_PATH.test(uri) || URI_SCHEME.test(uri)) {
     const native = nativePath(uri);
-    return native === void 0 ? void 0 : insideRoot(resolve24(native), root);
+    return native === void 0 ? void 0 : insideRoot(resolve23(native), root);
   }
   const decoded = decode(uri);
   if (/[\u0000-\u001f\u007f]/.test(decoded)) return void 0;
   const rel2 = decoded.replace(/\\/g, "/");
-  if (rel2.startsWith("/")) return insideRoot(resolve24(rel2), root);
-  return insideRoot(resolve24(baseDirectory(baseId, rc, root), rel2), root);
+  if (rel2.startsWith("/")) return insideRoot(resolve23(rel2), root);
+  return insideRoot(resolve23(baseDirectory(baseId, rc, root), rel2), root);
 }
 function baseDirectory(baseId, rc, root) {
   if (baseId === void 0 || !hasOwn(rc.bases, baseId)) return root;
   const baseUri = getString(rc.bases[baseId], "uri");
   const native = baseUri === void 0 ? void 0 : nativePath(baseUri);
   if (native === void 0) return root;
-  const dir = resolve24(native);
+  const dir = resolve23(native);
   return dir === root || insideRoot(dir, root) !== void 0 ? dir : root;
 }
 var SarifImportError, DEFAULT_MAX_RESULTS, MAX_RESULTS_CEILING, MESSAGE_MAX_BYTES, TITLE_MAX_CHARS, TOOL_NAME_MAX, PLACEHOLDER_FINGERPRINT, SECRET_CWES, isObject3, hasOwn, CWE_TEXT, DRIVE_PATH, URI_SCHEME, positiveInt;
@@ -67760,7 +67760,7 @@ var init_persistImport = __esm({
 
 // src/tools/importSarif.ts
 var importSarif_exports = {};
-import { basename as basename8, relative as relative24, resolve as resolve25, sep as sep15 } from "node:path";
+import { basename as basename8, relative as relative24, resolve as resolve24, sep as sep15 } from "node:path";
 function handler23(input, ctx) {
   return Promise.resolve(run(input, ctx));
 }
@@ -67772,7 +67772,7 @@ function run(input, ctx) {
   } catch (e) {
     return fail(projectPathErrorCode(e), e.message);
   }
-  const logPath = resolve25(projectPath, inp.sarif_path);
+  const logPath = resolve24(projectPath, inp.sarif_path);
   const inside = isWithinDir(projectPath, logPath);
   if (!inside && inp.allow_outside_project !== true) {
     return fail(
@@ -69659,7 +69659,7 @@ var init_wpscan = __esm({
 
 // src/wordpress/siteKeys.ts
 import { existsSync as existsSync20 } from "node:fs";
-import { isAbsolute as isAbsolute16, resolve as resolve26 } from "node:path";
+import { isAbsolute as isAbsolute16, resolve as resolve25 } from "node:path";
 function wpSiteKey(url2) {
   return url2.replace(/\/$/, "");
 }
@@ -69669,7 +69669,7 @@ function wpInstallPathProblem(raw) {
 }
 function wpInstallKeys(canonical2, raw) {
   const keys = [canonical2];
-  if (raw !== void 0 && raw.length > 0 && namesOneInstall(raw)) keys.push(raw, resolve26(raw));
+  if (raw !== void 0 && raw.length > 0 && namesOneInstall(raw)) keys.push(raw, resolve25(raw));
   return unique3(keys);
 }
 function namesOneInstall(raw) {
@@ -74989,7 +74989,7 @@ import {
   writeFileSync as writeFileSync14
 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename9, dirname as dirname23, isAbsolute as isAbsolute17, join as join76, relative as relative29, resolve as resolve27 } from "node:path";
+import { basename as basename9, dirname as dirname23, isAbsolute as isAbsolute17, join as join76, relative as relative29, resolve as resolve26 } from "node:path";
 function extOf(name) {
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot).toLowerCase();
@@ -75259,7 +75259,7 @@ function rel(root, abs) {
   return r || basename9(abs);
 }
 function readOne(root, abs, relPath) {
-  const read3 = readProjectBytes(root, resolve27(abs), MAX_FILE_BYTES3);
+  const read3 = readProjectBytes(root, resolve26(abs), MAX_FILE_BYTES3);
   if (read3.status === "absent") return { kind: "refused", reason: "unreadable" };
   if (read3.status === "refused") return { kind: "refused", reason: read3.reason };
   const raw = read3.bytes;
@@ -76487,9 +76487,9 @@ var init_scanSemgrep = __esm({
 
 // src/surface/specDiscover.ts
 import { readdirSync as readdirSync16 } from "node:fs";
-import { join as join80, relative as relative30, resolve as resolve28, sep as sep17 } from "node:path";
+import { join as join80, relative as relative30, resolve as resolve27, sep as sep17 } from "node:path";
 function discoverSpecs(projectPath, explicit) {
-  const root = resolve28(projectPath);
+  const root = resolve27(projectPath);
   const isExplicit = explicit !== void 0 && explicit.length > 0;
   const found2 = isExplicit ? null : walk4(root, root);
   const candidates2 = found2 === null ? dedupeResolved(explicit ?? []) : [...found2.exact.sort(), ...found2.widened.sort()];
@@ -76503,7 +76503,7 @@ function dedupeResolved(paths) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const path3 of paths) {
-    const resolved = resolve28(path3);
+    const resolved = resolve27(path3);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     out.push(resolved);
@@ -76932,7 +76932,7 @@ var init_specImport = __esm({
 });
 
 // src/tools/mapAttackSurface.ts
-import { isAbsolute as isAbsolute18, join as join81, resolve as resolve29 } from "node:path";
+import { isAbsolute as isAbsolute18, join as join81, resolve as resolve28 } from "node:path";
 async function handler40(input, ctx) {
   const inp = input;
   let projectPath;
@@ -77256,7 +77256,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path3) {
-  return resolve29(isAbsolute18(path3) ? path3 : join81(projectPath, path3));
+  return resolve28(isAbsolute18(path3) ? path3 : join81(projectPath, path3));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -79894,7 +79894,7 @@ var init_testCommandEnv = __esm({
 
 // src/fixpr/apply.ts
 import { rmSync as rmSync11 } from "node:fs";
-import { isAbsolute as isAbsolute19, join as join86, relative as relative31, resolve as resolve30, sep as sep18 } from "node:path";
+import { isAbsolute as isAbsolute19, join as join86, relative as relative31, resolve as resolve29, sep as sep18 } from "node:path";
 async function applyGroup(opts) {
   const run2 = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -80037,7 +80037,7 @@ function editPipPin(worktreePath, step) {
   const file = step.file ?? "";
   const label = `edit ${file || "(no file)"}: ${step.package_name}==${step.installed_version} -> ${step.package_name}==${step.latest_version}`;
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
-  const target = resolve30(worktreePath, file);
+  const target = resolve29(worktreePath, file);
   const rel2 = relative31(worktreePath, target);
   if (isAbsolute19(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep18}`) || isAbsolute19(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
@@ -80355,7 +80355,7 @@ var init_exclusions = __esm({
 });
 
 // src/fixpr/pr.ts
-import { resolve as resolve31 } from "node:path";
+import { resolve as resolve30 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 function branchName(_source, key, hash) {
   return `${BRANCH_PREFIX}${key}-${hash}`;
@@ -80544,7 +80544,7 @@ function localPath(worktreePath, url2) {
   }
   if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(url2) || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(url2)) return null;
   if (!/^[A-Za-z]:[\\/]/.test(url2) && /^[^/\\]*:/.test(url2)) return null;
-  return resolve31(worktreePath, url2);
+  return resolve30(worktreePath, url2);
 }
 async function deleteLocalBranch(opts) {
   const run2 = opts.run ?? runProcess;
@@ -80798,11 +80798,11 @@ var init_testEnv = __esm({
 
 // src/fixpr/repoPackageConfig.ts
 import { mkdtempSync as mkdtempSync8, renameSync as renameSync4, rmSync as rmSync13 } from "node:fs";
-import { dirname as dirname26, join as join88, relative as relative32, resolve as resolve32, sep as sep19 } from "node:path";
+import { dirname as dirname26, join as join88, relative as relative32, resolve as resolve31, sep as sep19 } from "node:path";
 function dirsUpToRoot(root, projectDir) {
   const out = [];
-  const top = resolve32(root);
-  for (let dir = resolve32(projectDir); isWithinDir(top, dir); dir = dirname26(dir)) {
+  const top = resolve31(root);
+  for (let dir = resolve31(projectDir); isWithinDir(top, dir); dir = dirname26(dir)) {
     out.push(dir);
     if (dir === top || dirname26(dir) === dir) break;
   }
@@ -80826,7 +80826,7 @@ function repoPackageConfigPaths(root, projectDir) {
 }
 function setAsidePackageConfig(root, projectDir) {
   const paths = repoPackageConfigPaths(root, projectDir);
-  const holding = paths.length > 0 ? mkdtempSync8(join88(dirname26(resolve32(root)), ".guardian-fixpr-config-")) : null;
+  const holding = paths.length > 0 ? mkdtempSync8(join88(dirname26(resolve31(root)), ".guardian-fixpr-config-")) : null;
   const moves = [];
   try {
     paths.forEach((from, i) => {
@@ -80842,7 +80842,7 @@ function setAsidePackageConfig(root, projectDir) {
   }
   let restored = false;
   return {
-    moved: moves.map((m) => relative32(resolve32(root), m.from).split(sep19).join("/")),
+    moved: moves.map((m) => relative32(resolve31(root), m.from).split(sep19).join("/")),
     restore: () => {
       if (restored) return;
       restored = true;
@@ -81306,7 +81306,7 @@ var init_verify3 = __esm({
 // src/fixpr/worktree.ts
 import { existsSync as existsSync23, mkdtempSync as mkdtempSync9, realpathSync as realpathSync7, rmSync as rmSync14 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
-import { join as join89, resolve as resolve33 } from "node:path";
+import { join as join89, resolve as resolve32 } from "node:path";
 async function createWorktree(opts) {
   let dir;
   try {
@@ -81410,7 +81410,7 @@ function samePathKey(path3) {
   try {
     real = realpathSync7.native(path3);
   } catch {
-    real = resolve33(path3);
+    real = resolve32(path3);
   }
   const posix6 = real.replace(/\\/g, "/");
   return process.platform === "win32" ? posix6.toLowerCase() : posix6;
@@ -84138,7 +84138,7 @@ async function analyzeServerListingAsync(listing, others, options = {}) {
       break;
     }
     if (steps.next().done === true) break;
-    await new Promise((resolve38) => setImmediate(resolve38));
+    await new Promise((resolve37) => setImmediate(resolve37));
   }
   return finishRun(run2, others);
 }
@@ -86705,7 +86705,7 @@ var init_sse = __esm({
         const baseFetch = this?._eventSourceInit?.fetch ?? this._fetch ?? fetch;
         const fetchImpl = this._followRedirects ? baseFetch : fetchWithinOrigin(baseFetch);
         let redirect;
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve37, reject) => {
           this._eventSource = new EventSource(this._url.href, {
             ...this._eventSourceInit,
             fetch: async (url2, init) => {
@@ -86727,7 +86727,7 @@ var init_sse = __esm({
           this._abortController = new AbortController();
           this._eventSource.onerror = (event) => {
             if (event.code === 401 && this._authProvider) {
-              this._authThenStart().then(resolve38, reject);
+              this._authThenStart().then(resolve37, reject);
               return;
             }
             const error2 = new SseError(event.code, redirect ?? event.message, event);
@@ -86749,7 +86749,7 @@ var init_sse = __esm({
               void this.close();
               return;
             }
-            resolve38();
+            resolve37();
           });
           this._eventSource.onmessage = (event) => {
             const messageEvent = event;
@@ -87419,7 +87419,7 @@ var init_streamableHttp = __esm({
 // src/mcpaudit/launch.ts
 import { spawn as spawn2 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
-import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute22, resolve as resolve34 } from "node:path";
+import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute22, resolve as resolve33 } from "node:path";
 function urlAt(text2, start) {
   const rest = text2.slice(start);
   const end = rest.search(URL_END);
@@ -87604,7 +87604,7 @@ async function resolveCommand2(command, env, cwd, deadline) {
   let candidates2;
   const skipped2 = [];
   if (/[\\/]/.test(command) || isAbsolute22(command)) {
-    candidates2 = withExts(resolve34(cwd, command));
+    candidates2 = withExts(resolve33(cwd, command));
   } else {
     const dirs = (envValue3(env, "PATH") ?? "").split(delimiter2).filter((d) => d !== "");
     candidates2 = [];
@@ -87613,7 +87613,7 @@ async function resolveCommand2(command, env, cwd, deadline) {
         skipped2.push(dir);
         continue;
       }
-      candidates2.push(...withExts(resolve34(dir, command)));
+      candidates2.push(...withExts(resolve33(dir, command)));
     }
   }
   const search2 = (async () => {
@@ -87835,7 +87835,7 @@ var init_stdioTransport = __esm({
           this.resumeLater(stderr);
         });
         stdin?.on("error", (e) => this.onerror?.(e));
-        const spawned = new Promise((resolve38) => child.process.once("spawn", () => resolve38("spawned")));
+        const spawned = new Promise((resolve37) => child.process.once("spawn", () => resolve37("spawned")));
         this.done = child.done.then((exit) => {
           this.exited = {
             exitCode: exit.exitCode,
@@ -87875,14 +87875,14 @@ var init_stdioTransport = __esm({
         void this.close();
       }
       send(message2) {
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve37, reject) => {
           const stdin = this.child?.process.stdin;
           if (stdin === void 0 || stdin === null || this.exited !== null || this.closing !== null) {
             reject(new Error("Not connected"));
             return;
           }
-          if (stdin.write(serializeMessage(message2))) resolve38();
-          else stdin.once("drain", () => resolve38());
+          if (stdin.write(serializeMessage(message2))) resolve37();
+          else stdin.once("drain", () => resolve37());
         });
       }
       /** Kill the whole tree, wait for it (bounded), then report closed. Idempotent. */
@@ -89622,7 +89622,7 @@ var init_popular = __esm({
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync18, readdirSync as readdirSync17 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { dirname as dirname28, isAbsolute as isAbsolute23, join as join93, parse as parse10, relative as relative35, resolve as resolve35 } from "node:path";
+import { dirname as dirname28, isAbsolute as isAbsolute23, join as join93, parse as parse10, relative as relative35, resolve as resolve34 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -89637,12 +89637,12 @@ function isInside3(dir, path3) {
   return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute23(rel2);
 }
 function walkRoot2(path3, ctx, under) {
-  const abs = resolve35(path3);
+  const abs = resolve34(path3);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
   const holds = (dir2, base2) => samePath3(dir2, base2) || isInside3(dir2, base2);
-  const project = ctx.projectDir === void 0 ? void 0 : resolve35(ctx.projectDir);
-  const home = resolve35(homeOf(ctx));
+  const project = ctx.projectDir === void 0 ? void 0 : resolve34(ctx.projectDir);
+  const home = resolve34(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
   if (project !== void 0 && isInside3(project, abs)) return project;
   const dir = dirname28(abs);
@@ -89697,14 +89697,14 @@ function listDir3(dir, ctx) {
   }
 }
 function samePath3(a, b) {
-  const norm = (p) => resolve35(p).replace(/[\\/]+$/, "");
+  const norm = (p) => resolve34(p).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
 }
 function ancestors(ctx) {
   if (ctx.projectDir === void 0) return [];
   const stops = [ctx.homeDir, homedir9()].filter((x) => typeof x === "string");
   const out = [];
-  let dir = resolve35(ctx.projectDir);
+  let dir = resolve34(ctx.projectDir);
   for (let i = 0; i < 16; i += 1) {
     if (stops.some((s) => samePath3(s, dir))) break;
     out.push(dir);
@@ -90086,7 +90086,7 @@ function localFeedHas(folder, configPath, id, ctx) {
   const env = envOf(ctx);
   const expanded = folder.replace(/%([^%]+)%/g, (whole, name) => envValue4(env, name) ?? whole);
   const portable = (ctx.platform ?? process.platform) === "win32" ? expanded : expanded.replace(/\\/g, "/");
-  const dir = resolve35(dirname28(configPath), portable.replace(/[\\/]+$/, ""));
+  const dir = resolve34(dirname28(configPath), portable.replace(/[\\/]+$/, ""));
   const lower = id.toLowerCase();
   return listDir3(dir, ctx).some((entry) => {
     const e = entry.toLowerCase();
@@ -90108,7 +90108,7 @@ function nugetRegistry(name, ctx) {
   if (fromEnv !== null) return fromEnv;
   const files = [];
   if (ctx.projectDir !== void 0) {
-    let dir = resolve35(ctx.projectDir);
+    let dir = resolve34(ctx.projectDir);
     for (let i = 0; i < 64; i += 1) {
       const f = nugetConfigIn(dir, ctx);
       if (f !== void 0) files.push(f);
@@ -90717,7 +90717,7 @@ var init_vet = __esm({
 
 // src/tools/vetPackages.ts
 import { existsSync as existsSync24, statSync as statSync13 } from "node:fs";
-import { resolve as resolve36 } from "node:path";
+import { resolve as resolve35 } from "node:path";
 async function handler46(input, _ctx, callMeta) {
   const inp = input;
   const ecosystem = ECOSYSTEM_ALIASES[inp.ecosystem];
@@ -90726,7 +90726,7 @@ async function handler46(input, _ctx, callMeta) {
   }
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
-    projectDir = resolve36(inp.project_path);
+    projectDir = resolve35(inp.project_path);
     if (!existsSync24(projectDir) || !statSync13(projectDir).isDirectory()) {
       return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
     }
@@ -90930,7 +90930,7 @@ var init_render = __esm({
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
 import { existsSync as existsSync25, readFileSync as readFileSync11, writeFileSync as writeFileSync18 } from "node:fs";
-import { basename as basename12, join as join94, posix as posix4, win32 } from "node:path";
+import { basename as basename12, join as join94, posix as posix4, win32 as win322 } from "node:path";
 async function handler47(input, ctx) {
   const inp = input;
   const format = inp.format ?? "openvex";
@@ -91117,7 +91117,7 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
 function productOf(projectPath, sbom) {
   const directory = basename12(projectPath);
   const sbomName = sbom?.product_name ?? null;
-  const name = sbomName === null ? directory : isAbsolutePath2(sbomName) ? win32.basename(sbomName) || directory : sbomName;
+  const name = sbomName === null ? directory : isAbsolutePath2(sbomName) ? win322.basename(sbomName) || directory : sbomName;
   const productPurl = sbom?.product_purl ?? null;
   if (productPurl !== null) return { id: productPurl, name, source: "sbom" };
   return { id: `pkg:generic/${encodeURIComponent(directory)}`, name, source: "directory" };
@@ -91140,7 +91140,7 @@ function sbomTrust(sbom, deps) {
   return { trusted: true, note: null };
 }
 function isAbsolutePath2(name) {
-  return posix4.isAbsolute(name) || win32.isAbsolute(name);
+  return posix4.isAbsolute(name) || win322.isAbsolute(name);
 }
 var SAMPLE_SIZE2, DEFAULT_AUTHOR, inputSchema30, tool50, NO_STATEMENTS, EMPTY_CONTEXT;
 var init_exportVex = __esm({
@@ -93569,8 +93569,8 @@ function attachOutputTail(child) {
   return () => tail2;
 }
 function sleep(ms) {
-  return new Promise((resolve38) => {
-    setTimeout(resolve38, ms);
+  return new Promise((resolve37) => {
+    setTimeout(resolve37, ms);
   });
 }
 var POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, KILL_GRACE_MS3, PIPE_ABANDON_MS2, OUTPUT_TAIL_BYTES;
@@ -94751,12 +94751,12 @@ var init_stdio3 = __esm({
         this.onclose?.();
       }
       send(message2) {
-        return new Promise((resolve38) => {
+        return new Promise((resolve37) => {
           const json = serializeMessage(message2);
           if (this._stdout.write(json)) {
-            resolve38();
+            resolve37();
           } else {
-            this._stdout.once("drain", resolve38);
+            this._stdout.once("drain", resolve37);
           }
         });
       }
@@ -94782,14 +94782,14 @@ var init_instructions = __esm({
 
 // src/server.ts
 var server_exports = {};
-import { resolve as resolve37 } from "node:path";
+import { resolve as resolve36 } from "node:path";
 async function main() {
   if (!nodeSqliteAvailable()) {
     process.stderr.write(`${NODE_SQLITE_REQUIRED}
 `);
     process.exit(1);
   }
-  const projectPath = resolve37(process.cwd());
+  const projectPath = resolve36(process.cwd());
   const droppedPath = hardenCommandSearch();
   if (droppedPath.length > 0) logErr(`PATH: dropped relative entries ${droppedPath.map((e) => JSON.stringify(e)).join(", ")} (they name the current directory)`);
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });

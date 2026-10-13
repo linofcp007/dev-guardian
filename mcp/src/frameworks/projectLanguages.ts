@@ -80,7 +80,7 @@
 
 import { readdirSync, type Dirent } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, win32 } from 'node:path';
 import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
@@ -567,8 +567,10 @@ export function longPathsOf(
   platform: NodeJS.Platform = process.platform,
 ): string[] {
   if (platform !== 'win32') return [];
-  const base = resolve(root);
-  return rels.filter((rel) => join(base, ...rel.split('/')).length >= WINDOWS_MAX_PATH).sort();
+  // Windows' own path rules whatever the host (`path.win32`): on Linux a drive path resolved as a relative
+  // path under the working directory, and every name read as too long (the first Linux run, review 8 finding 1).
+  const base = win32.resolve(root);
+  return rels.filter((rel) => win32.join(base, ...rel.split('/')).length >= WINDOWS_MAX_PATH).sort();
 }
 
 /** Whether `rel` is a file the scanners read with a source language — see the module comment. */
