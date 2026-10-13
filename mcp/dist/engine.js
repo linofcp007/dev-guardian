@@ -96697,7 +96697,9 @@ var SYSTEM_DIRS = ["etc", "usr", "bin", "sbin", "var", "lib", "lib64", "boot", "
 var WINDOWS_DIR = /^(?:[A-Za-z]:[\\/]?|\/(?:mnt\/)?[A-Za-z]\/)(?:Windows(?:[\\/]?(?:System32|SysWOW64))?|Users|Program Files(?: \(x86\))?|ProgramData|PROGRA~\d)(?:[\\/]\*?)?$/i;
 var WINDOWS_DIR_NAMES = ["windows", "users", "program files", "program files (x86)", "programdata"];
 function catastrophicKind(raw, tildeUsers = true) {
-  const t = stripQuotes(raw);
+  return spelledKind(stripQuotes(raw), tildeUsers) ?? plainKind(raw, tildeUsers);
+}
+function spelledKind(t, tildeUsers) {
   if (t === "/" || /^\/\*+$/.test(t)) return "root";
   if (/^\\\*?$/.test(t)) return "root";
   if (/^~(?:[\\/]\*?)?$/.test(t)) return "home";
@@ -96720,6 +96722,76 @@ function catastrophicKind(raw, tildeUsers = true) {
     return "root";
   }
   return globNamesCatastrophic(t) ? "root" : null;
+}
+var MAX_PLAIN_TARGET = 4096;
+var ROOT_VARIABLES = {
+  windir: "C:/Windows",
+  systemroot: "C:/Windows",
+  programfiles: "C:/Program Files",
+  "programfiles(x86)": "C:/Program Files (x86)",
+  programw6432: "C:/Program Files",
+  programdata: "C:/ProgramData",
+  allusersprofile: "C:/ProgramData",
+  systemdrive: "C:/",
+  homedrive: "C:/"
+};
+var HOME_VARIABLES = /* @__PURE__ */ new Set(["home", "userprofile"]);
+function leadingVariable(t) {
+  const m = /^(?:\$\{(?:env:)?([A-Za-z_][\w()]*)\}|\$(?:env:)?([A-Za-z_]\w*(?:\(x86\))?)|%([A-Za-z_][\w()]*)%)/i.exec(t);
+  if (m === null) return void 0;
+  const name = (m[1] ?? m[2] ?? m[3] ?? "").toLowerCase();
+  return { name, rest: t.slice((m[0] ?? "").length) };
+}
+function plainTarget(raw, variables = true) {
+  let t = stripQuotes(raw.trim());
+  if (t.length === 0 || t.length > MAX_PLAIN_TARGET) return void 0;
+  t = t.replace(/^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::/i, "");
+  const unc = /^[\\/]{2}[?.][\\/]UNC[\\/]/i.exec(t);
+  if (unc !== null) t = `//${t.slice(unc[0].length)}`;
+  else t = t.replace(/^[\\/]{2}[?.][\\/](?=[A-Za-z]:)/, "");
+  const share = /^[\\/]{2}[^\\/]+[\\/]([A-Za-z])\$(?=[\\/]|$)/.exec(t);
+  if (share !== null) t = `${share[1] ?? ""}:/${t.slice(share[0].length)}`;
+  let home = false;
+  const homePair = /^(?:\$\{?(?:env:)?HOMEDRIVE\}?\$\{?(?:env:)?HOMEPATH\}?|%HOMEDRIVE%%HOMEPATH%)/i.exec(t);
+  if (/^~(?=[\\/]|$)/.test(t)) home = true;
+  else if (variables && homePair !== null) {
+    home = true;
+    t = `~${t.slice(homePair[0].length)}`;
+  } else if (variables) {
+    const v = leadingVariable(t);
+    if (v !== void 0 && HOME_VARIABLES.has(v.name)) {
+      home = true;
+      t = `~${v.rest}`;
+    } else if (v !== void 0 && ROOT_VARIABLES[v.name] !== void 0) t = `${ROOT_VARIABLES[v.name] ?? ""}${v.rest}`;
+  }
+  const drive = /^[A-Za-z]:/.exec(t)?.[0] ?? "";
+  const body = t.slice(drive.length);
+  if (!home && !/^[\\/]/.test(body)) return void 0;
+  const windows = drive !== "" || /^[\\/](?:mnt[\\/])?[A-Za-z](?:[\\/]|$)/.test(body);
+  const segments = [];
+  let up = 0;
+  for (const raw0 of (home ? body.slice(1) : body).split(/[\\/]+/)) {
+    const seg = windows && raw0 !== "." && raw0 !== ".." ? raw0.replace(/[. ]+$/, "") : raw0;
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (segments.length > 0) segments.pop();
+      else if (home) up += 1;
+      continue;
+    }
+    segments.push(seg);
+  }
+  if (home) return { path: ["~", ...segments].join("/"), home, up };
+  return { path: `${drive}/${segments.join("/")}`, home, up: 0 };
+}
+function plainKind(raw, tildeUsers) {
+  const plain = plainTarget(raw);
+  if (plain === void 0) return null;
+  if (plain.home) {
+    const below = plain.path === "~" ? 0 : plain.path.split("/").length - 1;
+    if (plain.up === 0) return below === 0 ? "home" : null;
+    return below < plain.up ? "root" : below === plain.up ? "home" : null;
+  }
+  return plain.path === stripQuotes(raw) ? null : spelledKind(plain.path, tildeUsers);
 }
 function isCatastrophicTarget(raw, tildeUsers = true) {
   return catastrophicKind(raw, tildeUsers) !== null;
@@ -96748,7 +96820,8 @@ function globNamesCatastrophic(t) {
   return segs.length === 3 && segmentMatches(a, ["mnt"]) && letter(b) && segmentMatches(c, WINDOWS_DIR_NAMES);
 }
 function targetKey(raw, fold) {
-  const t = stripQuotes(raw.trim()).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+\*?$/, "");
+  const plain = plainTarget(raw, false);
+  const t = stripQuotes((plain !== void 0 && !plain.home ? plain.path : raw).trim()).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+\*?$/, "");
   return fold ? t.replace(/^(?:\/mnt)?\/([a-z])(?=\/|$)/i, "$1:").toLowerCase() : t;
 }
 function homeDirFor(home, platform) {

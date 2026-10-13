@@ -2147,7 +2147,9 @@ function stripQuotes(token) {
   return token.slice(a, b);
 }
 function catastrophicKind(raw, tildeUsers = true) {
-  const t = stripQuotes(raw);
+  return spelledKind(stripQuotes(raw), tildeUsers) ?? plainKind(raw, tildeUsers);
+}
+function spelledKind(t, tildeUsers) {
   if (t === "/" || /^\/\*+$/.test(t)) return "root";
   if (/^\\\*?$/.test(t)) return "root";
   if (/^~(?:[\\/]\*?)?$/.test(t)) return "home";
@@ -2170,6 +2172,63 @@ function catastrophicKind(raw, tildeUsers = true) {
     return "root";
   }
   return globNamesCatastrophic(t) ? "root" : null;
+}
+function leadingVariable(t) {
+  const m = /^(?:\$\{(?:env:)?([A-Za-z_][\w()]*)\}|\$(?:env:)?([A-Za-z_]\w*(?:\(x86\))?)|%([A-Za-z_][\w()]*)%)/i.exec(t);
+  if (m === null) return void 0;
+  const name = (m[1] ?? m[2] ?? m[3] ?? "").toLowerCase();
+  return { name, rest: t.slice((m[0] ?? "").length) };
+}
+function plainTarget(raw, variables = true) {
+  let t = stripQuotes(raw.trim());
+  if (t.length === 0 || t.length > MAX_PLAIN_TARGET) return void 0;
+  t = t.replace(/^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::/i, "");
+  const unc = /^[\\/]{2}[?.][\\/]UNC[\\/]/i.exec(t);
+  if (unc !== null) t = `//${t.slice(unc[0].length)}`;
+  else t = t.replace(/^[\\/]{2}[?.][\\/](?=[A-Za-z]:)/, "");
+  const share = /^[\\/]{2}[^\\/]+[\\/]([A-Za-z])\$(?=[\\/]|$)/.exec(t);
+  if (share !== null) t = `${share[1] ?? ""}:/${t.slice(share[0].length)}`;
+  let home = false;
+  const homePair = /^(?:\$\{?(?:env:)?HOMEDRIVE\}?\$\{?(?:env:)?HOMEPATH\}?|%HOMEDRIVE%%HOMEPATH%)/i.exec(t);
+  if (/^~(?=[\\/]|$)/.test(t)) home = true;
+  else if (variables && homePair !== null) {
+    home = true;
+    t = `~${t.slice(homePair[0].length)}`;
+  } else if (variables) {
+    const v = leadingVariable(t);
+    if (v !== void 0 && HOME_VARIABLES.has(v.name)) {
+      home = true;
+      t = `~${v.rest}`;
+    } else if (v !== void 0 && ROOT_VARIABLES[v.name] !== void 0) t = `${ROOT_VARIABLES[v.name] ?? ""}${v.rest}`;
+  }
+  const drive = /^[A-Za-z]:/.exec(t)?.[0] ?? "";
+  const body = t.slice(drive.length);
+  if (!home && !/^[\\/]/.test(body)) return void 0;
+  const windows = drive !== "" || /^[\\/](?:mnt[\\/])?[A-Za-z](?:[\\/]|$)/.test(body);
+  const segments = [];
+  let up = 0;
+  for (const raw0 of (home ? body.slice(1) : body).split(/[\\/]+/)) {
+    const seg = windows && raw0 !== "." && raw0 !== ".." ? raw0.replace(/[. ]+$/, "") : raw0;
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (segments.length > 0) segments.pop();
+      else if (home) up += 1;
+      continue;
+    }
+    segments.push(seg);
+  }
+  if (home) return { path: ["~", ...segments].join("/"), home, up };
+  return { path: `${drive}/${segments.join("/")}`, home, up: 0 };
+}
+function plainKind(raw, tildeUsers) {
+  const plain = plainTarget(raw);
+  if (plain === void 0) return null;
+  if (plain.home) {
+    const below = plain.path === "~" ? 0 : plain.path.split("/").length - 1;
+    if (plain.up === 0) return below === 0 ? "home" : null;
+    return below < plain.up ? "root" : below === plain.up ? "home" : null;
+  }
+  return plain.path === stripQuotes(raw) ? null : spelledKind(plain.path, tildeUsers);
 }
 function isCatastrophicTarget(raw, tildeUsers = true) {
   return catastrophicKind(raw, tildeUsers) !== null;
@@ -2197,7 +2256,8 @@ function globNamesCatastrophic(t) {
   return segs.length === 3 && segmentMatches(a, ["mnt"]) && letter(b) && segmentMatches(c, WINDOWS_DIR_NAMES);
 }
 function targetKey(raw, fold) {
-  const t = stripQuotes(raw.trim()).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+\*?$/, "");
+  const plain = plainTarget(raw, false);
+  const t = stripQuotes((plain !== void 0 && !plain.home ? plain.path : raw).trim()).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+\*?$/, "");
   return fold ? t.replace(/^(?:\/mnt)?\/([a-z])(?=\/|$)/i, "$1:").toLowerCase() : t;
 }
 function homeDirFor(home, platform) {
@@ -3917,7 +3977,7 @@ function assessReadings(readings, cut, now, deadline, where) {
     ...ask === void 0 ? {} : { ask }
   };
 }
-var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, MAX_PLAIN_TARGET, ROOT_VARIABLES, HOME_VARIABLES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
@@ -4112,6 +4172,19 @@ var init_bashGuard = __esm({
     SYSTEM_DIRS = ["etc", "usr", "bin", "sbin", "var", "lib", "lib64", "boot", "sys", "proc", "root", "home", "opt", "dev", "Users", "System"];
     WINDOWS_DIR = /^(?:[A-Za-z]:[\\/]?|\/(?:mnt\/)?[A-Za-z]\/)(?:Windows(?:[\\/]?(?:System32|SysWOW64))?|Users|Program Files(?: \(x86\))?|ProgramData|PROGRA~\d)(?:[\\/]\*?)?$/i;
     WINDOWS_DIR_NAMES = ["windows", "users", "program files", "program files (x86)", "programdata"];
+    MAX_PLAIN_TARGET = 4096;
+    ROOT_VARIABLES = {
+      windir: "C:/Windows",
+      systemroot: "C:/Windows",
+      programfiles: "C:/Program Files",
+      "programfiles(x86)": "C:/Program Files (x86)",
+      programw6432: "C:/Program Files",
+      programdata: "C:/ProgramData",
+      allusersprofile: "C:/ProgramData",
+      systemdrive: "C:/",
+      homedrive: "C:/"
+    };
+    HOME_VARIABLES = /* @__PURE__ */ new Set(["home", "userprofile"]);
     DRIVE_LETTERS = Array.from({ length: 26 }, (_, k) => String.fromCharCode(97 + k));
     PS_PATH_PARAM = /^(?:pa(?:t|th)?|l(?:i(?:t(?:e(?:r(?:a(?:l(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)?)?)?|lp|pspath)$/;
     DASH_DELETE_HEADS = /* @__PURE__ */ new Set(["rm", "ri", "remove-item"]);

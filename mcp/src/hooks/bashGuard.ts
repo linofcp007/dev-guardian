@@ -467,9 +467,16 @@ const WINDOWS_DIR_NAMES = ['windows', 'users', 'program files', 'program files (
  * command deleting them is `rm`, PowerShell's `Remove-Item`, `rd`/`del` or
  * `find`, so this is shared by every delete-assessing function below. A glob
  * that can name one of them counts as naming it (`/[a-z]*`, `/?*`, `/c/U*`).
+ * So does any other spelling of the same path ({@link plainTarget}): `/usr/..`,
+ * `C:\Windows\.`, `\\?\C:\Windows`, `\\host\c$\`, `FileSystem::C:\`,
+ * `$WINDIR`, `~/..` (review of 3.3.0).
  */
 function catastrophicKind(raw: string, tildeUsers = true): TargetKind | null {
-  const t = stripQuotes(raw);
+  return spelledKind(stripQuotes(raw), tildeUsers) ?? plainKind(raw, tildeUsers);
+}
+
+/** {@link catastrophicKind} of a target as written — the spellings it names outright. */
+function spelledKind(t: string, tildeUsers: boolean): TargetKind | null {
   if (t === '/' || /^\/\*+$/.test(t)) return 'root'; // root, or everything under root
   // PowerShell's `\` and `\*` are the current drive's root; in bash the `\`
   // is an escape, so `rm -rf \*` arrives here as `*` and is not this.
@@ -512,6 +519,114 @@ function catastrophicKind(raw: string, tildeUsers = true): TargetKind | null {
     return 'root';
   }
   return globNamesCatastrophic(t) ? 'root' : null;
+}
+
+/** The longest target {@link plainTarget} reads: no catastrophic path is long, however it is spelled. */
+const MAX_PLAIN_TARGET = 4096;
+
+/**
+ * Windows' own directories by the variable that names them, as bash (`$WINDIR`,
+ * `${SYSTEMROOT}` — Git Bash sees the Windows environment), cmd (`%windir%`) and
+ * PowerShell (`$env:windir`, `${env:ProgramFiles(x86)}`) spell it — each as the
+ * path it names on a default installation, which is what is compared.
+ */
+const ROOT_VARIABLES: Readonly<Record<string, string>> = {
+  windir: 'C:/Windows',
+  systemroot: 'C:/Windows',
+  programfiles: 'C:/Program Files',
+  'programfiles(x86)': 'C:/Program Files (x86)',
+  programw6432: 'C:/Program Files',
+  programdata: 'C:/ProgramData',
+  allusersprofile: 'C:/ProgramData',
+  systemdrive: 'C:/',
+  homedrive: 'C:/',
+};
+
+/** The variables that name the home directory, in the same spellings; `$HOMEDRIVE$HOMEPATH` is matched whole. */
+const HOME_VARIABLES = new Set(['home', 'userprofile']);
+
+/** A variable at the start of a target: `$X`, `${X}`, `$env:X`, `${env:X}`, `%X%` — its name, lower-cased, and the rest. */
+function leadingVariable(t: string): { name: string; rest: string } | undefined {
+  const m = /^(?:\$\{(?:env:)?([A-Za-z_][\w()]*)\}|\$(?:env:)?([A-Za-z_]\w*(?:\(x86\))?)|%([A-Za-z_][\w()]*)%)/i.exec(t);
+  if (m === null) return undefined;
+  const name = (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase();
+  return { name, rest: t.slice((m[0] ?? '').length) };
+}
+
+/**
+ * A delete target with its spelling taken away (review of 3.3.0: each of these
+ * only warned): quotes; PowerShell's provider prefix (`FileSystem::`,
+ * `Microsoft.PowerShell.Core\FileSystem::`); a device prefix (`\\?\`, `\\.\`,
+ * `\\?\UNC\`); an administrative share (`\\host\c$\…` is that host's `C:\…`,
+ * whichever host — deleting another machine's system folder is no less
+ * catastrophic); `\` read as `/`, doubled separators and `.` segments dropped,
+ * `..` folded (never above the root); and on a Windows path a segment's
+ * trailing dots and spaces, which Windows drops when it opens it. A leading
+ * home variable (`~`, `$HOME`, `$USERPROFILE`, `%USERPROFILE%`,
+ * `$env:USERPROFILE`, `$HOMEDRIVE$HOMEPATH`) is kept as `~` with how far the
+ * rest climbs above it (`up`); one of Windows' own (`$WINDIR`, `%ProgramFiles%`,
+ * …) is replaced by the path it names — unless `variables` is off. `undefined`
+ * for a relative path (`C:` and `C:dir` are relative to drive C's current
+ * directory), which names nothing this can judge.
+ */
+function plainTarget(raw: string, variables = true): { path: string; home: boolean; up: number } | undefined {
+  let t = stripQuotes(raw.trim());
+  if (t.length === 0 || t.length > MAX_PLAIN_TARGET) return undefined;
+  t = t.replace(/^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
+  const unc = /^[\\/]{2}[?.][\\/]UNC[\\/]/i.exec(t);
+  if (unc !== null) t = `//${t.slice(unc[0].length)}`;
+  else t = t.replace(/^[\\/]{2}[?.][\\/](?=[A-Za-z]:)/, '');
+  const share = /^[\\/]{2}[^\\/]+[\\/]([A-Za-z])\$(?=[\\/]|$)/.exec(t);
+  if (share !== null) t = `${share[1] ?? ''}:/${t.slice(share[0].length)}`;
+  let home = false;
+  const homePair = /^(?:\$\{?(?:env:)?HOMEDRIVE\}?\$\{?(?:env:)?HOMEPATH\}?|%HOMEDRIVE%%HOMEPATH%)/i.exec(t);
+  if (/^~(?=[\\/]|$)/.test(t)) home = true;
+  else if (variables && homePair !== null) {
+    home = true;
+    t = `~${t.slice(homePair[0].length)}`;
+  } else if (variables) {
+    const v = leadingVariable(t);
+    if (v !== undefined && HOME_VARIABLES.has(v.name)) {
+      home = true;
+      t = `~${v.rest}`;
+    } else if (v !== undefined && ROOT_VARIABLES[v.name] !== undefined) t = `${ROOT_VARIABLES[v.name] ?? ''}${v.rest}`;
+  }
+  const drive = /^[A-Za-z]:/.exec(t)?.[0] ?? '';
+  const body = t.slice(drive.length);
+  if (!home && !/^[\\/]/.test(body)) return undefined;
+  const windows = drive !== '' || /^[\\/](?:mnt[\\/])?[A-Za-z](?:[\\/]|$)/.test(body);
+  const segments: string[] = [];
+  let up = 0;
+  for (const raw0 of (home ? body.slice(1) : body).split(/[\\/]+/)) {
+    const seg = windows && raw0 !== '.' && raw0 !== '..' ? raw0.replace(/[. ]+$/, '') : raw0;
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (segments.length > 0) segments.pop();
+      else if (home) up += 1;
+      continue;
+    }
+    segments.push(seg);
+  }
+  if (home) return { path: ['~', ...segments].join('/'), home, up };
+  return { path: `${drive}/${segments.join('/')}`, home, up: 0 };
+}
+
+/**
+ * {@link catastrophicKind} of a target's plain path ({@link plainTarget}): what
+ * the spellings it names outright are judged as. A climb above the home
+ * directory reaches the directory every home is in (`/home`, `C:\Users`), or
+ * the root — a system directory either way; `~/../alice` is another account's
+ * home.
+ */
+function plainKind(raw: string, tildeUsers: boolean): TargetKind | null {
+  const plain = plainTarget(raw);
+  if (plain === undefined) return null;
+  if (plain.home) {
+    const below = plain.path === '~' ? 0 : plain.path.split('/').length - 1;
+    if (plain.up === 0) return below === 0 ? 'home' : null;
+    return below < plain.up ? 'root' : below === plain.up ? 'home' : null;
+  }
+  return plain.path === stripQuotes(raw) ? null : spelledKind(plain.path, tildeUsers);
 }
 
 function isCatastrophicTarget(raw: string, tildeUsers = true): boolean {
@@ -561,10 +676,14 @@ interface HomeDir {
 /**
  * A delete target as a comparable path: quotes and a trailing `/`, `\`, `/*`
  * or `\*` gone, `\` read as `/`, and — where paths fold case (Windows) — Git
- * Bash's `/c/…` and WSL's `/mnt/c/…` read as `c:/…`, lower-cased.
+ * Bash's `/c/…` and WSL's `/mnt/c/…` read as `c:/…`, lower-cased. An absolute
+ * path is read plain first ({@link plainTarget}, its variables as written):
+ * `C:\Users\alice\.` and `\\?\C:\Users\alice` are `C:\Users\alice` (review of
+ * 3.3.0).
  */
 function targetKey(raw: string, fold: boolean): string {
-  const t = stripQuotes(raw.trim())
+  const plain = plainTarget(raw, false);
+  const t = stripQuotes((plain !== undefined && !plain.home ? plain.path : raw).trim())
     .replace(/\\/g, '/')
     .replace(/\/{2,}/g, '/')
     .replace(/\/+\*?$/, '');

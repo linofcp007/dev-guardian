@@ -3818,3 +3818,90 @@ describe('assessBashCommand — review 8: an agent-run `baseline update` is the 
     expect(assessBashCommand('node .specs/guardian.cjs db adopt --yes').rules).toEqual(['db-adopt-yes']);
   });
 });
+
+// Review of 3.3.0: the same catastrophic target spelled another way only
+// warned — `.` and `..` segments, doubled separators, a device or provider
+// prefix, an administrative share, Windows' own variables, a climb above home.
+describe('assessBashCommand — a delete target in any spelling of the same path (review of 3.3.0)', () => {
+  const win = { homeDir: 'C:\\Users\\alice', platform: 'win32' } as const;
+  it.each([
+    ['rm -rf /./', 'bash'],
+    ['rm -rf /etc/../', 'bash'],
+    ['rm -rf /usr/..', 'bash'],
+    ['rm -rf //', 'bash'],
+    ['rm -rf /.//.', 'bash'],
+    ['rm -rf /etc/.', 'bash'],
+    ['rm -rf ~/..', 'bash'],
+    ['rm -rf ~/../', 'bash'],
+    ['rm -rf "$HOME/.."', 'bash'],
+    ['rm -rf "$USERPROFILE/.."', 'bash'],
+    ['rm -rf /c/Users/alice/..', 'bash'],
+    ['rm -rf C:/Users/../Windows', 'bash'],
+    ['rm -rf "C:/Windows/."', 'bash'],
+    ['rm -rf "C:/Windows//"', 'bash'],
+    ['rm -rf "/c/./Windows"', 'bash'],
+    ['rm -rf /c/Program\\ Files/..', 'bash'],
+    ['rm -rf "$WINDIR"', 'bash'],
+    ['rm -rf "$SYSTEMROOT"', 'bash'],
+    ['rm -rf "${PROGRAMFILES}"', 'bash'],
+    ['rm -rf "$WINDIR/System32"', 'bash'],
+    ["rm -rf '\\\\?\\C:\\Windows'", 'bash'],
+    ["rm -rf '\\\\localhost\\c$\\Windows'", 'bash'],
+    ['rm -rf //localhost/c$/Windows', 'bash'],
+    ['Remove-Item -Recurse -Force \\\\?\\C:\\Windows', 'powershell'],
+    ['Remove-Item -Recurse -Force \\\\.\\C:\\Windows', 'powershell'],
+    ['Remove-Item -Recurse -Force \\\\localhost\\c$\\Windows', 'powershell'],
+    ['Remove-Item -Recurse -Force \\\\127.0.0.1\\C$\\', 'powershell'],
+    ['Remove-Item -Recurse -Force \\\\?\\UNC\\localhost\\c$\\Windows', 'powershell'],
+    ['Remove-Item -Recurse -Force FileSystem::C:\\', 'powershell'],
+    ['Remove-Item -Recurse -Force Microsoft.PowerShell.Core\\FileSystem::C:\\Windows', 'powershell'],
+    ["Remove-Item -Recurse -Force 'C:\\Windows.'", 'powershell'],
+    ["Remove-Item -Recurse -Force 'C:\\Windows '", 'powershell'],
+    ['Remove-Item -Recurse -Force C:\\Windows\\..', 'powershell'],
+    ['Remove-Item -Recurse -Force C:\\Windows\\System32\\..', 'powershell'],
+    ['Remove-Item -Recurse -Force C:\\.\\', 'powershell'],
+    ['Remove-Item -Recurse -Force $env:USERPROFILE\\..', 'powershell'],
+    ['Remove-Item -Recurse -Force ${env:ProgramFiles(x86)}', 'powershell'],
+  ] as const)('%s blocks', (command, shell) => {
+    const a = assessBashCommand(command, { shell, ...win });
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'block', rules: ['rm-rf-root'] });
+  });
+
+  it.each([
+    ['rm -rf /c/Users/alice/.', 'bash'],
+    ['rm -rf /c/Users/alice/x/..', 'bash'],
+    ['Remove-Item -Recurse -Force \\\\?\\C:\\Users\\alice', 'powershell'],
+  ] as const)('%s is the home directory: blocks', (command, shell) => {
+    expect(assessBashCommand(command, { shell, ...win }).rules).toEqual(['rm-rf-root']);
+  });
+
+  it('another account’s home is reached by climbing out of this one', () => {
+    expect(assessBashCommand('rm -rf ~/../bob', win).rules).toEqual(['rm-rf-root']);
+  });
+
+  it.each([
+    ['rm -rf /tmp/build/..', 'bash'],
+    ['rm -rf ./dist/..', 'bash'],
+    ['rm -rf ../..', 'bash'],
+    ['rm -rf ~/project/../build', 'bash'],
+    ['rm -rf ~/../bob/project', 'bash'],
+    ['rm -rf "$WINDIR/Temp/x"', 'bash'],
+    ['rm -rf //server/share/build', 'bash'],
+    ["rm -rf '\\\\server\\c$\\build\\out'", 'bash'],
+    ['Remove-Item -Recurse -Force C:', 'powershell'],
+    ['Remove-Item -Recurse -Force C:build', 'powershell'],
+    ['Remove-Item -Recurse -Force C:\\Windows\\Temp\\x\\..', 'powershell'],
+  ] as const)('%s only warns', (command, shell) => {
+    expect(assessBashCommand(command, { shell, ...win }).rules).toEqual(['rm-rf-broad']);
+  });
+
+  it('a long target is read in linear time', () => {
+    expectLinear(
+      'a long dotted delete target',
+      (n) => {
+        assessBashCommand(`rm -rf /a${'/./..'.repeat(n)}`);
+      },
+      300,
+    );
+  });
+});
