@@ -81414,6 +81414,7 @@ function recoverMetavars(semgrepJson, sources) {
       intact: 0,
       recovered: 0,
       unrecoverable: 0,
+      lostEdges: 0,
       noCaptures: 0,
       unreadableRouteFiles: []
     };
@@ -81422,6 +81423,7 @@ function recoverMetavars(semgrepJson, sources) {
   let intact = 0;
   let recovered = 0;
   let unrecoverable = 0;
+  let lostEdges = 0;
   let noCaptures = 0;
   const unreadableRouteFiles = [];
   const rebuilt = results.map((raw) => {
@@ -81441,6 +81443,7 @@ function recoverMetavars(semgrepJson, sources) {
     const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
     if (metavars === void 0 || !isRecord9(raw)) {
       unrecoverable += 1;
+      if (kind === "import" || kind === "env") lostEdges += 1;
       const path8 = kind === "route" ? str5(raw, "path") : void 0;
       if (path8 !== void 0) unreadableRouteFiles.push(path8);
       return raw;
@@ -81453,6 +81456,7 @@ function recoverMetavars(semgrepJson, sources) {
     intact,
     recovered,
     unrecoverable,
+    lostEdges,
     noCaptures,
     unreadableRouteFiles
   };
@@ -81594,7 +81598,7 @@ function synthesizeEsmImport(span) {
   if (literal3 === void 0) return void 0;
   const module = stripQuotes4(literal3.text);
   if (module.length === 0) return void 0;
-  const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? // `import def, { helperA } from './helpers.js'` — the DEFAULT half of a
+  const symbol = /\bimport\s*(?:type\s+)?\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*(?:type\s*)?\{\s*(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? // `import def, { helperA } from './helpers.js'` — the DEFAULT half of a
   // mixed import. None of the other four accepted it: the bare-default
   // regex below needs `from` immediately after the name and finds a comma,
   // and the named regex above needs `{` immediately after `import`. Semgrep
@@ -81602,7 +81606,7 @@ function synthesizeEsmImport(span) {
   // rule's own comment in routes.yml describes), so the match was arriving
   // with a real capture on one Semgrep version and none at all on the
   // shipped one — the exact version-dependence the pack header rules out.
-  /\bimport\s+([A-Za-z_$][\w$]*)\s*,/.exec(span)?.[1] ?? /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1] ?? // A re-export, `export { thing } from './thing.js'`. Semgrep matches it
+  /\bimport\s+([A-Za-z_$][\w$]*)\s*,/.exec(span)?.[1] ?? /\bimport\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1] ?? // A re-export, `export { thing } from './thing.js'`. Semgrep matches it
   // with the named-import alternative and reports a span that begins INSIDE
   // the statement — measured as `thing } from './thing.js'`, with no
   // `export` or `import` keyword in it at all, which is why every regex
@@ -81615,7 +81619,14 @@ function synthesizeEsmImport(span) {
   // exists to follow; and Semgrep 1.86.0 reports it with
   // $SYMBOL="thing" $MODULE="./thing.js", so dropping it here would put the
   // two Semgrep versions back into disagreement to remove a true edge.
-  /^\s*([A-Za-z_$][\w$]*)\s*\}/.exec(span)?.[1];
+  //
+  // A MULTI-LINE re-export (`export {\n  first,\n  second,\n} from './m'`)
+  // is reported once per name, each span starting at its name and running to
+  // the end of the statement — `first,\n  second,\n} from './m'`, then
+  // `second,\n} from './m'` (measured, 1.176.1) — so the name may be followed
+  // by a comma, an `as` alias or the brace, with `} from` somewhere after it
+  // (review 8, finding 1: 16 such spans on `mcp/src` were unrecoverable).
+  (/\}\s*from\b/.test(span) ? /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:as\s+[A-Za-z_$][\w$]*\s*)?[,}]/.exec(span)?.[1] : void 0);
   if (symbol === void 0) return void 0;
   return {
     $SYMBOL: { abstract_content: symbol },
@@ -82735,7 +82746,7 @@ async function handler40(input, ctx) {
     );
   }
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
-  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
+  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable - recovery.lostEdges > 0) {
     return degradedResult(
       [semgrepRun, unreadableMatchesToolRun(recovery)],
       [],
@@ -82802,11 +82813,16 @@ function recoveryToolRun(recovery) {
   if (recovery.unrecoverable === 0) {
     return [{ name: RECOVERY_STEP, status: "ok", reason: base }];
   }
+  const edgesNote = recovery.lostEdges > 0 ? `${recovery.lostEdges} import/env edge(s) could not be read (not a route: a mount's prefix that relied on one may read partial)` : "";
+  const routesLost = recovery.unrecoverable - recovery.lostEdges;
+  if (routesLost === 0) {
+    return [{ name: RECOVERY_STEP, status: "ok", reason: `${base}; ${edgesNote}` }];
+  }
   return [
     {
       name: RECOVERY_STEP,
       status: "failed",
-      reason: `${base}; ${recovery.unrecoverable} match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages) \u2014 ${REDACTION_REMEDY}`
+      reason: `${base}; ${routesLost} route match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages)` + (edgesNote !== "" ? `; ${edgesNote}` : "") + ` \u2014 ${REDACTION_REMEDY}`
     }
   ];
 }

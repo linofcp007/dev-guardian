@@ -105,6 +105,40 @@ describe('dev-guardian scan --accept-partial-parse — usage (no real scanner re
     expect(r.stdout).toMatch(/--accept-partial-parse <path>/);
     expect(r.stdout).toMatch(/Matched\s+exactly/);
   });
+
+  // Review 8, finding 9: merge-conflict markers in the baseline read as "no
+  // baseline" — every finding new, and the advice (run `baseline update`)
+  // rebuilt the file and reset every date. Exit 3 now, before any scan.
+  it.each([[['scan']], [['baseline', 'update']]])('%j: a baseline with merge-conflict markers is exit 3, before any scan', (cmd) => {
+    const repo = mkdtempSync(join(tmpdir(), 'guardian-ci-corrupt-baseline-'));
+    try {
+      mkdirSync(join(repo, '.guardian'), { recursive: true });
+      const conflicted = '<<<<<<< HEAD\n{"version":1,"generated_at":"x","entries":[]}\n=======\n{}\n>>>>>>> topic\n';
+      writeFileSync(join(repo, '.guardian', 'baseline.json'), conflicted);
+      const r = runCli([...cmd, '--project', repo]);
+      expect(r.status, r.stderr).toBe(3);
+      expect(r.stderr).toMatch(/\.guardian\/baseline\.json is not a usable baseline: not valid JSON \(it holds merge-conflict markers\)/);
+      expect(r.stderr).toMatch(/not read as "no baseline"/);
+      expect(existsSync(join(repo, '.guardian', 'reports'))).toBe(false);
+      expect(readFileSync(join(repo, '.guardian', 'baseline.json'), 'utf8')).toBe(conflicted);
+    } finally {
+      rmDir(repo);
+    }
+  });
+
+  it('an invalid .guardian/scan.yml is exit 3, before any scan', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'guardian-ci-bad-settings-'));
+    try {
+      mkdirSync(join(repo, '.guardian'), { recursive: true });
+      writeFileSync(join(repo, '.guardian', 'scan.yml'), 'semgrep:\n  acept_timeouts: []\n');
+      const r = runCli(['scan', '--project', repo]);
+      expect(r.status, r.stderr).toBe(3);
+      expect(r.stderr).toMatch(/\.guardian\/scan\.yml is not valid: unrecognised semgrep setting "acept_timeouts"/);
+      expect(existsSync(join(repo, '.guardian', 'reports'))).toBe(false);
+    } finally {
+      rmDir(repo);
+    }
+  });
 });
 
 describe('dev-guardian scan --accept-partial-parse — the gate matrix, real Semgrep over const NAMESPACE', () => {
@@ -114,6 +148,8 @@ describe('dev-guardian scan --accept-partial-parse — the gate matrix, real Sem
   let accepted: SpawnSyncReturns<string>;
   let acceptedJson: SpawnSyncReturns<string>;
   let otherPath: SpawnSyncReturns<string>;
+  let updateNotAccepted: SpawnSyncReturns<string>;
+  let updateAccepted: SpawnSyncReturns<string>;
 
   beforeAll(async () => {
     if (!TOOLCHAIN_AVAILABLE) return;
@@ -133,7 +169,11 @@ describe('dev-guardian scan --accept-partial-parse — the gate matrix, real Sem
     accepted = scan('--accept-partial-parse', 'wp/rest-controller.php', '--sarif', sarif);
     acceptedJson = scan('--accept-partial-parse', 'wp\\rest-controller.php', '--format', 'json');
     otherPath = scan('--accept-partial-parse', 'wp/other.php');
-  }, 4 * SCAN_TIMEOUT_MS);
+    const update = (...extra: string[]) =>
+      runCli(['baseline', 'update', '--project', project, '--local-only', ...extra], SCAN_TIMEOUT_MS);
+    updateNotAccepted = update();
+    updateAccepted = update('--accept-partial-parse', 'wp/rest-controller.php');
+  }, 6 * SCAN_TIMEOUT_MS);
 
   afterAll(() => {
     if (project) rmDir(project);
@@ -170,6 +210,25 @@ describe('dev-guardian scan --accept-partial-parse — the gate matrix, real Sem
     expect(o.coverage).toBe('partial');
     expect(o.coverage_gaps).toEqual([]);
     expect(o.accepted_gaps).toHaveLength(2);
+    // The keys dev-spec-driven 1.30 reads, from a real run (review 8, C11 / C3).
+    const full = JSON.parse(acceptedJson.stdout) as {
+      tool_version: string;
+      baseline_status: string;
+      coverage_gap_details: Array<{ kind: string; gating: boolean }>;
+    };
+    expect(full.tool_version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(full.baseline_status).toBe('absent');
+    expect(full.coverage_gap_details.filter((d) => d.kind === 'partial_parse' && !d.gating)).toHaveLength(2);
+  });
+
+  // Review 8, finding 13: `baseline update` refused the flag (exit 3), so on a
+  // project that needs it, it always exited 2 while `scan` passed.
+  it.skipIf(!TOOLCHAIN_AVAILABLE)('baseline update takes --accept-partial-parse: exit 0 accepted, 2 not', () => {
+    expect(updateNotAccepted.status, describeRun(updateNotAccepted)).toBe(2);
+    expect(updateAccepted.status, describeRun(updateAccepted)).toBe(0);
+    expect(updateAccepted.stdout).toMatch(/^baseline updated: /m);
+    expect(updateAccepted.stdout).toMatch(/accepted \(not gating\):/);
+    expect(updateAccepted.stdout).toMatch(/Every finding of this scan is in the baseline now/);
   });
 
   it.skipIf(!TOOLCHAIN_AVAILABLE)('an accepted path that is not the one partly parsed: exit 2, and the acceptance is named unused', () => {

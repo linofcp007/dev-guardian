@@ -389,7 +389,9 @@ async function handler(
   // looks for them. Reading the files is the impure half and belongs here;
   // `recoverMetavars` itself is pure and takes the text.
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
-  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
+  // Nothing readable at all, and a ROUTE among what was lost: no surface. Lost
+  // import / env edges alone are no reason to withhold one (review 8, finding 1).
+  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable - recovery.lostEdges > 0) {
     return degradedResult(
       [semgrepRun, unreadableMatchesToolRun(recovery)],
       [],
@@ -532,14 +534,28 @@ function recoveryToolRun(recovery: RecoveryOutcome): ToolRun[] {
   if (recovery.unrecoverable === 0) {
     return [{ name: RECOVERY_STEP, status: 'ok', reason: base }];
   }
+  // Import and env edges the recovery could not read are reported and never
+  // fail the run: no route was lost, and a run that failed for them made the
+  // CI gate exit 2 on every TypeScript project (review 8, finding 1). A lost
+  // route or mount is a hole in the surface, and does fail it.
+  const edgesNote =
+    recovery.lostEdges > 0
+      ? `${recovery.lostEdges} import/env edge(s) could not be read (not a route: a mount's prefix that ` +
+        'relied on one may read partial)'
+      : '';
+  const routesLost = recovery.unrecoverable - recovery.lostEdges;
+  if (routesLost === 0) {
+    return [{ name: RECOVERY_STEP, status: 'ok', reason: `${base}; ${edgesNote}` }];
+  }
   return [
     {
       name: RECOVERY_STEP,
       status: 'failed',
       reason:
-        `${base}; ${recovery.unrecoverable} match(es) could not be read and are MISSING ` +
-        `from the surface (see coverage[].unreadable_matches for which languages) — ` +
-        `${REDACTION_REMEDY}`,
+        `${base}; ${routesLost} route match(es) could not be read and are MISSING ` +
+        `from the surface (see coverage[].unreadable_matches for which languages)` +
+        (edgesNote !== '' ? `; ${edgesNote}` : '') +
+        ` — ${REDACTION_REMEDY}`,
     },
   ];
 }

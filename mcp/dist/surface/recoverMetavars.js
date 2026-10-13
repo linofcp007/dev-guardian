@@ -101,6 +101,7 @@ export function recoverMetavars(semgrepJson, sources) {
             intact: 0,
             recovered: 0,
             unrecoverable: 0,
+            lostEdges: 0,
             noCaptures: 0,
             unreadableRouteFiles: [],
         };
@@ -110,6 +111,7 @@ export function recoverMetavars(semgrepJson, sources) {
     let intact = 0;
     let recovered = 0;
     let unrecoverable = 0;
+    let lostEdges = 0;
     let noCaptures = 0;
     const unreadableRouteFiles = [];
     const rebuilt = results.map((raw) => {
@@ -140,6 +142,8 @@ export function recoverMetavars(semgrepJson, sources) {
         const metavars = span === undefined ? undefined : synthesize(kind, span, metadata);
         if (metavars === undefined || !isRecord(raw)) {
             unrecoverable += 1;
+            if (kind === 'import' || kind === 'env')
+                lostEdges += 1;
             // Routes only — see the field's doc comment.
             const path = kind === 'route' ? str(raw, 'path') : undefined;
             if (path !== undefined)
@@ -154,6 +158,7 @@ export function recoverMetavars(semgrepJson, sources) {
         intact,
         recovered,
         unrecoverable,
+        lostEdges,
         noCaptures,
         unreadableRouteFiles,
     };
@@ -549,8 +554,15 @@ function synthesizeEsmImport(span) {
     const module = stripQuotes(literal.text);
     if (module.length === 0)
         return undefined;
-    const symbol = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
-        /\bimport\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ??
+    // TypeScript's `type` keyword (review 8, finding 1): `import type { X }`,
+    // `import type X`, `import type * as NS` and `import { type X }` were none
+    // of them recognised, so every such match counted as unrecoverable — 368 on
+    // a copy of this repository's `mcp/src`, which failed the whole surface
+    // run. Measured on Semgrep 1.176.1: each is reported as the whole statement.
+    // `import type from './m'` is a default import NAMED `type`: the optional
+    // keyword then backtracks and the name is `type`.
+    const symbol = /\bimport\s*(?:type\s+)?\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
+        /\bimport\s*(?:type\s*)?\{\s*(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(span)?.[1] ??
         // `import def, { helperA } from './helpers.js'` — the DEFAULT half of a
         // mixed import. None of the other four accepted it: the bare-default
         // regex below needs `from` immediately after the name and finds a comma,
@@ -560,7 +572,7 @@ function synthesizeEsmImport(span) {
         // with a real capture on one Semgrep version and none at all on the
         // shipped one — the exact version-dependence the pack header rules out.
         /\bimport\s+([A-Za-z_$][\w$]*)\s*,/.exec(span)?.[1] ??
-        /\bimport\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
+        /\bimport\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ??
         /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ??
         /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1] ??
         // A re-export, `export { thing } from './thing.js'`. Semgrep matches it
@@ -576,7 +588,16 @@ function synthesizeEsmImport(span) {
         // exists to follow; and Semgrep 1.86.0 reports it with
         // $SYMBOL="thing" $MODULE="./thing.js", so dropping it here would put the
         // two Semgrep versions back into disagreement to remove a true edge.
-        /^\s*([A-Za-z_$][\w$]*)\s*\}/.exec(span)?.[1];
+        //
+        // A MULTI-LINE re-export (`export {\n  first,\n  second,\n} from './m'`)
+        // is reported once per name, each span starting at its name and running to
+        // the end of the statement — `first,\n  second,\n} from './m'`, then
+        // `second,\n} from './m'` (measured, 1.176.1) — so the name may be followed
+        // by a comma, an `as` alias or the brace, with `} from` somewhere after it
+        // (review 8, finding 1: 16 such spans on `mcp/src` were unrecoverable).
+        (/\}\s*from\b/.test(span)
+            ? /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:as\s+[A-Za-z_$][\w$]*\s*)?[,}]/.exec(span)?.[1]
+            : undefined);
     if (symbol === undefined)
         return undefined;
     return {
