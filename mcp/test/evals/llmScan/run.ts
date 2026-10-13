@@ -83,7 +83,7 @@ import {
   type BenchmarkSampleFile,
 } from './benchmarkSample.js';
 import { CORPUS_IDS, Workspace, gitHead, resolveCorpora, spikeDir, type CorpusId, type CorpusState } from './corpora.js';
-import { driveTask, pool, type AnswerCheck, type DriverMode, type DrivenTask, type OutOfBriefCall, type Usage } from './driver.js';
+import { costSummary, driveTask, pool, type AnswerCheck, type DriverMode, type DrivenTask, type OutOfBriefCall, type Usage } from './driver.js';
 import {
   THRESHOLDS,
   agreement,
@@ -615,6 +615,8 @@ interface RunRecord {
   errors: string[];
   attempts: number;
   usage: Usage;
+  /** The CLI's own cost estimate for the run's attempts; null when it gave none. */
+  cost_usd: number | null;
   tool_calls: number;
   out_of_brief: OutOfBriefCall[];
   schema_refusals: number;
@@ -680,6 +682,7 @@ function record<T>(job: { key: string; corpus: CorpusId; task: LlmScanTask; brie
     errors: d.attempts.flatMap((a) => a.errors),
     attempts: d.attempts.length,
     usage: d.usage,
+    cost_usd: d.cost_usd,
     tool_calls: d.tool_calls.length,
     out_of_brief: d.out_of_brief,
     schema_refusals: d.schema_refusals,
@@ -1220,7 +1223,7 @@ async function evalRunIn(opts: Options, corpora: Readonly<Record<CorpusId, Corpu
     `  verify: ${verifyRecords.length} runs, mean ${mean(verifyRecords.map((r) => r.usage.total))} tokens, ` +
     `mean ${mean(verifyRecords.map((r) => r.tool_calls))} tool calls; brief P95 ${p95 === null ? 'N/A' : Math.round(p95)} estimated tokens\n` +
     `  hunt:   ${huntRecords.length} runs, mean ${mean(huntRecords.map((r) => r.usage.total))} tokens, mean ${mean(huntRecords.map((r) => r.tool_calls))} tool calls\n` +
-    `  total:  ${records.reduce((s, r) => s + r.usage.total, 0)} tokens\n`;
+    `  total:  ${records.reduce((s, r) => s + r.usage.total, 0)} tokens; ${costSummary(records)}\n`;
 
   const overall = worst(reports.map((r) => r.status));
   process.stdout.write(

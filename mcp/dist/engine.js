@@ -23837,7 +23837,7 @@ var init_schemas = __esm({
         return (payload, ctx) => fn(shape, payload, ctx);
       };
       let fastpass;
-      const isObject4 = isObject;
+      const isObject5 = isObject;
       const jit = !globalConfig.jitless;
       const allowsEval2 = allowsEval;
       const fastEnabled = jit && allowsEval2.value;
@@ -23846,7 +23846,7 @@ var init_schemas = __esm({
       inst._zod.parse = (payload, ctx) => {
         value ?? (value = _normalized.value);
         const input = payload.value;
-        if (!isObject4(input)) {
+        if (!isObject5(input)) {
           payload.issues.push({
             expected: "object",
             code: "invalid_type",
@@ -92307,6 +92307,69 @@ var init_llmScanStart = __esm({
   }
 });
 
+// src/llmscan/answerText.ts
+function closingBrace(text2, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let k = start; k < text2.length; k += 1) {
+    const c = text2[k];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return k;
+    }
+  }
+  return -1;
+}
+function objectSpans(text2) {
+  const out = [];
+  let i = text2.indexOf("{");
+  while (i !== -1) {
+    const end = closingBrace(text2, i);
+    if (end !== -1) {
+      let parsed;
+      try {
+        parsed = JSON.parse(text2.slice(i, end + 1));
+      } catch {
+        parsed = void 0;
+      }
+      if (isObject4(parsed)) {
+        if (Object.keys(parsed).length > 0) out.push({ value: parsed, end });
+        i = text2.indexOf("{", end + 1);
+        continue;
+      }
+    }
+    i = text2.indexOf("{", i + 1);
+  }
+  return out;
+}
+function finalAnswerObject(text2) {
+  let body = text2.trim();
+  const close = /`{3}[ \t]*$/.exec(body);
+  if (close !== null) {
+    const open = close.index > 0 ? body.lastIndexOf("```", close.index - 1) : -1;
+    if (open === -1) return void 0;
+    const inner = body.slice(open + 3, close.index).replace(/^[A-Za-z]*[ \t]*\r?\n/, "");
+    body = `${body.slice(0, open)}${inner}`.trim();
+  }
+  const spans = objectSpans(body);
+  const only = spans.length === 1 ? spans[0] : void 0;
+  return only !== void 0 && only.end === body.length - 1 ? only.value : void 0;
+}
+var isObject4;
+var init_answerText = __esm({
+  "src/llmscan/answerText.ts"() {
+    "use strict";
+    isObject4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  }
+});
+
 // src/llmscan/sampling.ts
 function failureOf(err, cancelled) {
   if (cancelled) return "cancelled";
@@ -92314,15 +92377,7 @@ function failureOf(err, cancelled) {
   return name === "TimeoutError" || name === "AbortError" ? "timeout" : "client_error";
 }
 function payloadOf(text2) {
-  const trimmed = text2.trim();
-  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n?```$/.exec(trimmed);
-  const candidate = (fenced?.[1] ?? trimmed).trim();
-  if (!candidate.startsWith("{") || !candidate.endsWith("}")) return text2;
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    return text2;
-  }
+  return finalAnswerObject(text2) ?? text2;
 }
 async function runSampling(storage, planId, sampling, opts = {}) {
   const clock = opts.clock ?? Date.now;
@@ -92391,7 +92446,7 @@ ${JSON.stringify(leased["response_schema"])}`;
       if (res.ok === true && res["accepted"] === false && res["closed"] === void 0) {
         text2 += `
 
-Your previous answer was refused: ${JSON.stringify(res["errors"])}. Answer again with only the corrected JSON.`;
+Your previous answer was refused: ${JSON.stringify(res["errors"])}. Answer again, ending with the one corrected JSON object.`;
         continue;
       }
       if (res.ok === true) closed = true;
@@ -92412,11 +92467,12 @@ var SAMPLING_BUDGET_MS, REQUEST_MARGIN_MS, MAX_ANSWER_TOKENS, SYSTEM_PROMPT, sam
 var init_sampling = __esm({
   "src/llmscan/sampling.ts"() {
     "use strict";
+    init_answerText();
     init_service();
     SAMPLING_BUDGET_MS = 5e4;
     REQUEST_MARGIN_MS = 5e3;
     MAX_ANSWER_TOKENS = 2e3;
-    SYSTEM_PROMPT = "You verify one finding. Reply with ONLY the JSON object the brief asks for, no prose and no code fence.";
+    SYSTEM_PROMPT = "You verify one finding. Follow the brief: your working in a few lines of prose, then the one JSON object it asks for, last, with nothing after it and no second object.";
     samplingUnavailable = () => fail5(
       "sampling_unavailable",
       'This client did not declare the MCP sampling capability; use execute: "host" (the default) and run the briefs in subagents.'

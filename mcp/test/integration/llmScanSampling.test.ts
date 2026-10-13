@@ -2,8 +2,10 @@
  * `execute: 'sampling'` past the paths T-26 and T-27 walk (task 7 review,
  * round 1):
  *
- *   - `payloadOf` takes ONE JSON object — a single code fence tolerated,
- *     prose, an array or trailing text refused as a host's submission is;
+ *   - `payloadOf` takes the reply the brief asks for: the working, then ONE
+ *     JSON object last (a code fence around it tolerated); a second object,
+ *     an array or trailing text is refused as a host's submission is — and a
+ *     sampled answer written that way is accepted with no try spent;
  *   - the budget counts from the tool's entry (`began`), and no request — nor
  *     a retry the slowest request would carry past the budget — starts after it;
  *   - a task cut short by the budget, the client failing or refusing, or the
@@ -69,22 +71,47 @@ function failing(err: unknown, onCall: () => void = () => {}): { fn: SamplingFn;
 
 const INVALID = JSON.stringify({ verdict: 'maybe' });
 
-describe('payloadOf: one JSON object, nothing else', () => {
+describe('payloadOf: the working, then one JSON object last', () => {
   it.each([
     ['{"a":1}', { a: 1 }],
     ['  {"a":1}\n', { a: 1 }],
     ['```json\n{"a":1}\n```', { a: 1 }],
     ['```\n{"a":1}\n```', { a: 1 }],
+    // What the brief asks for since prompts v5: the working first, the object last.
+    ['Here it is: {"a":1}', { a: 1 }],
+    ['The input is bound as a parameter, so it never reaches the SQL text.\n\n{"a":1}', { a: 1 }],
+    ['The handler calls `run(cmd)` with `{ shell: true }` unchecked.\n```json\n{"a":{"b":"}"}}\n```', { a: { b: '}' } }],
   ])('%j is the object', (text, value) => {
     expect(payloadOf(text)).toEqual(value);
   });
 
-  it.each(['Here it is: {"a":1}', '{"a":1} and that is all', '[{"a":1}]', '{not json}', '', '```json\n{"a":1}\n```\n```json\n{"b":2}\n```'])(
-    '%j stays text, for the validator to refuse',
-    (text) => {
-      expect(payloadOf(text)).toBe(text);
-    },
-  );
+  it.each([
+    '{"a":1} and that is all',
+    '[{"a":1}]',
+    '{not json}',
+    '',
+    '```json\n{"a":1}\n```\n```json\n{"b":2}\n```',
+    // An answer, then its correction: one submission, never a correction after it.
+    '{"verdict":"real"}\nCorrection:\n{"verdict":"not_real"}',
+    'Working.\n```json\n{"a":1}\n```\nThat is my answer.',
+  ])('%j stays text, for the validator to refuse', (text) => {
+    expect(payloadOf(text)).toBe(text);
+  });
+
+  it('a sampled verdict written as the brief asks — the working, then the object — closes its task on the first try', async () => {
+    const { h, planId, locs } = await verifyPlan();
+    const fake = fakeSampling(locs, (loc) => verdictAt(loc, 'real'));
+    const prose: SamplingFn = async (params, options) => {
+      const reply = await fake.fn(params, options);
+      const object = reply.content.type === 'text' ? reply.content.text : '';
+      return { ...reply, content: { type: 'text', text: `The value reaches the operation unchecked.\n\n${object}` } };
+    };
+    const r = ran(await runSampling(h.storage, planId, prose));
+    expect(r).toMatchObject({ executed: 3, remaining: 0 });
+    for (const t of h.repo.listTasks(planId)) expect(t).toMatchObject({ status: 'closed', closed_reason: 'valid', attempts: 0 });
+    expect(fake.requests).toHaveLength(3);
+    expect(fake.requests[0]).toContain('your working in a few lines of prose, then the one JSON object');
+  });
 });
 
 describe('the budget counts from the tool entry, and nothing starts after it', () => {
