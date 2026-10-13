@@ -6012,7 +6012,7 @@ var init_bashGuard = __esm({
     RULE_REGISTRY = {
       id: "guardian-registry-write",
       level: "block",
-      reason: "Writes dev-guardian's registry of trusted databases (<data dir>/registry) \u2014 which database to trust is the user's decision: they run `dev-guardian db adopt` themselves, in a terminal"
+      reason: "Writes dev-guardian's registry of trusted databases (<data dir>/registry) \u2014 which database to trust is the user's decision: they run the dev-guardian CLI's `db adopt` themselves, in a terminal"
     };
     RULE_SPECIAL = {
       id: "guard-config-special-file",

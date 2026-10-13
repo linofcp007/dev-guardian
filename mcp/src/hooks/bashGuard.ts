@@ -3334,7 +3334,7 @@ const RULE_REGISTRY: MatchedRule = {
   level: 'block',
   reason:
     "Writes dev-guardian's registry of trusted databases (<data dir>/registry) — which database to trust is the " +
-    "user's decision: they run `dev-guardian db adopt` themselves, in a terminal",
+    "user's decision: they run the dev-guardian CLI's `db adopt` themselves, in a terminal",
 };
 
 /** Program text naming the registry: a literal path in it, or its parts (`'dev-guardian', 'registry'`). */

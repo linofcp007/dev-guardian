@@ -19,7 +19,7 @@
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { walkLinksUnder } from './configFile.js';
+import { isNetworkPath, walkLinksUnder } from './configFile.js';
 import { fileIdentity, guardedPath, hardLinkedTo } from './guardedPath.js';
 import { userDataDir as resolveUserDataDir, type DataDirContext } from './userDataDir.js';
 
@@ -81,6 +81,9 @@ export function writesRegistry(abs: string, ctx: DataDirContext = {}): boolean {
   const registry = guardedPath(resolve(registryDir(ctx)), opts);
   const target = guardedPath(resolve(abs), opts);
   if (atOrBelow(registry, target)) return true;
+  // A network path, never resolved (review 8, items 13 and 19): a share may
+  // lead back to this machine by any name, so the default locations' tail decides.
+  if (isNetworkPath(target)) return /(?:appdata[\\/]local|\.local[\\/]share)[\\/]dev-guardian[\\/]registry(?:[\\/]|$)/i.test(target);
   const id = fileIdentity(target);
   if (id === undefined || id.nlink < 2n) return false;
   return hardLinkedTo(target, filesIn(registry)) !== undefined;

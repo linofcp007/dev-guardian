@@ -22,8 +22,18 @@
  */
 
 import { realpathSync, statSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { basename, dirname, join, parse } from 'node:path';
-import { walkLinksUnder } from './configFile.js';
+import { isNetworkPath, localShareAsLocal, walkLinksUnder } from './configFile.js';
+
+/** This machine's name, for {@link localShareAsLocal}; `''` when it cannot be read. */
+function safeHostname(): string {
+  try {
+    return hostname();
+  } catch {
+    return '';
+  }
+}
 
 /** One segment as Windows opens it: no stream suffix and — outside `\\?\` paths — no trailing dots or spaces. */
 function windowsSegment(segment: string, trim: boolean): string {
@@ -56,6 +66,8 @@ export interface GuardedPathOptions {
   platform?: NodeJS.Platform;
   /** Default `fs.realpathSync.native` (tests). */
   realpath?: (path: string) => string;
+  /** This machine's name, an admin share's host that is local (default `os.hostname()`; tests). */
+  hostname?: string;
 }
 
 /**
@@ -96,6 +108,8 @@ export interface FileIdentity {
  * the hook's timeout. `stat` follows a symbolic link to what it names.
  */
 export function fileIdentity(abs: string): FileIdentity | undefined {
+  // A network path is never stat-ed: an unreachable host holds the call past the hook's timeout (review 8, item 13).
+  if (isNetworkPath(abs)) return undefined;
   try {
     const root = parse(abs).root;
     if (root === '' || !walkLinksUnder(root, abs).ok) return undefined;
@@ -128,7 +142,16 @@ export function hardLinkedTo(abs: string, guarded: readonly string[]): string | 
  * the path as written.
  */
 export function guardedPath(abs: string, opts: GuardedPathOptions = {}): string {
-  const named = (opts.platform ?? process.platform) === 'win32' ? windowsName(abs) : abs;
+  const win = (opts.platform ?? process.platform) === 'win32';
+  let named = win ? windowsName(abs) : abs;
+  // A path on the network is compared as written, with no filesystem call
+  // (review 8, item 13) — except an admin share of this machine, which is the
+  // local path it names (`\\localhost\C$\…` is `C:\…`, item 19).
+  if (win && isNetworkPath(named)) {
+    const local = localShareAsLocal(named, opts.hostname ?? safeHostname());
+    if (local === undefined) return named;
+    named = windowsName(local);
+  }
   try {
     return resolveExisting(named, opts.realpath ?? realpathSync.native);
   } catch {

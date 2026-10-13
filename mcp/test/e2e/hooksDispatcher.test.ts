@@ -14,11 +14,11 @@
  * `rulePackFixture.test.ts`/`ciCliFixture.test.ts`.
  */
 
-import { spawnSync } from 'node:child_process';
-import { cpSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { cpSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { PERF_STRICT } from '../helpers/timing.js';
@@ -1618,5 +1618,276 @@ describe('SessionStart and a project database that is not registered', () => {
       rmSync(legacy, { recursive: true, force: true });
       rmSync(own, { recursive: true, force: true });
     }
+  });
+});
+
+// Review 8 (dev-guardian 3.3.0): the dispatcher's own changes — exec form,
+// the MCP write tools, the question on `baseline update`, a network path,
+// SessionStart's one git call and its quieter hint, and the exit after an answer.
+describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
+  let projectDir: string;
+  let homeDir: string;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'guardian-hook-r8-project-'));
+    homeDir = mkdtempSync(join(tmpdir(), 'guardian-hook-r8-home-'));
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  interface Out {
+    permissionDecision?: string;
+    permissionDecisionReason?: string;
+    additionalContext?: string;
+  }
+  const out = (r: HookResult): Out => (r.stdout as { hookSpecificOutput?: Out } | undefined)?.hookSpecificOutput ?? {};
+  const hook = (payload: Record<string, unknown>, env: Record<string, string> = {}): HookResult =>
+    runHook(payload, { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1', ...env } });
+  const userConfig = (config: Record<string, unknown>): void => {
+    mkdirSync(join(homeDir, '.config', 'dev-guardian'), { recursive: true });
+    writeFileSync(join(homeDir, '.config', 'dev-guardian', 'hooks.json'), JSON.stringify(config));
+  };
+
+  describe('hooks.json: exec form, and the tools each entry routes here (C13, item 18)', () => {
+    interface Entry {
+      matcher?: string;
+      hooks: Array<{ type: string; command: string; args?: string[]; timeout?: number }>;
+    }
+    const config = JSON.parse(readFileSync(join(REPO_ROOT, 'hooks', 'hooks.json'), 'utf8')) as { hooks: Record<string, Entry[]> };
+    const all = Object.entries(config.hooks).flatMap(([event, entries]) => entries.map((e) => ({ event, entry: e })));
+
+    it('every entry runs node on the dispatcher with its event — no shell between', () => {
+      expect(all.length).toBe(4);
+      for (const { event, entry } of all) {
+        for (const h of entry.hooks) {
+          expect({ event, command: h.command, args: h.args, timeout: h.timeout }).toEqual({
+            event,
+            command: 'node',
+            args: ['${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs', event],
+            timeout: 15,
+          });
+        }
+      }
+    });
+
+    const matcherOf = (event: string, probe: string): RegExp => {
+      const found = config.hooks[event]?.find((e) => e.matcher !== undefined && new RegExp(e.matcher).test(probe));
+      return new RegExp(found?.matcher ?? '^$');
+    };
+
+    it.each([
+      'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'mcp__filesystem__write_file', 'mcp__filesystem__edit_file',
+      'mcp__filesystem__move_file', 'mcp__filesystem__create_directory', 'mcp__plugin_x_files__appendText', 'mcp__fs__delete_file',
+    ])('PreToolUse routes %s to the write guards', (tool) => {
+      expect(matcherOf('PreToolUse', 'Write').test(tool)).toBe(true);
+    });
+
+    it.each(['Read', 'Bash', 'mcp__filesystem__read_file', 'mcp__filesystem__list_directory', 'mcp__github__search_code', 'WriteX'])(
+      'the write guards are not run for %s',
+      (tool) => {
+        expect(matcherOf('PreToolUse', 'Write').test(tool)).toBe(false);
+      },
+    );
+
+    it('PreToolUse routes exactly Bash and PowerShell to the shell guard', () => {
+      const shell = matcherOf('PreToolUse', 'Bash');
+      expect(['Bash', 'PowerShell'].every((t) => shell.test(t))).toBe(true);
+      expect(['BashOutput', 'mcp__x__bash', 'Write'].some((t) => shell.test(t))).toBe(false);
+    });
+  });
+
+  describe('an agent-run `baseline update` asks the user (C2)', () => {
+    it.each([
+      'node .specs/guardian.cjs baseline update --project .',
+      'dev-guardian baseline update',
+      'node "C:/plugins/dev-guardian/3.3.0/cli/dev-guardian.mjs" baseline update --project .',
+    ])('%s: ask, saying it accepts every finding', (command) => {
+      const r = hook(preToolUse('Bash', { command }, projectDir));
+      expect(r.status).toBe(0);
+      expect(out(r).permissionDecision).toBe('ask');
+      expect(out(r).permissionDecisionReason).toMatch(/EVERY current finding.*nosemgrep/s);
+    });
+
+    it('with the shell block switched off by the user, it is only a warning', () => {
+      userConfig({ bash: { block: false } });
+      const r = hook(preToolUse('Bash', { command: 'node .specs/guardian.cjs baseline update' }, projectDir));
+      expect(out(r).permissionDecision).toBeUndefined();
+      expect(out(r).additionalContext).toMatch(/baseline update accepts EVERY current finding/);
+    });
+
+    it('a scan asks nothing', () => {
+      const r = hook(preToolUse('Bash', { command: 'node .specs/guardian.cjs scan --project . --format json' }, projectDir));
+      expect(r.stdout).toBeUndefined();
+    });
+  });
+
+  describe('third-party MCP write tools are guarded like Write (item 18)', () => {
+    const mcp = (tool: string, input: Record<string, unknown>, env: Record<string, string> = {}): HookResult =>
+      hook(preToolUse(`mcp__filesystem__${tool}`, input, projectDir), env);
+
+    it('writing, editing or moving away the hook configuration is denied', () => {
+      expect(out(mcp('write_file', { path: join(projectDir, '.guardian', 'hooks.config.json'), content: '{}' })).permissionDecision).toBe('deny');
+      expect(
+        out(mcp('edit_file', { path: join(homeDir, '.config', 'dev-guardian', 'hooks.json'), edits: [{ oldText: 'a', newText: 'b' }] }))
+          .permissionDecision,
+      ).toBe('deny');
+      expect(
+        out(mcp('move_file', { source: join(projectDir, '.guardian', 'hooks-allowlist.json'), destination: join(projectDir, 'x.json') }))
+          .permissionDecision,
+      ).toBe('deny');
+      expect(out(mcp('write_file', { path: pathToFileURL(join(projectDir, '.guardian', 'hooks.config.json')).href, content: '{}' })).permissionDecision).toBe(
+        'deny',
+      );
+    });
+
+    it("a write of Claude Code's settings that switches the hooks off is denied; another is not", () => {
+      const settings = join(projectDir, '.claude', 'settings.local.json');
+      expect(out(mcp('write_file', { path: settings, content: '{"disableAllHooks": true}' })).permissionDecision).toBe('deny');
+      expect(mcp('write_file', { path: settings, content: '{"permissions": {"allow": []}}' }).stdout).toBeUndefined();
+    });
+
+    it("a write into dev-guardian's registry is denied", () => {
+      const data = join(homeDir, 'gdata');
+      const r = mcp('write_file', { path: join(data, 'registry', 'abc.json'), content: '{}' }, { GUARDIAN_DATA_DIR: data });
+      expect(out(r).permissionDecision).toBe('deny');
+    });
+
+    it('a provider token is denied under secrets.block, and warned about after the write', () => {
+      userConfig({ secrets: { block: true } });
+      const content = `const k = "${FAKE_AWS_KEY}";`;
+      expect(out(mcp('write_file', { path: join(projectDir, 'src', 'k.ts'), content })).permissionDecision).toBe('deny');
+      const post = hook({ hook_event_name: 'PostToolUse', tool_name: 'mcp__filesystem__write_file', tool_input: { path: join(projectDir, 'src', 'k.ts'), content }, cwd: projectDir });
+      expect(out(post).additionalContext).toMatch(/AWS access key ID/);
+    });
+
+    it('an ordinary write, and a read of the configuration, say nothing', () => {
+      expect(mcp('write_file', { path: join(projectDir, 'src', 'a.ts'), content: 'export {};' }).stdout).toBeUndefined();
+      expect(mcp('read_file', { path: join(projectDir, '.guardian', 'hooks.config.json') }).stdout).toBeUndefined();
+      expect(mcp('copy_file', { source: join(projectDir, '.guardian', 'hooks.config.json'), destination: join(projectDir, 'backup.json') }).stdout).toBeUndefined();
+    });
+  });
+
+  describe('a Write to a network path answers at once (items 13 and 19)', () => {
+    const UNREACHABLE = '\\\\10.255.255.1\\share';
+    const timed = (payload: Record<string, unknown>): { r: HookResult; ms: number } => {
+      const t0 = Date.now();
+      const r = hook(payload);
+      return { r, ms: Date.now() - t0 };
+    };
+
+    it.runIf(process.platform === 'win32')('an unreachable share: no filesystem call, an answer well before the 15 s kill', () => {
+      const plain = timed(preToolUse('Write', { file_path: `${UNREACHABLE}\\notes\\a.txt`, content: 'x' }, projectDir));
+      expect(plain.r.status).toBe(0);
+      expect(plain.r.stdout).toBeUndefined();
+      expect(plain.ms).toBeLessThan(answersWithin(3000));
+      const config = timed(preToolUse('Write', { file_path: `${UNREACHABLE}\\p\\.guardian\\hooks.config.json`, content: '{}' }, projectDir));
+      expect(out(config.r).permissionDecision).toBe('deny');
+      expect(config.ms).toBeLessThan(answersWithin(3000));
+      const settings = timed(
+        preToolUse('Edit', { file_path: `${UNREACHABLE}\\p\\.claude\\settings.json`, old_string: '{', new_string: '{"disableAllHooks": true,' }, projectDir),
+      );
+      expect(out(settings.r).permissionDecision).toBe('deny');
+    });
+
+    it.runIf(process.platform === 'win32')("this machine's admin share is the local file it names", () => {
+      const local = join(homeDir, '.config', 'dev-guardian', 'hooks.json');
+      const share = `\\\\localhost\\${local.charAt(0)}$${local.slice(2)}`;
+      expect(out(hook(preToolUse('Write', { file_path: share, content: '{}' }, projectDir))).permissionDecision).toBe('deny');
+    });
+  });
+
+  describe('SessionStart: one git call, and the setup hint only where code is (items 16 and 20)', () => {
+    const start = (): string => out(hook({ hook_event_name: 'SessionStart', cwd: projectDir })).additionalContext ?? '';
+
+    it('a folder with no code gets no setup hint', () => {
+      const ctx = start();
+      expect(ctx).toMatch(/dev-guardian active/);
+      expect(ctx).not.toMatch(/guardian-init/);
+    });
+
+    it('a code project gets the hint, worded as something the user runs', () => {
+      writeFileSync(join(projectDir, 'package.json'), '{}');
+      expect(start()).toMatch(/Not yet guardian-initialized — the user can run \/guardian-init/);
+    });
+
+    it("the registry's deny names a CLI line that runs from a plugin install", () => {
+      const data = join(homeDir, 'gdata');
+      const r = hook(preToolUse('Write', { file_path: join(data, 'registry', 'abc.json'), content: '{}' }, projectDir), { GUARDIAN_DATA_DIR: data });
+      expect(out(r).permissionDecisionReason).toMatch(/`node ".*dev-guardian\.mjs" db adopt`/);
+    });
+
+    it('a .NET solution counts as code', () => {
+      writeFileSync(join(projectDir, 'App.sln'), '');
+      expect(start()).toMatch(/guardian-init/);
+    });
+
+    it.runIf(spawnSync('git', ['--version']).status === 0)('the branch and the uncommitted count, from one porcelain v2 call', () => {
+      spawnSync('git', ['init', '-q', '-b', 'trunk', projectDir]);
+      writeFileSync(join(projectDir, 'a.txt'), 'x');
+      writeFileSync(join(projectDir, 'b.txt'), 'y');
+      const ctx = start();
+      expect(ctx).toMatch(/branch `trunk`/);
+      expect(ctx).toMatch(/2 uncommitted change\(s\)/);
+    });
+  });
+
+  describe('the process ends right after its answer (item 4)', () => {
+    // A handle that never closes — what a connect the 3 s network budget
+    // aborted is on an unresponsive network. The hook used to wait 5 s after
+    // its answer for the backstop; Claude Code waits for the process.
+    const holdLoop = (): string => {
+      const file = join(projectDir, 'hold-loop.mjs');
+      writeFileSync(file, 'setInterval(() => {}, 1 << 30);\n');
+      return pathToFileURL(file).href;
+    };
+    /** One call: how long it took, and how long the process lived after its answer reached stdout. */
+    const run = (preload: string | undefined): Promise<{ total: number; lag: number; status: number | null; stdout: string }> =>
+      new Promise((resolveRun, rejectRun) => {
+        const args = preload === undefined ? [HOOK] : ['--import', preload, HOOK];
+        const t0 = Date.now();
+        let answered = 0;
+        let stdout = '';
+        const child = spawn(process.execPath, args, {
+          cwd: projectDir,
+          env: { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GUARDIAN_OFFLINE: '1', GUARDIAN_HOOKS: '', CLAUDE_PROJECT_DIR: projectDir },
+        });
+        const cap = setTimeout(() => {
+          child.kill();
+          rejectRun(new Error(`the hook was still running after ${String(TIMEOUT_MS)} ms`));
+        }, TIMEOUT_MS);
+        child.stdout.on('data', (d: Buffer) => {
+          if (answered === 0) answered = Date.now();
+          stdout += d.toString();
+        });
+        child.on('close', (status) => {
+          clearTimeout(cap);
+          const end = Date.now();
+          resolveRun({ total: end - t0, lag: end - (answered || end), status, stdout });
+        });
+        child.stdin.end(JSON.stringify(preToolUse('Bash', { command: 'npm install left-pad' }, projectDir)));
+      });
+
+    it('with the loop held open, it still exits 0 with its answer — a moment after it, not 5 s', async () => {
+      const preload = holdLoop();
+      const held: Array<{ lag: number; status: number | null; stdout: string }> = [];
+      const free: number[] = [];
+      for (let k = 0; k < 3; k += 1) {
+        held.push(await run(preload));
+        free.push((await run(undefined)).total);
+      }
+      for (const h of held) {
+        expect(h.status).toBe(0);
+        expect(h.stdout).toMatch(/not verified|could not|offline/i);
+      }
+      // What the process lives after its answer, against a whole call without
+      // the held handle: the 250 ms grace reads ~2x; the old 5 s backstop read
+      // 35-40x, and still over 8x on a call slowed to 600 ms.
+      const lag = Math.min(...held.map((h) => h.lag));
+      expect(lag / Math.min(...free)).toBeLessThan(8);
+      if (PERF_STRICT) expect(lag).toBeLessThan(1000);
+    }, 120_000);
   });
 });

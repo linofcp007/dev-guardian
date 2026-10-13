@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { decideInstallCommand, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
+import { decideInstallCommand, MAX_DEADLINE_MS, vetDeadlineMs, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
 const OSV = 'https://api.osv.dev/v1/querybatch';
@@ -753,6 +753,15 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
     expect(d?.deny).toBeUndefined();
     expect(d?.context).toMatch(/time budget/);
     for (const name of NAMES) expect(d?.context).toContain(name);
+  });
+
+  // Review 8, item 4: 14 s of vetting, then the answer's write and the hook's
+  // exit, could run past Claude Code's 15 s kill and lose a deny.
+  it('GUARDIAN_PKG_VET_DEADLINE_MS is capped well under the hook’s 15 s, with room for its exit', () => {
+    expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: '99999' })).toBe(MAX_DEADLINE_MS);
+    expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: '5000' })).toBe(5000);
+    expect(vetDeadlineMs({})).toBe(8000);
+    expect(MAX_DEADLINE_MS).toBeLessThanOrEqual(12_000);
   });
 
   it('GUARDIAN_PKG_VET_DEADLINE_MS sets the deadline', async () => {
