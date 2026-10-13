@@ -3134,6 +3134,13 @@ function renderDbReport(report) {
     );
     lines.push(`Baselines     ${c.baselines}`);
   }
+  // Review 8, finding 10: the history kept while this database was refused.
+  if (report.fallback) {
+    lines.push(
+      `Fallback      ${report.fallback.db_path}: ${report.fallback.scans} scan(s), ` +
+        `${report.fallback.suppressions} suppression(s) — not merged by --yes`,
+    );
+  }
   if (report.paths.length > 0) {
     lines.push(`Paths         rows are filed under ${report.paths.length} project path(s); this project is ${report.canonical_project}`);
     for (const p of report.paths) {
@@ -3207,6 +3214,12 @@ async function cmdDb(argv) {
     const lines = [];
     if (!done.already) {
       lines.push(`Registered '${done.db_path}' as this user's database (id ${done.db_id}). The server uses it from its next start.`);
+      if (report.fallback && report.fallback.suppressions > 0) {
+        lines.push(
+          `The ${report.fallback.suppressions} suppression(s) kept meanwhile in '${report.fallback.db_path}' do not apply ` +
+            'here: apply the ones you still want again (suppress_finding).',
+        );
+      }
     }
     if (done.rehomed !== undefined) {
       lines.push(

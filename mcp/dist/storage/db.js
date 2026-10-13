@@ -99,6 +99,17 @@ export function nodeSqliteAvailable() {
  */
 export const BUSY_TIMEOUT_MS = 5000;
 /**
+ * How long the MCP server's connection waits for another process's lock once
+ * it has started (`server.ts`, after the startup work above was done at
+ * {@link BUSY_TIMEOUT_MS}). `node:sqlite` is synchronous: while a statement
+ * waits, the server answers nothing — another process holding `BEGIN
+ * IMMEDIATE` for 9 s froze a ping for 8.8 s and failed `detect_stack` with a
+ * bare "database is locked" (review 8, finding 11). The wait is shorter now,
+ * and a call that runs out of it answers `database_busy`, which says what to
+ * do (`tools/index.ts`).
+ */
+export const SESSION_BUSY_TIMEOUT_MS = 2000;
+/**
  * Prepared-statement wrapper over `node:sqlite`'s `StatementSync`.
  *
  * Methods are declared as methods (not arrow properties) on purpose: that keeps
@@ -153,6 +164,10 @@ export class GuardianDatabase {
     }
     prepare(source) {
         return new GuardianStatement(this.raw.prepare(source));
+    }
+    /** How long this connection waits for another's lock — see {@link SESSION_BUSY_TIMEOUT_MS}. */
+    setBusyTimeout(ms) {
+        this.raw.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(ms))}`);
     }
     /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
     exec(sql) {
@@ -520,7 +535,7 @@ function foreignReason(projectPath, dbPath, foreign) {
                 'the database holds first');
         case 'unregistered-id':
             return (`'${dbPath}' carries a dev-guardian id this user never registered — another user's or another machine's ` +
-                `database — and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ` +
+                `database, or one registered under another GUARDIAN_DATA_DIR — and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ` +
                 `${yourself}; otherwise delete it`);
         case 'registered-elsewhere':
             return (`'${dbPath}' was registered at '${foreign.at}', not here: it is a copy (a moved or copied repository, or ` +
@@ -568,6 +583,7 @@ export function inspectProjectDatabase(projectPath) {
         contents: null,
         paths: [],
         rehome: { paths: 0, rows: 0 },
+        fallback: fallbackHolding(project),
     };
     if (!report.exists)
         return report;
@@ -610,7 +626,31 @@ export function inspectProjectDatabase(projectPath) {
     report.paths = contents.paths.map((p) => ({ ...p, target: storedPathTarget(p.project_path, canonicalProject) }));
     const moving = report.paths.filter((p) => p.target === 'this-project');
     report.rehome = { paths: moving.length, rows: moving.reduce((n, p) => n + p.rows, 0) };
+    const fb = report.fallback;
+    if (fb !== null && report.status !== 'trusted') {
+        report.warnings.push(`while this database was not used, this project's history went to dev-guardian's per-user database ` +
+            `'${fb.db_path}' (${fb.scans} scan(s), ${fb.suppressions} suppression(s)). Registering this one switches the ` +
+            'project back to it, and that history is NOT merged: a suppression made meanwhile stops applying — note the ' +
+            'ones you still want and apply them again (suppress_finding) after registering');
+    }
     return report;
+}
+/**
+ * The project's per-user fallback database, when it holds a scan or a
+ * suppression: read-only, never created. Null when there is none, it is
+ * empty, or it cannot be read (an unusable data directory included).
+ */
+function fallbackHolding(projectPath) {
+    try {
+        const dbPath = resolveFallbackDbPath(projectPath);
+        const contents = summarizeDatabase(dbPath);
+        if (contents.scans === 0 && contents.suppressions === 0)
+            return null;
+        return { db_path: dbPath, scans: contents.scans, suppressions: contents.suppressions };
+    }
+    catch {
+        return null;
+    }
 }
 /** The one-line status of a foreign database, for `db adopt`'s report. */
 function shortReason(foreign) {
@@ -618,7 +658,7 @@ function shortReason(foreign) {
         case 'legacy':
             return 'created before dev-guardian 3.1.0 (it carries no id): not used until you register it';
         case 'unregistered-id':
-            return 'it carries an id this user never registered (another user or another machine): not used';
+            return 'it carries an id this user never registered (another user or another machine, or another GUARDIAN_DATA_DIR): not used';
         case 'registered-elsewhere':
             return `it was registered at '${foreign.at}', not here (a copy): not used here`;
         case 'tracked':
@@ -997,6 +1037,17 @@ function retryWhileBusy(op) {
 function isBusyError(error) {
     const primary = sqliteErrorCode(error);
     return primary === 5 || primary === 6;
+}
+/**
+ * Whether `error` is another process's lock on the database outlasting the
+ * busy timeout — SQLITE_BUSY / SQLITE_LOCKED, or their message when the code
+ * did not travel with it.
+ */
+export function isDatabaseBusyError(error) {
+    if (isBusyError(error))
+        return true;
+    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+    return /\bdatabase (?:table )?is locked\b|\bSQLITE_(?:BUSY|LOCKED)\b/.test(message);
 }
 /** The primary SQLite result code of a `node:sqlite` error, if it is one. */
 function sqliteErrorCode(error) {

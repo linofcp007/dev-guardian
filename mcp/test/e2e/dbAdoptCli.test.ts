@@ -171,6 +171,34 @@ describe('dev-guardian db adopt', () => {
     expect(again.stdout).toMatch(/Already registered: nothing to do/);
   });
 
+  // Review 8, finding 10: a suppression made while the project's database was
+  // refused lived in the per-user fallback, and `--yes` silently dropped it —
+  // the preview never mentioned the fallback.
+  it('names the fallback database and what it holds, says adopting does not merge it, and says it again after --yes', () => {
+    const dir = project();
+    git(dir, 'init', '-q');
+    legacyDatabase(dir, scan('a', canonicalPath(dir), 'completed'));
+    const fallback = openDatabase({ projectPath: dir });
+    try {
+      expect(fallback.path).toBe(resolveFallbackDbPath(dir));
+      fallback.db.exec(
+        `INSERT INTO suppressions (finding_fingerprint, reason, created_at, project_path) VALUES ` +
+          `('fp-9', 'reviewed meanwhile', '2026-02-01T00:00:00.000Z', '${sql(canonicalPath(dir))}');`,
+      );
+    } finally {
+      fallback.db.close();
+    }
+
+    const shown = runCli(['db', 'adopt', '--project', dir]);
+    expect(shown.status).toBe(0);
+    expect(shown.stdout).toMatch(/^!! while this database was not used, this project's history went to .*1 suppression\(s\)\)\. .*NOT merged/m);
+    expect(shown.stdout).toContain(`Fallback      ${resolveFallbackDbPath(dir)}: 0 scan(s), 1 suppression(s) — not merged by --yes`);
+
+    const adopted = runCli(['db', 'adopt', '--project', dir, '--yes']);
+    expect(adopted.status).toBe(0);
+    expect(adopted.stdout).toMatch(/The 1 suppression\(s\) kept meanwhile in '.*' do not apply here: apply the ones you still want again/);
+  });
+
   it('--rehome: scans filed under a link to the project are moved to its canonical path, and status reads them', () => {
     const dir = project();
     const link = `${dir}-link`;

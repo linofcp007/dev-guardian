@@ -15466,9 +15466,11 @@ __export(db_exports, {
   GuardianDbError: () => GuardianDbError,
   GuardianStatement: () => GuardianStatement,
   NODE_SQLITE_REQUIRED: () => NODE_SQLITE_REQUIRED,
+  SESSION_BUSY_TIMEOUT_MS: () => SESSION_BUSY_TIMEOUT_MS,
   adoptCommand: () => adoptCommand,
   expectedSchema: () => expectedSchema,
   inspectProjectDatabase: () => inspectProjectDatabase,
+  isDatabaseBusyError: () => isDatabaseBusyError,
   nodeSqliteAvailable: () => nodeSqliteAvailable,
   openDatabase: () => openDatabase,
   openDatabaseAtPath: () => openDatabaseAtPath,
@@ -15664,7 +15666,7 @@ function foreignReason(projectPath, dbPath, foreign) {
     case "legacy":
       return `This project's database '${dbPath}' was created before dev-guardian 3.1.0 and is not trusted automatically. If it is yours, run \`${adopt} --yes\` once, ${yourself}; without --yes it shows what the database holds first`;
     case "unregistered-id":
-      return `'${dbPath}' carries a dev-guardian id this user never registered \u2014 another user's or another machine's database \u2014 and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ${yourself}; otherwise delete it`;
+      return `'${dbPath}' carries a dev-guardian id this user never registered \u2014 another user's or another machine's database, or one registered under another GUARDIAN_DATA_DIR \u2014 and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ${yourself}; otherwise delete it`;
     case "registered-elsewhere":
       return `'${dbPath}' was registered at '${foreign.at}', not here: it is a copy (a moved or copied repository, or one shipped with its .guardian \u2014 a Docker COPY, a package, an archive) and is not trusted here. If it is yours, review it with \`${adopt}\` and register it here with --yes, ${yourself}`;
     case "tracked":
@@ -15695,7 +15697,8 @@ function inspectProjectDatabase(projectPath) {
     warnings: [],
     contents: null,
     paths: [],
-    rehome: { paths: 0, rows: 0 }
+    rehome: { paths: 0, rows: 0 },
+    fallback: fallbackHolding(project)
   };
   if (!report.exists) return report;
   const verdict = judgeProjectDatabase(project, dbPath);
@@ -15729,14 +15732,30 @@ function inspectProjectDatabase(projectPath) {
   report.paths = contents.paths.map((p) => ({ ...p, target: storedPathTarget(p.project_path, canonicalProject) }));
   const moving = report.paths.filter((p) => p.target === "this-project");
   report.rehome = { paths: moving.length, rows: moving.reduce((n2, p) => n2 + p.rows, 0) };
+  const fb = report.fallback;
+  if (fb !== null && report.status !== "trusted") {
+    report.warnings.push(
+      `while this database was not used, this project's history went to dev-guardian's per-user database '${fb.db_path}' (${fb.scans} scan(s), ${fb.suppressions} suppression(s)). Registering this one switches the project back to it, and that history is NOT merged: a suppression made meanwhile stops applying \u2014 note the ones you still want and apply them again (suppress_finding) after registering`
+    );
+  }
   return report;
+}
+function fallbackHolding(projectPath) {
+  try {
+    const dbPath = resolveFallbackDbPath(projectPath);
+    const contents = summarizeDatabase(dbPath);
+    if (contents.scans === 0 && contents.suppressions === 0) return null;
+    return { db_path: dbPath, scans: contents.scans, suppressions: contents.suppressions };
+  } catch {
+    return null;
+  }
 }
 function shortReason(foreign) {
   switch (foreign.kind) {
     case "legacy":
       return "created before dev-guardian 3.1.0 (it carries no id): not used until you register it";
     case "unregistered-id":
-      return "it carries an id this user never registered (another user or another machine): not used";
+      return "it carries an id this user never registered (another user or another machine, or another GUARDIAN_DATA_DIR): not used";
     case "registered-elsewhere":
       return `it was registered at '${foreign.at}', not here (a copy): not used here`;
     case "tracked":
@@ -15957,6 +15976,11 @@ function isBusyError(error2) {
   const primary = sqliteErrorCode(error2);
   return primary === 5 || primary === 6;
 }
+function isDatabaseBusyError(error2) {
+  if (isBusyError(error2)) return true;
+  const message2 = error2 instanceof Error ? error2.message : typeof error2 === "string" ? error2 : "";
+  return /\bdatabase (?:table )?is locked\b|\bSQLITE_(?:BUSY|LOCKED)\b/.test(message2);
+}
 function sqliteErrorCode(error2) {
   if (typeof error2 !== "object" || error2 === null || !("errcode" in error2)) return void 0;
   const code = error2.errcode;
@@ -15980,7 +16004,7 @@ function isDirectory(path8) {
 function shortHash(input) {
   return createHash4("sha1").update(input).digest("hex").slice(0, 16);
 }
-var sqliteModule, NODE_SQLITE_REQUIRED, BUSY_TIMEOUT_MS, GuardianStatement, GuardianDatabase, referenceSchema, latestKnownMigration, MOVE_ASIDE;
+var sqliteModule, NODE_SQLITE_REQUIRED, BUSY_TIMEOUT_MS, SESSION_BUSY_TIMEOUT_MS, GuardianStatement, GuardianDatabase, referenceSchema, latestKnownMigration, MOVE_ASIDE;
 var init_db = __esm({
   "src/storage/db.ts"() {
     "use strict";
@@ -15998,6 +16022,7 @@ var init_db = __esm({
     init_userData();
     NODE_SQLITE_REQUIRED = "dev-guardian requires Node.js >= 22.13 (node:sqlite)";
     BUSY_TIMEOUT_MS = 5e3;
+    SESSION_BUSY_TIMEOUT_MS = 2e3;
     GuardianStatement = class {
       constructor(stmt) {
         this.stmt = stmt;
@@ -16034,6 +16059,10 @@ var init_db = __esm({
       }
       prepare(source) {
         return new GuardianStatement(this.raw.prepare(source));
+      }
+      /** How long this connection waits for another's lock — see {@link SESSION_BUSY_TIMEOUT_MS}. */
+      setBusyTimeout(ms) {
+        this.raw.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(ms))}`);
       }
       /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
       exec(sql) {
@@ -16280,7 +16309,9 @@ var init_types2 = __esm({
       "already_closed",
       "bad_lease",
       "too_large",
-      "store_failed"
+      "store_failed",
+      // Another process held the database's lock past the wait (tools/index.ts).
+      "database_busy"
     ];
   }
 });
@@ -36186,6 +36217,7 @@ var init_annotations = __esm({
 // src/tools/index.ts
 var tools_exports = {};
 __export(tools_exports, {
+  DATABASE_BUSY_MESSAGE: () => DATABASE_BUSY_MESSAGE,
   TOOLS: () => TOOLS,
   attachAllTools: () => attachAllTools,
   registerToolModule: () => registerToolModule,
@@ -36225,7 +36257,13 @@ function attachAllTools(server, ctx) {
         if (server.server.getClientCapabilities()?.sampling !== void 0) {
           callMeta.sampling = (params, options) => server.server.createMessage(params, options);
         }
-        const result = await tool54.handler(input, ctx, callMeta);
+        let result;
+        try {
+          result = await tool54.handler(input, ctx, callMeta);
+        } catch (e) {
+          if (!isDatabaseBusyError(e)) throw e;
+          result = { ok: false, error: { code: "database_busy", message: DATABASE_BUSY_MESSAGE } };
+        }
         return toCallToolResult(result, tool54.contentOnlyKeys ?? []);
       }
     );
@@ -36260,7 +36298,7 @@ function toCallToolResult(result, contentOnlyKeys) {
     structuredContent: errorPayload
   };
 }
-var TOOLS;
+var DATABASE_BUSY_MESSAGE, TOOLS;
 var init_tools = __esm({
   "src/tools/index.ts"() {
     "use strict";
@@ -36268,6 +36306,8 @@ var init_tools = __esm({
     init_untrustedText();
     init_responseBounds();
     init_annotations();
+    init_db();
+    DATABASE_BUSY_MESSAGE = `dev-guardian's database is locked by another process \u2014 another dev-guardian server, hook or CLI writing to it (several can share one project) \u2014 and it was not released within ${SESSION_BUSY_TIMEOUT_MS / 1e3} s. Retry the call in a few seconds. If it keeps happening, close the other sessions working on this project, or end a dev-guardian process that is stuck.`;
     TOOLS = [];
   }
 });

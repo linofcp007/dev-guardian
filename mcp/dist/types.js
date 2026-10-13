@@ -145,5 +145,7 @@ export const DOMAIN_ERROR_CODES = [
     'bad_lease',
     'too_large',
     'store_failed',
+    // Another process held the database's lock past the wait (tools/index.ts).
+    'database_busy',
 ];
 //# sourceMappingURL=types.js.map

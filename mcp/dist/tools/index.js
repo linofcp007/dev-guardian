@@ -9,6 +9,17 @@ import { z } from 'zod';
 import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
 import { TOOL_ANNOTATIONS } from './annotations.js';
+import { isDatabaseBusyError, SESSION_BUSY_TIMEOUT_MS } from '../storage/db.js';
+/**
+ * What a call answers when another process held the database's lock past the
+ * wait (`storage/db.ts#SESSION_BUSY_TIMEOUT_MS`) — a coded, actionable error
+ * instead of the bare "database is locked" a host used to show (review 8,
+ * finding 11).
+ */
+export const DATABASE_BUSY_MESSAGE = "dev-guardian's database is locked by another process — another dev-guardian server, hook or CLI writing to " +
+    `it (several can share one project) — and it was not released within ${SESSION_BUSY_TIMEOUT_MS / 1000} s. ` +
+    'Retry the call in a few seconds. If it keeps happening, close the other sessions working on this project, ' +
+    'or end a dev-guardian process that is stuck.';
 /**
  * Mutable global registry. Modules append themselves at import time via
  * `registerToolModule`, which lets us keep additions localized to each
@@ -62,7 +73,15 @@ export function attachAllTools(server, ctx) {
             if (server.server.getClientCapabilities()?.sampling !== undefined) {
                 callMeta.sampling = (params, options) => server.server.createMessage(params, options);
             }
-            const result = await tool.handler(input, ctx, callMeta);
+            let result;
+            try {
+                result = await tool.handler(input, ctx, callMeta);
+            }
+            catch (e) {
+                if (!isDatabaseBusyError(e))
+                    throw e;
+                result = { ok: false, error: { code: 'database_busy', message: DATABASE_BUSY_MESSAGE } };
+            }
             return toCallToolResult(result, tool.contentOnlyKeys ?? []);
         });
     }

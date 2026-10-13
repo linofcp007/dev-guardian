@@ -47,6 +47,7 @@ import { resolveVersion } from './platform/version.js';
 import type { ProgressNotifier, ProgressPayload } from './progress/progressEmitter.js';
 import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
 import { openDatabase, Storage } from './storage/index.js';
+import { SESSION_BUSY_TIMEOUT_MS } from './storage/db.js';
 import { canonicalizeProjectPathsAtStartup, reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, TOOLS } from './tools/index.js';
@@ -91,6 +92,9 @@ async function main(): Promise<void> {
   // Suppressions and baselines stored under a 2.0.0 spelling of a project
   // path (`c:\…`) take the canonical one every scan uses. Never fatal.
   canonicalizeProjectPathsAtStartup(storage, logErr);
+  // The startup work above may wait out another process's lock; a tool call
+  // waits less, and answers database_busy (storage/db.ts#SESSION_BUSY_TIMEOUT_MS).
+  db.setBusyTimeout(SESSION_BUSY_TIMEOUT_MS);
 
   // The per-user tools directory install_toolchain's pinned installers write
   // to, appended to this server's PATH when it is not there
