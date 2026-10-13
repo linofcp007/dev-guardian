@@ -923,11 +923,10 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
  * third-party MCP server's write tool (review 8, item 18) — hooks.json matches
  * an `mcp__<server>__<tool>` whose name holds a file verb (write, edit, create,
  * move, rename, copy, append, patch, replace, save, put, upload, insert,
- * delete, remove, unlink): `mcp__filesystem__write_file` wrote the hook
- * configuration, Claude Code's settings or a provider token past every guard.
- * Its path arguments are read by their usual names ({@link MCP_DEST_KEYS}; a
- * `file://` URI too), a move's or rename's source as a path it takes away, and
- * its text as `content` / `text` / `data` or `edits` (`oldText` / `newText`).
+ * delete, remove, unlink — and update, modify, apply, set, push as a word of
+ * the name: {@link isMcpWriteTool}): `mcp__filesystem__write_file` wrote the
+ * hook configuration, Claude Code's settings or a provider token past every
+ * guard. Every string argument is read ({@link describeMcpWrite}).
  */
 function describeWrite(toolName, input) {
   if (!input || typeof input !== 'object') return null;
@@ -955,24 +954,83 @@ function describeWrite(toolName, input) {
   }
 }
 
-/** The argument names a third-party MCP write tool gives the path it writes. */
-const MCP_DEST_KEYS = [
+/** The argument names a third-party MCP write tool gives the path it writes (Serena's `relative_path`, JetBrains' `pathInProject` included). */
+const MCP_DEST_KEYS = new Set([
   'path', 'file_path', 'filePath', 'filepath', 'file', 'filename', 'fileName', 'destination', 'dest', 'target', 'targetPath',
-  'target_path', 'new_path', 'newPath', 'to', 'output', 'outputPath', 'output_path', 'notebook_path', 'uri',
+  'target_path', 'new_path', 'newPath', 'to', 'output', 'outputPath', 'output_path', 'notebook_path', 'uri', 'paths', 'files',
+  'relative_path', 'relativePath', 'pathInProject', 'path_in_project', 'filename_path', 'absolute_path', 'absolutePath',
+]);
+/** …and the path a move or a rename takes away (a copy's is only read). */
+const MCP_SOURCE_KEYS = new Set(['source', 'src', 'from', 'old_path', 'oldPath', 'sourcePath', 'source_path']);
+/** …and the text it writes, whole. */
+const MCP_TEXT_KEYS = ['content', 'contents', 'text', 'data', 'body', 'file_text', 'fileText', 'new_source', 'newContent', 'new_content'];
+/** …or as one edit: the text replaced and its replacement, at the top level (`str_replace_editor`, JetBrains, desktop-commander). */
+const MCP_EDIT_PAIRS = [
+  ['old_string', 'new_string'], ['old_str', 'new_str'], ['oldText', 'newText'], ['old_text', 'new_text'], ['oldString', 'newString'],
+  ['search', 'replace'],
 ];
-/** …and the path a move or a rename takes away. */
-const MCP_SOURCE_KEYS = ['source', 'src', 'from', 'old_path', 'oldPath', 'sourcePath', 'source_path'];
-/** …and the text it writes. */
-const MCP_TEXT_KEYS = ['content', 'contents', 'text', 'data', 'body', 'new_string', 'newText', 'new_source'];
+/** Keys that hold text, never a path: not judged as one. */
+const MCP_TEXT_ONLY_KEYS = new Set([...MCP_TEXT_KEYS, ...MCP_EDIT_PAIRS.flat()]);
 
-/** The verbs of an MCP tool's name that make it a write — what hooks.json's matcher routes here. */
+/**
+ * The verbs of an MCP tool's name that make it a write — what hooks.json's
+ * matchers route here, and held to them by `hooksDispatcher.test.ts`. The file
+ * verbs anywhere in the name, in any case (`WRITE_FILE`, `overwrite`); and
+ * update, modify, apply, set and push (review of 3.3.0: `update_file`,
+ * `modify_file`, `apply_diff`, `set_file_contents` were never routed) only as a
+ * word of the name — after its start, `_`, `-` or a lower-case letter's camel
+ * hump, and before its end, `_`, `-` or an upper-case letter — so that
+ * `get_settings`, `reset_cache` and `dataset_list` are not writes.
+ */
 const MCP_WRITE_VERB = /write|edit|create|move|rename|copy|append|patch|replace|save|put|upload|insert|delete|remove|unlink/i;
+const MCP_WORD_VERB =
+  /(?:^|[_-])(?:update|modify|apply|set|push|UPDATE|MODIFY|APPLY|SET|PUSH|Update|Modify|Apply|Set|Push)(?=$|[A-Z_-])|[a-z0-9](?:Update|Modify|Apply|Set|Push)(?=$|[A-Z_-])/;
 
-function describeMcpWrite(toolName, input) {
+/** Whether `toolName` is a third-party MCP tool that writes files, by the verbs of its own name. */
+function isMcpWriteTool(toolName) {
+  if (!toolName.startsWith('mcp__')) return false;
   const verb = toolName.slice(toolName.lastIndexOf('__') + 2);
-  if (!MCP_WRITE_VERB.test(verb)) return null;
+  return MCP_WRITE_VERB.test(verb) || MCP_WORD_VERB.test(verb);
+}
+
+/** The deepest an MCP tool's arguments are read, and the most strings read from them. */
+const MCP_ARG_DEPTH = 4;
+const MCP_ARG_STRINGS = 256;
+/** The longest string read as a path; a longer one, or one with a line break, is only text. */
+const MCP_PATH_MAX = 4096;
+
+/** Every string in an MCP tool's arguments with the name of the key it is under, to {@link MCP_ARG_DEPTH} levels. */
+function mcpStrings(input) {
+  const out = [];
+  const visit = (value, key, depth) => {
+    if (out.length >= MCP_ARG_STRINGS || depth > MCP_ARG_DEPTH) return;
+    if (typeof value === 'string') {
+      if (value !== '') out.push({ key, value });
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item, key, depth + 1);
+    } else if (value !== null && typeof value === 'object') {
+      for (const [k, v] of Object.entries(value)) visit(v, k, depth + 1);
+    }
+  };
+  visit(input, '', 0);
+  return out;
+}
+
+/**
+ * A third-party MCP write tool's call, as {@link describeWrite} says it: every
+ * string argument is read (review of 3.3.0 — Serena's `relative_path`,
+ * JetBrains' `pathInProject` and `str_replace_editor`'s `file_text` / `new_str`
+ * went unread, so their writes of Claude Code's settings or the hook
+ * configuration passed). A known path key (`path`, `relative_path`, …, a
+ * `file://` URI too) is a path it writes; a move's or a rename's source one it
+ * takes away; any other short, single-line string is judged as a path it may
+ * write too, and as text. The text is the known content key, or the edits, or
+ * else every string that is not a known path.
+ */
+function describeMcpWrite(toolName, input) {
+  if (!isMcpWriteTool(toolName)) return null;
+  const verb = toolName.slice(toolName.lastIndexOf('__') + 2);
   const asPath = (v) => {
-    if (typeof v !== 'string' || v === '') return undefined;
     if (!/^file:\/\//i.test(v)) return v;
     try {
       return fileURLToPath(v);
@@ -980,50 +1038,51 @@ function describeMcpWrite(toolName, input) {
       return undefined;
     }
   };
-  const pathsOf = (keys) => {
-    const out = [];
-    for (const k of keys) {
-      const v = input[k];
-      for (const item of Array.isArray(v) ? v : [v]) {
-        const p = asPath(item);
-        if (p !== undefined) out.push(p);
-      }
-    }
-    for (const k of ['paths', 'files']) {
-      if (!Array.isArray(input[k])) continue;
-      for (const item of input[k]) {
-        const p = asPath(item);
-        if (p !== undefined) out.push(p);
-      }
-    }
-    return out;
-  };
-  const dests = pathsOf(MCP_DEST_KEYS);
   const moves = /move|rename/i.test(verb);
+  const copies = /copy/i.test(verb);
   const removes = /delete|remove|unlink/i.test(verb);
-  const sources = moves ? pathsOf(MCP_SOURCE_KEYS) : [];
-  if (dests.length === 0 && sources.length === 0) return null;
+  const dests = [];
+  const sources = [];
+  const others = [];
+  const loose = [];
+  for (const { key, value } of mcpStrings(input)) {
+    const path = value.length <= MCP_PATH_MAX && !/[\r\n]/.test(value) ? asPath(value) : undefined;
+    if (MCP_DEST_KEYS.has(key)) {
+      if (path !== undefined) dests.push(path);
+    } else if (MCP_SOURCE_KEYS.has(key)) {
+      if (path !== undefined && !copies) sources.push(path);
+    } else {
+      loose.push(value);
+      if (path !== undefined && !MCP_TEXT_ONLY_KEYS.has(key) && others.length < 32) others.push(path);
+    }
+  }
+  if (dests.length === 0 && sources.length === 0 && others.length === 0) return null;
   const content = MCP_TEXT_KEYS.map((k) => input[k]).find((v) => typeof v === 'string');
-  const edits = Array.isArray(input.edits)
-    ? input.edits
-        .map((e) => ({
-          old_string: e?.old_string ?? e?.oldText ?? e?.old_text,
-          new_string: e?.new_string ?? e?.newText ?? e?.new_text,
-          replace_all: e?.replace_all === true,
-        }))
-        .filter((e) => typeof e.old_string === 'string' && typeof e.new_string === 'string')
-    : [];
-  const change = content !== undefined ? { content } : edits.length > 0 ? { edits } : null;
-  const text = content ?? edits.map((e) => e.new_string).join('\n');
+  const listed = Array.isArray(input.edits)
+    ? input.edits.map((e) => ({
+        old_string: e?.old_string ?? e?.oldText ?? e?.old_text,
+        new_string: e?.new_string ?? e?.newText ?? e?.new_text,
+        replace_all: e?.replace_all === true,
+      }))
+    : MCP_EDIT_PAIRS.filter(([o, n]) => typeof input[o] === 'string' && typeof input[n] === 'string').map(([o, n]) => ({
+        old_string: input[o],
+        new_string: input[n],
+        replace_all: input.replace_all === true || input.replaceAll === true,
+      }));
+  const edits = listed.filter((e) => typeof e.old_string === 'string' && typeof e.new_string === 'string');
+  // What no known key says is judged on all the call's other strings.
+  const change = content !== undefined ? { content } : edits.length > 0 ? { edits } : { content: loose.join('\n') };
+  const text = content ?? (edits.length > 0 ? edits.map((e) => e.new_string).join('\n') : loose.join('\n'));
+  const written = [...dests, ...others];
   return {
-    path: dests[0] ?? '',
+    path: dests[0] ?? others[0] ?? '',
     text,
     // Removing or moving the configuration away is refused like writing it; a copy's source is only read.
-    config: [...dests, ...sources],
+    config: [...written, ...sources],
     // Removing a registry entry only un-trusts a database; writing one is the user's decision.
-    registry: removes ? [] : dests,
+    registry: removes ? [] : written,
     // A move or copy onto the settings brings content no hook can read: a known limit, as for the shell.
-    settings: change === null || removes ? [] : dests.map((path) => ({ path, change })),
+    settings: removes ? [] : written.map((path) => ({ path, change })),
   };
 }
 

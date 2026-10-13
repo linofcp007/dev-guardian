@@ -1712,6 +1712,24 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       },
     );
 
+    // Review of 3.3.0: these file servers' write tools were never routed here.
+    it.each([
+      'mcp__x__update_file', 'mcp__mcp-filesystem-server__modify_file', 'mcp__x__apply_diff', 'mcp__x__set_file_contents',
+      'mcp__x__WRITE_FILE', 'mcp__x__WriteFile', 'mcp__x__fileUpdate', 'mcp__x__setContent', 'mcp__github__push_files',
+      'mcp__serena__create_text_file', 'mcp__serena__replace_regex', 'mcp__jetbrains__create_new_file',
+      'mcp__jetbrains__replace_text_in_file', 'mcp__text-editor__str_replace_editor',
+    ])('PreToolUse and PostToolUse route %s to the write guards', (tool) => {
+      expect(matcherOf('PreToolUse', 'Write').test(tool)).toBe(true);
+      expect(matcherOf('PostToolUse', 'Write').test(tool)).toBe(true);
+    });
+
+    it.each(['mcp__x__get_settings', 'mcp__x__reset_cache', 'mcp__x__list_datasets', 'mcp__x__setup_project', 'mcp__x__updated_at', 'mcp__x__getSettings'])(
+      'update / modify / apply / set / push count only as a word of the name: %s is not routed',
+      (tool) => {
+        expect(matcherOf('PreToolUse', 'Write').test(tool)).toBe(false);
+      },
+    );
+
     it('PreToolUse routes exactly Bash and PowerShell to the shell guard', () => {
       const shell = matcherOf('PreToolUse', 'Bash');
       expect(['Bash', 'PowerShell'].every((t) => shell.test(t))).toBe(true);
@@ -1787,6 +1805,50 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       expect(mcp('write_file', { path: join(projectDir, 'src', 'a.ts'), content: 'export {};' }).stdout).toBeUndefined();
       expect(mcp('read_file', { path: join(projectDir, '.guardian', 'hooks.config.json') }).stdout).toBeUndefined();
       expect(mcp('copy_file', { source: join(projectDir, '.guardian', 'hooks.config.json'), destination: join(projectDir, 'backup.json') }).stdout).toBeUndefined();
+    });
+
+    // Review of 3.3.0: the common file servers name their arguments otherwise
+    // — Serena `relative_path`, JetBrains `pathInProject`, the text editor
+    // `file_text` / `new_str` — and every one of these writes passed.
+    describe('every string argument is read (review of 3.3.0)', () => {
+      const call = (tool: string, input: Record<string, unknown>): HookResult => hook(preToolUse(tool, input, projectDir));
+      const settings = '.claude/settings.local.json';
+      const off = '{"disableAllHooks": true}';
+      it.each([
+        ['mcp__serena__create_text_file', { relative_path: '.guardian/hooks-allowlist.json', content: '["AKIA"]' }],
+        ['mcp__serena__create_text_file', { relative_path: settings, content: off }],
+        ['mcp__serena__replace_regex', { relative_path: settings, regex: '\\{\\}', repl: off }],
+        ['mcp__jetbrains__create_new_file', { pathInProject: settings, text: off }],
+        ['mcp__jetbrains__replace_text_in_file', { pathInProject: '.guardian/hooks.config.json', oldText: 'a', newText: 'b' }],
+        ['mcp__text-editor__str_replace_editor', { command: 'create', path: settings, file_text: off }],
+        ['mcp__text-editor__str_replace_editor', { command: 'str_replace', path: settings, old_str: '{}', new_str: off }],
+        ['mcp__desktop-commander__edit_block', { file_path: settings, old_string: '{}', new_string: off }],
+        ['mcp__x__update_file', { location: { file: '.guardian/hooks.config.json' }, body: '{}' }],
+        ['mcp__x__set_file_contents', { target_file: settings, value: off }],
+        ['mcp__x__WRITE_FILE', { PATH: '.guardian/hooks.config.json', CONTENT: '{}' }],
+      ] as const)('%s %j is denied', (tool, input) => {
+        expect(out(call(tool, { ...input })).permissionDecision).toBe('deny');
+      });
+
+      it('a provider token in a nested argument is denied under secrets.block (`push_files {files: [{path, content}]}`)', () => {
+        userConfig({ secrets: { block: true } });
+        const r = call('mcp__github__push_files', { owner: 'o', repo: 'r', branch: 'main', message: 'm', files: [{ path: 'a.txt', content: `k = "${FAKE_AWS_KEY}"` }] });
+        expect(out(r).permissionDecision).toBe('deny');
+      });
+
+      it('an ordinary edit through those servers says nothing', () => {
+        expect(call('mcp__serena__create_text_file', { relative_path: 'src/a.ts', content: 'export {};' }).stdout).toBeUndefined();
+        expect(call('mcp__text-editor__str_replace_editor', { command: 'str_replace', path: settings, old_str: '{}', new_str: '{"permissions": {}}' }).stdout).toBeUndefined();
+      });
+
+      it('the dispatcher judges exactly the tools hooks.json routes to it', () => {
+        const config = JSON.parse(readFileSync(join(REPO_ROOT, 'hooks', 'hooks.json'), 'utf8')) as { hooks: { PreToolUse: Array<{ matcher: string }> } };
+        const routed = new RegExp(config.hooks.PreToolUse.find((e) => e.matcher.startsWith('^(Write'))?.matcher ?? '^$');
+        for (const tool of ['mcp__x__update_file', 'mcp__x__WriteFile', 'mcp__x__fileUpdate', 'mcp__x__push_files', 'mcp__x__get_settings', 'mcp__x__reset_file', 'mcp__x__read_file']) {
+          const denied = out(call(tool, { path: '.guardian/hooks.config.json', content: '{}' })).permissionDecision === 'deny';
+          expect({ tool, denied }).toEqual({ tool, denied: routed.test(tool) });
+        }
+      });
     });
   });
 

@@ -15,7 +15,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|mcp__.+__[\\w-]*?([Ww]rite|[Ee]dit|[Cc]reate|[Mm]ove|[Rr]ename|[Cc]opy|[Aa]ppend|[Pp]atch|[Rr]eplace|[Ss]ave|[Pp]ut|[Uu]pload|[Ii]nsert)[\\w-]*)$",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|mcp__.+__[\\w-]*?([Ww][Rr][Ii][Tt][Ee]|[Ee][Dd][Ii][Tt]|[Cc][Rr][Ee][Aa][Tt][Ee]|[Mm][Oo][Vv][Ee]|[Rr][Ee][Nn][Aa][Mm][Ee]|[Cc][Oo][Pp][Yy]|[Aa][Pp][Pp][Ee][Nn][Dd]|[Pp][Aa][Tt][Cc][Hh]|[Rr][Ee][Pp][Ll][Aa][Cc][Ee]|[Ss][Aa][Vv][Ee]|[Pp][Uu][Tt]|[Uu][Pp][Ll][Oo][Aa][Dd]|[Ii][Nn][Ss][Ee][Rr][Tt])[\\w-]*|mcp__.+__(?:[\\w-]*[_-])?(?:update|modify|apply|set|push|UPDATE|MODIFY|APPLY|SET|PUSH|Update|Modify|Apply|Set|Push)(?:[A-Z_-][\\w-]*)?|mcp__.+__[\\w-]*[a-z0-9](?:Update|Modify|Apply|Set|Push)(?:[A-Z_-][\\w-]*)?)$",
         "hooks": [
           {
             "type": "command",
@@ -39,7 +39,7 @@
         ]
       },
       {
-        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|mcp__.+__[\\w-]*?([Ww]rite|[Ee]dit|[Cc]reate|[Mm]ove|[Rr]ename|[Cc]opy|[Aa]ppend|[Pp]atch|[Rr]eplace|[Ss]ave|[Pp]ut|[Uu]pload|[Ii]nsert|[Dd]elete|[Rr]emove|[Uu]nlink)[\\w-]*)$",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|mcp__.+__[\\w-]*?([Ww][Rr][Ii][Tt][Ee]|[Ee][Dd][Ii][Tt]|[Cc][Rr][Ee][Aa][Tt][Ee]|[Mm][Oo][Vv][Ee]|[Rr][Ee][Nn][Aa][Mm][Ee]|[Cc][Oo][Pp][Yy]|[Aa][Pp][Pp][Ee][Nn][Dd]|[Pp][Aa][Tt][Cc][Hh]|[Rr][Ee][Pp][Ll][Aa][Cc][Ee]|[Ss][Aa][Vv][Ee]|[Pp][Uu][Tt]|[Uu][Pp][Ll][Oo][Aa][Dd]|[Ii][Nn][Ss][Ee][Rr][Tt]|[Dd][Ee][Ll][Ee][Tt][Ee]|[Rr][Ee][Mm][Oo][Vv][Ee]|[Uu][Nn][Ll][Ii][Nn][Kk])[\\w-]*|mcp__.+__(?:[\\w-]*[_-])?(?:update|modify|apply|set|push|UPDATE|MODIFY|APPLY|SET|PUSH|Update|Modify|Apply|Set|Push)(?:[A-Z_-][\\w-]*)?|mcp__.+__[\\w-]*[a-z0-9](?:Update|Modify|Apply|Set|Push)(?:[A-Z_-][\\w-]*)?)$",
         "hooks": [
           {
             "type": "command",
