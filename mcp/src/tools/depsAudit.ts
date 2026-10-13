@@ -126,19 +126,12 @@ function detectBots(projectPath: string): BotConfigured {
 registerToolModule(
   makeScanTool({
     name: 'deps_audit',
-    title: 'Dependency audit (Trivy + native auditors + bot detection)',
+    title: 'Dependency audit (Trivy and native auditors)',
     description:
-      'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; ' +
-      'pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the ' +
-      'host Python — it builds a TEMPORARY virtualenv and installs those requirements into it ' +
-      'from PyPI, or from an index the requirements file names (named in tools_run) — network ' +
-      'access; an sdist\'s build step runs there; and for any .sln/.csproj, ' +
-      '`dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive ' +
-      '--no-restore`. That restore EXECUTES the project\'s own MSBuild (targets, imported .props) ' +
-      'and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an ' +
-      'out-of-sync lock, or one a restore would create, is reported as a gap). Returns Findings, ' +
-      'indexed CVEs, and a `bot_configured` flag indicating whether Renovate or Dependabot is set ' +
-      'up in this repo.',
+      "Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs " +
+      "the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list " +
+      "package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync " +
+      'lock is a gap). Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).',
     // Its own type, not scan_deps' 'deps': the two shared cache entries and
     // answered for each other. Readers that want "the latest deps_audit" use
     // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.

@@ -49,12 +49,9 @@ const inputSchema = {
 };
 const tool = {
     name: 'suggest_fix',
-    title: 'Gather fix context for the model',
-    description: 'Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, ' +
-        'prior suppressions for the same tool and rule_id) so the calling model can propose a patch. ' +
-        "The finding is found in project_path's (default: the server's working directory) newest " +
-        'scan that reported it. This tool never calls an external LLM — the model that invoked it ' +
-        'does the synthesis.',
+    title: 'Gather fix context',
+    description: "Gather a finding's context — the source around it, rule metadata, earlier suppressions of the same " +
+        "rule — from project_path's newest scan that reported it, so you can write the patch. Calls no LLM.",
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };

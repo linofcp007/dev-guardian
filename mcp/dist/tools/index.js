@@ -5,6 +5,8 @@
  * server iterates the array on startup and calls `registerTool` for each
  * entry. No other file in the codebase needs to know about the SDK shape.
  */
+import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
@@ -24,8 +26,46 @@ export const DATABASE_BUSY_MESSAGE = "dev-guardian's database is locked by anoth
  * Mutable global registry. Modules append themselves at import time via
  * `registerToolModule`, which lets us keep additions localized to each
  * tool's file rather than threading a list through the bootstrap.
+ *
+ * It holds every name `tools/call` answers, hidden aliases included;
+ * `listedTools()` is what `tools/list` shows.
  */
 export const TOOLS = [];
+/** The tools `tools/list` shows: every registered tool but the hidden aliases. */
+export function listedTools(tools = TOOLS) {
+    return tools.filter((t) => t.listed !== false);
+}
+/**
+ * The `tools/list` answer: the listed tools, each with the JSON schema the
+ * SDK would derive from its strict input schema (`toJsonSchemaCompat`, the
+ * SDK's own converter and options) — less what no client needs:
+ *
+ *   - `$schema` (`http://json-schema.org/draft-07/schema#`, 54 characters a
+ *     tool). The MCP specification makes it optional; without it a schema is
+ *     read as JSON Schema 2020-12, and these schemas use no keyword whose
+ *     meaning differs between the two (no tuple `items`, `definitions`,
+ *     `dependencies` or `$ref` — `toolFolds.test.ts` holds that);
+ *   - `execution: {taskSupport: "forbidden"}`, which the SDK adds to every
+ *     tool: an absent `execution` means exactly that.
+ *
+ * Computed once per server: the registry does not change after startup.
+ */
+export function toolListing(tools = TOOLS) {
+    return listedTools(tools).map((t) => {
+        const inputSchema = toJsonSchemaCompat(strictInputSchema(t), {
+            strictUnions: true,
+            pipeStrategy: 'input',
+        });
+        delete inputSchema['$schema'];
+        return {
+            name: t.name,
+            ...(t.title ? { title: t.title } : {}),
+            description: t.description,
+            inputSchema,
+            ...(t.annotations !== undefined ? { annotations: t.annotations } : {}),
+        };
+    });
+}
 export function registerToolModule(tool) {
     if (TOOLS.some((t) => t.name === tool.name)) {
         throw new Error(`Tool '${tool.name}' is already registered`);
@@ -52,6 +92,11 @@ export function registerToolModule(tool) {
  * validates as `{}`. Measured on 430c797, before the schemas were strict, it
  * was already rejected — -32602 "Required" from every tool, `check_toolchain`
  * (no parameters at all) included — and an unknown key was stripped.
+ *
+ * Every registered tool answers `tools/call`, hidden aliases included; the
+ * `tools/list` handler the SDK installed is then replaced with one that
+ * serves `toolListing()` — the listed tools, without `$schema` and
+ * `execution` (`Server.setRequestHandler` replaces a handler by design).
  */
 export function attachAllTools(server, ctx) {
     for (const tool of TOOLS) {
@@ -82,9 +127,12 @@ export function attachAllTools(server, ctx) {
                     throw e;
                 result = { ok: false, error: { code: 'database_busy', message: DATABASE_BUSY_MESSAGE } };
             }
-            return toCallToolResult(result, tool.contentOnlyKeys ?? []);
+            const shapedBy = tool.route?.(input) ?? tool;
+            return toCallToolResult(result, shapedBy.contentOnlyKeys ?? []);
         });
     }
+    const listing = toolListing(TOOLS);
+    server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: listing }));
 }
 /**
  * The schema a tool is registered with: its shape, rejecting any other key,

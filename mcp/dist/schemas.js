@@ -11,29 +11,26 @@ export const ProjectPath = z
     .string()
     .min(1)
     .optional()
-    .describe('Absolute or relative path to the target project. Defaults to the current working directory.');
+    .describe("Project root. Default: the server's working directory.");
 export const SeverityMin = z
     .enum(SEVERITIES)
     .optional()
-    .describe('Filter the RESPONSE to this minimum severity or above. Default: include all. ' +
-    'The scan still records every finding it made, so baselines, diff_scans and the ' +
-    'trend are unaffected by this floor; `severity_filter` on the result counts what ' +
-    'the response left out.');
+    .describe('Response floor only; every finding is still recorded (`severity_filter`).');
 export const Force = z
     .boolean()
     .optional()
     .default(false)
-    .describe('Bypass the tree-hash cache and force a fresh scan.');
+    .describe('Bypass the tree-hash cache.');
 export const AutoFix = z
     .boolean()
     .optional()
     .default(false)
-    .describe('Apply scanner auto-fixes where supported (Semgrep --autofix, Trivy where applicable).');
+    .describe("Apply Semgrep's autofixes to the source (a clean tree, unless allow_dirty).");
 export const AllowDirty = z
     .boolean()
     .optional()
     .default(false)
-    .describe('Allow auto-fix to run even when the working tree has uncommitted changes.');
+    .describe('With auto_fix: allow uncommitted changes in the tree.');
 export const Categories = z
     .array(z.enum(CATEGORIES))
     .optional()

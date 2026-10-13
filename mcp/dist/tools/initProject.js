@@ -103,26 +103,18 @@ const PROFILE_FILES = {
 };
 const tool = {
     name: 'init_project',
-    title: 'Bootstrap project with dev-guardian configs',
-    description: 'Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then ' +
-        'report a first-pass secrets/vuln/SAST status. Profile=minimal|standard|paranoid. paranoid is ' +
-        'not an alias of standard: its gitleaks config drops every content-based allowlist entry ' +
-        '(fixtures, known placeholders, stopwords — only generated/vendored trees stay excluded, for ' +
-        'noise, not secrecy), and its Renovate config disables automerge everywhere (every update, not ' +
-        'just major ones, waits for a human) with a 7-day minimum release age versus standard\'s 3. ' +
-        'Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, ' +
-        'so later scans can tell you when a shipped config has been fixed since yours was installed. ' +
-        'refresh=true compares your copies against the current baselines: with apply=false it only ' +
-        'reports what would change, and with apply=true it updates files you never edited in place ' +
-        'and writes <name>.new alongside the ones you did. An edited file is never overwritten.',
+    title: "Bootstrap the project's dev-guardian configs",
+    description: 'Install the gitleaks, Renovate, Semgrep and pre-commit configs (profile minimal, standard or ' +
+        'paranoid) and report a first secrets, vulnerability and SAST status. refresh compares your copies ' +
+        'with the current ones: apply false only reports; apply true updates the files you never edited and ' +
+        'writes <name>.new beside the others — an edited file is never overwritten.',
     inputSchema: {
         project_path: ProjectPath,
         profile: z
             .enum(['minimal', 'standard', 'paranoid'])
             .optional()
-            .describe('Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and ' +
-            'pre-commit; paranoid: standard\'s files with a gitleaks config that has no content-based ' +
-            'allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard.'),
+            .describe('minimal (gitleaks, Renovate), standard (+ Semgrep, pre-commit) or paranoid (stricter). Default ' +
+            'standard.'),
         apply: z
             .boolean()
             .optional()
@@ -130,9 +122,7 @@ const tool = {
         refresh: z
             .boolean()
             .optional()
-            .describe('Opt-in re-sync of already-installed configs against the shipped baselines. Reports the ' +
-            'per-file action; only writes when apply is also true, and never over a file you edited ' +
-            '(that one is delivered as <name>.new instead). Default: false.'),
+            .describe('Compare installed configs with the current ones; writes only with apply, never over your edits.'),
     },
     handler: async (input, ctx) => handler(input, ctx),
 };

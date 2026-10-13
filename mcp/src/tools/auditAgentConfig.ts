@@ -31,7 +31,7 @@ const inputSchema = {
     .string()
     .min(1)
     .optional()
-    .describe('Absolute or relative path to the project to audit. Defaults to the current working directory.'),
+    .describe("The project to audit. Default: the server's working directory."),
   include_user_config: z
     .boolean()
     .optional()
@@ -40,34 +40,20 @@ const inputSchema = {
     // description is an instruction to the model as far as the model can
     // tell, and audit_mcp_tools flagged exactly that here (fix round 3, M7).
     .describe(
-      'When true, the audit also reads the USER-level config, shared across every project on this ' +
-        'machine: ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json), ~/.claude/settings.json, Claude ' +
-        'Desktop\'s claude_desktop_config.json, ~/.cursor/mcp.json, Windsurf\'s ' +
-        '~/.codeium/windsurf/mcp_config.json and ~/.gemini/settings.json. Off by default: it is outside ' +
-        'this project and auditing it here would mix one project\'s report with settings that affect ' +
-        'every other project too.',
+      'Also read the user-level configs every project shares. Default false.',
     ),
   severity_min: SeverityMin,
 };
 
 const tool: ToolModule = {
   name: 'audit_agent_config',
-  title: 'Audit the AI-agent workspace configuration (MCP servers, permissions, hooks)',
+  title: 'Audit the agent workspace configuration',
   description:
-    'Audit the AI-agent workspace configuration in this project (and, opt-in, the user-level config) ' +
-    'for risk signals that would let an agent session run unpinned code, leak secrets, or bypass ' +
-    'permission prompts. Reads .mcp.json, .claude/settings.json, .claude/settings.local.json, ' +
-    '.cursor/mcp.json, .vscode/mcp.json, .gemini/settings.json, .claude-plugin/plugin.json, and with ' +
-    'include_user_config also ~/.claude.json, ~/.claude/settings.json and the Claude Desktop, Cursor, ' +
-    'Windsurf and Gemini user configs. Flags: MCP servers launched via npx/uvx/pipx with no ' +
-    'version pinned; remote MCP servers over plain http://; secrets written inline in an env block ' +
-    '(redacted in the response); wildcard Bash permission allowlists (Bash(*), Bash(rm:*), ' +
-    'Bash(curl:*)); defaultMode: bypassPermissions; enableAllProjectMcpServers; hooks that shell out ' +
-    'to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a ' +
-    'project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). ' +
-    'Hashes each MCP server entry and flags ones changed since the previous audit. No network access; ' +
-    'nothing here is executed. For the tool definitions a server actually serves (poisoning, rug pulls), ' +
-    'use audit_mcp_tools, which starts the servers you name.',
+    "Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, " +
+    'plugin.json; user-level ones with include_user_config): unpinned npx/uvx servers, plain-http remote ' +
+    'servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach ' +
+    'the network, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. ' +
+    'Reads only; audit_mcp_tools inspects what servers serve.',
   inputSchema,
   handler: (input, ctx) => handler(input, ctx),
 };

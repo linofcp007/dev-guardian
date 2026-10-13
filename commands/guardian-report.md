@@ -41,13 +41,13 @@ Arguments: $ARGUMENTS
 
 1. Read `guardian://scans/history` (the 50 most recent scans of every type). Default window: the last 10 scans of each type, or the window in the hint.
 2. For each consecutive pair of the same type: `diff_scans { project_path: "<project>", from_scan_id: "<older>", to_scan_id: "<newer>" }` — `new`, `resolved`, and `not_remeasured` (a scanner that did not run, never a resolution). A finding under an active suppression is in `suppressed_findings` (`summary.suppressed`), never in `resolved`: report a jump there as a suppression, not a fix.
-3. `regression_alert { project_path: "<project>", scan_type: "<type>" }` — the latest scan of that type against its baseline; `suppressed_by_severity` counts what suppressions kept out of its score.
-   Another scanner's SARIF log joins the history with `import_sarif { project_path: "<project>", sarif_path: "<log>" }` (`sarif_import` scans); `diff_scans`, `regression_alert` and `set_baseline` then take `source_tool` to say which tool's imports to compare — see `docs/sarif-import.md`.
+3. `diff_scans { mode: "regression", project_path: "<project>", scan_type: "<type>" }` — the latest scan of that type against its baseline; `suppressed_by_severity` counts what suppressions kept out of its score.
+   Another scanner's SARIF log joins the history with `import_sarif { project_path: "<project>", sarif_path: "<log>" }` (`sarif_import` scans); `diff_scans` (both modes) and `set_baseline` then take `source_tool` to say which tool's imports to compare — see `docs/sarif-import.md`.
 4. Show a table per severity with ↑ worse / ↓ better / → flat, the **chronic** findings (still `unchanged` across most of the window), the wins that stayed resolved, and a rough **debt half-life** from the resolution rate. This is a snapshot: for what to do next, `debt`.
 
 ## `debt` — hotspots ranked by ROI
 
-1. `risk_score { project_path: "<project>" }` and `prioritize_findings { project_path: "<project>", limit: 50 }`; `triage_findings { project_path: "<project>" }` to set likely false positives aside.
+1. `risk_score { project_path: "<project>" }` and `prioritize_findings { project_path: "<project>", limit: 50 }`; `prioritize_findings { view: "triage", project_path: "<project>" }` to set likely false positives aside.
 2. When the latest quality scan is stale: `quality_check { project_path: "<project>" }`.
 3. Churn: `git log --since="6 months ago" --name-only --format=`. No tool ranks files — you do: findings per file × severity × churn.
 4. The **top 10 hotspots**, each with a one-line why, one move (🛠️ refactor / 🧪 add tests / 📚 document the gotcha / 🗑️ delete) and an effort-versus-impact estimate. Favour small moves; never a mass rewrite; if the project is clean, say so.

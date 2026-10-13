@@ -14,9 +14,9 @@
  * (`lodash@4.17.20`, `Fix: >= 4.17.21`), a Node.js floor (`>= 22.13`), and the
  * sibling plugin a feature needs (`dev-spec-driven 1.29+`).
  *
- * KNOWN lists the offenders this branch could not edit — tool descriptions
- * are reworded in the tool-description pass — so the list can only shrink:
- * an entry that no longer matches fails too.
+ * KNOWN lists offenders a branch could not edit yet, so the list can only
+ * shrink: an entry that no longer matches fails too. The tool-description
+ * pass emptied it (health_status said "a database from before" a release).
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -51,10 +51,8 @@ function hits(text: string): string[] {
   return out;
 }
 
-/** Tool descriptions and titles still carrying history, until the tool-description pass rewrites them. */
-const KNOWN: Record<string, readonly string[]> = {
-  health_status: ['"a database from before 3.1.0" in the storage_warning sentence'],
-};
+/** Tool descriptions and titles still carrying history. Empty since the tool-description pass; it only shrinks. */
+const KNOWN: Record<string, readonly string[]> = {};
 
 describe('model-facing prose states the current rule, not the release history', () => {
   it.each(allDocs().map((d) => [d.rel, d.text] as const))('%s', (_rel, text) => {
@@ -65,7 +63,7 @@ describe('model-facing prose states the current rule, not the release history', 
     expect(hits(RULES_BODY)).toEqual([]);
   });
 
-  it('tool titles and descriptions (only the known offenders, and each still offends)', () => {
+  it('tool titles and descriptions (only the known offenders — none — and each still offends)', () => {
     const found: Record<string, string[]> = {};
     for (const t of TOOLS) {
       const h = hits(`${t.title ?? ''}\n${t.description}`);

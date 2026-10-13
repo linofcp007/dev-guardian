@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 
 import { RESOURCES, type ResourceModule } from '../../src/resources/index.js';
+import { FOLDS, type FoldRecord } from '../../src/tools/fold.js';
 import { TOOLS, type ToolModule } from '../../src/tools/index.js';
 import { enumerateClauses } from '../ablate/clauses.js';
 import type { PackInput } from './renderDocs.js';
@@ -51,8 +52,12 @@ export function loadPacks(dir: string = PACKS_DIR): PackInput[] {
     });
 }
 
-/** The full registry — importing `registerAll` is what populates it. */
-export async function loadRegistry(): Promise<{ tools: readonly ToolModule[]; resources: readonly ResourceModule[] }> {
+/** The full registry — importing `registerAll` is what populates it. `tools` holds the hidden aliases too. */
+export async function loadRegistry(): Promise<{
+  tools: readonly ToolModule[];
+  resources: readonly ResourceModule[];
+  folds: readonly FoldRecord[];
+}> {
   await import('../../src/registerAll.js');
-  return { tools: TOOLS, resources: RESOURCES };
+  return { tools: TOOLS, resources: RESOURCES, folds: FOLDS };
 }

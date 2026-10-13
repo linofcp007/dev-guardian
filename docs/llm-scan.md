@@ -88,7 +88,7 @@ acts on a finding:
   verdict, and a suppression made earlier stays in force.
 - **A hunt finding** is stored as an `llm-hunt` finding of the plan's `llm_scan`
   scan, with a verify task of its own. It counts — in the open set, triage,
-  `risk_score`, `regression_alert`, `diff_scans`, the dashboard, the scan
+  `risk_score`, `diff_scans` (both modes), the dashboard, the scan
   resources and the release gates — only once an independent verify answer
   says `real`. Until then, and after a `not_real`, it is a candidate: the
   report lists it in a section of its own and no total counts it.

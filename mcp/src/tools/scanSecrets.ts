@@ -76,18 +76,11 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
   name: 'scan_secrets',
   title: 'Secret scan (gitleaks)',
   description:
-    'Detect secrets / API keys / tokens with gitleaks: in git history AND in files not committed yet ' +
-    '(modified, staged, untracked-not-ignored), or the whole directory when the project is not a git ' +
-    'repository (skipping node_modules, vendor, .git and build output). Each finding says where it was ' +
-    'found: history (with the commit), working_tree or directory. A history pass that scanned 0 commits ' +
-    'is reported as failed, never as clean. The raw secret never reaches MCP output, the database or ' +
-    'reports. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are ' +
-    'scanned as files, diff.base and since as exactly those commits. .guardianignore paths are ' +
-    "filtered out. The project's .gitleaks.toml and .gitleaksignore are honoured, and named in " +
-    '`tools_run[].honoured_config`. verify_live (off by default) asks whether each GitHub, GitLab, Slack, Stripe, ' +
-    "OpenAI, Anthropic, npm or SendGrid secret still works: it sends each secret to its own provider's " +
-    'read-only API and nowhere else (5 s timeout, at most 50 per scan), and marks the finding live ' +
-    '(raised to critical, with where to revoke it), revoked or unknown.',
+    'gitleaks over git history and uncommitted files (the whole directory outside git); each finding says ' +
+    'where: history (with the commit), working_tree or directory. A history pass over 0 commits is ' +
+    'failed, never clean. The secret never reaches the response, the database or a report. .gitleaks.toml ' +
+    'and .gitleaksignore are honoured (`tools_run[].honoured_config`). verify_live asks each provider ' +
+    '(GitHub, Slack, Stripe, OpenAI, …) whether its secret is live: ask the user first.',
   scan_type: 'secrets',
   // History is read beyond the working tree: HEAD and every ref join the key.
   // A verifying scan run offline (every verdict `unknown`) must not be served
@@ -106,9 +99,7 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
       .max(400)
       .optional()
       .describe(
-        'Narrow the history pass. Only --all, <ref>..<ref> (or ...) and --since=<date> are accepted, ' +
-          'space-separated; every ref must resolve to a commit. Example: "--since=2026-01-01" or ' +
-          '"v1.2.0..HEAD". The uncommitted-files pass always runs. Not with scope.',
+        'Narrow the history pass: --all, <ref>..<ref> or --since=<date>. Not with scope.',
       ),
     force: Force,
     scope: ScanScopeInput,
@@ -117,8 +108,7 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
       .optional()
       .default(false)
       .describe(
-        "Off by default. Sends each supported secret to its own provider's read-only identity API — and " +
-          'nowhere else — to learn whether it is live, revoked or unknown. GUARDIAN_OFFLINE=1 sends nothing.',
+        "Ask each secret's own provider whether it is live: sends the secrets out, so ask the user first.",
       ),
   },
   invoke: async (input, ctx): Promise<ScannerInvocation> => {

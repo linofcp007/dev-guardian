@@ -132,21 +132,13 @@ const signerValue = (): z.ZodString => z.string().min(1).max(1024);
 
 const scanContainers = makeScanTool({
     name: 'scan_containers',
-    title: 'Container scan (Dockerfile + image + compose)',
+    title: 'Container scan (Dockerfile, image, compose)',
     description:
-      'Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + ' +
-      'misconfig). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present. ' +
-      'Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file ' +
-      '(docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for ' +
-      'privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags. ' +
-      'For the image, cosign (3.0+) checks its Sigstore signature on the digest it pins the tag to (unless ' +
-      'GUARDIAN_OFFLINE=1): with signer_identity (or signer_identity_regexp) AND signer_issuer (or ' +
-      'signer_issuer_regexp), a real cosign verify — a confirmed rejection is a high finding; without them, only ' +
-      'whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and ' +
-      'image_signature says an existing signature was NOT verified. Only a network or registry failure withholds a ' +
-      'verdict: a junk, unparseable or non-Sigstore artifact is no signature. A registry failure, even one cosign ' +
-      'skips in silence, is unknown, never absent — except a referrers API answering with no index at all (400, ' +
-      '406, HTML): see SECURITY.md. cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.',
+      'Trivy on a Dockerfile (config) and/or an image (vulnerabilities, secrets, misconfiguration); with ' +
+      'neither, ./Dockerfile. hadolint lints the Dockerfile; a root compose file is checked for privileged ' +
+      "containers, host networking, docker.sock and unpinned tags. An image's Sigstore signature is checked " +
+      'with cosign: a real verify with signer_identity and signer_issuer (a rejection is high), else ' +
+      'whether a signature and SLSA provenance exist. A registry failure is unknown, never absent.',
     scan_type: 'containers',
     category: 'security',
     supportsAutoFix: false,
@@ -163,17 +155,13 @@ const scanContainers = makeScanTool({
         .optional()
         .describe('Container image reference to scan with `trivy image`.'),
       signer_identity: signerValue().optional().describe(
-        "The identity `image` must be signed by: the signing certificate's subject — a workflow URL such as " +
-          'https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main, or an e-mail. Needs ' +
-          'signer_issuer (or signer_issuer_regexp); runs cosign verify.',
+        'The identity `image` must be signed by (a workflow URL or an e-mail). Needs signer_issuer.',
       ),
       signer_identity_regexp: signerValue().optional().describe(
-        'signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every ' +
-          'release workflow of one repository. Not with signer_identity.',
+        'signer_identity as an RE2 regular expression.',
       ),
       signer_issuer: signerValue().optional().describe(
-        'The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) ' +
-          'or https://accounts.google.com.',
+        'The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com.',
       ),
       signer_issuer_regexp: signerValue().optional().describe(
         'signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer.',

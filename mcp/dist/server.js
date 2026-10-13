@@ -3889,10 +3889,10 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative38, options, skipNormalization) {
+    function resolveComponent(base2, relative38, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse11(serialize2(base, options), options);
+        base2 = parse11(serialize2(base2, options), options);
         relative38 = parse11(serialize2(relative38, options), options);
       }
       options = options || {};
@@ -3912,32 +3912,32 @@ var require_fast_uri = __commonJS({
           target.query = relative38.query;
         } else {
           if (!relative38.path) {
-            target.path = base.path;
+            target.path = base2.path;
             if (relative38.query !== void 0) {
               target.query = relative38.query;
             } else {
-              target.query = base.query;
+              target.query = base2.query;
             }
           } else {
             if (relative38.path[0] === "/") {
               target.path = removeDotSegments(relative38.path);
             } else {
-              if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
+              if ((base2.userinfo !== void 0 || base2.host !== void 0 || base2.port !== void 0) && !base2.path) {
                 target.path = "/" + relative38.path;
-              } else if (!base.path) {
+              } else if (!base2.path) {
                 target.path = relative38.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative38.path;
+                target.path = base2.path.slice(0, base2.path.lastIndexOf("/") + 1) + relative38.path;
               }
               target.path = removeDotSegments(target.path);
             }
             target.query = relative38.query;
           }
-          target.userinfo = base.userinfo;
-          target.host = base.host;
-          target.port = base.port;
+          target.userinfo = base2.userinfo;
+          target.host = base2.host;
+          target.port = base2.port;
         }
-        target.scheme = base.scheme;
+        target.scheme = base2.scheme;
       }
       target.fragment = relative38.fragment;
       return target;
@@ -5069,8 +5069,8 @@ var require_multipleOf = __commonJS({
         const { gen, data, schemaCode, it } = cxt;
         const prec = it.opts.multipleOfPrecision;
         const res = gen.let("res");
-        const invalid = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
-        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid}))`);
+        const invalid2 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
+        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid2}))`);
       }
     };
     exports.default = def;
@@ -26566,23 +26566,23 @@ var ZodEffects = class extends ZodType {
     }
     if (effect.type === "transform") {
       if (ctx.common.async === false) {
-        const base = this._def.schema._parseSync({
+        const base2 = this._def.schema._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: ctx
         });
-        if (!isValid(base))
+        if (!isValid(base2))
           return INVALID;
-        const result = effect.transform(base.value, checkCtx);
+        const result = effect.transform(base2.value, checkCtx);
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
         return { status: status.value, value: result };
       } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base) => {
-          if (!isValid(base))
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base2) => {
+          if (!isValid(base2))
             return INVALID;
-          return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base2.value, checkCtx)).then((result) => ({
             status: status.value,
             value: result
           }));
@@ -34216,19 +34216,19 @@ function parseNullableDef(def, refs) {
     };
   }
   if (refs.target === "openApi3") {
-    const base2 = parseDef(def.innerType._def, {
+    const base3 = parseDef(def.innerType._def, {
       ...refs,
       currentPath: [...refs.currentPath]
     });
-    if (base2 && "$ref" in base2)
-      return { allOf: [base2], nullable: true };
-    return base2 && { ...base2, nullable: true };
+    if (base3 && "$ref" in base3)
+      return { allOf: [base3], nullable: true };
+    return base3 && { ...base3, nullable: true };
   }
-  const base = parseDef(def.innerType._def, {
+  const base2 = parseDef(def.innerType._def, {
     ...refs,
     currentPath: [...refs.currentPath, "anyOf", "0"]
   });
-  return base && { anyOf: [base, { type: "null" }] };
+  return base2 && { anyOf: [base2, { type: "null" }] };
 }
 
 // node_modules/zod-to-json-schema/dist/esm/parsers/number.js
@@ -35655,8 +35655,8 @@ var Protocol = class {
 function isPlainObject2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function mergeCapabilities(base, additional) {
-  const result = { ...base };
+function mergeCapabilities(base2, additional) {
+  const result = { ...base2 };
   for (const key in additional) {
     const k = key;
     const addValue = additional[k];
@@ -39031,8 +39031,8 @@ function neutraliseListing(entries2, env) {
 function probeArgs(dir) {
   return ["-c", "safe.directory=*", "-C", dir, "config", "--includes", "--show-scope", "-z", "--get-regexp", COMMAND_KEYS_REGEX];
 }
-function probeEnv(base, platform2) {
-  const env = { ...base };
+function probeEnv(base2, platform2) {
+  const env = { ...base2 };
   for (const name of Object.keys(env)) if (sameName(name, "GIT_CONFIG", platform2)) delete env[name];
   const stat3 = staticGitSafety(platform2);
   return applyGitSafety({ ...stat3, config: [...stat3.config, [PROBE_KEY, "1"]] }, env, platform2);
@@ -39055,9 +39055,9 @@ function interpretExit(status, stdout, stderr, dir) {
   };
 }
 function combine(probes, env, platform2) {
-  const base = staticGitSafety(platform2);
-  const config2 = [...base.config];
-  const vars = { ...base.vars };
+  const base2 = staticGitSafety(platform2);
+  const config2 = [...base2.config];
+  const vars = { ...base2.vars };
   const notApplied = /* @__PURE__ */ new Set();
   const refusals = [];
   const seen = /* @__PURE__ */ new Set();
@@ -39306,8 +39306,8 @@ function probeError(error2, dir, timeoutMs) {
   }
   return { kind: "refused", message: `could not read the git configuration of ${dir}: ${error2.message}` };
 }
-function applyGitSafety(safety, base, platform2 = process.platform) {
-  const env = { ...base };
+function applyGitSafety(safety, base2, platform2 = process.platform) {
+  const env = { ...base2 };
   for (const [name, value] of Object.entries(safety.vars)) setVar(env, name, value, platform2);
   if (countProblem(env, platform2) !== null) return env;
   const countName = Object.keys(env).find((name) => sameName(name, "GIT_CONFIG_COUNT", platform2));
@@ -45006,8 +45006,8 @@ function lockFileAdvice(ecosystem) {
 var DEV_ONLY_ADVICE = "only devDependencies, which Trivy skips by default";
 var MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
 function manifestEcosystemOfTarget(target) {
-  const base = target.slice(Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\")) + 1).toLowerCase();
-  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base));
+  const base2 = target.slice(Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\")) + 1).toLowerCase();
+  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base2));
   return eco?.ecosystem ?? null;
 }
 var NPM_DECLARING_FIELDS = [
@@ -45579,8 +45579,8 @@ async function runProcess(options) {
   let extendEnv = options.extendEnv ?? true;
   let gitNotApplied = [];
   if (options.gitHardening !== false) {
-    const base = extendEnv ? { ...process.env, ...options.env ?? {} } : { ...options.env ?? {} };
-    const full = await gitSafetyFor([options.cwd, ...options.gitRepos ?? []], { env: base });
+    const base2 = extendEnv ? { ...process.env, ...options.env ?? {} } : { ...options.env ?? {} };
+    const full = await gitSafetyFor([options.cwd, ...options.gitRepos ?? []], { env: base2 });
     const safety = options.gitHardening === "except-hooks-path" ? withoutHooksPath(full) : full;
     if (safety.refused !== null) {
       return {
@@ -45591,7 +45591,7 @@ async function runProcess(options) {
         truncated: false
       };
     }
-    env = applyGitSafety(safety, base);
+    env = applyGitSafety(safety, base2);
     extendEnv = false;
     gitNotApplied = safety.notApplied;
   }
@@ -45906,7 +45906,7 @@ async function resolveCommit(cwd, ref) {
   const sha = r.stdout.trim();
   return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
 }
-async function changedFiles(cwd, base, head) {
+async function changedFiles(cwd, base2, head) {
   const r = await git(cwd, [
     "diff",
     "-z",
@@ -45914,11 +45914,11 @@ async function changedFiles(cwd, base, head) {
     "--relative",
     "--diff-filter=ACMR",
     "--no-renames",
-    `${base}...${head}`,
+    `${base2}...${head}`,
     "--"
   ]);
   if (r.exitCode !== 0) {
-    throw new Error(`git diff ${base}...${head} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
+    throw new Error(`git diff ${base2}...${head} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
   }
   return splitNul(r.stdout);
 }
@@ -46554,8 +46554,8 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
   for (const name of gaps) {
     const colon = name.indexOf(":");
     if (colon <= 0 || hasOwnRun(name) || !ranOkNames.has(name.slice(0, colon))) continue;
-    const base = name.slice(0, colon);
-    partsOf.set(base, [...partsOf.get(base) ?? [], name.slice(colon + 1)]);
+    const base2 = name.slice(0, colon);
+    partsOf.set(base2, [...partsOf.get(base2) ?? [], name.slice(colon + 1)]);
   }
   const isPart = (name) => {
     const colon = name.indexOf(":");
@@ -46571,11 +46571,11 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
       `${unreadable.join(", ")} ran but ${anyDevOnly(manifestGaps) ? "reported on" : "read"} no dependency manifest \u2014 ` + manifestAdvice(manifestGaps)
     );
   }
-  for (const [base, allParts] of partsOf) {
+  for (const [base2, allParts] of partsOf) {
     const parts = allParts.filter((part) => part !== "manifest-walk");
     if (parts.length < allParts.length) {
       clauses.push(
-        `${base} ran, but the check of which dependency manifests it read stopped early (see its tools_run reason) \u2014 manifests beyond it were not checked`
+        `${base2} ran, but the check of which dependency manifests it read stopped early (see its tools_run reason) \u2014 manifests beyond it were not checked`
       );
     }
     if (parts.length === 0) continue;
@@ -46585,7 +46585,7 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     });
     const covered = manifestGaps.filter((g) => parts.includes(g.ecosystem));
     clauses.push(
-      `${base} ran, but ${named2.join(", ")} was not covered` + (covered.length > 0 ? ` \u2014 ${manifestAdvice(covered)}` : "")
+      `${base2} ran, but ${named2.join(", ")} was not covered` + (covered.length > 0 ? ` \u2014 ${manifestAdvice(covered)}` : "")
     );
   }
   if (ranWithGaps.length > 0) {
@@ -46799,10 +46799,10 @@ function writeManifest(projectPath, manifest) {
   }).ok;
 }
 function upsertManifestEntry(manifest, entry) {
-  const base = manifest ?? emptyManifest();
+  const base2 = manifest ?? emptyManifest();
   return {
     schema_version: MANIFEST_SCHEMA_VERSION,
-    entries: [...base.entries.filter((e) => e.target !== entry.target), entry]
+    entries: [...base2.entries.filter((e) => e.target !== entry.target), entry]
   };
 }
 function findManifestEntry(manifest, target) {
@@ -49253,6 +49253,10 @@ var TOOL_ANNOTATIONS = {
   scan_dotnet_secrets: records(true),
   // a .NET build restores from NuGet feeds
   dotnet_efcore_audit: records(true),
+  // Folds (./folds.ts): every member's hints covered — read-only only when all are, open-world when any is.
+  dotnet_check: records(true),
+  wp_report: records(false),
+  // the plugin kind runs WP-CLI and records a row
   scan_skill: records(true),
   // OSV
   scan_wordpress: records(true),
@@ -49304,6 +49308,25 @@ var TOOL_ANNOTATIONS = {
 // src/tools/index.ts
 var DATABASE_BUSY_MESSAGE = `dev-guardian's database is locked by another process \u2014 another dev-guardian server, hook or CLI writing to it (several can share one project) \u2014 and it was not released within ${SESSION_BUSY_TIMEOUT_MS / 1e3} s. Retry the call in a few seconds. If it keeps happening, close the other sessions working on this project, or end a dev-guardian process that is stuck.`;
 var TOOLS = [];
+function listedTools(tools = TOOLS) {
+  return tools.filter((t) => t.listed !== false);
+}
+function toolListing(tools = TOOLS) {
+  return listedTools(tools).map((t) => {
+    const inputSchema34 = toJsonSchemaCompat(strictInputSchema(t), {
+      strictUnions: true,
+      pipeStrategy: "input"
+    });
+    delete inputSchema34["$schema"];
+    return {
+      name: t.name,
+      ...t.title ? { title: t.title } : {},
+      description: t.description,
+      inputSchema: inputSchema34,
+      ...t.annotations !== void 0 ? { annotations: t.annotations } : {}
+    };
+  });
+}
 function registerToolModule(tool54) {
   if (TOOLS.some((t) => t.name === tool54.name)) {
     throw new Error(`Tool '${tool54.name}' is already registered`);
@@ -49344,10 +49367,13 @@ function attachAllTools(server, ctx) {
           if (!isDatabaseBusyError(e)) throw e;
           result = { ok: false, error: { code: "database_busy", message: DATABASE_BUSY_MESSAGE } };
         }
-        return toCallToolResult(result, tool54.contentOnlyKeys ?? []);
+        const shapedBy = tool54.route?.(input) ?? tool54;
+        return toCallToolResult(result, shapedBy.contentOnlyKeys ?? []);
       }
     );
   }
+  const listing = toolListing(TOOLS);
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: listing }));
 }
 function strictInputSchema(tool54) {
   const schema = external_exports.object(tool54.inputSchema).strict();
@@ -49379,6 +49405,16 @@ function toCallToolResult(result, contentOnlyKeys) {
   };
 }
 
+// src/tools/instructions.ts
+var SERVER_INSTRUCTIONS = [
+  "dev-guardian runs open-source scanners locally and keeps their history (baselines, diffs, suppressions). Use its tools, not the scanners in a shell.",
+  "Whole project: security_scan_full; a diff: review_pr or a scan with scope; bugs: bug_hunt; deps: deps_audit, and vet_packages before an install; WordPress: scan_wordpress, wp_*; .NET: dotnet_check; history: diff_scans, prioritize_findings, health_status.",
+  "A scanner that did not run is a gap, never 0 findings: read tools_run, missing_tools and coverage first.",
+  "Never run db adopt for the user. Never run baseline update to accept one finding: it accepts all of them.",
+  "create_fix_pr: dry run first. Ask before scan_secrets verify_live or audit_mcp_tools.",
+  "With .specs/ (dev-spec-driven): spec_next_action first; a reported bug goes to /spec-bugfix."
+].join("\n");
+
 // src/runners/findingMerge.ts
 function findingMergeKey(f) {
   return f.fingerprint;
@@ -49396,13 +49432,13 @@ function dedupeFindings(findings) {
 }
 
 // src/schemas.ts
-var ProjectPath = external_exports.string().min(1).optional().describe("Absolute or relative path to the target project. Defaults to the current working directory.");
+var ProjectPath = external_exports.string().min(1).optional().describe("Project root. Default: the server's working directory.");
 var SeverityMin = external_exports.enum(SEVERITIES).optional().describe(
-  "Filter the RESPONSE to this minimum severity or above. Default: include all. The scan still records every finding it made, so baselines, diff_scans and the trend are unaffected by this floor; `severity_filter` on the result counts what the response left out."
+  "Response floor only; every finding is still recorded (`severity_filter`)."
 );
-var Force = external_exports.boolean().optional().default(false).describe("Bypass the tree-hash cache and force a fresh scan.");
-var AutoFix = external_exports.boolean().optional().default(false).describe("Apply scanner auto-fixes where supported (Semgrep --autofix, Trivy where applicable).");
-var AllowDirty = external_exports.boolean().optional().default(false).describe("Allow auto-fix to run even when the working tree has uncommitted changes.");
+var Force = external_exports.boolean().optional().default(false).describe("Bypass the tree-hash cache.");
+var AutoFix = external_exports.boolean().optional().default(false).describe("Apply Semgrep's autofixes to the source (a clean tree, unless allow_dirty).");
+var AllowDirty = external_exports.boolean().optional().default(false).describe("With auto_fix: allow uncommitted changes in the tree.");
 var Categories = external_exports.array(external_exports.enum(CATEGORIES)).optional().describe("Restrict the run to these categories only.");
 var SeverityEnum = external_exports.enum(SEVERITIES);
 var CategoryEnum = external_exports.enum(CATEGORIES);
@@ -50567,8 +50603,8 @@ var SEMGREP_MAX_TARGET_BYTES = 1e6;
 var WINDOWS_MAX_PATH = 260;
 function longPathsOf(root, rels, platform2 = process.platform) {
   if (platform2 !== "win32") return [];
-  const base = resolve13(root);
-  return rels.filter((rel2) => join28(base, ...rel2.split("/")).length >= WINDOWS_MAX_PATH).sort();
+  const base2 = resolve13(root);
+  return rels.filter((rel2) => join28(base2, ...rel2.split("/")).length >= WINDOWS_MAX_PATH).sort();
 }
 function isScannedSource(rel2, exclusions) {
   if (languageOfFile(rel2) === null && !/\.h$/i.test(rel2)) return false;
@@ -50889,25 +50925,25 @@ function detectConfigDrift(input) {
   };
 }
 function classify2(entry, input) {
-  const base = {
+  const base2 = {
     target: entry.target,
     source: entry.source,
     recorded_plugin_version: entry.plugin_version,
     current_plugin_version: input.currentVersion
   };
   const sourceHash = hashConfigFile(input.configsDir, entry.source);
-  if (sourceHash === null) return { ...base, state: "source_missing" };
+  if (sourceHash === null) return { ...base2, state: "source_missing" };
   const targetHash = hashConfigFile(input.projectPath, entry.target);
-  if (targetHash === null) return { ...base, state: "target_missing" };
+  if (targetHash === null) return { ...base2, state: "target_missing" };
   if (entry.delivered_as !== void 0 && presentInProject(input.projectPath, entry.delivered_as)) {
-    return { ...base, state: "pending_merge", delivered_as: entry.delivered_as };
+    return { ...base2, state: "pending_merge", delivered_as: entry.delivered_as };
   }
   const oursMoved = sourceHash !== entry.source_sha256;
   const theirsMoved = targetHash !== entry.target_sha256;
-  if (oursMoved && theirsMoved) return { ...base, state: "diverged" };
-  if (oursMoved) return { ...base, state: "upstream_update" };
-  if (theirsMoved) return { ...base, state: "local_edit" };
-  return { ...base, state: "in_sync" };
+  if (oursMoved && theirsMoved) return { ...base2, state: "diverged" };
+  if (oursMoved) return { ...base2, state: "upstream_update" };
+  if (theirsMoved) return { ...base2, state: "local_edit" };
+  return { ...base2, state: "in_sync" };
 }
 
 // src/redaction/secretFindingRedaction.ts
@@ -51011,17 +51047,17 @@ function escapeRegExp2(text2) {
 // src/platform/scope.ts
 var ScanScopeInput = external_exports.object({
   paths: external_exports.array(external_exports.string().min(1).max(4096)).min(1).max(1e3).optional().describe(
-    "Files, directories or globs relative to (and inside) project_path. Directories are expanded to their files. With diff/since, narrows that change set to these paths."
+    "Files, directories or globs in project_path; with diff or since, narrows that set."
   ),
   diff: external_exports.object({
-    base: external_exports.string().min(1).max(256).optional().describe("Scan the files changed between the merge base of this ref and head (committed work)."),
+    base: external_exports.string().min(1).max(256).optional().describe("The files changed since the merge base of this ref and head."),
     head: external_exports.string().min(1).max(256).optional().describe("Must be the checked-out commit. Default HEAD."),
-    staged: external_exports.boolean().optional().describe("Only the files staged in the index (read from the working tree, like every scope)."),
-    include_untracked: external_exports.boolean().optional().describe("Also untracked, non-ignored files. Default: true without base/staged, else false.")
+    staged: external_exports.boolean().optional().describe("Only the staged files."),
+    include_untracked: external_exports.boolean().optional().describe("Also untracked files. Default: true without base or staged.")
   }).strict().optional().describe("A git change set. {} = every uncommitted change (staged, unstaged, untracked)."),
-  since: external_exports.string().min(1).max(256).optional().describe('A commit/tag, or a date (YYYY-MM-DD, "2 weeks ago", "yesterday"): what changed since.')
+  since: external_exports.string().min(1).max(256).optional().describe('What changed since a commit, tag or date ("2 weeks ago").')
 }).strict().optional().describe(
-  "Scan part of the project instead of all of it. Findings are restricted to the scope; the scan is recorded as scoped (meta.scope), never becomes a baseline and never replaces a whole-project scan in the project's open findings."
+  "Scan part of the project: paths, a git change set, or changes since a ref or date. Never a baseline."
 );
 var ScopeError = class extends Error {
   constructor(message2, code) {
@@ -51336,9 +51372,9 @@ async function resolveDiff(projectPath, diff) {
     meta: { diff: { staged: diff.staged === true, include_untracked: includeUntracked } }
   };
 }
-async function changedFilesOrThrow(projectPath, base, head) {
+async function changedFilesOrThrow(projectPath, base2, head) {
   try {
-    return (await changedFiles(projectPath, base, head)).map(normaliseRelPath);
+    return (await changedFiles(projectPath, base2, head)).map(normaliseRelPath);
   } catch (e) {
     throw new ScopeError(e instanceof Error ? e.message : String(e), "target_not_found");
   }
@@ -51438,14 +51474,14 @@ function makeProgressEmitter(options) {
     if (!lastPayload) return;
     heartbeatCounter += 1;
     const elapsedS = Math.round((Date.now() - startedAt2) / 1e3);
-    const base = noted ?? lastPayload.message;
+    const base2 = noted ?? lastPayload.message;
     const payload = {
       ...lastPayload,
       // Heartbeat: re-send the last step but with a bumped progress value so
       // the host knows the server is alive even if no boundary happened.
       progress: typeof lastPayload.total === "number" ? lastPayload.progress : lastPayload.progress + heartbeatCounter / 1e3
     };
-    payload.message = base !== void 0 ? `${base} (${elapsedS}s elapsed)` : `${elapsedS}s elapsed`;
+    payload.message = base2 !== void 0 ? `${base2} (${elapsedS}s elapsed)` : `${elapsedS}s elapsed`;
     sendMonotonic(options.notifier, payload);
   }, heartbeat);
   if (typeof interval.unref === "function") {
@@ -52551,16 +52587,16 @@ function commandLineLength(command, args) {
 }
 function batchArgs(items, options) {
   const budget = options.maxChars ?? ARG_CHAR_BUDGET;
-  const base = commandLineLength(options.command ?? "x".repeat(260), options.fixedArgs);
+  const base2 = commandLineLength(options.command ?? "x".repeat(260), options.fixedArgs);
   const batches = [];
   let current = [];
-  let used = base;
+  let used = base2;
   for (const item of items) {
     const cost = argCost(item);
     if (current.length > 0 && used + cost > budget) {
       batches.push(current);
       current = [];
-      used = base;
+      used = base2;
     }
     current.push(item);
     used += cost;
@@ -52588,15 +52624,15 @@ function loadScanSettings(root) {
   const path8 = SCAN_SETTINGS_RELATIVE_PATH;
   const read3 = readProjectText(root, path8, MAX_BYTES);
   if (read3.status === "absent") return { kind: "none", settings: defaultScanSettings() };
-  const invalid = (error2) => ({ kind: "invalid", path: path8, error: error2, settings: defaultScanSettings() });
-  if (read3.status === "refused") return invalid(`the file was not read: ${describeReadRefusal(read3.reason)}`);
+  const invalid2 = (error2) => ({ kind: "invalid", path: path8, error: error2, settings: defaultScanSettings() });
+  if (read3.status === "refused") return invalid2(`the file was not read: ${describeReadRefusal(read3.reason)}`);
   if (read3.text.trim() === "") return { kind: "loaded", path: path8, settings: defaultScanSettings() };
   const parsed = parseYamlBounded(read3.text);
   if (!parsed.ok) {
-    return invalid(parsed.reason === "invalid" ? `invalid YAML: ${(parsed.detail ?? "unparsable").split("\n")[0] ?? ""}` : describeYamlRefusal(parsed));
+    return invalid2(parsed.reason === "invalid" ? `invalid YAML: ${(parsed.detail ?? "unparsable").split("\n")[0] ?? ""}` : describeYamlRefusal(parsed));
   }
   const settings = parseSettings(parsed.value);
-  return typeof settings === "string" ? invalid(settings) : { kind: "loaded", path: path8, settings };
+  return typeof settings === "string" ? invalid2(settings) : { kind: "loaded", path: path8, settings };
 }
 function parseSettings(doc) {
   const out = defaultScanSettings();
@@ -53160,10 +53196,10 @@ function relativePath2(filePath, projectPath) {
   return rel2.startsWith(mount) ? rel2.slice(mount.length) : rel2;
 }
 function mapSeverity(rawSeverity, metadata) {
-  const base = normalizeSeverity(rawSeverity);
+  const base2 = normalizeSeverity(rawSeverity);
   const cat = getString(metadata, "category")?.toLowerCase();
-  if (base === "high" && (cat === "security" || cat === "vulnerability")) return "critical";
-  return base;
+  if (base2 === "high" && (cat === "security" || cat === "vulnerability")) return "critical";
+  return base2;
 }
 function mapCategory(metadata, checkId) {
   const explicit = getString(metadata, "category")?.toLowerCase();
@@ -53271,9 +53307,9 @@ function applyGaps(run2, gaps, opts, tooLong) {
   const notes = [...semgrepGapNotes(gaps), ...tooLong.length > 0 ? [describeTooLong(tooLong)] : []];
   if (notes.length === 0) return { toolRun: run2, missing: false };
   const because = opts.scannedNothing === true ? scannedNothingBecause(gaps) : null;
-  const base = because ?? run2.reason;
-  const added = notes.filter((n2) => base === void 0 || !base.includes(n2));
-  const reason = [base, ...added].filter((s) => s !== void 0 && s.length > 0).join("; ");
+  const base2 = because ?? run2.reason;
+  const added = notes.filter((n2) => base2 === void 0 || !base2.includes(n2));
+  const reason = [base2, ...added].filter((s) => s !== void 0 && s.length > 0).join("; ");
   const unscanned = {
     ...gaps.oversized.length > 0 ? { oversized: gaps.oversized.length } : {},
     ...gaps.submodules.length > 0 ? { submodules: gaps.submodules.length } : {},
@@ -53305,7 +53341,7 @@ registerToolModule(
   makeScanTool({
     name: "scan_sast",
     title: "SAST scan (Semgrep)",
-    description: "Static analysis with Semgrep: the registry ruleset (--config=auto), the project's own rules (.semgrep.yml, or whatever .dev-guardian/configs.json records), rules registered with register_custom_rules, and the plugin's packs: web-js.yml (Node/Express: SQL by interpolation, request paths and URLs) and llm.yml (model output reaching eval/shell/SQL, trust_remote_code, \u2026); a pack that ran only in part: `tools_run[].plugin_packs`. Also runs Bandit when Python files are present, and for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when referenced) \u2014 that restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned nothing or reported errors is never complete: a file it only partly parsed, or a rule that did not load, is partial coverage, named; so are the project files that decided a run (`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to .guardian/reports/sast-<scan>/. PRIVACY: --config=auto downloads registry rules and sends usage metrics to Semgrep Inc. Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using only rules already on disk. Pass scope to scan only some files (paths, a git diff, or changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by Semgrep and Bandit where they can be named exactly.",
+    description: "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What Semgrep could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local_only avoids the registry and its metrics.",
     scan_type: "sast",
     category: "security",
     supportsScope: true,
@@ -53331,7 +53367,7 @@ registerToolModule(
       allow_dirty: AllowDirty,
       force: Force,
       local_only: external_exports.boolean().optional().describe(
-        "Run only rules already on disk (the project's own Semgrep config, anything registered with register_custom_rules, and the plugin's own packs), skip the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer rules than the default. When the project has no rules of its own the scan is reported as skipped rather than as a clean result. Default: false."
+        "Semgrep with rules on disk only, no metrics. With no project rules: skipped, not clean."
       ),
       scope: ScanScopeInput
     },
@@ -54858,21 +54894,21 @@ async function resolveLogOpts(cwd, raw) {
 // src/secrets/verify/apply.ts
 function annotateFinding(f, check2) {
   if (check2.verdict === "skipped") return f;
-  const base = f.message !== void 0 && f.message.length > 0 ? `${f.message}. ` : "";
+  const base2 = f.message !== void 0 && f.message.length > 0 ? `${f.message}. ` : "";
   switch (check2.verdict) {
     case "live":
       return {
         ...f,
         severity: "critical",
-        message: `${base}verified: live \u2014 ${check2.reason}. This credential works: rotate it now${check2.rotate !== null ? ` (${check2.rotate})` : ""}, then replace it wherever it is used. Deleting it from the code does not disable it.`
+        message: `${base2}verified: live \u2014 ${check2.reason}. This credential works: rotate it now${check2.rotate !== null ? ` (${check2.rotate})` : ""}, then replace it wherever it is used. Deleting it from the code does not disable it.`
       };
     case "revoked":
       return {
         ...f,
-        message: `${base}verified: revoked \u2014 ${check2.reason}. Still remove it from the code (and the history).`
+        message: `${base2}verified: revoked \u2014 ${check2.reason}. Still remove it from the code (and the history).`
       };
     case "unknown":
-      return { ...f, message: `${base}verified: unknown \u2014 ${check2.reason}.` };
+      return { ...f, message: `${base2}verified: unknown \u2014 ${check2.reason}.` };
   }
 }
 function withSecretChecks(inner, checks) {
@@ -55208,7 +55244,7 @@ async function checkOne(provider, secret, opts) {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS3;
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = opts.signal !== void 0 ? AbortSignal.any([opts.signal, timeout]) : timeout;
-  const base = { provider: provider.name, host, sent: true, rotate: provider.rotate };
+  const base2 = { provider: provider.name, host, sent: true, rotate: provider.rotate };
   try {
     const res = await fetchImpl(provider.endpoint, {
       method: provider.method,
@@ -55219,9 +55255,9 @@ async function checkOne(provider, secret, opts) {
     });
     const body = await readJsonBody(res);
     const c3 = provider.classify({ status: res.status, body });
-    return { ...base, verdict: c3.verdict, reason: c3.reason };
+    return { ...base2, verdict: c3.verdict, reason: c3.reason };
   } catch (e) {
-    return { ...base, verdict: "unknown", reason: describeFailure(e, host, timeout, opts.signal, timeoutMs) };
+    return { ...base2, verdict: "unknown", reason: describeFailure(e, host, timeout, opts.signal, timeoutMs) };
   }
 }
 async function readJsonBody(res) {
@@ -55415,7 +55451,7 @@ function keptByScan(ctx) {
 var scanSecrets = makeScanTool({
   name: "scan_secrets",
   title: "Secret scan (gitleaks)",
-  description: "Detect secrets / API keys / tokens with gitleaks: in git history AND in files not committed yet (modified, staged, untracked-not-ignored), or the whole directory when the project is not a git repository (skipping node_modules, vendor, .git and build output). Each finding says where it was found: history (with the commit), working_tree or directory. A history pass that scanned 0 commits is reported as failed, never as clean. The raw secret never reaches MCP output, the database or reports. Pass scope to scan only some files or commits: paths and uncommitted/staged diffs are scanned as files, diff.base and since as exactly those commits. .guardianignore paths are filtered out. The project's .gitleaks.toml and .gitleaksignore are honoured, and named in `tools_run[].honoured_config`. verify_live (off by default) asks whether each GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, npm or SendGrid secret still works: it sends each secret to its own provider's read-only API and nowhere else (5 s timeout, at most 50 per scan), and marks the finding live (raised to critical, with where to revoke it), revoked or unknown.",
+  description: "gitleaks over git history and uncommitted files (the whole directory outside git); each finding says where: history (with the commit), working_tree or directory. A history pass over 0 commits is failed, never clean. The secret never reaches the response, the database or a report. .gitleaks.toml and .gitleaksignore are honoured (`tools_run[].honoured_config`). verify_live asks each provider (GitHub, Slack, Stripe, OpenAI, \u2026) whether its secret is live: ask the user first.",
   scan_type: "secrets",
   // History is read beyond the working tree: HEAD and every ref join the key.
   // A verifying scan run offline (every verdict `unknown`) must not be served
@@ -55430,12 +55466,12 @@ var scanSecrets = makeScanTool({
   inputSchema: {
     project_path: ProjectPath,
     log_opts: external_exports.string().max(400).optional().describe(
-      'Narrow the history pass. Only --all, <ref>..<ref> (or ...) and --since=<date> are accepted, space-separated; every ref must resolve to a commit. Example: "--since=2026-01-01" or "v1.2.0..HEAD". The uncommitted-files pass always runs. Not with scope.'
+      "Narrow the history pass: --all, <ref>..<ref> or --since=<date>. Not with scope."
     ),
     force: Force,
     scope: ScanScopeInput,
     verify_live: external_exports.boolean().optional().default(false).describe(
-      "Off by default. Sends each supported secret to its own provider's read-only identity API \u2014 and nowhere else \u2014 to learn whether it is live, revoked or unknown. GUARDIAN_OFFLINE=1 sends nothing."
+      "Ask each secret's own provider whether it is live: sends the secrets out, so ask the user first."
     )
   },
   invoke: async (input, ctx) => {
@@ -55544,8 +55580,8 @@ import { join as join39 } from "node:path";
 registerToolModule(
   makeScanTool({
     name: "scan_deps",
-    title: "Dependency vuln + license scan",
-    description: "Run Trivy fs with vuln+license scanners. Findings carry CVE id, severity, and fix version; CVEs are also indexed for the guardian://cves/active resource. `packages` narrows the response to those packages (every finding is still recorded; `package_filter` counts what was withheld and names requested packages with no finding). .guardianignore paths are excluded from the results, and skipped by Trivy where they can be named exactly. The project's .trivyignore is honoured, never silently: the run lists it in `tools_run[].honoured_config`, and `tools_run[].suppressed_by_repo_config` counts and names what it suppressed (reported, not findings, not a coverage gap).",
+    title: "Dependency CVE and licence scan (Trivy)",
+    description: "Trivy fs over the project's manifests and lock files: each finding with its CVE, severity and fixed version. `packages` narrows the response, not the scan. A manifest Trivy cannot read is a named gap. The project's .trivyignore is honoured (`tools_run[].honoured_config`); `suppressed_by_repo_config` names what it suppressed \u2014 reported, not findings.",
     scan_type: "deps",
     category: "security",
     supportsAutoFix: false,
@@ -55558,7 +55594,7 @@ registerToolModule(
       severity_min: SeverityMin,
       force: Force,
       packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(500).optional().describe(
-        "Show only findings for these package names in the response (case-insensitive). Trivy still reads every manifest and the scan records every finding; `package_filter.not_found` names requested packages with no finding."
+        "Show only these packages' findings; the scan records all (`package_filter`)."
       )
     },
     invoke: async (_input, ctx) => {
@@ -55934,10 +55970,10 @@ var TERRAFORM_FILE = /\.(tf|tf\.json|tofu|tofu\.json)$/;
 function readByTrivy(file, read3, singleFile) {
   const slash = file.lastIndexOf("/");
   const dir = slash < 0 ? "" : file.slice(0, slash);
-  const base = file.slice(slash + 1);
+  const base2 = file.slice(slash + 1);
   return read3.some(({ target, type }) => {
     if (target === file) return true;
-    if (singleFile && target === base) return true;
+    if (singleFile && target === base2) return true;
     if (TERRAFORM_FILE.test(file) && type.startsWith("terraform")) {
       const t = target === "." ? "" : target;
       if (t === dir) return true;
@@ -56037,8 +56073,8 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
 registerToolModule(
   makeScanTool({
     name: "scan_iac",
-    title: "IaC config scan (Terraform / K8s / CloudFormation / GitHub Actions)",
-    description: "Run Trivy config against the project root (Terraform, Kubernetes manifests, CloudFormation templates, Helm charts). When .github/workflows/*.yml exist, also run zizmor (GitHub Actions security auditor: template injection, unpinned actions, excessive permissions) and actionlint (workflow schema/expression correctness), each when installed. The project configuration each one reads (.trivyignore, actionlint.yaml, zizmor.yml) is named in `tools_run[].honoured_config`; `suppressed_by_repo_config` says what .trivyignore suppressed \u2014 `trivy config` cannot list it and says so (count null, unlisted_because).",
+    title: "IaC scan (Terraform, Kubernetes, CloudFormation)",
+    description: "Trivy config over Terraform, Kubernetes, CloudFormation and Helm; with .github/workflows, also zizmor (template injection, unpinned actions, broad permissions) and actionlint, when installed. Each one's configuration (.trivyignore, actionlint.yaml, zizmor.yml) is named in `tools_run[].honoured_config`; `suppressed_by_repo_config`: what .trivyignore suppressed, when trivy can say.",
     scan_type: "iac",
     category: "security",
     supportsAutoFix: false,
@@ -56159,7 +56195,7 @@ registerToolModule(
   makeScanTool({
     name: "security_scan_full",
     title: "Full security scan",
-    description: "Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is partial/none, never full. Each tools_run entry names the project configuration that decided it (`honoured_config`: .trivyignore, .gitleaks.toml, .bandit, .semgrepignore, .guardianignore\u2026), and `suppressed_by_repo_config` what .trivyignore suppressed \u2014 reported, never counted as findings. auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
+    description: "scan_sast, scan_secrets, scan_deps and scan_iac as one scan: each runs as its own child (child_scans); this scan holds the merged, de-duplicated findings. A scanner that did not run is reported: coverage partial or none, never full. `tools_run[].honoured_config`: the project files that decided each run; `suppressed_by_repo_config`: what .trivyignore suppressed. auto_fix applies Semgrep autofixes on a clean tree. local_only keeps Semgrep local; Trivy still downloads its database, a .NET restore still reaches NuGet.",
     scan_type: "security_full",
     category: "security",
     orchestrator: true,
@@ -56173,7 +56209,7 @@ registerToolModule(
       auto_fix: AutoFix,
       allow_dirty: AllowDirty,
       local_only: external_exports.boolean().optional().describe(
-        "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the plugin's LLM-application and web-JS sink packs) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet feeds. Default: false."
+        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy still goes out."
       ),
       force: Force
     },
@@ -56214,10 +56250,10 @@ registerToolModule(
   })
 );
 function childInput(name, input, projectPath) {
-  const base = { project_path: projectPath, force: true };
-  if (name !== "scan_sast") return base;
+  const base2 = { project_path: projectPath, force: true };
+  if (name !== "scan_sast") return base2;
   return {
-    ...base,
+    ...base2,
     ...input.local_only === true ? { local_only: true } : {},
     ...input.auto_fix === true ? { auto_fix: true, allow_dirty: true } : {}
   };
@@ -57351,8 +57387,8 @@ var IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
 var signerValue = () => external_exports.string().min(1).max(1024);
 var scanContainers = makeScanTool({
   name: "scan_containers",
-  title: "Container scan (Dockerfile + image + compose)",
-  description: "Run Trivy against a Dockerfile (config check) and/or a container image (vuln + secret + misconfig). If neither dockerfile_path nor image is provided, scans ./Dockerfile when present. Also, independent of both: hadolint lints the Dockerfile when installed, and a compose file (docker-compose.yml / compose.yml / docker-compose.yaml) at the project root is checked for privileged containers, host networking, a mounted docker.sock, and unpinned/:latest image tags. For the image, cosign (3.0+) checks its Sigstore signature on the digest it pins the tag to (unless GUARDIAN_OFFLINE=1): with signer_identity (or signer_identity_regexp) AND signer_issuer (or signer_issuer_regexp), a real cosign verify \u2014 a confirmed rejection is a high finding; without them, only whether a signature and a signed SLSA provenance attestation exist (low / info findings when absent), and image_signature says an existing signature was NOT verified. Only a network or registry failure withholds a verdict: a junk, unparseable or non-Sigstore artifact is no signature. A registry failure, even one cosign skips in silence, is unknown, never absent \u2014 except a referrers API answering with no index at all (400, 406, HTML): see SECURITY.md. cosign missing, older than 3.0 or offline: skipped and in missing_tools, never a pass.",
+  title: "Container scan (Dockerfile, image, compose)",
+  description: "Trivy on a Dockerfile (config) and/or an image (vulnerabilities, secrets, misconfiguration); with neither, ./Dockerfile. hadolint lints the Dockerfile; a root compose file is checked for privileged containers, host networking, docker.sock and unpinned tags. An image's Sigstore signature is checked with cosign: a real verify with signer_identity and signer_issuer (a rejection is high), else whether a signature and SLSA provenance exist. A registry failure is unknown, never absent.",
   scan_type: "containers",
   category: "security",
   supportsAutoFix: false,
@@ -57362,13 +57398,13 @@ var scanContainers = makeScanTool({
     dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
     image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
     signer_identity: signerValue().optional().describe(
-      "The identity `image` must be signed by: the signing certificate's subject \u2014 a workflow URL such as https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main, or an e-mail. Needs signer_issuer (or signer_issuer_regexp); runs cosign verify."
+      "The identity `image` must be signed by (a workflow URL or an e-mail). Needs signer_issuer."
     ),
     signer_identity_regexp: signerValue().optional().describe(
-      "signer_identity as a regular expression (Go RE2 syntax; anchor it with ^ and $), e.g. to accept every release workflow of one repository. Not with signer_identity."
+      "signer_identity as an RE2 regular expression."
     ),
     signer_issuer: signerValue().optional().describe(
-      "The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com (GitHub Actions) or https://accounts.google.com."
+      "The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com."
     ),
     signer_issuer_regexp: signerValue().optional().describe(
       "signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer."
@@ -57384,8 +57420,8 @@ var scanContainers = makeScanTool({
     let anyOutcome = "completed";
     const inp = input;
     let imageSignature;
-    const invalid = invalidInput(ctx.projectPath, inp);
-    if (invalid) throw new Error(invalid);
+    const invalid2 = invalidInput(ctx.projectPath, inp);
+    if (invalid2) throw new Error(invalid2);
     const dockerfile = inp.dockerfile_path !== void 0 ? resolve18(ctx.projectPath, inp.dockerfile_path) : presentInProject(ctx.projectPath, "Dockerfile") ? join42(ctx.projectPath, "Dockerfile") : void 0;
     if (dockerfile !== void 0 || inp.image !== void 0) {
       const trivyBin = await scannerAvailable("trivy");
@@ -57559,8 +57595,8 @@ var tool2 = {
     } catch (e) {
       if (!(e instanceof InvalidProjectPathError)) throw e;
     }
-    const invalid = projectPath !== null ? invalidInput(projectPath, inp) : null;
-    if (invalid) return { ok: false, error: { code: "unsupported_target", message: invalid } };
+    const invalid2 = projectPath !== null ? invalidInput(projectPath, inp) : null;
+    if (invalid2) return { ok: false, error: { code: "unsupported_target", message: invalid2 } };
     return scanContainers.handler(input, plugin, callMeta);
   }
 };
@@ -57620,8 +57656,8 @@ function invalidSigner(inp) {
   return null;
 }
 function isInside2(root, candidate) {
-  const within = (base, target) => {
-    const rel2 = relative16(base, target);
+  const within = (base2, target) => {
+    const rel2 = relative16(base2, target);
     return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep11}`) && !isAbsolute12(rel2);
   };
   const abs = resolve18(root, candidate);
@@ -57760,11 +57796,11 @@ function buildPackList(opts) {
   ];
 }
 function bugCategoryParserFor(packs, ctx) {
-  const base = semgrepParserFor(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
+  const base2 = semgrepParserFor(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   return {
     name: semgrepParser.name,
     parse(input, ctx2) {
-      const out = base.parse(input, ctx2);
+      const out = base2.parse(input, ctx2);
       return { findings: out.findings.map((f) => recategoriseAsBug(f)), cves: out.cves };
     }
   };
@@ -57839,7 +57875,7 @@ function mapSubcategory2(ruleId, existing) {
 registerToolModule(
   makeScanTool({
     name: "bug_hunt",
-    title: "Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, Java, C# and PHP bug rules, plus ONE Rust rule; optional language packs, off by default; other languages still registry-only)",
+    title: "Bug hunt (Semgrep bug packs)",
     // What the tool does, its inputs, what it returns and its limits — nothing
     // else. The measurement history behind every rule (corpora, counts, the
     // rules deleted and why, each accepted false positive and false negative)
@@ -57847,7 +57883,7 @@ registerToolModule(
     // CHANGELOG.md; the registry-pack composition lives in this file's header.
     // A description is loaded into every session, so it stays under 1500
     // characters (test/unit/pluginSurface/descriptionLimits.test.ts).
-    description: "Hunt implementation bugs with Semgrep: the registry packs p/r2c-bug-scan + p/security-audit, plus local always-on packs (configs/semgrep/bugfix-*.yml) covering six classes \u2014 race_condition, null_safety, off_by_one, memory_leak, error_handling, edge_case \u2014 for JS/TS (13 rules), Python (10), Go (9), Java (7), C# (11) and PHP (6; no memory_leak rule). Rust has one rule (a blocking sleep inside an async fn; use cargo clippy for the rest); Ruby has none (use RuboCop). Rules registered with register_custom_rules also run. Findings are category bug, with a subcategory when the rule id names one; other findings keep their own tag. `categories` filters the RESPONSE only (every finding is recorded; category_filter counts the rest). `include_language_packs` (off by default) also runs p/typescript or p/javascript, p/python, p/java and p/golang \u2014 security bundles, not bug classes. `scope` limits the scan to paths, a git diff, or what changed since a ref or date. Limits: pattern rules match syntax, not dataflow, so a quiet result is not a bug-free project; most local rules are WARNING (medium) heuristics; none ships an autofix, so create_fix_pr cannot fix them \u2014 use suggest_fix. A retired registry pack or a broken local rule file degrades to the packs that still load and is reported in tools_run / missing_tools, never as a clean scan. Per-rule measurements and known false positives and negatives live in each pack's comments and in CHANGELOG.md.",
+    description: "Semgrep bug hunt: p/r2c-bug-scan, p/security-audit and local packs (race conditions, null safety, off-by-one, leaks, error handling, edge cases) for JS/TS, Python, Go, Java, C# and PHP, plus register_custom_rules' rules. `categories` filters the response, not the scan. Pattern rules match syntax, not data flow: a quiet result is not bug-free. Local rules have no autofix: use suggest_fix, not create_fix_pr. A pack that failed to load is reported, never a clean scan.",
     scan_type: "bugs",
     category: "bug",
     // `scope`: the packs run over exactly the scoped files (`invokeBugHuntOnScope`).
@@ -57869,10 +57905,10 @@ registerToolModule(
       auto_fix: AutoFix,
       allow_dirty: AllowDirty,
       categories: external_exports.array(external_exports.string()).optional().describe(
-        "Show only these bug subcategories (e.g. race_condition, null_safety) in the response. Every finding is still recorded; `category_filter` counts what was withheld."
+        "Show only these bug subcategories (e.g. race_condition); every finding is recorded."
       ),
       include_language_packs: external_exports.boolean().optional().default(false).describe(
-        "Off by default. When true, also run one per-language Semgrep pack for each language family detect_stack finds in the project (or a filesystem fallback): p/javascript OR p/typescript for a JS/TS project (never both \u2014 identical 74-rule packs under two registry names), plus p/python, p/java, p/golang. These are per-language SECURITY bundles (XSS, injection, crypto, auth, SSRF, hard-coded secrets, ...), not bug-class rules \u2014 they add no race-condition/null-safety/off-by-one/memory-leak/error-handling coverage. Independent of `categories`: this decides which scanners run (input); `categories` decides which findings come back (output). Turn on when you specifically want broader per-language security scanning alongside the bug hunt."
+        "Also run the detected languages' Semgrep security packs (not bug classes)."
       ),
       force: Force,
       scope: ScanScopeInput
@@ -58616,7 +58652,7 @@ registerToolModule(
   makeScanTool({
     name: "quality_check",
     title: "Code quality scan",
-    description: "Code-quality scan: jscpd (duplication, any language); ruff and radon cyclomatic complexity when the project has .py files; ESLint when it is configured and installed in node_modules (never via npx); staticcheck when there is a go.mod. Findings are classified duplicate / complexity / smell / naming; `categories` narrows the response to those classes while every finding is still recorded (`category_filter` counts what was withheld). An applicable analyser that is missing or fails is reported as such and coverage is partial, never full. Also reads .guardian/budgets.yml, when present, and reports an exceeded duplication % or complexity budget as a finding. Pass scope to analyse only some files (duplication is then measured among them; budgets, being project-level, are skipped). .guardianignore paths are filtered out.",
+    description: "jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and installed in node_modules (it runs the project's config), staticcheck for Go. Findings: duplicate, complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with scope).",
     scan_type: "quality",
     category: "quality",
     supportsAutoFix: false,
@@ -58626,7 +58662,7 @@ registerToolModule(
     inputSchema: {
       project_path: ProjectPath,
       categories: external_exports.array(external_exports.enum(QUALITY_CATEGORIES)).optional().describe(
-        "Show only these quality classes in the response. Every finding is still recorded; `category_filter` counts what was withheld."
+        "Show only these classes; every finding is still recorded (`category_filter`)."
       ),
       force: Force,
       scope: ScanScopeInput
@@ -59059,7 +59095,7 @@ var MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\
 var reviewPr = makeScanTool({
   name: "review_pr",
   title: "Pre-PR diff review",
-  description: "Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted files when head is checked out), Bandit over changed .py files, and Trivy when a dependency manifest changed. Files are read at head: from the working tree when head is checked out, else from a temporary checkout of head. base_ref defaults to origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never \"no files changed\". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it runs, may still download its database. `preexisting_manifest_gaps`: dependency manifests Trivy read nothing for that the diff did not touch \u2014 the project's gap, in warnings, never the review's coverage. A diff that edits .guardianignore or .trivyignore is called out in warnings.",
+  description: "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules) and Bandit on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never \"no files changed\". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch \u2014 the project's gap, not the review's.",
   scan_type: "review_pr",
   category: "security",
   supportsAutoFix: false,
@@ -59069,19 +59105,19 @@ var reviewPr = makeScanTool({
     base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
     head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
     local_only: external_exports.boolean().optional().describe(
-      "Semgrep runs only rules on disk \u2014 the project's own, registered custom rules and the plugin's LLM-application and web-JS sink packs \u2014 with --metrics=off. Trivy (run when a manifest changed) may still download its database. Default: false."
+      "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy may still go out."
     ),
     severity_min: SeverityMin,
     force: Force
   },
   invoke: async (input, ctx) => {
-    const base = await resolveCommit(ctx.projectPath, input.base_ref ?? "");
+    const base2 = await resolveCommit(ctx.projectPath, input.base_ref ?? "");
     const head = await resolveCommit(ctx.projectPath, input.head_ref ?? "HEAD");
-    if (base === null || head === null) throw new Error("review_pr: base_ref/head_ref do not name commits");
+    if (base2 === null || head === null) throw new Error("review_pr: base_ref/head_ref do not name commits");
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "review");
     const out = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
-    const changed = await changedFiles(ctx.projectPath, base, head);
-    const touched = await touchedPaths(ctx.projectPath, base, head, changed);
+    const changed = await changedFiles(ctx.projectPath, base2, head);
+    const touched = await touchedPaths(ctx.projectPath, base2, head, changed);
     const headIsCheckedOut = await resolveCommit(ctx.projectPath, "HEAD") === head;
     let tree = null;
     let cleanupNote = null;
@@ -59114,7 +59150,7 @@ var reviewPr = makeScanTool({
         const secrets = await runGitleaksScan({
           projectPath: ctx.projectPath,
           reportDir,
-          scope: { kind: "range", base, head, workingTree: headIsCheckedOut },
+          scope: { kind: "range", base: base2, head, workingTree: headIsCheckedOut },
           env: ctx.scriptEnv,
           signal: ctx.signal,
           ...ctx.onLog ? { onLog: ctx.onLog } : {}
@@ -59147,7 +59183,7 @@ var reviewPr = makeScanTool({
       report_paths: [reportDir],
       ...warnings.length > 0 ? { warnings } : {},
       extras: {
-        base_sha: base,
+        base_sha: base2,
         head_sha: head,
         scanned_tree: headIsCheckedOut ? "working_tree" : "head_checkout",
         changed_files: changed.length,
@@ -59290,8 +59326,8 @@ async function runTrivy2(ctx, out, args) {
     );
   }
 }
-async function touchedPaths(cwd, base, head, changed) {
-  const r = await git(cwd, ["diff", "-z", "--name-only", "--relative", "--no-renames", `${base}...${head}`, "--"]);
+async function touchedPaths(cwd, base2, head, changed) {
+  const r = await git(cwd, ["diff", "-z", "--name-only", "--relative", "--no-renames", `${base2}...${head}`, "--"]);
   return r.exitCode === 0 ? splitNul(r.stdout) : [...changed];
 }
 var MAX_PREEXISTING_NAMED = 5;
@@ -60350,8 +60386,8 @@ function detectBots(projectPath) {
 registerToolModule(
   makeScanTool({
     name: "deps_audit",
-    title: "Dependency audit (Trivy + native auditors + bot detection)",
-    description: "Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the host Python \u2014 it builds a TEMPORARY virtualenv and installs those requirements into it from PyPI, or from an index the requirements file names (named in tools_run) \u2014 network access; an sdist's build step runs there; and for any .sln/.csproj, `dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive --no-restore`. That restore EXECUTES the project's own MSBuild (targets, imported .props) and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an out-of-sync lock, or one a restore would create, is reported as a gap). Returns Findings, indexed CVEs, and a `bot_configured` flag indicating whether Renovate or Dependabot is set up in this repo.",
+    title: "Dependency audit (Trivy and native auditors)",
+    description: "Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync lock is a gap). Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).",
     // Its own type, not scan_deps' 'deps': the two shared cache entries and
     // answered for each other. Readers that want "the latest deps_audit" use
     // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.
@@ -60746,7 +60782,7 @@ var inputSchema = {
 var tool4 = {
   name: "deps_update_plan",
   title: "Dependency upgrade plan",
-  description: "Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use each stack's own \"outdated\" command; for .NET that is preceded by `dotnet restore --locked-mode`, which EXECUTES the project's own MSBuild and contacts its NuGet feeds (it never creates or rewrites a packages.lock.json). pip reads this project's own requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn projects get no npm commands \u2014 their CVEs are listed with the pnpm overrides (where the project's pnpm version reads them) / resolutions fix to apply by hand (workspace members included). Classifies each entry as security (an active CVE in the same project's latest deps scan \u2014 npm/pip target the MINIMUM fixed version, other stacks the latest available) / patch / minor / major, and returns a sortable, structured plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), `unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem command that failed, with its code \u2014 e.g. NU1004 lock out of sync vs NU1301 feed unreachable).",
+  description: "Ordered upgrades from each stack's own outdated command (npm, composer, cargo, go, rubygems; dotnet after a locked restore, which runs MSBuild) and pip's own pins. Each entry: security (an active CVE in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest available), patch, minor or major, with its upgrade_command; pnpm and yarn get overrides to apply by hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.",
   inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta)
 };
@@ -61471,10 +61507,10 @@ function buildOverrideStep(input) {
 }
 async function execPackageManager(command, args, opts) {
   const pm = packageManagerEnvOptions();
-  const base = opts.env ?? ("env" in pm ? pm.env : { ...process.env });
-  const safety = await gitSafetyFor([opts.cwd], { env: base });
+  const base2 = opts.env ?? ("env" in pm ? pm.env : { ...process.env });
+  const safety = await gitSafetyFor([opts.cwd], { env: base2 });
   if (safety.refused !== null) return { code: "git_config_refused", shortMessage: safety.refused, stdout: "", stderr: "" };
-  const env = applyGitSafety(safety, base);
+  const env = applyGitSafety(safety, base2);
   return execa(commandFor(command, env), args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env, extendEnv: false });
 }
 function describeExecFailure(label, result, okCodes) {
@@ -62106,9 +62142,9 @@ function detectPolicyDocs(projectPath) {
   };
   const candidates2 = listShallowFiles(projectPath, 2);
   for (const rel2 of candidates2) {
-    const base = rel2.split("/").pop() ?? rel2;
+    const base2 = rel2.split("/").pop() ?? rel2;
     for (const { kind, pattern } of POLICY_DOC_PATTERNS) {
-      if (pattern.test(base)) {
+      if (pattern.test(base2)) {
         found2[kind] = true;
         found2.paths.push(rel2);
       }
@@ -62179,9 +62215,9 @@ function riskOrder(r) {
 registerToolModule(
   makeScanTool({
     name: "compliance_check",
-    title: "Compliance check (licenses + RGPD code rules + policy docs)",
+    title: "Compliance check (licences, GDPR code rules, policies)",
     // Under 1500 characters (test/unit/pluginSurface/descriptionLimits.test.ts).
-    description: 'Compliance scan of a project. (1) Trivy license scan: Findings for risky licenses, plus `licenses_summary` and `risky_licenses`. (2) The RGPD Semgrep pack configs/semgrep/rgpd.yml, offline (--metrics=off): Portuguese personal identifiers (NIF, NISS, Cart\xE3o de Cidad\xE3o, IBAN, phone, email \u2014 matched by variable/field NAME) inside log calls in JS/TS, PHP, Python and C# (subcategory rgpd-pii-in-logs), and trackers loaded by HTML/PHP/JS/JSX/TSX/Vue/Twig/Razor/EJS/Handlebars markup before consent \u2014 GA4/gtag.js, Meta Pixel fbq init, Hotjar, youtube.com/embed (subcategory rgpd-tracker-without-consent). Consent guards: type="text/plain" scripts, a consent-checking block, JSX or template condition; Consent Mode v2 analytics_storage denied and fbq consent revoke are also accepted, as a documented legal judgement (the messages prescribe loading nothing before consent). Findings are category compliance, severity medium: name-based heuristics, not proof. (3) `policy_documents_found`: PRIVACY, TERMS, COOKIES, DPA, SECURITY, CODE_OF_CONDUCT near the project root. A missing or failed Trivy or Semgrep, or a Semgrep error (timeout, partial parse), lowers `coverage` \u2014 never a clean result; a project with no file the pack reads is not applicable (semgrep-rgpd skipped), not missing. Templates for the fixes: configs/compliance/cookie-banner/ and configs/compliance/privacy-policy-template.md.',
+    description: "(1) Trivy licence scan: risky licences, `licenses_summary`. (2) The offline rgpd.yml Semgrep pack: Portuguese personal identifiers (NIF, NISS, IBAN, phone, e-mail \u2014 by variable name) in logs, and trackers (GA4, Meta Pixel, Hotjar, YouTube) loaded before consent; accepting a Consent Mode v2 denial is a documented legal judgement. Heuristics, not proof. (3) `policy_documents_found`. A failed scanner lowers coverage; nothing for the pack to read is not applicable.",
     scan_type: "compliance",
     category: "compliance",
     supportsAutoFix: false,
@@ -62343,14 +62379,12 @@ var MAX_INLINE_KB = 1024;
 var inputSchema2 = {
   project_path: ProjectPath,
   format: external_exports.enum(["cyclonedx-json", "spdx-json"]).optional().describe("SBOM output format. Default: cyclonedx-json."),
-  inline_max_kb: external_exports.number().int().min(0).max(MAX_INLINE_KB).optional().describe(
-    `Inline the SBOM document in the response when its size is at most this many KB. Default: ${DEFAULT_INLINE_KB}; maximum ${MAX_INLINE_KB} (1 MB). 0 never inlines.`
-  )
+  inline_max_kb: external_exports.number().int().min(0).max(MAX_INLINE_KB).optional().describe(`Inline the SBOM when it is at most this many KB (0 never; at most ${MAX_INLINE_KB}). Default ${DEFAULT_INLINE_KB}.`)
 };
 var tool5 = {
   name: "generate_sbom",
-  title: "Generate SBOM (Syft / Trivy)",
-  description: `Produce a Software Bill of Materials (CycloneDX or SPDX JSON). Prefers Syft; falls back to Trivy fs --format. The full SBOM is always written to .guardian/reports/sbom-<scan>/ (\`file_path\`). The response inlines the document once, in its text content, when its size is at most inline_max_kb (default ${DEFAULT_INLINE_KB}, max ${MAX_INLINE_KB}); \`inlined\` says whether it did. Read the file for anything larger.`,
+  title: "Generate an SBOM (Syft or Trivy)",
+  description: `Produce a CycloneDX or SPDX JSON SBOM with Syft (Trivy as fallback), always written to .guardian/reports/sbom-<scan>/ (\`file_path\`). The response inlines it when it is at most inline_max_kb (default ${DEFAULT_INLINE_KB} KB); \`inlined\` says whether it did.`,
   inputSchema: inputSchema2,
   handler: async (input, ctx) => handler2(input, ctx),
   contentOnlyKeys: ["inline"]
@@ -62795,8 +62829,8 @@ function unique(values) {
 // src/tools/detectStack.ts
 var tool6 = {
   name: "detect_stack",
-  title: "Detect project stack",
-  description: "Detect the project stack in-process (no shell involved): languages, package managers, frameworks, existing tools, IaC (has_iac), CI. Nested manifests are read up to 3 directories deep (excluding node_modules/vendor/.git/dist/build); each is also reported individually in `projects`, keyed by its path. PHP and WordPress (incl. WooCommerce, Kadence) are detected even with no composer.json: by *.php files, wp-config.php, wp-content/, or a theme/plugin header. The snapshot is also persisted to .guardian/guardian.db for stack-aware downstream tools.",
+  title: "Detect the project stack",
+  description: "Detect languages, package managers, frameworks, existing tools, IaC and CI, in-process. Manifests are read up to 3 directories deep (each also in `projects`); PHP and WordPress are detected without a composer.json. The snapshot is stored for the stack-aware tools.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler3(input, ctx)
 };
@@ -63185,16 +63219,16 @@ var PROFILE_FILES = {
 };
 var tool7 = {
   name: "init_project",
-  title: "Bootstrap project with dev-guardian configs",
-  description: "Install gitleaks/renovate/semgrep/pre-commit configs into the project (idempotent), then report a first-pass secrets/vuln/SAST status. Profile=minimal|standard|paranoid. paranoid is not an alias of standard: its gitleaks config drops every content-based allowlist entry (fixtures, known placeholders, stopwords \u2014 only generated/vendored trees stay excluded, for noise, not secrecy), and its Renovate config disables automerge everywhere (every update, not just major ones, waits for a human) with a 7-day minimum release age versus standard's 3. Copied files are stamped with their source and plugin version in .dev-guardian/configs.json, so later scans can tell you when a shipped config has been fixed since yours was installed. refresh=true compares your copies against the current baselines: with apply=false it only reports what would change, and with apply=true it updates files you never edited in place and writes <name>.new alongside the ones you did. An edited file is never overwritten.",
+  title: "Bootstrap the project's dev-guardian configs",
+  description: "Install the gitleaks, Renovate, Semgrep and pre-commit configs (profile minimal, standard or paranoid) and report a first secrets, vulnerability and SAST status. refresh compares your copies with the current ones: apply false only reports; apply true updates the files you never edited and writes <name>.new beside the others \u2014 an edited file is never overwritten.",
   inputSchema: {
     project_path: ProjectPath,
     profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional().describe(
-      "Which config set to install. minimal: gitleaks + Renovate; standard: minimal plus Semgrep and pre-commit; paranoid: standard's files with a gitleaks config that has no content-based allowlist and a Renovate config with no automerge and a 7-day minimum release age. Default: standard."
+      "minimal (gitleaks, Renovate), standard (+ Semgrep, pre-commit) or paranoid (stricter). Default standard."
     ),
     apply: external_exports.boolean().optional().describe("When false, return only the proposed file list without writing. Default: true."),
     refresh: external_exports.boolean().optional().describe(
-      "Opt-in re-sync of already-installed configs against the shipped baselines. Reports the per-file action; only writes when apply is also true, and never over a file you edited (that one is delivered as <name>.new instead). Default: false."
+      "Compare installed configs with the current ones; writes only with apply, never over your edits."
     )
   },
   handler: async (input, ctx) => handler4(input, ctx)
@@ -63718,8 +63752,8 @@ var inputSchema3 = {
 };
 var tool9 = {
   name: "perf_check",
-  title: "Performance probe (Lighthouse or k6)",
-  description: 'Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics (Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in `findings`. `budgets.status` says none/ok/not_measured/invalid \u2014 an invalid file, or a budget whose metric Lighthouse did not measure, is never reported as "within budget". A page Lighthouse could not load (runtimeError, non-zero exit) is a failed check.',
+  title: "Performance check (Lighthouse or k6)",
+  description: "Run Lighthouse against target_url, or k6 against k6_script_path: Core Web Vitals, or request counts and p95/p99, and the raw report's path. Lighthouse runs are checked against .guardian/budgets.yml: an exceeded budget is a finding, and `budgets.status` never reads an unmeasured metric as within budget. Sends real load to the URL.",
   inputSchema: inputSchema3,
   handler: async (input, ctx) => handler6(input, ctx)
 };
@@ -63951,7 +63985,7 @@ function failDomain7(code, message2) {
 
 // src/tools/sourceToolArg.ts
 var SourceToolInput = external_exports.string().min(1).max(100).optional().describe(
-  "With scan_type 'sarif_import': the source tool whose imports are read (the driver name an import recorded). Required when the project holds imports from more than one tool."
+  "sarif_import only: the importing tool. Required when several were imported."
 );
 function chooseSourceTool(storage, projectPath, scanType, sourceTool) {
   if (scanType !== "sarif_import") {
@@ -63974,14 +64008,14 @@ var SOURCE_TOOL_WITH_SCAN_ID = "source_tool picks the latest import of a tool; i
 var inputSchema4 = {
   project_path: ProjectPath,
   scan_id: external_exports.string().uuid().optional().describe("Scan to mark as the baseline. Defaults to project_path's newest usable scan."),
-  scan_type: external_exports.enum(SCAN_TYPES).optional().describe("Without scan_id: baseline the newest scan of this type. Default: any finding-producing type."),
+  scan_type: external_exports.enum(SCAN_TYPES).optional().describe("Without scan_id: baseline the newest scan of this type."),
   source_tool: SourceToolInput,
   note: external_exports.string().max(500).optional().describe("Free-form note attached to the baseline row.")
 };
 var tool10 = {
   name: "set_baseline",
-  title: "Set regression baseline",
-  description: "Mark a scan as its project's regression baseline for its scan type. Without scan_id, uses project_path's (default: the server's working directory) newest usable scan \u2014 of scan_type when given \u2014 never an SBOM, stack detection, diff review, scoped scan (meta.scope; refused as scan_id too) or a scan whose scanners did not run. Future `diff_scans from=baseline` and `regression_alert` calls compare scans of that type against it. Older baselines are kept for history but inactive. For scan_type sarif_import (import_sarif), source_tool says which tool's newest import is baselined \u2014 each tool keeps its own baseline.",
+  title: "Set the regression baseline",
+  description: "Mark a scan as its project's baseline for its type \u2014 by default the newest usable one (of scan_type), never an SBOM, stack, diff-review, scoped or unmeasured scan. diff_scans compares against it (from: baseline, and mode regression). For sarif_import, source_tool picks the tool. To accept one reviewed finding, suppress it instead.",
   inputSchema: inputSchema4,
   handler: async (input, ctx) => handler7(input, ctx)
 };
@@ -64042,7 +64076,7 @@ async function handler7(input, ctx) {
     ...baseline.note !== void 0 ? { note: baseline.note } : {},
     ...notMeasured2.length > 0 ? {
       not_measured: notMeasured2,
-      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, failed or was not installed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in regression_alert's score. Re-run the scan once the scanner works and set the baseline again.`
+      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, failed or was not installed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in the regression score of diff_scans {mode: "regression"}. Re-run the scan once the scanner works and set the baseline again.`
     } : {}
   };
 }
@@ -64378,8 +64412,8 @@ var JS_TS_SUFFIXES = [
 ];
 function resolveJsTs(importingFile, specifier, byPosixPath) {
   if (!specifier.startsWith(".")) return void 0;
-  const base = stripJsTsExtension(joinAndNormalize(dirOf2(importingFile), specifier));
-  return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base}${suffix}`));
+  const base2 = stripJsTsExtension(joinAndNormalize(dirOf2(importingFile), specifier));
+  return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base2}${suffix}`));
 }
 function stripJsTsExtension(path8) {
   return path8.replace(/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/, "");
@@ -64387,9 +64421,9 @@ function stripJsTsExtension(path8) {
 var PYTHON_SUFFIXES = [".py", "/__init__.py"];
 function resolvePython(specifier, byPosixPath) {
   if (specifier.startsWith(".")) return void 0;
-  const base = specifier.split(".").join("/");
-  if (base.length === 0) return void 0;
-  return lookupCandidates(byPosixPath, PYTHON_SUFFIXES.map((suffix) => `${base}${suffix}`));
+  const base2 = specifier.split(".").join("/");
+  if (base2.length === 0) return void 0;
+  return lookupCandidates(byPosixPath, PYTHON_SUFFIXES.map((suffix) => `${base2}${suffix}`));
 }
 var RUST_SUFFIXES = [".rs", "/mod.rs"];
 function resolveRust(importingFile, specifier, byPosixPath) {
@@ -64406,8 +64440,8 @@ function resolveRust(importingFile, specifier, byPosixPath) {
   }
   const segments = tail.split("::").filter((segment) => segment.length > 0);
   for (let depth = segments.length; depth > 0; depth -= 1) {
-    const base = joinAndNormalize(root, segments.slice(0, depth).join("/"));
-    const hit = lookupCandidates(byPosixPath, RUST_SUFFIXES.map((suffix) => `${base}${suffix}`));
+    const base2 = joinAndNormalize(root, segments.slice(0, depth).join("/"));
+    const hit = lookupCandidates(byPosixPath, RUST_SUFFIXES.map((suffix) => `${base2}${suffix}`));
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -65091,12 +65125,12 @@ var MANIFEST_PATTERNS = [
 ];
 function ecosystemOfManifest(path8) {
   const posix5 = path8.replace(/\\/g, "/").toLowerCase();
-  const base = posix5.split("/").pop() ?? "";
-  const exact = MANIFEST_ECOSYSTEMS2[base];
+  const base2 = posix5.split("/").pop() ?? "";
+  const exact = MANIFEST_ECOSYSTEMS2[base2];
   if (exact !== void 0) return exact;
   if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix5)) return "pypi";
   for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
-    if (pattern.test(base)) return ecosystem;
+    if (pattern.test(base2)) return ecosystem;
   }
   return null;
 }
@@ -65233,8 +65267,8 @@ function record5(value) {
 function text(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
-function withOptional(base, version2, purl) {
-  return { ...base, ...version2 !== null ? { version: version2 } : {}, ...purl !== null ? { purl } : {} };
+function withOptional(base2, version2, purl) {
+  return { ...base2, ...version2 !== null ? { version: version2 } : {}, ...purl !== null ? { purl } : {} };
 }
 
 // src/vex/statements.ts
@@ -65325,7 +65359,7 @@ function statementFor(group, names, inputs, active) {
   const ecosystem = subjects.find((s) => s.ecosystem !== null)?.ecosystem ?? sbomEcosystem(inputs.sbom, name, version2);
   const sbomPurls = inputs.sbom === null ? [] : purlsFor(inputs.sbom, name, version2, ecosystem).purls;
   const built = buildPurl(ecosystem, name, version2);
-  const base = {
+  const base2 = {
     vulnerability,
     aliases,
     package_name: name,
@@ -65341,7 +65375,7 @@ function statementFor(group, names, inputs, active) {
   if (first !== void 0 && vex.every((s) => s !== void 0) && justifications.size === 1 && first.vex_justification !== void 0) {
     const impact = joinImpacts(vex.map((s) => s?.vex_impact_statement));
     return {
-      ...base,
+      ...base2,
       status: "not_affected",
       justification: first.vex_justification,
       ...impact !== null ? { impact_statement: impact } : {},
@@ -65354,21 +65388,21 @@ function statementFor(group, names, inputs, active) {
   const stale = inputs.staleSurface ?? null;
   if (assessment?.verdict === "reachable" && stale !== null) {
     return {
-      ...base,
+      ...base2,
       status: "under_investigation",
       status_notes: `${label}: reachable per ${assessment.evidence[0]?.detail ?? "a file an HTTP route reaches"} \u2014 but ${stale}, so it is not stated affected (run map_attack_surface).${suppressedNote}`
     };
   }
   if (assessment?.verdict === "reachable") {
     return {
-      ...base,
+      ...base2,
       status: "affected",
-      action_statement: base.fixed_version !== null ? `Upgrade ${name}${version2 === null ? "" : ` from ${version2}`} to ${base.fixed_version} or later.` : `No fixed version of ${name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
+      action_statement: base2.fixed_version !== null ? `Upgrade ${name}${version2 === null ? "" : ` from ${version2}`} to ${base2.fixed_version} or later.` : `No fixed version of ${name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
       status_notes: `${label}: ${assessment.evidence[0]?.detail ?? "imported by a file an HTTP route reaches"} (file-level reachability, not proof the vulnerable function runs).` + suppressedNote
     };
   }
   return {
-    ...base,
+    ...base2,
     status: "under_investigation",
     status_notes: `${label}: not known to affect the product \u2014 ${whyNot(assessment)}.${suppressedNote}`
   };
@@ -65480,15 +65514,15 @@ var inputSchema5 = {
   reason: external_exports.string().min(1).max(1e3).describe("Why this finding is being suppressed. Required."),
   expires_at: external_exports.string().datetime().optional().describe("ISO-8601 expiry. When omitted, the suppression never expires."),
   vex_status: external_exports.enum(["not_affected"]).optional().describe(
-    "Also record a VEX statement: the product is not_affected by the finding's vulnerability. Requires justification; only for a finding with a vulnerability id (CVE, GHSA, PYSEC, \u2026). export_vex publishes it."
+    "Also record a VEX not_affected statement for the finding's vulnerability. Needs justification."
   ),
   justification: external_exports.enum(OPENVEX_JUSTIFICATIONS).optional().describe("OpenVEX justification for vex_status not_affected. Required with it."),
   impact_statement: external_exports.string().min(1).max(1e3).optional().describe("Optional free-text VEX impact statement, with vex_status.")
 };
 var tool11 = {
   name: "suppress_finding",
-  title: "Suppress finding",
-  description: "Mark a finding of project_path (default: the server's working directory) \u2014 named by the fingerprint a scan response shows \u2014 as a false positive. Resources that surface open findings exclude it while the suppression is active \u2014 including after the code around it moves: the finding's line-independent identity is recorded alongside the fingerprint and either one matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. Pass expires_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id \u2014 never one its text mentions), vex_status: not_affected with an OpenVEX justification (and optional impact_statement) also makes it a VEX statement that export_vex publishes \u2014 only for a finding that names a package version (`vex.exportable`), and as not_affected only once every copy of the vulnerability has one: the reply names the other open copies (`vex.other_open_findings`, `warning`).",
+  title: "Suppress a finding",
+  description: "Mark a finding (by the fingerprint a scan showed) as a false positive; it stays hidden after the code moves. A fingerprint no scan of this project reported is `unknown_finding`. expires_at snoozes. For a finding with its own CVE, GHSA or PYSEC id and a package version, vex_status: not_affected with a justification also makes a VEX statement (export_vex); the reply names other open copies of the vulnerability.",
   inputSchema: inputSchema5,
   handler: async (input, ctx) => handler8(input, ctx)
 };
@@ -65660,11 +65694,11 @@ var inputSchema6 = {
   source_tool: SourceToolInput,
   from_scan_id: external_exports.string().uuid().optional().describe("The older side: this exact scan. Takes precedence over from. Default: see from."),
   from: FromEnum.optional().describe(
-    "The older side, when from_scan_id is not given: 'previous' \u2014 this project's usable scan of the same type just before the to scan \u2014 or 'baseline' \u2014 the baseline set_baseline recorded for that type. Default: 'previous'."
+    "The older side when from_scan_id is not given: previous (default) or baseline (set_baseline's for that type)."
   ),
   to_scan_id: external_exports.string().uuid().optional().describe("The newer side: this exact scan. Takes precedence over to. Default: see to."),
   to: ToEnum.optional().describe(
-    "The newer side, when to_scan_id is not given: 'latest' \u2014 this project's newest usable scan (of scan_type, when given). Default: 'latest'."
+    "The newer side when to_scan_id is not given: latest (default)."
   )
 };
 var tool12 = {
@@ -65852,13 +65886,13 @@ var WP_EXTRA_SUB_TOOLS = ["scan_wordpress"];
 var DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_check"];
 var tool13 = {
   name: "audit_executive",
-  title: "Executive audit (security + quality + deps + compliance)",
-  description: "Executive roll-up: runs security_scan_full, quality_check, deps_audit and compliance_check CONCURRENTLY, plus scan_wordpress for a WordPress project and scan_dotnet_secrets + dotnet_target_framework_check for .NET, per this project's latest detect_stack. Returns one report: severity counts, top-10 findings, the worst child coverage with each gap, and a delta vs this project's previous audit. EGRESS: the Semgrep registry with usage metrics to Semgrep Inc. (security_scan_full, scan_wordpress); Trivy's vulnerability database and Maven Central for a pom.xml (dev-guardian turns Trivy's version check and telemetry off, and Semgrep's version check); npm audit and PyPI (deps_audit); the project's NuGet feeds. CODE EXECUTION: pip-audit installs the requirements into a temporary virtualenv (an sdist's build step runs); a .NET restore/build runs the project's MSBuild targets; quality_check runs the project's ESLint config. local_only=true passes local_only to security_scan_full (Semgrep: rules on disk, --metrics=off) and skips scan_wordpress, which has no local-only mode; it does NOT stop Trivy's requests, deps_audit's registry calls or a .NET restore \u2014 the result lists those in local_only_gaps.",
+  title: "Executive audit (security, quality, deps, compliance)",
+  description: "Run security_scan_full, quality_check, deps_audit and compliance_check concurrently, plus the WordPress or .NET scans the latest detect_stack calls for: one report \u2014 severity counts, top 10 findings, worst child coverage, change since the last audit. Egress: the Semgrep registry (with metrics), Trivy's database, npm, PyPI, NuGet feeds; Trivy's and Semgrep's version checks are off. Runs code: pip-audit's virtualenv, a .NET restore (MSBuild), the project's ESLint. local_only keeps Semgrep local (`local_only_gaps`: what still went out).",
   inputSchema: {
     project_path: ProjectPath,
     severity_min: SeverityMin,
     local_only: external_exports.boolean().optional().describe(
-      "Passed to every child that takes it (security_scan_full: Semgrep rules on disk only, --metrics=off). scan_wordpress, which has no local-only mode, is skipped. Trivy, deps_audit and a .NET restore still reach the network; local_only_gaps in the result says what did. Default: false."
+      "Semgrep on disk only, no scan_wordpress; the rest still goes out (`local_only_gaps`)."
     )
   },
   handler: async (input, ctx, callMeta) => handler10(input, ctx, callMeta)
@@ -66964,17 +66998,17 @@ async function mapLimited(items, limit, fn) {
 import { join as join58 } from "node:path";
 var inputSchema7 = {
   tools: external_exports.array(external_exports.string()).optional().describe(
-    "When set, install only these scanners (must exist in the catalogue). When omitted, install the default set: semgrep, trivy, gitleaks, syft, pre-commit (+ ruff/bandit/jscpd if stack detected)."
+    "Install only these catalogued scanners. Default: the standard set for the stack."
   ),
   dry_run: external_exports.boolean().optional().describe("Print commands without executing. Default: false."),
   elevation_allowed: external_exports.boolean().optional().describe(
-    'Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). Default: false \u2014 steps needing elevation are reported under `requires_elevation` instead. Install steps run without a terminal, so on Linux/macOS this only works with passwordless sudo; "sudo: a terminal is required to read the password" means the user must run the reported command themselves.'
+    "Allow steps that need sudo or admin (else listed in `requires_elevation`)."
   )
 };
 var tool15 = {
   name: "install_toolchain",
-  title: "Install missing toolchain",
-  description: 'Install missing scanners. Defaults to the standard set; pass `tools=[...]` to limit. Linux/macOS delegate to scripts/install/install-{linux,macos}.sh. Windows uses winget/scoop/choco/WSL. Syft, Trivy and gitleaks are a pinned release checked against its sha256 (on Windows a ZIP fetched with PowerShell), or a package manager asked for that same version \u2014 never "latest" \u2014 except on macOS, where Syft and gitleaks come from Homebrew first (Trivy: the pinned archive first, then homebrew-core). A pinned release goes to ~/.local/bin (%USERPROFILE%\\.local\\bin), which the server searches itself; the result names where each binary went (binary_path) and says when a terminal will not find it (path_note). dry_run prints commands without executing.',
+  title: "Install missing scanners",
+  description: "Install missing scanners \u2014 the standard set, or `tools` \u2014 with the install scripts (Linux, macOS) or winget, scoop, choco or WSL (Windows). Syft, Trivy and gitleaks come at a pinned version (a release checked against its sha256 goes to ~/.local/bin); `binary_path` and `path_note` say where each went. This changes the system: run dry_run first, which only lists the commands.",
   inputSchema: inputSchema7,
   handler: async (input, ctx) => handler12(input, ctx)
 };
@@ -67256,8 +67290,8 @@ async function runCheckToolchain(ctx) {
 import { join as join59 } from "node:path";
 var tool16 = {
   name: "license_compatibility",
-  title: "License compatibility check",
-  description: 'Cross-check the project license (package.json incl. UNLICENSED, pyproject.toml, composer.json incl. "proprietary"/"SEE LICENSE IN \u2026", .csproj PackageLicenseExpression, or LICENSE) against the licenses of installed deps captured by the most recent compliance_check OF THIS PROJECT. No declared license (or a proprietary label) is treated as proprietary and still flags copyleft deps; an unrecognised or SPDX OR/AND expression on EITHER side (project or dependency) is reported as `undetermined`, never silently compatible. Pure SQL read \u2014 does not spawn scanners.',
+  title: "Licence compatibility",
+  description: "Check the project's licence (package.json, pyproject.toml, composer.json, .csproj or LICENSE) against its dependencies' licences from this project's latest compliance_check. No declared licence, or a proprietary label, counts as proprietary and still flags copyleft; an unrecognised or compound SPDX expression on either side is `undetermined`, never compatible. Reads history only.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler13(input, ctx)
 };
@@ -67688,7 +67722,7 @@ function recommendation(score, open, cves, hasBaseline) {
   if (score >= 70) return "Run audit_executive and triage critical findings before any new deploy.";
   if (cves > 0) return "Address active CVEs via deps_update_plan with prefer=security.";
   if (!hasBaseline) return "Set a baseline with set_baseline so diff_scans can track regressions.";
-  if (open > 50) return "Run triage_findings to identify likely false positives, then suppress.";
+  if (open > 50) return "Run prioritize_findings with view triage to identify likely false positives, then suppress.";
   return "Posture is stable. Consider a periodic audit_executive to confirm.";
 }
 
@@ -67978,7 +68012,7 @@ function rankByExploitability(items, cveIdsOf, intel) {
 var tool17 = {
   name: "risk_score",
   title: "Risk score (0-100)",
-  description: "Compute a single 0-100 risk score for one project (project_path, default: the server's working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the union of the newest usable scan of every finding-producing type, suppressions removed. CVEs are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns the score, a band (low/medium/high/critical), per-component breakdown, the next action to recommend, and `coverage` \u2014 which scans it read, which newer scans it skipped because they measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and `coverage_caveat` when the numbers are incomplete. `suppressed_count`: findings an active suppression took out of the score \u2014 a mass suppression shows here, never as a clean project. `future_dated_note` when scans dated in the future were ignored.",
+  description: "A 0-100 risk score and band for one project from its recorded scans, open findings (newest usable scan of each type, suppressions out), CVEs (weighted up for CISA KEV or a high EPSS) and baseline, with the breakdown, the next action and `coverage` (`coverage_caveat` when incomplete). `suppressed_count`: what suppressions took out \u2014 a mass suppression is never a clean project. `future_dated_note`: future-dated scans ignored.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler14(input, ctx)
 };
@@ -68086,19 +68120,19 @@ import { existsSync as existsSync17, readFileSync as readFileSync9 } from "node:
 var RESPONSE_CAP = 50;
 var inputSchema8 = {
   project_path: ProjectPath,
-  from_scan_id: external_exports.string().uuid().optional().describe("The older generate_sbom scan. Default: this project's second-newest completed SBOM scan."),
-  to_scan_id: external_exports.string().uuid().optional().describe("The newer generate_sbom scan. Default: this project's newest completed SBOM scan."),
+  from_scan_id: external_exports.string().uuid().optional().describe("The older SBOM scan. Default: the second-newest."),
+  to_scan_id: external_exports.string().uuid().optional().describe("The newer SBOM scan. Default: the newest."),
   /** No longer changes behaviour — full-file comparison always happens now
    *  when the SBOM file is still on disk. Kept so an existing caller that
    *  passes it does not break. */
   use_full_file: external_exports.boolean().optional().describe(
-    "Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is still on disk, and the capped summary stored with the scan only when it is not (component_source says which)."
+    "Ignored; kept for old callers."
   )
 };
 var tool18 = {
   name: "sbom_diff",
-  title: "SBOM diff (added / removed / changed components)",
-  description: "Compare two generate_sbom scans, full component list, keyed by (ecosystem, name) with a version SET per key so multiple versions of the same package in the same ecosystem are reported per-version, never collapsed. Default to/from: the two latest completed SBOM scans of project_path. Refuses a comparison that would mix a full component list against a capped 25-item summary (spurious results); response arrays are capped but summary carries the true, uncapped totals except on the (flagged) both-capped fallback path.",
+  title: "Compare two SBOMs",
+  description: "Compare two generate_sbom scans of project_path (default: its two latest): components added, removed and changed, keyed by ecosystem and name with every version kept. Refuses to compare a full list with a capped summary; the response arrays are capped, `summary` has the true totals.",
   inputSchema: inputSchema8,
   handler: async (input, ctx) => handler15(input, ctx)
 };
@@ -68382,7 +68416,7 @@ async function handler16(input, ctx) {
     suppressed_by_severity: countBySeverity3(suppressed),
     ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
     ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
-    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the findings that were measured. ${measuredNote}` : "No significant regression.",
+    hint: regressed ? 'Severity-weighted change exceeded the threshold. Consider prioritize_findings (view: "triage") + audit_executive, or revert recent changes.' : measuredNote !== null ? `No significant regression among the findings that were measured. ${measuredNote}` : "No significant regression.",
     ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
     ...note,
     ...measuredNote !== null ? { not_measured_note: measuredNote } : {}
@@ -68406,8 +68440,8 @@ var inputSchema10 = {
 };
 var tool20 = {
   name: "suggest_fix",
-  title: "Gather fix context for the model",
-  description: "Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, prior suppressions for the same tool and rule_id) so the calling model can propose a patch. The finding is found in project_path's (default: the server's working directory) newest scan that reported it. This tool never calls an external LLM \u2014 the model that invoked it does the synthesis.",
+  title: "Gather fix context",
+  description: "Gather a finding's context \u2014 the source around it, rule metadata, earlier suppressions of the same rule \u2014 from project_path's newest scan that reported it, so you can write the patch. Calls no LLM.",
   inputSchema: inputSchema10,
   handler: async (input, ctx) => handler17(input, ctx)
 };
@@ -68786,36 +68820,36 @@ async function validateOnce(files, cwd) {
   return { answered: true, ok: false, message: validateMessage(run2.stderr, run2.stdout) };
 }
 async function validateRuleFiles(files, cwd) {
-  const invalid = /* @__PURE__ */ new Map();
-  if (files.length === 0) return { validated: true, invalid };
+  const invalid2 = /* @__PURE__ */ new Map();
+  if (files.length === 0) return { validated: true, invalid: invalid2 };
   const all = await validateOnce(files, cwd);
   if (!all.answered) return { validated: false, reason: all.reason };
-  if (all.ok) return { validated: true, invalid };
+  if (all.ok) return { validated: true, invalid: invalid2 };
   if (files.length === 1) {
     const only = files[0];
-    if (only !== void 0) invalid.set(only, all.message);
-    return { validated: true, invalid };
+    if (only !== void 0) invalid2.set(only, all.message);
+    return { validated: true, invalid: invalid2 };
   }
   for (const file of files) {
     const one = await validateOnce([file], cwd);
     if (!one.answered) return { validated: false, reason: one.reason };
-    if (!one.ok) invalid.set(file, one.message);
+    if (!one.ok) invalid2.set(file, one.message);
   }
-  return { validated: true, invalid };
+  return { validated: true, invalid: invalid2 };
 }
 
 // src/tools/registerCustomRules.ts
 var inputSchema11 = {
   project_path: ProjectPath,
   paths: external_exports.array(external_exports.string()).optional().describe(
-    "Files, directories or globs (e.g. rules/**/*.yml), relative to the project. When omitted, auto-discovers .semgrep/, semgrep/ and rules/."
+    "Rule files, directories or globs. Default: .semgrep/, semgrep/ and rules/."
   ),
-  clear: external_exports.boolean().optional().describe("When true, remove this project's registered custom rules \u2014 and the 2.0.x global registration, for every project \u2014 and exit.")
+  clear: external_exports.boolean().optional().describe("Remove this project's registered rules.")
 };
 var tool23 = {
   name: "register_custom_rules",
   title: "Register custom Semgrep rules",
-  description: "Discover or accept paths/globs to Semgrep YAML rules and persist them for THIS project (registrations are per project). scan_sast and bug_hunt then run them as extra --config packs. Every file is checked to be a Semgrep rules file (non-empty rules:, each rule with id, message, languages, severity and a pattern) and, when Semgrep is installed, compiled with semgrep --validate (an unknown language or a broken pattern is refused with Semgrep's message) \u2014 anything else is returned in `rejected` with a reason and never registered, so a stray YAML (e.g. Prometheus alerts in rules/) cannot break later scans; semgrep_validated says whether Semgrep looked. A registered path that later disappears or stops validating is skipped rather than failing the scan. Pass clear=true to remove the registration.",
+  description: "Register Semgrep rule files for this project (paths, or found in .semgrep/, semgrep/, rules/); scan_sast and bug_hunt then run them. Each must be a valid rules file and, when Semgrep is installed, pass semgrep --validate; anything else is returned in `rejected` with the reason, never registered. A registered file that later disappears or breaks is skipped, not fatal. clear removes the registration.",
   inputSchema: inputSchema11,
   handler: async (input, ctx) => handler20(input, ctx)
 };
@@ -68977,7 +69011,7 @@ var SERVER_VERSION = resolveVersion();
 var tool24 = {
   name: "health_status",
   title: "Server health",
-  description: "Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and one project's last scan and scan count (project_path, default: the server's working directory). Read-only. `storage_warning` (null when fine): the project's .guardian/guardian.db is not being used \u2014 one from before 3.1.0 or a copy is not trusted until its owner registers it, and history goes to a per-user fallback meanwhile. Tell the user, with the `db adopt` command the warning names, to run it themselves in a terminal; never run it yourself \u2014 it decides whose data dev-guardian trusts. `suppressions` {active, this_project, all_projects}: the active suppressions that apply here; all_projects ones have no project and hide findings in every project. `storage.future_dated_scans_ignored` and `future_dated_note`: scans dated in the future, which every count, list and \"latest\" ignores.",
+  description: "Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. `storage_warning` (null when fine): the project's .guardian/guardian.db is not used (a copy, or not registered) and history goes to a per-user fallback \u2014 tell the user to run the `db adopt` command it names in their own terminal; never run it yourself. `suppressions` {active, this_project, all_projects}: all_projects ones hide findings in every project. `storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, which every count ignores.",
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler21(input, ctx)
 };
@@ -69035,7 +69069,7 @@ async function handler21(input, ctx) {
       queued: limiter2.queued
     },
     registry: {
-      tools: TOOLS.length,
+      tools: listedTools().length,
       resources: RESOURCES.length
     },
     storage_warning: ctx.storageWarning ?? null,
@@ -69534,15 +69568,15 @@ function toUri(p) {
 // src/tools/reportExport.ts
 var inputSchema12 = {
   project_path: ProjectPath,
-  scan_id: external_exports.string().uuid().optional().describe("Scan to export. Defaults to project_path's newest usable finding-producing scan."),
+  scan_id: external_exports.string().uuid().optional().describe("Scan to export. Default: project_path's newest usable scan."),
   source_tool: SourceToolInput.describe(
-    "Without scan_id: export the newest SARIF import of this source tool (an import's driver name) instead of the newest scan."
+    "Without scan_id: export this tool's newest SARIF import."
   ),
   format: external_exports.enum(["html", "sarif", "markdown", "json"]).optional().default("markdown").describe(
-    "Output format. markdown (default, handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline), sarif (SARIF 2.1.0 for CI/IDE code scanning), or json (raw findings)."
+    "markdown (default), html (self-contained, light/dark), sarif (SARIF 2.1.0) or json."
   ),
   content_markdown: external_exports.string().optional().describe(
-    "Stakeholder-narrative Markdown. When set, it is wrapped in the branded HTML shell (dark/light) instead of rendering a scan \u2014 scan_id is ignored. Used by /guardian-report."
+    "A Markdown narrative to render instead of a scan (scan_id is then ignored)."
   ),
   title: external_exports.string().optional().describe('Title for the content_markdown report. Default: "Pro Digital Key \u2014 Report".'),
   subtitle: external_exports.string().optional().describe("Optional subtitle under the title (content_markdown mode)."),
@@ -69550,8 +69584,8 @@ var inputSchema12 = {
 };
 var tool25 = {
   name: "report_export",
-  title: "Export a report (branded HTML / SARIF / Markdown / JSON)",
-  description: "Write a report in one of four formats: markdown (default \u2014 handover doc), html (branded Pro Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass content_markdown to render a stakeholder narrative as Markdown (or branded HTML with format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per source language of the project. An explicit scan_id must be a scan of project_path (another project's is refused, with retry_with naming its project) and not still running. source_tool exports that tool's newest SARIF import (import_sarif). Local file only \u2014 no external services, no web fonts.",
+  title: "Export a report (HTML, SARIF, Markdown, JSON)",
+  description: "Write a scan report as markdown (default), html (self-contained, light/dark), sarif (SARIF 2.1.0, CWE and OWASP Top 10:2025 tags) or json, saying which OWASP categories the scan tested; content_markdown renders a narrative instead. An explicit scan_id must be one of project_path's (another project's is refused, with retry_with naming its project) and not still running. source_tool: that tool's newest SARIF import.",
   inputSchema: inputSchema12,
   handler: async (input, ctx) => handler22(input, ctx)
 };
@@ -70294,13 +70328,13 @@ var TOP_FINDINGS = 10;
 var inputSchema13 = {
   project_path: ProjectPath,
   sarif_path: external_exports.string().min(1).describe("The SARIF 2.1.0 log to import: absolute, or relative to project_path."),
-  allow_outside_project: external_exports.boolean().optional().describe("Read a log that is not under project_path. Default false: such a path is refused."),
-  max_results: external_exports.number().int().min(1).max(2e5).optional().describe("Results imported per run before stopping; the rest are counted and the scan is partial. Default 50000.")
+  allow_outside_project: external_exports.boolean().optional().describe("Read a log outside project_path. Default false."),
+  max_results: external_exports.number().int().min(1).max(2e5).optional().describe("Results imported before stopping (the scan is then partial). Default 50000.")
 };
 var tool26 = {
   name: "import_sarif",
   title: "Import a SARIF log",
-  description: "Import another analysis tool's SARIF 2.1.0 log (CodeQL, Snyk, Trivy, Semgrep, gitleaks, a dev-guardian export\u2026) into the project history: one `sarif_import` scan per run, named by the tool that wrote it (tool.driver.name and version), one finding per result that is a finding. Imported findings behave like a native scanner's in set_baseline, diff_scans, regression_alert, suppress_finding, triage_findings, prioritize_findings and report_export \u2014 those take `source_tool` to say which tool's imports they read. A new import of a tool becomes that tool's latest scan and never touches the open findings of another tool or of the native scanners. Identities come from the log's fingerprints, else are computed as the native scanners do. Results that are not findings (pass, notApplicable\u2026) and results accepted as suppressed at the source are counted, not imported; a result without a location inside the project is imported with no file. A result that cannot be read is skipped and the scan is partial, like one past max_results (default 50000, at most 200000). Secret-rule snippets are never stored. Read-only toward the log: nothing it names (URIs, helpUri, invocations) is opened, fetched or run. The log is read only if it is a regular file of at most 50 MiB under project_path (default: the working directory), or anywhere with allow_outside_project: true. Errors: invalid_sarif, outside_project, refused_file, not_found.",
+  description: "Import another tool's SARIF 2.1.0 log (CodeQL, Snyk, \u2026) into the history: one sarif_import scan per run, named by its tool, whose findings then work in set_baseline, diff_scans, suppress_finding, prioritize_findings and report_export (source_tool picks the tool). Results that are not findings, or were suppressed at the source, are counted, not imported. Nothing the log names is opened or run. The log: a file of at most 50 MiB under project_path, unless allow_outside_project.",
   inputSchema: inputSchema13,
   handler: async (input, ctx) => handler23(input, ctx)
 };
@@ -70472,13 +70506,13 @@ var FRAMEWORKS = ["gdpr", "soc2", "iso27001", "owasp-top10-2025", "nist-csf-2.0"
 var inputSchema14 = {
   project_path: ProjectPath,
   framework: external_exports.enum(FRAMEWORKS).optional().describe(
-    "Which framework to label the evidence under. owasp-top10-2025 and nist-csf-2.0 give per-category evidence from the open findings and the scanners that ran. Default: generic."
+    "gdpr, soc2, iso27001, generic (default), or owasp-top10-2025 / nist-csf-2.0 (per category)."
   )
 };
 var tool27 = {
   name: "compliance_evidence",
   title: "Compliance evidence pack (Markdown)",
-  description: "Generate a Markdown evidence document from one project's accumulated state (project_path, default: the server's working directory): latest compliance scan, license summary, CVE counts, baseline status, suppressions, policy docs found. Tag with a framework (gdpr/soc2/iso27001/generic) to shape the section labels, or owasp-top10-2025 / nist-csf-2.0 for per-category evidence: a category counts as covered only when, for every source language of the project, a scanner that ran ok has enough rules for it; partial categories are listed apart (NIST CSF via dev-guardian's own OWASP mapping). Read-only.",
+  description: "A Markdown evidence document from one project's recorded state: latest compliance scan, licences, CVE counts, baseline, suppressions, policy documents. framework gdpr, soc2, iso27001 or generic shapes the labels; owasp-top10-2025 and nist-csf-2.0 give per-category evidence, a category being covered only when, for every source language, a scanner that ran has rules for it. Reads history only.",
   inputSchema: inputSchema14,
   handler: async (input, ctx) => handler24(input, ctx)
 };
@@ -70824,22 +70858,22 @@ function build(args) {
 var inputSchema15 = {
   project_path: ProjectPath,
   severity_min: external_exports.enum(["info", "low", "medium", "high", "critical"]).optional().describe(
-    "Minimum severity a finding must have to be filed. Default: high \u2014 what this drops is reported in `filtered`, never silently."
+    "Lowest severity filed. Default high; the rest are counted in `filtered`."
   ),
   max_issues: external_exports.number().int().min(1).max(50).optional().describe(
-    "Cap on issues filed in one run, highest severity first. Default: 10 \u2014 findings beyond the cap are counted in `filtered`, never silently dropped."
+    "Issues per run, highest severity first. Default 10."
   ),
   labels: external_exports.array(external_exports.string()).optional().describe(
-    'Labels for every issue. Missing ones are created; one that cannot be is left off (labels_omitted). Default: ["dev-guardian", "security"].'
+    'Labels for every issue. Default ["dev-guardian", "security"].'
   ),
   dry_run: external_exports.boolean().optional().describe(
-    "true: list the issues that would be created and call nothing. Default: false \u2014 the call FILES REAL ISSUES on GitHub through the local gh CLI."
+    "true: list the issues without filing them. Default false."
   )
 };
 var tool28 = {
   name: "create_github_issues",
-  title: "Create GitHub issues for top findings",
-  description: "Use the local `gh` CLI to open one issue per top open finding of project_path (default: the server's working directory; suppressed findings are never filed). Uses the developer's existing GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the finding fingerprint; a finding with an issue in ANY state (open or closed) is skipped. Missing labels are created, or left off when they cannot be (`labels_omitted`). Pass dry_run=true to preview. severity_min defaults to high and max_issues to 10; every finding those two dropped is counted in `filtered` and summarised in `filtered_reason`. ok:false when every issue failed to file.",
+  title: "File GitHub issues for top findings",
+  description: "Open one GitHub issue per top open finding of project_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its fingerprint is in the title). severity_min (default high) and max_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry_run: preview first.",
   inputSchema: inputSchema15,
   handler: async (input, ctx) => handler25(input, ctx)
 };
@@ -71162,8 +71196,8 @@ var WP_STANDARDS = ["WordPress", "WordPress-Core", "WordPress-Extra", "WordPress
 registerToolModule(
   makeScanTool({
     name: "scan_wordpress",
-    title: "WordPress code scan (Semgrep + Trivy + gitleaks + PHPCS-WPCS)",
-    description: "Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + WP rule pack, Trivy fs for dependency CVEs (a manifest it cannot read, e.g. composer.json with no composer.lock, is a named gap), gitleaks for secrets, PHPCS WordPress standard. Each scanner that is missing is skipped with reason. Use wp_audit / wp_vuln_check for live-install scenarios.",
+    title: "WordPress code scan",
+    description: "Source scan of a WordPress plugin, theme or site: Semgrep PHP with the WordPress pack, Trivy on composer.lock (a composer.json with no lock is a named gap), gitleaks and PHPCS with a WordPress standard. A missing scanner is skipped with its reason. For an install: wp_audit; for known vulnerabilities: wp_vuln_check.",
     scan_type: "wordpress",
     // Its secrets pass reads git history: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
@@ -71929,15 +71963,15 @@ function defaultWordfenceCacheDir(env = process.env) {
   const override = env["GUARDIAN_CACHE_DIR"];
   if (override !== void 0 && override.length > 0) return override;
   if (process.platform === "win32") {
-    const base2 = env["LOCALAPPDATA"] ?? join64(homedir4(), "AppData", "Local");
-    return join64(base2, "dev-guardian", "cache");
+    const base3 = env["LOCALAPPDATA"] ?? join64(homedir4(), "AppData", "Local");
+    return join64(base3, "dev-guardian", "cache");
   }
   if (process.platform === "darwin") {
-    const base2 = env["XDG_CACHE_HOME"] ?? join64(homedir4(), "Library", "Caches");
-    return join64(base2, "dev-guardian");
+    const base3 = env["XDG_CACHE_HOME"] ?? join64(homedir4(), "Library", "Caches");
+    return join64(base3, "dev-guardian");
   }
-  const base = env["XDG_CACHE_HOME"] ?? join64(homedir4(), ".cache");
-  return join64(base, "dev-guardian");
+  const base2 = env["XDG_CACHE_HOME"] ?? join64(homedir4(), ".cache");
+  return join64(base2, "dev-guardian");
 }
 async function getWordfenceFeed(opts = {}) {
   const now = opts.now ?? Date.now();
@@ -72998,7 +73032,7 @@ async function handler28(input, ctx) {
   if (!wpBin) {
     return failDomain21(
       "missing_scanner",
-      'WP-CLI (`wp`) is required for wp_cron_audit. Run install_toolchain with tools=["wp-cli"].'
+      'WP-CLI (`wp`) is required for wp_audit {mode: "cron"}. Run install_toolchain with tools=["wp-cli"].'
     );
   }
   const cronResult = await runProcess({
@@ -73684,7 +73718,7 @@ async function handler33(input, ctx) {
     open_critical: open.filter((f) => f.severity === "critical").length,
     open_high: open.filter((f) => f.severity === "high").length,
     active_cves: cves,
-    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
+    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? 'Run `wp_vuln_check` (a live URL, or `mode: "source"` with no live URL) to map CVEs to your installed plugins and themes.' : !wpCron ? 'Run `wp_audit` with `mode: "cron"` to detect persistent backdoors.' : open.length > 0 ? 'Open findings exist. Try `prioritize_findings` (`view: "triage"`) + `wp_report` (`kind: "hardening"`).' : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
   };
 }
 var META_REPORT = { skipCoverageNone: false };
@@ -74237,7 +74271,7 @@ async function handler37(input, ctx) {
     open_dotnet_findings_count: dotnetFindings.length,
     open_critical: dotnetFindings.filter((f) => f.severity === "critical").length,
     open_high: dotnetFindings.filter((f) => f.severity === "high").length,
-    recommended_next: !tfm ? "Run `dotnet_target_framework_check` to find EOL frameworks." : !secrets ? "Run `scan_dotnet_secrets` to find MS-specific secrets in configs." : !efcore ? "If you use EF Core, run `dotnet_efcore_audit` for risky migration patterns." : dotnetFindings.length > 0 ? "Open .NET findings exist. Try `triage_findings` + `suggest_fix`." : "Posture looks clean. Consider running `scan_sast` again if code changed."
+    recommended_next: !tfm ? 'Run `dotnet_check` with `check: "target_framework"` to find end-of-life frameworks.' : !secrets ? 'Run `dotnet_check` with `check: "secrets"` to find .NET secrets in configs.' : !efcore ? 'If you use EF Core, run `dotnet_check` with `check: "efcore"` for risky migrations.' : dotnetFindings.length > 0 ? 'Open .NET findings exist. Try `prioritize_findings` (`view: "triage"`) + `suggest_fix`.' : "Posture looks clean. Consider running `scan_sast` again if code changed."
   };
 }
 function findLatest2(ctx, projectPath, type, skipCoverageNone) {
@@ -74482,10 +74516,10 @@ import { join as join71 } from "node:path";
 var MAX_MANIFEST_BYTES2 = 8 * 1024 * 1024;
 function isPypiPinFile(path8) {
   const lower = path8.toLowerCase();
-  const base = lower.split("/").pop() ?? "";
-  if (/^requirements.*\.txt$/.test(base) || /-requirements\.txt$/.test(base)) return true;
+  const base2 = lower.split("/").pop() ?? "";
+  if (/^requirements.*\.txt$/.test(base2) || /-requirements\.txt$/.test(base2)) return true;
   if (/(^|\/)requirements\/[^/]+\.txt$/.test(lower)) return true;
-  return base === "pipfile.lock" || base === "poetry.lock" || base === "uv.lock";
+  return base2 === "pipfile.lock" || base2 === "poetry.lock" || base2 === "uv.lock";
 }
 function makePypiPinResolver(projectPath) {
   let index;
@@ -74512,9 +74546,9 @@ function readAllPins(projectPath) {
   return byName;
 }
 function pinsOf(manifest, text2) {
-  const base = (manifest.split("/").pop() ?? "").toLowerCase();
-  if (base === "pipfile.lock") return pipfileLockPins(text2);
-  if (base === "poetry.lock" || base === "uv.lock") return tomlPackagePins(text2);
+  const base2 = (manifest.split("/").pop() ?? "").toLowerCase();
+  if (base2 === "pipfile.lock") return pipfileLockPins(text2);
+  if (base2 === "poetry.lock" || base2 === "uv.lock") return tomlPackagePins(text2);
   return requirementPins(text2);
 }
 function requirementPins(text2) {
@@ -74821,13 +74855,13 @@ async function postJson(url2, body, opts, fetchImpl) {
 function extractDependencies(files) {
   const out = [];
   for (const f of files) {
-    const base = f.relPath.split("/").pop()?.toLowerCase() ?? "";
-    if (base === "package.json") out.push(...fromPackageJson(f.content));
-    else if (base === "requirements.txt") out.push(...fromRequirements(f.content));
-    else if (base === "go.mod") out.push(...fromGoMod(f.content));
-    else if (base === "cargo.toml") out.push(...fromCargoToml(f.content));
-    else if (base === "composer.json") out.push(...fromComposerJson(f.content));
-    else if (base === "gemfile.lock") out.push(...fromGemfileLock(f.content));
+    const base2 = f.relPath.split("/").pop()?.toLowerCase() ?? "";
+    if (base2 === "package.json") out.push(...fromPackageJson(f.content));
+    else if (base2 === "requirements.txt") out.push(...fromRequirements(f.content));
+    else if (base2 === "go.mod") out.push(...fromGoMod(f.content));
+    else if (base2 === "cargo.toml") out.push(...fromCargoToml(f.content));
+    else if (base2 === "composer.json") out.push(...fromComposerJson(f.content));
+    else if (base2 === "gemfile.lock") out.push(...fromGemfileLock(f.content));
   }
   return dedupe(out);
 }
@@ -76268,8 +76302,8 @@ var URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
 function downloadsIn(unit) {
   const out = [];
   const add = (end, file) => {
-    const base = basenameOf(file ?? "");
-    if (base !== "") out.push({ unit, end, file: base });
+    const base2 = basenameOf(file ?? "");
+    if (base2 !== "") out.push({ unit, end, file: base2 });
   };
   for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
     for (const m of unit.text.matchAll(re)) add(m.index + m[0].length, m[1]);
@@ -76283,8 +76317,8 @@ function downloadsIn(unit) {
   return out;
 }
 function basenameOf(path8) {
-  const base = (path8.split(/[/\\]/).pop() ?? "").replace(/[.,;:!?)\]}]+$/, "");
-  return /[A-Za-z0-9]/.test(base) ? base : "";
+  const base2 = (path8.split(/[/\\]/).pop() ?? "").replace(/[.,;:!?)\]}]+$/, "");
+  return /[A-Za-z0-9]/.test(base2) ? base2 : "";
 }
 var RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
 function runsFile(text2, file) {
@@ -76344,8 +76378,8 @@ function scoreFindings(signals2) {
   let executableFindings = 0;
   for (const s of signals2) {
     by_severity[s.severity] += 1;
-    const base = s.scored === false ? 0 : SEVERITY_POINTS[s.severity];
-    raw += s.isExecutable ? base * EXECUTABLE_MULTIPLIER : base;
+    const base2 = s.scored === false ? 0 : SEVERITY_POINTS[s.severity];
+    raw += s.isExecutable ? base2 * EXECUTABLE_MULTIPLIER : base2;
     if (s.isExecutable) executableFindings += 1;
   }
   const score = Math.min(100, Math.round(raw));
@@ -77281,13 +77315,13 @@ function safeRm(dir) {
 // src/tools/scanSkill.ts
 var inputSchema26 = {
   target: external_exports.string().min(1).optional().describe(
-    "What to vet: a local directory, a single file, a .zip, or a git/HTTP(S) URL. Defaults to the current project directory (audit the skill you are standing in)."
+    "A directory, file, .zip or git/HTTP(S) URL. Default: the current project."
   ),
   check_deps: external_exports.boolean().optional().default(true).describe("Query OSV.dev for known CVEs in declared dependencies (degrades offline)."),
   write_reports: external_exports.boolean().optional().default(true).describe("Write report.sarif + report.json under .guardian/reports/ for CI/IDE."),
   severity_min: SeverityMin,
   fail_on: external_exports.enum(RECOMMENDATIONS).optional().describe(
-    'If set, the result `passed` flag is false when the recommendation is at or worse than this band (e.g. fail_on="CAUTION"). Lets a caller gate installs.'
+    "`passed` is false when the recommendation is this band or worse."
   )
 };
 var RECOMMENDATION_TEXT = {
@@ -77304,8 +77338,8 @@ var RECOMMENDATION_RANK = {
 };
 var tool42 = {
   name: "scan_skill",
-  title: "Vet an AI skill / MCP server / agent before install",
-  description: "Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, taint flows, signature matches, and MCP least-privilege / tool-poisoning \u2014 plus OSV.dev CVE lookups on declared dependencies. The commands in an instruction file (a SKILL.md's fenced, indented and <pre> blocks, inline code and prose) and the commands a plugin's hooks.json, plugin.json and .mcp.json run are scored like the skill's own scripts, including a file downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a placeholder (\u2026, <url>, example.com) stands for its target; any other finding, when nothing nearby is a fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 risk score and an install recommendation (SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).",
+  title: "Vet an AI skill, MCP server or plugin before install",
+  description: "Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, .zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, tool poisoning, dangerous code, taint flows \u2014 the commands in instruction files and hook / plugin / MCP configs scored like scripts \u2014 and OSV CVEs of its dependencies. Returns a 0-100 risk score and SAFE, REVIEW, CAUTION or DO_NOT_INSTALL.",
   inputSchema: inputSchema26,
   handler: (input, ctx, callMeta) => handler39(input, ctx, callMeta)
 };
@@ -78360,14 +78394,14 @@ function walk4(root, dir) {
 function specCandidateTier(root, dir, name) {
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return null;
-  const base = name.slice(0, dot);
+  const base2 = name.slice(0, dot);
   const ext = name.slice(dot).toLowerCase();
   if (!SPEC_EXTENSIONS.has(ext)) return null;
-  if (SPEC_BASENAMES.has(base.toLowerCase())) return "exact";
+  if (SPEC_BASENAMES.has(base2.toLowerCase())) return "exact";
   const relDir = relative30(root, dir);
   const segments = relDir === "" ? [] : relDir.split(sep17);
   if (segments.some((segment) => segment.toLowerCase() === "openapi")) return "exact";
-  if (WIDENED_BASE.test(base) || segments.some((segment) => WIDENED_DIR.test(segment))) return "widened";
+  if (WIDENED_BASE.test(base2) || segments.some((segment) => WIDENED_DIR.test(segment))) return "widened";
   return null;
 }
 
@@ -78540,7 +78574,7 @@ function importSpec(file, text2) {
       }
     };
   }
-  const { base, partial: basePartial } = format2 === "openapi-3" ? openapiBasePath(root) : swaggerBasePath(root);
+  const { base: base2, partial: basePartial } = format2 === "openapi-3" ? openapiBasePath(root) : swaggerBasePath(root);
   const docSecurityRaw = prop5(root, "security");
   const docSecurityNonEmpty = Array.isArray(docSecurityRaw) && docSecurityRaw.length > 0;
   const routes = [];
@@ -78564,7 +78598,7 @@ function importSpec(file, text2) {
         method: operationMethod(opKey),
         provenance: "spec",
         path_raw: pathTemplate,
-        path_resolved: partial3 ? pathTemplate : `${base}${pathTemplate}`,
+        path_resolved: partial3 ? pathTemplate : `${base2}${pathTemplate}`,
         path_partial: partial3,
         file,
         line,
@@ -78733,11 +78767,11 @@ var COVERED_LANGUAGES = /* @__PURE__ */ new Set([
 ]);
 var IncludeEnvVars = external_exports.boolean().optional().default(true).describe("Collect environment-variable names the code reads. Default: true.");
 var SpecPaths = external_exports.array(external_exports.string().min(1)).min(1).optional().describe(
-  "Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when supplied \u2014 must be non-empty; omit the field to use automatic discovery instead. Relative paths resolve against project_path, not the current working directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is never persisted as the project's cached surface, so a later plain call cannot inherit these paths. Any named path that cannot be read is reported in spec_files, not silently dropped."
+  "OpenAPI / Swagger documents to read instead of discovering them."
 );
 var tool43 = {
   name: "map_attack_surface",
-  title: "Map the application attack surface",
+  title: "Map the attack surface",
   // No "auth hint" in this description on purpose, for code-extracted routes:
   // `auth_hint` exists on every RouteRecord, but no Semgrep rule populates it
   // for a route extracted from source, so it is always 'unknown' there (see
@@ -78750,7 +78784,7 @@ var tool43 = {
   // so the description below still does not advertise "auth hint" as a
   // general feature. Advertising a mostly-constant field as a feature is how
   // an agent ends up reasoning from it.
-  description: "Statically extract the externally reachable surface of the project \u2014 HTTP routes (method, path, params), referenced environment variables, and declared container ports \u2014 across all supported stacks. Also discovers OpenAPI 3.x / Swagger 2.0 documents (or reads exactly the paths given as spec_paths) and diffs them against the code-extracted routes, reporting shadow endpoints (routes the code registers that no spec documents) and dead documentation (spec paths no code implements). Persists a snapshot readable via guardian://surface/latest. Returns a summary plus a 20-route code sample and a spec sample; read the resource for the full route list and the full spec diff. Follow up with scan_dast to actively probe an already-running instance of the application against this inventory.",
+  description: "Statically extract the reachable surface \u2014 HTTP routes (method, path, params), environment variables read, container ports \u2014 across the supported stacks, and diff OpenAPI 3 / Swagger 2 documents against the routes: shadow endpoints and dead documentation. Stores a snapshot (guardian://surface/latest has the full route list) and returns a summary with samples. scan_dast and validate_finding need it.",
   inputSchema: {
     project_path: ProjectPath,
     force: Force,
@@ -78947,24 +78981,24 @@ function readSources(parsed, projectPath) {
 var REDACTION_REMEDY = "this Semgrep version redacts match content unless you run `semgrep login`, so the captures are rebuilt by re-reading the source at the reported byte offsets, and that read failed for these matches. Either log in, or use a Semgrep older than ~1.100, and the captures arrive directly. dev-guardian does not require an account \u2014 every route family is rebuilt from byte offsets either way";
 function recoveryToolRun(recovery) {
   if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
-  const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "") + // Not a loss and not a recovery: a bare `@Get()` / `[HttpGet]` /
+  const base2 = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "") + // Not a loss and not a recovery: a bare `@Get()` / `[HttpGet]` /
   // `@GetMapping` captures nothing on any Semgrep version, and its route is
   // built from the rule's metadata (see RecoveryOutcome.noCaptures). Named
   // here so the two numbers below still add up for a reader.
   (recovery.noCaptures > 0 ? `; ${recovery.noCaptures} carry no path of their own and needed none` : "");
   if (recovery.unrecoverable === 0) {
-    return [{ name: RECOVERY_STEP, status: "ok", reason: base }];
+    return [{ name: RECOVERY_STEP, status: "ok", reason: base2 }];
   }
   const edgesNote = recovery.lostEdges > 0 ? `${recovery.lostEdges} import/env edge(s) could not be read (not a route: a mount's prefix that relied on one may read partial)` : "";
   const routesLost = recovery.unrecoverable - recovery.lostEdges;
   if (routesLost === 0) {
-    return [{ name: RECOVERY_STEP, status: "ok", reason: `${base}; ${edgesNote}` }];
+    return [{ name: RECOVERY_STEP, status: "ok", reason: `${base2}; ${edgesNote}` }];
   }
   return [
     {
       name: RECOVERY_STEP,
       status: "failed",
-      reason: `${base}; ${routesLost} match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages)` + (edgesNote !== "" ? `; ${edgesNote}` : "") + ` \u2014 ${REDACTION_REMEDY}`
+      reason: `${base2}; ${routesLost} match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages)` + (edgesNote !== "" ? `; ${edgesNote}` : "") + ` \u2014 ${REDACTION_REMEDY}`
     }
   ];
 }
@@ -79150,9 +79184,9 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
     else stack.push(part);
   }
   const joined = `${absolute ? "/" : ""}${stack.join("/")}`;
-  const base = stripKnownExtension(joined);
+  const base2 = stripKnownExtension(joined);
   for (const file of knownFiles) {
-    if (stripKnownExtension(toPosixPath2(file)) === base) return file;
+    if (stripKnownExtension(toPosixPath2(file)) === base2) return file;
   }
   return joined;
 }
@@ -80107,8 +80141,8 @@ function matchRoute(pathname, routes) {
 }
 function buildMessage(templateId, matchedAt, description) {
   const where = matchedAt === "" ? "(no matched-at reported)" : matchedAt;
-  const base = `nuclei template '${templateId}' matched ${where}.`;
-  return description === void 0 || description === "" ? base : `${base} ${description}`;
+  const base2 = `nuclei template '${templateId}' matched ${where}.`;
+  return description === void 0 || description === "" ? base2 : `${base2} ${description}`;
 }
 function normalizeLine(line, routes) {
   let parsed;
@@ -80390,7 +80424,7 @@ async function runRateLimitBurst(opts) {
   }
   const verdict = rateLimitVerdict(burstResults);
   const cutByCeiling = burstResults.length < requests.length && !verdict.observed;
-  const base = {
+  const base2 = {
     path: selected.route.path_resolved,
     inferred: selected.inferred,
     burst_planned: RATE_LIMIT_BURST,
@@ -80400,7 +80434,7 @@ async function runRateLimitBurst(opts) {
     return {
       outcome: "ran",
       finding: null,
-      summary: { ...base, sent: verdict.at_request, observed: true, at_request: verdict.at_request },
+      summary: { ...base2, sent: verdict.at_request, observed: true, at_request: verdict.at_request },
       evidence: /* @__PURE__ */ new Map()
     };
   }
@@ -80408,7 +80442,7 @@ async function runRateLimitBurst(opts) {
     return {
       outcome: "no_response",
       finding: null,
-      summary: { ...base, sent: 0, observed: false },
+      summary: { ...base2, sent: 0, observed: false },
       evidence: /* @__PURE__ */ new Map()
     };
   }
@@ -80427,7 +80461,7 @@ async function runRateLimitBurst(opts) {
   return {
     outcome: "ran",
     finding: finding4,
-    summary: { ...base, sent: verdict.sent, observed: false },
+    summary: { ...base2, sent: verdict.sent, observed: false },
     evidence: /* @__PURE__ */ new Map([
       [
         finding4.fingerprint,
@@ -80615,44 +80649,44 @@ var UNANSWERED_COVERAGE_THRESHOLD = 0.1;
 var inputSchema27 = {
   project_path: ProjectPath,
   base_url: external_exports.string().min(1).describe(
-    "Origin of the ALREADY-RUNNING application, e.g. http://localhost:3000. This tool never starts, builds or stops the app; if nothing answers it returns target_not_found."
+    "Origin of the running application, e.g. http://localhost:3000."
   ),
   authorized_target: external_exports.boolean().optional().describe(
-    "Attestation that you are authorised to send scan traffic to a non-loopback host. Required for every host that is not localhost / 127.0.0.0/8 / ::1 \u2014 including a hostname that merely resolves to loopback, because classification is lexical and never resolves DNS. Recorded in the scan for audit. Do not set this on a caller's behalf."
+    "The user's attestation that they may scan this non-loopback host. Never set it on their behalf."
   ),
   allow_write_methods: external_exports.boolean().optional().describe(
-    'Allow POST/PUT/PATCH/DELETE probes, always with an empty body (the 400/422-vs-401/403 signal answers the authorization question without writing). Default: false \u2014 read-only GET/HEAD/OPTIONS. A 2xx on a write method is reported as "may have mutated state".'
+    "Allow POST/PUT/PATCH/DELETE probes, with an empty body. Default false."
   ),
   probe_rate_limit: external_exports.boolean().optional().describe(
-    "Send a bounded burst of identical requests carrying a synthetic, un-ownable credential to one authentication endpoint, to see whether a limiter answers. Default: false. This flag is its own authorization and does not open write methods for any other check."
+    "Send one bounded burst with a fake credential to one login endpoint. Default false."
   ),
   rate_limit_path: external_exports.string().min(1).optional().describe(
-    "Exact path (as it appears in the inventory) to aim the rate-limit burst at. When omitted the target is inferred from auth-shaped paths and the chosen route is reported; when the named path is not in the inventory the check reports no_candidate rather than bursting something else."
+    "Inventory path to aim the rate-limit burst at. Default: inferred from auth-shaped paths."
   ),
   auth_header_env: external_exports.string().min(1).optional().describe(
-    "RECOMMENDED credential path: the NAME of an environment variable holding an Authorization header value. The secret never enters the conversation or the MCP request log. An unset variable is reported as a warning, never a silent anonymous run. WARNING: the named variable lives in this server's own environment \u2014 any OTHER scanner this session spawns (semgrep, trivy, gitleaks, git) inherits it too. nuclei is the one exception: it is always spawned with a scrubbed environment that excludes it."
+    "Name of an environment variable holding the Authorization header; the secret stays out of the conversation."
   ),
   auth_header: external_exports.string().min(1).optional().describe(
-    "Literal Authorization header value. Lands in the transcript \u2014 prefer auth_header_env. Never persisted and redacted from every finding, evidence file and result field."
+    "Literal Authorization header: it lands in the transcript, so prefer auth_header_env."
   ),
   use_nuclei: external_exports.boolean().optional().describe(
-    "Also run nuclei against the origin. Default: false (nuclei is an active scanner with a large template download). When requested and not installed the gap is reported in tools_run and missing_tools, never silently skipped. nuclei's default templates test the ORIGIN, not this project's routes \u2014 the own engine is what tests those."
+    "Also run nuclei against the origin (not these routes). Default false."
   ),
   max_requests: external_exports.number().int().positive().optional().describe(`Global request ceiling. Default: ${DEFAULT_MAX_REQUESTS}. Reported when it cuts.`),
   timeout_ms: external_exports.number().int().positive().optional().describe(`Per-request timeout in milliseconds. Default: ${DEFAULT_PROBE_TIMEOUT_MS}.`),
   wall_clock_ms: external_exports.number().int().positive().optional().describe(
-    `Global wall-clock ceiling for the probing phase, in milliseconds. Default: ${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor max_requests (how many are planned) does. When it cuts, the run still returns and says so: summary.timed_out, summary.probes_cut, and a degraded coverage. Probes it cut record outcome 'cancelled', never 'timeout' \u2014 the target did not fail to answer, this tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`
+    `Ceiling on the whole probing phase, in ms. Default ${DEFAULT_WALL_CLOCK_MS}.`
   )
 };
 var tool44 = {
   name: "scan_dast",
-  title: "Probe a running application against its route inventory",
+  title: "Probe a running app against its route inventory",
   // The description is the only discovery surface an agent has, so it states
   // the preconditions and the envelope, not just the capability: the two
   // things that make a caller pick this tool wrongly are not knowing the app
   // must already be running, and not knowing a prior map_attack_surface run
   // is required.
-  description: "ACTIVE DAST: sends real HTTP requests to an ALREADY-RUNNING application and reports what is actually reachable, what is served without credentials, and what leaks. REQUIRES a prior map_attack_surface run \u2014 it probes that route inventory and refuses with no_surface_snapshot when there is none. The app must already be up: this tool never starts, builds or stops it, and returns target_not_found when nothing answers at base_url. Safety envelope: LOOPBACK TARGETS ONLY (localhost / 127.0.0.0/8 / ::1) unless the caller passes authorized_target: true attesting they may scan that host; READ-ONLY methods (GET/HEAD/OPTIONS) unless allow_write_methods is set, and even then with empty bodies \u2014 plus the opt-in probe_rate_limit burst, the one exception, which sends POST to exactly one route; redirects are never followed; no injection payloads and no credential guessing. Checks reachability against the spec diff, anonymous exposure of auth-required routes, differential authorization, CORS, security headers, information disclosure, method surface and open redirects, plus an opt-in benign rate-limit burst and an optional nuclei pass. Findings persist with scan_type dast and point at the source file the route was extracted from. A clean result is NOT evidence of injection safety.",
+  description: "Send real HTTP requests to an already-running application along the latest map_attack_surface inventory (none: no_surface_snapshot): reachability, anonymous access to auth-required routes, authorization differences, CORS, headers, information disclosure, methods, open redirects; nuclei and a rate-limit burst are opt-in. Loopback only unless the user attests authorized_target; read-only methods unless allow_write_methods. No injection payloads: a clean result is no proof of injection safety.",
   inputSchema: inputSchema27,
   handler: (input, ctx, callMeta) => handler41(input, ctx, callMeta)
 };
@@ -81203,13 +81237,13 @@ function collectGaps(input, stale, providersRun) {
 // src/tools/validateFinding.ts
 var ANONYMOUS_EXPOSURE = "anonymous_exposure";
 var Fingerprint = external_exports.string().min(1).optional().describe(
-  "Validate exactly this finding. Omitted (the default) validates EVERY open finding \u2014 batch is the point, since validating one finding at a time saves nobody any triage effort. A fingerprint that matches no open finding is an error, never an empty result."
+  "Validate only this finding. Default: every open finding."
 );
 var FindingFingerprint = external_exports.string().min(1).optional().describe(
-  "Same as fingerprint \u2014 the name suppress_finding and suggest_fix use. Pass either; both with different values is an error."
+  "Same as fingerprint (the name other tools use); pass one."
 );
 var Providers = external_exports.array(external_exports.enum(IMPLEMENTED_PROVIDERS)).min(1).optional().describe(
-  "Evidence providers to run: 'static' (the finding's own file, via the import graph) and 'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is planned. Omit the field to run every provider this version has. Non-empty when supplied."
+  "static (the finding's file) and/or dependency (a CVE's package). Default: both."
 );
 var tool45 = {
   name: "validate_finding",
@@ -81222,7 +81256,7 @@ var tool45 = {
   // At most 1500 characters (descriptionLimits.test.ts). Shortened from 1809
   // by tightening wording only: every limit below survived, each one tested
   // in validateFinding.test.ts.
-  description: 'Answers, per finding, whether anything outside the process can reach the FILE the finding lives in: a file-level import graph from the latest map_attack_surface snapshot, rooted at the route files, gives reachable / unreachable / unknown with evidence (nearest route, hops, live-confirmed anonymous exposure) and coverage gaps. The dependency provider adds, per dependency CVE (npm, PyPI), reachable (a file a route reaches imports the package) / imported / unknown \u2014 never unreachable. REQUIRES a prior map_attack_surface run (refuses with no_surface_snapshot). Validates every open finding by default; an unknown fingerprint is an error, not an empty result. REPORT ONLY: it never suppresses a finding and never changes a severity. Limits: granularity is the file, not the function ("reachable" is NOT "the vulnerable line runs"); "unreachable" is never emitted for Ruby, Java, C# or PHP, which resolve code at runtime (autoload, DI container); only HTTP routes are entry points, so a file reached solely by a CLI, cron job or queue consumer reads unreachable-by-route; and NOTHING detects dynamic imports (import(expr), require(variable), reflection) \u2014 where they are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts are stored against the snapshot and tree hash and flagged stale once the tree moves. Read summary.coverage_gaps beside the counts.',
+  description: "Per open finding: does a file an HTTP route reaches import its file (static) or, for a dependency CVE, its package (dependency)? reachable, unreachable or unknown, with evidence. Needs map_attack_surface. Report only: it never suppresses a finding or changes a severity. The unit is the file; Ruby, Java, C# and PHP never get unreachable; nothing detects a dynamic import, so where one is used unreachable can be wrong and this tool cannot tell you when.",
   inputSchema: {
     project_path: ProjectPath,
     fingerprint: Fingerprint,
@@ -81794,18 +81828,18 @@ function findingEcosystem(finding4) {
   const byTool = TOOL_ECOSYSTEM[finding4.tool];
   if (byTool !== void 0) return byTool;
   if (finding4.tool !== "trivy") return null;
-  const base = (finding4.file_path ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
-  if (["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "package.json", "bun.lock"].includes(base)) {
+  const base2 = (finding4.file_path ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  if (["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "package.json", "bun.lock"].includes(base2)) {
     return "npm";
   }
-  if (/^requirements.*\.txt$/.test(base) || ["pipfile.lock", "poetry.lock", "pyproject.toml", "uv.lock", "setup.py"].includes(base)) {
+  if (/^requirements.*\.txt$/.test(base2) || ["pipfile.lock", "poetry.lock", "pyproject.toml", "uv.lock", "setup.py"].includes(base2)) {
     return "pip";
   }
-  if (base === "composer.lock" || base === "composer.json") return "composer";
-  if (base === "cargo.lock" || base === "cargo.toml") return "cargo";
-  if (base === "go.mod" || base === "go.sum") return "go";
-  if (base === "gemfile.lock" || base === "gemfile" || base.endsWith(".gemspec")) return "rubygems";
-  if (base === "packages.lock.json" || base === "packages.config" || /\.(csproj|fsproj|vbproj|deps\.json)$/.test(base)) {
+  if (base2 === "composer.lock" || base2 === "composer.json") return "composer";
+  if (base2 === "cargo.lock" || base2 === "cargo.toml") return "cargo";
+  if (base2 === "go.mod" || base2 === "go.sum") return "go";
+  if (base2 === "gemfile.lock" || base2 === "gemfile" || base2.endsWith(".gemspec")) return "rubygems";
+  if (base2 === "packages.lock.json" || base2 === "packages.config" || /\.(csproj|fsproj|vbproj|deps\.json)$/.test(base2)) {
     return "dotnet";
   }
   return null;
@@ -82990,8 +83024,8 @@ var KEEPS_BRANCH = /* @__PURE__ */ new Set([
 ]);
 var tool46 = {
   name: "create_fix_pr",
-  title: "Apply scanner-produced fixes and open a pull request",
-  description: "Apply fixes the scanners already produced \u2014 deps_update_plan pinned upgrade steps (npm with --ignore-scripts, pip pins edited in place) and the target rules' own Semgrep autofix (only those rules, --metrics=off) \u2014 inside an isolated git worktree, prove them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, deps_audit or scan_deps) plus a lazy test differential against a base-commit tree, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, go test) in those worktrees \u2014 that is the project's code, run as you, with an allowlisted environment that carries no token or credential of this server. Package managers get it plus your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs are set aside (package_config_set_aside), and a non-plain pip requirement, an npm network path or a Composer repository refuses the fix. Every open finding that did NOT become a candidate is accounted for in `filtered` and `filtered_reason` (below severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan covers it). A cancelled call answers ok with cancelled: true and the groups it finished.",
+  title: "Apply scanner fixes as pull requests",
+  description: "Apply scanner-made fixes \u2014 deps_update_plan upgrades, the rules' own Semgrep autofixes \u2014 in a disposable worktree, verify them by re-running the scan and a test differential, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the project's own test command \u2014 the project's code, run as you. The repo's .npmrc/.yarnrc and like configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository refuses the fix. `filtered` explains the rest.",
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -83003,14 +83037,14 @@ var tool46 = {
     // rather than mutating the shared one, so every other caller keeps
     // seeing "include all".
     severity_min: SeverityMin.describe(
-      "Minimum severity a finding must have to be considered a fix candidate. Default: high."
+      "Lowest severity to fix. Default high."
     ),
     sources: external_exports.array(external_exports.enum(["deps", "semgrep"])).optional().describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
     max_prs: external_exports.number().int().min(1).max(10).optional().describe(
-      "Maximum number of groups (pull requests) to act on in one run, highest severity first, then CISA KEV-listed, then higher FIRST EPSS. Groups beyond the cap are reported in `deferred`, never dropped silently. Default: 3."
+      "Pull requests per run, highest severity first; the rest in `deferred`. Default 3."
     ),
     apply: external_exports.boolean().optional().describe(
-      "When true, commit, push and open a pull request for every group that verifies. Default: false \u2014 a dry run that still computes candidates, applies the fix in a worktree, and runs both differentials \u2014 the project's own test command included \u2014 but commits, pushes and opens nothing."
+      "true: commit, push, open the PRs. Default false: a dry run (still runs the test command)."
     )
   },
   handler: async (input, ctx, callMeta) => handler43(input, ctx, callMeta)
@@ -83208,15 +83242,15 @@ async function processGroup(opts) {
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c3) => c3.fingerprints);
   const findings = findingsForGroup(allFindings, group);
-  const base = { key: group.key, source: group.source, severity: group.severity, branch, findings };
+  const base2 = { key: group.key, source: group.source, severity: group.severity, branch, findings };
   if (!apply && await localBranchExists(projectPath, branch)) {
     const existing = await prExists({ projectPath, branch });
     if (existing.known && existing.exists) {
       const pr = existsOutcome(branch);
-      return { ...base, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
+      return { ...base2, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
     }
     return {
-      ...base,
+      ...base2,
       commands: [],
       outcome: "worktree_failed",
       scan: null,
@@ -83231,7 +83265,7 @@ async function processGroup(opts) {
     if (existing.known && existing.exists) {
       const pr = existsOutcome(branch);
       return {
-        ...base,
+        ...base2,
         commands: [],
         outcome: PR_STATUS_OUTCOME[pr.status],
         scan: null,
@@ -83241,7 +83275,7 @@ async function processGroup(opts) {
       };
     }
     return {
-      ...base,
+      ...base2,
       commands: [],
       outcome: "worktree_failed",
       scan: null,
@@ -83251,7 +83285,7 @@ async function processGroup(opts) {
     };
   }
   const { worktree } = created;
-  if (worktree.notApplied.length > 0) base.git_config_not_applied = [...worktree.notApplied];
+  if (worktree.notApplied.length > 0) base2.git_config_not_applied = [...worktree.notApplied];
   let keepBranch = !apply;
   let semgrepFix;
   let setAside = null;
@@ -83259,7 +83293,7 @@ async function processGroup(opts) {
     const projectDir = inWorktree(worktree.path, prefix);
     const commands = [];
     setAside = setAsidePackageConfig(worktree.path, projectDir);
-    if (setAside.moved.length > 0) base.package_config_set_aside = setAside.moved;
+    if (setAside.moved.length > 0) base2.package_config_set_aside = setAside.moved;
     const derivedTest = deriveTestCommand(readManifests(projectDir));
     const refused2 = installRefusal({
       projectDir,
@@ -83274,13 +83308,13 @@ async function processGroup(opts) {
       npmInstalls: derivedTest?.command === "npm"
     });
     if (refused2 !== null) {
-      return { ...base, commands, outcome: "refused", scan: null, tests: null, pr: null, note: `refused: ${refused2}` };
+      return { ...base2, commands, outcome: "refused", scan: null, tests: null, pr: null, note: `refused: ${refused2}` };
     }
     const env = await prepareTestEnvironment({ treePath: projectDir, derived: derivedTest });
     if (env.command !== null) commands.push(`${env.command} (test environment)`);
     if (!env.ok) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "apply_failed",
         scan: null,
@@ -83293,7 +83327,7 @@ async function processGroup(opts) {
       const planned = planSemgrepFix(semgrepFixSources(findings, origins, projectPath, ctx));
       if (!planned.ok) {
         return {
-          ...base,
+          ...base2,
           commands,
           outcome: "apply_failed",
           scan: null,
@@ -83318,7 +83352,7 @@ async function processGroup(opts) {
     commands.push(...applied.commands);
     if (!applied.applied) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "apply_failed",
         scan: null,
@@ -83333,7 +83367,7 @@ async function processGroup(opts) {
     );
     if (!rescan.ok) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "verification_failed",
         scan: null,
@@ -83357,7 +83391,7 @@ async function processGroup(opts) {
     if (!mayOpenPr(scanVerdict, testVerdict)) {
       const why = !scanVerdict.passed ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still present, ${scanVerdict.new_findings.length} new finding(s))` : testVerdict.outcome === "unattributed" ? "the test suite failed after the fix and the base-commit comparison could not be run" : "the fix broke the test suite";
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "not_verified",
         scan: scanVerdict,
@@ -83368,7 +83402,7 @@ async function processGroup(opts) {
     }
     if (!apply) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "verified_dry_run",
         scan: scanVerdict,
@@ -83383,7 +83417,7 @@ async function processGroup(opts) {
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
     keepBranch = KEEPS_BRANCH.has(pr.status);
     return {
-      ...base,
+      ...base2,
       commands,
       outcome: PR_STATUS_OUTCOME[pr.status],
       scan: scanVerdict,
@@ -84092,8 +84126,8 @@ function finding3(input) {
 }
 function launcherName(command) {
   if (!command) return void 0;
-  const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
-  return base.replace(/\.(cmd|exe|ps1|bat)$/i, "").toLowerCase();
+  const base2 = command.replace(/\\/g, "/").split("/").pop() ?? command;
+  return base2.replace(/\.(cmd|exe|ps1|bat)$/i, "").toLowerCase();
 }
 function firstNonFlag(args, fromIndex = 0) {
   for (let i2 = fromIndex; i2 < args.length; i2++) {
@@ -84799,41 +84833,41 @@ function walkRoot(kind, projectPath, path8) {
 }
 function readOne2(descriptor, projectPath) {
   const absolutePath = descriptor.resolve(projectPath);
-  const base = {
+  const base2 = {
     label: descriptor.label,
     kind: descriptor.kind,
     absolutePath,
     mcpServersField: descriptor.mcpServersField,
     ...descriptor.nestedProjects === true ? { nestedProjects: true } : {}
   };
-  if (absolutePath === "") return { ...base, exists: false };
+  if (absolutePath === "") return { ...base2, exists: false };
   const cap = descriptor.maxBytes ?? MAX_CONFIG_BYTES;
   const read3 = readSmallText(absolutePath, cap, walkRoot(descriptor.kind, projectPath, absolutePath));
-  if (read3.status === "absent") return { ...base, exists: false };
+  if (read3.status === "absent") return { ...base2, exists: false };
   if (read3.status === "refused") {
-    return { ...base, exists: true, refusal: read3.reason, parseError: refusalMessage(read3.reason, cap) };
+    return { ...base2, exists: true, refusal: read3.reason, parseError: refusalMessage(read3.reason, cap) };
   }
   const raw = read3.text;
   try {
     const json = parseJson(raw);
-    return { ...base, exists: true, raw, json };
+    return { ...base2, exists: true, raw, json };
   } catch (e) {
-    return { ...base, exists: true, raw, parseError: `invalid JSON: ${e.message}` };
+    return { ...base2, exists: true, raw, parseError: `invalid JSON: ${e.message}` };
   }
 }
 
 // src/tools/auditAgentConfig.ts
 var inputSchema28 = {
-  project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project to audit. Defaults to the current working directory."),
+  project_path: external_exports.string().min(1).optional().describe("The project to audit. Default: the server's working directory."),
   include_user_config: external_exports.boolean().optional().default(false).describe(
-    "When true, the audit also reads the USER-level config, shared across every project on this machine: ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json), ~/.claude/settings.json, Claude Desktop's claude_desktop_config.json, ~/.cursor/mcp.json, Windsurf's ~/.codeium/windsurf/mcp_config.json and ~/.gemini/settings.json. Off by default: it is outside this project and auditing it here would mix one project's report with settings that affect every other project too."
+    "Also read the user-level configs every project shares. Default false."
   ),
   severity_min: SeverityMin
 };
 var tool47 = {
   name: "audit_agent_config",
-  title: "Audit the AI-agent workspace configuration (MCP servers, permissions, hooks)",
-  description: "Audit the AI-agent workspace configuration in this project (and, opt-in, the user-level config) for risk signals that would let an agent session run unpinned code, leak secrets, or bypass permission prompts. Reads .mcp.json, .claude/settings.json, .claude/settings.local.json, .cursor/mcp.json, .vscode/mcp.json, .gemini/settings.json, .claude-plugin/plugin.json, and with include_user_config also ~/.claude.json, ~/.claude/settings.json and the Claude Desktop, Cursor, Windsurf and Gemini user configs. Flags: MCP servers launched via npx/uvx/pipx with no version pinned; remote MCP servers over plain http://; secrets written inline in an env block (redacted in the response); wildcard Bash permission allowlists (Bash(*), Bash(rm:*), Bash(curl:*)); defaultMode: bypassPermissions; enableAllProjectMcpServers; hooks that shell out to the network (curl/wget/iwr/irm) or write outside the project; and ${VAR} placeholders in a project .mcp.json, which Claude Code does not expand there (a real defect this repo shipped). Hashes each MCP server entry and flags ones changed since the previous audit. No network access; nothing here is executed. For the tool definitions a server actually serves (poisoning, rug pulls), use audit_mcp_tools, which starts the servers you name.",
+  title: "Audit the agent workspace configuration",
+  description: "Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, plugin.json; user-level ones with include_user_config): unpinned npx/uvx servers, plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach the network, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. Reads only; audit_mcp_tools inspects what servers serve.",
   inputSchema: inputSchema28,
   handler: (input, ctx) => handler44(input, ctx)
 };
@@ -89109,8 +89143,8 @@ function authorityOpen(written) {
   return !/[/?#]/.test(afterScheme);
 }
 function commandName(command) {
-  const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
-  return base.replace(/\.(exe|cmd|bat|com)$/i, "").toLowerCase();
+  const base2 = command.replace(/\\/g, "/").split("/").pop() ?? command;
+  return base2.replace(/\.(exe|cmd|bat|com)$/i, "").toLowerCase();
 }
 var REMOTE_COMMANDS = /* @__PURE__ */ new Set(["ssh", "sshpass", "plink", "kubectl", "oc"]);
 var ENGINES = /* @__PURE__ */ new Set(["docker", "podman", "nerdctl"]);
@@ -89228,7 +89262,7 @@ async function resolveCommand(command, env, cwd, deadline) {
   }
   if (process.platform !== "win32") return { ok: true, command };
   const exts = (envValue3(env, "PATHEXT") ?? process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((e) => e !== "");
-  const withExts = (base) => extname3(base) !== "" ? [base, ...exts.map((e) => base + e)] : exts.map((e) => base + e);
+  const withExts = (base2) => extname3(base2) !== "" ? [base2, ...exts.map((e) => base2 + e)] : exts.map((e) => base2 + e);
   let candidates2;
   const skipped2 = [];
   if (/[\\/]/.test(command) || isAbsolute22(command)) {
@@ -89313,9 +89347,9 @@ function formatBytes(n2) {
   return n2 % MiB2 === 0 ? `${n2 / MiB2} MiB` : `${n2} bytes`;
 }
 function probeEnvironment(entryEnv, treeToken) {
-  const base = {};
-  for (const [k, v] of Object.entries(getDefaultEnvironment())) if (typeof v === "string") base[k] = v;
-  return { ...base, ...entryEnv, ...treeToken === null ? {} : { [PROC_TREE_ENV]: treeToken } };
+  const base2 = {};
+  for (const [k, v] of Object.entries(getDefaultEnvironment())) if (typeof v === "string") base2[k] = v;
+  return { ...base2, ...entryEnv, ...treeToken === null ? {} : { [PROC_TREE_ENV]: treeToken } };
 }
 var ProbeStdioTransport = class {
   constructor(launch, limits) {
@@ -89832,24 +89866,24 @@ function auditBudgetMs() {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AUDIT_BUDGET_MS;
 }
 var inputSchema29 = {
-  project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project whose MCP configs declare the servers. Defaults to the current working directory."),
+  project_path: external_exports.string().min(1).optional().describe("The project whose MCP configs declare them. Default: the server's working directory."),
   servers: external_exports.array(external_exports.string().min(1).regex(/^[^*?]+$/, "exact server names only: no wildcards")).min(1).max(50).describe(
-    'REQUIRED. The MCP servers to start and audit: an entry name as it appears in the config (e.g. ["github"]), or `<source>::<name>` (e.g. ".mcp.json::github") to pick one entry when several share a name. No wildcard and no default: only these are executed.'
+    'Config entry names to start and audit (e.g. ["github"]), or `<source>::<name>`. No wildcard.'
   ),
   include_user_config: external_exports.boolean().optional().default(false).describe(
-    "Also look the names up in the user-level configs (Claude Code, Claude Desktop, Cursor, Windsurf, Gemini). Off by default."
+    "Also look the names up in the user-level configs. Default false."
   ),
   allow_remote: external_exports.boolean().optional().default(false).describe(
-    "Contact servers that reach another machine: a url entry (even at localhost), a command on a network path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it carries a backslash, more than one @, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is not seen. Off by default: they are skipped."
+    "Also start servers that reach another machine (url, ssh, kubectl, remote docker). Default false."
   ),
-  timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS8).describe("Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.")
+  timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS8).describe("Per-server time budget, in ms.")
 };
 var tool48 = {
   name: "audit_mcp_tools",
-  title: "Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls)",
+  title: "Audit what MCP servers serve (poisoning, rug pulls)",
   // Worded so this description does not trip the checks it lists: measured,
   // a literal tag block or file name here was a finding on dev-guardian itself.
-  description: "Start the MCP servers named in `servers` (a name, or `<source>::<name>` when several entries share it), list the tools, prompts, resources and templates each serves, and check them: instructions aimed at the model, hidden Unicode and look-alike letters, instructions to read secrets or agent config, to hide actions from the user, to send data out (a URL, an address, an image, a parameter), cross-server shadowing, base64 blobs, oversized descriptions. Pins every definition and the server instructions: a tool or the instructions changed since the previous audit is a high \"rug pull\", reported once. THIS EXECUTES THIRD-PARTY CODE: it runs the named servers' commands as the host would, ONLY for the names the caller lists (no wildcard, no default), with a minimal environment plus the entry's own env, cwd = the project; it never calls tools/call; it contacts remote servers (a url; a network-path command; a non-loopback URL in the command line or env; ssh or kubectl; a remote docker/podman engine) only with allow_remote; it kills the process tree after. Run it only for servers the user asked to audit. A server can recognise this audit: a clean result covers only what it chose to show this client. A name not declared or ambiguous, a remote server without allow_remote, a server that fails or does not answer within timeout_ms, or a listing a budget cut short is skipped/failed/partial with a reason and lowers coverage, never a clean pass.",
+  description: "Start the MCP servers named in `servers` and check what they serve \u2014 tools, prompts, resources \u2014 for instructions aimed at the model, hidden Unicode, requests to read secrets or send data out, cross-server shadowing and oversized descriptions; a definition changed since the last audit is a high rug pull. This runs third-party code: only the servers the user named, with a minimal environment, never tools/call; remote ones only with allow_remote. A failed server lowers coverage, never a clean pass.",
   inputSchema: inputSchema29,
   handler: (input, ctx, callMeta) => handler45(input, ctx, callMeta)
 };
@@ -89968,18 +90002,18 @@ async function runAudit(ctx, run2, callMeta) {
     }
     const entry = target.entry;
     const qualified = escapeInvisible(qualifiedName(entry));
-    const base = {
+    const base2 = {
       server_key: qualified,
       source: escapeInvisible(entry.sourceLabel),
       ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: reportList(target.alsoDeclaredIn) } : {}
     };
     if (signal?.aborted === true) {
-      notRun(name, "skipped", "cancelled before it was started", base);
+      notRun(name, "skipped", "cancelled before it was started", base2);
       continue;
     }
     const left = auditDeadline - Date.now();
     if (left <= 0) {
-      notRun(name, "skipped", `the audit's overall budget of ${budgetMs} ms was used up before this server`, base);
+      notRun(name, "skipped", `the audit's overall budget of ${budgetMs} ms was used up before this server`, base2);
       continue;
     }
     const outcome = await probeServer(entry, {
@@ -89990,7 +90024,7 @@ async function runAudit(ctx, run2, callMeta) {
       ...signal === void 0 ? {} : { signal }
     });
     const withTransport = {
-      ...base,
+      ...base2,
       ...outcome.transport === void 0 ? {} : { transport: outcome.transport },
       ...outcome.warnings.length > 0 ? { warnings: reportList(outcome.warnings, MAX_REPORT_STRING_BYTES) } : {}
     };
@@ -91209,7 +91243,7 @@ function walkRoot2(path8, ctx, under) {
   const abs = resolve34(path8);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
-  const holds = (dir2, base) => samePath3(dir2, base) || isInside3(dir2, base);
+  const holds = (dir2, base2) => samePath3(dir2, base2) || isInside3(dir2, base2);
   const project = ctx.projectDir === void 0 ? void 0 : resolve34(ctx.projectDir);
   const home = resolve34(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
@@ -92570,12 +92604,12 @@ var ECOSYSTEM_ALIASES = {
 var tool49 = {
   name: "vet_packages",
   title: "Vet packages before installing",
-  description: 'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: does the name exist (a name nobody published is likely hallucinated), is the version that would install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, rate limit, GUARDIAN_OFFLINE=1) \u2014 never read it as ok. A name missing from the public registry is `unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, pyproject/uv index, composer repositories, nuget.config), when an npmjs auth token is configured (scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only when the whole command is one plain install statement with allowlisted flags (otherwise it warns), and warns on known vulnerabilities only for an exact version pin.',
+  description: "Check packages before installing them, against the registry and OSV: the name exists (unpublished: likely hallucinated), the version is not malicious, known vulnerabilities, publish age (under 72 h warns), npm install scripts, typosquatting. Verdict per package: block, warn, unknown or ok \u2014 unknown means a check could not run, never ok. Accepts name or name@version. Read-only.",
   inputSchema: {
     ecosystem: external_exports.enum(Object.keys(ECOSYSTEM_ALIASES)).describe("npm (also pnpm/yarn/bun), pypi (pip/uv/poetry), packagist (composer) or nuget (dotnet)."),
-    packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(50).describe('Package specs: "name" or "name@version" (a range or tag is resolved to the version it installs).'),
+    packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(50).describe('Package specs: "name" or "name@version".'),
     project_path: ProjectPath.describe(
-      "Project whose registry configuration (.npmrc, pyproject.toml, composer.json, nuget.config) applies. Defaults to the current directory."
+      "The project whose registry configuration applies. Default: the server's working directory."
     )
   },
   handler: async (input, ctx, callMeta) => handler46(input, ctx, callMeta)
@@ -92753,13 +92787,13 @@ var SAMPLE_SIZE2 = 20;
 var DEFAULT_AUTHOR = "Unknown Author";
 var inputSchema30 = {
   project_path: ProjectPath,
-  format: external_exports.enum(["openvex", "cyclonedx"]).optional().describe("openvex (OpenVEX 0.2.0 JSON, the default) or cyclonedx (a CycloneDX 1.6 BOM with vulnerabilities[].analysis)."),
-  author: external_exports.string().min(1).max(200).optional().describe(`OpenVEX author \u2014 the person or organisation making the statements. Default "${DEFAULT_AUTHOR}".`)
+  format: external_exports.enum(["openvex", "cyclonedx"]).optional().describe("openvex (default) or cyclonedx (CycloneDX 1.6)."),
+  author: external_exports.string().min(1).max(200).optional().describe(`Who makes the statements. Default "${DEFAULT_AUTHOR}".`)
 };
 var tool50 = {
   name: "export_vex",
-  title: "Export VEX (OpenVEX / CycloneDX)",
-  description: "Write a VEX document for project_path: one statement per vulnerability (and package version) of its latest usable dependency scan (scan_deps, deps_audit or security_scan_full), named by its CVE or its own GHSA/PYSEC id with the aliases its scanner gave \u2014 tied to findings by those ids only, never by ids a description mentions. Status: not_affected ONLY from a suppress_finding with vex_status and its OpenVEX justification; affected when validate_finding's dependency provider finds that version imported by a file an HTTP route reaches (latest map_attack_surface); otherwise under_investigation, with the reason in status_notes. fixed is never guessed. Packages are named by purl (the newest generate_sbom's, else built from ecosystem, name and version); the product by the SBOM's purl only when that SBOM describes the same tree. Writes .guardian/reports/vex-*/vex.openvex.json (openvex, default) or vex.cdx.json (cyclonedx, CycloneDX 1.6). `unknowns` lists what it could not know \u2014 no SBOM, no surface snapshot, a partial scan \u2014 and nothing is written when no vulnerability was measured. No network.",
+  title: "Export VEX (OpenVEX or CycloneDX)",
+  description: "Write a VEX document for the latest dependency scan, one statement per vulnerability and package version (by purl): not_affected only from suppress_finding with vex_status; affected when validate_finding finds the version imported by a route-reachable file; else under_investigation, with the reason; never fixed. Writes .guardian/reports/vex-*/; `unknowns` lists what it could not know; nothing is written when no vulnerability was measured. No network.",
   inputSchema: inputSchema30,
   handler: async (input, ctx) => handler47(input, ctx)
 };
@@ -93758,11 +93792,11 @@ function planStatus(storage, planId, project, confirm) {
 var isLeasable = (t, now) => t.status === "open" || t.status === "leased" && t.lease_expires_at !== null && t.lease_expires_at <= now;
 function briefFor(storage, plan, task) {
   const root = plan.project_path;
-  const base = { root, reader: readProjectText, boundary: randomBoundary, prompt_version: plan.prompt_version, max_tokens: HOST_BRIEF_MAX_TOKENS };
+  const base2 = { root, reader: readProjectText, boundary: randomBoundary, prompt_version: plan.prompt_version, max_tokens: HOST_BRIEF_MAX_TOKENS };
   if (task.kind === "verify") {
     const fp = task.target.fingerprint;
     const hit = fp === void 0 ? null : storage.findings.findLatestInProject(root, fp);
-    return hit === null ? null : renderBrief(task, { ...base, finding: hit.finding }).text;
+    return hit === null ? null : renderBrief(task, { ...base2, finding: hit.finding }).text;
   }
   const ids2 = new Set(task.target.entry_points ?? []);
   const surface = plan.surface_snapshot_id === null ? null : storage.surface.getById(plan.surface_snapshot_id);
@@ -93772,7 +93806,7 @@ function briefFor(storage, plan, task) {
     const rel2 = f.file_path === void 0 ? null : relPosix(root, f.file_path);
     return f.tool !== "llm-hunt" && rel2 !== null && files.has(rel2);
   });
-  return renderBrief(task, { ...base, entry_points: routes, scanner_findings: known }).text;
+  return renderBrief(task, { ...base2, entry_points: routes, scanner_findings: known }).text;
 }
 function limitReason(plan, tasks, next, briefTokens) {
   const delivered = tasks.filter((t) => t.delivered_at !== null);
@@ -94000,20 +94034,20 @@ function acceptHunt(storage, plan, task, input, value, rejected, responseChars, 
 // src/tools/llmScanStart.ts
 var inputSchema31 = {
   project_path: ProjectPath,
-  modes: external_exports.array(external_exports.enum(["verify", "hunt"])).min(1).max(2).optional().describe("'verify' checks scanner findings, 'hunt' looks for what scanners miss from the entry points. Default ['verify']."),
+  modes: external_exports.array(external_exports.enum(["verify", "hunt"])).min(1).max(2).optional().describe("verify checks scanner findings; hunt looks for what they miss. Default [verify]."),
   scan_id: external_exports.string().uuid().optional().describe("Verify the findings of this scan. Default: the project open set."),
   fingerprints: external_exports.array(external_exports.string().min(1).max(200)).min(1).max(1e3).optional().describe("Verify only these findings."),
   max_tasks: external_exports.number().int().min(1).optional().describe(`Stop handing out tasks after this many. Default ${String(LLM_SCAN_DEFAULTS.max_tasks)}.`),
   max_estimated_tokens: external_exports.number().int().min(1).optional().describe(`Above this estimate the plan needs confirm: true. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`),
   per_task_overhead: external_exports.number().int().min(0).optional().describe(`Host tokens assumed per task. Default ${String(LLM_SCAN_DEFAULTS.per_task_overhead)}.`),
   confirm: external_exports.boolean().optional().describe("Accept an estimate above the limit."),
-  plan_id: external_exports.string().min(1).max(100).optional().describe("Read this plan status and report instead of planning (with confirm: true, also confirm it).")
+  plan_id: external_exports.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning (with confirm: true, confirm it).")
 };
 var parser = external_exports.object(inputSchema31).strict();
 var tool51 = {
   name: "llm_scan_start",
   title: "Plan an LLM-assisted scan",
-  description: "Plan a scan in which YOUR model checks the scanners' findings and hunts what they miss; this server calls no model. modes: verify (one task per finding with a file and line) and/or hunt (needs map_attack_surface first). Returns plan_id, the task count, what was left out and why (not_eligible, set_aside) and a token estimate; above max_estimated_tokens (default 500000) nothing is handed out until confirm: true. The loop: (1) llm_scan_task {plan_id} gives a task with a brief and a lease_token; (2) run that brief in a FRESH subagent/context, one per task (tasks may run in parallel); (3) llm_scan_submit {plan_id, task_id, lease_token, independence: 'subagent'|'same_context', payload} with its JSON answer; (4) repeat until llm_scan_task says done. llm_scan_start {plan_id} returns the report at any time: counts, coverage (full only when every task closed and every entry point was visited), demoted findings, hunt findings. Only an independent verdict ('subagent', or 'sampling') demotes or confirms a finding. The real token use is known only to the host.",
+  description: "Plan a scan where your model verifies the scanners' findings and hunts what they miss; the server calls no model. modes: verify (a task per finding with a file and line), hunt (needs map_attack_surface). Returns plan_id, the task count, what was left out and a token estimate; above max_estimated_tokens nothing is handed out until confirm: true, which the user must agree to. Then repeat llm_scan_task, the brief in a fresh subagent, llm_scan_submit. llm_scan_start {plan_id} returns the report.",
   inputSchema: inputSchema31,
   handler: async (input, ctx) => handler48(input, ctx)
 };
@@ -94161,13 +94195,13 @@ var samplingUnavailable = () => fail5(
 // src/tools/llmScanTask.ts
 var inputSchema32 = {
   plan_id: external_exports.string().min(1).max(100).describe("The plan from llm_scan_start."),
-  execute: external_exports.enum(["host", "sampling"]).optional().describe("'host' (default): hand the task out. 'sampling': run tasks through the client's MCP sampling, where it offers it.")
+  execute: external_exports.enum(["host", "sampling"]).optional().describe("host (default): hand the task out. sampling: run it through the client's MCP sampling.")
 };
 var parser2 = external_exports.object(inputSchema32).strict();
 var tool52 = {
   name: "llm_scan_task",
   title: "Lease the next LLM scan task",
-  description: "Lease the next task of a plan made by llm_scan_start. Returns task_id, kind (verify, hunt, crosscut), lease_token, lease_expires_at, brief (self-contained: give it to a FRESH subagent/context, one per task) and response_schema (the JSON answer's schema), attempts_left; or { done: true, report } when every task is closed; or { waiting: true } when the rest are leased to others. Then call llm_scan_submit with the answer. Errors: needs_confirm (the estimate is above the limit: llm_scan_start {plan_id, confirm: true}), limit_reached (max_tasks or max_estimated_tokens hit: the tasks not delivered are named and coverage is partial), plan_abandoned. A task whose file changed since planning is closed stale, not handed out. execute: 'sampling' runs tasks through the client's MCP sampling instead, where the client offers it.",
+  description: "Lease the next task of a plan: task_id, kind, lease_token, brief (give it to a fresh subagent, one per task) and response_schema; or {done: true, report}, or {waiting: true}. Then llm_scan_submit the answer. needs_confirm: llm_scan_start {plan_id, confirm: true} first; limit_reached: coverage is partial, the undelivered tasks named. A task whose file changed is closed stale.",
   inputSchema: inputSchema32,
   // The brief is the bulk of the response and the model reads the text once.
   contentOnlyKeys: ["brief"],
@@ -94192,14 +94226,14 @@ var inputSchema33 = {
   plan_id: external_exports.string().min(1).max(100).describe("The plan the task belongs to."),
   task_id: external_exports.string().min(1).max(40).describe("The task, as llm_scan_task returned it."),
   lease_token: external_exports.string().min(1).max(100).describe("The lease_token llm_scan_task returned with the task."),
-  independence: external_exports.enum(["subagent", "same_context"]).describe("'subagent': a fresh context ran the brief. 'same_context': you ran it yourself \u2014 shown, never used to demote or confirm."),
+  independence: external_exports.enum(["subagent", "same_context"]).describe("subagent: a fresh context ran the brief; same_context: you did (never demotes or confirms)."),
   payload: external_exports.unknown().describe("The answer, matching the task response_schema. At most 64 KiB serialized.")
 };
 var parser3 = external_exports.object(inputSchema33).strict();
 var tool53 = {
   name: "llm_scan_submit",
-  title: "Submit the answer to an LLM scan task",
-  description: "Submit the JSON answer to a task leased with llm_scan_task: plan_id, task_id, lease_token, independence (subagent when a fresh context ran the brief, same_context when you did) and payload (at most 64 KiB, matching the task response_schema). Returns { accepted: true, progress } or { accepted: false, errors: [{path, problem}], attempts_left }: an invalid answer is refused with the reason and the task stays yours for two more tries, then it closes undetermined. Every file:line it cites is checked against the project on disk. A hunt result stores its valid findings (unverified until a verdict) and creates a verify task for each; rejected ones are named. Errors: already_closed (a task takes one answer), bad_lease (wrong plan, task or token), too_large, plan_abandoned. If the target file changed since planning, the verdict is recorded stale and demotes nothing. After submitting, call llm_scan_task for the next task.",
+  title: "Submit an LLM scan task's answer",
+  description: "Submit the JSON answer to a leased task: plan_id, task_id, lease_token, independence and payload (at most 64 KiB, matching response_schema). An invalid answer is refused with the reasons; the task stays yours for two more tries. Every file:line it cites is checked on disk. Errors: already_closed, bad_lease, too_large, plan_abandoned. Then llm_scan_task for the next.",
   inputSchema: inputSchema33,
   handler: async (input, ctx) => handler50(input, ctx)
 };
@@ -94212,6 +94246,204 @@ async function handler50(input, ctx) {
   const { plan_id, task_id, lease_token, independence, payload } = parsed.data;
   return submitAnswer(ctx.storage, { plan_id, task_id, lease_token, independence, payload });
 }
+
+// src/tools/fold.ts
+var FOLDS = [];
+var WRAPPERS = /* @__PURE__ */ new Set(["ZodOptional", "ZodDefault", "ZodNullable", "ZodEffects"]);
+function base(field2) {
+  let cur = field2;
+  for (; ; ) {
+    const def = cur._def;
+    if (def.typeName === void 0 || !WRAPPERS.has(def.typeName)) return cur;
+    const next = def.innerType ?? def.schema;
+    if (next === void 0) return cur;
+    cur = next;
+  }
+}
+function asFoldParam(field2, description) {
+  const inner = field2 instanceof ZodDefault ? field2.removeDefault() : field2;
+  const optional2 = inner.isOptional() ? inner : inner.optional();
+  return description !== void 0 ? optional2.describe(description) : optional2;
+}
+function invalid(message2) {
+  return { ok: false, error: { code: "invalid_input", message: message2 } };
+}
+function registerFold(spec) {
+  const members = /* @__PURE__ */ new Map();
+  for (const [mode, memberName] of Object.entries(spec.modes)) {
+    const member = TOOLS.find((t) => t.name === memberName);
+    if (member === void 0) throw new Error(`fold ${spec.name}: member '${memberName}' is not registered`);
+    members.set(mode, member);
+  }
+  const modeValues = [...members.keys()];
+  const [firstMode, ...otherModes] = modeValues;
+  if (firstMode === void 0) throw new Error(`fold ${spec.name}: no modes`);
+  const headIndex = TOOLS.findIndex((t) => t.name === spec.name);
+  if (headIndex >= 0 && (spec.defaultMode === void 0 || spec.modes[spec.defaultMode] !== spec.name)) {
+    throw new Error(`fold ${spec.name} keeps a member's name, so that member must be its defaultMode`);
+  }
+  if (spec.defaultMode !== void 0 && !members.has(spec.defaultMode)) {
+    throw new Error(`fold ${spec.name}: defaultMode '${spec.defaultMode}' is not one of its modes`);
+  }
+  const modeField = external_exports.enum([firstMode, ...otherModes]);
+  const shape = {
+    [spec.modeKey]: (spec.defaultMode !== void 0 ? modeField.optional() : modeField).describe(spec.modeDescription)
+  };
+  for (const member of members.values()) {
+    for (const [key, field2] of Object.entries(member.inputSchema)) {
+      if (key === spec.modeKey) throw new Error(`fold ${spec.name}: member ${member.name} already takes '${key}'`);
+      const seen = shape[key];
+      if (seen !== void 0) {
+        const [a2, b] = [base(seen), base(field2)];
+        const typeA = a2._def.typeName;
+        const typeB = b._def.typeName;
+        const sameEnum = !(a2 instanceof ZodEnum) || !(b instanceof ZodEnum) || JSON.stringify(a2.options) === JSON.stringify(b.options);
+        if (typeA !== typeB || !sameEnum) {
+          throw new Error(`fold ${spec.name}: '${key}' has different types in its members`);
+        }
+        continue;
+      }
+      shape[key] = asFoldParam(field2, spec.params?.[key] ?? field2.description);
+    }
+  }
+  for (const key of Object.keys(spec.params ?? {})) {
+    if (shape[key] === void 0) throw new Error(`fold ${spec.name}: no member takes '${key}'`);
+  }
+  const pick2 = (input) => {
+    const mode = input[spec.modeKey] ?? spec.defaultMode;
+    return typeof mode === "string" ? members.get(mode) : void 0;
+  };
+  const fold = {
+    name: spec.name,
+    title: spec.title,
+    description: spec.description,
+    inputSchema: shape,
+    route: pick2,
+    handler: async (input, ctx, callMeta) => {
+      const member = pick2(input);
+      const mode = String(input[spec.modeKey] ?? spec.defaultMode ?? "");
+      if (member === void 0) {
+        return invalid(`${spec.name} needs ${spec.modeKey}: one of ${modeValues.map((v) => `"${v}"`).join(", ")}`);
+      }
+      const rest = Object.fromEntries(
+        Object.entries(input).filter(([key, value]) => key !== spec.modeKey && value !== void 0)
+      );
+      const takes = Object.keys(member.inputSchema);
+      const foreign = Object.keys(rest).filter((key) => !takes.includes(key));
+      if (foreign.length > 0) {
+        return invalid(
+          `${spec.name} {${spec.modeKey}: "${mode}"} does not take ${foreign.join(", ")}; ` + (takes.length > 0 ? `it takes ${takes.join(", ")}` : "it takes no other parameter")
+        );
+      }
+      const parsed = await strictInputSchema(member).safeParseAsync(rest);
+      if (!parsed.success) {
+        const why = parsed.error.issues.map((i2) => `${i2.path.join(".") || "input"}: ${i2.message}`).join("; ");
+        return invalid(`${spec.name} {${spec.modeKey}: "${mode}"}: ${why}`);
+      }
+      return member.handler(parsed.data, ctx, callMeta);
+    }
+  };
+  if (headIndex >= 0) TOOLS.splice(headIndex, 1);
+  for (const member of members.values()) {
+    if (member.name !== spec.name) member.listed = false;
+  }
+  const at = headIndex >= 0 ? headIndex : Math.min(...[...members.values()].map((m) => TOOLS.indexOf(m)));
+  registerToolModule(fold);
+  const added = TOOLS.pop();
+  if (added !== void 0) TOOLS.splice(at, 0, added);
+  FOLDS.push({
+    name: spec.name,
+    modeKey: spec.modeKey,
+    modes: { ...spec.modes },
+    ...spec.defaultMode !== void 0 ? { defaultMode: spec.defaultMode } : {}
+  });
+  return fold;
+}
+
+// src/tools/folds.ts
+registerFold({
+  name: "dotnet_check",
+  title: ".NET checks",
+  description: "One .NET check. secrets: appsettings*.json, *.config, nuget.config and launchSettings.json for what gitleaks misses \u2014 SQL Server connection strings, Azure keys, NuGet feed credentials, JWT signing keys. target_framework: each project's TargetFramework (LTS, STS, end of life); no SDK needed. efcore: EF Core migrations that drop tables or columns, add NOT NULL without a default, or embed credentials. setup: the recorded .NET posture (these checks, NuGet CVEs, open findings), no scanner run.",
+  modeKey: "check",
+  modeDescription: "The check to run.",
+  modes: {
+    secrets: "scan_dotnet_secrets",
+    target_framework: "dotnet_target_framework_check",
+    efcore: "dotnet_efcore_audit",
+    setup: "dotnet_describe_setup"
+  }
+});
+registerFold({
+  name: "wp_audit",
+  title: "WordPress install audit (WP-CLI)",
+  description: "Audit a WordPress install with WP-CLI, changing nothing. mode install (default): core and plugin checksums (themes: not checked), administrators with risky logins, DISALLOW_FILE_EDIT / WP_DEBUG / FORCE_SSL_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin \u2014 where backdoors persist. mode bulk: the install audit of up to 50 installs. Needs WP-CLI; checksums come from api.wordpress.org.",
+  modeKey: "mode",
+  modeDescription: "install (default), cron or bulk.",
+  defaultMode: "install",
+  modes: { install: "wp_audit", cron: "wp_cron_audit", bulk: "bulk_audit_wordpress_sites" },
+  params: {
+    wp_install_path: "install, cron: the directory holding wp-config.php.",
+    wp_install_paths: "bulk: up to 50 install directories.",
+    concurrency: "bulk: installs audited at once, 1\u201310. Default 4.",
+    include_users: "install: list the administrators, flagging risky logins. Default true.",
+    include_options: "install: read the config flags. Default true.",
+    risky_login_names: "install: logins to flag, replacing the default list."
+  }
+});
+registerFold({
+  name: "wp_vuln_check",
+  title: "WordPress vulnerability checks",
+  description: "Known WordPress vulnerabilities and exposure. mode live (default): WPScan against target_url (or a local install's URL) for core, plugin and theme CVEs; with no API token it reads not checked, never clean. mode source: a local install's versions (project_path = the install root) against the Wordfence feed (WORDFENCE_API_KEY; without it, partial) and wp.org (closed or stale plugins). mode rest: GET probes of the live REST API \u2014 users, drafts, comments, xmlrpc.php.",
+  modeKey: "mode",
+  modeDescription: "live (default), source or rest.",
+  defaultMode: "live",
+  modes: { live: "wp_vuln_check", source: "wp_vuln_check_source", rest: "wp_rest_audit" },
+  params: {
+    target_url: "live, rest: the live site's URL.",
+    wp_install_path: "live: a local install whose wp-config.php gives the URL.",
+    timeout_ms: "rest: per-request timeout, 1000\u201360000 ms. Default 15000."
+  }
+});
+registerFold({
+  name: "wp_report",
+  title: "WordPress recorded state",
+  description: "What dev-guardian recorded about one WordPress install (project_path = its root); no network. kind setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI. Run wp_audit or wp_vuln_check first for fresh data.",
+  modeKey: "kind",
+  modeDescription: "setup, hardening or plugin.",
+  modes: { setup: "wp_describe_setup", hardening: "wp_recommend_hardening", plugin: "wp_plugin_check" },
+  params: {
+    target_url: "setup, plugin: the site URL its scans were recorded under (nothing is sent).",
+    slug: 'plugin: the wp.org slug, e.g. "contact-form-7".',
+    wp_install_path: "plugin: a local install; WP-CLI reads the plugin's version and state."
+  }
+});
+registerFold({
+  name: "diff_scans",
+  title: "Compare two scans",
+  description: "Compare two scans of a project and type. mode diff (default): new, resolved, unchanged and not_remeasured findings (a type the newer scan did not measure \u2014 never resolved), matched by line-independent identity; from_scan_id / to_scan_id, else from (previous, baseline) to the latest. mode regression: the latest scan against its baseline (else the previous), weighted by severity; `regressed` past threshold. Suppressed findings count apart (summary.suppressed, suppressed_findings, suppressed_by_severity); unmeasured ones in not_remeasured_by_severity. Another project's scan id: unknown_scan_id.",
+  modeKey: "mode",
+  modeDescription: "diff (default) or regression.",
+  defaultMode: "diff",
+  modes: { diff: "diff_scans", regression: "regression_alert" },
+  params: {
+    scan_type: "Compare scans of this type. Default: the newest finding-producing scan.",
+    threshold: "regression: the weighted change that sets regressed. Default 5 (one new critical)."
+  }
+});
+registerFold({
+  name: "prioritize_findings",
+  title: "Rank or triage open findings",
+  description: "One project's open findings (newest usable scan of each type, suppressions out). view rank (default): by severity, category, fix availability and age, boosted for CVEs on CISA KEV or with a high EPSS, each CVE with a CISA SSVC decision (Act, Attend, Track*, Track); missing data is named, never invented. view triage: likely_false_positive, probably_safe or keep, from paths (tests, generated code, fixtures) \u2014 suppress_finding candidates for you to judge.",
+  modeKey: "view",
+  modeDescription: "rank (default) or triage.",
+  defaultMode: "rank",
+  modes: { rank: "prioritize_findings", triage: "triage_findings" },
+  params: {
+    limit: "rank: how many to return, 1\u2013500. Default 50.",
+    mission_wellbeing: "rank: SSVC Mission & Well-being of this system. Default medium."
+  }
+});
 
 // src/resources/scans.ts
 registerResourceModule({
@@ -94501,7 +94733,7 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-wp-cron",
   uri: "guardian://wp/cron",
-  description: "Latest wp_cron_audit result: total scheduled events + flagged ones (suspicious hooks, base64-looking args, hooks from inactive plugins).",
+  description: 'Latest wp_audit {mode: "cron"} result: total scheduled events + flagged ones (suspicious hooks, base64-looking args, hooks from inactive plugins).',
   handler: async (_uri, _params, ctx) => {
     const scan2 = findLatestOfType(ctx, "wp_cron_audit");
     if (!scan2) return { json: { last_run: null } };
@@ -94530,7 +94762,7 @@ function mcpInvalidParams3(message2) {
 registerResourceModule({
   name: "guardian-dotnet-target-frameworks",
   uri: "guardian://dotnet/target-frameworks",
-  description: "Latest dotnet_target_framework_check: per-project target framework moniker + EOL/legacy status.",
+  description: 'Latest dotnet_check {check: "target_framework"}: per-project target framework moniker + EOL/legacy status.',
   handler: async (_uri, _params, ctx) => {
     const scan2 = findLatestOfType2(ctx, "dotnet_target_framework");
     if (!scan2) return { json: { last_run: null } };
@@ -94546,7 +94778,7 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-dotnet-efcore",
   uri: "guardian://dotnet/efcore",
-  description: "Latest dotnet_efcore_audit: dangerous migration patterns detected (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials).",
+  description: 'Latest dotnet_check {check: "efcore"}: dangerous migration patterns detected (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials).',
   handler: async (_uri, _params, ctx) => {
     const scan2 = findLatestOfType2(ctx, "dotnet_efcore_audit");
     if (!scan2) return { json: { last_run: null } };
@@ -94686,7 +94918,7 @@ async function main() {
   else if (guard.reason === "refused" || guard.reason === "unwritable") {
     logErr(`.gitignore left alone (${guard.reason}): ${guard.detail ?? "no detail"}`);
   }
-  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION2 });
+  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION2 }, { instructions: SERVER_INSTRUCTIONS });
   const progressNotifier = {
     send: (payload) => {
       void mcp.server.notification({
@@ -94704,7 +94936,9 @@ async function main() {
   };
   attachAllTools(mcp, ctx);
   attachAllResources(mcp, ctx);
-  logErr(`registered ${TOOLS.length} tool(s), ${RESOURCES.length} resource(s)`);
+  logErr(
+    `registered ${listedTools().length} tool(s) (+${TOOLS.length - listedTools().length} hidden alias(es)), ${RESOURCES.length} resource(s)`
+  );
   const background = { cancel: () => {
   } };
   installShutdownHooks(mcp, storage, background);

@@ -24,7 +24,7 @@ import { RESOURCES } from '../resources/index.js';
 import { serverProjectPath } from '../resources/paging.js';
 import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
-import { registerToolModule, TOOLS } from './index.js';
+import { listedTools, registerToolModule } from './index.js';
 const startedAt = Date.now();
 // Same shared resolver server.ts and report/sarif.ts already use — was a
 // second hardcoded '0.1.0' here, independent of (and just as stale as) the
@@ -34,16 +34,13 @@ const SERVER_VERSION = resolveVersion();
 const tool = {
     name: 'health_status',
     title: 'Server health',
-    description: 'Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and ' +
-        "one project's last scan and scan count (project_path, default: the server's working " +
-        "directory). Read-only. `storage_warning` (null when fine): the project's .guardian/guardian.db " +
-        'is not being used — one from before 3.1.0 or a copy is not trusted until its owner registers it, ' +
-        "and history goes to a per-user fallback meanwhile. Tell the user, with the `db adopt` command the " +
-        'warning names, to run it themselves in a terminal; never run it yourself — it decides whose data ' +
-        'dev-guardian trusts. `suppressions` {active, this_project, all_projects}: the active suppressions ' +
-        'that apply here; all_projects ones have no project and hide findings in every project. ' +
-        '`storage.future_dated_scans_ignored` and `future_dated_note`: scans dated in the future, which ' +
-        'every count, list and "latest" ignores.',
+    description: "Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. " +
+        "`storage_warning` (null when fine): the project's .guardian/guardian.db is not used (a copy, or not " +
+        'registered) and history goes to a per-user fallback — tell the user to run the `db adopt` command it ' +
+        'names in their own terminal; never run it yourself. `suppressions` {active, this_project, ' +
+        'all_projects}: all_projects ones hide findings in every project. ' +
+        '`storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, which every count ' +
+        'ignores.',
     inputSchema: { project_path: ProjectPath },
     handler: async (input, ctx) => handler(input, ctx),
 };
@@ -113,7 +110,7 @@ async function handler(input, ctx) {
             queued: limiter.queued,
         },
         registry: {
-            tools: TOOLS.length,
+            tools: listedTools().length,
             resources: RESOURCES.length,
         },
         storage_warning: ctx.storageWarning ?? null,

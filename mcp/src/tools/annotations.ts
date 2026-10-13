@@ -7,11 +7,13 @@
  * `health_status`. `audit_mcp_tools` audits other servers' annotations; this
  * server now has its own.
  *
- * One table, keyed by tool name, rather than a field written into each of the
- * 63 tool modules: the four answers are easier to review side by side, and a
- * tool module may still declare `annotations` itself, which wins
+ * One table, keyed by tool name, rather than a field written into each tool
+ * module: the four answers are easier to review side by side, and a tool
+ * module may still declare `annotations` itself, which wins
  * (`registerToolModule`, `./index.ts`). `test/integration/toolSchemaListing.test.ts`
- * holds every registered tool to an entry here, and every entry to a tool.
+ * holds every registered tool to an entry here, and every entry to a tool;
+ * a fold's entry (`./folds.ts`) covers each of its members' — the hidden
+ * aliases keep their own.
  *
  * What each hint means HERE (the MCP specification leaves "environment" open):
  *
@@ -101,6 +103,9 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, Hints>> = {
   scan_secrets: records(true), // `verify_live` asks each provider whether a key is live
   scan_dotnet_secrets: records(true), // a .NET build restores from NuGet feeds
   dotnet_efcore_audit: records(true),
+  // Folds (./folds.ts): every member's hints covered — read-only only when all are, open-world when any is.
+  dotnet_check: records(true),
+  wp_report: records(false), // the plugin kind runs WP-CLI and records a row
   scan_skill: records(true), // OSV
   scan_wordpress: records(true), // Semgrep's registry PHP rules
   wp_vuln_check: records(true), // WordPress.org / WPScan

@@ -77,30 +77,26 @@ const inputSchema = {
         .string()
         .uuid()
         .optional()
-        .describe("The older generate_sbom scan. Default: this project's second-newest completed SBOM scan."),
+        .describe('The older SBOM scan. Default: the second-newest.'),
     to_scan_id: z
         .string()
         .uuid()
         .optional()
-        .describe("The newer generate_sbom scan. Default: this project's newest completed SBOM scan."),
+        .describe('The newer SBOM scan. Default: the newest.'),
     /** No longer changes behaviour — full-file comparison always happens now
      *  when the SBOM file is still on disk. Kept so an existing caller that
      *  passes it does not break. */
     use_full_file: z
         .boolean()
         .optional()
-        .describe('Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is ' +
-        'still on disk, and the capped summary stored with the scan only when it is not (component_source says which).'),
+        .describe('Ignored; kept for old callers.'),
 };
 const tool = {
     name: 'sbom_diff',
-    title: 'SBOM diff (added / removed / changed components)',
-    description: 'Compare two generate_sbom scans, full component list, keyed by (ecosystem, name) with a ' +
-        'version SET per key so multiple versions of the same package in the same ecosystem are ' +
-        'reported per-version, never collapsed. Default to/from: the two latest completed SBOM scans ' +
-        'of project_path. Refuses a comparison that would mix a full component list against a capped ' +
-        '25-item summary (spurious results); response arrays are capped but summary carries the true, ' +
-        'uncapped totals except on the (flagged) both-capped fallback path.',
+    title: 'Compare two SBOMs',
+    description: 'Compare two generate_sbom scans of project_path (default: its two latest): components added, removed ' +
+        'and changed, keyed by ecosystem and name with every version kept. Refuses to compare a full list ' +
+        'with a capped summary; the response arrays are capped, `summary` has the true totals.',
     inputSchema,
     handler: async (input, ctx) => handler(input, ctx),
 };

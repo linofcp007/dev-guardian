@@ -137,19 +137,11 @@ const inputSchema = {
 const tool = {
     name: 'deps_update_plan',
     title: 'Dependency upgrade plan',
-    description: 'Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use ' +
-        'each stack\'s own "outdated" command; for .NET that is preceded by `dotnet restore ' +
-        '--locked-mode`, which EXECUTES the project\'s own MSBuild and contacts its NuGet feeds (it ' +
-        'never creates or rewrites a packages.lock.json). pip reads this project\'s own ' +
-        'requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn ' +
-        'projects get no npm commands — their CVEs are listed with the pnpm overrides (where the ' +
-        "project's pnpm version reads them) / resolutions fix to apply by hand (workspace members " +
-        'included). Classifies each entry as security (an ' +
-        'active CVE in the same project\'s latest deps scan — npm/pip target the MINIMUM fixed version, ' +
-        'other stacks the latest available) / patch / minor / major, and returns a sortable, structured ' +
-        'plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), ' +
-        '`unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem ' +
-        'command that failed, with its code — e.g. NU1004 lock out of sync vs NU1301 feed unreachable).',
+    description: "Ordered upgrades from each stack's own outdated command (npm, composer, cargo, go, rubygems; dotnet " +
+        "after a locked restore, which runs MSBuild) and pip's own pins. Each entry: security (an active CVE " +
+        'in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest ' +
+        'available), patch, minor or major, with its upgrade_command; pnpm and yarn get overrides to apply by ' +
+        'hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.',
     inputSchema,
     handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };

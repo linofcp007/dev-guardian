@@ -71,18 +71,12 @@ registerToolModule(
     name: 'security_scan_full',
     title: 'Full security scan',
     description:
-      'Run every security scan as one: scan_sast (Semgrep with the registry ruleset, the project .semgrep.yml ' +
-      'and registered custom rules; Bandit for Python; .NET analyzers), scan_secrets (gitleaks over git ' +
-      'history AND uncommitted files), scan_deps (Trivy vuln + license) and scan_iac (Trivy config). Each ' +
-      'runs as its own scan (meta.parent_scan_id); this scan holds the merged, de-duplicated findings and ' +
-      'lists them in child_scans. A scanner that did not run or failed is reported as such and coverage is ' +
-      'partial/none, never full. Each tools_run entry names the project configuration that decided it ' +
-      '(`honoured_config`: .trivyignore, .gitleaks.toml, .bandit, .semgrepignore, .guardianignore…), and ' +
-      '`suppressed_by_repo_config` what .trivyignore suppressed — reported, never counted as findings. ' +
-      'auto_fix applies Semgrep autofixes after a clean-tree check. PRIVACY: the ' +
-      'Semgrep registry (--config=auto) sends usage metrics to Semgrep Inc.; local_only=true uses only rules ' +
-      "on disk with --metrics=off. It does not stop Trivy's database download (scan_deps, scan_iac) nor, on " +
-      "a .NET project, scan_sast's dotnet restore (the NuGet feeds).",
+      'scan_sast, scan_secrets, scan_deps and scan_iac as one scan: each runs as its own child ' +
+      '(child_scans); this scan holds the merged, de-duplicated findings. A scanner that did not run is ' +
+      'reported: coverage partial or none, never full. `tools_run[].honoured_config`: the project files ' +
+      'that decided each run; `suppressed_by_repo_config`: what .trivyignore suppressed. auto_fix applies ' +
+      'Semgrep autofixes on a clean tree. local_only keeps Semgrep local; Trivy still downloads its ' +
+      'database, a .NET restore still reaches NuGet.',
     scan_type: 'security_full',
     category: 'security',
     orchestrator: true,
@@ -100,10 +94,8 @@ registerToolModule(
         .boolean()
         .optional()
         .describe(
-          "Semgrep runs only rules already on disk (the project's .semgrep.yml, registered custom rules and the " +
-            "plugin's LLM-application and web-JS sink packs) with --metrics=off; no registry, no telemetry. Trivy (scan_deps, " +
-            "scan_iac) may still download its database, and a .NET project's restore still contacts its NuGet " +
-            'feeds. Default: false.',
+          "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). " +
+            'Trivy still goes out.',
         ),
       force: Force,
     },

@@ -22,7 +22,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { TOOLS, attachAllTools, type ToolModule } from '../../src/tools/index.js';
+import { TOOLS, attachAllTools, listedTools, type ToolModule } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { freshPlugin } from '../helpers/historySeed.js';
 // Static, not in a beforeAll: `it.each(TOOLS…)` below is expanded when the
@@ -162,7 +162,8 @@ describe('every registered tool rejects an unknown key', () => {
   it('tools/list advertises exactly that: additionalProperties false on every input schema', async () => {
     const client = await connect();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(TOOLS.length);
+    // The listed tools; a hidden alias is strict too, and is called by name in the tests above.
+    expect(tools).toHaveLength(listedTools().length);
     const open = tools
       .filter((t) => (t.inputSchema as { additionalProperties?: unknown }).additionalProperties !== false)
       .map((t) => t.name);

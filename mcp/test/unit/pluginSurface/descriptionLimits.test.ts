@@ -2,12 +2,13 @@
  * Length and validity limits on everything a host loads into the model's
  * context before the user has asked for anything.
  *
- *   - MCP tool descriptions: at most 1500 characters. Claude Code truncates a
- *     description at 2048; this repo keeps a margin. `bug_hunt` once reached
- *     25 568 — a changelog carried in every session's tool list. Measurement
- *     history belongs in the rule packs' comments and CHANGELOG.md; the
- *     description says what the tool does, its key inputs, what it returns
- *     and its limits.
+ *   - MCP tool descriptions: at most 1500 characters for every registered
+ *     name (hidden aliases included), at most 600 for a listed tool, and the
+ *     whole `tools/list` with the server instructions under one total (below).
+ *     `bug_hunt` once reached 25 568 — a changelog carried in every session's
+ *     tool list. Measurement history belongs in the rule packs' comments and
+ *     CHANGELOG.md; the description says what the tool does, when to use it
+ *     and the rules that change a decision.
  *   - Skill `description`: at most 1024 characters, and valid YAML. The
  *     router's alone was 4 487 characters, and two skills
  *     (`guardian-grill`, `guardian-improve`) carried an unquoted `: ` that a
@@ -17,10 +18,15 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { RULES_BODY } from '../../../src/hostsetup/rulesTemplate.js';
 import { RESOURCES } from '../../../src/resources/index.js';
-import { TOOLS } from '../../../src/tools/index.js';
+import { attachAllTools, listedTools, TOOLS } from '../../../src/tools/index.js';
+import { SERVER_INSTRUCTIONS } from '../../../src/tools/instructions.js';
+import { freshPlugin } from '../../helpers/historySeed.js';
 import { MCP_ROOT } from '../../helpers/tsxNode.js';
 import { commandDocs, frontmatter, referenceDocs, skillDocs } from './pluginDocs.js';
 
@@ -56,6 +62,98 @@ describe('MCP tool descriptions', () => {
       expect(tool?.description.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX);
     },
   );
+});
+
+// The whole of `tools/list` — plus the `instructions` sent at initialize, which
+// hosts put in the system prompt — is in the context of every session of a
+// host that loads it up front (Cursor, Windsurf, Copilot), and each Claude Code
+// search hit loads a full entry. It was 125 744 characters for 63 tools: half
+// of it descriptions, with release history, repeated boilerplate (a
+// `project_path` description written 53 times), output fields the results
+// already explain, and `$schema` / `execution` on every entry; a per-tool cap
+// of 1500 had become what descriptions grew to. Now it is measured whole,
+// through a real MCP handshake, against one total; each description says what
+// the tool does, when to use it and the rules that change a decision, in at
+// most 600 characters; a parameter in at most 200; a title in at most 60.
+describe('the tools/list budget (a real handshake)', () => {
+  const TOTAL_MAX = 72_000;
+  const LISTED_DESCRIPTION_MAX = 600;
+  const PARAM_DESCRIPTION_MAX = 200;
+  const TITLE_MAX = 60;
+  const INSTRUCTIONS_MAX = 900;
+
+  interface Listed {
+    name: string;
+    title?: string;
+    description?: string;
+    inputSchema: Record<string, unknown>;
+  }
+  let tools: Listed[] = [];
+  let listJson = '';
+  let instructions = '';
+
+  beforeAll(async () => {
+    const server = new McpServer({ name: 'budget', version: '0.0.0' }, { instructions: SERVER_INSTRUCTIONS });
+    attachAllTools(server, freshPlugin().plugin);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'budget-client', version: '0.0.0' });
+    await client.connect(clientTransport);
+    const result = await client.listTools();
+    tools = result.tools as Listed[];
+    listJson = JSON.stringify(result.tools);
+    instructions = client.getInstructions() ?? '';
+    await client.close();
+  });
+
+  it(`tools/list and the instructions together are at most ${TOTAL_MAX} characters`, () => {
+    expect(tools.length).toBe(listedTools().length);
+    expect(instructions).not.toBe('');
+    expect(listJson.length + instructions.length).toBeLessThanOrEqual(TOTAL_MAX);
+  });
+
+  it(`the instructions are at most ${INSTRUCTIONS_MAX} characters`, () => {
+    expect(instructions.length).toBeLessThanOrEqual(INSTRUCTIONS_MAX);
+  });
+
+  it(`every listed description is at most ${LISTED_DESCRIPTION_MAX} characters, every title at most ${TITLE_MAX}`, () => {
+    const over = tools
+      .filter((t) => (t.description ?? '').length > LISTED_DESCRIPTION_MAX || (t.title ?? '').length > TITLE_MAX)
+      .map((t) => `${t.name}: description ${(t.description ?? '').length}, title ${(t.title ?? '').length}`);
+    expect(over).toEqual([]);
+  });
+
+  it(`every parameter description, nested ones included, is at most ${PARAM_DESCRIPTION_MAX} characters`, () => {
+    const over: string[] = [];
+    const walk = (node: unknown, path: string): void => {
+      if (node === null || typeof node !== 'object') return;
+      const n = node as { description?: unknown; properties?: Record<string, unknown>; items?: unknown };
+      if (typeof n.description === 'string' && n.description.length > PARAM_DESCRIPTION_MAX) {
+        over.push(`${path}: ${n.description.length}`);
+      }
+      for (const [k, v] of Object.entries(n.properties ?? {})) walk(v, `${path}.${k}`);
+      walk(n.items, `${path}[]`);
+    };
+    for (const t of tools) for (const [k, v] of Object.entries(t.inputSchema['properties'] ?? {})) walk(v, `${t.name}.${k}`);
+    expect(over).toEqual([]);
+  });
+
+  it('no entry carries $schema or execution', () => {
+    expect(listJson).not.toContain('"$schema"');
+    expect(listJson).not.toContain('"execution"');
+  });
+
+  // Emphasis (shouting, bold) made the real hazards — audit_mcp_tools runs
+  // third-party code, verify_live sends secrets out — read like every other
+  // sentence. A hazard is stated plainly, once.
+  it('no bold and no shouting in the listing', () => {
+    expect(listJson).not.toContain('**');
+    const SHOUTED =
+      /\b(?:NEVER|ALWAYS|MUST|ONLY|NOT|NO|REQUIRED|RECOMMENDED|WARNING|ACTIVE|BEFORE|EVERY|ALREADY|PRIVACY|EGRESS|THIS|REPORT|READ|EXECUTES?|OFF|DO|ANY|ALL|OTHER|USER|NAME|ORIGIN|LOOPBACK|RESPONSE|MINIMUM|SECURITY|TEMPORARY|YOUR|CAN|BE|WRONG|AND|WHEN|TOOL|FILE|FILES|REAL|ISSUES|CODE)\b/g;
+    // NOT NULL is SQL, and DO_NOT_INSTALL a verdict: neither is shouting.
+    const text = listJson.replace(/NOT NULL|DO_NOT_INSTALL/g, '');
+    expect([...new Set(text.match(SHOUTED) ?? [])]).toEqual([]);
+  });
 });
 
 // sarif-import (test plan T-23, NFR-1 and NFR-2): the new tool is held to the
@@ -255,6 +353,6 @@ describe('the host rules name the real tool and resource counts', () => {
   it('RULES_BODY says N tools and M resources, as registered', () => {
     const m = /(\d+) tools and (\d+) resources/.exec(RULES_BODY);
     expect(m).not.toBeNull();
-    expect([Number(m?.[1]), Number(m?.[2])]).toEqual([TOOLS.length, RESOURCES.length]);
+    expect([Number(m?.[1]), Number(m?.[2])]).toEqual([listedTools().length, RESOURCES.length]);
   });
 });

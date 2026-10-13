@@ -7,7 +7,8 @@
  * the full surface without starting the stdio server.
  *
  * This list IS the public MCP surface — `toolSurface.test.ts` snapshots it, so
- * adding or removing an import here is an intentional, reviewed change.
+ * adding or removing an import here is an intentional, reviewed change. The
+ * folds (`tools/folds.ts`) decide which of these names `tools/list` shows.
  */
 
 // Cross-stack security + quality + deps:
@@ -87,6 +88,8 @@ import './tools/exportVex.js';
 import './tools/llmScanStart.js';
 import './tools/llmScanTask.js';
 import './tools/llmScanSubmit.js';
+// Families listed as one tool each, their members kept as hidden aliases (tools/fold.ts) — after every member:
+import './tools/folds.js';
 
 // Resources:
 import './resources/scans.js';
