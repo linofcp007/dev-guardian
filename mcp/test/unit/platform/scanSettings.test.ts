@@ -71,15 +71,29 @@ describe('loadScanSettings', () => {
 });
 
 describe('semgrepScanFlags', () => {
-  it('passes the timeouts and keeps .guardian/ out of every scan (finding 14)', () => {
+  it('passes the timeouts and keeps the root .guardian/ output out of every scan (finding 14)', () => {
     const flags = semgrepScanFlags(project('semgrep:\n  timeout: 45\n'));
-    expect(flags.args).toEqual(['--timeout', '45', '--timeout-threshold', '0', '--exclude=.guardian']);
+    expect(flags.args.slice(0, 4)).toEqual(['--timeout', '45', '--timeout-threshold', '0']);
+    expect(flags.args).toContain('--exclude=.guardian/reports');
+    expect(flags.args).toContain('--exclude=.guardian/guardian.db');
     expect(flags.warning).toBeNull();
+  });
+
+  it('never a .guardian folder below the root: no unanchored --exclude (review 10, finding 1)', () => {
+    // `--exclude=.guardian` matched `lib/.guardian/handler.js` too. Every
+    // exclusion holds a slash (anchored) and no leading one (which anchors at
+    // the git root, not the project — platform/guardianOutput.ts).
+    const excludes = semgrepScanFlags(project()).args.filter((a) => a.startsWith('--exclude='));
+    expect(excludes.length).toBeGreaterThan(0);
+    for (const flag of excludes) {
+      const pattern = flag.slice('--exclude='.length);
+      expect(pattern, flag).toMatch(/^\.guardian\/[^/*]/);
+    }
   });
 
   it('an invalid file: the defaults, with a warning naming it', () => {
     const flags = semgrepScanFlags(project('semgrep:\n  timeout: -1\n'));
-    expect(flags.args).toContain('--exclude=.guardian');
+    expect(flags.args).toContain('--exclude=.guardian/reports');
     expect(flags.warning).toMatch(/\.guardian\/scan\.yml was not applied \(semgrep\.timeout must be/);
   });
 });

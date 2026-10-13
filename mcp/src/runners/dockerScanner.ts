@@ -52,7 +52,7 @@ export interface SemgrepDockerOptions {
    * not by ours. `scan_sast`'s `local_only` mode sets both together.
    */
   metricsOff?: boolean;
-  /** Flags passed after the configs (the per-file timeouts, `--exclude=.guardian` — runners/semgrepRun.ts). */
+  /** Flags passed after the configs (the per-file timeouts, the root `.guardian/` output excluded — runners/semgrepRun.ts). */
   extraArgs?: readonly string[];
   /**
    * Further host directories to bind into the container, READ-ONLY — the

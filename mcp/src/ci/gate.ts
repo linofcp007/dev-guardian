@@ -462,6 +462,9 @@ export function remedyFor(kind: GapKind, tool: string, detail: string): string {
     default:
       if (/shallow|history truncated/i.test(detail)) return 'Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.';
       if (/^baseline: /.test(detail)) return 'Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.';
+      if (/\.guardian\/'s generated output/.test(detail)) {
+        return "Stop tracking the named files (`git rm --cached <file>`) and move any code they hold out of .guardian/ — dev-guardian's reports, database and dashboard are never committed, and no scan reads them.";
+      }
       if (/target limit|size limit/i.test(detail)) return "Split the files over Semgrep's 1 MB target limit, or list them in .guardianignore after review.";
       if (/submodule/i.test(detail)) return 'Scan each submodule as a project of its own, or list it in .guardianignore after review.';
       if (/did not load/i.test(detail)) return 'Fix or remove the rule the detail names, then rerun the scan.';

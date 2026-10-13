@@ -29,6 +29,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, parse } from 'node:path';
 import { readSmallText } from '../hooks/configFile.js';
+import { GUARDIAN_OUTPUT_PATHS } from '../platform/guardianOutput.js';
 import { listProjectDir, projectEntryKindIn } from '../platform/projectFs.js';
 import { textLines } from '../platform/textLines.js';
 import { execGit } from '../platform/gitSafety.js';
@@ -202,6 +203,19 @@ export async function gitlinksAmong(cwd: string, rev: string, paths: readonly st
     if (wanted.has(path)) out.push(path);
   }
   return out.sort();
+}
+
+/**
+ * The files git TRACKS among the root `.guardian/`'s generated output
+ * (`platform/guardianOutput.ts`) of `cwd` — relative to it, sorted. None is
+ * ever written there by dev-guardian alone (that output is git-ignored), and
+ * a scan of the project's directory leaves those paths out (review 10,
+ * finding 1). Empty outside a repository, or when git cannot answer.
+ */
+export async function trackedGuardianOutput(cwd: string): Promise<string[]> {
+  const r = await git(cwd, ['ls-files', '-z', '--cached', '--', ...GUARDIAN_OUTPUT_PATHS.map((p) => `:(literal)${p}`)]);
+  if (r.exitCode !== 0) return [];
+  return [...new Set(splitNul(r.stdout).map((p) => p.split('\\').join('/')))].sort();
 }
 
 /** `submodule contents not scanned: a, b` — the first few, then "and N more". */

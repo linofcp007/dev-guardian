@@ -13751,7 +13751,7 @@ async function computeTreeHash(projectPath, options = {}) {
   return hash.digest("hex");
 }
 async function tryGitListFiles(root) {
-  const excludes = [...FS_EXCLUDE].map((dir) => `--exclude=${dir}/`);
+  const excludes = [...FS_EXCLUDE].filter((dir) => dir !== TOOL_OUTPUT_DIR).map((dir) => `--exclude=${dir}/`);
   const result = await execGit(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", ...excludes], {
     timeoutMs: 3e4
   });
@@ -13759,7 +13759,7 @@ async function tryGitListFiles(root) {
   const files = /* @__PURE__ */ new Set();
   for (const entry of result.stdout.split("\0")) {
     if (entry.length === 0) continue;
-    if (entry.split("/").includes(TOOL_OUTPUT_DIR)) continue;
+    if (entry.startsWith(`${TOOL_OUTPUT_DIR}/`)) continue;
     files.add(entry);
   }
   return [...files];
@@ -13777,8 +13777,7 @@ async function walk2(root, dir, out) {
     return;
   }
   for (const entry of entries2) {
-    if (entry.name.startsWith(".") && FS_EXCLUDE.has(entry.name)) continue;
-    if (FS_EXCLUDE.has(entry.name)) continue;
+    if (entry.name === TOOL_OUTPUT_DIR ? dir === root : FS_EXCLUDE.has(entry.name)) continue;
     const abs = join17(dir, entry.name);
     if (entry.isDirectory()) {
       await walk2(root, abs, out);
@@ -13882,12 +13881,13 @@ function listProjectFiles(root, exclude = PROJECT_WALK_EXCLUDE) {
   }
   return out.sort();
 }
-var PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE;
+var PROJECT_WALK_EXCLUDE, SCANNED_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE;
 var init_projectFiles = __esm({
   "src/runners/projectFiles.ts"() {
     "use strict";
     init_computeTreeHash();
     PROJECT_WALK_EXCLUDE = /* @__PURE__ */ new Set([...FS_EXCLUDE, "vendor"]);
+    SCANNED_WALK_EXCLUDE = new Set([...PROJECT_WALK_EXCLUDE].filter((d) => d !== ".guardian"));
     SCANNER_WALK_EXCLUDE = /* @__PURE__ */ new Set([
       ".git",
       ".hg",
@@ -16440,6 +16440,34 @@ var init_toolProbe = __esm({
   }
 });
 
+// src/platform/guardianOutput.ts
+function isGuardianOutput(rel2) {
+  let p = rel2.split("\\").join("/");
+  while (p.startsWith("./")) p = p.slice(2);
+  return OUTPUT_FILES.includes(p) || OUTPUT_DIRS.some((dir) => p === dir || p.startsWith(`${dir}/`));
+}
+function semgrepGuardianOutputExcludes() {
+  return GUARDIAN_OUTPUT_PATHS.map((p) => `--exclude=${p}`);
+}
+var GUARDIAN_DIR, OUTPUT_DIRS, OUTPUT_FILES, GUARDIAN_OUTPUT_PATHS;
+var init_guardianOutput = __esm({
+  "src/platform/guardianOutput.ts"() {
+    "use strict";
+    GUARDIAN_DIR = ".guardian";
+    OUTPUT_DIRS = [".guardian/reports"];
+    OUTPUT_FILES = [
+      ".guardian/guardian.db",
+      ".guardian/guardian.db-wal",
+      ".guardian/guardian.db-shm",
+      ".guardian/guardian.db-journal",
+      ".guardian/dashboard.html",
+      ".guardian/last-grill.md",
+      ".guardian/.gitignore"
+    ];
+    GUARDIAN_OUTPUT_PATHS = [...OUTPUT_DIRS, ...OUTPUT_FILES];
+  }
+});
+
 // src/runners/git.ts
 var git_exports = {};
 __export(git_exports, {
@@ -16457,6 +16485,7 @@ __export(git_exports, {
   shallowBoundary: () => shallowBoundary,
   showPrefix: () => showPrefix,
   splitNul: () => splitNul,
+  trackedGuardianOutput: () => trackedGuardianOutput,
   uncommittedFiles: () => uncommittedFiles
 });
 import { createHash as createHash6 } from "node:crypto";
@@ -16533,6 +16562,11 @@ async function gitlinksAmong(cwd, rev, paths) {
     if (wanted.has(path3)) out.push(path3);
   }
   return out.sort();
+}
+async function trackedGuardianOutput(cwd) {
+  const r = await git(cwd, ["ls-files", "-z", "--cached", "--", ...GUARDIAN_OUTPUT_PATHS.map((p) => `:(literal)${p}`)]);
+  if (r.exitCode !== 0) return [];
+  return [...new Set(splitNul(r.stdout).map((p) => p.split("\\").join("/")))].sort();
 }
 function describeSubmodules(paths) {
   const shown = paths.slice(0, 5).join(", ");
@@ -16630,6 +16664,7 @@ var init_git = __esm({
   "src/runners/git.ts"() {
     "use strict";
     init_configFile();
+    init_guardianOutput();
     init_projectFs();
     init_textLines();
     init_gitSafety();
@@ -17708,7 +17743,7 @@ async function loadProjectExclusions(projectPath, configRoot = projectPath) {
     hash: createHash7("sha256").update(text2).digest("hex"),
     patterns: matcher.patterns,
     ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
-    ...classify(listed2 ?? listProjectFiles(projectPath), matcher),
+    ...classify(listed2 ?? listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f)), matcher),
     semgrepAnchor
   };
 }
@@ -17756,12 +17791,12 @@ async function gitListFiles(root) {
     "--cached",
     "--others",
     "--exclude-standard",
-    ...[...PROJECT_WALK_EXCLUDE].map((d) => `--exclude=${d}/`)
+    ...[...SCANNED_WALK_EXCLUDE].map((d) => `--exclude=${d}/`)
   ]);
   if (r.exitCode !== 0) return null;
   const files = /* @__PURE__ */ new Set();
   for (const entry of splitNul(r.stdout)) {
-    if (entry.split("/").some((segment) => PROJECT_WALK_EXCLUDE.has(segment))) continue;
+    if (entry.split("/").some((segment) => SCANNED_WALK_EXCLUDE.has(segment)) || isGuardianOutput(entry)) continue;
     files.add(entry);
   }
   return [...files];
@@ -17867,6 +17902,7 @@ var init_guardianIgnore = __esm({
     "use strict";
     init_git();
     init_projectFiles();
+    init_guardianOutput();
     init_projectFs();
     MAX_GUARDIAN_IGNORE_BYTES = 1024 * 1024;
     GUARDIAN_IGNORE_FILE = ".guardianignore";
@@ -18994,8 +19030,10 @@ async function semgrepCoverageGaps(projectPath, opts = {}) {
     ...from !== void 0 ? { guardianIgnoreFrom: from } : {}
   });
   const honoured = opts.files === void 0 ? await honouredFiles(projectPath, "semgrep") : [];
+  const trackedOutput = opts.files === void 0 ? await trackedGuardianOutput(projectPath) : [];
   const withHonoured2 = (gaps) => {
-    const out2 = sized.longPaths !== void 0 ? { ...gaps, longPaths: sized.longPaths } : gaps;
+    let out2 = sized.longPaths !== void 0 ? { ...gaps, longPaths: sized.longPaths } : gaps;
+    if (trackedOutput.length > 0) out2 = { ...out2, trackedOutput };
     return honoured.length > 0 ? { ...out2, honoured } : out2;
   };
   if (opts.submodules !== void 0) {
@@ -19023,7 +19061,11 @@ function semgrepGapNotes(gaps) {
   if (gaps.incomplete !== void 0) {
     notes.push(`${gaps.incomplete} \u2014 files over Semgrep's size limit below it were not checked`);
   }
+  if (gaps.trackedOutput !== void 0 && gaps.trackedOutput.length > 0) notes.push(describeTrackedOutput(gaps.trackedOutput));
   return notes;
+}
+function describeTrackedOutput(files) {
+  return `${files.length} file(s) git tracks in .guardian/'s generated output were not scanned: ${nameAFew(files)} \u2014 dev-guardian never commits its reports, database or dashboard, and every scan leaves those paths out`;
 }
 function scannedNothingBecause(gaps) {
   return gaps.oversized.length > 0 ? `semgrep scanned 0 files \u2014 ${describeOversized(gaps.oversized)}` : null;
@@ -19062,7 +19104,8 @@ function applyGaps(run2, gaps, opts, tooLong) {
   const unscanned = {
     ...gaps.oversized.length > 0 ? { oversized: gaps.oversized.length } : {},
     ...gaps.submodules.length > 0 ? { submodules: gaps.submodules.length } : {},
-    ...gaps.incomplete !== void 0 ? { listing_incomplete: true } : {}
+    ...gaps.incomplete !== void 0 ? { listing_incomplete: true } : {},
+    ...gaps.trackedOutput !== void 0 && gaps.trackedOutput.length > 0 ? { guardian_output: gaps.trackedOutput.length } : {}
   };
   const longEntries = tooLong.map((file) => ({
     file,
@@ -19240,6 +19283,9 @@ function remedyFor(kind, tool54, detail) {
     default:
       if (/shallow|history truncated/i.test(detail)) return "Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.";
       if (/^baseline: /.test(detail)) return "Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.";
+      if (/\.guardian\/'s generated output/.test(detail)) {
+        return "Stop tracking the named files (`git rm --cached <file>`) and move any code they hold out of .guardian/ \u2014 dev-guardian's reports, database and dashboard are never committed, and no scan reads them.";
+      }
       if (/target limit|size limit/i.test(detail)) return "Split the files over Semgrep's 1 MB target limit, or list them in .guardianignore after review.";
       if (/submodule/i.test(detail)) return "Scan each submodule as a project of its own, or list it in .guardianignore after review.";
       if (/did not load/i.test(detail)) return "Fix or remove the rule the detail names, then rerun the scan.";
@@ -35634,8 +35680,9 @@ function resolvePaths(projectPath, entries2) {
       files.add(rel2);
     } else if (kind === "dir") {
       dirs.push(rel2);
-      for (const f of listProjectFiles(abs)) {
+      for (const f of listProjectFiles(abs, SCANNED_WALK_EXCLUDE)) {
         const fileRel = rel2 === "" ? f : `${rel2}/${f}`;
+        if (isGuardianOutput(fileRel)) continue;
         assertInside(fileRel);
         files.add(fileRel);
       }
@@ -35645,7 +35692,7 @@ function resolvePaths(projectPath, entries2) {
         "unsupported_target"
       );
     } else if (hasGlobMagic(rel2)) {
-      allFiles ??= listProjectFiles(projectPath);
+      allFiles ??= listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f));
       const re = globToRegExp(rel2);
       globs.push(re);
       let matched = 0;
@@ -35743,13 +35790,14 @@ async function listZ(cwd, args) {
   return splitNul(r.stdout).map(normaliseRelPath);
 }
 async function untracked(cwd) {
-  return listZ(cwd, [
+  const listed2 = await listZ(cwd, [
     "ls-files",
     "-z",
     "--others",
     "--exclude-standard",
-    ...[...PROJECT_WALK_EXCLUDE].map((d) => `--exclude=${d}/`)
+    ...[...SCANNED_WALK_EXCLUDE].map((d) => `--exclude=${d}/`)
   ]);
+  return listed2.filter((f) => !isGuardianOutput(f));
 }
 function onDisk(projectPath, rels, fromUntracked = false) {
   const assertInside = insideChecker(projectPath, realOrSelf(projectPath), fromUntracked ? UNTRACKED_LINK_HINT : "");
@@ -35904,6 +35952,7 @@ var init_scope = __esm({
     init_zod();
     init_git();
     init_projectFiles();
+    init_guardianOutput();
     init_glob();
     ScanScopeInput = external_exports.object({
       paths: external_exports.array(external_exports.string().min(1).max(4096)).min(1).max(1e3).optional().describe(
@@ -37200,7 +37249,7 @@ var init_argBatches = __esm({
 function semgrepScanFlags(configRoot) {
   const loaded = loadScanSettings(configRoot);
   return {
-    args: [...semgrepTimeoutArgs(loaded.settings), SEMGREP_EXCLUDE_GUARDIAN_DIR],
+    args: [...semgrepTimeoutArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
     warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD})` : null
   };
 }
@@ -37210,15 +37259,15 @@ function semgrepSpawn(env) {
 function runSemgrep(opts, run2 = runProcess) {
   return run2({ ...opts, ...semgrepSpawn(opts.env) });
 }
-var SEMGREP_COMMAND, SEMGREP_EXCLUDE_GUARDIAN_DIR, SEMGREP_NO_VERSION_CHECK_ENV;
+var SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV;
 var init_semgrepRun = __esm({
   "src/runners/semgrepRun.ts"() {
     "use strict";
     init_scanSettings();
+    init_guardianOutput();
     init_processRunner();
     init_semgrepReport();
     SEMGREP_COMMAND = "semgrep";
-    SEMGREP_EXCLUDE_GUARDIAN_DIR = "--exclude=.guardian";
     SEMGREP_NO_VERSION_CHECK_ENV = { SEMGREP_ENABLE_VERSION_CHECK: "0" };
   }
 });
@@ -39225,13 +39274,15 @@ async function directoryPass(opts, result, name) {
     result.tools_run.push({ name, status: "skipped", reason: `${prefix}: it holds nothing gitleaks reads (0 bytes)` });
     return;
   }
-  const excluded = EXCLUDED_DIRS.join(", ");
+  const excluded = [...EXCLUDED_DIRS, `the root ${GUARDIAN_DIR}/'s generated output`].join(", ");
   const scanned = bytes === null ? "" : ` (~${bytes} bytes)`;
   recordFilesRun(result, name, run2, report, "directory", `${prefix}${scanned}, excluding ${excluded}`, [], []);
 }
 function directoryConfig(projectPath) {
   const own = join40(projectPath, ".gitleaks.toml");
-  const names = EXCLUDED_DIRS.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const escape3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const names = EXCLUDED_DIRS.map(escape3).join("|");
+  const output = GUARDIAN_OUTPUT_PATHS.map((p) => `${escape3(p)}(?:/|$)`).join("|");
   return [
     "# Generated by dev-guardian for one scan: the project's gitleaks config (or",
     "# gitleaks' defaults) plus the directories no scan of the project's own files reads.",
@@ -39240,7 +39291,7 @@ function directoryConfig(projectPath) {
     "",
     "[allowlist]",
     'description = "dev-guardian: vendored, generated and tool directories"',
-    `paths = ['''(^|/)(${names})/''']`,
+    `paths = ['''(^|/)(${names})/''', '''^(?:\\./)?(?:${output})''']`,
     ""
   ].join("\n");
 }
@@ -39328,7 +39379,7 @@ function fatalLine(stderr) {
   return lines.find((l) => /\b(FTL|ERR)\b/.test(l)) ?? lines.find((l) => l.length > 0) ?? null;
 }
 function isExcluded(rel2) {
-  return rel2.split("/").some((segment) => segment === ".guardian" || segment === ".git");
+  return rel2.split("/").includes(".git") || isGuardianOutput(rel2);
 }
 function describeCount(n, noun) {
   return n === null ? `an unreported number of ${noun}s` : `${n} ${noun}(s)`;
@@ -39395,6 +39446,7 @@ var init_gitleaksScan = __esm({
   "src/runners/gitleaksScan.ts"() {
     "use strict";
     init_guardianIgnore();
+    init_guardianOutput();
     init_projectFs();
     init_repoConfig();
     init_rawReport();
@@ -39409,7 +39461,7 @@ var init_gitleaksScan = __esm({
     GITLEAKS_WORKING_TREE = "gitleaks-working-tree";
     MAX_FILE_BYTES = 25 * 1024 * 1024;
     MAX_TOTAL_BYTES = 512 * 1024 * 1024;
-    EXCLUDED_DIRS = [...PROJECT_WALK_EXCLUDE];
+    EXCLUDED_DIRS = [...SCANNED_WALK_EXCLUDE];
     WITHHELD_REPORT = JSON.stringify("gitleaks report withheld: not a JSON array, and it may hold unredacted values");
     ANSI = /\u001b\[[0-9;]*m/g;
     REF = /^[A-Za-z0-9][A-Za-z0-9._/@{}~^-]*$/;

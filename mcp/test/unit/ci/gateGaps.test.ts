@@ -80,6 +80,16 @@ describe('a gap no acceptance clears', () => {
     expect(v.coverageGapDetails[0]?.remedy).toMatch(/LongPathsEnabled/);
   });
 
+  it('a file git tracks in .guardian/’s generated output: a gap no flag clears, whose remedy is to stop tracking it (review 10, finding 1)', () => {
+    const reason = "1 file(s) git tracks in .guardian/'s generated output were not scanned: .guardian/reports/evil.js — x";
+    const v = evaluateGate(
+      input({ steps: [semgrepStep([{ file: F, type: 'PartialParsing' }], { reason, unscanned: { guardian_output: 1 } })], acceptedPartialParses: [F] }),
+    );
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.acceptedGaps).toEqual([]);
+    expect(remedyFor('other', 'semgrep', `security_scan_full: semgrep ran with reduced coverage (${reason})`)).toMatch(/git rm --cached/);
+  });
+
   it('a run that also missed files over the size limit (unscanned), or rules that did not load: never cleared by naming files', () => {
     for (const run of [{ unscanned: { oversized: 1 } }, { failed_rules: [{ rule_id: 'r', message: 'bad' }] }] as Array<Partial<ToolRun>>) {
       const v = evaluateGate(input({ steps: [semgrepStep([{ file: F, type: 'PartialParsing' }], run)], acceptedPartialParses: [F] }));

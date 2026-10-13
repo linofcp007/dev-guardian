@@ -152,11 +152,13 @@ export interface ToolRun {
    * What a Semgrep run could not see that no file of `partially_parsed`
    * stands for (`runners/semgrepCoverageGaps.ts`): how many files were over
    * the size limit, how many initialised submodules hold files no listing
-   * has, and whether the file listing stopped early. Named in `reason` too;
-   * here as data, because the CI gate never lets an acceptance of named
-   * files cover them (`ci/gate.ts`). Absent: none.
+   * has, whether the file listing stopped early, and how many files git
+   * tracks in the root `.guardian/`'s generated output, which no scan reads
+   * (`platform/guardianOutput.ts`). Named in `reason` too; here as data,
+   * because the CI gate never lets an acceptance of named files cover them
+   * (`ci/gate.ts`). Absent: none.
    */
-  unscanned?: { oversized?: number; submodules?: number; listing_incomplete?: true };
+  unscanned?: { oversized?: number; submodules?: number; listing_incomplete?: true; guardian_output?: number };
   /**
    * The scanner is installed and ran, but its RULES did not load — none of
    * them (a Semgrep run in which every local rule failed to compile and no

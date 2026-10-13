@@ -30,6 +30,7 @@ import {
   loadScanSettings,
   semgrepTimeoutArgs,
 } from '../platform/scanSettings.js';
+import { semgrepGuardianOutputExcludes } from '../platform/guardianOutput.js';
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from './processRunner.js';
 import { pythonUtf8Env } from './semgrepReport.js';
 
@@ -37,26 +38,24 @@ import { pythonUtf8Env } from './semgrepReport.js';
 export const SEMGREP_COMMAND = 'semgrep';
 
 /**
- * `.guardian/` is dev-guardian's own state — reports of earlier scans
- * (`sast.json`, `surface.json`: 1.5 MB a run on a mid-size tree), the
- * baseline, the database — and never a scan target: a project whose
- * `.gitignore` lacks the lines (every CLI-only and CI project) had Semgrep
- * read its old reports (review 8, finding 14). Unanchored: a sub-project's
- * `.guardian/` too.
- */
-const SEMGREP_EXCLUDE_GUARDIAN_DIR = '--exclude=.guardian';
-
-/**
  * The flags every Semgrep scan of a project takes besides its rules: the
  * per-file timeout and threshold from `.guardian/scan.yml` under `configRoot`
  * (the project, or the CI gate's `--rules-ref` copy — `platform/scanSettings.ts`)
- * and {@link SEMGREP_EXCLUDE_GUARDIAN_DIR}. `warning`: the settings file was
- * there but not applied, and why — the caller says so on the run.
+ * and the exclusion of dev-guardian's own output in the root `.guardian/` —
+ * reports of earlier scans (`sast.json`, `surface.json`: 1.5 MB a run), the
+ * database, the dashboard: a project whose `.gitignore` lacks the lines (every
+ * CLI-only and CI project) had Semgrep read its old reports (review 8, finding
+ * 14). Only those paths: a `.guardian` folder below the root is the project's
+ * code, and 3.3.0's unanchored `--exclude=.guardian` let a
+ * `lib/.guardian/handler.js` through the gate unscanned (review 10, finding 1)
+ * — the spelling, and why, is `platform/guardianOutput.ts`'s. `warning`: the
+ * settings file was there but not applied, and why — the caller says so on
+ * the run.
  */
 export function semgrepScanFlags(configRoot: string): { args: string[]; warning: string | null } {
   const loaded = loadScanSettings(configRoot);
   return {
-    args: [...semgrepTimeoutArgs(loaded.settings), SEMGREP_EXCLUDE_GUARDIAN_DIR],
+    args: [...semgrepTimeoutArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
     warning:
       loaded.kind === 'invalid'
         ? `${loaded.path} was not applied (${loaded.error}) — Semgrep ran with dev-guardian's defaults ` +
