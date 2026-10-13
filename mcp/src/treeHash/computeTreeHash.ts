@@ -39,6 +39,7 @@ import { createHash } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { execGit } from '../platform/gitSafety.js';
+import '../runners/gitExec.js';
 import { hashProjectFile } from '../platform/projectFs.js';
 
 export interface TreeHashOptions {

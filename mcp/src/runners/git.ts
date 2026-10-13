@@ -33,6 +33,8 @@ import { GUARDIAN_OUTPUT_PATHS } from '../platform/guardianOutput.js';
 import { listProjectDir, projectEntryKindIn } from '../platform/projectFs.js';
 import { textLines } from '../platform/textLines.js';
 import { execGit } from '../platform/gitSafety.js';
+// Every git here is stopped with its whole tree on a timeout (review 10, finding 12).
+import './gitExec.js';
 
 const GIT_TIMEOUT_MS = 60_000;
 /** A checkout writes the whole tree: a large repository needs longer than a query. */
