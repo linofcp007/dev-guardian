@@ -23,6 +23,11 @@ goes** (a merge verdict). If `dev-grill` is installed, load it in `diff` mode wi
 
 For style, security, or test coverage, use `guardian-review` / `guardian-security` / `guardian-quality`.
 
+In a dev-spec-driven project (a `.specs/` folder, its tools available): on a feature branch, call
+`spec_next_action { name: "<feature>" }` first (`spec_status {}` lists the features) and grill the diff against
+what that feature's spec says. Grilling the **requirements**, before there is a diff, is dev-spec-driven's
+`/clarify --grill`, not this gate.
+
 ## Flow
 
 ### 1. Get the diff
