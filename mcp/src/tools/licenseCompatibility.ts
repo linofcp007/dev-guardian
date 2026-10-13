@@ -53,15 +53,12 @@ interface UndeterminedRow {
 
 const tool: ToolModule = {
   name: 'license_compatibility',
-  title: 'License compatibility check',
+  title: 'Licence compatibility',
   description:
-    'Cross-check the project license (package.json incl. UNLICENSED, pyproject.toml, composer.json ' +
-    'incl. "proprietary"/"SEE LICENSE IN …", .csproj PackageLicenseExpression, or LICENSE) against ' +
-    'the licenses of installed deps captured by the most recent compliance_check OF THIS PROJECT. ' +
-    'No declared license (or a proprietary label) is treated as proprietary and still flags ' +
-    'copyleft deps; an unrecognised or SPDX OR/AND expression on EITHER side (project or ' +
-    'dependency) is reported as `undetermined`, never silently compatible. Pure SQL read — does ' +
-    'not spawn scanners.',
+    "Check the project's licence (package.json, pyproject.toml, composer.json, .csproj or LICENSE) " +
+    "against its dependencies' licences from this project's latest compliance_check. No declared licence, " +
+    'or a proprietary label, counts as proprietary and still flags copyleft; an unrecognised or compound ' +
+    'SPDX expression on either side is `undetermined`, never compatible. Reads history only.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
 };

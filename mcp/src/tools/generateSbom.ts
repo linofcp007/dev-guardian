@@ -55,21 +55,16 @@ const inputSchema = {
     .min(0)
     .max(MAX_INLINE_KB)
     .optional()
-    .describe(
-      `Inline the SBOM document in the response when its size is at most this many KB. ` +
-        `Default: ${DEFAULT_INLINE_KB}; maximum ${MAX_INLINE_KB} (1 MB). 0 never inlines.`,
-    ),
+    .describe(`Inline the SBOM when it is at most this many KB (0 never; at most ${MAX_INLINE_KB}). Default ${DEFAULT_INLINE_KB}.`),
 };
 
 const tool: ToolModule = {
   name: 'generate_sbom',
-  title: 'Generate SBOM (Syft / Trivy)',
+  title: 'Generate an SBOM (Syft or Trivy)',
   description:
-    'Produce a Software Bill of Materials (CycloneDX or SPDX JSON). Prefers Syft; falls back to ' +
-    'Trivy fs --format. The full SBOM is always written to .guardian/reports/sbom-<scan>/ ' +
-    '(`file_path`). The response inlines the document once, in its text content, when its size ' +
-    `is at most inline_max_kb (default ${DEFAULT_INLINE_KB}, max ${MAX_INLINE_KB}); \`inlined\` ` +
-    'says whether it did. Read the file for anything larger.',
+    'Produce a CycloneDX or SPDX JSON SBOM with Syft (Trivy as fallback), always written to ' +
+    '.guardian/reports/sbom-<scan>/ (`file_path`). The response inlines it when it is at most inline_max_kb ' +
+    `(default ${DEFAULT_INLINE_KB} KB); \`inlined\` says whether it did.`,
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
   contentOnlyKeys: ['inline'],

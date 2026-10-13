@@ -216,14 +216,12 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
 }
 registerToolModule(makeScanTool({
     name: 'scan_iac',
-    title: 'IaC config scan (Terraform / K8s / CloudFormation / GitHub Actions)',
-    description: 'Run Trivy config against the project root (Terraform, Kubernetes manifests, CloudFormation ' +
-        'templates, Helm charts). When .github/workflows/*.yml exist, also run zizmor (GitHub Actions ' +
-        'security auditor: template injection, unpinned actions, excessive permissions) and actionlint ' +
-        '(workflow schema/expression correctness), each when installed. The project configuration each ' +
-        'one reads (.trivyignore, actionlint.yaml, zizmor.yml) is named in `tools_run[].honoured_config`; ' +
-        "`suppressed_by_repo_config` says what .trivyignore suppressed — `trivy config` cannot list it and " +
-        'says so (count null, unlisted_because).',
+    title: 'IaC scan (Terraform, Kubernetes, CloudFormation)',
+    description: 'Trivy config over Terraform, Kubernetes, CloudFormation and Helm; with .github/workflows, also ' +
+        'zizmor (template injection, unpinned actions, broad permissions) and actionlint, when installed. ' +
+        "Each one's configuration (.trivyignore, actionlint.yaml, zizmor.yml) is named in " +
+        '`tools_run[].honoured_config`; `suppressed_by_repo_config`: what .trivyignore suppressed, when trivy ' +
+        'can say.',
     scan_type: 'iac',
     category: 'security',
     supportsAutoFix: false,

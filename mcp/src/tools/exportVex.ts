@@ -60,32 +60,24 @@ const inputSchema = {
   format: z
     .enum(['openvex', 'cyclonedx'])
     .optional()
-    .describe('openvex (OpenVEX 0.2.0 JSON, the default) or cyclonedx (a CycloneDX 1.6 BOM with vulnerabilities[].analysis).'),
+    .describe('openvex (default) or cyclonedx (CycloneDX 1.6).'),
   author: z
     .string()
     .min(1)
     .max(200)
     .optional()
-    .describe(`OpenVEX author — the person or organisation making the statements. Default "${DEFAULT_AUTHOR}".`),
+    .describe(`Who makes the statements. Default "${DEFAULT_AUTHOR}".`),
 };
 
 const tool: ToolModule = {
   name: 'export_vex',
-  title: 'Export VEX (OpenVEX / CycloneDX)',
+  title: 'Export VEX (OpenVEX or CycloneDX)',
   description:
-    'Write a VEX document for project_path: one statement per vulnerability (and package version) ' +
-    'of its latest usable dependency scan (scan_deps, deps_audit or security_scan_full), named by ' +
-    'its CVE or its own GHSA/PYSEC id with the aliases its scanner gave — tied to findings by those ' +
-    'ids only, never by ids a description mentions. Status: not_affected ONLY from a ' +
-    'suppress_finding with vex_status and its OpenVEX justification; affected when validate_finding\'s ' +
-    'dependency provider finds that version imported by a file an HTTP route reaches (latest ' +
-    'map_attack_surface); otherwise under_investigation, with the reason in status_notes. fixed is ' +
-    'never guessed. Packages are named by purl (the newest generate_sbom\'s, else built from ' +
-    'ecosystem, name and version); the product by the SBOM\'s purl only when that SBOM describes ' +
-    'the same tree. Writes .guardian/reports/vex-*/vex.openvex.json (openvex, default) or ' +
-    'vex.cdx.json (cyclonedx, CycloneDX 1.6). `unknowns` lists what it could not know — no SBOM, ' +
-    'no surface snapshot, a partial scan — and nothing is written when no vulnerability was ' +
-    'measured. No network.',
+    'Write a VEX document for the latest dependency scan, one statement per vulnerability and package ' +
+    'version (by purl): not_affected only from suppress_finding with vex_status; affected when ' +
+    'validate_finding finds the version imported by a route-reachable file; else under_investigation, ' +
+    'with the reason; never fixed. Writes .guardian/reports/vex-*/; `unknowns` lists what it could not ' +
+    'know; nothing is written when no vulnerability was measured. No network.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };

@@ -49,8 +49,7 @@ export const ScanScopeInput = z
         .min(1)
         .max(1000)
         .optional()
-        .describe('Files, directories or globs relative to (and inside) project_path. Directories are ' +
-        'expanded to their files. With diff/since, narrows that change set to these paths.'),
+        .describe('Files, directories or globs in project_path; with diff or since, narrows that set.'),
     diff: z
         .object({
         base: z
@@ -58,16 +57,16 @@ export const ScanScopeInput = z
             .min(1)
             .max(256)
             .optional()
-            .describe('Scan the files changed between the merge base of this ref and head (committed work).'),
+            .describe('The files changed since the merge base of this ref and head.'),
         head: z.string().min(1).max(256).optional().describe('Must be the checked-out commit. Default HEAD.'),
         staged: z
             .boolean()
             .optional()
-            .describe('Only the files staged in the index (read from the working tree, like every scope).'),
+            .describe('Only the staged files.'),
         include_untracked: z
             .boolean()
             .optional()
-            .describe('Also untracked, non-ignored files. Default: true without base/staged, else false.'),
+            .describe('Also untracked files. Default: true without base or staged.'),
     })
         .strict()
         .optional()
@@ -77,13 +76,11 @@ export const ScanScopeInput = z
         .min(1)
         .max(256)
         .optional()
-        .describe('A commit/tag, or a date (YYYY-MM-DD, "2 weeks ago", "yesterday"): what changed since.'),
+        .describe('What changed since a commit, tag or date ("2 weeks ago").'),
 })
     .strict()
     .optional()
-    .describe('Scan part of the project instead of all of it. Findings are restricted to the scope; the scan ' +
-    'is recorded as scoped (meta.scope), never becomes a baseline and never replaces a whole-project ' +
-    "scan in the project's open findings.");
+    .describe('Scan part of the project: paths, a git change set, or changes since a ref or date. Never a baseline.');
 export class ScopeError extends Error {
     code;
     constructor(message, code) {

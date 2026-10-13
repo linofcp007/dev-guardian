@@ -89,15 +89,11 @@ const IGNORED_DIRS = ['node_modules', '.git', '.guardian', 'vendor', 'dist', 'bu
 registerToolModule(makeScanTool({
     name: 'quality_check',
     title: 'Code quality scan',
-    description: 'Code-quality scan: jscpd (duplication, any language); ruff and radon cyclomatic complexity when ' +
-        'the project has .py files; ESLint when it is configured and installed in node_modules (never via ' +
-        'npx); staticcheck when there is a go.mod. Findings are classified duplicate / complexity / smell / ' +
-        'naming; `categories` narrows the response to those classes while every finding is still recorded ' +
-        '(`category_filter` counts what was withheld). An applicable analyser that is missing or fails is ' +
-        'reported as such and coverage is partial, never full. Also reads .guardian/budgets.yml, when ' +
-        'present, and reports an exceeded duplication % or complexity budget as a finding. Pass scope to ' +
-        'analyse only some files (duplication is then measured among them; budgets, being project-level, ' +
-        'are skipped). .guardianignore paths are filtered out.',
+    description: 'jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and ' +
+        "installed in node_modules (it runs the project's config), staticcheck for Go. Findings: duplicate, " +
+        'complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed ' +
+        'analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with ' +
+        'scope).',
     scan_type: 'quality',
     category: 'quality',
     supportsAutoFix: false,
@@ -109,8 +105,7 @@ registerToolModule(makeScanTool({
         categories: z
             .array(z.enum(QUALITY_CATEGORIES))
             .optional()
-            .describe('Show only these quality classes in the response. Every finding is still recorded; ' +
-            '`category_filter` counts what was withheld.'),
+            .describe('Show only these classes; every finding is still recorded (`category_filter`).'),
         force: Force,
         scope: ScanScopeInput,
     },

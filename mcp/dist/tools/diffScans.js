@@ -61,16 +61,14 @@ const inputSchema = {
         .uuid()
         .optional()
         .describe('The older side: this exact scan. Takes precedence over from. Default: see from.'),
-    from: FromEnum.optional().describe("The older side, when from_scan_id is not given: 'previous' — this project's usable scan of the same " +
-        "type just before the to scan — or 'baseline' — the baseline set_baseline recorded for that type. " +
-        "Default: 'previous'."),
+    from: FromEnum.optional().describe("The older side when from_scan_id is not given: previous (default) or baseline (set_baseline's for " +
+        'that type).'),
     to_scan_id: z
         .string()
         .uuid()
         .optional()
         .describe('The newer side: this exact scan. Takes precedence over to. Default: see to.'),
-    to: ToEnum.optional().describe("The newer side, when to_scan_id is not given: 'latest' — this project's newest usable scan (of " +
-        "scan_type, when given). Default: 'latest'."),
+    to: ToEnum.optional().describe('The newer side when to_scan_id is not given: latest (default).'),
 };
 const tool = {
     name: 'diff_scans',

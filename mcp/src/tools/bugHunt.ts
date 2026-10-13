@@ -554,9 +554,7 @@ registerToolModule(
   makeScanTool({
     name: 'bug_hunt',
     title:
-      'Bug hunt (Semgrep r2c-bug-scan + security-audit + always-on local JS/TS, Python, Go, ' +
-      'Java, C# and PHP bug rules, plus ONE Rust rule; optional language packs, off by ' +
-      'default; other languages still registry-only)',
+      'Bug hunt (Semgrep bug packs)',
     // What the tool does, its inputs, what it returns and its limits — nothing
     // else. The measurement history behind every rule (corpora, counts, the
     // rules deleted and why, each accepted false positive and false negative)
@@ -565,21 +563,11 @@ registerToolModule(
     // A description is loaded into every session, so it stays under 1500
     // characters (test/unit/pluginSurface/descriptionLimits.test.ts).
     description:
-      'Hunt implementation bugs with Semgrep: the registry packs p/r2c-bug-scan + p/security-audit, plus ' +
-      'local always-on packs (configs/semgrep/bugfix-*.yml) covering six classes — race_condition, ' +
-      'null_safety, off_by_one, memory_leak, error_handling, edge_case — for JS/TS (13 rules), Python (10), ' +
-      'Go (9), Java (7), C# (11) and PHP (6; no memory_leak rule). Rust has one rule (a blocking sleep ' +
-      'inside an async fn; use cargo clippy for the rest); Ruby has none (use RuboCop). Rules registered ' +
-      'with register_custom_rules also run. Findings are category bug, with a subcategory when the rule id ' +
-      'names one; other findings keep their own tag. `categories` filters the RESPONSE only (every finding is ' +
-      'recorded; category_filter counts the rest). `include_language_packs` (off by default) also runs ' +
-      'p/typescript or p/javascript, p/python, p/java and p/golang — security bundles, not bug classes. ' +
-      '`scope` limits the scan to paths, a git diff, or what changed since a ref or date. Limits: pattern ' +
-      'rules match syntax, not dataflow, so a quiet result is not a bug-free project; most local rules are ' +
-      'WARNING (medium) heuristics; none ships an autofix, so create_fix_pr cannot fix them — use ' +
-      'suggest_fix. A retired registry pack or a broken local rule file degrades to the packs that still ' +
-      'load and is reported in tools_run / missing_tools, never as a clean scan. Per-rule measurements and ' +
-      "known false positives and negatives live in each pack's comments and in CHANGELOG.md.",
+      'Semgrep bug hunt: p/r2c-bug-scan, p/security-audit and local packs (race conditions, null safety, ' +
+      'off-by-one, leaks, error handling, edge cases) for JS/TS, Python, Go, Java, C# and PHP, plus ' +
+      "register_custom_rules' rules. `categories` filters the response, not the scan. Pattern rules match " +
+      'syntax, not data flow: a quiet result is not bug-free. Local rules have no autofix: use suggest_fix, ' +
+      'not create_fix_pr. A pack that failed to load is reported, never a clean scan.',
     scan_type: 'bugs',
     category: 'bug',
     // `scope`: the packs run over exactly the scoped files (`invokeBugHuntOnScope`).
@@ -606,24 +594,14 @@ registerToolModule(
         .array(z.string())
         .optional()
         .describe(
-          'Show only these bug subcategories (e.g. race_condition, null_safety) in the response. ' +
-            'Every finding is still recorded; `category_filter` counts what was withheld.',
+          'Show only these bug subcategories (e.g. race_condition); every finding is recorded.',
         ),
       include_language_packs: z
         .boolean()
         .optional()
         .default(false)
         .describe(
-          'Off by default. When true, also run one per-language Semgrep pack for each ' +
-            'language family detect_stack finds in the project (or a filesystem fallback): ' +
-            'p/javascript OR p/typescript for a JS/TS project (never both — identical 74-rule ' +
-            'packs under two registry names), plus p/python, p/java, p/golang. These are ' +
-            'per-language SECURITY bundles (XSS, injection, crypto, auth, SSRF, hard-coded ' +
-            'secrets, ...), not bug-class rules — they add no race-condition/null-safety/off-by-one/' +
-            'memory-leak/error-handling coverage. Independent of `categories`: this decides ' +
-            'which scanners run (input); `categories` decides which findings come back ' +
-            '(output). Turn on when you specifically want broader per-language security ' +
-            'scanning alongside the bug hunt.',
+          "Also run the detected languages' Semgrep security packs (not bug classes).",
         ),
       force: Force,
       scope: ScanScopeInput,

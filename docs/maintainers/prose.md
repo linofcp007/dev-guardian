@@ -17,9 +17,38 @@ what the model needs **now**; history goes to `CHANGELOG.md` and the rule packs'
 | `skills/<name>/references/*.md` | ≤ 6 KB each, and linked from its `SKILL.md` | same |
 | `host-rules/AGENTS.md` (the rendered body) | ≤ 8 000 bytes — Codex reads 32 KiB of AGENTS.md in all, dev-spec-driven's block included | `hostRulesDrift.test.ts` |
 | The Windsurf rule | ≤ 11 000 characters — Windsurf truncates at 12 000 | same |
+| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (70 977 at 3.3.0: 70 184 + 793) | `descriptionLimits.test.ts` |
+| A listed tool's `description` / `title` | ≤ 600 / ≤ 60 characters | same |
+| A parameter's description (nested ones too) | ≤ 200 characters | same |
+| The MCP `instructions` (`mcp/src/tools/instructions.ts`) | ≤ 900 characters | same |
 
 When a number is about to break, move what only some runs need into the skill's `references/` (the model reads it
 on demand), or into `docs/`. Never raise a budget to fit.
+
+## Tool descriptions and the tools/list
+
+`tools/list` is in the context of every session of a host that loads it up front, and each Claude Code search hit
+loads a full entry. A description says what the tool does, when to use it and the two or three rules that change
+a decision (a hazard, a precondition, a field whose meaning is not obvious) — never release history, never the
+semantics of every result field (they explain themselves; `responseFieldDocs.test.ts` names the few a model must
+be told). A hazard is said plainly, once: no bold, no capitals for emphasis (tested). A parameter description
+that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `severity_min`, `force`, …),
+`platform/scope.ts` or `tools/sourceToolArg.ts`.
+
+- `tools/list` is served by `toolListing()` (`mcp/src/tools/index.ts`), not the SDK's handler: the same JSON
+  schema, less `$schema` (absent means JSON Schema 2020-12 in MCP 2025-11-25; no listed schema uses a keyword
+  that means something else in draft-07 — `toolFolds.test.ts`) and `execution` (absent means
+  `taskSupport: "forbidden"`).
+- **Folds** (`mcp/src/tools/fold.ts`, the list in `folds.ts`): a family of one risk class is listed as one tool
+  whose `check` / `mode` / `kind` / `view` picks the member; each member name stays a hidden alias (`listed:
+  false`) that `tools/call` still answers with its own parameters. A model in Claude Code can only call listed
+  names, so skills, commands, the rules template, the READMEs, docs and every response hint name the fold call
+  (`wp_audit { mode: "cron" }`), never an alias — `docReferences.test.ts` checks a fold call against its mode's
+  member. A fold's annotations cover every member's (`toolFolds.test.ts`); never fold across risk classes —
+  Claude Code asks permission per tool name. The LLM scan's three steps stay separate: its versioned prompts
+  name `llm_scan_submit`.
+- The MCP `instructions` say which family serves which job, that a scanner that did not run is a gap, the safety
+  rules and the dev-spec-driven routing; the rules template says the same at length.
 
 ## Descriptions and invocation
 

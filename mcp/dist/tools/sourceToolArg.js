@@ -9,8 +9,7 @@ export const SourceToolInput = z
     .min(1)
     .max(100)
     .optional()
-    .describe("With scan_type 'sarif_import': the source tool whose imports are read (the driver name an import recorded). " +
-    'Required when the project holds imports from more than one tool.');
+    .describe('sarif_import only: the importing tool. Required when several were imported.');
 /**
  * The source tool to read for a call that names no explicit scan: the one
  * asked for, else the project's only one. A `source_tool` with any other

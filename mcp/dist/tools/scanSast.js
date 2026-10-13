@@ -120,25 +120,11 @@ const DOTNET_BUILD_TIMEOUT_MS = 10 * 60_000;
 registerToolModule(makeScanTool({
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
-    description: 'Static analysis with Semgrep: the registry ruleset ' +
-        "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
-        '.dev-guardian/configs.json records), rules registered with ' +
-        "register_custom_rules, and the plugin's packs: web-js.yml (Node/Express: SQL by interpolation, request " +
-        'paths and URLs) and llm.yml (model output reaching eval/shell/SQL, trust_remote_code, …); a pack ' +
-        'that ran only in part: `tools_run[].plugin_packs`. Also runs Bandit when Python files are present, and ' +
-        'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
-        'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
-        '(plus Security Code Scan when referenced) — that ' +
-        "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
-        'nothing or reported errors is never complete: a file it only partly parsed, or a rule that ' +
-        'did not load, is partial coverage, named; so are the project files that decided a run ' +
-        '(`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to ' +
-        '.guardian/reports/sast-<scan>/. PRIVACY: --config=auto ' +
-        'downloads registry rules and sends usage metrics to Semgrep Inc. ' +
-        'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
-        'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or ' +
-        'changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
-        'Semgrep and Bandit where they can be named exactly.',
+    description: "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS " +
+        'and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; for .NET, a ' +
+        "locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What " +
+        'Semgrep could not process is partial coverage. `tools_run[].honoured_config`: the project files that ' +
+        'decided a run. local_only avoids the registry and its metrics.',
     scan_type: 'sast',
     category: 'security',
     supportsScope: true,
@@ -166,11 +152,7 @@ registerToolModule(makeScanTool({
         local_only: z
             .boolean()
             .optional()
-            .describe("Run only rules already on disk (the project's own Semgrep config, anything " +
-            "registered with register_custom_rules, and the plugin's own packs), skip " +
-            'the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer ' +
-            'rules than the default. When the project has no rules of its own the scan is reported ' +
-            'as skipped rather than as a clean result. Default: false.'),
+            .describe('Semgrep with rules on disk only, no metrics. With no project rules: skipped, not clean.'),
         scope: ScanScopeInput,
     },
     invoke: async (input, ctx) => {

@@ -370,25 +370,14 @@ function riskOrder(r: 'high' | 'medium' | 'low'): number {
 registerToolModule(
   makeScanTool({
     name: 'compliance_check',
-    title: 'Compliance check (licenses + RGPD code rules + policy docs)',
+    title: 'Compliance check (licences, GDPR code rules, policies)',
     // Under 1500 characters (test/unit/pluginSurface/descriptionLimits.test.ts).
     description:
-      'Compliance scan of a project. (1) Trivy license scan: Findings for risky licenses, plus ' +
-      '`licenses_summary` and `risky_licenses`. (2) The RGPD Semgrep pack configs/semgrep/rgpd.yml, ' +
-      'offline (--metrics=off): Portuguese personal identifiers (NIF, NISS, Cartão de Cidadão, IBAN, ' +
-      'phone, email — matched by variable/field NAME) inside log calls in JS/TS, PHP, Python and C# ' +
-      '(subcategory rgpd-pii-in-logs), and trackers loaded by HTML/PHP/JS/JSX/TSX/Vue/Twig/Razor/EJS/' +
-      'Handlebars markup before consent — GA4/gtag.js, Meta Pixel fbq init, Hotjar, youtube.com/embed ' +
-      '(subcategory rgpd-tracker-without-consent). Consent guards: type="text/plain" scripts, a ' +
-      'consent-checking block, JSX or template condition; Consent Mode v2 analytics_storage denied and ' +
-      'fbq consent revoke are also accepted, as a documented legal judgement (the messages prescribe ' +
-      'loading nothing before consent). Findings are category compliance, severity medium: name-based ' +
-      'heuristics, not proof. (3) `policy_documents_found`: PRIVACY, TERMS, COOKIES, DPA, SECURITY, ' +
-      'CODE_OF_CONDUCT near the project root. A missing or failed Trivy or Semgrep, or a Semgrep error ' +
-      '(timeout, partial parse), lowers `coverage` — never a clean result; a project with no file the ' +
-      'pack reads is not applicable (semgrep-rgpd skipped), not missing. ' +
-      'Templates for the fixes: configs/compliance/cookie-banner/ and ' +
-      'configs/compliance/privacy-policy-template.md.',
+      '(1) Trivy licence scan: risky licences, `licenses_summary`. (2) The offline rgpd.yml Semgrep pack: ' +
+      'Portuguese personal identifiers (NIF, NISS, IBAN, phone, e-mail — by variable name) in logs, and ' +
+      'trackers (GA4, Meta Pixel, Hotjar, YouTube) loaded before consent; accepting a Consent Mode v2 ' +
+      'denial is a documented legal judgement. Heuristics, not proof. (3) `policy_documents_found`. A ' +
+      'failed scanner lowers coverage; nothing for the pack to read is not applicable.',
     scan_type: 'compliance',
     category: 'compliance',
     supportsAutoFix: false,

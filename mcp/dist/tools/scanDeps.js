@@ -32,15 +32,11 @@ import { ensureReportDir, readJsonSafe, scannerAvailable, } from './scanHelpers.
 import { makeScanTool, } from './scanToolFactory.js';
 registerToolModule(makeScanTool({
     name: 'scan_deps',
-    title: 'Dependency vuln + license scan',
-    description: 'Run Trivy fs with vuln+license scanners. Findings carry CVE id, severity, ' +
-        'and fix version; CVEs are also indexed for the guardian://cves/active resource. ' +
-        '`packages` narrows the response to those packages (every finding is still recorded; ' +
-        '`package_filter` counts what was withheld and names requested packages with no finding). ' +
-        '.guardianignore paths are excluded from the results, and skipped by Trivy where they can be ' +
-        "named exactly. The project's .trivyignore is honoured, never silently: the run lists it in " +
-        '`tools_run[].honoured_config`, and `tools_run[].suppressed_by_repo_config` counts and names what ' +
-        'it suppressed (reported, not findings, not a coverage gap).',
+    title: 'Dependency CVE and licence scan (Trivy)',
+    description: "Trivy fs over the project's manifests and lock files: each finding with its CVE, severity and fixed " +
+        'version. `packages` narrows the response, not the scan. A manifest Trivy cannot read is a named gap. ' +
+        "The project's .trivyignore is honoured (`tools_run[].honoured_config`); `suppressed_by_repo_config` " +
+        'names what it suppressed — reported, not findings.',
     scan_type: 'deps',
     category: 'security',
     supportsAutoFix: false,
@@ -57,9 +53,7 @@ registerToolModule(makeScanTool({
             .min(1)
             .max(500)
             .optional()
-            .describe('Show only findings for these package names in the response (case-insensitive). Trivy still ' +
-            'reads every manifest and the scan records every finding; `package_filter.not_found` names ' +
-            'requested packages with no finding.'),
+            .describe("Show only these packages' findings; the scan records all (`package_filter`)."),
     },
     invoke: async (_input, ctx) => {
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'deps');

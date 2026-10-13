@@ -43,7 +43,8 @@ performance and compliance:
 - **Counts are tested**: every tool, resource, skill and command count in the READMEs, this file, `mcp/README.md`
   and `docs/` equals the code (`mcp/test/docs/docs.test.ts`) — fix the number in the same commit.
 - **The prose has budgets**: skill descriptions ≤ 300 characters, the listing ≤ 4 000, `SKILL.md` ≤ 12 KB,
-  `host-rules/AGENTS.md` ≤ 8 000 bytes — see [`docs/maintainers/prose.md`](docs/maintainers/prose.md).
+  `host-rules/AGENTS.md` ≤ 8 000 bytes, `tools/list` + instructions ≤ 72 000, a tool description ≤ 600 — see
+  [`docs/maintainers/prose.md`](docs/maintainers/prose.md).
 - **Three READMEs** — `README.md`, `README.pt-PT.md` (European Portuguese), `README.es.md` — changed together.
 - When working here, use the dev-guardian MCP tools rather than Semgrep / Trivy / gitleaks directly.
 

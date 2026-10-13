@@ -48,34 +48,25 @@ const inputSchema = {
   allow_outside_project: z
     .boolean()
     .optional()
-    .describe('Read a log that is not under project_path. Default false: such a path is refused.'),
+    .describe('Read a log outside project_path. Default false.'),
   max_results: z
     .number()
     .int()
     .min(1)
     .max(200_000)
     .optional()
-    .describe('Results imported per run before stopping; the rest are counted and the scan is partial. Default 50000.'),
+    .describe('Results imported before stopping (the scan is then partial). Default 50000.'),
 };
 
 const tool: ToolModule = {
   name: 'import_sarif',
   title: 'Import a SARIF log',
   description:
-    "Import another analysis tool's SARIF 2.1.0 log (CodeQL, Snyk, Trivy, Semgrep, gitleaks, a dev-guardian " +
-    'export…) into the project history: one `sarif_import` scan per run, named by the tool that wrote it ' +
-    '(tool.driver.name and version), one finding per result that is a finding. Imported findings behave like a ' +
-    'native scanner\'s in set_baseline, diff_scans, regression_alert, suppress_finding, triage_findings, ' +
-    "prioritize_findings and report_export — those take `source_tool` to say which tool's imports they read. " +
-    "A new import of a tool becomes that tool's latest scan and never touches the open findings of another tool " +
-    'or of the native scanners. Identities come from the log\'s fingerprints, else are computed as the native ' +
-    'scanners do. Results that are not findings (pass, notApplicable…) and results accepted as suppressed at ' +
-    'the source are counted, not imported; a result without a location inside the project is imported with no ' +
-    'file. A result that cannot be read is skipped and the scan is partial, like one past max_results ' +
-    '(default 50000, at most 200000). Secret-rule snippets are never stored. Read-only toward the log: nothing it ' +
-    'names (URIs, helpUri, invocations) is opened, fetched or run. The log is read only if it is a regular file ' +
-    'of at most 50 MiB under project_path (default: the working directory), or anywhere with ' +
-    'allow_outside_project: true. Errors: invalid_sarif, outside_project, refused_file, not_found.',
+    "Import another tool's SARIF 2.1.0 log (CodeQL, Snyk, …) into the history: one sarif_import scan per " +
+    'run, named by its tool, whose findings then work in set_baseline, diff_scans, suppress_finding, ' +
+    'prioritize_findings and report_export (source_tool picks the tool). Results that are not findings, ' +
+    'or were suppressed at the source, are counted, not imported. Nothing the log names is opened or run. ' +
+    'The log: a file of at most 50 MiB under project_path, unless allow_outside_project.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };

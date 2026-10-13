@@ -40,20 +40,10 @@ const tool: ToolModule = {
   name: 'vet_packages',
   title: 'Vet packages before installing',
   description:
-    'Vet dependencies BEFORE installing them. Per package, against the public registry and OSV: ' +
-    'does the name exist (a name nobody published is likely hallucinated), is the version that would ' +
-    'install flagged malicious (OSV MAL- advisory, or npm security placeholder), known vulnerabilities, ' +
-    'publish age (< 72 h warns: fresh releases are how npm/PyPI worms spread), npm install scripts, ' +
-    'and typosquat suspicion against a committed popular-packages list. Verdict per package and overall: ' +
-    'block | warn | unknown | ok. `unknown` means a check could not run (offline, timeout, HTTP error, ' +
-    'rate limit, GUARDIAN_OFFLINE=1) — never read it as ok. A name missing from the public registry is ' +
-    '`unknown`, not block, when a custom registry is configured for it (.npmrc, pip.conf / PIP_INDEX_URL, ' +
-    'pyproject/uv index, composer repositories, nuget.config), when an npmjs auth token is configured ' +
-    '(scoped names), or when it is a local workspace package. Accepts "name" or "name@version" (also ' +
-    'name==1.2, vendor/pkg:^2). Read-only; 10 s network budget. The PreToolUse hook runs the same checks ' +
-    'on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands; it denies a missing name only ' +
-    'when the whole command is one plain install statement with allowlisted flags (otherwise it warns), ' +
-    'and warns on known vulnerabilities only for an exact version pin.',
+    'Check packages before installing them, against the registry and OSV: the name exists (unpublished: ' +
+    'likely hallucinated), the version is not malicious, known vulnerabilities, publish age (under 72 h ' +
+    'warns), npm install scripts, typosquatting. Verdict per package: block, warn, unknown or ok — ' +
+    'unknown means a check could not run, never ok. Accepts name or name@version. Read-only.',
   inputSchema: {
     ecosystem: z
       .enum(Object.keys(ECOSYSTEM_ALIASES) as [string, ...string[]])
@@ -62,9 +52,9 @@ const tool: ToolModule = {
       .array(z.string().min(1).max(214))
       .min(1)
       .max(50)
-      .describe('Package specs: "name" or "name@version" (a range or tag is resolved to the version it installs).'),
+      .describe('Package specs: "name" or "name@version".'),
     project_path: ProjectPath.describe(
-      'Project whose registry configuration (.npmrc, pyproject.toml, composer.json, nuget.config) applies. Defaults to the current directory.',
+      "The project whose registry configuration applies. Default: the server's working directory.",
     ),
   },
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),

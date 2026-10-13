@@ -95,72 +95,53 @@ const inputSchema = {
     .string()
     .min(1)
     .describe(
-      'Origin of the ALREADY-RUNNING application, e.g. http://localhost:3000. This tool never ' +
-        'starts, builds or stops the app; if nothing answers it returns target_not_found.',
+      'Origin of the running application, e.g. http://localhost:3000.',
     ),
   authorized_target: z
     .boolean()
     .optional()
     .describe(
-      'Attestation that you are authorised to send scan traffic to a non-loopback host. ' +
-        'Required for every host that is not localhost / 127.0.0.0/8 / ::1 — including a ' +
-        'hostname that merely resolves to loopback, because classification is lexical and never ' +
-        'resolves DNS. Recorded in the scan for audit. Do not set this on a caller\'s behalf.',
+      "The user's attestation that they may scan this non-loopback host. Never set it on their behalf.",
     ),
   allow_write_methods: z
     .boolean()
     .optional()
     .describe(
-      'Allow POST/PUT/PATCH/DELETE probes, always with an empty body (the 400/422-vs-401/403 ' +
-        'signal answers the authorization question without writing). Default: false — read-only ' +
-        'GET/HEAD/OPTIONS. A 2xx on a write method is reported as "may have mutated state".',
+      'Allow POST/PUT/PATCH/DELETE probes, with an empty body. Default false.',
     ),
   probe_rate_limit: z
     .boolean()
     .optional()
     .describe(
-      'Send a bounded burst of identical requests carrying a synthetic, un-ownable credential to ' +
-        'one authentication endpoint, to see whether a limiter answers. Default: false. This ' +
-        'flag is its own authorization and does not open write methods for any other check.',
+      'Send one bounded burst with a fake credential to one login endpoint. Default false.',
     ),
   rate_limit_path: z
     .string()
     .min(1)
     .optional()
     .describe(
-      'Exact path (as it appears in the inventory) to aim the rate-limit burst at. When omitted ' +
-        'the target is inferred from auth-shaped paths and the chosen route is reported; when ' +
-        'the named path is not in the inventory the check reports no_candidate rather than ' +
-        'bursting something else.',
+      'Inventory path to aim the rate-limit burst at. Default: inferred from auth-shaped paths.',
     ),
   auth_header_env: z
     .string()
     .min(1)
     .optional()
     .describe(
-      'RECOMMENDED credential path: the NAME of an environment variable holding an Authorization ' +
-        'header value. The secret never enters the conversation or the MCP request log. An unset ' +
-        'variable is reported as a warning, never a silent anonymous run. WARNING: the named ' +
-        'variable lives in this server\'s own environment — any OTHER scanner this session spawns ' +
-        '(semgrep, trivy, gitleaks, git) inherits it too. nuclei is the one exception: it is ' +
-        'always spawned with a scrubbed environment that excludes it.',
+      'Name of an environment variable holding the Authorization header; the secret stays out of the ' +
+        'conversation.',
     ),
   auth_header: z
     .string()
     .min(1)
     .optional()
     .describe(
-      'Literal Authorization header value. Lands in the transcript — prefer auth_header_env. ' +
-        'Never persisted and redacted from every finding, evidence file and result field.',
+      'Literal Authorization header: it lands in the transcript, so prefer auth_header_env.',
     ),
   use_nuclei: z
     .boolean()
     .optional()
     .describe(
-      'Also run nuclei against the origin. Default: false (nuclei is an active scanner with a ' +
-        'large template download). When requested and not installed the gap is reported in ' +
-        'tools_run and missing_tools, never silently skipped. nuclei\'s default templates test ' +
-        'the ORIGIN, not this project\'s routes — the own engine is what tests those.',
+      'Also run nuclei against the origin (not these routes). Default false.',
     ),
   max_requests: z
     .number()
@@ -180,40 +161,25 @@ const inputSchema = {
     .positive()
     .optional()
     .describe(
-      `Global wall-clock ceiling for the probing phase, in milliseconds. Default: ` +
-        `${DEFAULT_WALL_CLOCK_MS}. Bounds the total, which neither timeout_ms (one request) nor ` +
-        `max_requests (how many are planned) does. When it cuts, the run still returns and says ` +
-        `so: summary.timed_out, summary.probes_cut, and a degraded coverage. Probes it cut ` +
-        `record outcome 'cancelled', never 'timeout' — the target did not fail to answer, this ` +
-        `tool stopped asking. Does not cover the one liveness request, which timeout_ms bounds.`,
+      `Ceiling on the whole probing phase, in ms. Default ${DEFAULT_WALL_CLOCK_MS}.`,
     ),
 };
 
 const tool: ToolModule = {
   name: 'scan_dast',
-  title: 'Probe a running application against its route inventory',
+  title: 'Probe a running app against its route inventory',
   // The description is the only discovery surface an agent has, so it states
   // the preconditions and the envelope, not just the capability: the two
   // things that make a caller pick this tool wrongly are not knowing the app
   // must already be running, and not knowing a prior map_attack_surface run
   // is required.
   description:
-    'ACTIVE DAST: sends real HTTP requests to an ALREADY-RUNNING application and reports what is ' +
-    'actually reachable, what is served without credentials, and what leaks. REQUIRES a prior ' +
-    'map_attack_surface run — it probes that route inventory and refuses with no_surface_snapshot ' +
-    'when there is none. The app must already be up: this tool never starts, builds or stops it, ' +
-    'and returns target_not_found when nothing answers at base_url. Safety envelope: LOOPBACK ' +
-    'TARGETS ONLY (localhost / 127.0.0.0/8 / ::1) unless the caller passes authorized_target: ' +
-    'true attesting they may scan that host; READ-ONLY methods (GET/HEAD/OPTIONS) unless ' +
-    'allow_write_methods is set, and even then with empty bodies — plus the opt-in ' +
-    'probe_rate_limit burst, the one exception, which sends POST to exactly one route; ' +
-    'redirects are never followed; ' +
-    'no injection payloads and no credential guessing. Checks reachability against the spec diff, ' +
-    'anonymous exposure of auth-required routes, differential authorization, CORS, security ' +
-    'headers, information disclosure, method surface and open redirects, plus an opt-in benign ' +
-    'rate-limit burst and an optional nuclei pass. Findings persist with scan_type dast and point ' +
-    'at the source file the route was extracted from. A clean result is NOT evidence of injection ' +
-    'safety.',
+    'Send real HTTP requests to an already-running application along the latest map_attack_surface ' +
+    'inventory (none: no_surface_snapshot): reachability, anonymous access to auth-required routes, ' +
+    'authorization differences, CORS, headers, information disclosure, methods, open redirects; nuclei ' +
+    'and a rate-limit burst are opt-in. Loopback only unless the user attests authorized_target; ' +
+    'read-only methods unless allow_write_methods. No injection payloads: a clean result is no proof of ' +
+    'injection safety.',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };

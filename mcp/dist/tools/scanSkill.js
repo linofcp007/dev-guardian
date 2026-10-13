@@ -33,8 +33,7 @@ const inputSchema = {
         .string()
         .min(1)
         .optional()
-        .describe('What to vet: a local directory, a single file, a .zip, or a git/HTTP(S) URL. ' +
-        'Defaults to the current project directory (audit the skill you are standing in).'),
+        .describe('A directory, file, .zip or git/HTTP(S) URL. Default: the current project.'),
     check_deps: z
         .boolean()
         .optional()
@@ -49,8 +48,7 @@ const inputSchema = {
     fail_on: z
         .enum(RECOMMENDATIONS)
         .optional()
-        .describe('If set, the result `passed` flag is false when the recommendation is at or worse than this ' +
-        'band (e.g. fail_on="CAUTION"). Lets a caller gate installs.'),
+        .describe('`passed` is false when the recommendation is this band or worse.'),
 };
 const RECOMMENDATION_TEXT = {
     SAFE: 'No significant risk signals. Safe to install after a normal review.',
@@ -66,21 +64,12 @@ const RECOMMENDATION_RANK = {
 };
 const tool = {
     name: 'scan_skill',
-    title: 'Vet an AI skill / MCP server / agent before install',
-    description: 'Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. ' +
-        'Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, ' +
-        'privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt ' +
-        'leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, ' +
-        'taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE ' +
-        'lookups on declared dependencies. The commands in an instruction file (a SKILL.md\'s fenced, indented ' +
-        'and <pre> blocks, inline code and prose) and the commands a plugin\'s hooks.json, plugin.json and ' +
-        '.mcp.json run are scored like the skill\'s own scripts, including a file ' +
-        'downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a ' +
-        'placeholder (…, <url>, example.com) stands for its target; any other finding, when nothing nearby is a ' +
-        'fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack ' +
-        'to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 ' +
-        'risk score and an install recommendation ' +
-        '(SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).',
+    title: 'Vet an AI skill, MCP server or plugin before install',
+    description: 'Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, ' +
+        '.zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, ' +
+        'tool poisoning, dangerous code, taint flows — the commands in instruction files and hook / plugin / ' +
+        'MCP configs scored like scripts — and OSV CVEs of its dependencies. Returns a 0-100 risk score and ' +
+        'SAFE, REVIEW, CAUTION or DO_NOT_INSTALL.',
     inputSchema,
     handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
