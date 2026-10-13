@@ -17,8 +17,8 @@
  * writes); `guardedPath` also reads the filesystem, with `lstat`/`readlink`
  * only until it knows no link on the way leads to a network or device path
  * (see `configFile.ts`), since resolving one could wait on the network past
- * the hook's timeout. Node built-ins only: the dispatcher loads the compiled
- * copy from `mcp/dist/hooks/`.
+ * the hook's timeout. Node built-ins only: the dispatcher loads it from its
+ * bundle, `mcp/dist/hooks.js`.
  */
 
 import { realpathSync, statSync } from 'node:fs';

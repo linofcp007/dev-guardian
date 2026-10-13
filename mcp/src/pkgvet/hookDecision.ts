@@ -1,6 +1,6 @@
 /**
  * The PreToolUse hook's decision for one Bash/PowerShell command: deny,
- * warn, note, or stay silent. Kept here (compiled to `mcp/dist/pkgvet/`)
+ * warn, note, or stay silent. Kept here (bundled into `mcp/dist/hooks.js`)
  * rather than in `hooks/guardian-hook.mjs` so it is unit-testable; the hook
  * itself only calls it and emits the answer.
  *

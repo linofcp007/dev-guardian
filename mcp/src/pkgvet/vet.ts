@@ -31,8 +31,8 @@
  * AbortSignal — registry lookups in parallel, then OSV (one batch) plus the
  * per-version extras in parallel. The hook passes 3 s; the tool 10 s.
  *
- * Dependency-free (global `fetch`, node built-ins): the hook imports this
- * file from `mcp/dist/pkgvet/vet.js`.
+ * Dependency-free (global `fetch`, node built-ins): the hook loads it from
+ * its bundle, `mcp/dist/hooks.js`.
  */
 
 import { queryOsv, type OsvPackageQuery, type OsvResult } from '../runners/osv.js';

@@ -11,8 +11,8 @@
  * {@link userDataDir} is the one resolution of the directory
  * (`hooks/userDataDir.ts`), which the storage module that owns it
  * re-exports; the two used to be separate copies. Node built-ins and sibling
- * hook modules only: the hooks and the CLI's `check` load `mcp/dist/hooks/`
- * without the storage layer or `node_modules`
+ * hook modules only: the hooks load this from their bundle, `mcp/dist/hooks.js`,
+ * which carries no storage layer and no npm package
  * (`test/unit/hooks/hooksDistImports.test.ts` holds that).
  */
 
