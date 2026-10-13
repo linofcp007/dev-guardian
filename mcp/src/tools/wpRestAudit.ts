@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { httpUrlField } from '../schemas.js';
 import type { ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -27,10 +28,7 @@ interface ProbeResult {
 }
 
 const inputSchema = {
-  target_url: z
-    .string()
-    .url()
-    .describe('Base URL of the WordPress site (e.g. https://example.com).'),
+  target_url: httpUrlField().describe('Base URL of the WordPress site (e.g. https://example.com).'),
   timeout_ms: z
     .number()
     .int()

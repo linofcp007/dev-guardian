@@ -22,11 +22,16 @@
  * exist locally ({@link wpInstallPathProblem}), and a relative path that does
  * not exist contributes no alias. A legacy row filed under a relative raw key
  * is therefore reachable only while that path exists on this machine.
+ *
+ * **No `"` and no control character** (review 10, finding 3): WP-CLI is
+ * handed the path as `--path=<it>`, and on Windows it is `wp.bat`: a `"`
+ * closed the quotes `cmd.exe` wraps it in (`platform/toolArgs.ts`).
  */
 
 import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { findLatestUsable, type FindUsableOptions } from '../history/openSet.js';
+import { pathArgProblem } from '../platform/toolArgs.js';
 import type { Storage } from '../storage/index.js';
 import type { ScanRecord, ScanType } from '../types.js';
 
@@ -36,10 +41,13 @@ export function wpSiteKey(url: string): string {
 }
 
 /**
- * Whether `raw` can name one install: absolute, or existing on this machine.
- * Null when it can; otherwise the message a tool refuses it with.
+ * Whether `raw` can name one install: absolute, or existing on this machine,
+ * and a path at all (no `"`, no control character). Null when it can;
+ * otherwise the message a tool refuses it with.
  */
 export function wpInstallPathProblem(raw: string): string | null {
+  const unsafe = pathArgProblem('wp_install_path', raw);
+  if (unsafe !== null) return `${unsafe}: pass the path of the install.`;
   if (namesOneInstall(raw)) return null;
   return (
     `wp_install_path ${JSON.stringify(raw)} is relative and does not exist on this machine, so it names no ` +

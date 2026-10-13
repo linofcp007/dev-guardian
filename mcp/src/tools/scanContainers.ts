@@ -117,9 +117,11 @@ const cosignParser: ScannerParser = {
  * none of `UNSAFE_CHARS` (`runners/cosignCheck.ts`: control, zero-width,
  * line-separator and bidi characters) — JavaScript's `\S` lets ESC, U+0085
  * and the zero-width characters through, and the reference flows into
- * cosign's reasons, notes and findings.
+ * cosign's reasons, notes and findings. No `"` and no `%` either: no
+ * reference holds one, and on Windows a scanner installed as a batch file
+ * would hand them to `cmd.exe` (review 10, finding 3; `runners/spawn.ts`).
  */
-const IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
+const IMAGE_REF = new RegExp(`^(?!-)[^\\s"%${UNSAFE_CHAR_CLASS}]+$`);
 
 /**
  * A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character.
@@ -151,7 +153,7 @@ const scanContainers = makeScanTool({
         .describe('Path to a Dockerfile to scan with `trivy config`.'),
       image: z
         .string()
-        .regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"')
+        .regex(IMAGE_REF, 'image must be an image reference: no whitespace, control character, " or %, not starting with "-"')
         .optional()
         .describe('Container image reference to scan with `trivy image`.'),
       signer_identity: signerValue().optional().describe(
@@ -457,7 +459,7 @@ function signerPolicy(inp: ContainersInput): SignerPolicy | null {
 /** Why the input cannot be scanned, or null when it can. */
 function invalidInput(projectPath: string, inp: ContainersInput): string | null {
   if (inp.image !== undefined && !IMAGE_REF.test(inp.image)) {
-    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, or start with "-".`;
+    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, " or %, or start with "-".`;
   }
   if (inp.dockerfile_path !== undefined && !isInside(projectPath, inp.dockerfile_path)) {
     return `dockerfile_path ${escapeUnsafe(JSON.stringify(inp.dockerfile_path))} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;

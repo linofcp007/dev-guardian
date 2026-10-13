@@ -35296,12 +35296,38 @@ var init_semgrepConfigs = __esm({
   }
 });
 
+// src/platform/toolArgs.ts
+function httpUrl(text2) {
+  let parsed;
+  try {
+    parsed = new URL(text2);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return parsed.href;
+}
+function pathArgProblem(name, value) {
+  if (value.includes('"')) return `${name} holds a double quote, which no path holds`;
+  if (/[\u0000-\u001F\u007F]/.test(value)) return `${name} holds a control character, which no path holds`;
+  return null;
+}
+var WP_PLUGIN_SLUG, API_TOKEN;
+var init_toolArgs = __esm({
+  "src/platform/toolArgs.ts"() {
+    "use strict";
+    WP_PLUGIN_SLUG = /^[A-Za-z0-9_-]{1,200}$/;
+    API_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
+  }
+});
+
 // src/schemas.ts
-var ProjectPath, SeverityMin, Force, AutoFix, AllowDirty, Categories, SeverityEnum, CategoryEnum, DomainErrorCodeEnum, BaseScanInput, BaseScanWithFixInput;
+var ProjectPath, SeverityMin, Force, AutoFix, AllowDirty, httpUrlField, Categories, SeverityEnum, CategoryEnum, DomainErrorCodeEnum, BaseScanInput, BaseScanWithFixInput;
 var init_schemas4 = __esm({
   "src/schemas.ts"() {
     "use strict";
     init_zod();
+    init_toolArgs();
     init_types2();
     ProjectPath = external_exports.string().min(1).optional().describe("Project root. Default: the server's working directory.");
     SeverityMin = external_exports.enum(SEVERITIES).optional().describe(
@@ -35310,6 +35336,7 @@ var init_schemas4 = __esm({
     Force = external_exports.boolean().optional().default(false).describe("Bypass the tree-hash cache.");
     AutoFix = external_exports.boolean().optional().default(false).describe("Apply Semgrep's autofixes to the source (a clean tree, unless allow_dirty).");
     AllowDirty = external_exports.boolean().optional().default(false).describe("With auto_fix: allow uncommitted changes in the tree.");
+    httpUrlField = () => external_exports.string().url().refine((text2) => httpUrl(text2) !== null, { message: "must be an http:// or https:// URL" });
     Categories = external_exports.array(external_exports.enum(CATEGORIES)).optional().describe("Restrict the run to these categories only.");
     SeverityEnum = external_exports.enum(SEVERITIES);
     CategoryEnum = external_exports.enum(CATEGORIES);
@@ -42121,7 +42148,7 @@ function signerPolicy(inp) {
 }
 function invalidInput(projectPath, inp) {
   if (inp.image !== void 0 && !IMAGE_REF.test(inp.image)) {
-    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, or start with "-".`;
+    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, " or %, or start with "-".`;
   }
   if (inp.dockerfile_path !== void 0 && !isInside2(projectPath, inp.dockerfile_path)) {
     return `dockerfile_path ${escapeUnsafe(JSON.stringify(inp.dockerfile_path))} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;
@@ -42198,7 +42225,7 @@ var init_scanContainers = __esm({
         return { findings: input, cves: [] };
       }
     };
-    IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
+    IMAGE_REF = new RegExp(`^(?!-)[^\\s"%${UNSAFE_CHAR_CLASS}]+$`);
     signerValue = () => external_exports.string().min(1).max(1024);
     scanContainers = makeScanTool({
       name: "scan_containers",
@@ -42211,7 +42238,7 @@ var init_scanContainers = __esm({
         project_path: ProjectPath,
         severity_min: SeverityMin,
         dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
-        image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
+        image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace, control character, " or %, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
         signer_identity: signerValue().optional().describe(
           "The identity `image` must be signed by (a workflow URL or an e-mail). Needs signer_issuer."
         ),
@@ -50804,11 +50831,15 @@ async function handler6(input, ctx) {
       "Provide exactly one of target_url (Lighthouse) or k6_script_path (k6)."
     );
   }
+  const lighthouseUrl = targetUrl === void 0 ? void 0 : httpUrl(targetUrl);
+  if (lighthouseUrl === null) return failDomain7("invalid_input", "target_url must be an http:// or https:// URL.");
+  const scriptProblem = k6Script === void 0 ? null : pathArgProblem("k6_script_path", k6Script);
+  if (scriptProblem !== null) return failDomain7("invalid_input", `${scriptProblem}.`);
   const scanId = randomUUID5();
   const reportDir = ensureReportDir(projectPath, scanId, "perf");
-  if (targetUrl !== void 0) {
+  if (lighthouseUrl !== void 0) {
     return runLighthouse({
-      url: targetUrl,
+      url: lighthouseUrl,
       categories: inp.lighthouse_categories,
       reportDir,
       projectPath,
@@ -51020,13 +51051,14 @@ var init_perfCheck = __esm({
     init_budgets();
     init_projectPath();
     init_processRunner();
+    init_toolArgs();
     init_schemas4();
     init_scanHelpers();
     init_scannerParsers();
     init_tools();
     inputSchema3 = {
       project_path: ProjectPath,
-      target_url: external_exports.string().url().optional().describe("URL to probe with Lighthouse. Mutually exclusive with k6_script_path."),
+      target_url: httpUrlField().optional().describe("URL to probe with Lighthouse. Mutually exclusive with k6_script_path."),
       k6_script_path: external_exports.string().optional().describe("Path to a k6 script to execute. Mutually exclusive with target_url."),
       lighthouse_categories: external_exports.array(external_exports.enum(["performance", "accessibility", "best-practices", "seo", "pwa"])).optional().describe("Categories to include. Default: all five.")
     };
@@ -69719,6 +69751,8 @@ function wpSiteKey(url2) {
   return url2.replace(/\/$/, "");
 }
 function wpInstallPathProblem(raw) {
+  const unsafe = pathArgProblem("wp_install_path", raw);
+  if (unsafe !== null) return `${unsafe}: pass the path of the install.`;
   if (namesOneInstall(raw)) return null;
   return `wp_install_path ${JSON.stringify(raw)} is relative and does not exist on this machine, so it names no single install (resolved against the server's working directory, every remote install passed the same way would share one record). Pass the absolute path of the install, or target_url for a remote site.`;
 }
@@ -69752,6 +69786,7 @@ var init_siteKeys = __esm({
   "src/wordpress/siteKeys.ts"() {
     "use strict";
     init_openSet();
+    init_toolArgs();
   }
 });
 
@@ -70072,7 +70107,20 @@ async function handler27(input, ctx) {
   if (!url2) {
     return failDomain20("scanner_failed", "Could not resolve a target URL for WPScan.");
   }
+  const scanUrl = httpUrl(url2);
+  if (scanUrl === null) {
+    return inp.target_url ? failDomain20("invalid_input", "target_url must be an http:// or https:// URL.") : failDomain20(
+      "scanner_failed",
+      `The site's home option is not an http:// or https:// URL (WP-CLI read ${JSON.stringify(url2.slice(0, 200))}); pass target_url.`
+    );
+  }
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
+  if (token !== "" && !API_TOKEN.test(token)) {
+    return failDomain20(
+      "invalid_input",
+      `${inp.api_token !== void 0 ? "api_token" : "WPSCAN_API_TOKEN"} is not a WPScan API token (letters and digits only).`
+    );
+  }
   const scanId = randomUUID10();
   const reportDir = localInstall !== void 0 ? join69(localInstall, ".guardian", "reports", `wpvuln-${scanId.slice(0, 8)}`) : join69(urlReportsDir(url2), `wpvuln-${String(Date.now()).padStart(13, "0")}-${scanId.slice(0, 8)}`);
   mkdirSync11(reportDir, { recursive: true });
@@ -70088,7 +70136,7 @@ async function handler27(input, ctx) {
     tree_hash: "",
     report_dir: reportDir
   });
-  const args = ["--no-update", "--no-banner", "--format", "json", "--output", outFile, "--enumerate", "vp,vt", "--url", url2];
+  const args = ["--no-update", "--no-banner", "--format", "json", "--output", outFile, "--enumerate", "vp,vt", "--url", scanUrl];
   if (token) args.push("--api-token", token);
   const scan2 = async () => {
     rmSync9(outFile, { force: true });
@@ -70153,13 +70201,13 @@ async function handler27(input, ctx) {
     tools_run,
     missing_tools,
     report_dir: reportDir,
-    meta: { url: url2, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked }
+    meta: { url: scanUrl, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked }
   });
   return {
     ok: true,
     scan_id: scanId,
     status,
-    url: url2,
+    url: scanUrl,
     has_token: token.length > 0,
     rate_limited: rateLimited,
     vulnerabilities_checked: verdict.checked,
@@ -70302,6 +70350,8 @@ var init_wpVulnCheck = __esm({
     init_maintenance();
     init_zod();
     init_projectPath();
+    init_toolArgs();
+    init_schemas4();
     init_processRunner();
     init_wpscan();
     init_scanCoverage();
@@ -70313,8 +70363,8 @@ var init_wpVulnCheck = __esm({
       wp_install_path: external_exports.string().optional().describe(
         "Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine."
       ),
-      target_url: external_exports.string().url().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
-      api_token: external_exports.string().optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
+      target_url: httpUrlField().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
+      api_token: external_exports.string().regex(API_TOKEN, "api_token must be a WPScan API token: letters and digits").optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
     };
     tool30 = {
       name: "wp_vuln_check",
@@ -71274,6 +71324,9 @@ import { randomUUID as randomUUID12 } from "node:crypto";
 async function handler30(input, ctx) {
   const inp = input;
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
+  if (!WP_PLUGIN_SLUG.test(inp.slug)) {
+    return failDomain22("invalid_input", 'slug must be a plugin slug: letters, digits, "_" and "-" (e.g. "contact-form-7").');
+  }
   const hasProject = inp.project_path !== void 0 && inp.project_path.length > 0;
   const installProblem = inp.wp_install_path !== void 0 && inp.wp_install_path.length > 0 ? wpInstallPathProblem(inp.wp_install_path) : null;
   if (installProblem !== null && !hasProject) return failDomain22("unsupported_target", installProblem);
@@ -71431,17 +71484,18 @@ var init_wpPluginCheck = __esm({
     init_paging();
     init_processRunner();
     init_schemas4();
+    init_toolArgs();
     init_scanHelpers();
     init_types2();
     init_scanCoverage();
     init_siteKeys();
     init_tools();
     inputSchema19 = {
-      slug: external_exports.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
+      slug: external_exports.string().regex(WP_PLUGIN_SLUG, 'slug must be a plugin slug: letters, digits, "_" and "-"').describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
       wp_install_path: external_exports.string().optional().describe(
         "Path to the WordPress install. On this machine, WP-CLI (`wp plugin list`) reads the installed version and active state from it; it also keys the CVE lookup when project_path is omitted. Absolute, or existing on this machine."
       ),
-      target_url: external_exports.string().url().optional().describe(
+      target_url: httpUrlField().optional().describe(
         "Site URL a wp_vuln_check was recorded under: its CVEs are read too. Nothing is sent to the site \u2014 for a live WPScan lookup run wp_vuln_check."
       ),
       project_path: ProjectPath.describe(
@@ -71547,9 +71601,10 @@ var init_wpRestAudit = __esm({
   "src/tools/wpRestAudit.ts"() {
     "use strict";
     init_zod();
+    init_schemas4();
     init_tools();
     inputSchema20 = {
-      target_url: external_exports.string().url().describe("Base URL of the WordPress site (e.g. https://example.com)."),
+      target_url: httpUrlField().describe("Base URL of the WordPress site (e.g. https://example.com)."),
       timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional().describe("Per-request timeout in milliseconds, 1000-60000. Default: 15000.")
     };
     tool34 = {
@@ -71729,7 +71784,6 @@ var tool36, META_REPORT, FINDING_SCAN;
 var init_wpDescribeSetup = __esm({
   "src/tools/wpDescribeSetup.ts"() {
     "use strict";
-    init_zod();
     init_findingIdentity();
     init_openSet();
     init_projectPath();
@@ -71742,7 +71796,7 @@ var init_wpDescribeSetup = __esm({
       description: "Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_cron_audit (flagged events), latest wp_rest_audit (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.",
       inputSchema: {
         project_path: ProjectPath,
-        target_url: external_exports.string().url().optional().describe("The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.")
+        target_url: httpUrlField().optional().describe("The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.")
       },
       handler: async (input, ctx) => handler33(input, ctx)
     };
@@ -80070,6 +80124,10 @@ async function runCommand(run2, worktreePath, timeoutMs, lockfileOnly, commandLi
   return result.outcome === "completed" ? null : buildFailure(invoked, result);
 }
 function harden(argv, lockfileOnly) {
+  const odd = argv.args.find((token) => /["%]/.test(token));
+  if (odd !== void 0) {
+    return `refused: ${JSON.stringify(odd.slice(0, 120))} holds a " or a %, which no package identifier or version holds`;
+  }
   const sub = argv.args[0] ?? "";
   if (argv.command === "bundle") {
     if (sub === "update") argv.args.splice(0, 1, "lock", "--update");
@@ -82245,15 +82303,15 @@ function remoteAddress(raw, sourceLabel) {
   const str7 = (k) => typeof raw[k] === "string" ? raw[k] : void 0;
   const type = str7("type")?.toLowerCase();
   const gemini = /(^|\/)\.gemini\/settings\.json$/.test(sourceLabel);
-  const httpUrl = str7("httpUrl");
+  const httpUrl2 = str7("httpUrl");
   const url2 = str7("url");
   const serverUrl = str7("serverUrl");
-  const address = httpUrl ?? url2 ?? serverUrl;
+  const address = httpUrl2 ?? url2 ?? serverUrl;
   if (address === void 0) return void 0;
   let transport;
   if (type === "sse") transport = "sse";
   else if (type !== void 0 && type !== "stdio") transport = "http";
-  else if (httpUrl !== void 0) transport = "http";
+  else if (httpUrl2 !== void 0) transport = "http";
   else if (gemini && url2 !== void 0) transport = "sse";
   else transport = /\/sse\/?(?:[?#]|$)/i.test(address) ? "sse" : "http";
   return { url: address, transport };

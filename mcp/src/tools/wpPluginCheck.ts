@@ -43,6 +43,12 @@
  * lookup, with no findings, whose silence about everything else is not
  * evidence — `history/scanRoles.ts#isScopedScan` keeps it out of the open
  * set, the baselines and every comparison.
+ *
+ * **The slug is a slug** (review 10, finding 3): WP-CLI is handed it as
+ * `--name=<slug>`, and on Windows WP-CLI is `wp.bat` — `x"&echo PWNED>f&"`
+ * ran a second command. Only letters, digits, `_` and `-`
+ * (`platform/toolArgs.ts#WP_PLUGIN_SLUG`), checked by the schema and again
+ * here, where a direct call arrives unparsed.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -51,7 +57,8 @@ import type { PluginContext } from '../context.js';
 import { canonicalPath, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { serverProjectPath } from '../resources/paging.js';
 import { runProcess } from '../runners/processRunner.js';
-import { ProjectPath } from '../schemas.js';
+import { httpUrlField, ProjectPath } from '../schemas.js';
+import { WP_PLUGIN_SLUG } from '../platform/toolArgs.js';
 import { scannerAvailable } from './scanHelpers.js';
 import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, type ToolResult, type ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
@@ -59,7 +66,10 @@ import { latestUnderKeys, wpInstallKeys, wpInstallPathProblem, wpSiteKeys } from
 import { registerToolModule, type ToolModule } from './index.js';
 
 const inputSchema = {
-  slug: z.string().min(1).describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
+  slug: z
+    .string()
+    .regex(WP_PLUGIN_SLUG, 'slug must be a plugin slug: letters, digits, "_" and "-"')
+    .describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
   wp_install_path: z
     .string()
     .optional()
@@ -67,9 +77,7 @@ const inputSchema = {
       'Path to the WordPress install. On this machine, WP-CLI (`wp plugin list`) reads the installed version and ' +
         'active state from it; it also keys the CVE lookup when project_path is omitted. Absolute, or existing on this machine.',
     ),
-  target_url: z
-    .string()
-    .url()
+  target_url: httpUrlField()
     .optional()
     .describe(
       'Site URL a wp_vuln_check was recorded under: its CVEs are read too. Nothing is sent to the site — for a ' +
@@ -103,6 +111,9 @@ async function handler(
 ): Promise<ToolResult<Record<string, unknown>>> {
   const inp = input as { slug: string; wp_install_path?: string; target_url?: string; project_path?: string };
   if (!inp.slug) return failDomain('unknown_scan_id', 'slug is required.');
+  if (!WP_PLUGIN_SLUG.test(inp.slug)) {
+    return failDomain('invalid_input', 'slug must be a plugin slug: letters, digits, "_" and "-" (e.g. "contact-form-7").');
+  }
   // See the module comment: an explicit project_path must exist, and a
   // wp_install_path that keys the lookup must be absolute or exist here (fix
   // round 2) — a relative one that does not would be resolved against the

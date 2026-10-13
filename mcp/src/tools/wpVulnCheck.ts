@@ -31,6 +31,16 @@
  *     every other scan tool;
  *   - the report goes under the install, or the per-user cache for a URL —
  *     never the server's working directory.
+ *
+ * ---- What WPScan and WP-CLI are handed (review 10, finding 3) ----------
+ *
+ * On Windows both are batch files (a gem's `wpscan.bat`, `wp.bat`), and a
+ * `"` in an argument closed the quotes `cmd.exe` wraps it in: a payload in
+ * `target_url`, in `wp_install_path` or in the site's own `home` option ran
+ * a second command. WPScan gets the URL parsed and re-serialised — http or
+ * https only, the one WordPress names itself included — and the token only
+ * when it is a token (`platform/toolArgs.ts`); the row is still filed under
+ * the URL as given (`wpSiteKey`), where the readers look for it.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -40,6 +50,8 @@ import { resolveRetentionLimit } from '../storage/maintenance.js';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { canonicalPath } from '../platform/projectPath.js';
+import { API_TOKEN, httpUrl } from '../platform/toolArgs.js';
+import { httpUrlField } from '../schemas.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { wpscanParser } from '../runners/scannerParsers/wpscan.js';
 import { computeCoverage } from './scanCoverage.js';
@@ -56,13 +68,12 @@ const inputSchema = {
     .describe(
       'Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine.',
     ),
-  target_url: z
-    .string()
-    .url()
+  target_url: httpUrlField()
     .optional()
     .describe('Live URL of the WordPress site to scan. Preferred when both inputs are present.'),
   api_token: z
     .string()
+    .regex(API_TOKEN, 'api_token must be a WPScan API token: letters and digits')
     .optional()
     .describe('WPScan API token. Falls back to WPSCAN_API_TOKEN env var.'),
 };
@@ -146,8 +157,26 @@ async function handler(
   if (!url) {
     return failDomain('scanner_failed', 'Could not resolve a target URL for WPScan.');
   }
+  // What WPScan is handed: the URL parsed and re-serialised, http(s) only —
+  // the one the site names itself as much as the caller's (see the module
+  // comment). The row stays filed under the URL as given.
+  const scanUrl = httpUrl(url);
+  if (scanUrl === null) {
+    return inp.target_url
+      ? failDomain('invalid_input', 'target_url must be an http:// or https:// URL.')
+      : failDomain(
+          'scanner_failed',
+          `The site's home option is not an http:// or https:// URL (WP-CLI read ${JSON.stringify(url.slice(0, 200))}); pass target_url.`,
+        );
+  }
 
   const token = inp.api_token ?? process.env['WPSCAN_API_TOKEN'] ?? '';
+  if (token !== '' && !API_TOKEN.test(token)) {
+    return failDomain(
+      'invalid_input',
+      `${inp.api_token !== undefined ? 'api_token' : 'WPSCAN_API_TOKEN'} is not a WPScan API token (letters and digits only).`,
+    );
+  }
 
   // The report goes under the install when it is on this machine, else the
   // per-user dev-guardian cache — never the server's working directory,
@@ -173,7 +202,7 @@ async function handler(
     report_dir: reportDir,
   });
 
-  const args = ['--no-update', '--no-banner', '--format', 'json', '--output', outFile, '--enumerate', 'vp,vt', '--url', url];
+  const args = ['--no-update', '--no-banner', '--format', 'json', '--output', outFile, '--enumerate', 'vp,vt', '--url', scanUrl];
   if (token) args.push('--api-token', token);
   const scan = async (): Promise<WpscanAttempt> => {
     rmSync(outFile, { force: true });
@@ -252,14 +281,14 @@ async function handler(
     tools_run,
     missing_tools,
     report_dir: reportDir,
-    meta: { url, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked },
+    meta: { url: scanUrl, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked },
   });
 
   return {
     ok: true,
     scan_id: scanId,
     status,
-    url,
+    url: scanUrl,
     has_token: token.length > 0,
     rate_limited: rateLimited,
     vulnerabilities_checked: verdict.checked,

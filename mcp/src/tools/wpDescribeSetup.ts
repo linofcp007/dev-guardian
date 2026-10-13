@@ -29,12 +29,11 @@
  * coverage; a finding scan that measured nothing is passed over (M3).
  */
 
-import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { indexFindings } from '../fingerprint/findingIdentity.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
-import { ProjectPath } from '../schemas.js';
+import { httpUrlField, ProjectPath } from '../schemas.js';
 import type { ScanRecord, ScanType, ToolResult } from '../types.js';
 import { latestUnderKeys, wpInstallKeys, wpSiteKey, wpSiteKeys } from '../wordpress/siteKeys.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -50,9 +49,7 @@ const tool: ToolModule = {
     'findings, and active CVEs on wp packages. No scanner spawn.',
   inputSchema: {
     project_path: ProjectPath,
-    target_url: z
-      .string()
-      .url()
+    target_url: httpUrlField()
       .optional()
       .describe('The live site URL wp_rest_audit / wp_vuln_check were run against, to include those rows.'),
   },

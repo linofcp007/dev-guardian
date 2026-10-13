@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { httpUrl } from './platform/toolArgs.js';
 import { SEVERITIES, CATEGORIES, DOMAIN_ERROR_CODES } from './types.js';
 
 export const ProjectPath = z
@@ -39,6 +40,18 @@ export const AllowDirty = z
   .optional()
   .default(false)
   .describe('With auto_fix: allow uncommitted changes in the tree.');
+
+/**
+ * An http or https URL (`platform/toolArgs.ts#httpUrl`): a tool hands the
+ * program it runs the RE-SERIALISED URL, never the text. A FACTORY, not one
+ * shared instance: the JSON-schema converter emits a reused zod instance as a
+ * `$ref` to its first use.
+ */
+export const httpUrlField = (): z.ZodEffects<z.ZodString, string, string> =>
+  z
+    .string()
+    .url()
+    .refine((text) => httpUrl(text) !== null, { message: 'must be an http:// or https:// URL' });
 
 export const Categories = z
   .array(z.enum(CATEGORIES))

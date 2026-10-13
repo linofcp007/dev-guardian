@@ -101,6 +101,16 @@ describe('applyGroup — deps', () => {
     expect(b.calls).toEqual([]);
   });
 
+  it('a package identifier with a " or a % from the scanned manifests is refused — npm is npm.cmd on Windows (review 10, finding 3)', async () => {
+    for (const cmd of ['npm install x"&echo PWNED>f&"@1.0.0 --ignore-scripts', 'npm install lodash@%CMDCMDLINE:~-1% --ignore-scripts']) {
+      const a = fakeRun([]);
+      const r = await applyGroup({ group: group({ candidates: [candidate([npmStep({ upgrade_command: cmd })])] }), worktreePath: '/w', run: a.run, lockfileOnly: false });
+      expect(r.applied, cmd).toBe(false);
+      expect(r.failure?.stderr_head).toMatch(/no package identifier or version/);
+      expect(a.calls).toEqual([]);
+    }
+  });
+
   it('Task 10 handoff: runs a step\'s follow_up_command, so an overrides-only fix re-resolves the lockfile', async () => {
     const override = npmStep({
       upgrade_command: 'npm pkg set overrides[minimist]=1.2.6',
