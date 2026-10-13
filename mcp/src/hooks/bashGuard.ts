@@ -142,6 +142,14 @@ export interface BashAssessment {
    * whenever another rule blocks too.
    */
   denyMessage?: string;
+  /**
+   * Set when the command is the user's decision to take rather than a hazard —
+   * `dev-guardian baseline update` (review 8, C2) — and nothing blocks it: the
+   * hook asks the user, with this as the reason, instead of letting it run.
+   * The level stays `warn`, which is what `check --bash` and a hook whose
+   * block is switched off report.
+   */
+  ask?: string;
 }
 
 /**
@@ -265,9 +273,12 @@ export const BASH_RULES: BashRule[] = [
     // Scoped to the whole command: `(`, `)`, `|`, `&` and `;` are the very
     // characters splitShell() separates on, so this signature only exists
     // before segmentation. Quoted spans are still masked, so
-    // `echo ':(){ :|:& };:'` stays inert.
-    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
+    // `echo ':(){ :|:& };:'` stays inert. Any function name, not only `:`
+    // (review 8, item 9: `f(){ f|f& };f` was ok); the backreference is the
+    // specification, `forkBomb` the linear reading of it.
+    pattern: /(?<![\w:.-])([\w:.-]{1,64})\s*\(\s*\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}\s*;\s*\1(?![\w:.-])/,
     scope: 'command',
+    test: forkBomb,
   },
   {
     id: 'chmod-777-root',
@@ -360,6 +371,30 @@ function processSubstitutionFetch(text: string): boolean {
     for (const fetch of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
       if (fetch.index >= shellEnd) return true;
     }
+  }
+  return false;
+}
+
+/** A character of a fork bomb's function name. */
+const FORK_NAME_CHAR = /[\w:.-]/;
+
+/**
+ * `fork-bomb`'s pattern in linear time: at each `( ) {`, the name right before
+ * it (1-64 characters, whole), then the body `NAME | NAME & } ; NAME` read
+ * once from there. The pattern's backreference retried every name length at
+ * every position of a long word.
+ */
+function forkBomb(text: string): boolean {
+  for (const m of text.matchAll(/\(\s*\)\s*\{\s*/g)) {
+    let end = m.index;
+    for (let k = 0; end > 0 && k < 64 && /\s/.test(text.charAt(end - 1)); k += 1) end -= 1;
+    let start = end;
+    while (start > 0 && end - start < 64 && FORK_NAME_CHAR.test(text.charAt(start - 1))) start -= 1;
+    if (start === end || (start > 0 && FORK_NAME_CHAR.test(text.charAt(start - 1)))) continue;
+    const name = text.slice(start, end).replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+    const body = new RegExp(`${name}\\s*\\|\\s*${name}\\s*&\\s*\\}\\s*;\\s*${name}(?![\\w:.-])`, 'y');
+    body.lastIndex = m.index + m[0].length;
+    if (body.test(text)) return true;
   }
   return false;
 }
@@ -1560,10 +1595,45 @@ function namesLooseningKey(text: string): boolean {
   );
 }
 
-/** Whether the whole command names a loosening key — computed once per assessment (fix round 3). */
+/**
+ * Whether the whole command names a loosening key — computed once per
+ * assessment (fix round 3), and only for a command that writes the settings.
+ * Also through an escape (`disableAllHook\x73`, `s`, `\163`) and inside
+ * a base64 literal the command decodes (`echo eyJ… | base64 -d >
+ * .claude/settings.local.json`) — review 8, item 15.
+ */
 function loosens(scope: Scope): boolean {
-  if (scope.notes.loosens === undefined) scope.notes.loosens = namesLooseningKey(scope.raw);
+  if (scope.notes.loosens === undefined) {
+    const raw = scope.raw;
+    scope.notes.loosens =
+      namesLooseningKey(raw) ||
+      (raw.includes('\\') && namesLooseningKey(unescapeText(raw))) ||
+      base64Literals(raw).some((text) => namesLooseningKey(text) || namesLooseningKey(unescapeText(text)));
+  }
   return scope.notes.loosens;
+}
+
+/** `\xHH`, `\u{H…}`, `\uHHHH` and octal `\NNN` escapes — printf's, `$'…'`'s, JSON's, JavaScript's — read as what they spell. */
+function unescapeText(text: string): string {
+  return text.replace(/\\(?:x([0-9A-Fa-f]{2})|u\{([0-9A-Fa-f]{1,6})\}|u([0-9A-Fa-f]{4})|([0-7]{1,3}))/g, (all, x?: string, u1?: string, u2?: string, o?: string) => {
+    const code = x !== undefined ? parseInt(x, 16) : u1 !== undefined ? parseInt(u1, 16) : u2 !== undefined ? parseInt(u2, 16) : parseInt(o ?? '', 8);
+    return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : all;
+  });
+}
+
+/** The most base64 literals of one command decoded to look for a settings key. */
+const MAX_BASE64_LITERALS = 64;
+
+/** The text of each base64 literal in `text` (16+ characters) that decodes to UTF-8 text. */
+function base64Literals(text: string): string[] {
+  const out: string[] = [];
+  let tried = 0;
+  for (const m of text.matchAll(/[A-Za-z0-9+/]{16,}={0,2}/g)) {
+    if ((tried += 1) > MAX_BASE64_LITERALS) break;
+    const decoded = decodeBase64(m[0]);
+    if (decoded !== undefined && !decoded.includes('�')) out.push(decoded);
+  }
+  return out;
 }
 
 /** A command word's name: its last path segment, lower-cased, without `.exe`. */
@@ -1825,10 +1895,16 @@ interface Effects {
    * which a write reaches it (review round 3, item 5).
    */
   hardLinkSources: string[];
+  /**
+   * Directories whose whole content a command deletes without a delete command
+   * (review 8, item 9): `rsync --delete` and `robocopy /MIR` into them, a
+   * recursive `[IO.Directory]::Delete`.
+   */
+  trees: string[];
 }
 
 function noEffects(): Effects {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [] };
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
 }
 
 /**
@@ -1848,6 +1924,7 @@ function mergeEffects(into: Effects, from: Effects): void {
   pushAll(into.special, from.special);
   pushAll(into.links, from.links);
   pushAll(into.hardLinkSources, from.hardLinkSources);
+  pushAll(into.trees, from.trees);
 }
 
 
@@ -2422,6 +2499,33 @@ function perlLike(
 
 const SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
 
+/** vi / vim / ex options whose value is the next word (a short cluster ending in one of these letters, too). */
+const EDITOR_VALUED_LETTERS = 'cSuUiTwWtq';
+
+/** The files `vi`, `vim`, `nvim` or `ex` opens — every operand but an option's value and a `+cmd`. */
+function editorFiles(args: readonly string[]): string[] {
+  const out: string[] = [];
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (!optionsDone && a === '--') {
+      optionsDone = true;
+      continue;
+    }
+    if (!optionsDone && a === '--cmd') {
+      i += 1;
+      continue;
+    }
+    if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
+      if (EDITOR_VALUED_LETTERS.includes(a.charAt(a.length - 1))) i += 1;
+      continue;
+    }
+    if (!optionsDone && (a.startsWith('-') || a.startsWith('+'))) continue;
+    out.push(a);
+  }
+  return out;
+}
+
 /**
  * The files a command itself writes — `tee`, `sed -i`, `dd of=`, `curl -o`,
  * `wget -O`, `sort -o`, `truncate`, `sponge`, `shred`, `perl -i` / `ruby -i`,
@@ -2458,6 +2562,19 @@ function commandWriteDestinations(name: string, args: readonly string[]): string
       const p = perlLike(args, 'e', 'IrCEFx');
       return p.inPlace ? p.files : [];
     }
+    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
+    // `vim -es -c '…' -c wq f` write the files they open.
+    case 'ed':
+    case 'red':
+      return operands(args, new Set(['-p', '--prompt']));
+    case 'ex':
+    case 'vi':
+    case 'vim':
+    case 'nvim':
+    case 'gvim':
+      return editorFiles(args);
+    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
+    case 'sc':
     case 'set-content':
     case 'add-content':
     case 'ac':
@@ -2559,6 +2676,8 @@ function effectsOf(name: string, rawArgs: readonly string[], cwd: string, depth 
         e.dirs.push(at(dest));
         e.writes.push(at(dest));
         pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
+        // `/MIR` and `/PURGE` delete what the source lacks: from an empty source, everything.
+        if (name === 'robocopy' && args.some((a) => /^\/(?:mir|purge)$/i.test(a))) e.trees.push(at(dest));
       }
       return e;
     }
@@ -2569,6 +2688,7 @@ function effectsOf(name: string, rawArgs: readonly string[], cwd: string, depth 
       e.writes.push(at(dest));
       pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
       if (args.some((a) => a === '--recursive' || a === '--archive' || /^-[a-zA-Z]*[ra]/.test(a))) e.dirs.push(at(dest));
+      if (args.some((a) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a))) e.trees.push(at(dest));
       return e;
     }
     case 'ren':
@@ -3015,23 +3135,29 @@ function asWindowsOpens(paths: readonly string[]): string[] {
  * or one assembled from parts (`join(home, '.config', 'dev-guardian',
  * 'hooks.json')`). A sentence that merely mentions a path does not end in it.
  */
-function literalsNameHookConfig(literals: readonly string[]): boolean {
+function literalsNameHookConfig(literals: readonly string[], scope: Scope): Placement {
   const paths = literalPaths(literals);
-  if (paths.some((p) => HOOK_CONFIG_PATH.test(p) || USER_CONFIG_DIR.test(p))) return true;
+  // A literal spelled in full is placed like a shell write's target; one
+  // assembled from parts is not known, so this session's (review 8, item 14).
+  const named = locate(paths, (p) => HOOK_CONFIG_PATH.test(p) || USER_CONFIG_DIR.test(p), scope);
+  if (named === 'inside') return named;
   const has = (re: RegExp): boolean => paths.some((p) => re.test(p));
-  if (has(/(?:^|\/)dev-guardian\/?$/i) && has(/(?:^|\/)hooks\.json$/i)) return true;
-  return has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i);
+  if (has(/(?:^|\/)dev-guardian\/?$/i) && has(/(?:^|\/)hooks\.json$/i)) return 'inside';
+  if (has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i)) return 'inside';
+  return named;
 }
 
 /** The same for Claude Code's settings files. */
-function literalsNameClaudeSettings(literals: readonly string[], configDirName: string | undefined): boolean {
+function literalsNameClaudeSettings(literals: readonly string[], scope: Scope): Placement {
+  const configDirName = scope.configDirName;
   const paths = literalPaths(literals);
-  if (paths.some((p) => isSettingsPath(p, configDirName))) return true;
+  const named = locate(paths, (p) => isSettingsPath(p, configDirName), scope);
+  if (named === 'inside') return named;
   const has = (re: RegExp): boolean => paths.some((p) => re.test(p));
   const inDir =
     has(/(?:^|\/)\.claude\/?$/i) ||
     (configDirName !== undefined && paths.some((p) => p.toLowerCase().replace(/\/+$/, '').endsWith(configDirName)));
-  return inDir && has(/^settings(?:\.local)?\.json$/i);
+  return inDir && has(/^settings(?:\.local)?\.json$/i) ? 'inside' : named;
 }
 
 // ── .NET file calls in PowerShell
@@ -3127,7 +3253,8 @@ const DOTNET_CALL = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(File|Directory)\s*\]\s*:
  */
 function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
   const e = noEffects();
-  if (!text.includes('::')) return e;
+  const newObject = /new-object/i.test(text);
+  if (!text.includes('::') && !newObject) return e;
   const unquotedAt = quoteTracker(text);
   for (const m of text.matchAll(DOTNET_CALL)) {
     if (!unquotedAt(m.index)) continue;
@@ -3138,8 +3265,11 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
     const paths = call.args.map((a) => resolveFrom(cwd, argPath(a)));
     const [first, second] = paths;
     if (first === undefined) continue;
-    if (method === 'delete') e.removes.push(first);
-    else if (method === 'createsymboliclink') e.links.push(first);
+    if (method === 'delete') {
+      e.removes.push(first);
+      // `[IO.Directory]::Delete('C:\', $true)`: the whole tree (review 8, item 9).
+      if (kind === 'directory' && /^\$?true$/i.test(call.args[1] ?? '')) e.trees.push(first);
+    } else if (method === 'createsymboliclink') e.links.push(first);
     else if (method === 'move' || method === 'replace') {
       e.removes.push(first);
       if (second !== undefined) (kind === 'directory' ? e.dirs : e.writes).push(second);
@@ -3149,8 +3279,38 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
       e.writes.push(first);
     }
   }
+  // A stream opened for writing (review 8, item 15): `[IO.StreamWriter]::new(p)`,
+  // `New-Object IO.StreamWriter(p)` / `-ArgumentList p`, and a `FileStream` not
+  // opened only to read.
+  if (!/streamwriter|filestream/i.test(text)) return e;
+  const unquotedWriterAt = quoteTracker(text);
+  for (const m of text.matchAll(DOTNET_WRITER)) {
+    if (!unquotedWriterAt(m.index)) continue;
+    const kind = (m[1] ?? m[2] ?? '').toLowerCase();
+    const after = m.index + m[0].length;
+    const open = /^\s*@?\(/.exec(text.slice(after, after + 64));
+    let args: string[];
+    if (open !== null) {
+      const call = callArgs(text, after + open[0].length);
+      if (call.cut && notes !== undefined) notes.calls = true;
+      args = call.args;
+    } else {
+      const word = /^\s*('(?:[^']|'')*'|"(?:[^"`]|`.)*"|[^\s;|,)]+)/.exec(text.slice(after, after + MAX_CALL_ARGS));
+      args = word === null ? [] : [word[1] ?? ''];
+    }
+    const first = args[0];
+    if (first === undefined || first === '') continue;
+    // Every argument of the call, not only the first two `callArgs` reads.
+    const all = text.slice(after, after + MAX_CALL_ARGS).split(')')[0] ?? '';
+    if (kind === 'filestream' && /\bRead\b/i.test(all) && !/Write|Create|Append|Truncate/i.test(all)) continue;
+    e.writes.push(resolveFrom(cwd, argPath(first)));
+  }
   return e;
 }
+
+/** `[IO.StreamWriter]::new(`, `New-Object [-TypeName] System.IO.StreamWriter [-ArgumentList]` and the same for `FileStream`. */
+const DOTNET_WRITER =
+  /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\s*\]\s*::\s*new\b|\bNew-Object\s+(?:-TypeName\s+)?(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\b(?:\s+-ArgumentList\b|\s+-Args?\b)?/gi;
 
 // ── the rules
 
@@ -3217,6 +3377,102 @@ const RULE_SETTINGS: MatchedRule = {
 };
 
 /**
+ * Where a guarded path a command names lies: `inside` — where the hooks of
+ * this session read it (the project, the working directory, the home
+ * directory, `CLAUDE_CONFIG_DIR`), or anywhere a variable, a relative path or
+ * a mangled spelling leaves unknown; `outside` — provably elsewhere (another
+ * project, a test fixture's fake HOME); `null` — not a guarded path at all.
+ */
+type Placement = 'inside' | 'outside' | null;
+
+/** The more serious of several placements. */
+function worst(placements: readonly Placement[]): Placement {
+  if (placements.includes('inside')) return 'inside';
+  return placements.includes('outside') ? 'outside' : null;
+}
+
+/** The places a guarded path counts as this session's, as {@link targetKey} spells them. */
+interface Places {
+  fold: boolean;
+  home?: string | undefined;
+  cwd?: string | undefined;
+  project?: string | undefined;
+  configDir?: string | undefined;
+}
+
+/** `key` is `dir` or below it. */
+function keyAtOrBelow(dir: string | undefined, key: string): boolean {
+  return dir !== undefined && dir !== '' && (key === dir || key.startsWith(`${dir}/`));
+}
+
+/**
+ * Where the guarded paths of `paths` (those `pred` accepts) lie ({@link
+ * Placement}). Without {@link Scope.places} — the CLI's `check`, the tests'
+ * default — every one is `inside`, as it always was. A path is `outside` only
+ * when it is spelled in full (`/tmp/x/…`, `C:/x/…`, `~other/…`, or `~/…` and
+ * `$HOME/…` below home) and lies under none of the places: a project's
+ * `.guardian/hooks*.json` counts under the project or the working directory,
+ * the user-level `hooks.json` only as the home directory's own, Claude Code's
+ * settings under any of them.
+ */
+function locate(paths: readonly string[], pred: (p: string) => boolean, scope: Scope): Placement {
+  let found: Placement = null;
+  for (const p of paths) {
+    if (!pred(p)) continue;
+    if (placeOf(p, scope) === 'inside') return 'inside';
+    found = 'outside';
+  }
+  return found;
+}
+
+function placeOf(raw: string, scope: Scope): Placement {
+  const places = scope.places;
+  if (places === undefined) return 'inside';
+  let t = stripQuotes(raw).replace(/\\/g, '/');
+  const homeSpelled = /^(?:~|\$\{?HOME\}?|\$\{?USERPROFILE\}?|\$\{?env:USERPROFILE\}?|%USERPROFILE%)(?=\/|$)/i.exec(t);
+  if (homeSpelled !== null) {
+    if (places.home === undefined) return 'inside';
+    t = `${places.home}${t.slice(homeSpelled[0].length)}`;
+  } else if (/^~[A-Za-z_]/.test(t)) {
+    // `~other/…` is another account's: never this session's hooks.
+    return 'outside';
+  } else if (!/^(?:\/|[A-Za-z]:\/)/.test(t)) {
+    // Relative (the working directory), a variable, or a spelling the POSIX
+    // reader mangled (`C:proj.guardian…`): unknown, so this session's.
+    return 'inside';
+  }
+  // A glob may name the place itself: unknown, so this session's.
+  if (GLOB.test(t)) return 'inside';
+  const key = targetKey(t, places.fold);
+  if (/(?:^|\/)\.config\/dev-guardian(?:\/|$)/i.test(key)) {
+    if (places.home === undefined) return 'inside';
+    return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? 'inside' : 'outside';
+  }
+  if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
+    return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
+  }
+  return [places.project, places.cwd].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
+}
+
+/** The guarded path one elsewhere: a warning, since it is not this session's (review 8, item 14). */
+const RULE_ELSEWHERE: MatchedRule = {
+  id: 'guard-config-elsewhere',
+  level: 'warn',
+  reason:
+    "Writes a file named like the guardrail hooks' configuration or Claude Code's settings outside this project, " +
+    'the working directory and the home directory — not the one this session reads; confirm the target',
+};
+
+/** A block device: what `tee` or `cp` must not be pointed at (review 8, item 9). */
+const BLOCK_DEVICE = /^\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)|PhysicalDrive\d/i;
+
+const RULE_DISK_WRITE: MatchedRule = {
+  id: 'disk-overwrite',
+  level: 'block',
+  reason: 'Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/…)',
+};
+
+/**
  * The rules a command's filesystem effects break. The guard's own
  * configuration: a FIFO, device node or link created at a config file (a link
  * also at a config directory — final review I12 and fix round 2, N1); a write
@@ -3233,23 +3489,33 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     special: asWindowsOpens(effects.special.map(tail)),
     links: asWindowsOpens(effects.links.map(tail)),
     hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
+    trees: effects.trees.map(tail),
   };
   const out: MatchedRule[] = [];
-  if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
-    out.push({ ...RULE_SPECIAL });
-  }
-  if (e.writes.some((p) => isHookConfigPath(p) || globNamesConfig(p))) out.push({ ...RULE_WRITE });
+  // Each guarded path is this session's only where the hooks read it; one
+  // elsewhere — another project's, a test fixture's HOME — warns (review 8, item 14).
+  const judged = (rule: MatchedRule, where: Placement): void => {
+    if (where === 'inside') out.push({ ...rule });
+    else if (where === 'outside') out.push({ ...RULE_ELSEWHERE });
+  };
+  const configAt = (p: string): boolean => isHookConfigPath(p) || globNamesConfig(p);
+  judged(RULE_SPECIAL, worst([locate(e.special, isHookConfigPath, scope), locate(e.links, (p) => isHookConfigPath(p) || isHookConfigDir(p), scope)]));
+  judged(RULE_WRITE, locate(e.writes, configAt, scope));
   const removesConfig = (p: string): boolean =>
     isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || globNamesConfig(p, [USER_CONFIG_TAIL]);
-  if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
-  if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
+  judged(RULE_REMOVE, locate(e.removes, removesConfig, scope));
+  judged(RULE_DIR, locate(e.dirs, isHookConfigDir, scope));
   // A hard link to a configuration file, to Claude Code's settings (the Write
   // guard judges a write through one as that file; a shell write through one
   // names neither), or — `cp -al` — to every file of a directory that holds
   // them (review 3.0, wave 2).
   const linksGuarded = (p: string): boolean =>
     isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
-  if (e.hardLinkSources.some(linksGuarded)) out.push({ ...RULE_HARD_LINK });
+  judged(RULE_HARD_LINK, locate(e.hardLinkSources, linksGuarded, scope));
+  // A whole tree deleted by a copy or a .NET call (review 8, item 9), and a
+  // block device written by `tee` or `cp` (`cat /dev/zero | tee /dev/sda`).
+  if (e.trees.some((p) => isCatastrophicTarget(p, scope.tildeUsers) || isHomeTarget(p, scope.home))) out.push({ ...RULE_RM_ROOT });
+  if (e.writes.some((p) => BLOCK_DEVICE.test(p))) out.push({ ...RULE_DISK_WRITE });
   // dev-guardian's registry of trusted databases (round 2): an entry written,
   // linked or copied into it, a hard link to one, or the registry or the whole
   // data directory replaced. Removing one only un-trusts a database.
@@ -3264,7 +3530,8 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   ) {
     out.push({ ...RULE_REGISTRY });
   }
-  if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
   return out;
 }
 
@@ -3305,8 +3572,12 @@ const RULE_DB_ADOPT: MatchedRule = {
   reason: 'db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt` without --yes',
 };
 
-/** The CLI, as a command or a script: `dev-guardian`, `dev-guardian.mjs`, `dev-guardian.cmd`, `dev-guardian@3.0.1`. */
-const CLI_NAME = /^dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?$/i;
+/**
+ * The CLI, as a command or a script: `dev-guardian`, `dev-guardian.mjs`,
+ * `dev-guardian.cmd`, `dev-guardian@3.0.1` — and `guardian.cjs`, the launcher
+ * dev-spec-driven writes into `.specs/`, which hands every argument on to it.
+ */
+const CLI_NAME = /^(?:dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?|guardian\.cjs)$/i;
 /** What runs the CLI named as its program: node and the other runtimes, and the package runners. */
 const CLI_HOSTS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'npx', 'pnpx', 'bunx', 'npm', 'pnpm', 'yarn']);
 /** A package runner's or a runtime's subcommand before the program: `pnpm dlx`, `npm exec`, `bun x`, `deno run`. */
@@ -3360,10 +3631,40 @@ function adoptsDatabase(words: readonly ShellWord[], at: number): boolean {
  * read as a nested script instead: it can hand on any command.)
  */
 function adoptsDatabaseThroughLauncher(words: readonly ShellWord[], at: number): boolean {
-  const started = startProcessArgv(words, at);
-  if (started !== undefined && adoptsDatabase(started, 0)) return true;
-  return findExecCommands(words, at).some((cmd) => adoptsDatabase(cmd, resolveCommand(cmd).index));
+  return throughLauncher(words, at, adoptsDatabase);
 }
+
+/** `runs` of the command `Start-Process` starts, or of one `find -exec` runs. */
+function throughLauncher(words: readonly ShellWord[], at: number, runs: (words: readonly ShellWord[], at: number) => boolean): boolean {
+  const started = startProcessArgv(words, at);
+  if (started !== undefined && runs(started, 0)) return true;
+  return findExecCommands(words, at).some((cmd) => runs(cmd, resolveCommand(cmd).index));
+}
+
+/**
+ * `dev-guardian baseline update` run by the assistant (review 8, C2): it
+ * accepts EVERY current finding into `.guardian/baseline.json` — a feature's
+ * own new finding included — and the gate then reports none of them. That is
+ * the user's decision, so the hook asks ({@link BashAssessment.ask}) instead
+ * of denying: `dev-guardian baseline update`, `node …/dev-guardian.mjs
+ * baseline update`, `node .specs/guardian.cjs baseline update`, behind `npx`
+ * or a runner, in a nested script or launched by `Start-Process` / `find -exec`.
+ */
+function updatesBaseline(words: readonly ShellWord[], at: number): boolean {
+  const args = cliArgs(words, at);
+  if (args === undefined) return false;
+  const plain = args.filter((a) => !a.startsWith('-'));
+  return plain[0] === 'baseline' && plain[1] === 'update';
+}
+
+const RULE_BASELINE_UPDATE: MatchedRule = {
+  id: 'baseline-update',
+  level: 'warn',
+  reason:
+    'dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the ' +
+    'gate stops reporting them — the user decides. To accept one reviewed finding, suppress it inline with a reason ' +
+    '(`nosemgrep: <rule> -- <reason>`, `# nosec`), or rebuild the baseline on the base commit',
+};
 
 const START_PROCESS = new Set(['start-process', 'saps', 'start']);
 
@@ -3476,8 +3777,13 @@ function envSplitScript(words: readonly ShellWord[], end: number): string | unde
 function judgeCode(code: string, lang: CodeLang, scope: Scope): MatchedRule[] {
   const literals = codeLiterals(code, lang);
   const out: MatchedRule[] = [];
-  if (literalsNameHookConfig(literals)) out.push({ ...RULE_INLINE });
-  if (literalsNameClaudeSettings(literals, scope.configDirName) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  const placed = (rule: MatchedRule, where: Placement): void => {
+    if (where === 'inside') out.push({ ...rule });
+    else if (where === 'outside') out.push({ ...RULE_ELSEWHERE });
+  };
+  placed(RULE_INLINE, literalsNameHookConfig(literals, scope));
+  const settings = literalsNameClaudeSettings(literals, scope);
+  if (settings !== null && loosens(scope)) placed(RULE_SETTINGS, settings);
   if (literalsNameRegistry(literals, scope.dataDir)) out.push({ ...RULE_REGISTRY });
   return out;
 }
@@ -3500,6 +3806,14 @@ interface Scope {
   cmdLine?: boolean;
   /** `~name` is another account's home: a POSIX shell's reading, never the PowerShell tool's. */
   tildeUsers?: boolean;
+  /** Where a guarded path is this session's ({@link placeOf}); none: everywhere. */
+  places?: Places | undefined;
+  /** Where the command was before its last `cd` — what `cd -` returns to ({@link moveCwd}). */
+  prevCwd?: string;
+  /** `pushd`'s stack, replaced on every change. */
+  dirStack?: readonly string[];
+  /** `CDPATH`, when the command set it. */
+  cdpath?: readonly string[];
 }
 
 /**
@@ -3594,6 +3908,10 @@ function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
   }
   // PowerShell's `eval`: `iex "& { $(irm …) }"` runs its argument — quoted or
   // not — as PowerShell (review I1).
+  if (launcher === 'wsl') {
+    const script = wslScript(words, start);
+    return script === undefined || script.trim() === '' ? [] : [shellScript(script)];
+  }
   if (launcher === 'iex' || launcher === 'invoke-expression') {
     const script = words
       .slice(start + 1)
@@ -4919,6 +5237,168 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
   return null;
 }
 
+/** A POSIX shell's `CDPATH=a:b`: the directories a relative `cd` also searches. */
+function cdpathValue(word: string): string[] | undefined {
+  const m = /^CDPATH=(.*)$/.exec(word);
+  return m === null ? undefined : (m[1] ?? '').split(':').filter((d) => d !== '');
+}
+
+/**
+ * Where the command is after `words` ({@link cwdAfter}), with what a `cd`
+ * can return to (review 8, item 15): `cd -` and `cd "$OLDPWD"` go back to the
+ * directory before the last move, `pushd` / `popd` keep a stack, and a
+ * relative `cd` also searches `CDPATH` — set before the command
+ * (`CDPATH=~/.config cd dev-guardian`) or earlier in the command (`export
+ * CDPATH=…`, `CDPATH=…;`). Each used to read as "where the command started",
+ * so `cd ~/.config/dev-guardian; cd /tmp; cd -; echo > hooks.json` was ok. A
+ * `CDPATH` entry that names a guarded directory is taken: the conservative
+ * reading. Stacks are replaced, never mutated: a nested scope shares them.
+ */
+function moveCwd(scope: Scope, words: readonly ShellWord[], at: number): void {
+  // `CDPATH=x` alone, or `export CDPATH=x`: for the rest of the command.
+  const head = words[at];
+  const exported = head !== undefined && commandName(head.value) === 'export';
+  for (const w of exported ? words.slice(at + 1) : head === undefined ? words : []) {
+    const dirs = cdpathValue(w.value);
+    if (dirs !== undefined) scope.cdpath = dirs;
+  }
+  if (head === undefined) return;
+  const name = commandName(head.value);
+  const args = withoutRedirections(words.slice(at + 1));
+  const prefix = words.slice(0, at).map((w) => cdpathValue(w.value)).find((d) => d !== undefined);
+  const cdpath = prefix ?? scope.cdpath ?? [];
+  const here = scope.cwd;
+  if (name === 'popd' || name === 'pop-location') {
+    const stack = scope.dirStack ?? [];
+    scope.prevCwd = here;
+    scope.cwd = stack[stack.length - 1] ?? '';
+    scope.dirStack = stack.slice(0, -1);
+    return;
+  }
+  if (!CD_COMMANDS.has(name)) return;
+  const target = psParam(args, ['path', 'literalpath']) ?? args.find((a) => a === '-' || !(a.startsWith('-') || /^\/d$/i.test(a)));
+  const pushes = name === 'pushd' || name === 'push-location';
+  let next: string | undefined;
+  if (target === '-' || (target !== undefined && /^\$\{?OLDPWD\}?$/.test(target))) next = scope.prevCwd ?? '';
+  else if (pushes && target === undefined) {
+    // `pushd` alone swaps the top two.
+    const stack = scope.dirStack ?? [];
+    next = stack[stack.length - 1] ?? '';
+    scope.dirStack = [...stack.slice(0, -1), here];
+    scope.prevCwd = here;
+    scope.cwd = next;
+    return;
+  } else {
+    next = cwdAfter(name, args, here, scope.dataDir) ?? here;
+    if (target !== undefined && !isAbsolutePath(target) && !/^\.\.?(?:[\\/]|$)/.test(target)) {
+      for (const dir of cdpath) {
+        const via = cwdAfter('cd', [resolveFrom(dir, target)], '', scope.dataDir);
+        if (via !== undefined && via !== '') {
+          next = via;
+          break;
+        }
+      }
+    }
+  }
+  if (pushes) scope.dirStack = [...(scope.dirStack ?? []), here];
+  scope.prevCwd = here;
+  scope.cwd = next;
+}
+
+// ─────────────────────────────── other catastrophic and destructive commands
+
+/** The filesystem root or a drive root — not a directory below one. */
+const ROOT_ITSELF = /^(?:\/\*?|\\\*?|[A-Za-z]:[\\/]?\*?|\/(?:mnt\/)?[A-Za-z]\/?\*?)$/i;
+
+/**
+ * `chmod -R` / `chown -R` / `chgrp -R` of the filesystem root, a drive root or
+ * a system directory (review 8, item 9): `chmod -R a+rwx /` matched no rule
+ * (only a numeric 777 did), and `chown -R x /` none at all — a recursive owner
+ * change clears every setuid bit, `sudo`'s included. The root itself blocks;
+ * a system directory (`/usr`, `/etc`, `C:\Windows`) warns.
+ */
+function recursivePermsOnRoot(words: readonly ShellWord[], at: number, tildeUsers = true): MatchedRule | null {
+  const name = commandName(words[at]?.value ?? '');
+  if (name !== 'chmod' && name !== 'chown' && name !== 'chgrp') return null;
+  const args = withoutRedirections(words.slice(at + 1));
+  if (!args.some((a) => a === '--recursive' || /^-[A-Za-z]*R[A-Za-z]*$/.test(a))) return null;
+  const operandWords = args.filter((a) => !a.startsWith('-') || /^-[rwxXst]+$/.test(a));
+  const targets = args.some((a) => a.startsWith('--reference')) ? operandWords : operandWords.slice(1);
+  const roots = targets.filter((t) => catastrophicKind(t, tildeUsers) === 'root');
+  if (roots.length === 0) return null;
+  return roots.some((t) => ROOT_ITSELF.test(stripQuotes(t)))
+    ? { id: 'recursive-perms-root', level: 'block', reason: 'Recursively changes the permissions or the owner of the filesystem root' }
+    : { id: 'recursive-perms-system', level: 'warn', reason: 'Recursively changes the permissions or the owner of a system directory — confirm this is intended' };
+}
+
+/**
+ * Commands that destroy something no delete rule sees (review 8, item 9) —
+ * warnings, since each is sometimes the job: Windows' restore points
+ * (`vssadmin delete shadows`, `wmic shadowcopy delete`), a machine-wide
+ * registry key (`reg delete HKLM\…`), the infrastructure Terraform manages
+ * (`terraform destroy`, `apply -destroy`), an S3 bucket's objects (`aws s3 rm
+ * --recursive`, `aws s3 rb --force`) and a GitHub repository (`gh repo delete`).
+ */
+function destructiveCommand(words: readonly ShellWord[], at: number): MatchedRule | null {
+  const name = commandName(words[at]?.value ?? '');
+  const args = withoutRedirections(words.slice(at + 1));
+  const plain = args.filter((a) => !a.startsWith('-') && !/^\/[A-Za-z]/.test(a)).map((a) => a.toLowerCase());
+  if ((name === 'vssadmin' && plain[0] === 'delete' && plain[1] === 'shadows') || (name === 'wmic' && plain[0] === 'shadowcopy' && plain.includes('delete'))) {
+    return { id: 'shadow-copy-delete', level: 'warn', reason: "Deletes Windows' volume shadow copies (restore points)" };
+  }
+  // `HKLM\SYSTEM` reaches the POSIX reader as `HKLMSYSTEM`.
+  if (name === 'reg' && plain[0] === 'delete' && /^(?:hklm|hkey_local_machine)/i.test(plain[1] ?? '')) {
+    return { id: 'registry-delete', level: 'warn', reason: 'Deletes a machine-wide registry key (HKLM)' };
+  }
+  if ((name === 'terraform' || name === 'tofu' || name === 'terragrunt') && (plain[0] === 'destroy' || (plain[0] === 'apply' && args.includes('-destroy')))) {
+    return { id: 'terraform-destroy', level: 'warn', reason: 'Destroys the infrastructure Terraform manages' };
+  }
+  if (name === 'aws' && plain[0] === 's3' && ((plain[1] === 'rm' && args.includes('--recursive')) || (plain[1] === 'rb' && args.includes('--force')))) {
+    return { id: 's3-recursive-delete', level: 'warn', reason: "Deletes an S3 bucket's objects recursively" };
+  }
+  if (name === 'gh' && plain[0] === 'repo' && plain[1] === 'delete') {
+    return { id: 'gh-repo-delete', level: 'warn', reason: 'Deletes a GitHub repository' };
+  }
+  return null;
+}
+
+/**
+ * The command line PowerShell's `Start-Process` / `saps` starts, as a script
+ * ({@link startProcessArgv}): its program and `-ArgumentList` (review 8, item
+ * 9 — `Start-Process cmd -ArgumentList '/c rd /s /q C:\'` was ok).
+ */
+function startedCommandLine(words: readonly ShellWord[], at: number): string | undefined {
+  const name = commandName(words[at]?.value ?? '');
+  if (name !== 'start-process' && name !== 'saps') return undefined;
+  const argv = startProcessArgv(words, at);
+  return argv === undefined ? undefined : argv.map((w) => posixWord(w.value)).join(' ');
+}
+
+/** `wsl`'s own options that take a value. */
+const WSL_VALUED = new Set(['-d', '--distribution', '-u', '--user', '--cd', '--shell-type', '--distribution-id']);
+
+/**
+ * The command `wsl [options] [--] command…` runs in Linux (review 8, item 9:
+ * `wsl rm -rf /mnt/c` was ok): the words after its options — after `-e` /
+ * `--exec` run without a shell, otherwise through the default shell. A
+ * management option (`--install`, `--list`, `--shutdown`, …) runs none.
+ */
+function wslScript(words: readonly ShellWord[], start: number): string | undefined {
+  for (let i = start + 1; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (v === '--') return words.slice(i + 1).map((w) => w.value).join(' ');
+    if (v === '-e' || v === '--exec') return words.slice(i + 1).map((w) => posixWord(w.value)).join(' ');
+    if (WSL_VALUED.has(v)) {
+      i += 1;
+      continue;
+    }
+    if (v === '--system' || v === '-s') continue;
+    if (v.startsWith('-')) return undefined;
+    return words.slice(i).map((w) => w.value).join(' ');
+  }
+  return undefined;
+}
+
 // ──────────────────────────────────────────────────────────── assessment
 
 const MAX_NESTING = 3;
@@ -5021,9 +5501,19 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
       if (adoptsDatabase(words, resolved.index) || adoptsDatabaseThroughLauncher(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
+      if (updatesBaseline(words, resolved.index) || throughLauncher(words, resolved.index, updatesBaseline)) {
+        out.push({ ...RULE_BASELINE_UPDATE });
+      }
+      const perms = recursivePermsOnRoot(words, resolved.index, scope.tildeUsers);
+      if (perms !== null) out.push(perms);
+      const destructive = destructiveCommand(words, resolved.index);
+      if (destructive !== null) out.push(destructive);
       const scripts = nestedScripts(words, resolved.index);
       const split = envSplitScript(words, resolved.index);
       if (split !== undefined) scripts.push(shellScript(split));
+      // `Start-Process cmd -ArgumentList '/c rd /s /q C:\'`: the command it starts (review 8, item 9).
+      const started = startedCommandLine(words, resolved.index);
+      if (started !== undefined) scripts.push(shellScript(started));
       const cmdHead = words[resolved.index];
       const line =
         cmdHead !== undefined && commandName(cmdHead.value) === 'cmd'
@@ -5056,11 +5546,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
         if (line !== undefined) collect(line, depth + 1, out, { ...scope, cmdLine: true });
       }
-      const head = words[resolved.index];
-      if (head !== undefined) {
-        const args = withoutRedirections(words.slice(resolved.index + 1));
-        scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd, scope.dataDir) ?? scope.cwd;
-      }
+      moveCwd(scope, words, resolved.index);
     }
     // Finding 4: text a shell actually reads as its script — `bash <<EOF …
     // EOF`, `echo '…' | bash`, `printf '…' | sh` — is assessed as a command
@@ -5135,6 +5621,16 @@ export interface AssessOptions {
    * `$GUARDIAN_DATA_DIR`) are recognised whatever this is.
    */
   dataDir?: string;
+  /**
+   * The directory the command runs in, and the project the session belongs to
+   * (the hook's payload `cwd` and its project root). With either, a guarded
+   * path spelled in full that lies outside them both and the home directory —
+   * another project's `.guardian/hooks.config.json`, a fake HOME's
+   * `~/.config/dev-guardian/hooks.json` — warns instead of being denied
+   * (review 8, item 14). Without them, every one is denied.
+   */
+  cwd?: string;
+  projectDir?: string;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -5203,13 +5699,22 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   // respelled `'` is four characters (fix round 4).
   const cut = whole.length > MAX_COMMAND_LENGTH;
   const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
-  const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
+  const homeRaw = opts.homeDir ?? safeHomedir();
+  const platform = opts.platform ?? process.platform;
+  const home = homeDirFor(homeRaw, platform);
   const dataDir = normalizedPath(opts.dataDir ?? safeUserDataDir());
+  const configDir = opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR'];
+  const fold = platform === 'win32';
+  const placeKey = (p: string | undefined): string | undefined => (p === undefined || p.trim() === '' ? undefined : targetKey(p, fold));
   const where: Where = {
     home,
-    configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']),
+    configDirName: configDirNameOf(configDir),
     dataDir: dataDir === '' ? undefined : dataDir,
     tildeUsers: opts.shell !== 'powershell',
+    places:
+      opts.cwd === undefined && opts.projectDir === undefined
+        ? undefined
+        : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) },
   };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
@@ -5229,6 +5734,8 @@ interface Where {
   dataDir: string | undefined;
   /** `~name` names a home directory — false for the PowerShell tool. */
   tildeUsers: boolean;
+  /** Where the guarded paths are this session's, when the caller said where it runs. */
+  places: Places | undefined;
 }
 
 /** {@link userDataDir}, or `''` when it cannot be worked out. */
@@ -5292,11 +5799,13 @@ function assessReadings(
   const blocks = effective.filter((r) => r.level === 'block');
   const only = blocks.length === 1 ? blocks[0] : undefined;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
+  const ask = blocks.length === 0 ? byId.get(RULE_BASELINE_UPDATE.id)?.reason : undefined;
 
   return {
     level: effective[0]?.level ?? 'ok',
     reasons: effective.map((r) => r.reason),
     rules: effective.map((r) => r.id),
     ...(own === undefined ? {} : { denyMessage: own }),
+    ...(ask === undefined ? {} : { ask }),
   };
 }

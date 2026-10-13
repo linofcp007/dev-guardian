@@ -3625,3 +3625,196 @@ describe('assessBashCommand — review 8: scripts fed to a shell by process subs
     expect(assessBashCommand(command).level).toBe('ok');
   });
 });
+
+describe('assessBashCommand — review 8: other catastrophic equivalents (item 9)', () => {
+  it.each([
+    ['rsync -a --delete empty/ /', 'bash', 'rm-rf-root'],
+    ['rsync -a --delete-after empty/ ~/', 'bash', 'rm-rf-root'],
+    ['chmod -R a+rwx /', 'bash', 'recursive-perms-root'],
+    ['chown -R nobody /', 'bash', 'recursive-perms-root'],
+    ['cat /dev/zero | tee /dev/sda', 'bash', 'disk-overwrite'],
+    ['cp image.img /dev/sdb', 'bash', 'disk-overwrite'],
+    ["[IO.Directory]::Delete('C:\\', $true)", 'powershell', 'rm-rf-root'],
+    ['robocopy empty C:\\Users /MIR', 'powershell', 'rm-rf-root'],
+    ['wsl rm -rf /mnt/c', 'bash', 'rm-rf-root'],
+    ['wsl -d Ubuntu -- rm -rf /', 'bash', 'rm-rf-root'],
+    ['wsl -e rm -rf /', 'bash', 'rm-rf-root'],
+    ["Start-Process cmd -ArgumentList '/c rd /s /q C:\\'", 'powershell', 'rm-rf-root'],
+    ['f(){ f|f& };f', 'bash', 'fork-bomb'],
+    ['bomb () { bomb | bomb & } ; bomb', 'bash', 'fork-bomb'],
+  ] as const)('%s is denied (%s)', (command, shell, rule) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each([
+    ['chown -R me /usr', 'recursive-perms-system'],
+    ['vssadmin delete shadows /all /quiet', 'shadow-copy-delete'],
+    ['wmic shadowcopy delete', 'shadow-copy-delete'],
+    ['reg delete HKLM\\SYSTEM /f', 'registry-delete'],
+    ['terraform destroy -auto-approve', 'terraform-destroy'],
+    ['terraform apply -destroy', 'terraform-destroy'],
+    ['aws s3 rm s3://bucket --recursive', 's3-recursive-delete'],
+    ['aws s3 rb s3://bucket --force', 's3-recursive-delete'],
+    ['gh repo delete me/x --yes', 'gh-repo-delete'],
+  ])('%s warns (%s)', (command, rule) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'warn' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each([
+    ['rsync -a --delete src/ dest/', 'bash'],
+    ['chown -R me ./build', 'bash'],
+    ['chmod -R 755 ~', 'bash'],
+    ['cp /dev/sda disk.img', 'bash'],
+    ["[IO.Directory]::Delete('C:\\temp\\x', $true)", 'powershell'],
+    ['robocopy src dest /MIR', 'powershell'],
+    ['wsl --list --verbose', 'bash'],
+    ['wsl ls -la', 'bash'],
+    ['Start-Process notepad readme.txt', 'powershell'],
+    ["echo 'f(){ f|f& };f'", 'bash'],
+    ['reg query HKLM\\SOFTWARE', 'bash'],
+    ['terraform plan', 'bash'],
+    ['aws s3 ls s3://bucket', 'bash'],
+    ['gh repo view', 'bash'],
+    ['function build(){ make | tee log & }; build', 'bash'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+
+  it('the fork-bomb test agrees with its pattern', () => {
+    const rule = BASH_RULES.find((r) => r.id === 'fork-bomb');
+    const samples = [
+      ':(){ :|:& };:', 'f(){ f|f& };f', 'f(){ f|g& };f', 'f(){ f|f& };g', 'ff(){ f|f& };f', 'a.b(){ a.b|a.b& };a.b',
+      'x f(){ f|f& };f y', 'f (){ f | f & } ; f', 'f(){ f|f&};fx', `${'a'.repeat(70)}(){ a|a& };a`, '(){ |& };',
+    ];
+    for (const s of samples) {
+      expect({ s, linear: rule?.test?.(s) }).toEqual({ s, linear: rule?.pattern.test(s) });
+    }
+  });
+
+  timeShape('a long word before ( ) {', (n) => assessBashCommand(`${'a'.repeat(n)}(){ x`), 2_000, 500);
+});
+
+describe('assessBashCommand — review 8: a guarded path elsewhere warns, here it is denied (item 14)', () => {
+  const here = { cwd: '/work/proj', projectDir: '/work/proj', homeDir: '/home/alice', platform: 'linux' as const };
+  it.each([
+    'echo x > test/fixtures/p/.guardian/hooks.config.json',
+    'echo x > /work/proj/.guardian/hooks.config.json',
+    'echo x > /work/proj/packages/api/.guardian/hooks-allowlist.json',
+    'echo x > /home/alice/.config/dev-guardian/hooks.json',
+    'echo x > ~/.config/dev-guardian/hooks.json',
+    'echo x > $HOME/.config/dev-guardian/hooks.json',
+    'echo x > $X/.guardian/hooks.config.json',
+    'cd /tmp/proj && echo x > .guardian/hooks.config.json',
+    `node -e "require('fs').readFileSync('.guardian/hooks.config.json')"`,
+    `echo '{"disableAllHooks":true}' > /home/alice/.claude/settings.json`,
+  ])('%s is denied', (command) => {
+    expect({ command, level: assessBashCommand(command, here).level }).toEqual({ command, level: 'block' });
+  });
+
+  it.each([
+    'echo x > /tmp/proj/.guardian/hooks.config.json',
+    'echo x > /tmp/fakehome/.config/dev-guardian/hooks.json',
+    'rm /tmp/proj/.guardian/hooks.config.json',
+    `node -e "require('fs').readFileSync('/tmp/proj/.guardian/hooks.config.json')"`,
+    `echo '{"disableAllHooks":true}' > /tmp/fx/.claude/settings.json`,
+    'echo x > ~bob/.config/dev-guardian/hooks.json',
+  ])('%s warns: not this session’s', (command) => {
+    const a = assessBashCommand(command, here);
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'warn', rules: ['guard-config-elsewhere'] });
+  });
+
+  it('Windows: a fixture under the temp directory warns, the project’s own is denied', () => {
+    const win = { cwd: 'C:\\work\\proj', projectDir: 'C:\\work\\proj', homeDir: 'C:\\Users\\alice', platform: 'win32' as const };
+    expect(assessBashCommand("echo x > 'C:\\Users\\alice\\AppData\\Local\\Temp\\h\\.config\\dev-guardian\\hooks.json'", win).rules).toEqual([
+      'guard-config-elsewhere',
+    ]);
+    expect(assessBashCommand('echo x > /c/work/proj/.guardian/hooks.config.json', win).level).toBe('block');
+    expect(assessBashCommand('echo x > /c/Users/ALICE/.config/dev-guardian/hooks.json', win).level).toBe('block');
+  });
+
+  it('without a cwd or a project (check --bash), every one is denied as before', () => {
+    expect(assessBashCommand('echo x > /tmp/proj/.guardian/hooks.config.json').level).toBe('block');
+  });
+});
+
+describe('assessBashCommand — review 8: configuration writes the guard did not model (item 15)', () => {
+  it.each([
+    ['ed .guardian/hooks.config.json', 'bash'],
+    ["ex -sc '%s/true/false/|x' ~/.config/dev-guardian/hooks.json", 'bash'],
+    ["vim -es -c '%s/a/b/' -c wq .guardian/hooks-allowlist.json", 'bash'],
+    ['cd ~/.config/dev-guardian && cd /tmp && cd - && echo x > hooks.json', 'bash'],
+    ['cd ~/.config/dev-guardian; cd /tmp; cd "$OLDPWD"; echo x > hooks.json', 'bash'],
+    ['pushd ~/.config/dev-guardian && pushd /tmp && popd && echo x > hooks.json', 'bash'],
+    ['CDPATH=~/.config cd dev-guardian && echo x > hooks.json', 'bash'],
+    ['export CDPATH=~/.config; cd dev-guardian; echo x > hooks.json', 'bash'],
+    ["sc .guardian\\hooks.config.json '{}'", 'powershell'],
+    ['$w = [IO.StreamWriter]::new("$HOME\\.config\\dev-guardian\\hooks.json")', 'powershell'],
+    ["$w = New-Object IO.StreamWriter('.guardian\\hooks.config.json')", 'powershell'],
+    ["New-Object System.IO.StreamWriter -ArgumentList '.guardian\\hooks.config.json'", 'powershell'],
+    ["[IO.FileStream]::new('.guardian\\hooks.config.json', 'Create')", 'powershell'],
+  ] as const)('%s is denied', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('guard-config-shell-write');
+  });
+
+  it.each([
+    String.raw`printf '{"disableAllHook\x73":true}' > .claude/settings.json`,
+    String.raw`printf '{"disableAllHooks\u0022:true}' > .claude/settings.json`,
+    'echo eyJkaXNhYmxlQWxsSG9va3MiOnRydWV9 | base64 -d > .claude/settings.local.json',
+  ])('%s: an escaped or encoded key still names it', (command) => {
+    expect(assessBashCommand(command).rules).toContain('claude-settings-loosen');
+  });
+
+  it.each([
+    ['vim notes.txt', 'bash'],
+    ['cd /tmp && cd - && echo x > notes.txt', 'bash'],
+    ["$r = New-Object IO.StreamReader('.guardian\\hooks.config.json')", 'powershell'],
+    ["[IO.FileStream]::new('.guardian\\hooks.config.json', 'Open', 'Read')", 'powershell'],
+    ['echo eyJwZXJtaXNzaW9ucyI6e319 | base64 -d > .claude/settings.local.json', 'bash'],
+    [`jq '.permissions.allow += ["Bash(ls)"]' .claude/settings.json > tmp && mv tmp .claude/settings.json`, 'bash'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+});
+
+describe('assessBashCommand — review 8: an agent-run `baseline update` is the user’s to decide (C2)', () => {
+  it.each([
+    ['dev-guardian baseline update --project .', 'bash'],
+    ['node "C:/Users/me/.claude/plugins/cache/m/dev-guardian/3.3.0/cli/dev-guardian.mjs" baseline update --project .', 'bash'],
+    ['node .specs/guardian.cjs baseline update --project .', 'bash'],
+    ['npx dev-guardian baseline update', 'bash'],
+    ["bash -c 'node .specs/guardian.cjs baseline update'", 'bash'],
+    ["cmd /c 'node .specs\\guardian.cjs baseline update'", 'bash'],
+    ["Start-Process node -ArgumentList '.specs/guardian.cjs baseline update'", 'powershell'],
+  ] as const)('%s asks', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'warn', rules: ['baseline-update'] });
+    expect(a.ask).toMatch(/EVERY current finding.*user decides.*nosemgrep/s);
+  });
+
+  it('a block wins over the question', () => {
+    const a = assessBashCommand('dev-guardian baseline update && rm -rf /');
+    expect(a.level).toBe('block');
+    expect(a.ask).toBeUndefined();
+  });
+
+  it.each([
+    'node .specs/guardian.cjs scan --project . --format json',
+    'dev-guardian baseline --help',
+    'git commit -m "run dev-guardian baseline update later"',
+    'echo dev-guardian baseline update',
+  ])('%s asks nothing', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.ask).toBeUndefined();
+    expect(a.level).toBe('ok');
+  });
+
+  it('the launcher counts for db adopt --yes too', () => {
+    expect(assessBashCommand('node .specs/guardian.cjs db adopt --yes').rules).toEqual(['db-adopt-yes']);
+  });
+});

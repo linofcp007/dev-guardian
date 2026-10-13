@@ -89789,9 +89789,12 @@ var BASH_RULES = [
     // Scoped to the whole command: `(`, `)`, `|`, `&` and `;` are the very
     // characters splitShell() separates on, so this signature only exists
     // before segmentation. Quoted spans are still masked, so
-    // `echo ':(){ :|:& };:'` stays inert.
-    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
-    scope: "command"
+    // `echo ':(){ :|:& };:'` stays inert. Any function name, not only `:`
+    // (review 8, item 9: `f(){ f|f& };f` was ok); the backreference is the
+    // specification, `forkBomb` the linear reading of it.
+    pattern: /(?<![\w:.-])([\w:.-]{1,64})\s*\(\s*\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}\s*;\s*\1(?![\w:.-])/,
+    scope: "command",
+    test: forkBomb
   },
   {
     id: "chmod-777-root",
@@ -89867,6 +89870,21 @@ function processSubstitutionFetch(text2) {
     for (const fetch2 of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
       if (fetch2.index >= shellEnd) return true;
     }
+  }
+  return false;
+}
+var FORK_NAME_CHAR = /[\w:.-]/;
+function forkBomb(text2) {
+  for (const m of text2.matchAll(/\(\s*\)\s*\{\s*/g)) {
+    let end = m.index;
+    for (let k = 0; end > 0 && k < 64 && /\s/.test(text2.charAt(end - 1)); k += 1) end -= 1;
+    let start = end;
+    while (start > 0 && end - start < 64 && FORK_NAME_CHAR.test(text2.charAt(start - 1))) start -= 1;
+    if (start === end || start > 0 && FORK_NAME_CHAR.test(text2.charAt(start - 1))) continue;
+    const name = text2.slice(start, end).replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+    const body = new RegExp(`${name}\\s*\\|\\s*${name}\\s*&\\s*\\}\\s*;\\s*${name}(?![\\w:.-])`, "y");
+    body.lastIndex = m.index + m[0].length;
+    if (body.test(text2)) return true;
   }
   return false;
 }

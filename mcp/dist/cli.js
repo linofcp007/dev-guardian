@@ -2352,6 +2352,20 @@ function processSubstitutionFetch(text2) {
   }
   return false;
 }
+function forkBomb(text2) {
+  for (const m of text2.matchAll(/\(\s*\)\s*\{\s*/g)) {
+    let end = m.index;
+    for (let k = 0; end > 0 && k < 64 && /\s/.test(text2.charAt(end - 1)); k += 1) end -= 1;
+    let start = end;
+    while (start > 0 && end - start < 64 && FORK_NAME_CHAR.test(text2.charAt(start - 1))) start -= 1;
+    if (start === end || start > 0 && FORK_NAME_CHAR.test(text2.charAt(start - 1))) continue;
+    const name = text2.slice(start, end).replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+    const body = new RegExp(`${name}\\s*\\|\\s*${name}\\s*&\\s*\\}\\s*;\\s*${name}(?![\\w:.-])`, "y");
+    body.lastIndex = m.index + m[0].length;
+    if (body.test(text2)) return true;
+  }
+  return false;
+}
 function scanQuote(source, start) {
   const quote = source.charAt(start);
   let inner = "";
@@ -2928,8 +2942,27 @@ function namesLooseningKey(text2) {
   return /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET\b/i.test(text2) || /enabledPlugins/i.test(text2) && /dev-guardian/i.test(text2);
 }
 function loosens(scope) {
-  if (scope.notes.loosens === void 0) scope.notes.loosens = namesLooseningKey(scope.raw);
+  if (scope.notes.loosens === void 0) {
+    const raw = scope.raw;
+    scope.notes.loosens = namesLooseningKey(raw) || raw.includes("\\") && namesLooseningKey(unescapeText(raw)) || base64Literals(raw).some((text2) => namesLooseningKey(text2) || namesLooseningKey(unescapeText(text2)));
+  }
   return scope.notes.loosens;
+}
+function unescapeText(text2) {
+  return text2.replace(/\\(?:x([0-9A-Fa-f]{2})|u\{([0-9A-Fa-f]{1,6})\}|u([0-9A-Fa-f]{4})|([0-7]{1,3}))/g, (all, x, u1, u2, o2) => {
+    const code = x !== void 0 ? parseInt(x, 16) : u1 !== void 0 ? parseInt(u1, 16) : u2 !== void 0 ? parseInt(u2, 16) : parseInt(o2 ?? "", 8);
+    return Number.isFinite(code) && code <= 1114111 ? String.fromCodePoint(code) : all;
+  });
+}
+function base64Literals(text2) {
+  const out = [];
+  let tried = 0;
+  for (const m of text2.matchAll(/[A-Za-z0-9+/]{16,}={0,2}/g)) {
+    if ((tried += 1) > MAX_BASE64_LITERALS) break;
+    const decoded = decodeBase64(m[0]);
+    if (decoded !== void 0 && !decoded.includes("\uFFFD")) out.push(decoded);
+  }
+  return out;
 }
 function commandName(word) {
   return basename(word).toLowerCase().replace(/\.exe$/, "");
@@ -3083,7 +3116,7 @@ function wildcardMatch(pattern, name) {
   return pi === pat.length;
 }
 function noEffects() {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [] };
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
 }
 function pushAll(into, from) {
   for (const x of from) into.push(x);
@@ -3095,6 +3128,7 @@ function mergeEffects(into, from) {
   pushAll(into.special, from.special);
   pushAll(into.links, from.links);
   pushAll(into.hardLinkSources, from.hardLinkSources);
+  pushAll(into.trees, from.trees);
 }
 function lastSegment(path8) {
   return path8.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path8;
@@ -3482,6 +3516,28 @@ function perlLike(args, codeLetters, valueLetters) {
   const files = code.length > 0 ? operandsSeen : operandsSeen.slice(1);
   return { code, inPlace, files };
 }
+function editorFiles(args) {
+  const out = [];
+  let optionsDone = false;
+  for (let i2 = 0; i2 < args.length; i2 += 1) {
+    const a2 = args[i2] ?? "";
+    if (!optionsDone && a2 === "--") {
+      optionsDone = true;
+      continue;
+    }
+    if (!optionsDone && a2 === "--cmd") {
+      i2 += 1;
+      continue;
+    }
+    if (!optionsDone && /^-[A-Za-z]+$/.test(a2)) {
+      if (EDITOR_VALUED_LETTERS.includes(a2.charAt(a2.length - 1))) i2 += 1;
+      continue;
+    }
+    if (!optionsDone && (a2.startsWith("-") || a2.startsWith("+"))) continue;
+    out.push(a2);
+  }
+  return out;
+}
 function commandWriteDestinations(name, args) {
   switch (name) {
     case "tee":
@@ -3509,6 +3565,19 @@ function commandWriteDestinations(name, args) {
       const p = perlLike(args, "e", "IrCEFx");
       return p.inPlace ? p.files : [];
     }
+    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
+    // `vim -es -c '…' -c wq f` write the files they open.
+    case "ed":
+    case "red":
+      return operands(args, /* @__PURE__ */ new Set(["-p", "--prompt"]));
+    case "ex":
+    case "vi":
+    case "vim":
+    case "nvim":
+    case "gvim":
+      return editorFiles(args);
+    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
+    case "sc":
     case "set-content":
     case "add-content":
     case "ac":
@@ -3587,6 +3656,7 @@ function effectsOf(name, rawArgs, cwd, depth = 0) {
         e.dirs.push(at(dest));
         e.writes.push(at(dest));
         pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
+        if (name === "robocopy" && args.some((a2) => /^\/(?:mir|purge)$/i.test(a2))) e.trees.push(at(dest));
       }
       return e;
     }
@@ -3597,6 +3667,7 @@ function effectsOf(name, rawArgs, cwd, depth = 0) {
       e.writes.push(at(dest));
       pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
       if (args.some((a2) => a2 === "--recursive" || a2 === "--archive" || /^-[a-zA-Z]*[ra]/.test(a2))) e.dirs.push(at(dest));
+      if (args.some((a2) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a2))) e.trees.push(at(dest));
       return e;
     }
     case "ren":
@@ -3871,19 +3942,23 @@ function asWindowsOpens(paths) {
   }
   return out;
 }
-function literalsNameHookConfig(literals) {
+function literalsNameHookConfig(literals, scope) {
   const paths = literalPaths(literals);
-  if (paths.some((p) => HOOK_CONFIG_PATH.test(p) || USER_CONFIG_DIR.test(p))) return true;
+  const named2 = locate2(paths, (p) => HOOK_CONFIG_PATH.test(p) || USER_CONFIG_DIR.test(p), scope);
+  if (named2 === "inside") return named2;
   const has = (re) => paths.some((p) => re.test(p));
-  if (has(/(?:^|\/)dev-guardian\/?$/i) && has(/(?:^|\/)hooks\.json$/i)) return true;
-  return has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i);
+  if (has(/(?:^|\/)dev-guardian\/?$/i) && has(/(?:^|\/)hooks\.json$/i)) return "inside";
+  if (has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i)) return "inside";
+  return named2;
 }
-function literalsNameClaudeSettings(literals, configDirName) {
+function literalsNameClaudeSettings(literals, scope) {
+  const configDirName = scope.configDirName;
   const paths = literalPaths(literals);
-  if (paths.some((p) => isSettingsPath(p, configDirName))) return true;
+  const named2 = locate2(paths, (p) => isSettingsPath(p, configDirName), scope);
+  if (named2 === "inside") return named2;
   const has = (re) => paths.some((p) => re.test(p));
   const inDir = has(/(?:^|\/)\.claude\/?$/i) || configDirName !== void 0 && paths.some((p) => p.toLowerCase().replace(/\/+$/, "").endsWith(configDirName));
-  return inDir && has(/^settings(?:\.local)?\.json$/i);
+  return inDir && has(/^settings(?:\.local)?\.json$/i) ? "inside" : named2;
 }
 function quoteTracker(text2) {
   let quote = "";
@@ -3944,7 +4019,8 @@ function argPath(arg) {
 }
 function dotNetEffects(text2, cwd, notes) {
   const e = noEffects();
-  if (!text2.includes("::")) return e;
+  const newObject = /new-object/i.test(text2);
+  if (!text2.includes("::") && !newObject) return e;
   const unquotedAt = quoteTracker(text2);
   for (const m of text2.matchAll(DOTNET_CALL)) {
     if (!unquotedAt(m.index)) continue;
@@ -3955,8 +4031,10 @@ function dotNetEffects(text2, cwd, notes) {
     const paths = call.args.map((a2) => resolveFrom(cwd, argPath(a2)));
     const [first, second] = paths;
     if (first === void 0) continue;
-    if (method === "delete") e.removes.push(first);
-    else if (method === "createsymboliclink") e.links.push(first);
+    if (method === "delete") {
+      e.removes.push(first);
+      if (kind === "directory" && /^\$?true$/i.test(call.args[1] ?? "")) e.trees.push(first);
+    } else if (method === "createsymboliclink") e.links.push(first);
     else if (method === "move" || method === "replace") {
       e.removes.push(first);
       if (second !== void 0) (kind === "directory" ? e.dirs : e.writes).push(second);
@@ -3966,6 +4044,28 @@ function dotNetEffects(text2, cwd, notes) {
       e.writes.push(first);
     }
   }
+  if (!/streamwriter|filestream/i.test(text2)) return e;
+  const unquotedWriterAt = quoteTracker(text2);
+  for (const m of text2.matchAll(DOTNET_WRITER)) {
+    if (!unquotedWriterAt(m.index)) continue;
+    const kind = (m[1] ?? m[2] ?? "").toLowerCase();
+    const after2 = m.index + m[0].length;
+    const open = /^\s*@?\(/.exec(text2.slice(after2, after2 + 64));
+    let args;
+    if (open !== null) {
+      const call = callArgs(text2, after2 + open[0].length);
+      if (call.cut && notes !== void 0) notes.calls = true;
+      args = call.args;
+    } else {
+      const word = /^\s*('(?:[^']|'')*'|"(?:[^"`]|`.)*"|[^\s;|,)]+)/.exec(text2.slice(after2, after2 + MAX_CALL_ARGS));
+      args = word === null ? [] : [word[1] ?? ""];
+    }
+    const first = args[0];
+    if (first === void 0 || first === "") continue;
+    const all = text2.slice(after2, after2 + MAX_CALL_ARGS).split(")")[0] ?? "";
+    if (kind === "filestream" && /\bRead\b/i.test(all) && !/Write|Create|Append|Truncate/i.test(all)) continue;
+    e.writes.push(resolveFrom(cwd, argPath(first)));
+  }
   return e;
 }
 function literalsNameRegistry(literals, dataDir) {
@@ -3974,6 +4074,46 @@ function literalsNameRegistry(literals, dataDir) {
   const has = (re) => paths.some((p) => re.test(p));
   return has(/(?:^|\/)dev-guardian\/?$/i) && has(/^registry\/?$/i);
 }
+function worst(placements) {
+  if (placements.includes("inside")) return "inside";
+  return placements.includes("outside") ? "outside" : null;
+}
+function keyAtOrBelow(dir, key) {
+  return dir !== void 0 && dir !== "" && (key === dir || key.startsWith(`${dir}/`));
+}
+function locate2(paths, pred, scope) {
+  let found2 = null;
+  for (const p of paths) {
+    if (!pred(p)) continue;
+    if (placeOf(p, scope) === "inside") return "inside";
+    found2 = "outside";
+  }
+  return found2;
+}
+function placeOf(raw, scope) {
+  const places = scope.places;
+  if (places === void 0) return "inside";
+  let t = stripQuotes(raw).replace(/\\/g, "/");
+  const homeSpelled = /^(?:~|\$\{?HOME\}?|\$\{?USERPROFILE\}?|\$\{?env:USERPROFILE\}?|%USERPROFILE%)(?=\/|$)/i.exec(t);
+  if (homeSpelled !== null) {
+    if (places.home === void 0) return "inside";
+    t = `${places.home}${t.slice(homeSpelled[0].length)}`;
+  } else if (/^~[A-Za-z_]/.test(t)) {
+    return "outside";
+  } else if (!/^(?:\/|[A-Za-z]:\/)/.test(t)) {
+    return "inside";
+  }
+  if (GLOB.test(t)) return "inside";
+  const key = targetKey(t, places.fold);
+  if (/(?:^|\/)\.config\/dev-guardian(?:\/|$)/i.test(key)) {
+    if (places.home === void 0) return "inside";
+    return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? "inside" : "outside";
+  }
+  if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
+    return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? "inside" : "outside";
+  }
+  return [places.project, places.cwd].some((d) => keyAtOrBelow(d, key)) ? "inside" : "outside";
+}
 function judgeEffects(effects, scope) {
   const e = {
     writes: asWindowsOpens(effects.writes.map(tail)),
@@ -3981,24 +4121,31 @@ function judgeEffects(effects, scope) {
     dirs: asWindowsOpens(effects.dirs.map(tail)),
     special: asWindowsOpens(effects.special.map(tail)),
     links: asWindowsOpens(effects.links.map(tail)),
-    hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail))
+    hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
+    trees: effects.trees.map(tail)
   };
   const out = [];
-  if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
-    out.push({ ...RULE_SPECIAL });
-  }
-  if (e.writes.some((p) => isHookConfigPath(p) || globNamesConfig(p))) out.push({ ...RULE_WRITE });
+  const judged = (rule, where) => {
+    if (where === "inside") out.push({ ...rule });
+    else if (where === "outside") out.push({ ...RULE_ELSEWHERE });
+  };
+  const configAt = (p) => isHookConfigPath(p) || globNamesConfig(p);
+  judged(RULE_SPECIAL, worst([locate2(e.special, isHookConfigPath, scope), locate2(e.links, (p) => isHookConfigPath(p) || isHookConfigDir(p), scope)]));
+  judged(RULE_WRITE, locate2(e.writes, configAt, scope));
   const removesConfig = (p) => isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || globNamesConfig(p, [USER_CONFIG_TAIL]);
-  if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
-  if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
+  judged(RULE_REMOVE, locate2(e.removes, removesConfig, scope));
+  judged(RULE_DIR, locate2(e.dirs, isHookConfigDir, scope));
   const linksGuarded = (p) => isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
-  if (e.hardLinkSources.some(linksGuarded)) out.push({ ...RULE_HARD_LINK });
+  judged(RULE_HARD_LINK, locate2(e.hardLinkSources, linksGuarded, scope));
+  if (e.trees.some((p) => isCatastrophicTarget(p, scope.tildeUsers) || isHomeTarget(p, scope.home))) out.push({ ...RULE_RM_ROOT });
+  if (e.writes.some((p) => BLOCK_DEVICE.test(p))) out.push({ ...RULE_DISK_WRITE });
   const inRegistry = (p) => isRegistryPath(p, scope.dataDir);
   const registryOrData = (p) => inRegistry(p) || isDataDirPath(p, scope.dataDir);
   if (e.writes.some(inRegistry) || e.special.some(inRegistry) || e.hardLinkSources.some(inRegistry) || e.links.some(registryOrData) || e.dirs.some(registryOrData)) {
     out.push({ ...RULE_REGISTRY });
   }
-  if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  const settings = locate2(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
   return out;
 }
 function turnsPluginOff(words, start) {
@@ -4040,9 +4187,18 @@ function adoptsDatabase(words, at) {
   return args.some((a2) => a2 === "--yes" || a2.startsWith("--yes="));
 }
 function adoptsDatabaseThroughLauncher(words, at) {
+  return throughLauncher(words, at, adoptsDatabase);
+}
+function throughLauncher(words, at, runs) {
   const started = startProcessArgv(words, at);
-  if (started !== void 0 && adoptsDatabase(started, 0)) return true;
-  return findExecCommands(words, at).some((cmd) => adoptsDatabase(cmd, resolveCommand(cmd).index));
+  if (started !== void 0 && runs(started, 0)) return true;
+  return findExecCommands(words, at).some((cmd) => runs(cmd, resolveCommand(cmd).index));
+}
+function updatesBaseline(words, at) {
+  const args = cliArgs(words, at);
+  if (args === void 0) return false;
+  const plain = args.filter((a2) => !a2.startsWith("-"));
+  return plain[0] === "baseline" && plain[1] === "update";
 }
 function plainWords(values) {
   return values.map((value) => ({ value, quoted: false }));
@@ -4133,8 +4289,13 @@ function envSplitScript(words, end) {
 function judgeCode(code, lang, scope) {
   const literals = codeLiterals(code, lang);
   const out = [];
-  if (literalsNameHookConfig(literals)) out.push({ ...RULE_INLINE });
-  if (literalsNameClaudeSettings(literals, scope.configDirName) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  const placed = (rule, where) => {
+    if (where === "inside") out.push({ ...rule });
+    else if (where === "outside") out.push({ ...RULE_ELSEWHERE });
+  };
+  placed(RULE_INLINE, literalsNameHookConfig(literals, scope));
+  const settings = literalsNameClaudeSettings(literals, scope);
+  if (settings !== null && loosens(scope)) placed(RULE_SETTINGS, settings);
   if (literalsNameRegistry(literals, scope.dataDir)) out.push({ ...RULE_REGISTRY });
   return out;
 }
@@ -4174,6 +4335,10 @@ function nestedScripts(words, start) {
   if (head !== void 0 && basename(head.value) === "eval") {
     const script = words.slice(start + 1).map((w) => w.value).join(" ").trim();
     return script.length > 0 ? [shellScript(script)] : [];
+  }
+  if (launcher === "wsl") {
+    const script = wslScript(words, start);
+    return script === void 0 || script.trim() === "" ? [] : [shellScript(script)];
   }
   if (launcher === "iex" || launcher === "invoke-expression") {
     const script = words.slice(start + 1).map((w) => w.value).join(" ").trim();
@@ -4963,6 +5128,111 @@ function downloadsThenRuns(text2, statements, bareRunsCwd) {
   }
   return null;
 }
+function cdpathValue(word) {
+  const m = /^CDPATH=(.*)$/.exec(word);
+  return m === null ? void 0 : (m[1] ?? "").split(":").filter((d) => d !== "");
+}
+function moveCwd(scope, words, at) {
+  const head = words[at];
+  const exported = head !== void 0 && commandName(head.value) === "export";
+  for (const w of exported ? words.slice(at + 1) : head === void 0 ? words : []) {
+    const dirs = cdpathValue(w.value);
+    if (dirs !== void 0) scope.cdpath = dirs;
+  }
+  if (head === void 0) return;
+  const name = commandName(head.value);
+  const args = withoutRedirections(words.slice(at + 1));
+  const prefix = words.slice(0, at).map((w) => cdpathValue(w.value)).find((d) => d !== void 0);
+  const cdpath = prefix ?? scope.cdpath ?? [];
+  const here = scope.cwd;
+  if (name === "popd" || name === "pop-location") {
+    const stack = scope.dirStack ?? [];
+    scope.prevCwd = here;
+    scope.cwd = stack[stack.length - 1] ?? "";
+    scope.dirStack = stack.slice(0, -1);
+    return;
+  }
+  if (!CD_COMMANDS.has(name)) return;
+  const target = psParam(args, ["path", "literalpath"]) ?? args.find((a2) => a2 === "-" || !(a2.startsWith("-") || /^\/d$/i.test(a2)));
+  const pushes = name === "pushd" || name === "push-location";
+  let next;
+  if (target === "-" || target !== void 0 && /^\$\{?OLDPWD\}?$/.test(target)) next = scope.prevCwd ?? "";
+  else if (pushes && target === void 0) {
+    const stack = scope.dirStack ?? [];
+    next = stack[stack.length - 1] ?? "";
+    scope.dirStack = [...stack.slice(0, -1), here];
+    scope.prevCwd = here;
+    scope.cwd = next;
+    return;
+  } else {
+    next = cwdAfter(name, args, here, scope.dataDir) ?? here;
+    if (target !== void 0 && !isAbsolutePath(target) && !/^\.\.?(?:[\\/]|$)/.test(target)) {
+      for (const dir of cdpath) {
+        const via = cwdAfter("cd", [resolveFrom(dir, target)], "", scope.dataDir);
+        if (via !== void 0 && via !== "") {
+          next = via;
+          break;
+        }
+      }
+    }
+  }
+  if (pushes) scope.dirStack = [...scope.dirStack ?? [], here];
+  scope.prevCwd = here;
+  scope.cwd = next;
+}
+function recursivePermsOnRoot(words, at, tildeUsers = true) {
+  const name = commandName(words[at]?.value ?? "");
+  if (name !== "chmod" && name !== "chown" && name !== "chgrp") return null;
+  const args = withoutRedirections(words.slice(at + 1));
+  if (!args.some((a2) => a2 === "--recursive" || /^-[A-Za-z]*R[A-Za-z]*$/.test(a2))) return null;
+  const operandWords = args.filter((a2) => !a2.startsWith("-") || /^-[rwxXst]+$/.test(a2));
+  const targets = args.some((a2) => a2.startsWith("--reference")) ? operandWords : operandWords.slice(1);
+  const roots = targets.filter((t) => catastrophicKind(t, tildeUsers) === "root");
+  if (roots.length === 0) return null;
+  return roots.some((t) => ROOT_ITSELF.test(stripQuotes(t))) ? { id: "recursive-perms-root", level: "block", reason: "Recursively changes the permissions or the owner of the filesystem root" } : { id: "recursive-perms-system", level: "warn", reason: "Recursively changes the permissions or the owner of a system directory \u2014 confirm this is intended" };
+}
+function destructiveCommand(words, at) {
+  const name = commandName(words[at]?.value ?? "");
+  const args = withoutRedirections(words.slice(at + 1));
+  const plain = args.filter((a2) => !a2.startsWith("-") && !/^\/[A-Za-z]/.test(a2)).map((a2) => a2.toLowerCase());
+  if (name === "vssadmin" && plain[0] === "delete" && plain[1] === "shadows" || name === "wmic" && plain[0] === "shadowcopy" && plain.includes("delete")) {
+    return { id: "shadow-copy-delete", level: "warn", reason: "Deletes Windows' volume shadow copies (restore points)" };
+  }
+  if (name === "reg" && plain[0] === "delete" && /^(?:hklm|hkey_local_machine)/i.test(plain[1] ?? "")) {
+    return { id: "registry-delete", level: "warn", reason: "Deletes a machine-wide registry key (HKLM)" };
+  }
+  if ((name === "terraform" || name === "tofu" || name === "terragrunt") && (plain[0] === "destroy" || plain[0] === "apply" && args.includes("-destroy"))) {
+    return { id: "terraform-destroy", level: "warn", reason: "Destroys the infrastructure Terraform manages" };
+  }
+  if (name === "aws" && plain[0] === "s3" && (plain[1] === "rm" && args.includes("--recursive") || plain[1] === "rb" && args.includes("--force"))) {
+    return { id: "s3-recursive-delete", level: "warn", reason: "Deletes an S3 bucket's objects recursively" };
+  }
+  if (name === "gh" && plain[0] === "repo" && plain[1] === "delete") {
+    return { id: "gh-repo-delete", level: "warn", reason: "Deletes a GitHub repository" };
+  }
+  return null;
+}
+function startedCommandLine(words, at) {
+  const name = commandName(words[at]?.value ?? "");
+  if (name !== "start-process" && name !== "saps") return void 0;
+  const argv = startProcessArgv(words, at);
+  return argv === void 0 ? void 0 : argv.map((w) => posixWord(w.value)).join(" ");
+}
+function wslScript(words, start) {
+  for (let i2 = start + 1; i2 < words.length; i2 += 1) {
+    const v = words[i2]?.value ?? "";
+    if (v === "--") return words.slice(i2 + 1).map((w) => w.value).join(" ");
+    if (v === "-e" || v === "--exec") return words.slice(i2 + 1).map((w) => posixWord(w.value)).join(" ");
+    if (WSL_VALUED.has(v)) {
+      i2 += 1;
+      continue;
+    }
+    if (v === "--system" || v === "-s") continue;
+    if (v.startsWith("-")) return void 0;
+    return words.slice(i2).map((w) => w.value).join(" ");
+  }
+  return void 0;
+}
 function collect2(command, depth, out, scope) {
   const cmd = command.trim();
   if (cmd.length === 0) return;
@@ -5025,9 +5295,18 @@ function collect2(command, depth, out, scope) {
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
       if (adoptsDatabase(words, resolved.index) || adoptsDatabaseThroughLauncher(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
+      if (updatesBaseline(words, resolved.index) || throughLauncher(words, resolved.index, updatesBaseline)) {
+        out.push({ ...RULE_BASELINE_UPDATE });
+      }
+      const perms = recursivePermsOnRoot(words, resolved.index, scope.tildeUsers);
+      if (perms !== null) out.push(perms);
+      const destructive = destructiveCommand(words, resolved.index);
+      if (destructive !== null) out.push(destructive);
       const scripts = nestedScripts(words, resolved.index);
       const split = envSplitScript(words, resolved.index);
       if (split !== void 0) scripts.push(shellScript(split));
+      const started = startedCommandLine(words, resolved.index);
+      if (started !== void 0) scripts.push(shellScript(started));
       const cmdHead = words[resolved.index];
       const line = cmdHead !== void 0 && commandName(cmdHead.value) === "cmd" ? cmdLineText(withoutRedirections(words.slice(resolved.index + 1))) : void 0;
       if (depth >= MAX_NESTING && (scripts.length > 0 || line !== void 0)) scope.notes.depth = true;
@@ -5042,11 +5321,7 @@ function collect2(command, depth, out, scope) {
         }
         if (line !== void 0) collect2(line, depth + 1, out, { ...scope, cmdLine: true });
       }
-      const head = words[resolved.index];
-      if (head !== void 0) {
-        const args = withoutRedirections(words.slice(resolved.index + 1));
-        scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd, scope.dataDir) ?? scope.cwd;
-      }
+      moveCwd(scope, words, resolved.index);
     }
     const fed = fedScripts(statement, isBareShellStdin);
     if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
@@ -5100,13 +5375,19 @@ function assessBashCommand(command, opts = {}) {
   const deadline = now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
   const cut = whole.length > MAX_COMMAND_LENGTH;
   const text2 = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
-  const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
+  const homeRaw = opts.homeDir ?? safeHomedir();
+  const platform2 = opts.platform ?? process.platform;
+  const home = homeDirFor(homeRaw, platform2);
   const dataDir = normalizedPath(opts.dataDir ?? safeUserDataDir());
+  const configDir = opts.claudeConfigDir ?? process.env["CLAUDE_CONFIG_DIR"];
+  const fold = platform2 === "win32";
+  const placeKey = (p) => p === void 0 || p.trim() === "" ? void 0 : targetKey(p, fold);
   const where = {
     home,
-    configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env["CLAUDE_CONFIG_DIR"]),
+    configDirName: configDirNameOf(configDir),
     dataDir: dataDir === "" ? void 0 : dataDir,
-    tildeUsers: opts.shell !== "powershell"
+    tildeUsers: opts.shell !== "powershell",
+    places: opts.cwd === void 0 && opts.projectDir === void 0 ? void 0 : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) }
   };
   if (opts.shell !== "powershell") return assessReadings([text2], cut, now, deadline, where);
   return assessReadings([powershellAsPosix(text2), powershellOpaque(text2)], cut, now, deadline, where);
@@ -5150,14 +5431,16 @@ function assessReadings(readings, cut, now, deadline, where) {
   const blocks = effective.filter((r) => r.level === "block");
   const only = blocks.length === 1 ? blocks[0] : void 0;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : void 0;
+  const ask = blocks.length === 0 ? byId.get(RULE_BASELINE_UPDATE.id)?.reason : void 0;
   return {
     level: effective[0]?.level ?? "ok",
     reasons: effective.map((r) => r.reason),
     rules: effective.map((r) => r.id),
-    ...own === void 0 ? {} : { denyMessage: own }
+    ...own === void 0 ? {} : { denyMessage: own },
+    ...ask === void 0 ? {} : { ask }
   };
 }
-var BASH_RULES, SUDO_RULE, LEVEL_RANK, MASK, INTERPOLATION, NAME_POSITION, QUOTED_NAME, TOKEN_WORD, HEREDOC_WORD, COMPOUND_RESERVED, RUNNERS, RUNNER_VALUED, ASSIGNMENT, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_CWD, CD_COMMANDS, CD_RETURNS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, MAX_CMD_NESTING, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, MASK, INTERPOLATION, NAME_POSITION, QUOTED_NAME, TOKEN_WORD, HEREDOC_WORD, COMPOUND_RESERVED, RUNNERS, RUNNER_VALUED, ASSIGNMENT, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, MAX_CWD, CD_COMMANDS, CD_RETURNS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, MAX_CMD_NESTING, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
@@ -5274,9 +5557,12 @@ var init_bashGuard = __esm({
         // Scoped to the whole command: `(`, `)`, `|`, `&` and `;` are the very
         // characters splitShell() separates on, so this signature only exists
         // before segmentation. Quoted spans are still masked, so
-        // `echo ':(){ :|:& };:'` stays inert.
-        pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
-        scope: "command"
+        // `echo ':(){ :|:& };:'` stays inert. Any function name, not only `:`
+        // (review 8, item 9: `f(){ f|f& };f` was ok); the backreference is the
+        // specification, `forkBomb` the linear reading of it.
+        pattern: /(?<![\w:.-])([\w:.-]{1,64})\s*\(\s*\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}\s*;\s*\1(?![\w:.-])/,
+        scope: "command",
+        test: forkBomb
       },
       {
         id: "chmod-777-root",
@@ -5331,6 +5617,7 @@ var init_bashGuard = __esm({
         pattern: /\bhistory\s+-c\b|>\s*~?\/?\.(?:bash|zsh)_history\b/i
       }
     ];
+    FORK_NAME_CHAR = /[\w:.-]/;
     SUDO_RULE = {
       id: "sudo",
       level: "warn",
@@ -5460,6 +5747,7 @@ var init_bashGuard = __esm({
     CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
     CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
     DATA_DIR_SPELLED = /(?:(?:\$\{?(?:env:)?(?:localappdata|xdg_data_home)\}?|%(?:localappdata|xdg_data_home)%|appdata\/local|\.local\/share)\/dev-guardian|\$\{?(?:env:)?guardian_data_dir\}?|%guardian_data_dir%)$/;
+    MAX_BASE64_LITERALS = 64;
     MAX_CWD = 320;
     CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
     CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
@@ -5528,6 +5816,7 @@ var init_bashGuard = __esm({
       "--max-delete"
     ]);
     SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
+    EDITOR_VALUED_LETTERS = "cSuUiTwWtq";
     REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
     CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
     PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
@@ -5645,6 +5934,7 @@ var init_bashGuard = __esm({
     ]);
     MAX_CALL_ARGS = 512;
     DOTNET_CALL = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(File|Directory)\s*\]\s*::\s*([A-Za-z]+)\s*\(/gi;
+    DOTNET_WRITER = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\s*\]\s*::\s*new\b|\bNew-Object\s+(?:-TypeName\s+)?(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\b(?:\s+-ArgumentList\b|\s+-Args?\b)?/gi;
     RULE_HARD_LINK = {
       id: "guard-config-hard-link",
       level: "block",
@@ -5686,6 +5976,17 @@ var init_bashGuard = __esm({
       level: "block",
       reason: "Writes Claude Code's settings with a key that switches the guardrail hooks off"
     };
+    RULE_ELSEWHERE = {
+      id: "guard-config-elsewhere",
+      level: "warn",
+      reason: "Writes a file named like the guardrail hooks' configuration or Claude Code's settings outside this project, the working directory and the home directory \u2014 not the one this session reads; confirm the target"
+    };
+    BLOCK_DEVICE = /^\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)|PhysicalDrive\d/i;
+    RULE_DISK_WRITE = {
+      id: "disk-overwrite",
+      level: "block",
+      reason: "Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/\u2026)"
+    };
     RULE_PLUGIN_OFF = {
       id: "claude-plugin-disable",
       level: "block",
@@ -5696,9 +5997,14 @@ var init_bashGuard = __esm({
       level: "block",
       reason: "db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt` without --yes"
     };
-    CLI_NAME = /^dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?$/i;
+    CLI_NAME = /^(?:dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?|guardian\.cjs)$/i;
     CLI_HOSTS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "npx", "pnpx", "bunx", "npm", "pnpm", "yarn"]);
     CLI_HOST_SUBCOMMANDS = /* @__PURE__ */ new Set(["dlx", "exec", "x", "run"]);
+    RULE_BASELINE_UPDATE = {
+      id: "baseline-update",
+      level: "warn",
+      reason: "dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the gate stops reporting them \u2014 the user decides. To accept one reviewed finding, suppress it inline with a reason (`nosemgrep: <rule> -- <reason>`, `# nosec`), or rebuild the baseline on the base commit"
+    };
     START_PROCESS = /* @__PURE__ */ new Set(["start-process", "saps", "start"]);
     SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "su", "pwsh", "powershell"]);
     DASH_C = /^-[A-Za-z]*c$/;
@@ -5947,6 +6253,8 @@ var init_bashGuard = __esm({
       "popd",
       "pushd"
     ]);
+    ROOT_ITSELF = /^(?:\/\*?|\\\*?|[A-Za-z]:[\\/]?\*?|\/(?:mnt\/)?[A-Za-z]\/?\*?)$/i;
+    WSL_VALUED = /* @__PURE__ */ new Set(["-d", "--distribution", "-u", "--user", "--cd", "--shell-type", "--distribution-id"]);
     MAX_NESTING = 3;
     MAX_STATEMENT_LENGTH = 16 * 1024;
     MAX_COMMAND_LENGTH = 512 * 1024;
@@ -6626,7 +6934,7 @@ function assignIdentities(findings, opts = {}) {
   const located = findings.map((finding4, index) => ({
     finding: finding4,
     index,
-    location: locate2(finding4.file_path, opts.projectPath)
+    location: locate3(finding4.file_path, opts.projectPath)
   }));
   const contentKeys = /* @__PURE__ */ new Map();
   let currentPath = null;
@@ -6700,7 +7008,7 @@ ${finding4.rule_id ?? ""}`) : finding4.content_key;
       index,
       tool: finding4.tool.toLowerCase(),
       rule: finding4.rule_id ?? "",
-      path: locate2(finding4.file_path, projectPath).key,
+      path: locate3(finding4.file_path, projectPath).key,
       contentKey
     }];
   });
@@ -6739,7 +7047,7 @@ function resolutionKey(f) {
     "content",
     f.tool.toLowerCase(),
     f.rule_id ?? null,
-    locate2(f.file_path, void 0).key,
+    locate3(f.file_path, void 0).key,
     f.content_key
   ]);
 }
@@ -6767,7 +7075,7 @@ function indexFindings(items) {
   };
   return { find, has: (f) => find(f) !== void 0, add };
 }
-function locate2(filePath, projectPath) {
+function locate3(filePath, projectPath) {
   let path8 = filePath ?? "";
   if (path8 === "") return { key: "", readable: null };
   let insideProject = !isAbsolute6(path8);
@@ -40738,7 +41046,7 @@ function locatedParser(location, projectPrefix) {
     name: gitleaksParser.name,
     parse(input, ctx) {
       const out = gitleaksParser.parse(input, ctx);
-      return { findings: out.findings.map((f) => locate3(f, location, projectPrefix)), cves: out.cves };
+      return { findings: out.findings.map((f) => locate4(f, location, projectPrefix)), cves: out.cves };
     }
   };
 }
@@ -40750,7 +41058,7 @@ function posixRelative(toplevel, projectPath) {
   const rel2 = relative14(resolve18(toplevel), resolve18(projectPath)).replace(/\\/g, "/");
   return rel2.startsWith("..") ? "" : rel2;
 }
-function locate3(f, location, projectPrefix) {
+function locate4(f, location, projectPrefix) {
   const located = { ...f };
   if (projectPrefix !== "" && f.file_path?.startsWith(`${projectPrefix}/`)) {
     located.file_path = f.file_path.slice(projectPrefix.length + 1);
@@ -54335,7 +54643,7 @@ function subToolRuns(subTools, subResults) {
 }
 function worstCoverage(list2) {
   const rank2 = { none: 0, partial: 1, full: 2 };
-  return list2.reduce((worst, c3) => rank2[c3] < rank2[worst] ? c3 : worst, "full");
+  return list2.reduce((worst2, c3) => rank2[c3] < rank2[worst2] ? c3 : worst2, "full");
 }
 function buildSubToolsForStack(ctx, projectPath) {
   const snap = ctx.storage.stack.getLatestForProject(projectPath)?.snapshot;
@@ -72984,7 +73292,7 @@ function buildFinding(result, rc) {
     ...ruleId !== void 0 ? { rule_id: ruleId } : {},
     subcategory: props.map((p) => getString(p, "subcategory")).find((v) => v !== void 0) ?? ""
   });
-  const where = locate4(result, rc);
+  const where = locate5(result, rc);
   const message2 = messageText !== void 0 ? truncateBytes(messageText) : void 0;
   const title = (getString(getProp(rule, "shortDescription"), "text") ?? message2 ?? ruleId ?? "finding").slice(
     0,
@@ -73091,7 +73399,7 @@ function identityOf(result, tool54, ruleId) {
   if (key.length === 0) return void 0;
   return createHash11("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
 }
-function locate4(result, rc) {
+function locate5(result, rc) {
   const physical = getProp(asArray(getProp(result, "locations"))[0], "physicalLocation");
   const artifact = getProp(physical, "artifactLocation");
   const uri = getString(artifact, "uri");
@@ -79842,7 +80150,7 @@ function matchSignatures(content) {
     const need = sig.condition === "all" ? sig.strings.length : sig.minHits ?? 1;
     if (hits.length >= need) {
       const firstIndex = Math.min(...hits.map((h2) => h2.index));
-      const { line, snippet } = locate5(content, firstIndex);
+      const { line, snippet } = locate6(content, firstIndex);
       out.push({ signature: sig, line, snippet, matched: hits.length });
     }
   }
@@ -79854,7 +80162,7 @@ function firstMatch2(content, re) {
   const m = global3.exec(content);
   return m ? { index: m.index } : null;
 }
-function locate5(content, index) {
+function locate6(content, index) {
   const before = content.slice(0, index);
   const line = before.split(/\r?\n/).length;
   const lineStart = before.lastIndexOf("\n") + 1;
@@ -96369,9 +96677,9 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
 }
 function worstVerdict(results) {
   const rank2 = { ok: 0, unknown: 1, warn: 2, block: 3 };
-  let worst = "ok";
-  for (const r of results) if (rank2[r.verdict] > rank2[worst]) worst = r.verdict;
-  return worst;
+  let worst2 = "ok";
+  for (const r of results) if (rank2[r.verdict] > rank2[worst2]) worst2 = r.verdict;
+  return worst2;
 }
 var FRESH_HOURS, TOOL_BUDGET_MS, HOUR, NPM_PLACEHOLDER, INSTALL_SCRIPTS, REGISTRY_NAME, TIME_BUDGET, pass, warn, fail4, unknown3, na;
 var init_vet = __esm({
