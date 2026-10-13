@@ -70119,40 +70119,9 @@ async function handler27(inp, ctx) {
       'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].'
     );
   }
-  let url2 = inp.target_url;
-  if (!url2 && inp.wp_install_path) {
-    const wpBin = await scannerAvailable("wp");
-    if (!wpBin) {
-      return failDomain13(
-        "missing_scanner",
-        "wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url."
-      );
-    }
-    const r = await runProcess({
-      command: "wp",
-      args: ["option", "get", "home", `--path=${inp.wp_install_path}`],
-      cwd: localInstall ?? process.cwd(),
-      timeoutMs: 3e4
-    });
-    if (r.outcome === "completed") {
-      url2 = r.stdout.trim();
-    } else {
-      return failDomain13(
-        "scanner_failed",
-        `wp option get home failed: ${r.stderr.split(/\r?\n/)[0] ?? r.outcome}`
-      );
-    }
-  }
-  if (!url2) {
-    return failDomain13("scanner_failed", "Could not resolve a target URL for WPScan.");
-  }
-  const scanUrl = httpUrl(url2);
-  if (scanUrl === null) {
-    return inp.target_url ? failDomain13("invalid_input", "target_url must be an http:// or https:// URL.") : failDomain13(
-      "scanner_failed",
-      `The site's home option is not an http:// or https:// URL (WP-CLI read ${JSON.stringify(url2.slice(0, 200))}); pass target_url.`
-    );
-  }
+  const resolved = await resolveScanUrl(inp, localInstall);
+  if (!resolved.ok) return resolved;
+  const { url: url2, scanUrl } = resolved;
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
   if (token !== "" && !API_TOKEN.test(token)) {
     return failDomain13(
@@ -70183,27 +70152,7 @@ async function handler27(inp, ctx) {
     const raw = readReport(outFile, run2.stdout);
     return { run: run2, raw, report: readWpscanReport(raw) };
   };
-  let attempt = await scan2();
-  let failure = null;
-  let dbNote = null;
-  if (attempt.report.aborted !== null && MISSING_DB.test(attempt.report.aborted)) {
-    if (process.env["GUARDIAN_OFFLINE"] === "1") {
-      failure = "WPScan has no local database, and GUARDIAN_OFFLINE=1 forbids downloading one: run `wpscan --update` once (it downloads the database from data.wpscan.org), or unset GUARDIAN_OFFLINE, and re-run \u2014 nothing was scanned";
-    } else {
-      const update = await runProcess({
-        command: "wpscan",
-        args: ["--update", "--no-banner"],
-        cwd: reportDir,
-        timeoutMs: 10 * 6e4
-      });
-      if (update.outcome !== "completed") {
-        failure = `WPScan has no local database and \`wpscan --update\` failed (${whyLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) \u2014 nothing was scanned; run \`wpscan --update\` by hand and re-run`;
-      } else {
-        dbNote = "database downloaded (wpscan --update)";
-        attempt = await scan2();
-      }
-    }
-  }
+  const { attempt, failure, dbNote } = await scanWithDatabase(scan2, reportDir);
   let findingsCount = 0;
   let cvesCount = 0;
   if (attempt.raw !== null) {
@@ -70258,6 +70207,67 @@ async function handler27(inp, ctx) {
     report_path: outFile,
     warnings
   };
+}
+async function resolveScanUrl(inp, localInstall) {
+  let url2 = inp.target_url;
+  if (!url2 && inp.wp_install_path) {
+    const wpBin = await scannerAvailable("wp");
+    if (!wpBin) {
+      return failDomain13(
+        "missing_scanner",
+        "wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url."
+      );
+    }
+    const r = await runProcess({
+      command: "wp",
+      args: ["option", "get", "home", `--path=${inp.wp_install_path}`],
+      cwd: localInstall ?? process.cwd(),
+      timeoutMs: 3e4
+    });
+    if (r.outcome === "completed") {
+      url2 = r.stdout.trim();
+    } else {
+      return failDomain13(
+        "scanner_failed",
+        `wp option get home failed: ${r.stderr.split(/\r?\n/)[0] ?? r.outcome}`
+      );
+    }
+  }
+  if (!url2) {
+    return failDomain13("scanner_failed", "Could not resolve a target URL for WPScan.");
+  }
+  const scanUrl = httpUrl(url2);
+  if (scanUrl === null) {
+    return inp.target_url ? failDomain13("invalid_input", "target_url must be an http:// or https:// URL.") : failDomain13(
+      "scanner_failed",
+      `The site's home option is not an http:// or https:// URL (WP-CLI read ${JSON.stringify(url2.slice(0, 200))}); pass target_url.`
+    );
+  }
+  return { ok: true, url: url2, scanUrl };
+}
+async function scanWithDatabase(scan2, reportDir) {
+  let attempt = await scan2();
+  let failure = null;
+  let dbNote = null;
+  if (attempt.report.aborted !== null && MISSING_DB.test(attempt.report.aborted)) {
+    if (process.env["GUARDIAN_OFFLINE"] === "1") {
+      failure = "WPScan has no local database, and GUARDIAN_OFFLINE=1 forbids downloading one: run `wpscan --update` once (it downloads the database from data.wpscan.org), or unset GUARDIAN_OFFLINE, and re-run \u2014 nothing was scanned";
+    } else {
+      const update = await runProcess({
+        command: "wpscan",
+        args: ["--update", "--no-banner"],
+        cwd: reportDir,
+        timeoutMs: 10 * 6e4
+      });
+      if (update.outcome !== "completed") {
+        failure = `WPScan has no local database and \`wpscan --update\` failed (${whyLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) \u2014 nothing was scanned; run \`wpscan --update\` by hand and re-run`;
+      } else {
+        dbNote = "database downloaded (wpscan --update)";
+        attempt = await scan2();
+      }
+    }
+  }
+  return { attempt, failure, dbNote };
 }
 function urlReportsDir(url2) {
   const key = wpSiteKey(url2);
