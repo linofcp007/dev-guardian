@@ -54,7 +54,7 @@
  */
 
 /** The directory's name. */
-export const GUARDIAN_DIR = '.guardian';
+export const DOT_GUARDIAN = '.guardian';
 
 /** The generated directories, project-relative (no trailing slash). */
 const OUTPUT_DIRS: readonly string[] = ['.guardian/reports'];
@@ -71,7 +71,7 @@ const OUTPUT_FILES: readonly string[] = [
 ];
 
 /** Every generated path, project-relative and `/`-separated — directories first, then files. */
-export const GUARDIAN_OUTPUT_PATHS: readonly string[] = [...OUTPUT_DIRS, ...OUTPUT_FILES];
+export const ROOT_OUTPUT_PATHS: readonly string[] = [...OUTPUT_DIRS, ...OUTPUT_FILES];
 
 /**
  * Whether a project-relative path (`/` or `\` separated, a leading `./`
@@ -86,5 +86,5 @@ export function isGuardianOutput(rel: string): boolean {
 
 /** Semgrep's flags for the generated output — see the module comment for why this spelling. */
 export function semgrepGuardianOutputExcludes(): string[] {
-  return GUARDIAN_OUTPUT_PATHS.map((p) => `--exclude=${p}`);
+  return ROOT_OUTPUT_PATHS.map((p) => `--exclude=${p}`);
 }

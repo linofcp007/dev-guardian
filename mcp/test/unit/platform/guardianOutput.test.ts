@@ -4,7 +4,7 @@
  * below the root, which is the project's code.
  */
 import { afterAll, describe, expect, it } from 'vitest';
-import { GUARDIAN_OUTPUT_PATHS, isGuardianOutput } from '../../../src/platform/guardianOutput.js';
+import { ROOT_OUTPUT_PATHS, isGuardianOutput } from '../../../src/platform/guardianOutput.js';
 import { directoryConfig } from '../../../src/runners/gitleaksScan.js';
 import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
 
@@ -43,7 +43,7 @@ describe('isGuardianOutput', () => {
   });
 
   it('every generated path is under the root .guardian/', () => {
-    for (const p of GUARDIAN_OUTPUT_PATHS) expect(p.startsWith('.guardian/'), p).toBe(true);
+    for (const p of ROOT_OUTPUT_PATHS) expect(p.startsWith('.guardian/'), p).toBe(true);
   });
 });
 
