@@ -37481,25 +37481,22 @@ var init_semgrepRun = __esm({
 // src/runners/fileBatchScan.ts
 import { rmSync as rmSync5 } from "node:fs";
 import { join as join36 } from "node:path";
-async function scanFileBatches(opts) {
-  const probeReport = join36(opts.reportDir, `${opts.reportPrefix}-000.json`);
-  const batches = batchArgs(opts.files, {
-    command: opts.command,
-    fixedArgs: [...opts.args, ...opts.reportArgs(probeReport), "--"]
-  });
-  const reports = [];
-  const reportFiles = [];
-  const failures = [];
-  let configFailures = 0;
-  const partial3 = [];
-  const failedRules = [];
-  const packFiles = [];
-  let packFunctions = 0;
-  let cancelled = false;
-  let scanned = 0;
+async function runBatches(opts, batches) {
+  const t = {
+    reports: [],
+    reportFiles: [],
+    failures: [],
+    configFailures: 0,
+    partial: [],
+    failedRules: [],
+    packFiles: [],
+    packFunctions: 0,
+    cancelled: false,
+    scanned: 0
+  };
   for (const [i, batch] of batches.entries()) {
     if (opts.signal.aborted) {
-      cancelled = true;
+      t.cancelled = true;
       break;
     }
     const reportFile = join36(opts.reportDir, `${opts.reportPrefix}-${String(i + 1).padStart(3, "0")}.json`);
@@ -37512,11 +37509,11 @@ async function scanFileBatches(opts) {
       signal: opts.signal,
       onLog: opts.onLog
     });
-    if (run2.outcome === "cancelled") cancelled = true;
+    if (run2.outcome === "cancelled") t.cancelled = true;
     const raw = readJsonSafe(reportFile);
     if (raw !== null && parseInputAsJson(raw) !== null) {
-      reports.push(raw);
-      reportFiles.push(reportFile);
+      t.reports.push(raw);
+      t.reportFiles.push(reportFile);
     }
     const verdict = opts.check({
       raw,
@@ -37525,23 +37522,32 @@ async function scanFileBatches(opts) {
       // With requireScanned the count is judged below, over every batch.
       targets: opts.requireScanned === true ? 0 : batch.length
     });
-    scanned += verdict.scanned ?? 0;
+    t.scanned += verdict.scanned ?? 0;
     for (const p of verdict.partial ?? []) {
       const file = toRelativeIfPossible(p.file, opts.cwd);
-      if (!partial3.some((q) => q.file === file && q.type === p.type)) partial3.push({ ...p, file });
+      if (!t.partial.some((q) => q.file === file && q.type === p.type)) t.partial.push({ ...p, file });
     }
     if (verdict.packFixpoint !== void 0) {
-      packFunctions += verdict.packFixpoint.functions;
-      for (const p of verdict.packFixpoint.files) packFiles.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
+      t.packFunctions += verdict.packFixpoint.functions;
+      for (const p of verdict.packFixpoint.files) t.packFiles.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
     }
-    for (const r of verdict.failedRules ?? []) if (!failedRules.some((q) => q.rule_id === r.rule_id)) failedRules.push(r);
+    for (const r of verdict.failedRules ?? []) if (!t.failedRules.some((q) => q.rule_id === r.rule_id)) t.failedRules.push(r);
     if (!verdict.ok) {
       const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : "";
-      failures.push(`${label}${verdict.reason ?? "failed"}`);
-      if (verdict.ruleConfigError === true) configFailures += 1;
+      t.failures.push(`${label}${verdict.reason ?? "failed"}`);
+      if (verdict.ruleConfigError === true) t.configFailures += 1;
     }
-    if (cancelled) break;
+    if (t.cancelled) break;
   }
+  return t;
+}
+async function scanFileBatches(opts) {
+  const probeReport = join36(opts.reportDir, `${opts.reportPrefix}-000.json`);
+  const batches = batchArgs(opts.files, {
+    command: opts.command,
+    fixedArgs: [...opts.args, ...opts.reportArgs(probeReport), "--"]
+  });
+  const { reports, reportFiles, failures, configFailures, partial: partial3, failedRules, packFiles, packFunctions, cancelled, scanned } = await runBatches(opts, batches);
   const described = `${opts.files.length} file(s)${batches.length > 1 ? ` in ${batches.length} batches` : ""}`;
   if (failures.length === 0 && !cancelled && failedRules.length > 0 && opts.noRuleLoaded?.(failedRules) === true) {
     return {
