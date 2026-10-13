@@ -36,9 +36,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // Node's on-disk compile cache for the detectors this hook imports on every
 // call (review 8, dg-core 17): a no-op where Node lacks it, and a failure to
-// write it changes nothing but the time.
+// write it changes nothing but the time. Only under a temp directory that
+// exists: Node creates the cache's directory with every missing parent, and a
+// TMPDIR that is not there must stay not there.
 try {
-  module.enableCompileCache?.();
+  if (existsSync(tmpdir())) module.enableCompileCache?.();
 } catch {
   /* no cache: the hook only runs slower */
 }

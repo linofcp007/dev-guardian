@@ -15,7 +15,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1889,5 +1889,14 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       expect(lag / Math.min(...free)).toBeLessThan(8);
       if (PERF_STRICT) expect(lag).toBeLessThan(1000);
     }, 120_000);
+  });
+
+  // Node's compile cache creates its directory with every missing parent: with
+  // a TMPDIR that does not exist, a cache enabled anyway created it (dg-core 17).
+  it('the compile cache never creates a temp directory that is not there', () => {
+    const missing = join(projectDir, 'no-such-tmp', 'nested');
+    const r = hook(preToolUse('Bash', { command: 'git status' }, projectDir), { TMPDIR: missing, TEMP: missing, TMP: missing });
+    expect(r.status).toBe(0);
+    expect(readdirSync(projectDir)).not.toContain('no-such-tmp');
   });
 });
