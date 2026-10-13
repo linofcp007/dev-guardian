@@ -77,6 +77,22 @@ describe('computeTreeHash (git listing)', () => {
     expect(after).toBe(before);
   });
 
+  it('changes when a file in a .guardian folder BELOW the root changes, tracked or not (review 10, finding 1)', async () => {
+    // Dropped at any depth, an edit of `lib/.guardian/handler.js` served the
+    // cached scan of the tree before it.
+    const { pkg } = monorepo();
+    mkdirSync(join(pkg, 'lib', '.guardian'), { recursive: true });
+    writeFileSync(join(pkg, 'lib', '.guardian', 'handler.js'), 'exec(a);\n');
+    const untracked = await computeTreeHash(pkg);
+    writeFileSync(join(pkg, 'lib', '.guardian', 'handler.js'), 'exec(b);\n');
+    expect(await computeTreeHash(pkg)).not.toBe(untracked);
+    execFileSync('git', ['-C', pkg, 'add', '-f', 'lib/.guardian/handler.js'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', pkg, 'commit', '-q', '-m', 'nested'], { stdio: 'ignore' });
+    const tracked = await computeTreeHash(pkg);
+    writeFileSync(join(pkg, 'lib', '.guardian', 'handler.js'), 'exec(c);\n');
+    expect(await computeTreeHash(pkg)).not.toBe(tracked);
+  });
+
   it('is not affected by files outside the subdirectory', async () => {
     const { repo, pkg } = monorepo();
     const before = await computeTreeHash(pkg);
@@ -125,6 +141,15 @@ describe('computeTreeHash (filesystem walk)', () => {
 
     const afterNoise = await computeTreeHash(dir, { forceFilesystemWalk: true });
     expect(baseline).toBe(afterNoise);
+  });
+
+  it('walks a .guardian folder below the root: it is the project’s code (review 10, finding 1)', async () => {
+    const dir = fixture();
+    mkdirSync(join(dir, 'lib', '.guardian'), { recursive: true });
+    writeFileSync(join(dir, 'lib', '.guardian', 'handler.js'), 'exec(a);\n');
+    const before = await computeTreeHash(dir, { forceFilesystemWalk: true });
+    writeFileSync(join(dir, 'lib', '.guardian', 'handler.js'), 'exec(b);\n');
+    expect(await computeTreeHash(dir, { forceFilesystemWalk: true })).not.toBe(before);
   });
 
   it('hash depends only on contents, not on directory entry order', async () => {

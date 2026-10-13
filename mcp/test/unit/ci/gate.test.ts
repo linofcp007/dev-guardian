@@ -258,18 +258,21 @@ describe('evaluateGate — coverage gaps beyond "missing" (guards computeCoverag
 });
 
 describe('evaluateGate — droppedBaselineEntries (carried forward from Task 1 review)', () => {
-  it('folds a non-zero droppedBaselineEntries into coverageGaps by name', () => {
+  it('names a non-zero droppedBaselineEntries as a NOTE — never a line of coverageGaps, which gate (review 10)', () => {
     // Guards an implementation that silently ignores the field entirely.
     const v = evaluateGate(input({ droppedBaselineEntries: 2 }));
-    expect(v.coverageGaps.some((g) => g.includes('baseline') && g.includes('2'))).toBe(true);
+    expect(v.coverageNotes.some((g) => g.includes('baseline') && g.includes('2'))).toBe(true);
+    expect(v.coverageGaps).toEqual([]);
+    expect(v.coverageGapDetails).toEqual([expect.objectContaining({ tool: 'baseline', gating: false })]);
   });
 
-  it('adds nothing to coverageGaps when droppedBaselineEntries is zero', () => {
+  it('adds nothing when droppedBaselineEntries is zero', () => {
     // Guards an implementation that unconditionally appends a "0 entries..."
     // line regardless of the count — the field defaults to 0 for every
     // baseline-less/clean-baseline run, which must stay silent.
     const v = evaluateGate(input({ droppedBaselineEntries: 0 }));
     expect(v.coverageGaps).toEqual([]);
+    expect(v.coverageNotes).toEqual([]);
   });
 
   it('does NOT fail the build or downgrade coverage on dropped baseline entries alone', () => {
@@ -287,7 +290,7 @@ describe('evaluateGate — droppedBaselineEntries (carried forward from Task 1 r
   it('surfaces both facts when a dropped entry lets an old finding resurface as new', () => {
     // The scenario the requirement exists for: a fingerprint whose baseline
     // entry was dropped shows up in `blocking` on its own severity merits,
-    // AND coverageGaps says a baseline entry was unreadable — two different
+    // AND coverageNotes say a baseline entry was unreadable — two different
     // facts (a real regression vs. a parser that lost a line), both visible,
     // neither substituting for the other.
     const f = finding({ severity: 'critical' });
@@ -296,7 +299,7 @@ describe('evaluateGate — droppedBaselineEntries (carried forward from Task 1 r
       findings: [f], baseline: baselineMissingF, droppedBaselineEntries: 1,
     }));
     expect(v.blocking.map((x) => x.fingerprint)).toEqual(['fp1']);
-    expect(v.coverageGaps.some((g) => g.includes('baseline'))).toBe(true);
+    expect(v.coverageNotes.some((g) => g.includes('baseline'))).toBe(true);
     expect(v.exitCode).toBe(CI_EXIT.GATE_FAILED);
   });
 });

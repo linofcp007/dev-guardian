@@ -47,7 +47,8 @@
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve, sep } from 'node:path';
 import { git, splitNul } from '../runners/git.js';
-import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
+import { listProjectFiles, SCANNED_WALK_EXCLUDE } from '../runners/projectFiles.js';
+import { isGuardianOutput } from './guardianOutput.js';
 import { describeReadRefusal, presentInProject, projectEntryKind, readProjectText, readProjectTextOrUndefined } from './projectFs.js';
 
 /** The largest `.guardianignore` read; a real one is a few KB. */
@@ -276,9 +277,10 @@ interface ExclusionsLoadError {
  * The files are git's own listing in a work tree (tracked, plus untracked
  * files `.gitignore` does not exclude — what Semgrep and the tree hash read,
  * and never a crawl of a gitignored `data/` of a million files), else a walk
- * of the directory. Either way `PROJECT_WALK_EXCLUDE` (`node_modules`,
- * `.git`, `.guardian`, build output, …) is left out: no scan of the
- * project's own files reads those.
+ * of the directory. Either way `SCANNED_WALK_EXCLUDE` (`node_modules`,
+ * `.git`, build output, …) and the root `.guardian/`'s generated output are
+ * left out: no scan of the project's own files reads those (a `.guardian`
+ * folder below the root is read — review 10, finding 1).
  *
  * `configRoot` is where the file itself is read — the project, unless the CI
  * gate took it from `--rules-ref` (`ci/refConfig.ts`): the ref's copy is then
@@ -314,7 +316,7 @@ export async function loadProjectExclusions(
     hash: createHash('sha256').update(text).digest('hex'),
     patterns: matcher.patterns,
     ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
-    ...classify(listed ?? listProjectFiles(projectPath), matcher),
+    ...classify(listed ?? listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f)), matcher),
     semgrepAnchor,
   };
 }
@@ -409,14 +411,14 @@ async function gitListFiles(root: string): Promise<string[] | null> {
     '--cached',
     '--others',
     '--exclude-standard',
-    ...[...PROJECT_WALK_EXCLUDE].map((d) => `--exclude=${d}/`),
+    ...[...SCANNED_WALK_EXCLUDE].map((d) => `--exclude=${d}/`),
   ]);
   if (r.exitCode !== 0) return null;
   const files = new Set<string>();
   for (const entry of splitNul(r.stdout)) {
     // Tracked files under an excluded directory name are listed by git; no
     // walk of the project would see them.
-    if (entry.split('/').some((segment) => PROJECT_WALK_EXCLUDE.has(segment))) continue;
+    if (entry.split('/').some((segment) => SCANNED_WALK_EXCLUDE.has(segment)) || isGuardianOutput(entry)) continue;
     files.add(entry);
   }
   return [...files];

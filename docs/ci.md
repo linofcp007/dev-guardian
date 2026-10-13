@@ -35,7 +35,7 @@ node dev-guardian.mjs baseline update --project .
 | `--start-command <cmd> [args…]` | start the app for the DAST pass (argv, never a shell) and kill its whole process tree afterwards; requires `--base-url`. **Command line only** — a `start_command` in `.guardian/ci.json` or any other repository file makes the CLI refuse, because a fork's pull request could edit that file and run code on your runner. |
 | `--accept-partial-parse <path>` | repeatable: accept that Semgrep could parse this file only in part — see [below](#files-semgrep-can-only-partly-parse). **Command line only**, like `--start-command`: an `accept_partial_parse` in `.guardian/ci.json` makes the CLI refuse. `baseline update` takes it too. A per-file Semgrep timeout is accepted in [`.guardian/scan.yml`](#scan-settings-guardianscanyml) instead |
 | `--baseline-ref <ref>` | read `.guardian/baseline.json` from the commit `<ref>` names, never from the checkout — see [below](#a-pull-request-cannot-gate-itself) |
-| `--rules-ref <ref>` | read the project's Semgrep rules, `.guardianignore`, `.trivyignore` and `.bandit` from `<ref>` — see [below](#a-pull-request-cannot-gate-itself) |
+| `--rules-ref <ref>` | read the project's Semgrep rules, `.guardianignore`, `.trivyignore`, `.bandit` and `.guardian/scan.yml` from `<ref>` — see [below](#a-pull-request-cannot-gate-itself) |
 | `--reset-exclusions-from <ref>` | in CI only (`CI=true`): put every `.semgrepignore`, `.gitleaksignore` and `.gitleaks.toml` back to `<ref>`'s before scanning — see [below](#a-pull-request-cannot-gate-itself) |
 
 | Exit code | `scan` | `baseline update` |
@@ -49,7 +49,7 @@ Every other command's usage error is 3 too (`check` and `mcp-config` used 2 befo
 
 `baseline update` is the only command that writes `.guardian/baseline.json`; `scan` never does. It accepts **every** finding of the scan it runs, the newest included, so it is a human decision, made on the base commit — before a change, never to accept one finding: for that, suppress the finding where its scanner reads suppressions, with a reason (`nosemgrep: <rule> -- <reason>`, `# nosec`, a `.trivyignore` or `.gitleaksignore` entry), reviewed like code. A plugin install puts no `dev-guardian` on `PATH`; the command is `node "<plugin root>/cli/dev-guardian.mjs" baseline update --project .`, which every message of the CLI prints in full.
 
-The file keeps `version: 1`; entries carry a line-independent `identity` next to the fingerprint, so a finding that merely moved down a line is not "new". Since 3.3.0 they also carry a `match_id` the gate matches on when the identity does not: a dependency finding keyed without its installed version (an upgrade that fixes some CVEs of a package no longer turns the others into new findings), a secret keyed without the commit that saw it (a squash merge, a whitespace commit or an uncommitted edit of its file no longer makes it new), and the path the file had when the baseline was written (a file renamed since — `git diff -M` between the baseline's commit, or `--baseline-ref`, and the working tree — matches its old entries; that one works with an older baseline too). An older baseline gains `match_id` the next time `baseline update` runs, keeping every `added` date. A 2.0.x build still reads a file written by this one, and this one reads a 2.0.x file. A baseline that is there but not readable — merge-conflict markers, a wrong shape — is exit 3 naming the error, never "no baseline".
+The file keeps `version: 1`; entries carry a line-independent `identity` next to the fingerprint, so a finding that merely moved down a line is not "new". Since 3.3.0 they also carry a `match_id` the gate matches on when the identity does not: a dependency finding keyed without its installed version (an upgrade that fixes some CVEs of a package no longer turns the others into new findings), a secret keyed without the commit that saw it (a squash merge, a whitespace commit or an uncommitted edit of its file no longer makes it new — but a secret **replaced** on its line is new: since 3.4.0 the gate reads each such finding's line, from the commit or the working tree, and compares them in memory under a key the run draws and never writes, so the replacement never takes the baselined secret's place; anything else changed on that line reads the same way, the safe direction), and the path the file had when the baseline was written (a file renamed since — `git diff -M` between the baseline's commit, or `--baseline-ref`, and the working tree — matches its old entries; that one works with an older baseline too). An older baseline gains `match_id` the next time `baseline update` runs, keeping every `added` date. A 2.0.x build still reads a file written by this one, and this one reads a 2.0.x file. A baseline that is there but not readable — merge-conflict markers, a wrong shape — is exit 3 naming the error, never "no baseline".
 
 ### Files Semgrep can only partly parse
 
@@ -85,7 +85,7 @@ How Semgrep runs, and which of its per-file timeouts the gate accepts, is the pr
 
 ```yaml
 semgrep:
-  timeout: 30            # seconds per rule per file — Semgrep's --timeout (0: no limit)
+  timeout: 30            # whole seconds per rule per file — Semgrep's --timeout (0: no limit)
   timeout_threshold: 0   # rules that may time out on a file before Semgrep drops the
                          # whole file — --timeout-threshold (0: never drop it)
   accept_timeouts:       # files whose per-file Timeout the gate accepts, after review
@@ -93,10 +93,15 @@ semgrep:
 ```
 
 - Without the file, every Semgrep scan dev-guardian runs passes `--timeout 30 --timeout-threshold 0` (Semgrep's own defaults are 5 s and 3). At 5 s a mid-size repository never passed the gate: dev-spec-driven's own tree had two files time out on every run (`cli/commands.js`, `engine/guards.js`); at 30 s neither did, and the scan took no longer (100 s and 96 s, Semgrep 1.176.1). A threshold of 0 matters for acceptance: at 3, three timeouts on one file made Semgrep drop the file for every rule still to run and name none of them, so a "timeout" under-stated what was lost.
-- `accept_timeouts`: paths relative to the project, matched exactly like `--accept-partial-parse` (`/` or `\`, a leading `./`; no globs). An accepted timeout prints under `accepted (not gating):` naming `.guardian/scan.yml`, and no longer forces exit 2; coverage still reads `partial`.
-- A file that is there but not valid — bad YAML, an unknown key, a negative timeout, an absolute path — is exit 3 before anything runs (the MCP tools warn and use the defaults); a typo never reads as a setting that silently never applies.
+- `accept_timeouts`: paths relative to the project, matched exactly like `--accept-partial-parse` (`/` or `\`, a leading `./`). An accepted timeout prints under `accepted (not gating):` naming `.guardian/scan.yml`, and no longer forces exit 2; coverage still reads `partial`. What an entry covers, precisely:
+  - **One file, every rule.** Any per-file `Timeout` Semgrep reports on that file is accepted, whichever rule timed out — so code added to an accepted file can go unanalysed by the rules that time out on it, and still pass. Review a change to an accepted file as if no SAST ran on it; prefer a larger `semgrep.timeout`, which keeps every rule.
+  - **Until removed.** An entry never expires. One that no step reported a `Timeout` on is named on every run — `note: .guardian/scan.yml semgrep.accept_timeouts <path>: no step reported a Timeout on it (unused — remove it)`, and `unused_timeout_acceptances` in the JSON (3.4.0 and later) — so a stale acceptance does not sit in the file unnoticed.
+  - **No patterns.** An entry holding `*` or `?`, or ending in `/`, is refused (exit 3): before 3.4.0 it was compared as a file name and matched nothing, in silence. `[` and `{` are read as written — `pages/[id].js` is a file.
+  - **Timeouts only.** `accept_timeouts` never accepts a `PartialParsing` or a `Syntax error`, and `--accept-partial-parse` never a `Timeout`.
+- A file that is there but not valid — bad YAML, an unknown key, a negative or fractional timeout (Semgrep takes whole seconds only: `--timeout 1.5` made every scan exit 2 without naming this file), an absolute path, a glob — is exit 3 before anything runs, naming `.guardian/scan.yml` (the MCP tools warn and use the defaults); a typo never reads as a setting that silently never applies.
+- **Who may change it.** No dev-guardian hook guards `.guardian/scan.yml` (nor `baseline.json`) against an assistant's edit: the hooks guard the hook configuration, which turns guards off, while this file only widens what one gate run accepts, and every change to it is a reviewable diff. In CI, `--rules-ref` reads it from the base commit, so a pull request cannot accept the timeout its own change causes. Locally, dev-spec-driven 1.30 or later treats `.guardian/` as guarded while its `guardian` finish check is on. Put the file under CODEOWNERS, like the pipeline file ([below](#a-pull-request-cannot-gate-itself)).
 - **Taint fixpoint timeouts** — Semgrep's dataflow analysis giving up on one function (`time.fixpoint_timeouts`; no setting tunes it) — are reported and never gate: they print under `notes (not gating):` and appear in the JSON as `coverage_notes` and as `coverage_gap_details` entries of kind `taint_timeout` with `gating: false`. Taint findings inside those functions may be missing; coverage reads `partial`. They used to count like a per-file `Timeout`, and nothing could accept them: dev-spec-driven's tree had them in 49 files on every run.
-- `.guardian/` itself is never a Semgrep target (`--exclude=.guardian`): a project whose `.gitignore` lacked the lines had Semgrep read its own old reports.
+- What dev-guardian writes in the project's root `.guardian/` — `reports/`, the database, `dashboard.html`, `last-grill.md` and its `.gitignore` — is never a scan target (Semgrep, gitleaks' working-tree pass, the attack-surface map): a project whose `.gitignore` lacked the lines had Semgrep read its own old reports. Only those paths, matched exactly: a `.guardian` folder below the root (`lib/.guardian/`) is the project's code and is scanned — 3.3.0 left out every folder of that name, so a pull request hiding a command injection in `lib/.guardian/handler.js` passed with exit 0. A file git tracks among those generated paths is a gap (exit 2, kind `other`) that no flag accepts: dev-guardian never commits its output, so stop tracking it (`git rm --cached`).
 
 ### The JSON verdict
 
@@ -109,12 +114,12 @@ semgrep:
 | `coverage` | `full`, `partial` or `none` — over every gap, accepted ones and notes included |
 | `coverage_gaps` | one line per gap that gates, as the human report prints it (a string array) |
 | `coverage_gap_details` | the same gaps as data, same order — `tool`, `kind`, `detail` (the line), `remedy` (one English sentence: what clears it), `gating` — then the accepted gaps and the notes, with `gating: false` |
-| `coverage_notes` | gaps reported and never gating: taint fixpoint timeouts |
+| `coverage_notes` | reported and never gating: taint fixpoint timeouts, and baseline entries that could not be read (a line of `coverage_gaps` before 3.4.0, which holds only the gaps that gate) |
 | `accepted_gaps` | gaps accepted by `--accept-partial-parse` or `.guardian/scan.yml` |
 | `new_findings`, `new_findings_count`, `new_findings_by_severity` | the findings new to the baseline (with `--compact`, only the blocking ones), how many there are, and per severity |
 | `blocking_findings` | new findings at or above `--fail-on` — each with `file_path`, `line_start`, `severity`, `rule_id`, `title` |
 | `baseline_absent`, `baseline_status` | no baseline was read (`absent`) or one was (`present`); an unreadable one never gets here — it is exit 3 |
-| `baseline_source`, `rules_source`, `exclusions_reset`, `suppressed_by_repo_config`, `unused_partial_parse_acceptances` | where the baseline and the rules came from, what was reset, what the repository's own `.trivyignore` suppressed, acceptances nothing used |
+| `baseline_source`, `rules_source`, `exclusions_reset`, `suppressed_by_repo_config`, `unused_partial_parse_acceptances`, `unused_timeout_acceptances` | where the baseline and the rules came from, what was reset, what the repository's own `.trivyignore` suppressed, acceptances nothing used (`--accept-partial-parse`, and since 3.4.0 `semgrep.accept_timeouts`) |
 
 A gap's `kind` says what it is, so a reader can say the right thing about it — only a `missing_tool` is "install something":
 
@@ -176,6 +181,7 @@ node dev-guardian.mjs scan --project . --baseline-ref "$BASE_SHA" --rules-ref "$
   | `.guardianignore` | every scan | the ref's patterns, applied to the checkout's files — also for which submodules and oversized files are named as gaps, and which languages the project counts |
   | `.trivyignore` | Trivy (`scan_deps`, `scan_iac`) | `--ignorefile <copy>` |
   | `.bandit` | Bandit (`scan_sast`) | `--ini <copy>` (an empty one when the ref has none) |
+  | `.guardian/scan.yml` | every Semgrep scan (its timeouts), and the gate (`semgrep.accept_timeouts`) | the ref's settings; a pull request cannot accept the timeout its own change causes ([above](#scan-settings-guardianscanyml)) |
 
   A file the ref has but that cannot be copied — over 8 MiB, a directory, a link leaving the repository, a manifest entry outside the project — stops the scan (exit 3): leaving it out would run fewer rules than the ref says. Without Semgrep on `PATH` the Docker fallback is not used (it would read the checkout's rules): Semgrep is a named gap and the scan exits 2.
 

@@ -37,6 +37,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { describeReadRefusal, entryKindAnywhere, readProjectBytes } from '../platform/projectFs.js';
 import { execGit } from '../platform/gitSafety.js';
+// A clone that stalls is stopped with its remote helper (review 10, finding 12).
+import '../runners/gitExec.js';
 
 export interface IngestedFile {
   relPath: string;

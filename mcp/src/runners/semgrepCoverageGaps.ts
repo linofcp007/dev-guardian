@@ -18,6 +18,13 @@
  *   - **A listing that stopped early** (the walk outside git reached its
  *     directory ceiling): files below it were not checked for their size, so
  *     the run cannot be called complete either.
+ *   - **Committed files in `.guardian/`'s generated output.** A scan of the
+ *     project's directory leaves the root `.guardian/reports/`, its database
+ *     and dashboard out (`platform/guardianOutput.ts`); dev-guardian never
+ *     commits them, so a file git tracks there is someone's code hiding in
+ *     the one place no scanner reads — named, never a silent pass (review
+ *     10, finding 1). Not for explicit file targets, which Semgrep reads
+ *     whatever `--exclude` says (measured on 1.176.1).
  *
  * Every gap is named in the run's reason and makes the run partial (`ok`,
  * or `skipped`, AND listed missing).
@@ -41,7 +48,7 @@ import {
 import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
 import { honouredFiles, withProjectConfig, type HonouredFile } from './repoConfig.js';
 import type { PartialParse, ToolRun } from '../types.js';
-import { describeSubmodules, initialisedSubmodules } from './git.js';
+import { describeSubmodules, initialisedSubmodules, trackedGuardianOutput } from './git.js';
 import { asArray, getProp, parseInputAsJson } from './scannerParsers/index.js';
 import { nameAFew } from './semgrepReport.js';
 
@@ -62,6 +69,12 @@ export interface SemgrepCoverageGaps {
    * scans them. Absent: none.
    */
   longPaths?: string[];
+  /**
+   * A directory target only: the files git tracks among the root
+   * `.guardian/`'s generated output, which the run leaves unread (see the
+   * module comment). Absent: none.
+   */
+  trackedOutput?: string[];
 }
 
 export const NO_SEMGREP_GAPS: SemgrepCoverageGaps = { oversized: [], submodules: [] };
@@ -89,10 +102,13 @@ export async function semgrepCoverageGaps(
     ...(opts.files !== undefined ? { only: opts.files } : {}),
     ...(from !== undefined ? { guardianIgnoreFrom: from } : {}),
   });
-  // A directory target reads them; explicit file targets do not.
+  // A directory target reads them, and leaves `.guardian/`'s output out;
+  // explicit file targets do neither.
   const honoured = opts.files === undefined ? await honouredFiles(projectPath, 'semgrep') : [];
+  const trackedOutput = opts.files === undefined ? await trackedGuardianOutput(projectPath) : [];
   const withHonoured = (gaps: SemgrepCoverageGaps): SemgrepCoverageGaps => {
-    const out = sized.longPaths !== undefined ? { ...gaps, longPaths: sized.longPaths } : gaps;
+    let out = sized.longPaths !== undefined ? { ...gaps, longPaths: sized.longPaths } : gaps;
+    if (trackedOutput.length > 0) out = { ...out, trackedOutput };
     return honoured.length > 0 ? { ...out, honoured } : out;
   };
   if (opts.submodules !== undefined) {
@@ -125,7 +141,19 @@ export function semgrepGapNotes(gaps: SemgrepCoverageGaps): string[] {
   if (gaps.incomplete !== undefined) {
     notes.push(`${gaps.incomplete} — files over Semgrep's size limit below it were not checked`);
   }
+  if (gaps.trackedOutput !== undefined && gaps.trackedOutput.length > 0) notes.push(describeTrackedOutput(gaps.trackedOutput));
   return notes;
+}
+
+/**
+ * `N file(s) git tracks in .guardian/'s generated output were not scanned: …`
+ * — the CI gate's remedy for it keys on "generated output" (`ci/gate.ts`).
+ */
+function describeTrackedOutput(files: readonly string[]): string {
+  return (
+    `${files.length} file(s) git tracks in .guardian/'s generated output were not scanned: ${nameAFew(files)} — ` +
+    'dev-guardian never commits its reports, database or dashboard, and every scan leaves those paths out'
+  );
 }
 
 /**
@@ -223,6 +251,7 @@ function applyGaps(
     ...(gaps.oversized.length > 0 ? { oversized: gaps.oversized.length } : {}),
     ...(gaps.submodules.length > 0 ? { submodules: gaps.submodules.length } : {}),
     ...(gaps.incomplete !== undefined ? { listing_incomplete: true as const } : {}),
+    ...(gaps.trackedOutput !== undefined && gaps.trackedOutput.length > 0 ? { guardian_output: gaps.trackedOutput.length } : {}),
   };
   // A file never opened is not re-measured either: named per file, as a
   // partly parsed one is, under its own type.

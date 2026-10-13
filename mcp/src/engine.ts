@@ -16,7 +16,7 @@
  * `startServer` reaches `server.ts` through a dynamic `import()`, which the
  * bundle keeps lazy (esbuild wraps a module reached only that way in an
  * initializer that runs on the first call, as for `cli.ts`'s loaders): the
- * CLI never evaluates the server's module graph — the SDK, the 63 tools — and
+ * CLI never evaluates the server's module graph — the SDK, every tool module — and
  * `server.ts` stays the entry `npm run dev` runs with tsx, starting itself on
  * import.
  */
