@@ -48,19 +48,22 @@ export const MODE_TOOLS: Readonly<Record<DriverMode, readonly string[]>> = {
 
 /**
  * Appended to the system prompt. The production brief tells the model to
- * submit through `llm_scan_submit`; here there is no MCP server, so the
- * payload comes back as the final message instead.
+ * submit through `llm_scan { step: "submit" }` (v6; `llm_scan_submit` in
+ * v1–v5); here there is no MCP server, so the payload comes back as the final
+ * message instead. The note names both tools, so one note serves every
+ * version: the v5 / v6 comparison differs in the brief alone. (Runs before
+ * the fold, v1–v5, were measured with a note naming `llm_scan_submit` only.)
  *
  * Text before the payload is allowed, as in the product: there the host
- * model may write anything before it calls `llm_scan_submit`, and only the
- * `payload` argument is validated. Until prompts v5 this note said "with
- * nothing before or after it", which left a model that reads no file
- * nowhere to reason before the object (D-10, D-11); runs v1–v4 were
- * measured under that wording. Prose before the object is still counted as
- * a lenient extraction in the report.
+ * model may write anything before it submits, and only the `payload`
+ * argument is validated. Until prompts v5 this note said "with nothing
+ * before or after it", which left a model that reads no file nowhere to
+ * reason before the object (D-10, D-11); runs v1–v4 were measured under that
+ * wording. Prose before the object is still counted as a lenient extraction
+ * in the report.
  */
 export const HARNESS_NOTE =
-  'This session runs inside an offline evaluation. There is no llm_scan_submit tool and no MCP server: ' +
+  'This session runs inside an offline evaluation. There is no llm_scan tool, no llm_scan_submit tool and no MCP server: ' +
   'where the task tells you to submit your answer, end your final message instead with the JSON payload the response schema describes ' +
   '(the payload object itself, without plan_id, task_id or lease_token). Your working may come before it; nothing may come after it.';
 

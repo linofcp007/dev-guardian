@@ -1,22 +1,82 @@
 /**
  * Helper tests for the briefs renderer (no planned T-ID): the hunt templates'
  * class list never drifts from HUNT_CLASSES, no brief keeps a literal
- * placeholder, and quoted data is never re-expanded.
+ * placeholder, and quoted data is never re-expanded. And the answer channel
+ * each version names: v1–v5 `llm_scan_submit` (a hidden alias since the
+ * fold, still answering), v6 the listed fold `llm_scan { step: "submit" }`;
+ * a shipped version never changes — an eval measured it, and a plan made
+ * with it renders it until the plan ends.
  */
 
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { renderBrief } from '../../../src/llmscan/briefs.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { CURRENT_PROMPT_VERSION, renderBrief } from '../../../src/llmscan/briefs.js';
 import { HUNT_CLASSES } from '../../../src/llmscan/classes.js';
 import type { LlmScanTask, TaskKind } from '../../../src/llmscan/types.js';
 import { makeFinding } from '../../../src/runners/scannerParsers/index.js';
+import { listedTools, TOOLS } from '../../../src/tools/index.js';
 import type { RouteRecord } from '../../../src/types.js';
 
+beforeAll(async () => {
+  await import('../../../src/registerAll.js');
+});
+
 /** Every shipped prompt version: the class list may drift in none of them. */
-const VERSIONS = ['v1', 'v2', 'v3', 'v4', 'v5'] as const;
-const promptsOf = (v: string): string => fileURLToPath(new URL(`../../../../configs/llm-scan/prompts/${v}/`, import.meta.url));
+const VERSIONS = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6'] as const;
+const TEMPLATES = ['verify', 'hunt-entrypoint', 'hunt-crosscut'] as const;
+const PROMPTS = fileURLToPath(new URL('../../../../configs/llm-scan/prompts/', import.meta.url));
+const promptsOf = (v: string): string => join(PROMPTS, v);
+const templateOf = (v: string, name: string): string => readFileSync(join(promptsOf(v), `${name}.md`), 'utf8');
+
+/**
+ * sha256 of a version's three templates, LF line ends, in TEMPLATES order.
+ * A version an eval measured is never edited: a change is a new version.
+ */
+const FROZEN: Readonly<Record<string, string>> = {
+  v1: '020e73014d81b87b72879c96af58e4e54fb6e4faea5780b876df6a7e26ae1fda',
+  v2: '8e093536110a1c9f3a1e5315411d7ebb344057dea95bfb257829a108a1d0118d',
+  v3: '937a047e0ba88821ef4a03ff49e84872b797c5744bba1f97da846a0dcbd4ae5a',
+  v4: '01bee46bf27fedfe11cc84dd16dfea99cf1cfb849be35cfd8c32f92ca421920d',
+  v5: '0c9ed565cd1d87304478eee70962b23489d6436c248a6a6323dfb7f8ff691825',
+};
+
+describe('the shipped versions and their answer channel', () => {
+  it('VERSIONS is every version on disk, and the current one is the newest', () => {
+    const onDisk = readdirSync(PROMPTS).filter((d) => /^v[0-9]+$/.test(d)).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+    expect(onDisk).toEqual([...VERSIONS]);
+    expect(CURRENT_PROMPT_VERSION).toBe(VERSIONS[VERSIONS.length - 1]);
+  });
+
+  it.each(Object.entries(FROZEN))('%s is unchanged', (version, hash) => {
+    const text = TEMPLATES.map((name) => templateOf(version, name).replace(/\r\n/g, '\n')).join('');
+    expect(createHash('sha256').update(text, 'utf8').digest('hex')).toBe(hash);
+  });
+
+  it.each(['v1', 'v2', 'v3', 'v4', 'v5'])('%s names llm_scan_submit, which still answers tools/call', (version) => {
+    for (const name of TEMPLATES) expect(templateOf(version, name), name).toContain('`llm_scan_submit`');
+    const alias = TOOLS.find((t) => t.name === 'llm_scan_submit');
+    expect(alias).toBeDefined();
+    expect(alias?.listed).toBe(false);
+  });
+
+  it.each(TEMPLATES)('v6 %s: submits through the listed fold, step submit only, the payload alone', (name) => {
+    const text = templateOf('v6', name);
+    expect(listedTools().map((t) => t.name)).toContain('llm_scan');
+    expect(text).not.toMatch(/llm_scan_(?:start|task|submit)/);
+    expect(text).toContain('the `llm_scan` tool and `step: "submit"`');
+    expect(text).toMatch(/Never call its other steps, `start` and `task`/);
+    expect(text).toMatch(/the object is the `payload` argument alone, and `step` and those four stay out of it/);
+    // Apart from the answer channel, v6 is v5: the same lines, in the same order.
+    const differs = (a: string, b: string): number => {
+      const [x, y] = [a.split('\n'), b.split('\n')];
+      return x.filter((line, i) => line !== y[i]).length + Math.abs(x.length - y.length);
+    };
+    expect(differs(templateOf('v5', name), text)).toBe(5); // provenance, title, rule 2, the answer, the last message
+  });
+});
 
 function task(kind: TaskKind, files: string[]): LlmScanTask {
   return {

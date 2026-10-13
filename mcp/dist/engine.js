@@ -13571,7 +13571,7 @@ var init_types2 = __esm({
       "outside_project",
       "refused_file",
       "not_found",
-      // llm_scan_start / llm_scan_task / llm_scan_submit (tools/llmScan*.ts).
+      // llm_scan and its steps llm_scan_start / llm_scan_task / llm_scan_submit (tools/llmScan*.ts).
       "invalid_input",
       "needs_surface",
       "too_many_open_plans",
@@ -34373,6 +34373,8 @@ var init_annotations = __esm({
       // Adds a scan to the history per call.
       import_sarif: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       // The LLM scan's plan and its leases (the model's own sampling goes to the client, not out).
+      // The fold `llm_scan` (./folds.ts) runs all three steps, whose hints are the same.
+      llm_scan: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       llm_scan_start: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       llm_scan_task: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       llm_scan_submit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
@@ -46461,7 +46463,7 @@ var init_runNames = __esm({
       // it started (`runNameEntry` reads each as a pass of this base); a server
       // that failed or was skipped leaves the audit's findings unmeasured.
       "mcp-tool-audit": scanner("mcp-tool-audit"),
-      // llm_scan: the hunt's findings (tool `llm-hunt`); written by llm_scan_submit.
+      // llm_scan: the hunt's findings (tool `llm-hunt`); written by the submit step of llm_scan.
       "llm-hunt": scanner("llm-hunt"),
       // import_sarif: the importer's own pass. It speaks for no key: an import's
       // findings carry the TOOL that wrote the log (an open set of names), and
@@ -91540,7 +91542,7 @@ var init_briefs = __esm({
     init_submission();
     MAX_BRIEF_TOKENS = 25e3;
     MAX_EXCERPT_LINES = 200;
-    CURRENT_PROMPT_VERSION = "v5";
+    CURRENT_PROMPT_VERSION = "v6";
     MAX_EXCERPT_CHARS = 2e4;
     MAX_LINE_CHARS = 400;
     MAX_FLAGGED_LINE_CHARS = 2e3;
@@ -91750,7 +91752,7 @@ function loadPlan(storage, planId, opts = {}) {
     return storage.llmScan.planRowExists(planId) ? fail5("plan_corrupt", `The stored plan ${planId} cannot be read (its row is damaged); it cannot be resumed. Start a new plan.`) : fail5("not_found", `No LLM scan plan with id ${planId}.`);
   }
   if (plan.status === "abandoned" && opts.allowAbandoned !== true) {
-    return fail5("plan_abandoned", `Plan ${planId} was abandoned (no activity for a long time). Start a new plan with llm_scan_start.`, { plan_id: planId });
+    return fail5("plan_abandoned", `Plan ${planId} was abandoned (no activity for a long time). Start a new plan with llm_scan { step: "start" }.`, { plan_id: planId });
   }
   return { ok: true, plan };
 }
@@ -91818,7 +91820,7 @@ async function startPlan(storage, input) {
   if (active.length >= LLM_SCAN_DEFAULTS.max_open_plans) {
     return fail5(
       "too_many_open_plans",
-      `This project already has ${String(active.length)} open LLM scan plans (the limit is ${String(LLM_SCAN_DEFAULTS.max_open_plans)}). Finish one, or read its report with llm_scan_start { plan_id }: ${active.join(", ")}.`,
+      `This project already has ${String(active.length)} open LLM scan plans (the limit is ${String(LLM_SCAN_DEFAULTS.max_open_plans)}). Finish one, or read its report with llm_scan { step: "start", plan_id }: ${active.join(", ")}.`,
       { open_plans: active }
     );
   }
@@ -91933,7 +91935,7 @@ async function startPlan(storage, input) {
     beyond_max_tasks: tasks.length - deliverable.length,
     needs_confirm: needsConfirm(stored),
     ...tokenLimitFields(stored, tasks),
-    ...needsConfirm(stored) ? { confirm_with: "llm_scan_start { plan_id, confirm: true }" } : {},
+    ...needsConfirm(stored) ? { confirm_with: 'llm_scan { step: "start", plan_id, confirm: true }' } : {},
     notes: plan.notes,
     recipe: RECIPE,
     prompt_version: CURRENT_PROMPT_VERSION
@@ -92003,7 +92005,7 @@ function leaseNext(storage, planId, only = {}) {
   if (needsConfirm(plan)) {
     return fail5(
       "needs_confirm",
-      `The plan's estimate (${String(plan.estimate.total_tokens)} tokens) is above the limit (${String(plan.limits.max_estimated_tokens)}). Confirm with llm_scan_start { plan_id: "${plan.id}", confirm: true } before any task is handed out. ${tokenLimitNote(deliverableWithinTokenLimit(plan, repo.listTasks(plan.id)))}`,
+      `The plan's estimate (${String(plan.estimate.total_tokens)} tokens) is above the limit (${String(plan.limits.max_estimated_tokens)}). Confirm with llm_scan { step: "start", plan_id: "${plan.id}", confirm: true } before any task is handed out. ${tokenLimitNote(deliverableWithinTokenLimit(plan, repo.listTasks(plan.id)))}`,
       { plan_id: plan.id, confirm: true, ...tokenLimitFields(plan, repo.listTasks(plan.id)) }
     );
   }
@@ -92225,10 +92227,10 @@ var init_service = __esm({
     needsConfirm = (plan) => !plan.confirmed && plan.estimate.total_tokens > plan.limits.max_estimated_tokens;
     RECIPE = {
       loop: [
-        "llm_scan_task { plan_id } -> one task: task_id, lease_token, brief, response_schema. Repeat for the next one (tasks may be leased in parallel).",
+        'llm_scan { step: "task", plan_id } -> one task: task_id, lease_token, brief, response_schema. Repeat for the next one (tasks may be leased in parallel).',
         "Run the brief in a FRESH context \u2014 a subagent with its own context, one per task \u2014 and take its JSON answer. The brief says what the subagent may read.",
-        "llm_scan_submit { plan_id, task_id, lease_token, independence, payload } with that answer. An invalid answer is refused with the reason: fix it and submit again (up to two more tries).",
-        "Until llm_scan_task answers { done: true, report }. llm_scan_start { plan_id } gives the report at any time."
+        'llm_scan { step: "submit", plan_id, task_id, lease_token, independence, payload } with that answer. An invalid answer is refused with the reason: fix it and submit again (up to two more tries).',
+        'Until step task answers { done: true, report }. llm_scan { step: "start", plan_id } gives the report at any time.'
       ],
       independence: "'subagent' when a fresh context ran the brief; 'same_context' when you ran it yourself (shown, and never used to demote or confirm).",
       lease: `A leased task is yours for ${String(LLM_SCAN_DEFAULTS.lease_minutes)} minutes; after that it goes to whoever asks next.`
@@ -92765,6 +92767,20 @@ var init_folds = __esm({
       params: {
         limit: "rank: how many to return, 1\u2013500. Default 50.",
         mission_wellbeing: "rank: SSVC Mission & Well-being of this system. Default medium."
+      }
+    });
+    registerFold({
+      name: "llm_scan",
+      title: "LLM-assisted scan",
+      description: "Your model verifies the scanners' findings and hunts what they miss; the server calls no model. step start: plan it, modes verify (a task per finding with a file and line) or hunt (needs map_attack_surface); returns plan_id and a token estimate. Above max_estimated_tokens nothing is handed out until confirm: true, which the user must agree to. step task: lease the next task; its brief goes to a fresh subagent, one per task; done: true and the report at the end. step submit: that task's answer as payload; an invalid one is refused with the reasons, two more tries.",
+      modeKey: "step",
+      modeDescription: "start: plan (with plan_id: its report). task {plan_id}: lease the next task. submit {plan_id, task_id, lease_token, independence, payload}: that task's answer.",
+      modes: { start: "llm_scan_start", task: "llm_scan_task", submit: "llm_scan_submit" },
+      params: {
+        plan_id: "task, submit: the plan step start returned. start: report on this plan instead of planning (confirm: true confirms it).",
+        task_id: "submit: the task, as step task returned it.",
+        lease_token: "submit: the lease_token step task returned with the task.",
+        payload: "submit: the answer, matching the task's response_schema. At most 64 KiB serialized."
       }
     });
   }
@@ -95048,7 +95064,7 @@ function substituteCliPath(body, cliPath) {
 }
 var RULES_BODY = `# dev-guardian
 
-This project has the **dev-guardian MCP server**: 52 tools and 18 resources for security, bugs, quality,
+This project has the **dev-guardian MCP server**: 50 tools and 18 resources for security, bugs, quality,
 dependencies, compliance, observability, performance, WordPress and .NET. Every scanner runs locally and results
 persist in \`.guardian/guardian.db\`. dev-guardian sends no telemetry of its own;
 Semgrep's registry mode sends metrics \u2014 pass \`local_only: true\` to avoid it.
@@ -95087,7 +95103,7 @@ Semgrep's registry mode sends metrics \u2014 pass \`local_only: true\` to avoid 
   \`bug_hunt\` \xB7 a third-party skill or MCP server before installing it: \`scan_skill\` \xB7 the agent's own config (\`.mcp.json\`, \u2026): \`audit_agent_config\` (reads, runs nothing) \xB7 the tools an
   MCP server serves, or whether they changed: \`audit_mcp_tools\` with \`servers: ["X"]\` \xB7 routes and endpoints:
   \`map_attack_surface\` \xB7 runtime probing: \`scan_dast\` \xB7 is a finding reachable: \`validate_finding\` \xB7 a model
-  verifies the findings or hunts what scanners miss: \`llm_scan_start\` (below) \xB7 another tool's SARIF:
+  verifies the findings or hunts what scanners miss: \`llm_scan\` (below) \xB7 another tool's SARIF:
   \`import_sarif\`.
 - **Quality** \u2014 duplication, complexity, smells: \`quality_check\`.
 - **Dependencies** \u2014 upgrade plan: \`deps_update_plan\` \xB7 audit: \`deps_audit\` \xB7 VEX / "are we affected?":
@@ -95116,20 +95132,20 @@ Semgrep's registry mode sends metrics \u2014 pass \`local_only: true\` to avoid 
 Resources are read-only views of the same history: \`guardian://findings/open\`, \`guardian://scans/latest\`,
 \`guardian://wp/audit/{scan_id}\` and the rest of \`findings/\`, \`scans/\`, \`cves/\`, \`wp/\`, \`dotnet/\`, \`surface/\`.
 
-## LLM-assisted scan (\`llm_scan_start\` \u2192 \`llm_scan_task\` \u2192 \`llm_scan_submit\`)
+## LLM-assisted scan (\`llm_scan\`, \`step\`: start \u2192 task \u2192 submit)
 
-\`llm_scan_start { project_path, modes }\` plans (\`verify\`; \`hunt\` after \`map_attack_surface\`): show the user the
-token estimate and \`token_limit_note\` first, and pass \`confirm: true\` above \`max_estimated_tokens\` only after the
-user agrees. Then \`llm_scan_task { plan_id }\` leases one task (\`brief\`, \`lease_token\`, 20 minutes); run THAT brief
-as below and \`llm_scan_submit { plan_id, task_id, lease_token, independence, payload }\`; repeat until \`done\`.
+\`llm_scan { step: "start", project_path, modes }\` plans (\`verify\`; \`hunt\` after \`map_attack_surface\`): show the
+user the token estimate and \`token_limit_note\` first, and pass \`confirm: true\` above \`max_estimated_tokens\` only
+after the user agrees. Then \`llm_scan { step: "task", plan_id }\` leases one task (\`brief\`, \`lease_token\`, 20
+minutes); run THAT brief as below and \`llm_scan { step: "submit", plan_id, task_id, lease_token, independence,
+payload }\`; repeat until \`done\`.
 
-- **Claude Code** \u2014 each \`llm_scan_task\` brief in a fresh subagent, one task per subagent: \`subagent\`.
-- **Codex** \u2014 spawns a subagent only when asked: ask it to spawn one per \`llm_scan_task\` brief; otherwise
-  \`same_context\`.
+- **Claude Code** \u2014 each \`llm_scan\` task brief in a fresh subagent, one task per subagent: \`subagent\`.
+- **Codex** \u2014 spawns a subagent only when asked: ask it to spawn one per task brief; otherwise \`same_context\`.
 - **Cline** \u2014 no MCP-capable subagent: run the tasks sequentially, one after another: \`same_context\`.
 - **Claude Desktop / Cowork chat** \u2014 no subagents: sequentially, one at a time: \`same_context\`.
-- **MCP sampling (VS Code Copilot)** \u2014 \`llm_scan_task { plan_id, execute: "sampling" }\` runs verification
-  tasks through the client's model.
+- **MCP sampling (VS Code Copilot)** \u2014 \`llm_scan { step: "task", plan_id, execute: "sampling" }\` runs
+  verification tasks through the client's model.
 - **Other hosts** \u2014 a fresh subagent per task if one can call these tools, else \`same_context\`.
 
 Declare independence honestly: a \`same_context\` verdict never demotes or confirms a finding.

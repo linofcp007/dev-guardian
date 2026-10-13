@@ -1,7 +1,6 @@
 # LLM-assisted scan
 
-`llm_scan_start`, `llm_scan_task` and `llm_scan_submit` let **your host's model**
-do two jobs scanners do badly:
+`llm_scan` lets **your host's model** do two jobs scanners do badly:
 
 - **verify** — check each scanner finding against the code and say whether an
   attacker can exploit it, quoting the line that decides it;
@@ -17,19 +16,32 @@ result depends on that model: the report says so.
 
 ## The loop
 
-1. `llm_scan_start { project_path, modes }` plans the scan. `modes` is
+One tool, three steps (`step`); each step takes its own arguments, and a
+parameter of another step is refused with `invalid_input`.
+
+1. `llm_scan { step: "start", project_path, modes }` plans the scan. `modes` is
    `["verify"]` (the default), `["hunt"]` or both. It answers with `plan_id`,
    `tasks_total`, what was left out and why (`not_eligible`, `set_aside`), and a
    token `estimate`. **Show the user the estimate before going on.**
-2. `llm_scan_task { plan_id }` hands out one task: `task_id`, a `lease_token`, the
-   `brief` and its `response_schema`. The lease lasts 20 minutes; after that the
-   task goes to whoever asks next. Tasks may be leased in parallel.
+2. `llm_scan { step: "task", plan_id }` hands out one task: `task_id`, a
+   `lease_token`, the `brief` and its `response_schema`. The lease lasts 20
+   minutes; after that the task goes to whoever asks next. Tasks may be leased in
+   parallel.
 3. Run the brief where your host's recipe says (below), then
-   `llm_scan_submit { plan_id, task_id, lease_token, independence, payload }` with
-   the JSON answer. An invalid answer is refused with the reason and can be sent
-   again; the third invalid answer closes the task as `undetermined`.
-4. Repeat until `llm_scan_task` answers `{ done: true, report }`.
-   `llm_scan_start { plan_id }` returns the report at any time.
+   `llm_scan { step: "submit", plan_id, task_id, lease_token, independence, payload }`
+   with the JSON answer as `payload`. An invalid answer is refused with the
+   reason and can be sent again; the third invalid answer closes the task as
+   `undetermined`. A call with no `payload` is refused before the task is
+   touched, and costs no try.
+4. Repeat until step `task` answers `{ done: true, report }`.
+   `llm_scan { step: "start", plan_id }` returns the report at any time.
+
+The three steps were three tools before 3.4.0: `llm_scan_start`,
+`llm_scan_task` and `llm_scan_submit` still answer `tools/call` with the same
+arguments, but are no longer listed. A plan keeps the prompt version it was
+made with, so the briefs of a plan made before 3.4.0 (prompt v5) still say
+`llm_scan_submit`; answer them through `llm_scan { step: "submit" }` or that
+name, either works.
 
 A verify answer is `verdict` (`real`, `not_real`, `undetermined`),
 `attacker_input` (`file:line`, or `none`), `operation` (`file:line`),
@@ -60,12 +72,12 @@ The rules file `mcp-config` writes for each host carries this recipe:
 - **Claude Code** — one fresh subagent per task (parallel is fine), declared
   `subagent`. The `guardian-security` skill does this.
 - **Codex** — it starts a subagent only when asked to, so ask explicitly: "spawn
-  a subagent for each `llm_scan_task` brief, one task per subagent". Otherwise
+  a subagent for each `llm_scan` task brief, one task per subagent". Otherwise
   it answers in its own context: `same_context`.
 - **Cline**, **Claude Desktop / Cowork chat** — no subagent that can use MCP: the
   tasks run sequentially in the same context, declared `same_context`.
 - **A client that declares MCP sampling** (VS Code Copilot does) —
-  `llm_scan_task { plan_id, execute: "sampling" }` runs the verify tasks inside
+  `llm_scan { step: "task", plan_id, execute: "sampling" }` runs the verify tasks inside
   the server through the client's model. Hunts need tools, so they are never
   sampled. Without the capability the call answers `sampling_unavailable`.
 - **Any other host** — a fresh subagent per task when one can call the tools,
@@ -105,7 +117,7 @@ access control, authentication and secrets are `high`; every other class is
 | Limit | Value | When it is reached |
 | --- | --- | --- |
 | Tasks handed out per plan | `max_tasks`, default 200 | delivery stops with `limit_reached`; coverage `partial`, the undelivered tasks named |
-| Estimated tokens | `max_estimated_tokens`, default 500 000 | above it the plan says `needs_confirm`, and nothing is handed out until `llm_scan_start { plan_id, confirm: true }` |
+| Estimated tokens | `max_estimated_tokens`, default 500 000 | above it the plan says `needs_confirm`, and nothing is handed out until `llm_scan { step: "start", plan_id, confirm: true }` |
 | Planned tasks | 1 000 | the rest is listed with `overflow: true`; coverage `partial` |
 | Open plans per project | 5 | `too_many_open_plans`, with the open `plan_id`s to resume |
 | Lease | 20 minutes | the task goes to whoever asks next |
