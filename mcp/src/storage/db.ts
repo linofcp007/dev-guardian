@@ -60,7 +60,7 @@ import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { presentInProject } from '../platform/projectFs.js';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import type { StatementSync, SQLInputValue } from 'node:sqlite';
+import type { StatementSync } from 'node:sqlite';
 import { storedPathTarget, type StoredPathTarget } from '../platform/pathSpelling.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
@@ -94,6 +94,13 @@ import {
   untrustedObjects,
   type SchemaSnapshot,
 } from './schemaCheck.js';
+
+/**
+ * A value a statement binds. Spelled here, not imported: `@types/node` is held
+ * to the Node floor, 22.13 (review 8, finding 1), whose declarations name it
+ * `SupportedValueType`; later ones call it `SQLInputValue` and widen it.
+ */
+type SQLInputValue = null | number | bigint | string | Uint8Array;
 
 // `node:sqlite` is pulled in via createRequire rather than a static value
 // import on purpose: the production bundler (esbuild) and the test runner
@@ -290,13 +297,14 @@ export class GuardianDatabase {
   }
 
   /**
-   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
-   * it reads `undefined` at runtime (whatever the type declarations say), and
+   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0 — not in the
+   * floor's declarations, so it is read as an optional property. On
+   * 22.13–22.15 it reads `undefined` at runtime, and
    * the answer is "unknown": the rollback is then attempted and its own
    * failure swallowed.
    */
   private inTransaction(): boolean | undefined {
-    const flag: unknown = this.raw.isTransaction;
+    const flag: unknown = (this.raw as { isTransaction?: unknown }).isTransaction;
     return typeof flag === 'boolean' ? flag : undefined;
   }
 

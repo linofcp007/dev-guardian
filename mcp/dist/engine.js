@@ -13396,8 +13396,9 @@ var init_db = __esm({
         }
       }
       /**
-       * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
-       * it reads `undefined` at runtime (whatever the type declarations say), and
+       * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0 — not in the
+       * floor's declarations, so it is read as an optional property. On
+       * 22.13–22.15 it reads `undefined` at runtime, and
        * the answer is "unknown": the rollback is then attempted and its own
        * failure swallowed.
        */
