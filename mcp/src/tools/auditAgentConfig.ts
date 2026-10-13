@@ -22,9 +22,10 @@ import { readConfigSources } from '../agentaudit/configSources.js';
 import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { filterFindings } from '../severity/filter.js';
 import { SeverityMin } from '../schemas.js';
-import type { Finding, FindingsCountBySeverity, ToolResult, ToolRun } from '../types.js';
+import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { countBySeverity } from '../severity/counts.js';
 
 const inputSchema = {
   project_path: z
@@ -160,8 +161,3 @@ async function handler(
   };
 }
 
-function countBySeverity(findings: Finding[]): FindingsCountBySeverity {
-  const out: FindingsCountBySeverity = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}

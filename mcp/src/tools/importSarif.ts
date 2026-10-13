@@ -24,16 +24,10 @@ import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPat
 import { importSarif, SarifImportError, type SarifImportCounts } from '../sarif/importSarif.js';
 import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
-import {
-  SEVERITY_ORDER,
-  type DomainError,
-  type Finding,
-  type FindingsCountBySeverity,
-  type ScanResult,
-  type ToolResult,
-} from '../types.js';
+import type { DomainError, ScanResult, ToolResult } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { countBySeverity, topFindings } from '../severity/counts.js';
 
 /** Largest log read: 50 MiB (US-1.AC-13). */
 const LOG_MAX_BYTES = 50 * 1024 * 1024;
@@ -172,7 +166,7 @@ function describeRun(
   return {
     ...scan,
     findings_count_by_severity: countBySeverity(findings),
-    top_findings: topFindings(findings),
+    top_findings: topFindings(findings, TOP_FINDINGS),
     warnings,
     coverage,
     counts,
@@ -193,18 +187,6 @@ function totalCounts(all: readonly SarifImportCounts[]): Record<string, number> 
     total.truncated += c.truncated;
   }
   return total;
-}
-
-function countBySeverity(findings: readonly Finding[]): FindingsCountBySeverity {
-  const out: FindingsCountBySeverity = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-
-function topFindings(findings: readonly Finding[]): Finding[] {
-  return [...findings]
-    .sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint))
-    .slice(0, TOP_FINDINGS);
 }
 
 /** Why a file that exists was not read — a fixed text per reason, never the file's content. */

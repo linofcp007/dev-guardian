@@ -69,9 +69,10 @@ import { planTargets, qualifiedName, serverNameOfPinKey, serverPinKey } from '..
 import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import type { McpPin } from '../storage/mcpToolPinsRepo.js';
-import type { Finding, FindingsCountBySeverity, ToolResult, ToolRun } from '../types.js';
+import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
+import { countBySeverity } from '../severity/counts.js';
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 /** The whole audit's budget, unless `GUARDIAN_MCP_AUDIT_BUDGET_MS` sets another. */
@@ -579,8 +580,3 @@ async function runAudit(
   };
 }
 
-function countBySeverity(findings: Finding[]): FindingsCountBySeverity {
-  const out: FindingsCountBySeverity = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}

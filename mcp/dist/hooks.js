@@ -21,9 +21,11 @@ __export(configFile_exports, {
   isNetworkPath: () => isNetworkPath,
   isRemoteOrDeviceTarget: () => isRemoteOrDeviceTarget,
   localShareAsLocal: () => localShareAsLocal,
+  readBoundedBytes: () => readBoundedBytes,
   readSmallJsonFile: () => readSmallJsonFile,
   readSmallText: () => readSmallText,
   readSmallTextFile: () => readSmallTextFile,
+  textOf: () => textOf,
   walkLinksUnder: () => walkLinksUnder
 });
 import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
@@ -83,7 +85,7 @@ function walkLinksUnder(under, path) {
   }
   return { ok: true };
 }
-function readText(path, maxBytes) {
+function readBoundedBytes(path, maxBytes, opts = {}) {
   let fd;
   try {
     fd = openSync(path, OPEN_FLAGS);
@@ -96,6 +98,16 @@ function readText(path, maxBytes) {
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
+    if (opts.head === true) {
+      const buf2 = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
+      let total2 = 0;
+      while (total2 < buf2.length) {
+        const n = readSync(fd, buf2, total2, buf2.length - total2, null);
+        if (n === 0) break;
+        total2 += n;
+      }
+      return { status: "ok", bytes: buf2.subarray(0, total2) };
+    }
     if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
     let buf = Buffer.allocUnsafe(st.size + 1);
     let total = 0;
@@ -111,9 +123,7 @@ function readText(path, maxBytes) {
       total += n;
     }
     if (total > maxBytes) return { status: "refused", reason: "too-large" };
-    let text = buf.subarray(0, total).toString("utf8");
-    if (text.charCodeAt(0) === 65279) text = text.slice(1);
-    return { status: "ok", text };
+    return { status: "ok", bytes: buf.subarray(0, total) };
   } catch {
     return { status: "refused", reason: "unreadable" };
   } finally {
@@ -122,6 +132,14 @@ function readText(path, maxBytes) {
     } catch {
     }
   }
+}
+function textOf(bytes) {
+  const text = bytes.toString("utf8");
+  return text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+}
+function readText(path, maxBytes) {
+  const r = readBoundedBytes(path, maxBytes);
+  return r.status === "ok" ? { status: "ok", text: textOf(r.bytes) } : r;
 }
 function readSmallJsonFile(path, maxBytes = MAX_HOOK_CONFIG_BYTES, under) {
   if (under !== void 0) {

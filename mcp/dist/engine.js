@@ -92,7 +92,7 @@ function walkLinksUnder(under, path3) {
   }
   return { ok: true };
 }
-function readText(path3, maxBytes) {
+function readBoundedBytes(path3, maxBytes, opts = {}) {
   let fd;
   try {
     fd = openSync(path3, OPEN_FLAGS);
@@ -105,6 +105,16 @@ function readText(path3, maxBytes) {
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
+    if (opts.head === true) {
+      const buf2 = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
+      let total2 = 0;
+      while (total2 < buf2.length) {
+        const n = readSync(fd, buf2, total2, buf2.length - total2, null);
+        if (n === 0) break;
+        total2 += n;
+      }
+      return { status: "ok", bytes: buf2.subarray(0, total2) };
+    }
     if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
     let buf = Buffer.allocUnsafe(st.size + 1);
     let total = 0;
@@ -120,9 +130,7 @@ function readText(path3, maxBytes) {
       total += n;
     }
     if (total > maxBytes) return { status: "refused", reason: "too-large" };
-    let text2 = buf.subarray(0, total).toString("utf8");
-    if (text2.charCodeAt(0) === 65279) text2 = text2.slice(1);
-    return { status: "ok", text: text2 };
+    return { status: "ok", bytes: buf.subarray(0, total) };
   } catch {
     return { status: "refused", reason: "unreadable" };
   } finally {
@@ -131,6 +139,14 @@ function readText(path3, maxBytes) {
     } catch {
     }
   }
+}
+function textOf(bytes) {
+  const text2 = bytes.toString("utf8");
+  return text2.charCodeAt(0) === 65279 ? text2.slice(1) : text2;
+}
+function readText(path3, maxBytes) {
+  const r = readBoundedBytes(path3, maxBytes);
+  return r.status === "ok" ? { status: "ok", text: textOf(r.bytes) } : r;
 }
 function readSmallText(path3, maxBytes, under) {
   if (under !== void 0) {
@@ -258,76 +274,13 @@ function readProjectJson(root, path3, maxBytes = PROJECT_FILE_MAX_BYTES) {
 function readProjectBytes(root, path3, maxBytes = PROJECT_FILE_MAX_BYTES) {
   const where = locate(root, path3);
   if (!where.ok) return where.read;
-  let fd;
-  try {
-    fd = openSync2(where.real, OPEN_FLAGS2);
-  } catch (e) {
-    const code = e.code;
-    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
-    if (code === "EISDIR") return { status: "refused", reason: "not-a-regular-file" };
-    return { status: "refused", reason: "unreadable" };
-  }
-  try {
-    const st = fstatSync2(fd);
-    if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
-    if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
-    let buf = Buffer.allocUnsafe(st.size + 1);
-    let total = 0;
-    for (; ; ) {
-      if (total === buf.length) {
-        if (buf.length > maxBytes) break;
-        const bigger = Buffer.allocUnsafe(Math.min(buf.length * 2, maxBytes + 1));
-        buf.copy(bigger, 0, 0, total);
-        buf = bigger;
-      }
-      const n = readSync2(fd, buf, total, buf.length - total, null);
-      if (n === 0) break;
-      total += n;
-    }
-    if (total > maxBytes) return { status: "refused", reason: "too-large" };
-    return { status: "ok", bytes: buf.subarray(0, total) };
-  } catch {
-    return { status: "refused", reason: "unreadable" };
-  } finally {
-    try {
-      closeSync2(fd);
-    } catch {
-    }
-  }
+  return readBoundedBytes(where.real, maxBytes);
 }
 function readProjectHead(root, path3, maxBytes) {
   const where = locate(root, path3);
   if (!where.ok) return where.read;
-  let fd;
-  try {
-    fd = openSync2(where.real, OPEN_FLAGS2);
-  } catch (e) {
-    const code = e.code;
-    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
-    if (code === "EISDIR") return { status: "refused", reason: "not-a-regular-file" };
-    return { status: "refused", reason: "unreadable" };
-  }
-  try {
-    const st = fstatSync2(fd);
-    if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
-    const buf = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
-    let total = 0;
-    while (total < buf.length) {
-      const n = readSync2(fd, buf, total, buf.length - total, null);
-      if (n === 0) break;
-      total += n;
-    }
-    let text2 = buf.subarray(0, total).toString("utf8");
-    if (text2.charCodeAt(0) === 65279) text2 = text2.slice(1);
-    return { status: "ok", text: text2 };
-  } catch {
-    return { status: "refused", reason: "unreadable" };
-  } finally {
-    try {
-      closeSync2(fd);
-    } catch {
-    }
-  }
+  const r = readBoundedBytes(where.real, maxBytes, { head: true });
+  return r.status === "ok" ? { status: "ok", text: textOf(r.bytes) } : r;
 }
 async function hashProjectFile(root, path3) {
   const abs = resolve2(root, path3);
@@ -27959,6 +27912,22 @@ var init_gitState = __esm({
   }
 });
 
+// src/severity/counts.ts
+function countBySeverity(findings) {
+  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
+  for (const f of findings) out[f.severity] += 1;
+  return out;
+}
+function topFindings(findings, limit) {
+  return [...findings].sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)).slice(0, limit);
+}
+var init_counts = __esm({
+  "src/severity/counts.ts"() {
+    "use strict";
+    init_types2();
+  }
+});
+
 // src/tools/scanToolFactory.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 function makeScanTool(config2) {
@@ -28530,22 +28499,6 @@ function severityFloorNotice(all, min, scanId) {
     warning: `severity_min "${min}" filtered this response only: ${shortfall2.total} finding(s) (${describeShortfallTiers(shortfall2)}) are recorded in scan ${scanId} and are not shown here. Baselines and diffs against this scan include them.${suggestion}`
   };
 }
-function countBySeverity(findings) {
-  const out = {
-    info: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
-    critical: 0
-  };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-function topFindings(findings, limit) {
-  return [...findings].sort(
-    (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)
-  ).slice(0, limit);
-}
 function failDomain(code, message2, retry_with) {
   const error2 = { code, message: message2 };
   if (retry_with !== void 0) error2.retry_with = retry_with;
@@ -28570,13 +28523,13 @@ var init_scanToolFactory = __esm({
     init_concurrencyLimiter();
     init_breakdown();
     init_filter();
-    init_types2();
     init_cacheKey();
     init_computeTreeHash();
     init_projectPath();
     init_gitState();
     init_scanCoverage();
     init_repoConfig();
+    init_counts();
     FIVE_MINUTES_MS = 5 * 60 * 1e3;
     KEYLESS_INPUTS = ["project_path", "severity_min", "force"];
     FACTORY_META_KEYS = /* @__PURE__ */ new Set([
@@ -44790,8 +44743,8 @@ async function handler10(input, ctx, callMeta) {
     }
   }
   const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
-  const aggregate_counts = countBySeverity2(filteredAggregate);
-  const top_findings = topFindings2(filteredAggregate, 10);
+  const aggregate_counts = countBySeverity(filteredAggregate);
+  const top_findings = topFindings(filteredAggregate, 10);
   const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
   let deltas;
   if (previousAudit) {
@@ -44927,22 +44880,6 @@ function findPreviousAudit(ctx, projectPath, thisAuditId) {
   });
   return prev?.scan_id ?? null;
 }
-function countBySeverity2(findings) {
-  const out = {
-    info: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
-    critical: 0
-  };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-function topFindings2(findings, limit) {
-  return [...findings].sort(
-    (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)
-  ).slice(0, limit);
-}
 function failDomain11(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
@@ -44955,8 +44892,8 @@ var init_auditExecutive = __esm({
     init_schemas();
     init_filter();
     init_computeTreeHash();
-    init_types2();
     init_tools();
+    init_counts();
     BASE_SUB_TOOLS = ["security_scan_full", "quality_check", "deps_audit", "compliance_check"];
     WP_EXTRA_SUB_TOOLS = ["scan_wordpress"];
     DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_check"];
@@ -47327,11 +47264,11 @@ async function handler16(input, ctx) {
     reference,
     baseline_scan_id: baselineId,
     current_scan_id: latest.scan_id,
-    new_findings_by_severity: countBySeverity3(newFindings2),
-    resolved_findings_by_severity: countBySeverity3(resolvedFindings),
-    not_remeasured_by_severity: countBySeverity3(d.notRemeasured),
-    not_previously_measured_by_severity: countBySeverity3(d.notPreviouslyMeasured),
-    suppressed_by_severity: countBySeverity3(suppressed),
+    new_findings_by_severity: countBySeverity(newFindings2),
+    resolved_findings_by_severity: countBySeverity(resolvedFindings),
+    not_remeasured_by_severity: countBySeverity(d.notRemeasured),
+    not_previously_measured_by_severity: countBySeverity(d.notPreviouslyMeasured),
+    suppressed_by_severity: countBySeverity(suppressed),
     ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
     ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
     hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the findings that were measured. ${measuredNote}` : "No significant regression.",
@@ -47342,11 +47279,6 @@ async function handler16(input, ctx) {
 }
 function weightedScore(findings) {
   return findings.reduce((acc, f) => acc + (SEVERITY_WEIGHT[f.severity] ?? 0), 0);
-}
-function countBySeverity3(findings) {
-  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
 }
 var SEVERITY_WEIGHT, inputSchema9, tool19;
 var init_regressionAlert = __esm({
@@ -47361,6 +47293,7 @@ var init_regressionAlert = __esm({
     init_sourceToolArg();
     init_types2();
     init_tools();
+    init_counts();
     SEVERITY_WEIGHT = {
       info: 0.5,
       low: 1,
@@ -67520,7 +67453,7 @@ function resolveRule(result, rc) {
 }
 function buildFinding(result, rc) {
   const { rule, id: ruleId, danglingRef } = resolveRule(result, rc);
-  const messageText = textOf(getProp(result, "message"));
+  const messageText = textOf2(getProp(result, "message"));
   if (ruleId === void 0 && danglingRef) return { skip: "ruleIndex does not resolve to a rule" };
   if (ruleId === void 0 && messageText === void 0) {
     return { skip: "no ruleId, no resolvable ruleIndex and no message" };
@@ -67560,7 +67493,7 @@ function buildFinding(result, rc) {
   const dedupeKey = identity !== void 0 ? `i:${identity}` : `l:${JSON.stringify([ruleId ?? null, where.file ?? null, where.startLine ?? null, where.endLine ?? null, where.columns ?? null, message2 ?? null])}`;
   return { finding: finding4, dedupeKey };
 }
-function textOf(message2) {
+function textOf2(message2) {
   const t = getString(message2, "text") ?? getString(message2, "markdown");
   return t === void 0 || t.trim() === "" ? void 0 : t;
 }
@@ -67864,8 +67797,8 @@ function describeRun(ctx, scanId, counts) {
   }
   return {
     ...scan2,
-    findings_count_by_severity: countBySeverity4(findings),
-    top_findings: topFindings3(findings),
+    findings_count_by_severity: countBySeverity(findings),
+    top_findings: topFindings(findings, TOP_FINDINGS),
     warnings,
     coverage,
     counts
@@ -67885,14 +67818,6 @@ function totalCounts(all) {
     total.truncated += c.truncated;
   }
   return total;
-}
-function countBySeverity4(findings) {
-  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-function topFindings3(findings) {
-  return [...findings].sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)).slice(0, TOP_FINDINGS);
 }
 function refusalText(reason) {
   switch (reason) {
@@ -67922,9 +67847,9 @@ var init_importSarif2 = __esm({
     init_importSarif();
     init_persistImport();
     init_schemas();
-    init_types2();
     init_scanCoverage();
     init_tools();
+    init_counts();
     LOG_MAX_BYTES = 50 * 1024 * 1024;
     TOP_FINDINGS = 10;
     inputSchema13 = {
@@ -75568,7 +75493,7 @@ async function handler39(input, ctx, callMeta) {
       findings_count: findings.length,
       findings_by_severity: report.score.by_severity,
       category_breakdown: nonZeroBreakdown(report.category_breakdown),
-      top_findings: topFindings4(findings, 12),
+      top_findings: topFindings(findings, 12),
       files_scanned: report.files_scanned,
       executable_files: report.executable_files,
       hidden_unicode_files: report.hidden_unicode_files,
@@ -75597,10 +75522,6 @@ function nonZeroBreakdown(breakdown) {
   }
   return out.sort((a, b) => b.count - a.count);
 }
-function topFindings4(findings, limit) {
-  const order = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
-  return [...findings].sort((a, b) => order[b.severity] - order[a.severity] || a.fingerprint.localeCompare(b.fingerprint)).slice(0, limit);
-}
 function hashFiles(parts) {
   const h = createHash13("sha256");
   for (const p of [...parts].sort()) h.update(p).update("\n");
@@ -75620,6 +75541,7 @@ var init_scanSkill = __esm({
     init_taxonomy2();
     init_schemas();
     init_tools();
+    init_counts();
     inputSchema26 = {
       target: external_exports.string().min(1).optional().describe(
         "What to vet: a local directory, a single file, a .zip, or a git/HTTP(S) URL. Defaults to the current project directory (audit the skill you are standing in)."
@@ -79265,7 +79187,7 @@ async function handler41(input, ctx, callMeta) {
     report_paths: [evidenceDir],
     evidence_dir: evidenceDir,
     coverage,
-    findings_count_by_severity: countBySeverity5(ordered),
+    findings_count_by_severity: countBySeverity(ordered),
     // `top_findings` is the `ScanResult` contract every roll-up already reads
     // (`audit_executive`, `guardian://scans/{id}`); `findings` is the full
     // list, which a DAST run can afford to inline because its size is bounded
@@ -79367,11 +79289,6 @@ function toInsertInput(finding4, scanId, evidenceDir) {
     }
   };
 }
-function countBySeverity5(findings) {
-  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const finding4 of findings) out[finding4.severity] += 1;
-  return out;
-}
 function outcomeCounts(results) {
   const out = {
     completed: 0,
@@ -79405,6 +79322,7 @@ var init_scanDast = __esm({
     init_tools();
     init_scanCoverage();
     init_scanHelpers();
+    init_counts();
     DAST_ENGINE = "guardian-dast";
     UNANSWERED_COVERAGE_THRESHOLD = 0.1;
     inputSchema27 = {
@@ -83096,7 +83014,7 @@ async function handler44(input, ctx) {
     project_path: projectPath,
     include_user_config: includeUserConfig,
     findings_count: findings.length,
-    findings_by_severity: countBySeverity6(findings),
+    findings_by_severity: countBySeverity(findings),
     findings,
     mcp_servers_found: result.mcpServersFound,
     entries_changed_since_previous_audit: result.entriesChanged,
@@ -83106,11 +83024,6 @@ async function handler44(input, ctx) {
     coverage: computeCoverage(toolsRun, missingTools),
     warnings: result.warnings
   };
-}
-function countBySeverity6(findings) {
-  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
 }
 var inputSchema28, tool47;
 var init_auditAgentConfig = __esm({
@@ -83124,6 +83037,7 @@ var init_auditAgentConfig = __esm({
     init_schemas();
     init_scanCoverage();
     init_tools();
+    init_counts();
     inputSchema28 = {
       project_path: external_exports.string().min(1).optional().describe("Absolute or relative path to the project to audit. Defaults to the current working directory."),
       include_user_config: external_exports.boolean().optional().default(false).describe(
@@ -88585,7 +88499,7 @@ async function runAudit(ctx, run2, callMeta) {
     project_path: projectPath,
     coverage,
     findings_count: findings.length,
-    findings_by_severity: countBySeverity7(findings),
+    findings_by_severity: countBySeverity(findings),
     findings,
     servers: reports,
     tools_run: toolsRun,
@@ -88594,11 +88508,6 @@ async function runAudit(ctx, run2, callMeta) {
     sources_unreadable: sourcesUnreadable,
     warnings
   };
-}
-function countBySeverity7(findings) {
-  const out = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
 }
 var DEFAULT_TIMEOUT_MS8, DEFAULT_AUDIT_BUDGET_MS, inputSchema29, tool48;
 var init_auditMcpTools = __esm({
@@ -88617,6 +88526,7 @@ var init_auditMcpTools = __esm({
     init_version();
     init_scanCoverage();
     init_tools();
+    init_counts();
     DEFAULT_TIMEOUT_MS8 = 2e4;
     DEFAULT_AUDIT_BUDGET_MS = 10 * 60 * 1e3;
     inputSchema29 = {
@@ -92573,29 +92483,13 @@ function enrich(scanId, ctx) {
     };
   }
   const findings = countableFindings(ctx.storage, record8.project_path, ctx.storage.findings.listByScan(scanId));
-  const counts = countBySeverity8(findings);
-  const top = topFindings5(findings, 10);
+  const counts = countBySeverity(findings);
+  const top = topFindings(findings, 10);
   return {
     ...record8,
     findings_count_by_severity: counts,
     top_findings: top.map(boundFinding)
   };
-}
-function countBySeverity8(findings) {
-  const out = {
-    info: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
-    critical: 0
-  };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-function topFindings5(findings, limit) {
-  return [...findings].sort(
-    (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)
-  ).slice(0, limit);
 }
 function mcpInvalidParams(message2) {
   const err = new Error(message2);
@@ -92606,9 +92500,9 @@ var init_scans = __esm({
   "src/resources/scans.ts"() {
     "use strict";
     init_openSet();
-    init_types2();
     init_resources();
     init_paging();
+    init_counts();
     registerResourceModule({
       name: "guardian-scans-latest",
       uri: "guardian://scans/latest",

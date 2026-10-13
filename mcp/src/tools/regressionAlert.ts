@@ -49,6 +49,7 @@ import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type Finding, type ScanType, type Severity, type ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { countBySeverity } from '../severity/counts.js';
 
 const SEVERITY_WEIGHT: Record<Severity, number> = {
   info: 0.5,
@@ -236,8 +237,3 @@ function weightedScore(findings: Finding[]): number {
   return findings.reduce((acc, f) => acc + (SEVERITY_WEIGHT[f.severity] ?? 0), 0);
 }
 
-function countBySeverity(findings: Finding[]): Record<Severity, number> {
-  const out: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}

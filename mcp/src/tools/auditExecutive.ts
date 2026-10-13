@@ -31,7 +31,6 @@ import { ProjectPath, SeverityMin } from '../schemas.js';
 import { filterFindings } from '../severity/filter.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
-  SEVERITY_ORDER,
   type DomainError,
   type Finding,
   type FindingsCountBySeverity,
@@ -41,6 +40,7 @@ import {
   type ToolRun,
 } from '../types.js';
 import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
+import { countBySeverity, topFindings } from '../severity/counts.js';
 
 const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
 const WP_EXTRA_SUB_TOOLS = ['scan_wordpress'] as const;
@@ -435,28 +435,6 @@ function findPreviousAudit(ctx: PluginContext, projectPath: string, thisAuditId:
     beforeScanId: thisAuditId,
   });
   return prev?.scan_id ?? null;
-}
-
-function countBySeverity(findings: Finding[]): FindingsCountBySeverity {
-  const out: FindingsCountBySeverity = {
-    info: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
-    critical: 0,
-  };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-
-function topFindings(findings: Finding[], limit: number): Finding[] {
-  return [...findings]
-    .sort(
-      (a, b) =>
-        SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
-        a.fingerprint.localeCompare(b.fingerprint),
-    )
-    .slice(0, limit);
 }
 
 function failDomain(

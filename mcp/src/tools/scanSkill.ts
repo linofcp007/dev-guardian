@@ -36,6 +36,7 @@ import {
 import { SeverityMin } from '../schemas.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { topFindings } from '../severity/counts.js';
 
 const inputSchema = {
   target: z
@@ -280,13 +281,6 @@ function nonZeroBreakdown(
     }
   }
   return out.sort((a, b) => b.count - a.count);
-}
-
-function topFindings(findings: Finding[], limit: number): Finding[] {
-  const order = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
-  return [...findings]
-    .sort((a, b) => order[b.severity] - order[a.severity] || a.fingerprint.localeCompare(b.fingerprint))
-    .slice(0, limit);
 }
 
 function hashFiles(parts: string[]): string {

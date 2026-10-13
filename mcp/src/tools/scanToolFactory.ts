@@ -104,12 +104,10 @@ import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import type { ProcessOutcome } from '../runners/processRunner.js';
 import { describeShortfallTiers, severityShortfall } from '../severity/breakdown.js';
 import { filterFindings } from '../severity/filter.js';
-import { SEVERITY_ORDER } from '../types.js';
 import type {
   Category,
   DomainError,
   Finding,
-  FindingsCountBySeverity,
   ScanCoverage,
   ScanResult,
   ScanType,
@@ -129,6 +127,7 @@ import { workingTreeState } from './gitState.js';
 import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import type { ToolCallMeta, ToolModule } from './index.js';
+import { countBySeverity, topFindings } from '../severity/counts.js';
 
 /**
  * What `config.invoke` returns to the factory: how the scanner run(s) ended,
@@ -1288,28 +1287,6 @@ function severityFloorNotice(
       `(${describeShortfallTiers(shortfall)}) are recorded in scan ${scanId} and are not ` +
       `shown here. Baselines and diffs against this scan include them.${suggestion}`,
   };
-}
-
-function countBySeverity(findings: Finding[]): FindingsCountBySeverity {
-  const out: FindingsCountBySeverity = {
-    info: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
-    critical: 0,
-  };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-
-function topFindings(findings: Finding[], limit: number): Finding[] {
-  return [...findings]
-    .sort(
-      (a, b) =>
-        SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
-        a.fingerprint.localeCompare(b.fingerprint),
-    )
-    .slice(0, limit);
 }
 
 function failDomain(

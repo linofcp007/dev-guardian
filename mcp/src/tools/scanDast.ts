@@ -60,13 +60,13 @@ import {
   type AttackSurfaceSnapshot,
   type PartialParse,
   type Finding,
-  type Severity,
   type ToolResult,
   type ToolRun,
 } from '../types.js';
 import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
 import { assessCoverage } from './scanCoverage.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
+import { countBySeverity } from '../severity/counts.js';
 
 /** Name the own engine reports under in `tools_run`. Not a binary. */
 const DAST_ENGINE = 'guardian-dast';
@@ -841,12 +841,6 @@ function toInsertInput(
         evidenceDir === null ? null : join(evidenceDir, `${finding.fingerprint}.json`),
     },
   };
-}
-
-function countBySeverity(findings: readonly Finding[]): Record<Severity, number> {
-  const out: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const finding of findings) out[finding.severity] += 1;
-  return out;
 }
 
 /**

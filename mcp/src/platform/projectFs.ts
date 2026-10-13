@@ -104,7 +104,7 @@ import {
 import { open as openAsync, lstat as lstatAsync, readlink as readlinkAsync } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
-import { readSmallText, walkLinksUnder, type RefusalReason } from '../hooks/configFile.js';
+import { readBoundedBytes, readSmallText, textOf, walkLinksUnder, type RefusalReason } from '../hooks/configFile.js';
 import { parseJsonBounded } from './boundedJson.js';
 
 /** A project file's default read cap: far above any config or source file, far below a denial of service. */
@@ -228,43 +228,7 @@ export function readProjectJson(root: string, path: string, maxBytes: number = P
 export function readProjectBytes(root: string, path: string, maxBytes: number = PROJECT_FILE_MAX_BYTES): ProjectBytesRead {
   const where = locate(root, path);
   if (!where.ok) return where.read;
-  let fd: number;
-  try {
-    fd = openSync(where.real, OPEN_FLAGS);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { status: 'absent' };
-    if (code === 'EISDIR') return { status: 'refused', reason: 'not-a-regular-file' };
-    return { status: 'refused', reason: 'unreadable' };
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) return { status: 'refused', reason: 'not-a-regular-file' };
-    if (st.size > maxBytes) return { status: 'refused', reason: 'too-large' };
-    let buf = Buffer.allocUnsafe(st.size + 1);
-    let total = 0;
-    for (;;) {
-      if (total === buf.length) {
-        if (buf.length > maxBytes) break;
-        const bigger = Buffer.allocUnsafe(Math.min(buf.length * 2, maxBytes + 1));
-        buf.copy(bigger, 0, 0, total);
-        buf = bigger;
-      }
-      const n = readSync(fd, buf, total, buf.length - total, null);
-      if (n === 0) break;
-      total += n;
-    }
-    if (total > maxBytes) return { status: 'refused', reason: 'too-large' };
-    return { status: 'ok', bytes: buf.subarray(0, total) };
-  } catch {
-    return { status: 'refused', reason: 'unreadable' };
-  } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      /* nothing left to do with it */
-    }
-  }
+  return readBoundedBytes(where.real, maxBytes);
 }
 
 /**
@@ -280,37 +244,8 @@ export function readProjectBytes(root: string, path: string, maxBytes: number = 
 export function readProjectHead(root: string, path: string, maxBytes: number): ProjectTextRead {
   const where = locate(root, path);
   if (!where.ok) return where.read;
-  let fd: number;
-  try {
-    fd = openSync(where.real, OPEN_FLAGS);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { status: 'absent' };
-    if (code === 'EISDIR') return { status: 'refused', reason: 'not-a-regular-file' };
-    return { status: 'refused', reason: 'unreadable' };
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) return { status: 'refused', reason: 'not-a-regular-file' };
-    const buf = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
-    let total = 0;
-    while (total < buf.length) {
-      const n = readSync(fd, buf, total, buf.length - total, null);
-      if (n === 0) break;
-      total += n;
-    }
-    let text = buf.subarray(0, total).toString('utf8');
-    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-    return { status: 'ok', text };
-  } catch {
-    return { status: 'refused', reason: 'unreadable' };
-  } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      /* nothing left to do with it */
-    }
-  }
+  const r = readBoundedBytes(where.real, maxBytes, { head: true });
+  return r.status === 'ok' ? { status: 'ok', text: textOf(r.bytes) } : r;
 }
 
 /**
