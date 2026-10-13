@@ -52,7 +52,7 @@ of it committed:
 
 Nothing else: `tsconfig.json` is `noEmit` (tsc only type-checks), no source
 map ships, and `scripts/bundle.mjs` empties `dist/` before it writes — 743
-files / 17 MB before 3.3.0, 22 files / 4.5 MB since. Code that finds a file
+files / 14.6 MB before 3.3.0, 24 files / 4.1 MB since. Code that finds a file
 relative to `import.meta.url` (`platform/scriptsDir.ts`, `configsDir.ts`,
 `version.ts`, the migrations runner, `hostsetup/setup.ts`) still probes two
 depths: a bundle in `dist/`, or its own file in `src/` under tsx and vitest.
