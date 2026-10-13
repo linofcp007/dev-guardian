@@ -483,8 +483,8 @@ function lineWindows(line: string, overlap: number = OVERLAP): LineWindow[] {
  * which holds it whole when it is no longer than the rule's overlap; the search in
  * this window stops, so a window costs at most two searches per rule.
  */
-function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow): SecretMatch | null {
-  let from = 0;
+function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow, start = 0): SecretMatch | null {
+  let from = start;
   for (let tries = 0; tries < 2; tries += 1) {
     let m: SecretMatch | null;
     if (rule.find !== undefined) m = rule.find(w.text, from);
@@ -500,6 +500,30 @@ function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow): SecretMatch | 
       continue;
     }
     return m;
+  }
+  return null;
+}
+
+/**
+ * How many matches of one rule in one window may be set aside — a placeholder
+ * (AWS's documented example key), a value too plain to be a credential —
+ * before the rest of the window is left unread for that rule. A rule used to
+ * stop at its first match: AWS's example key and a real key on one line
+ * reported nothing at all, the real key hidden behind the documented one
+ * (review of 3.3.0). The cap keeps a window's cost bounded — a line of nothing
+ * but placeholders costs this many searches per rule, never one per match.
+ */
+const MAX_SET_ASIDE = 16;
+
+/** A rule's first match in a window that is a hit — past the placeholders before it, up to {@link MAX_SET_ASIDE} of them. */
+function firstHit(rule: SecretRule, re: RegExp, w: LineWindow, line: number, skipPlaceholders: boolean): SecretHit | null {
+  let start = 0;
+  for (let k = 0; k <= MAX_SET_ASIDE && start <= w.text.length; k += 1) {
+    const m = firstMatch(rule, re, w, start);
+    if (m === null) return null;
+    const hit = judge(rule, m, line, skipPlaceholders);
+    if (hit !== null) return hit;
+    start = m.index + Math.max(1, m.text.length);
   }
   return null;
 }
@@ -542,7 +566,7 @@ export function scanForSecrets(text: string, options: SecretScanOptions = {}): S
         if (allow.some((a) => lower.includes(a))) continue;
         for (const { rule, re } of group) {
           if (found.has(rule)) continue;
-          const hit = judge(rule, firstMatch(rule, re, w), i, skipPlaceholders);
+          const hit = firstHit(rule, re, w, i, skipPlaceholders);
           if (hit !== null) found.set(rule, hit);
         }
       }

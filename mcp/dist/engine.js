@@ -2001,8 +2001,8 @@ function lineWindows(line, overlap = OVERLAP) {
     if (e >= line.length) return out;
   }
 }
-function firstMatch(rule, re, w) {
-  let from = 0;
+function firstMatch(rule, re, w, start = 0) {
+  let from = start;
   for (let tries = 0; tries < 2; tries += 1) {
     let m;
     if (rule.find !== void 0) m = rule.find(w.text, from);
@@ -2018,6 +2018,17 @@ function firstMatch(rule, re, w) {
       continue;
     }
     return m;
+  }
+  return null;
+}
+function firstHit(rule, re, w, line, skipPlaceholders) {
+  let start = 0;
+  for (let k = 0; k <= MAX_SET_ASIDE && start <= w.text.length; k += 1) {
+    const m = firstMatch(rule, re, w, start);
+    if (m === null) return null;
+    const hit = judge(rule, m, line, skipPlaceholders);
+    if (hit !== null) return hit;
+    start = m.index + Math.max(1, m.text.length);
   }
   return null;
 }
@@ -2047,7 +2058,7 @@ function scanForSecrets(text2, options = {}) {
         if (allow.some((a) => lower.includes(a))) continue;
         for (const { rule, re } of group) {
           if (found2.has(rule)) continue;
-          const hit = judge(rule, firstMatch(rule, re, w), i, skipPlaceholders);
+          const hit = firstHit(rule, re, w, i, skipPlaceholders);
           if (hit !== null) found2.set(rule, hit);
         }
       }
@@ -2080,7 +2091,7 @@ function judge(rule, m, i, skipPlaceholders = true) {
     preview: redact(matched)
   };
 }
-var CONFIDENCE_RANK, SECRET_RULES, ENV_KEY, VALUE_CAPTURE_RULES, QUOTED_VALUE_RULES, TOKEN_PLACEHOLDER_MARKERS, MIXED_TOKEN_RULES, PLACEHOLDER_MARKERS, WINDOW, OVERLAP;
+var CONFIDENCE_RANK, SECRET_RULES, ENV_KEY, VALUE_CAPTURE_RULES, QUOTED_VALUE_RULES, TOKEN_PLACEHOLDER_MARKERS, MIXED_TOKEN_RULES, PLACEHOLDER_MARKERS, WINDOW, OVERLAP, MAX_SET_ASIDE;
 var init_secretScan = __esm({
   "src/hooks/secretScan.ts"() {
     "use strict";
@@ -2269,6 +2280,7 @@ var init_secretScan = __esm({
     ];
     WINDOW = 16 * 1024;
     OVERLAP = 2 * 1024;
+    MAX_SET_ASIDE = 16;
   }
 });
 

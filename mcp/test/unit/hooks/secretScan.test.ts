@@ -411,6 +411,31 @@ describe('scanForSecrets — review 8: documentation is not a credential (item 1
     expect(scanForSecrets(`OPENAI_API_KEY=sk-proj-${tokenBody(48)}`, { minConfidence: 'high' }).map((h) => h.ruleId)).toEqual(['openai-api-key']);
   });
 
+  // Review of 3.3.0: a rule stopped at its first match, so a placeholder before
+  // a real key on the same line hid it — `[]` at high confidence, the block mode.
+  it('a placeholder before a real key on the same line does not hide it', () => {
+    const example = join('AKIA', 'IOSFODNN7', 'EXAMPLE');
+    const ghPlaceholder = join('ghp_', 'x'.repeat(36));
+    const ghReal = join('ghp_', tokenBody(36));
+    expect(scanForSecrets(`const a = '${example}', b = '${FAKE_AWS_KEY}';`, { minConfidence: 'high' }).map((h) => h.ruleId)).toEqual([
+      'aws-access-key-id',
+    ]);
+    expect(scanForSecrets(`tokens = ['${ghPlaceholder}', '${ghReal}']`, { minConfidence: 'high' }).map((h) => h.ruleId)).toEqual([
+      'github-token',
+    ]);
+    // …and a plain password value before a real one, for the value rules.
+    expect(scanForSecrets('password = "changeme"; password = "Gx7$kPq2zVw9MtRb"').length).toBeGreaterThan(0);
+  });
+
+  it('a line of nothing but placeholders costs a bounded number of searches, not one per match', () => {
+    const example = join('AKIA', 'IOSFODNN7', 'EXAMPLE');
+    // Past the cap of set-aside matches, a real key further along the line is not read — the price of a bounded window.
+    const many = `${`'${example}', `.repeat(40)}'${FAKE_AWS_KEY}'`;
+    expect(scanForSecrets(many, { minConfidence: 'high' })).toEqual([]);
+    const few = `${`'${example}', `.repeat(10)}'${FAKE_AWS_KEY}'`;
+    expect(scanForSecrets(few, { minConfidence: 'high' }).map((h) => h.ruleId)).toEqual(['aws-access-key-id']);
+  });
+
   it('redaction (skipPlaceholders: false) keeps every one of them', () => {
     const example = join('AKIA', 'IOSFODNN7', 'EXAMPLE');
     expect(scanForSecrets(`k = "${example}"`, { skipPlaceholders: false }).map((h) => h.ruleId)).toContain('aws-access-key-id');
