@@ -11,13 +11,16 @@
  *   - since 1.29 — `exit_code` (0 pass · 1 blocked · 2 incomplete · 3
  *     config/usage), `coverage`, `coverage_gaps` (a STRING array),
  *     `new_findings`, `blocking_findings[].{file_path, line_start, severity,
- *     rule_id, title}`, `baseline_absent`, `accepted_gaps`;
+ *     rule_id, title, tool}` (`tool` labels a finding with neither rule nor
+ *     title), `baseline_absent`, `accepted_gaps`;
  *   - since 3.3.0 (dev-spec-driven 1.30 reads them when present) —
  *     `tool_version`, `coverage_gap_details[].{tool, kind, detail, remedy,
  *     gating}` (one per `coverage_gaps` line, same order, then the non-gating
  *     notes), `baseline_status`, and `--compact` (`new_findings` cut to the
  *     blocking ones, with `new_findings_count` and `new_findings_by_severity`).
  *
+ * Checked against dev-spec-driven 1.30.0's reader, `guardianRecord` in its
+ * `mcp/lib/engine/guardian.js`: it reads no key this file does not freeze.
  * Keys are only ever added. Change one of these and this test fails before
  * dev-spec-driven's gate quietly stops reading the verdict.
  */
@@ -97,6 +100,7 @@ describe('the JSON verdict dev-spec-driven parses (contract)', () => {
       severity: 'high',
       rule_id: 'web-js-sql-template',
       title: 'SQL built by interpolation',
+      tool: 'semgrep',
     });
   });
 
