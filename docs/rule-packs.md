@@ -4,7 +4,7 @@
 
 dev-guardian ships **154 rules in 12 packs** under [`configs/semgrep/`](../configs/semgrep/). Messages and comments are in Portuguese; each pack's header comment records what was measured, against which corpus, and why each exclusion exists.
 
-**30 of the 154 rules** have no clause the ablation harness (`npm run ablate`, see [CLAUDE.md](../CLAUDE.md)) can remove — 24 are a bare `pattern` / `pattern-regex` and 6 a `patterns` group of positive terms only. Those rules are checked by axis 0 (the rule fires on its `hits/` fixtures) and nothing else.
+**30 of the 154 rules** have no clause the ablation harness (`npm run ablate`, see [maintainers/ablation.md](maintainers/ablation.md)) can remove — 24 are a bare `pattern` / `pattern-regex` and 6 a `patterns` group of positive terms only. Those rules are checked by axis 0 (the rule fires on its `hits/` fixtures) and nothing else.
 
 | Pack | Run by | Rules | With ablatable clauses | With none | Languages | Severity |
 | --- | --- | ---: | ---: | ---: | --- | --- |
