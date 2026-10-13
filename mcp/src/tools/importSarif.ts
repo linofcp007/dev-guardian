@@ -15,11 +15,12 @@
  * refusal below is a fixed text.
  */
 
-import { basename, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { readSmallText, type TextRead } from '../hooks/configFile.js';
 import { isWithinDir, readProjectText } from '../platform/projectFs.js';
+import { canonicalPath, isNetworkPath } from '../platform/projectPath.js';
 import { importSarif, SarifImportError, type SarifImportCounts } from '../sarif/importSarif.js';
 import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
@@ -77,7 +78,8 @@ function run(inp: ToolInput<typeof inputSchema>, ctx: PluginContext): Result {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== 'string') return projectPath;
 
-  const logPath = resolve(projectPath, inp.sarif_path);
+  const given = resolve(projectPath, inp.sarif_path);
+  const logPath = isWithinDir(projectPath, given) ? given : inProjectSpelling(projectPath, given);
   const inside = isWithinDir(projectPath, logPath);
   if (!inside && inp.allow_outside_project !== true) {
     return fail(
@@ -184,6 +186,22 @@ function refusalText(reason: string): string {
     default:
       return 'The log could not be read.';
   }
+}
+
+/**
+ * `path` in the project's own spelling, when only its spelling put it
+ * outside (review 10, a 3.3.0 regression): the CLI resolves `--file` from its
+ * working directory, which may be spelt with an 8.3 short name
+ * (`C:\Users\ADMINI~1\…`) while the project path is canonical, so a log
+ * inside the project read as outside it. The DIRECTORY is canonicalised, never
+ * the file — a linked log is still judged by the read — and a network path is
+ * never asked of the filesystem. A path still outside is returned unchanged.
+ */
+function inProjectSpelling(projectPath: string, path: string): string {
+  const dir = dirname(path);
+  if (isNetworkPath(dir)) return path;
+  const respelled = join(canonicalPath(dir), basename(path));
+  return isWithinDir(projectPath, respelled) ? respelled : path;
 }
 
 function fail(code: DomainError['code'], message: string): Result {

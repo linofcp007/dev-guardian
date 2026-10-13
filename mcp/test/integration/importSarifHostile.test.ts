@@ -13,7 +13,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, symlinkSync, writeSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { basename, join, relative } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CAN_SYMLINK, POSIX } from '../helpers/fsCapabilities.js';
 import { freshPlugin, projectDir } from '../helpers/historySeed.js';
@@ -172,6 +173,33 @@ describe('T-14 a log outside the project needs allow_outside_project (US-1.AC-14
     writeSarif(dir, 'reports/ci.sarif', validLog());
     const out = await importOk(s.plugin, dir, 'reports/ci.sarif');
     expect(scanRow(s.plugin, out.runs[0]?.scan_id ?? '').meta?.['source_file']).toBe('reports/ci.sarif');
+  });
+
+  // Review 10 (a 3.3.0 regression): the CLI resolves --file from its working
+  // directory, spelt through the temp dir's 8.3 alias (C:\Users\ADMINI~1\…) or
+  // macOS's /var symlink, while project_path resolves to the canonical path —
+  // and a log inside the project was refused as outside it.
+  const rawTmpdir = process.env['GUARDIAN_TEST_RAW_TMPDIR'];
+  it.skipIf(rawTmpdir === undefined)('T-14 an absolute path inside the project, spelt through the temp dir alias, is read without the flag', async () => {
+    const s = freshPlugin();
+    const dir = projectDir('sarif-t14-');
+    writeSarif(dir, 'reports/ci.sarif', validLog());
+    const viaAlias = join(rawTmpdir ?? '', relative(tmpdir(), dir), 'reports', 'ci.sarif');
+    expect(viaAlias.toLowerCase().startsWith(dir.toLowerCase())).toBe(false);
+    const out = await importOk(s.plugin, dir, viaAlias);
+    expect(scanRow(s.plugin, out.runs[0]?.scan_id ?? '').meta?.['source_file']).toBe('reports/ci.sarif');
+  });
+
+  it('T-14 a log outside the project stays outside whatever its spelling: a sibling via the alias too', async () => {
+    const s = freshPlugin();
+    const parent = makeTempDir('sarif-t14-parent-');
+    const dir = join(parent, 'project');
+    mkdirSync(dir);
+    writeSarif(parent, 'sibling.sarif', validLog());
+    const sibling = join(rawTmpdir ?? tmpdir(), relative(tmpdir(), parent), 'sibling.sarif');
+    const r = await callTool('import_sarif', { project_path: dir, sarif_path: sibling }, s.plugin);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('outside_project');
   });
 });
 
