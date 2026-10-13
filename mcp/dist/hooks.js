@@ -861,6 +861,531 @@ var init_paths = __esm({
   }
 });
 
+// src/hooks/shell/effects.ts
+function noEffects() {
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
+}
+function mergeEffects(into, from) {
+  pushAll(into.writes, from.writes);
+  pushAll(into.removes, from.removes);
+  pushAll(into.dirs, from.dirs);
+  pushAll(into.special, from.special);
+  pushAll(into.links, from.links);
+  pushAll(into.hardLinkSources, from.hardLinkSources);
+  pushAll(into.trees, from.trees);
+}
+function lastSegment(path) {
+  return path.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path;
+}
+function operands(args, valued) {
+  const out = [];
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (!optionsDone && a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    if (!optionsDone && a.startsWith("-") && a.length > 1) {
+      if (valued.has(a)) i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+function lnDestinations(args) {
+  let dir;
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    const long = /^--target-directory=(.+)$/.exec(a);
+    if (long !== null) dir = long[1];
+    else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) dir = args[++i];
+    else if (/^-t./.test(a)) dir = a.slice(2);
+    else if (a === "-S" || a === "--suffix") i++;
+    else rest.push(a);
+  }
+  const targets = operands(rest, /* @__PURE__ */ new Set());
+  if (dir !== void 0) return targets.map((t) => `${dir}/${lastSegment(t)}`);
+  if (targets.length >= 2) return [targets[targets.length - 1] ?? ""];
+  return targets.length === 1 ? [lastSegment(targets[0] ?? "")] : [];
+}
+function lnHardSources(args) {
+  if (args.some((a) => a === "--symbolic" || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
+  let dir = false;
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (/^--target-directory=/.test(a)) dir = true;
+    else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) {
+      dir = true;
+      i += 1;
+    } else if (/^-t./.test(a)) dir = true;
+    else if (a === "-S" || a === "--suffix") i += 1;
+    else rest.push(a);
+  }
+  const names = operands(rest, /* @__PURE__ */ new Set());
+  return dir || names.length < 2 ? names : names.slice(0, -1);
+}
+function newItemParam(spelled) {
+  const exact = NEW_ITEM_VALUED.find(([, names]) => names.includes(spelled));
+  if (exact !== void 0) return exact[0];
+  const matches = NEW_ITEM_VALUED.filter(([, names]) => names.some((n) => n.startsWith(spelled)));
+  return matches.length === 1 ? matches[0]?.[0] : void 0;
+}
+function itemTypeOf(value) {
+  if (value === "") return "file";
+  const pattern = `${value.toLowerCase()}*`;
+  if (wildcardMatch(pattern, "directory") || wildcardMatch(pattern, "container")) return "directory";
+  return ["file", "symboliclink", "junction", "hardlink"].find((t) => wildcardMatch(pattern, t)) ?? "unknown";
+}
+function newItemArgs(args) {
+  let spelledType = "";
+  let target;
+  const paths = [];
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+    if (param === null) {
+      positional.push(a);
+      continue;
+    }
+    const name = newItemParam((param[1] ?? "").toLowerCase());
+    const inline = param[2];
+    const value = inline !== void 0 ? inline : name !== void 0 ? args[++i] ?? "" : void 0;
+    if (value === void 0) continue;
+    if (name === "type") spelledType = value;
+    else if (name === "path" || name === "name") paths.push(value);
+    else if (name === "target") target = value;
+  }
+  if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? "");
+  const itemType = itemTypeOf(spelledType);
+  return target === void 0 ? { itemType, paths } : { itemType, paths, target };
+}
+function mklinkDestinations(args) {
+  const link = args.find((a) => !a.startsWith("/"));
+  return link === void 0 ? [] : [link];
+}
+function cmdEffects(args, cwd, depth = 0) {
+  const e = noEffects();
+  if (depth > MAX_CMD_NESTING) return e;
+  const commands = cmdLine(args);
+  let dir = cwd;
+  for (const command of commands) {
+    const [raw, ...rest] = cmdCommandWords(command.words);
+    const name = (raw ?? "").toLowerCase().replace(/\.exe$/, "");
+    pushAll(e.writes, command.redirects.map((r) => resolveFrom(dir, r)));
+    mergeEffects(e, effectsOf(name, rest, dir, depth + 1));
+    dir = cwdAfter(name, rest, dir) ?? dir;
+  }
+  return e;
+}
+function redirectTargets(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    const r = word === void 0 ? null : parseRedirect(word);
+    if (r === null || !r.op.startsWith(">")) continue;
+    const next = words[i + 1]?.value;
+    if (r.op.endsWith("&")) {
+      const fd = r.inline !== "" ? r.inline : next ?? "";
+      if (/^\d*-?$/.test(fd)) continue;
+    }
+    const target = r.inline !== "" ? r.inline : next;
+    if (target !== void 0) out.push(target);
+  }
+  return out;
+}
+function withoutRedirections(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === void 0) continue;
+    const r = parseRedirect(word);
+    if (r === null) {
+      out.push(word.value);
+      continue;
+    }
+    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
+    if (r.inline === "") i += 1;
+  }
+  return out;
+}
+function intoDir(dir, src) {
+  return `${dir.replace(/[\\/]+$/, "")}/${lastSegment(src)}`;
+}
+function optionValues(args, short, long) {
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a === short || a === long) {
+      const v = args[i + 1];
+      if (v !== void 0) out.push(v);
+    } else if (a.startsWith(`${long}=`)) out.push(a.slice(long.length + 1));
+    else if (a.startsWith(short) && a.length > short.length && !a.startsWith("--")) out.push(a.slice(short.length));
+  }
+  return out;
+}
+function psName(spelled) {
+  const lower = spelled.toLowerCase();
+  const all = [...PS_PATH_PARAMS, ...PS_VALUE_PARAMS, ...PS_SWITCHES];
+  if (all.includes(lower)) return lower;
+  return lower.length >= 3 ? all.find((n) => n.startsWith(lower)) : void 0;
+}
+function parseTransfer(args, slashSwitches) {
+  const named = [];
+  const positional = [];
+  let dest;
+  let into = false;
+  let recursive = false;
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (slashSwitches && /^\/[A-Za-z]/.test(a)) continue;
+    if (optionsDone || a === "-" || !a.startsWith("-")) {
+      positional.push(a);
+      continue;
+    }
+    if (a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    const target = /^--target-directory(?:=(.*))?$/.exec(a);
+    if (target !== null) {
+      dest = target[1] ?? args[++i];
+      into = true;
+      continue;
+    }
+    if (a === "--recursive" || a === "--archive") {
+      recursive = true;
+      continue;
+    }
+    const ps = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+    const param = ps === null ? void 0 : psName(ps[1] ?? "");
+    if (ps !== null && param !== void 0) {
+      const value = PS_PATH_PARAMS.includes(param) || PS_VALUE_PARAMS.includes(param) ? ps[2] ?? args[++i] : void 0;
+      if (param === "recurse") recursive = true;
+      else if (param === "destination") dest = value;
+      else if ((param === "path" || param === "literalpath") && value !== void 0) named.push(value);
+      continue;
+    }
+    if (COPY_VALUED.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (/^-[a-zA-Z]*t$/.test(a)) {
+      dest = args[++i];
+      into = true;
+    } else if (/^-t./.test(a)) {
+      dest = a.slice(2);
+      into = true;
+    }
+    if (!a.startsWith("--") && /[rRa]/.test(a.slice(1))) recursive = true;
+  }
+  const sources = [...named, ...positional];
+  if (dest === void 0 && sources.length >= 2) dest = sources.pop();
+  return dest === void 0 ? { sources, into, recursive } : { sources, dest, into, recursive };
+}
+function perlLike(args, codeLetters, valueLetters) {
+  const code = [];
+  const operandsSeen = [];
+  let inPlace = false;
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (!optionsDone && a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    if (optionsDone || !a.startsWith("-") || a.length === 1 || a.startsWith("--")) {
+      if (optionsDone || !a.startsWith("--")) operandsSeen.push(a);
+      continue;
+    }
+    for (let k = 1; k < a.length; k += 1) {
+      const c = a.charAt(k);
+      if (codeLetters.includes(c)) {
+        const rest = a.slice(k + 1);
+        code.push(rest !== "" ? rest : args[++i] ?? "");
+        break;
+      }
+      if (c === "i") {
+        inPlace = true;
+        break;
+      }
+      if (valueLetters.includes(c)) {
+        if (k === a.length - 1) i += 1;
+        break;
+      }
+      if (c === "0") while (/[0-9a-fA-Fx]/.test(a.charAt(k + 1))) k += 1;
+      if (c === "l") while (/[0-9]/.test(a.charAt(k + 1))) k += 1;
+    }
+  }
+  const files = code.length > 0 ? operandsSeen : operandsSeen.slice(1);
+  return { code, inPlace, files };
+}
+function editorFiles(args) {
+  const out = [];
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (!optionsDone && a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    if (!optionsDone && a === "--cmd") {
+      i += 1;
+      continue;
+    }
+    if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
+      if (EDITOR_VALUED_LETTERS.includes(a.charAt(a.length - 1))) i += 1;
+      continue;
+    }
+    if (!optionsDone && (a.startsWith("-") || a.startsWith("+"))) continue;
+    out.push(a);
+  }
+  return out;
+}
+function commandWriteDestinations(name, args) {
+  switch (name) {
+    case "tee":
+    case "sponge":
+      return operands(args, /* @__PURE__ */ new Set());
+    case "sed":
+      return args.some((a) => SED_IN_PLACE.test(a)) ? operands(args, /* @__PURE__ */ new Set(["-e", "-f", "--expression", "--file", "-l", "--line-length"])) : [];
+    case "dd":
+      return args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3));
+    case "curl":
+      return optionValues(args, "-o", "--output");
+    case "wget":
+      return optionValues(args, "-O", "--output-document");
+    case "sort":
+      return optionValues(args, "-o", "--output");
+    case "truncate":
+      return operands(args, /* @__PURE__ */ new Set(["-s", "--size", "-r", "--reference"]));
+    case "shred":
+      return operands(args, /* @__PURE__ */ new Set(["-n", "--iterations", "-s", "--size", "--random-source"]));
+    case "perl": {
+      const p = perlLike(args, "eE", "IMm");
+      return p.inPlace ? p.files : [];
+    }
+    case "ruby": {
+      const p = perlLike(args, "e", "IrCEFx");
+      return p.inPlace ? p.files : [];
+    }
+    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
+    // `vim -es -c '…' -c wq f` write the files they open.
+    case "ed":
+    case "red":
+      return operands(args, /* @__PURE__ */ new Set(["-p", "--prompt"]));
+    case "ex":
+    case "vi":
+    case "vim":
+    case "nvim":
+    case "gvim":
+      return editorFiles(args);
+    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
+    case "sc":
+    case "set-content":
+    case "add-content":
+    case "ac":
+    case "clear-content":
+    case "clc":
+    case "out-file":
+    case "tee-object":
+      return args.map((a) => a.replace(/^-[A-Za-z]+:/, ""));
+    default:
+      return [];
+  }
+}
+function effectsOf(name, rawArgs, cwd, depth = 0) {
+  if (name === "cmd") return cmdEffects(rawArgs, cwd, depth);
+  const args = CMD_SWITCHED.has(name) ? rawArgs.map(cmdSwitch) : rawArgs;
+  const at = (p) => resolveFrom(cwd, p);
+  const e = noEffects();
+  switch (name) {
+    case "mkfifo":
+      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).map(at));
+      return e;
+    case "mknod":
+      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).slice(0, 1).map(at));
+      return e;
+    case "ln":
+      pushAll(e.links, lnDestinations(args).map(at));
+      pushAll(e.hardLinkSources, lnHardSources(args).map(at));
+      return e;
+    case "link":
+      pushAll(e.hardLinkSources, operands(args, /* @__PURE__ */ new Set()).slice(0, 1).map(at));
+      return e;
+    case "fsutil":
+      if (/^hardlink$/i.test(args[0] ?? "") && /^create$/i.test(args[1] ?? "")) {
+        if (args[2] !== void 0) e.links.push(at(args[2]));
+        if (args[3] !== void 0) e.hardLinkSources.push(at(args[3]));
+      }
+      return e;
+    case "mklink": {
+      pushAll(e.links, mklinkDestinations(args).map(at));
+      const names = args.filter((a) => !a.startsWith("/"));
+      if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== void 0) e.hardLinkSources.push(at(names[1]));
+      return e;
+    }
+    case "new-item":
+    case "ni": {
+      const item = newItemArgs(args);
+      if (["symboliclink", "hardlink", "junction"].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
+      if (item.itemType === "hardlink" && item.target !== void 0) e.hardLinkSources.push(at(item.target));
+      else if (item.itemType === "file") pushAll(e.writes, item.paths.map(at));
+      return e;
+    }
+    case "cp":
+    case "install":
+    case "copy-item":
+    case "cpi":
+    case "copy":
+    case "mv":
+    case "move-item":
+    case "mi":
+    case "move": {
+      const t = parseTransfer(args, name === "copy" || name === "move");
+      const moves = name === "mv" || name === "move-item" || name === "mi" || name === "move";
+      if (moves) pushAll(e.removes, t.sources.map(at));
+      if (name === "cp" && args.some((a) => a === "--link" || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a))) pushAll(e.hardLinkSources, t.sources.map(at));
+      if (t.dest === void 0) return e;
+      const dest = t.dest;
+      if (!t.into) e.writes.push(at(dest));
+      pushAll(e.writes, t.sources.map((s) => at(intoDir(dest, s))));
+      if (!t.into && (moves || t.recursive)) e.dirs.push(at(dest));
+      return e;
+    }
+    case "xcopy":
+    case "robocopy": {
+      const [, dest, ...files] = args.filter((a) => !/^\/[A-Za-z]/.test(a));
+      if (dest !== void 0) {
+        e.dirs.push(at(dest));
+        e.writes.push(at(dest));
+        pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
+        if (name === "robocopy" && args.some((a) => /^\/(?:mir|purge)$/i.test(a))) e.trees.push(at(dest));
+      }
+      return e;
+    }
+    case "rsync": {
+      const paths = operands(args, RSYNC_VALUED);
+      const dest = paths.pop();
+      if (dest === void 0 || paths.length === 0) return e;
+      e.writes.push(at(dest));
+      pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
+      if (args.some((a) => a === "--recursive" || a === "--archive" || /^-[a-zA-Z]*[ra]/.test(a))) e.dirs.push(at(dest));
+      if (args.some((a) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a))) e.trees.push(at(dest));
+      return e;
+    }
+    case "ren":
+    case "rename":
+    case "rename-item":
+    case "rni": {
+      const positional = args.filter((a) => !a.startsWith("-") && !/^\/[A-Za-z]$/.test(a));
+      const src = psParam(args, ["path", "literalpath"]) ?? positional.shift();
+      const newName = psParam(args, ["newname"]) ?? positional.shift();
+      if (src === void 0) return e;
+      e.removes.push(at(src));
+      if (newName !== void 0) {
+        const dest = /[\\/]/.test(newName) ? newName : `${dirOf(src.replace(/\\/g, "/")) || "."}/${newName}`;
+        e.writes.push(at(dest));
+        e.dirs.push(at(dest));
+      }
+      return e;
+    }
+    default:
+      break;
+  }
+  if (REMOVERS.has(name)) pushAll(e.removes, operands(args, /* @__PURE__ */ new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
+  const written = commandWriteDestinations(name, args).map(at);
+  pushAll(e.writes, written);
+  if (name === "shred" && args.some((a) => a === "--remove" || a.startsWith("--remove=") || /^-[a-zA-Z]*u/.test(a))) {
+    pushAll(e.removes, written);
+  }
+  return e;
+}
+function withoutRedirectWords(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === void 0) continue;
+    const r = parseRedirect(word);
+    if (r === null) out.push(word);
+    else if (r.inline === "") i += 1;
+  }
+  return out;
+}
+var NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED;
+var init_effects = __esm({
+  "src/hooks/shell/effects.ts"() {
+    "use strict";
+    init_arrays();
+    init_cmd();
+    init_command();
+    init_paths();
+    NEW_ITEM_VALUED = [
+      ["type", ["itemtype", "type"]],
+      ["path", ["path", "literalpath", "pspath", "lp"]],
+      ["name", ["name"]],
+      ["target", ["value", "target"]],
+      ["credential", ["credential"]]
+    ];
+    COPY_VALUED = /* @__PURE__ */ new Set(["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"]);
+    PS_PATH_PARAMS = ["path", "literalpath", "destination"];
+    PS_VALUE_PARAMS = ["filter", "include", "exclude", "credential", "fromsession", "tosession"];
+    PS_SWITCHES = ["recurse", "force", "container", "passthru", "whatif", "confirm"];
+    RSYNC_VALUED = /* @__PURE__ */ new Set([
+      "-e",
+      "--rsh",
+      "-f",
+      "--filter",
+      "--exclude",
+      "--include",
+      "--exclude-from",
+      "--include-from",
+      "--files-from",
+      "-T",
+      "--temp-dir",
+      "-B",
+      "--block-size",
+      "--chmod",
+      "--chown",
+      "--log-file",
+      "--password-file",
+      "--partial-dir",
+      "--backup-dir",
+      "--suffix",
+      "--compare-dest",
+      "--copy-dest",
+      "--link-dest",
+      "--rsync-path",
+      "-M",
+      "--remote-option",
+      "--port",
+      "--timeout",
+      "--contimeout",
+      "--bwlimit",
+      "--max-size",
+      "--min-size",
+      "--out-format",
+      "--info",
+      "--debug",
+      "--iconv",
+      "--usermap",
+      "--groupmap",
+      "--address",
+      "--sockopts",
+      "--max-delete"
+    ]);
+    SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
+    EDITOR_VALUED_LETTERS = "cSuUiTwWtq";
+    REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
+    CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
+  }
+});
+
 // src/hooks/shell/split.ts
 function scanQuote(source, start) {
   const quote = source.charAt(start);
@@ -1535,450 +2060,6 @@ function expandWords(words) {
     for (const value of expanded) out.push({ value, quoted: false });
   }
   return out ?? words;
-}
-function noEffects() {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
-}
-function mergeEffects(into, from) {
-  pushAll(into.writes, from.writes);
-  pushAll(into.removes, from.removes);
-  pushAll(into.dirs, from.dirs);
-  pushAll(into.special, from.special);
-  pushAll(into.links, from.links);
-  pushAll(into.hardLinkSources, from.hardLinkSources);
-  pushAll(into.trees, from.trees);
-}
-function lastSegment(path) {
-  return path.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path;
-}
-function operands(args, valued) {
-  const out = [];
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    if (!optionsDone && a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    if (!optionsDone && a.startsWith("-") && a.length > 1) {
-      if (valued.has(a)) i++;
-      continue;
-    }
-    out.push(a);
-  }
-  return out;
-}
-function lnDestinations(args) {
-  let dir;
-  const rest = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    const long = /^--target-directory=(.+)$/.exec(a);
-    if (long !== null) dir = long[1];
-    else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) dir = args[++i];
-    else if (/^-t./.test(a)) dir = a.slice(2);
-    else if (a === "-S" || a === "--suffix") i++;
-    else rest.push(a);
-  }
-  const targets = operands(rest, /* @__PURE__ */ new Set());
-  if (dir !== void 0) return targets.map((t) => `${dir}/${lastSegment(t)}`);
-  if (targets.length >= 2) return [targets[targets.length - 1] ?? ""];
-  return targets.length === 1 ? [lastSegment(targets[0] ?? "")] : [];
-}
-function lnHardSources(args) {
-  if (args.some((a) => a === "--symbolic" || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
-  let dir = false;
-  const rest = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    if (/^--target-directory=/.test(a)) dir = true;
-    else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) {
-      dir = true;
-      i += 1;
-    } else if (/^-t./.test(a)) dir = true;
-    else if (a === "-S" || a === "--suffix") i += 1;
-    else rest.push(a);
-  }
-  const names = operands(rest, /* @__PURE__ */ new Set());
-  return dir || names.length < 2 ? names : names.slice(0, -1);
-}
-function newItemParam(spelled) {
-  const exact = NEW_ITEM_VALUED.find(([, names]) => names.includes(spelled));
-  if (exact !== void 0) return exact[0];
-  const matches = NEW_ITEM_VALUED.filter(([, names]) => names.some((n) => n.startsWith(spelled)));
-  return matches.length === 1 ? matches[0]?.[0] : void 0;
-}
-function itemTypeOf(value) {
-  if (value === "") return "file";
-  const pattern = `${value.toLowerCase()}*`;
-  if (wildcardMatch(pattern, "directory") || wildcardMatch(pattern, "container")) return "directory";
-  return ["file", "symboliclink", "junction", "hardlink"].find((t) => wildcardMatch(pattern, t)) ?? "unknown";
-}
-function newItemArgs(args) {
-  let spelledType = "";
-  let target;
-  const paths = [];
-  const positional = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
-    if (param === null) {
-      positional.push(a);
-      continue;
-    }
-    const name = newItemParam((param[1] ?? "").toLowerCase());
-    const inline = param[2];
-    const value = inline !== void 0 ? inline : name !== void 0 ? args[++i] ?? "" : void 0;
-    if (value === void 0) continue;
-    if (name === "type") spelledType = value;
-    else if (name === "path" || name === "name") paths.push(value);
-    else if (name === "target") target = value;
-  }
-  if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? "");
-  const itemType = itemTypeOf(spelledType);
-  return target === void 0 ? { itemType, paths } : { itemType, paths, target };
-}
-function mklinkDestinations(args) {
-  const link = args.find((a) => !a.startsWith("/"));
-  return link === void 0 ? [] : [link];
-}
-function cmdEffects(args, cwd, depth = 0) {
-  const e = noEffects();
-  if (depth > MAX_CMD_NESTING) return e;
-  const commands = cmdLine(args);
-  let dir = cwd;
-  for (const command of commands) {
-    const [raw, ...rest] = cmdCommandWords(command.words);
-    const name = (raw ?? "").toLowerCase().replace(/\.exe$/, "");
-    pushAll(e.writes, command.redirects.map((r) => resolveFrom(dir, r)));
-    mergeEffects(e, effectsOf(name, rest, dir, depth + 1));
-    dir = cwdAfter(name, rest, dir) ?? dir;
-  }
-  return e;
-}
-function redirectTargets(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    const r = word === void 0 ? null : parseRedirect(word);
-    if (r === null || !r.op.startsWith(">")) continue;
-    const next = words[i + 1]?.value;
-    if (r.op.endsWith("&")) {
-      const fd = r.inline !== "" ? r.inline : next ?? "";
-      if (/^\d*-?$/.test(fd)) continue;
-    }
-    const target = r.inline !== "" ? r.inline : next;
-    if (target !== void 0) out.push(target);
-  }
-  return out;
-}
-function withoutRedirections(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === void 0) continue;
-    const r = parseRedirect(word);
-    if (r === null) {
-      out.push(word.value);
-      continue;
-    }
-    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
-    if (r.inline === "") i += 1;
-  }
-  return out;
-}
-function intoDir(dir, src) {
-  return `${dir.replace(/[\\/]+$/, "")}/${lastSegment(src)}`;
-}
-function optionValues(args, short, long) {
-  const out = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (a === short || a === long) {
-      const v = args[i + 1];
-      if (v !== void 0) out.push(v);
-    } else if (a.startsWith(`${long}=`)) out.push(a.slice(long.length + 1));
-    else if (a.startsWith(short) && a.length > short.length && !a.startsWith("--")) out.push(a.slice(short.length));
-  }
-  return out;
-}
-function psName(spelled) {
-  const lower = spelled.toLowerCase();
-  const all = [...PS_PATH_PARAMS, ...PS_VALUE_PARAMS, ...PS_SWITCHES];
-  if (all.includes(lower)) return lower;
-  return lower.length >= 3 ? all.find((n) => n.startsWith(lower)) : void 0;
-}
-function parseTransfer(args, slashSwitches) {
-  const named = [];
-  const positional = [];
-  let dest;
-  let into = false;
-  let recursive = false;
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (slashSwitches && /^\/[A-Za-z]/.test(a)) continue;
-    if (optionsDone || a === "-" || !a.startsWith("-")) {
-      positional.push(a);
-      continue;
-    }
-    if (a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    const target = /^--target-directory(?:=(.*))?$/.exec(a);
-    if (target !== null) {
-      dest = target[1] ?? args[++i];
-      into = true;
-      continue;
-    }
-    if (a === "--recursive" || a === "--archive") {
-      recursive = true;
-      continue;
-    }
-    const ps = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
-    const param = ps === null ? void 0 : psName(ps[1] ?? "");
-    if (ps !== null && param !== void 0) {
-      const value = PS_PATH_PARAMS.includes(param) || PS_VALUE_PARAMS.includes(param) ? ps[2] ?? args[++i] : void 0;
-      if (param === "recurse") recursive = true;
-      else if (param === "destination") dest = value;
-      else if ((param === "path" || param === "literalpath") && value !== void 0) named.push(value);
-      continue;
-    }
-    if (COPY_VALUED.has(a)) {
-      i += 1;
-      continue;
-    }
-    if (/^-[a-zA-Z]*t$/.test(a)) {
-      dest = args[++i];
-      into = true;
-    } else if (/^-t./.test(a)) {
-      dest = a.slice(2);
-      into = true;
-    }
-    if (!a.startsWith("--") && /[rRa]/.test(a.slice(1))) recursive = true;
-  }
-  const sources = [...named, ...positional];
-  if (dest === void 0 && sources.length >= 2) dest = sources.pop();
-  return dest === void 0 ? { sources, into, recursive } : { sources, dest, into, recursive };
-}
-function perlLike(args, codeLetters, valueLetters) {
-  const code = [];
-  const operandsSeen = [];
-  let inPlace = false;
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (!optionsDone && a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    if (optionsDone || !a.startsWith("-") || a.length === 1 || a.startsWith("--")) {
-      if (optionsDone || !a.startsWith("--")) operandsSeen.push(a);
-      continue;
-    }
-    for (let k = 1; k < a.length; k += 1) {
-      const c = a.charAt(k);
-      if (codeLetters.includes(c)) {
-        const rest = a.slice(k + 1);
-        code.push(rest !== "" ? rest : args[++i] ?? "");
-        break;
-      }
-      if (c === "i") {
-        inPlace = true;
-        break;
-      }
-      if (valueLetters.includes(c)) {
-        if (k === a.length - 1) i += 1;
-        break;
-      }
-      if (c === "0") while (/[0-9a-fA-Fx]/.test(a.charAt(k + 1))) k += 1;
-      if (c === "l") while (/[0-9]/.test(a.charAt(k + 1))) k += 1;
-    }
-  }
-  const files = code.length > 0 ? operandsSeen : operandsSeen.slice(1);
-  return { code, inPlace, files };
-}
-function editorFiles(args) {
-  const out = [];
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (!optionsDone && a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    if (!optionsDone && a === "--cmd") {
-      i += 1;
-      continue;
-    }
-    if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
-      if (EDITOR_VALUED_LETTERS.includes(a.charAt(a.length - 1))) i += 1;
-      continue;
-    }
-    if (!optionsDone && (a.startsWith("-") || a.startsWith("+"))) continue;
-    out.push(a);
-  }
-  return out;
-}
-function commandWriteDestinations(name, args) {
-  switch (name) {
-    case "tee":
-    case "sponge":
-      return operands(args, /* @__PURE__ */ new Set());
-    case "sed":
-      return args.some((a) => SED_IN_PLACE.test(a)) ? operands(args, /* @__PURE__ */ new Set(["-e", "-f", "--expression", "--file", "-l", "--line-length"])) : [];
-    case "dd":
-      return args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3));
-    case "curl":
-      return optionValues(args, "-o", "--output");
-    case "wget":
-      return optionValues(args, "-O", "--output-document");
-    case "sort":
-      return optionValues(args, "-o", "--output");
-    case "truncate":
-      return operands(args, /* @__PURE__ */ new Set(["-s", "--size", "-r", "--reference"]));
-    case "shred":
-      return operands(args, /* @__PURE__ */ new Set(["-n", "--iterations", "-s", "--size", "--random-source"]));
-    case "perl": {
-      const p = perlLike(args, "eE", "IMm");
-      return p.inPlace ? p.files : [];
-    }
-    case "ruby": {
-      const p = perlLike(args, "e", "IrCEFx");
-      return p.inPlace ? p.files : [];
-    }
-    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
-    // `vim -es -c '…' -c wq f` write the files they open.
-    case "ed":
-    case "red":
-      return operands(args, /* @__PURE__ */ new Set(["-p", "--prompt"]));
-    case "ex":
-    case "vi":
-    case "vim":
-    case "nvim":
-    case "gvim":
-      return editorFiles(args);
-    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
-    case "sc":
-    case "set-content":
-    case "add-content":
-    case "ac":
-    case "clear-content":
-    case "clc":
-    case "out-file":
-    case "tee-object":
-      return args.map((a) => a.replace(/^-[A-Za-z]+:/, ""));
-    default:
-      return [];
-  }
-}
-function effectsOf(name, rawArgs, cwd, depth = 0) {
-  if (name === "cmd") return cmdEffects(rawArgs, cwd, depth);
-  const args = CMD_SWITCHED.has(name) ? rawArgs.map(cmdSwitch) : rawArgs;
-  const at = (p) => resolveFrom(cwd, p);
-  const e = noEffects();
-  switch (name) {
-    case "mkfifo":
-      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).map(at));
-      return e;
-    case "mknod":
-      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).slice(0, 1).map(at));
-      return e;
-    case "ln":
-      pushAll(e.links, lnDestinations(args).map(at));
-      pushAll(e.hardLinkSources, lnHardSources(args).map(at));
-      return e;
-    case "link":
-      pushAll(e.hardLinkSources, operands(args, /* @__PURE__ */ new Set()).slice(0, 1).map(at));
-      return e;
-    case "fsutil":
-      if (/^hardlink$/i.test(args[0] ?? "") && /^create$/i.test(args[1] ?? "")) {
-        if (args[2] !== void 0) e.links.push(at(args[2]));
-        if (args[3] !== void 0) e.hardLinkSources.push(at(args[3]));
-      }
-      return e;
-    case "mklink": {
-      pushAll(e.links, mklinkDestinations(args).map(at));
-      const names = args.filter((a) => !a.startsWith("/"));
-      if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== void 0) e.hardLinkSources.push(at(names[1]));
-      return e;
-    }
-    case "new-item":
-    case "ni": {
-      const item = newItemArgs(args);
-      if (["symboliclink", "hardlink", "junction"].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
-      if (item.itemType === "hardlink" && item.target !== void 0) e.hardLinkSources.push(at(item.target));
-      else if (item.itemType === "file") pushAll(e.writes, item.paths.map(at));
-      return e;
-    }
-    case "cp":
-    case "install":
-    case "copy-item":
-    case "cpi":
-    case "copy":
-    case "mv":
-    case "move-item":
-    case "mi":
-    case "move": {
-      const t = parseTransfer(args, name === "copy" || name === "move");
-      const moves = name === "mv" || name === "move-item" || name === "mi" || name === "move";
-      if (moves) pushAll(e.removes, t.sources.map(at));
-      if (name === "cp" && args.some((a) => a === "--link" || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a))) pushAll(e.hardLinkSources, t.sources.map(at));
-      if (t.dest === void 0) return e;
-      const dest = t.dest;
-      if (!t.into) e.writes.push(at(dest));
-      pushAll(e.writes, t.sources.map((s) => at(intoDir(dest, s))));
-      if (!t.into && (moves || t.recursive)) e.dirs.push(at(dest));
-      return e;
-    }
-    case "xcopy":
-    case "robocopy": {
-      const [, dest, ...files] = args.filter((a) => !/^\/[A-Za-z]/.test(a));
-      if (dest !== void 0) {
-        e.dirs.push(at(dest));
-        e.writes.push(at(dest));
-        pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
-        if (name === "robocopy" && args.some((a) => /^\/(?:mir|purge)$/i.test(a))) e.trees.push(at(dest));
-      }
-      return e;
-    }
-    case "rsync": {
-      const paths = operands(args, RSYNC_VALUED);
-      const dest = paths.pop();
-      if (dest === void 0 || paths.length === 0) return e;
-      e.writes.push(at(dest));
-      pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
-      if (args.some((a) => a === "--recursive" || a === "--archive" || /^-[a-zA-Z]*[ra]/.test(a))) e.dirs.push(at(dest));
-      if (args.some((a) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a))) e.trees.push(at(dest));
-      return e;
-    }
-    case "ren":
-    case "rename":
-    case "rename-item":
-    case "rni": {
-      const positional = args.filter((a) => !a.startsWith("-") && !/^\/[A-Za-z]$/.test(a));
-      const src = psParam(args, ["path", "literalpath"]) ?? positional.shift();
-      const newName = psParam(args, ["newname"]) ?? positional.shift();
-      if (src === void 0) return e;
-      e.removes.push(at(src));
-      if (newName !== void 0) {
-        const dest = /[\\/]/.test(newName) ? newName : `${dirOf(src.replace(/\\/g, "/")) || "."}/${newName}`;
-        e.writes.push(at(dest));
-        e.dirs.push(at(dest));
-      }
-      return e;
-    }
-    default:
-      break;
-  }
-  if (REMOVERS.has(name)) pushAll(e.removes, operands(args, /* @__PURE__ */ new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
-  const written = commandWriteDestinations(name, args).map(at);
-  pushAll(e.writes, written);
-  if (name === "shred" && args.some((a) => a === "--remove" || a.startsWith("--remove=") || /^-[a-zA-Z]*u/.test(a))) {
-    pushAll(e.removes, written);
-  }
-  return e;
 }
 function isInterpreter(name) {
   return PYTHON.test(name) || INTERPRETERS.has(name);
@@ -2849,17 +2930,6 @@ function xargsReplacement(options) {
   }
   return replace === "" ? void 0 : replace;
 }
-function withoutRedirectWords(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === void 0) continue;
-    const r = parseRedirect(word);
-    if (r === null) out.push(word);
-    else if (r.inline === "") i += 1;
-  }
-  return out;
-}
 function interpreterRunsFetch(statements, k) {
   const statement = statements[k];
   if (statement === void 0 || !statement.masked.endsWith("<")) return false;
@@ -3723,7 +3793,7 @@ function assessReadings(readings, cut, now, deadline, where) {
     ...ask === void 0 ? {} : { ask }
   };
 }
-var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
@@ -3733,6 +3803,7 @@ var init_bashGuard = __esm({
     init_arrays();
     init_cmd();
     init_command();
+    init_effects();
     init_paths();
     init_split();
     init_command();
@@ -4002,64 +4073,6 @@ var init_bashGuard = __esm({
     ];
     MAX_BRACE_WORDS = 64;
     MAX_BRACE_WORD = 1024;
-    NEW_ITEM_VALUED = [
-      ["type", ["itemtype", "type"]],
-      ["path", ["path", "literalpath", "pspath", "lp"]],
-      ["name", ["name"]],
-      ["target", ["value", "target"]],
-      ["credential", ["credential"]]
-    ];
-    COPY_VALUED = /* @__PURE__ */ new Set(["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"]);
-    PS_PATH_PARAMS = ["path", "literalpath", "destination"];
-    PS_VALUE_PARAMS = ["filter", "include", "exclude", "credential", "fromsession", "tosession"];
-    PS_SWITCHES = ["recurse", "force", "container", "passthru", "whatif", "confirm"];
-    RSYNC_VALUED = /* @__PURE__ */ new Set([
-      "-e",
-      "--rsh",
-      "-f",
-      "--filter",
-      "--exclude",
-      "--include",
-      "--exclude-from",
-      "--include-from",
-      "--files-from",
-      "-T",
-      "--temp-dir",
-      "-B",
-      "--block-size",
-      "--chmod",
-      "--chown",
-      "--log-file",
-      "--password-file",
-      "--partial-dir",
-      "--backup-dir",
-      "--suffix",
-      "--compare-dest",
-      "--copy-dest",
-      "--link-dest",
-      "--rsync-path",
-      "-M",
-      "--remote-option",
-      "--port",
-      "--timeout",
-      "--contimeout",
-      "--bwlimit",
-      "--max-size",
-      "--min-size",
-      "--out-format",
-      "--info",
-      "--debug",
-      "--iconv",
-      "--usermap",
-      "--groupmap",
-      "--address",
-      "--sockopts",
-      "--max-delete"
-    ]);
-    SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
-    EDITOR_VALUED_LETTERS = "cSuUiTwWtq";
-    REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
-    CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
     PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
     INTERPRETERS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "perl", "ruby", "php", "pwsh", "powershell"]);
     RUN_WRAPPERS = /* @__PURE__ */ new Set(["uv", "poetry", "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi"]);
