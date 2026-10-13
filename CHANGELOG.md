@@ -8,6 +8,238 @@ version bump.
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-10-13
+
+Review 8, and dev-guardian's half of a contract with dev-spec-driven 1.30.0. The CI gate — the one
+dev-spec-driven's `/spec-finish` runs — returns a verdict on an ordinary project: it no longer stays
+"incomplete" on every TypeScript project (`import type`) or on Semgrep's per-file timeouts
+(`.guardian/scan.yml`), and no longer passes a Windows file at a long path it never opened. Baselines keep
+a finding known across a version bump, a squash merge and a rename. The guardrail hooks judge a recursive
+delete by its target, read more of what a shell command does, and ask before an agent runs `baseline
+update`. `tools/list` went from 125.8k to 71k characters with the new server `instructions` (52 listed
+tools, 13 hidden aliases), the skill and command listing from 12.9k to 3.9k. The verdict gains the keys
+dev-spec-driven 1.30.0 reads — `tool_version`, `coverage_gap_details`, `baseline_status`. The hooks run
+in exec form, so they need Claude Code 2.1.139 or later. A plugin install went from 743 files / 14.6 MB to
+24 files / 4.1 MB.
+
+### Upgrading from 3.2.x
+
+- **Claude Code 2.1.139 or later.** Every hook is exec form: `"command": "node"` with the dispatcher and
+  the event in `"args"`, no shell per call.
+- **Pairs with dev-spec-driven 1.30.0**, which reads `tool_version`, `coverage_gap_details` and
+  `baseline_status` when present (and accepts a `--compact` report). Every key 1.29 reads is unchanged.
+- **Thirteen tool names became hidden aliases** (see Changed). They still answer `tools/call` with their
+  own parameters, so scripts, saved prompts and host permissions keep working; a model in Claude Code now
+  calls the folded tool.
+- **Other hosts**: re-run `mcp-config <host> --write` (`--update-mcp` for a shared file) to get the new
+  rules file.
+- **Every usage error is exit 3**: `check` and `mcp-config` used 2, which is `scan`'s "incomplete".
+- Baselines need nothing: the file stays `version: 1` and 3.2.x reads it as before; an entry gains its
+  `match_id` at the next `baseline update`, its `added` date kept.
+
+### Security
+
+- **The shell guard judges a recursive delete by its target, not by `-f`.** `rm -r ~`,
+  `rm -r /c/Users/<you>`, `Remove-Item ~ -Recurse` and `rd /s C:\` are denied like their forced forms (a
+  tool has no terminal to ask on); `rm -r node_modules` warns as `rm -rf node_modules` does. Catastrophic
+  targets now include Windows folders in every spelling (`/c/Windows`, `C:/Windows`, `/mnt/c/Windows`, any
+  case, `System32`, `PROGRA~1`, `ProgramData`), another account's `~name`, and a glob or brace that names a
+  root directory (`/[a-z]*`, `/?*`, `/{bin,etc,usr}`).
+- **It reads more of what a command does**: brace expansion before any rule (`{rm,-rf,/}`); Git Bash's
+  `cmd //c` and its `//s` `//q` as cmd's `/c` `/s` `/q`; `find` with `-H/-L/-P/-O/-D` before its paths,
+  `-exec rm`, `-execdir` and `-ok` read like `-delete`, and its targets judged like any delete
+  (`find ~ -delete` is denied, `find -L / -delete` too); a script fed to a shell (`bash <(echo …)`,
+  `bash -c -- …`, `bash <<< …`, `$(…)` handed to `bash -c` or `eval`, base64 decoded from a literal)
+  assessed as the script it is, and a decoder output it cannot read warned (`decoded-script`).
+- **More shapes denied**: `rsync --delete` / `robocopy /MIR` into a root or home,
+  `[IO.Directory]::Delete('C:\', $true)`, `chmod -R` / `chown -R` of `/`, `tee` / `cp` onto a block device,
+  `wsl rm -rf /mnt/c`, `Start-Process cmd -ArgumentList '/c rd …'`, fork bombs under any name. **New
+  warnings**: `chmod` / `chown -R` of a system directory, `vssadmin delete shadows`, `reg delete HKLM\…`,
+  `terraform destroy`, `aws s3 rm --recursive` / `rb --force`, `gh repo delete`.
+- **An agent-run `baseline update` asks the user** (`permissionDecision: "ask"`, also as
+  `node …/dev-guardian.mjs`, `node .specs/guardian.cjs`, nested or launched): it accepts every current
+  finding. `.specs/guardian.cjs` counts for the `db adopt --yes` denial too.
+- **The configuration guards see more writes.** A third-party MCP server's write tool
+  (`mcp__<server>__<tool>` with a file verb such as `write_file`, `edit_file`, `move_file`) meets the same
+  guards as `Write` / `Edit`: the hook configuration, Claude Code's settings, the trusted-database
+  registry, `secrets.block` and the secret warning after the write. The shell guard sees `ed`, `ex`,
+  `vim -es`, PowerShell 5.1's `sc`, `[IO.StreamWriter]` and a writing `FileStream`, `cd -` / `$OLDPWD` /
+  `pushd`-`popd` / `CDPATH`, a glob in a configuration path's directory, and settings keys spelled through
+  escapes or a decoded base64 literal.
+- **A Write to a network path no longer stalls the hook** (21 s on an unreachable `\\host\share`, past the
+  15 s kill): no filesystem call is made for it, and `\\localhost\C$\…` (loopback and own-hostname admin
+  shares) is judged as the local path.
+- **A network (UNC) `project_path` is refused before any file call** — a dead share froze the whole server
+  for about 21 s. The CLI's `--project` and `db adopt` use the MCP side's own rule: a UNC path, or the home
+  directory in another case or by its 8.3 short name, is refused (exit 3).
+- **Secret scan**: the PGP `PRIVATE KEY BLOCK` header is detected (that alternative never matched); new
+  rules for PuTTY keys, Hugging Face, DigitalOcean, Shopify, Azure `AccountKey=` and Telegram bot tokens
+  (high), and `Authorization: Bearer …` and unquoted YAML credentials (medium).
+
+### Added
+
+- **The JSON verdict as data** (`scan` and `baseline update`, `--format json`): `tool_version`;
+  `coverage_gap_details` — `{tool, kind, detail, remedy, gating}`, one per `coverage_gaps` line in the same
+  order, then the non-gating notes — whose `kind` is one of `missing_tool`, `no_lockfile`,
+  `partial_parse`, `file_timeout`, `taint_timeout`, `path_too_long`, `scanner_failed`, `skipped`, `other`
+  (only `missing_tool` means "install something"); `coverage_notes`; `baseline_status` (`present` |
+  `absent`); `new_findings_count` and `new_findings_by_severity`. Keys are only added: `coverage_gaps`
+  stays a string array. `verdictContract.test.ts` freezes every key dev-spec-driven 1.30.0's finish gate
+  reads.
+- **`scan --format json --compact`**: `new_findings` holds only the blocking findings — small enough to
+  hand to a tool call. The human report prints each gap's remedy (`fix: …`), accepted gaps under
+  `accepted (not gating):` and taint timeouts under `notes (not gating):`.
+- **`.guardian/scan.yml`**, committed: `semgrep.timeout` and `semgrep.timeout_threshold` (now 30 and 0 by
+  default — see Fixed) and `semgrep.accept_timeouts`, the files whose per-file Semgrep `Timeout` the gate
+  accepts after review. `--rules-ref` reads it from the ref; an invalid one is exit 3.
+  `baseline update` takes `--accept-partial-parse`.
+- **MCP server `instructions`** at initialize (793 characters): which tool for which job, that a scanner
+  that did not run is a gap and never "0 findings", never `db adopt` on the user's behalf, never `baseline
+  update` to accept one finding, `create_fix_pr` dry run first, ask before `verify_live` or
+  `audit_mcp_tools`, and the dev-spec-driven routing. Every tool declares `readOnlyHint`,
+  `destructiveHint`, `idempotentHint` and `openWorldHint`.
+- **Files the scans leave**: `.guardian/reports/` keeps the last 3 report sets of each kind
+  (`GUARDIAN_KEEP_REPORTS`; SBOM, VEX, perf and DAST evidence are never pruned). The CLI writes
+  `.guardian/.gitignore` when there is none: everything below `.guardian/` ignored, except
+  `baseline.json`, `budgets.yml`, `hooks.config.json`, `hooks-allowlist.json` and `scan.yml`.
+
+### Changed
+
+- **Six tool families are one tool each — `tools/list` shows 52 tools instead of 63.**
+  `dotnet_check { check }` replaces `scan_dotnet_secrets`, `dotnet_target_framework_check`,
+  `dotnet_efcore_audit` and `dotnet_describe_setup`; `wp_audit { mode: "install" | "cron" | "bulk" }`
+  absorbs `wp_cron_audit` and `bulk_audit_wordpress_sites`; `wp_vuln_check { mode: "live" | "source" |
+  "rest" }` absorbs `wp_vuln_check_source` and `wp_rest_audit`; `wp_report { kind: "setup" | "hardening" |
+  "plugin" }` replaces `wp_describe_setup`, `wp_recommend_hardening` and `wp_plugin_check`; `diff_scans {
+  mode: "regression" }` absorbs `regression_alert`; `prioritize_findings { view: "triage" }` absorbs
+  `triage_findings`. The 13 old names stay callable as hidden aliases. A folded tool called without the
+  new parameter behaves as before; a parameter of another mode is refused with `invalid_input`.
+- **`tools/list` is 44% smaller**: 125.8k → 70.2k characters (about 31k → 18k tokens), 71.0k with the
+  instructions. Every description is at most 600 characters (what the tool does, when, and the rules that
+  change a decision), shared parameters are described once, and no release history is left; `$schema` and
+  `execution` are no longer sent (both are the protocol's defaults when absent). `health_status` reports
+  the listed tool count.
+- **Less context in every session.** The skill and command listing went from 12.9k to 3.9k characters:
+  one owner per intent, each description saying what it is not for; PT and ES requests still route. `/g`,
+  `/guardian-grill`, `/guardian-improve` and `/guardian-init` start only when you invoke them
+  (`disable-model-invocation`), so "set up the project" no longer installs scanners by surprise.
+  `guardian-bugfix` loads 6 KB instead of 64 KB, `guardian-security` (8.6 KB) runs the full scan by
+  default instead of asking which, and the router is 6 KB; the rest moved to references read on demand.
+- **Rules files for other hosts: 18.5 KB → 7.8 KB, safety rules first** (`host-rules/AGENTS.md`, GEMINI,
+  Copilot, Cline), which leaves room under Codex's 32 KiB budget for `AGENTS.md`. Cursor (`alwaysApply:
+  false`) and Windsurf (`trigger: model_decision`) load the rule on demand; Windsurf's 12 000-character cap
+  used to cut the file before the "never run `db adopt`" rule.
+- **dev-spec-driven (1.29+) owns its features.** In a `.specs/` project, `guardian-review`,
+  `guardian-grill` and `guardian-bugfix` ask it where the feature stands first (`spec_next_action`); the
+  review's verdict points to `/spec-finish`, requirements are grilled with `/clarify --grill`, and a
+  reported bug goes to `/spec-bugfix`, with `bug_hunt` as its reproduce tool. `guardian-improve` lists the
+  backlog first, reuses exact names and keeps them short (≤ 6 words, no numbers).
+- **Never `baseline update` to accept one finding.** The README, the router, the rules files, `docs/ci.md`
+  and `baseline update` itself say it accepts every current finding, the feature's own included. Accept one
+  reviewed finding with an inline suppression and a reason (`nosemgrep: <rule> -- <reason>`), or rebuild
+  the baseline on the base commit.
+- **Runnable lines only**: `--help`, every hint and the skills print `node "<plugin
+  root>/cli/dev-guardian.mjs" …` (a plugin install puts no `dev-guardian` on `PATH`), or `node
+  .specs/guardian.cjs …` from a dev-spec-driven project. The README's CI block no longer asks for `npm ci`.
+- **Every usage error is exit 3** (`check` and `mcp-config` used 2); an unknown command, or none, is 3 too.
+- SARIF URIs are relative to the repository root (`scan --project packages/api` annotates
+  `packages/api/src/…`). The verdict is printed before `--sarif` is written, and a failed SARIF write is an
+  error on stderr (exit 3 only when the gate passed). Semgrep never scans `.guardian/`.
+- The MCP server's `.gitignore` block re-includes `budgets.yml`, `hooks.config.json`,
+  `hooks-allowlist.json` and `scan.yml` beside `baseline.json` — budgets differed per machine and in CI;
+  missing lines go below an existing block.
+- A bad `project_path` answers `target_not_found` (missing) or `unsupported_target` (a file, a root or home
+  directory, a network path) on every tool, instead of `not_a_git_repo`. With the database locked by
+  another process the server waits 2 s (was 5 s, blocking every call) and answers `database_busy`, saying
+  what to do. `db adopt` names the per-user fallback database a project's history went to while its own was
+  refused, and warns that `--yes` does not merge it.
+- SessionStart says "Not yet guardian-initialized" only in a folder that looks like code (VCS or a
+  manifest), worded as something the user runs; the unregistered-database line no longer names a version.
+
+### Fixed
+
+- **The CI gate stayed "incomplete" (exit 2) on ordinary projects.** On every TypeScript project, because
+  the attack-surface recovery could not read `import type …`, `import { type X }` or a multi-line
+  re-export: it reads them now, an import or env edge it still cannot read is a note, and only a lost route
+  fails the surface run. On Semgrep's per-file timeouts: Semgrep now runs with `--timeout 30
+  --timeout-threshold 0` (its defaults are 5 and 3) — on dev-spec-driven's own tree both per-file timeouts
+  are gone, 100 s → 96 s; taint fixpoint timeouts (49 files there, on every run) are notes that never gate;
+  a per-file `Timeout` can be accepted in `.guardian/scan.yml`. Coverage still reads `partial` for both.
+  `baseline update` exits on the gaps that gate only, no longer 2 for accepted gaps and notes.
+- **A false pass on Windows.** A file at a path of 260 characters or more that Semgrep did not open, or a
+  Python file Bandit did not analyse, was skipped silently: coverage full, exit 0. It is a named
+  `path_too_long` gap.
+- **Baselines lost known findings.** A dependency finding stays known when an upgrade changes its installed
+  version; a secret stays known after a squash merge, a whitespace commit touching its line, or an
+  uncommitted edit of its file; a finding in a file renamed since the baseline (`git diff -M`) matches its
+  old entry, with an older baseline too, and `baseline update` keeps its `added` date. Entries gain an
+  additive `match_id`; identities are unchanged.
+- **A corrupt `.guardian/baseline.json`** (merge-conflict markers, wrong shape) is exit 3 naming the parse
+  error, checked before the scan. It read as "no baseline": every finding new, and the advice rebuilt the
+  file, resetting every date.
+- **Timeouts that hold.** `deps_update_plan`'s package managers (`npm.cmd` is cmd.exe plus a node
+  grandchild) and `scan_skill`'s tar and unzip signalled only the direct child, then waited on whatever held
+  its pipes — 25 s for a 2 s timeout. They go through the runner, whose timeout kills the whole tree and
+  returns at the deadline; the DAST app runner's Windows stop reaches Git Bash (MSYS) descendants too.
+- **`npx` of a tool the project has installed is no longer vetted as a download** (`cd mcp && npx vitest
+  run` warned that the registry's newest vitest was "published 31 h ago"). The install hook follows the
+  `cd` / `pushd` / `Set-Location` before the command and looks for the bin there and up to the repository
+  root; `npx -y pkg@1.2.3` / `@latest`, and a directory change it cannot read, stay vetted.
+- **Install vetting ends on time**: the hook exits 250 ms after its answer instead of up to 5 s later
+  (black-holed network: exit 8.3 s → 3.5 s, the answer unchanged at about 3.2 s);
+  `GUARDIAN_PKG_VET_DEADLINE_MS` is capped at 12 000 (was 14 000).
+- **Fewer false alarms.** From a hook call, a hook configuration or settings path spelled in full outside
+  the project, the working directory and home (another project, a test's fake HOME) warns
+  (`guard-config-elsewhere`) instead of being denied. The secret scan skips AWS's documented `…EXAMPLE`
+  keys, `sk-your-…-here`, `sk-ant-xxxx…`, one-character runs and an `sk-` CSS class (so `secrets.block` no
+  longer denies them), and quoted values with two spaces (i18n labels, passphrase examples) no longer warn.
+- **One reading of `requirements.txt`, pip's**: `deps_update_plan`, `validate_finding`'s PyPI pins and
+  `scan_skill` join continuations with nothing between, take `#` as a comment only at the start or after
+  whitespace, and drop `--hash` options. They cut at any `#`, joined with a space, or did not join.
+- A child's output is decoded whole: a multi-byte character split across two pipe chunks was two U+FFFD.
+- `guardian-compliance` recommends juridico-pt's real commands (`/rgpd`, `/advogado`), not a non-existent
+  `advogado-pt` skill, and says it checks the code — it is not legal advice.
+
+### Performance
+
+- **A plugin install is a third of the size.** `mcp/dist/` ships two bundles and nothing per-file:
+  `engine.js` (3.87 MB: the MCP server and everything the CLI uses, which shared 98.8% of their code as two
+  3.7 MB bundles), `hooks.js` (0.37 MB, the hooks' detectors) and a two-line `server.js` at the same path
+  as before, so every host configuration keeps working. tsc's 355 per-file modules and 361 source maps,
+  which nothing loaded, are gone: `mcp/dist` 743 files / 14.6 MB → 24 files / 4.1 MB, the tracked tree
+  29.7 MB → 19.3 MB.
+- **Hooks**: exec form, no shell per call (a `git status` call 117 → 90 ms); each event imports only its
+  own detectors, and the vetting code only for a command that names an installer; SessionStart makes one
+  `git status --porcelain=v2 --branch` call instead of two git calls (363 → 295 ms in a plain folder). A
+  PostToolUse on a Write now parses the hooks bundle: +10 ms.
+- The CLI turns on Node's compile cache before loading its bundle (`--help` 160 → ~115 ms), only when the
+  OS temp directory exists — Node creates the cache directory with every missing parent.
+
+### Maintainers
+
+- `CLAUDE.md` is a 5.4 KB index (it was 41.5 KB, in every session); the notes moved to `docs/maintainers/`,
+  one file per area, never `@`-imported.
+- **The build**: `tsc` only type-checks (`noEmit`); `scripts/bundle.mjs` empties `dist/` and writes both
+  bundles in one esbuild build; `distSync.test.ts` holds `dist/` to exactly that, and `.gitattributes`
+  marks it generated. Every child process goes through `runners/spawn.ts` / `runners/childProcess.ts`:
+  execa moved to devDependencies (tests only), `cross-spawn` is a direct dependency.
+- **`npm run lint`** is one `tsc` pass over `src/` and `test/` plus `scripts/unusedExports.mjs`: 419
+  exports nothing imported were un-exported and 9 dead declarations deleted; a new unused export fails, and
+  the 19-entry baseline only shrinks. `@types/node` is held to `~22.13.17`, the engines floor.
+- **`npm run test:docker`** runs the suite in `node:22.13-bookworm-slim` (with coverage, so the thresholds
+  are enforced) and `node:24-bookworm-slim`; `--toolchain` adds pinned Semgrep, Bandit, gitleaks and
+  Trivy. Its first run found two Linux-only failures, fixed. `npm run test:fast` is the inner loop. No test
+  asserts a bare number of milliseconds: a ratio for a cost, `hangBound` for a wait.
+- **The prose has tested budgets**: a skill description ≤ 300 characters, a command's ≤ 100, the listing ≤
+  4 000, `SKILL.md` ≤ 12 KB, a reference ≤ 6 KB, `host-rules/AGENTS.md` ≤ 8 000 bytes, `tools/list` +
+  instructions ≤ 72 000 (a real handshake), a tool description ≤ 600. New guards: no release history in
+  the prose, unaccented PT words, juridico-pt names held to a live install. Plugin evals: 12 triggering
+  cases (EN / PT / ES), 5 negative or near-miss, a two-plugin routing case, 3 behavioural cases.
+- The dev-spec-driven mirror fixture is at 1.30.0 (its lists unchanged since 1.28.0). The T-07 open-set
+  property runs on a frozen clock. Its one failure, in the Node 22.13 container, reproduces with the clock
+  stepped back 1 ms between two imports of one tool (history is ordered by `started_at`, then by row), never
+  with a same-millisecond tie, which the row already breaks.
+
 ## [3.2.1] - 2026-10-12
 
 The CLI runs from a plugin install again. In 3.2.0 every subcommand that reaches the scan pipeline or
