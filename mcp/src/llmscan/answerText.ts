@@ -7,8 +7,17 @@
  * first key and correcting itself after it (D-10, D-11). The sampling path
  * (`sampling.ts`) reads a client's reply with {@link finalAnswerObject}; the
  * eval harness (`test/evals/llmScan/driver.ts`) counts a final message's
- * objects with {@link jsonObjectsIn}, so the two agree on what "one object"
- * is: a non-empty JSON object, never a brace of quoted code.
+ * objects with {@link jsonObjectsIn}, so the two agree on what an object is:
+ * a non-empty JSON object, never a brace of quoted code.
+ *
+ * They differ on one case, on purpose. The working may quote a JSON value the
+ * code handles — a request body such as `{"role":"admin"}`. The harness
+ * counts it as a second object and refuses the answer (measured: 3 of 37 and
+ * 4 of 40 runs of the golden hunt, v6 and v5, 2026-10-13, the same with both
+ * prompts); the sampling path refuses only an earlier object that shares a
+ * key with the last one — an answer and its correction — and otherwise takes
+ * the object that ends the reply. The harness keeps its rule: it measures the
+ * prompt, and a change there is a change of measurement conditions.
  */
 
 type JsonObject = Record<string, unknown>;
@@ -75,10 +84,11 @@ export function jsonObjectsIn(text: string): JsonObject[] {
 }
 
 /**
- * The object a reply ends with, when it is the reply's only one: prose may
- * come before it and a code fence may hold it, but nothing may follow it.
- * Undefined for no object, for two (an answer and its correction — one
- * submission, never a correction after it), and for text after the object.
+ * The object a reply ends with: prose may come before it and a code fence may
+ * hold it, but nothing may follow it. Undefined for no object, for text after
+ * the object, and for an earlier object that shares a key with it — an answer
+ * and its correction: one submission, never a correction after it. An earlier
+ * object with none of its keys is a value the working quotes, not an answer.
  */
 export function finalAnswerObject(text: string): JsonObject | undefined {
   let body = text.trim();
@@ -91,6 +101,9 @@ export function finalAnswerObject(text: string): JsonObject | undefined {
     body = `${body.slice(0, open)}${inner}`.trim();
   }
   const spans = objectSpans(body);
-  const only = spans.length === 1 ? spans[0] : undefined;
-  return only !== undefined && only.end === body.length - 1 ? only.value : undefined;
+  const last = spans[spans.length - 1];
+  if (last === undefined || last.end !== body.length - 1) return undefined;
+  const keys = Object.keys(last.value);
+  const corrected = spans.slice(0, -1).some((s) => Object.keys(s.value).some((k) => keys.includes(k)));
+  return corrected ? undefined : last.value;
 }

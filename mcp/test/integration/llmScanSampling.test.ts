@@ -81,6 +81,8 @@ describe('payloadOf: the working, then one JSON object last', () => {
     ['Here it is: {"a":1}', { a: 1 }],
     ['The input is bound as a parameter, so it never reaches the SQL text.\n\n{"a":1}', { a: 1 }],
     ['The handler calls `run(cmd)` with `{ shell: true }` unchecked.\n```json\n{"a":{"b":"}"}}\n```', { a: { b: '}' } }],
+    // A JSON value the working quotes (a request body) is not an answer: it shares no key with the object.
+    ['An attacker sends `{"role":"admin"}` and keeps it.\n\n{"verdict":"real"}', { verdict: 'real' }],
   ])('%j is the object', (text, value) => {
     expect(payloadOf(text)).toEqual(value);
   });
@@ -90,9 +92,10 @@ describe('payloadOf: the working, then one JSON object last', () => {
     '[{"a":1}]',
     '{not json}',
     '',
-    '```json\n{"a":1}\n```\n```json\n{"b":2}\n```',
+    '```json\n{"a":1}\n```\n```json\n{"a":2}\n```',
     // An answer, then its correction: one submission, never a correction after it.
     '{"verdict":"real"}\nCorrection:\n{"verdict":"not_real"}',
+    '{"verdict":"real","reasoning":"x"}\nWait, the check holds.\n{"reasoning":"y","verdict":"not_real"}',
     'Working.\n```json\n{"a":1}\n```\nThat is my answer.',
   ])('%j stays text, for the validator to refuse', (text) => {
     expect(payloadOf(text)).toBe(text);

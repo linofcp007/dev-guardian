@@ -92361,8 +92361,11 @@ function finalAnswerObject(text2) {
     body = `${body.slice(0, open)}${inner}`.trim();
   }
   const spans = objectSpans(body);
-  const only = spans.length === 1 ? spans[0] : void 0;
-  return only !== void 0 && only.end === body.length - 1 ? only.value : void 0;
+  const last = spans[spans.length - 1];
+  if (last === void 0 || last.end !== body.length - 1) return void 0;
+  const keys = Object.keys(last.value);
+  const corrected = spans.slice(0, -1).some((s) => Object.keys(s.value).some((k) => keys.includes(k)));
+  return corrected ? void 0 : last.value;
 }
 var isObject4;
 var init_answerText = __esm({
