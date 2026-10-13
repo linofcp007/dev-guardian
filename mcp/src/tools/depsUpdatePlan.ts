@@ -117,6 +117,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
 import { runProcess } from '../runners/processRunner.js';
+import { exactPin, findRequirementFiles, parseRequirementSpec, requirementMentions, type RequirementSpec } from '../deps/pipRequirements.js';
 import { matchesAny } from '../platform/glob.js';
 import {
   listProjectDir,
@@ -1736,131 +1737,45 @@ function buildPipSecurityStep(opts: {
   };
 }
 
-/** `requirements*.txt` at the project root, plus one level into a
- *  `requirements/` directory — same shallow scope `deps_audit.ts`'s own
- *  pip-audit wiring uses (not shared code: that module belongs to a
- *  different tool). */
+/** The project's requirements files, by the one finder `deps_audit` uses (`deps/pipRequirements.ts`), read. */
 function findPipRequirementsFiles(projectPath: string): Array<{ relPath: string; content: string }> {
   const out: Array<{ relPath: string; content: string }> = [];
-  const tryRead = (relPath: string): void => {
+  for (const relPath of findRequirementFiles(projectPath).files) {
     const content = readProjectTextOrUndefined(projectPath, relPath);
     if (content !== undefined) out.push({ relPath, content });
-  };
-  for (const { name } of listProjectDir(projectPath, projectPath)) {
-    if (/^requirements.*\.txt$/i.test(name)) tryRead(name);
-  }
-  for (const { name } of listProjectDir(projectPath, join(projectPath, 'requirements'))) {
-    if (name.toLowerCase().endsWith('.txt')) tryRead(join('requirements', name));
   }
   return out;
 }
 
 /**
- * Every package MENTION in a requirements file — exact `==` pins (returned
- * with `version` set, the only specifier precise enough to name a single
- * "installed" version without inspecting an environment) AND range/unpinned
- * mentions (returned with `unplannableReason` set instead, so an active CVE
- * on one is reported in `unplanned` rather than silently dropped — fix
- * round 1, item 7).
- *
- * Handles the shapes a real `requirements.txt` uses beyond a bare
- * `pkg==1.2.3`:
- *   - pip-compile's hash-pinned, line-continued form
- *     (`django==4.2.0 \` followed by `    --hash=sha256:...` lines) — a
- *     trailing backslash joins the logical line, and `--hash=...` tokens
- *     are stripped before parsing;
- *   - extras (`celery[redis]==5.3.0`) — the `[redis]` marker is stripped;
- *     the package identity for CVE matching is `celery`, not the bracketed
- *     form;
- *   - environment markers (`pkg==1.0.0; python_version >= "3.8"`) — the
- *     marker (after `;`) is dropped, the pin itself is still read.
+ * Every package MENTION in a requirements file, read as pip reads it
+ * (`deps/pipRequirements.ts#requirementMentions` — continuations, comments,
+ * `--hash` options, extras and markers as pip-compile writes them) — exact
+ * `==` pins with `version` set (the only specifier precise enough to name a
+ * single "installed" version without inspecting an environment), and
+ * range / unpinned mentions with `unplannableReason` set instead, so an
+ * active CVE on one is reported in `unplanned` rather than silently dropped
+ * (fix round 1, item 7).
  */
 function parsePinnedRequirements(content: string): RequirementMention[] {
-  const out: RequirementMention[] = [];
-  for (const rawLine of joinContinuedLines(content)) {
-    let line = rawLine.split('#')[0]?.trim() ?? '';
-    if (!line || line.startsWith('-')) continue; // -r other.txt, --index-url, etc.
-    line = line.replace(/\s+--hash=\S+/g, '').trim(); // pip-compile hash annotations
-    const semi = line.indexOf(';');
-    if (semi >= 0) line = line.slice(0, semi).trim(); // environment marker
-    if (!line) continue;
-    const mention = parseOneRequirementSpec(line);
-    if (mention) out.push(mention);
-  }
-  return out;
+  return requirementMentions(content).map(planMention);
 }
 
 /**
- * Parses ONE already-isolated requirement specifier — no comments, no
- * `--hash=...` annotations, no line continuation: the caller (a
- * requirements-file line, or one element of a pyproject
- * `dependencies = [...]` array) already stripped those. Shared so both
- * shapes get the SAME extras/exact/range/bare handling rather than two
- * copies that can drift (fix round 2, item 7).
- *
- * The environment marker (everything from a top-level `;` onward,
- * `pkg==1.0.0; python_version >= "3.8"`) IS stripped here, internally (fix
- * round 3, "cheap" item) — `parsePinnedRequirements` already stripped it
- * before this function existed as a shared helper, but a pyproject array
- * element (`"urllib3==1.26.0; python_version >= '3.8'"`) went straight from
- * `parsePyprojectPins` to this function with no such preprocessing, so the
- * marker's trailing text made every one of the regexes below fail to match
- * at all — the whole mention silently vanished, not even reported
- * `unplanned`. Doing it here, once, means BOTH callers get it whether or
- * not they remembered to strip it themselves.
- *
- * Returns an exact `==` pin with `version` set, a non-exact specifier or
- * bare name with `unplannableReason` set (fix round 1, item 7 — never
- * silently dropped), or `null` when the text is not a package mention at
- * all (a VCS URL, a local path, `-e .`, …).
+ * One requirement as this planner sees it: an exact `==` pin, or why it
+ * cannot be planned — a non-exact specifier (`>=`, `~=`, `===`, a wildcard),
+ * or no specifier at all. Shared by the requirements files and pyproject's
+ * `dependencies` array, so both get the same handling (fix round 2, item 7).
  */
-function parseOneRequirementSpec(specRaw: string): RequirementMention | null {
-  const semi = specRaw.indexOf(';');
-  const spec = (semi >= 0 ? specRaw.slice(0, semi) : specRaw).trim();
-  if (!spec) return null;
-
-  // Extras: `celery[redis]==5.3.0` -> name `celery`, rest `==5.3.0`.
-  const extras = /^([A-Za-z0-9._-]+)\[[^\]]*\](.*)$/.exec(spec);
-  const target = extras ? `${extras[1]}${extras[2]}` : spec;
-
-  const exact = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(target);
-  if (exact) {
-    const [, name, version] = exact;
-    if (name && version) return { name, version };
-    return null;
-  }
-  const range = /^([A-Za-z0-9._-]+)\s*(>=|<=|~=|!=|===|<|>)/.exec(target);
-  if (range?.[1] && range[2]) {
-    return {
-      name: range[1],
-      unplannableReason: `non-exact specifier (${range[2]}) — cannot determine a safe target without inspecting the installed environment`,
-    };
-  }
-  const bare = /^[A-Za-z0-9._-]+$/.exec(target);
-  if (bare) {
-    return { name: target, unplannableReason: 'no version specifier — cannot determine an installed version' };
-  }
-  // Anything else (a VCS URL, a local path, `-e .`, …) is not a package
-  // mention this module can reason about at all — silently skipped, same
-  // as before.
-  return null;
-}
-
-/** Joins a pip-compile-style backslash line continuation
- *  (`django==4.2.0 \` followed by `    --hash=sha256:...`) into one logical
- *  line, so `parsePinnedRequirements` sees the whole pin on one line. */
-function joinContinuedLines(content: string): string[] {
-  const out: string[] = [];
-  let buffer = '';
-  for (const line of content.split(/\r?\n/)) {
-    const continued = /\\\s*$/.test(line);
-    buffer += continued ? line.replace(/\\\s*$/, ' ') : line;
-    if (continued) continue;
-    out.push(buffer);
-    buffer = '';
-  }
-  if (buffer) out.push(buffer);
-  return out;
+function planMention(spec: RequirementSpec): RequirementMention {
+  const version = spec.specifier.startsWith('===') ? undefined : exactPin(spec.specifier);
+  if (version !== undefined) return { name: spec.name, version };
+  if (spec.specifier === '') return { name: spec.name, unplannableReason: 'no version specifier — cannot determine an installed version' };
+  const op = /^(~=|===|==|!=|<=|>=|<|>)/.exec(spec.specifier)?.[1] ?? spec.specifier;
+  return {
+    name: spec.name,
+    unplannableReason: `non-exact specifier (${op}) — cannot determine a safe target without inspecting the installed environment`,
+  };
 }
 
 /**
@@ -1881,7 +1796,7 @@ function joinContinuedLines(content: string): string[] {
  * table's own text (from its header to the next `[section]` header or EOF)
  * first; `extractDependenciesArray` then searches only within that slice.
  *
- * Every element goes through `parseOneRequirementSpec` (fix round 2, item
+ * Every element goes through `parseRequirementSpec` and `planMention` (fix round 2, item
  * 7): a range specifier (`django>=4.2`) and an extras pin
  * (`celery[redis]==5.3.0`) are now returned as proper `RequirementMention`s
  * — an exact pin with `version` set, or an unplannable one with a reason —
@@ -1899,8 +1814,8 @@ function parsePyprojectPins(projectPath: string): RequirementMention[] {
   const entryPattern = /["']([^"']*)["']/g;
   let m: RegExpExecArray | null;
   while ((m = entryPattern.exec(block)) !== null) {
-    const mention = parseOneRequirementSpec(m[1] ?? '');
-    if (mention) out.push(mention);
+    const spec = parseRequirementSpec(m[1] ?? '');
+    if (spec !== null) out.push(planMention(spec));
   }
   return out;
 }

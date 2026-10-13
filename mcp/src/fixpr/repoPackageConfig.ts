@@ -45,7 +45,7 @@ import {
   readProjectJson,
   readProjectText,
 } from '../platform/projectFs.js';
-import { checkRequirements, describePipRefusal, urlHost, type PipRefusal } from '../deps/pipRequirements.js';
+import { checkRequirements, describePipRefusal, findRequirementFiles, urlHost, type PipRefusal } from '../deps/pipRequirements.js';
 import { checkPyproject, checkSetupCfg } from '../deps/pythonProject.js';
 
 /** Names moved aside in each directory, lower-cased (the match is case-insensitive). */
@@ -149,16 +149,16 @@ export function composerChoosesRepository(projectDir: string): string | null {
 
 // ------------------------------------------------------------------ pip
 
-/** The requirement files the re-scan's pip-audit reads, as `deps_audit` finds them. */
+/**
+ * The requirement files a pip install from this project would read — the
+ * re-scan's pip-audit's, found by the one finder `deps_audit` uses
+ * (`deps/pipRequirements.ts#findRequirementFiles`). A candidate that leads out
+ * of the project, or is no regular file, is listed too: `checkRequirements`
+ * refuses it, by name.
+ */
 export function rootRequirementFiles(projectDir: string): string[] {
-  const out: string[] = [];
-  for (const { name, kind } of listProjectDir(projectDir, projectDir)) {
-    if (kind !== 'directory' && /^requirements.*\.txt$/i.test(name)) out.push(name);
-  }
-  for (const { name, kind } of listProjectDir(projectDir, join(projectDir, 'requirements'))) {
-    if (kind !== 'directory' && name.toLowerCase().endsWith('.txt')) out.push(`requirements/${name}`);
-  }
-  return out;
+  const found = findRequirementFiles(projectDir);
+  return [...found.files, ...found.outside.filter((rel) => !rel.endsWith('/')), ...found.other];
 }
 
 /**
