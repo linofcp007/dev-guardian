@@ -19,6 +19,7 @@
 
 import type { ZodTypeAny } from 'zod';
 import type { ResourceModule } from '../../src/resources/index.js';
+import type { FoldRecord } from '../../src/tools/fold.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { RuleInventory } from '../ablate/clauses.js';
 
@@ -182,14 +183,18 @@ export function paramRows(shape: Record<string, ZodTypeAny>, prefix = ''): Param
 
 // ---------------------------------------------------------------- tools page
 
-export function renderToolsDoc(tools: readonly ToolModule[], resources: readonly ResourceModule[]): string {
-  const sortedTools = [...tools].sort((a, b) => a.name.localeCompare(b.name));
+export function renderToolsDoc(
+  tools: readonly ToolModule[],
+  resources: readonly ResourceModule[],
+  folds: readonly FoldRecord[],
+): string {
+  const sortedTools = tools.filter((t) => t.listed !== false).sort((a, b) => a.name.localeCompare(b.name));
   const sortedResources = [...resources].sort((a, b) => a.uri.localeCompare(b.uri));
   const out: string[] = [];
 
   out.push('# MCP tools and resources', '', GENERATED_NOTICE, '');
   out.push(
-    `The dev-guardian MCP server registers **${tools.length} tools** and **${resources.length} resources**. ` +
+    `The dev-guardian MCP server lists **${sortedTools.length} tools** and **${resources.length} resources**. ` +
       'This page is rendered from the registry itself (`mcp/src/registerAll.ts`): every description and ' +
       'parameter below is exactly what an MCP host receives. For which tool to reach for, see ' +
       '[`host-rules/AGENTS.md`](../host-rules/AGENTS.md); for the slash commands that drive them, the ' +
@@ -223,6 +228,26 @@ export function renderToolsDoc(tools: readonly ToolModule[], resources: readonly
           `${r.description === '' ? '—' : escapeInline(r.description, true)} |`,
       );
     }
+    out.push('');
+  }
+
+  const aliases = folds
+    .flatMap((f) =>
+      Object.entries(f.modes)
+        .filter(([, member]) => member !== f.name)
+        .map(([mode, member]) => ({ member, call: `${f.name} { ${f.modeKey}: "${mode}" }` })),
+    )
+    .sort((a, b) => a.member.localeCompare(b.member));
+  if (aliases.length > 0) {
+    out.push('## Hidden aliases', '');
+    out.push(
+      'Each of these names still answers `tools/call` with its own parameters, but `tools/list` does not show ' +
+        'it: the listed tool runs it, with the same parameters, as one of its modes.',
+      '',
+      '| Name | Listed as |',
+      '| --- | --- |',
+    );
+    for (const a of aliases) out.push(`| \`${a.member}\` | \`${a.call}\` |`);
     out.push('');
   }
 
@@ -323,7 +348,7 @@ export function renderRulePacksDoc(packs: readonly PackInput[]): string {
       'header comment records what was measured, against which corpus, and why each exclusion exists.',
     '',
     `**${totals.withNone} of the ${totals.rules} rules** have no clause the ablation harness ` +
-      `(\`npm run ablate\`, see [CLAUDE.md](../CLAUDE.md)) can remove — ${totals.bare} are a bare ` +
+      `(\`npm run ablate\`, see [maintainers/ablation.md](maintainers/ablation.md)) can remove — ${totals.bare} are a bare ` +
       `\`pattern\` / \`pattern-regex\` and ${totals.positiveOnly} a \`patterns\` group of positive terms only. ` +
       'Those rules are checked by axis 0 (the rule fires on its `hits/` fixtures) and nothing else.',
     '',

@@ -15,7 +15,7 @@ import type { HostName, McpScope } from './hostSpecs.js';
 /** The fixed id used for the server entry across every host. */
 export const SERVER_ID = 'dev-guardian';
 
-export interface ServerEntry {
+interface ServerEntry {
   /** Present only for hosts that require it (VS Code / Copilot). */
   type?: 'stdio';
   command: string;
@@ -35,7 +35,7 @@ export function buildServerEntry(serverJsPath: string, withType: boolean): Serve
   return withType ? { type: 'stdio', ...base } : base;
 }
 
-export interface DesktopPathEnv {
+interface DesktopPathEnv {
   os: DetectedOs;
   home: string;
   /** %APPDATA% on Windows; ignored elsewhere. */
@@ -99,9 +99,9 @@ export function resolveMcpConfigPath(
   }
 }
 
-export type MergeStatus = 'written' | 'merged' | 'already_present' | 'needs_update';
+type MergeStatus = 'written' | 'merged' | 'already_present' | 'needs_update';
 
-export interface MergeResult {
+interface MergeResult {
   status: MergeStatus;
   /** Content to write — present only for `written` / `merged`. */
   content?: string;
@@ -118,9 +118,9 @@ export interface MergeResult {
  * `mergeTomlConfig`'s callers never have to account for a status those two
  * functions can never actually produce.
  */
-export type RulesBlockStatus = MergeStatus | 'manual_merge_required';
+type RulesBlockStatus = MergeStatus | 'manual_merge_required';
 
-export interface RulesBlockMergeResult {
+interface RulesBlockMergeResult {
   status: RulesBlockStatus;
   /** Content to write — present only for `written` / `merged`. */
   content?: string;

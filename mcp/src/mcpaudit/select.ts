@@ -56,7 +56,7 @@ function launchIdentity(e: McpServerEntry): string {
   });
 }
 
-export type PlannedTarget =
+type PlannedTarget =
   | { requested: string; kind: 'start'; entry: McpServerEntry; alsoDeclaredIn: string[] }
   | { requested: string; kind: 'refuse'; reason: string }
   | { requested: string; kind: 'missing' }

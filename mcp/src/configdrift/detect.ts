@@ -30,7 +30,7 @@ import { presentInProject } from '../platform/projectFs.js';
 import { hashConfigFile } from './hash.js';
 import { readManifest, type ConfigManifestEntry } from './manifest.js';
 
-export type DriftState =
+type DriftState =
   /** Both sides match what was recorded. Silent. */
   | 'in_sync'
   /** Their hash moved, ours did not. Expected and fine. Silent. */
@@ -61,7 +61,7 @@ export interface DriftReport {
   entries: DriftEntry[];
 }
 
-export interface DetectDriftInput {
+interface DetectDriftInput {
   projectPath: string;
   /** Absolute path to the plugin's `configs/` directory. */
   configsDir: string;

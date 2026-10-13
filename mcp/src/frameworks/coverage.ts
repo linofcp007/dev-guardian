@@ -72,7 +72,7 @@ import { classifyTaxonomy } from './taxonomy.js';
 /** The fewest rules in a language for a detector to TEST a category there. Fewer is "thin". */
 export const MIN_RULES = 3;
 /** The fewest distinct CWEs those rules must cover. One is a single check, repeated. */
-export const MIN_WEAKNESSES = 2;
+const MIN_WEAKNESSES = 2;
 
 /** One scan's bookkeeping, as far as coverage needs it. */
 export interface CoverageRun {
@@ -88,7 +88,7 @@ export interface CoverageRun {
  * distinct CWEs those rules name (all of each rule's CWEs), and the CWE when
  * there is exactly one.
  */
-export interface RuleCell {
+interface RuleCell {
   rules: number;
   weaknesses: number;
   sole?: string;
@@ -102,7 +102,7 @@ function cell(rules: number, weaknesses: number | string): RuleCell {
 type RuleCounts = Readonly<Partial<Record<SourceLanguage, RuleCell>>>;
 
 /** How far a detector reaches into one category. */
-export type Reach =
+type Reach =
   /** Rule counts per language, measured. */
   | { kind: 'rules'; perLanguage: RuleCounts }
   /** A vulnerability database, complete for these languages' packages. */
@@ -110,7 +110,7 @@ export type Reach =
   /** Independent of the source language (secrets in any file, any lock file). */
   | { kind: 'any-language' };
 
-export interface OwaspDetector {
+interface OwaspDetector {
   /** Stable key, recorded in `tested_by`. */
   id: string;
   /** What a reader is told ran, or should run. */
@@ -406,7 +406,7 @@ export function countRuleReach(
   return out;
 }
 
-export type OwaspCoverageStatus = 'tested' | 'partial' | 'not_tested';
+type OwaspCoverageStatus = 'tested' | 'partial' | 'not_tested';
 
 export interface OwaspTestedBy {
   scan_id: string;
@@ -417,7 +417,7 @@ export interface OwaspTestedBy {
   partial?: string;
 }
 
-export interface OwaspLanguageCoverage {
+interface OwaspLanguageCoverage {
   language: string;
   /**
    * full: a complete rule-based run with ≥ MIN_RULES rules and ≥

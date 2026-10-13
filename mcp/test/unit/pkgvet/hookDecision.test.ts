@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { decideInstallCommand, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
+import { decideInstallCommand, MAX_DEADLINE_MS, vetDeadlineMs, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
+import { hangBound } from '../../helpers/timing.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
 const OSV = 'https://api.osv.dev/v1/querybatch';
@@ -205,7 +206,7 @@ describe('decideInstallCommand', () => {
     const f = fakeFetch({ 'https://registry.npmjs.org/express': { hang: true }, [OSV]: { hang: true } });
     const t0 = Date.now();
     const d = await decideInstallCommand('npm install express', opts(f.fetchImpl, { budgetMs: 200 }));
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
     expect(d?.deny).toBeUndefined();
     expect(d?.context).toMatch(/could not vet/i);
     expect(d?.context).not.toMatch(/\bok\b|vetted and clean/i);
@@ -529,7 +530,7 @@ describe('Part Y — shapes that were never vetted: malicious denies, missing na
       const t0 = performance.now();
       expect(await decideInstallCommand('npm i express; '.repeat(6_800), opts(f.fetchImpl))).toBeNull();
       expect(f.calls.filter((u) => u.endsWith('/express'))).toHaveLength(1);
-      expect(performance.now() - t0).toBeLessThan(3000);
+      expect(performance.now() - t0).toBeLessThan(hangBound(3000));
     });
 
     it('past 50 distinct packages the rest are not looked up — and the answer says so', async () => {
@@ -667,6 +668,99 @@ describe('decideInstallCommand — launchers are vetted like installs (review P1
     expect(f.calls).toEqual([]);
   });
 
+  // Review 8, extra item: `cd mcp && npx vitest run …` from the repository
+  // root got a "published 31 h ago" warning about the registry's newest
+  // vitest — while npx ran mcp/node_modules/.bin/vitest and fetched nothing.
+  describe('the directory the launcher runs in: the cwd moved by the `cd`s before it', () => {
+    const installIn = (dir: string, bin: string): void => {
+      mkdirSync(join(dir, 'node_modules', '.bin'), { recursive: true });
+      writeFileSync(join(dir, 'node_modules', '.bin', bin), '#!/bin/sh\n');
+    };
+
+    it('`cd sub && npx tool` runs sub/node_modules/.bin/tool: nothing is looked up', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const f = fakeRegistry();
+      for (const command of [
+        'cd sub && npx zz-no-such-pkg run',
+        'cd ./sub; npx zz-no-such-pkg',
+        'cd "sub" && npm exec zz-no-such-pkg',
+        'pushd sub && bunx zz-no-such-pkg',
+        `cd '${join(project, 'sub')}' && npx zz-no-such-pkg`,
+      ]) {
+        expect(await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} })), command).toBeNull();
+      }
+      expect(f.calls).toEqual([]);
+    });
+
+    it('a PowerShell `Set-Location` moves it the same way', async () => {
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const f = fakeRegistry();
+      const d = await decideInstallCommand('Set-Location -Path sub; npx zz-no-such-pkg', opts(f.fetchImpl, { popular: {}, shell: 'powershell' }));
+      expect(d).toBeNull();
+      expect(f.calls).toEqual([]);
+    });
+
+    it('a deeper `cd` still finds the copy an ancestor holds, up to the repository root', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      mkdirSync(join(project, 'sub', 'deep', 'er'), { recursive: true });
+      const f = fakeRegistry();
+      expect(await decideInstallCommand('cd sub/deep && cd er && npx zz-no-such-pkg', opts(f.fetchImpl, { popular: {} }))).toBeNull();
+      expect(f.calls).toEqual([]);
+    });
+
+    it('without the `cd`, the same bin installed only in sub is fetched — and vetted', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const f = fakeRegistry();
+      const d = await decideInstallCommand('npx zz-no-such-pkg', opts(f.fetchImpl, { popular: {} }));
+      expect(d?.deny).toMatch(/zz-no-such-pkg/);
+    });
+
+    it('a `cd` into a directory without the bin: vetted, even when the starting directory has it', async () => {
+      mkdirSync(join(project, '.git'));
+      installIn(project, 'zz-no-such-pkg');
+      const outside = mkdtempSync(join(tmpdir(), 'pkgvet-elsewhere-'));
+      try {
+        const f = fakeRegistry();
+        const d = await decideInstallCommand(`cd '${outside}' && npx zz-no-such-pkg`, opts(f.fetchImpl, { popular: {} }));
+        expect(d?.context ?? d?.deny).toMatch(/zz-no-such-pkg/);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['cd "$WORK" && npx zz-no-such-pkg', 'cd - && npx zz-no-such-pkg', 'popd && npx zz-no-such-pkg', 'cd `pwd` && npx zz-no-such-pkg'])(
+      '%s — a move this parse cannot read: vetted, whatever is installed here',
+      async (command) => {
+        installIn(project, 'zz-no-such-pkg');
+        const f = fakeRegistry();
+        const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} }));
+        expect(d?.context ?? d?.deny).toMatch(/zz-no-such-pkg/);
+      },
+    );
+
+    it.each(['npx -y zz-no-such-pkg@1.0.0', 'npx zz-no-such-pkg@latest', 'cd sub && npx -y zz-no-such-pkg@^2'])(
+      '%s — a version asked for: npx fetches unless the copy matches, so it is vetted',
+      async (command) => {
+        installIn(project, 'zz-no-such-pkg');
+        installIn(join(project, 'sub'), 'zz-no-such-pkg');
+        const f = fakeRegistry();
+        const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} }));
+        expect(d?.context ?? d?.deny).toMatch(/zz-no-such-pkg/);
+      },
+    );
+
+    it.skipIf(process.platform !== 'win32')('on Windows, an MSYS `/c/…` target is the drive path', async () => {
+      installIn(join(project, 'sub'), 'zz-no-such-pkg');
+      const msys = join(project, 'sub').replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d: string) => `/${d.toLowerCase()}`);
+      const f = fakeRegistry();
+      expect(await decideInstallCommand(`cd '${msys}' && npx zz-no-such-pkg`, opts(f.fetchImpl, { popular: {} }))).toBeNull();
+      expect(f.calls).toEqual([]);
+    });
+  });
+
   it('…but pnpm dlx and yarn dlx always fetch, so they are vetted all the same', async () => {
     mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
     writeFileSync(join(project, 'node_modules', '.bin', 'zz-no-such-pkg'), '#!/bin/sh\n');
@@ -721,14 +815,14 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
     const t0 = Date.now();
     const d = await decideInstallCommand(`npm i ${NAMES.join(' ')}`, opts(all404(), { cwd: mono }));
     const ms = Date.now() - t0;
-    expect(ms).toBeLessThan(8000);
+    expect(ms).toBeLessThan(hangBound(8000));
     for (const name of NAMES) expect(`${d?.deny ?? ''}${d?.context ?? ''}`).toContain(name);
   }, 60_000);
 
   it('offline, the workspace is not walked at all', async () => {
     const t0 = Date.now();
     const d = await decideInstallCommand(`npm i ${NAMES.join(' ')}`, opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '1' } }));
-    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(3000));
     expect(d?.context).toMatch(/not verified/);
     for (const name of NAMES) expect(d?.context).toContain(name);
   }, 60_000);
@@ -755,6 +849,15 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
     for (const name of NAMES) expect(d?.context).toContain(name);
   });
 
+  // Review 8, item 4: 14 s of vetting, then the answer's write and the hook's
+  // exit, could run past Claude Code's 15 s kill and lose a deny.
+  it('GUARDIAN_PKG_VET_DEADLINE_MS is capped well under the hook’s 15 s, with room for its exit', () => {
+    expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: '99999' })).toBe(MAX_DEADLINE_MS);
+    expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: '5000' })).toBe(5000);
+    expect(vetDeadlineMs({})).toBe(8000);
+    expect(MAX_DEADLINE_MS).toBeLessThanOrEqual(12_000);
+  });
+
   it('GUARDIAN_PKG_VET_DEADLINE_MS sets the deadline', async () => {
     const d = await decideInstallCommand(
       `npm i ${NAMES.join(' ')}`,
@@ -769,7 +872,7 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
       `npm i ${NAMES.join(' ')} zz-evil`,
       opts(all404('zz-evil'), { cwd: mono, deadlineAt: Date.now() + 1500 }),
     );
-    expect(Date.now() - t0).toBeLessThan(4000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(4000));
     expect(d?.deny).toMatch(/MAL-2026-9/);
   }, 60_000);
 });

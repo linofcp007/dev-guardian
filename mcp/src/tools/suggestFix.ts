@@ -27,7 +27,7 @@ import { z } from 'zod';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -56,13 +56,10 @@ const inputSchema = {
 
 const tool: ToolModule = {
   name: 'suggest_fix',
-  title: 'Gather fix context for the model',
+  title: 'Gather fix context',
   description:
-    'Assemble structured context about a finding (source snippet, surrounding lines, rule metadata, ' +
-    'prior suppressions for the same tool and rule_id) so the calling model can propose a patch. ' +
-    "The finding is found in project_path's (default: the server's working directory) newest " +
-    'scan that reported it. This tool never calls an external LLM — the model that invoked it ' +
-    'does the synthesis.',
+    "Gather a finding's context — the source around it, rule metadata, earlier suppressions of the same " +
+    "rule — from project_path's newest scan that reported it, so you can write the patch. Calls no LLM.",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -83,7 +80,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
   const contextLines = inp.context_lines ?? 20;
 

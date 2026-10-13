@@ -40,6 +40,7 @@ import { WSL_SHELL } from '../platform/shellProbe.js';
 import { ensureUserBinOnPath, userBinPlacement } from '../platform/userBin.js';
 import { runProcess } from '../runners/processRunner.js';
 import { runShellScript } from '../runners/shellRunner.js';
+import { captureOutput } from '../runners/spawn.js';
 import {
   TOOL_CATALOG,
   listDefaultTools,
@@ -55,9 +56,7 @@ const inputSchema = {
     .array(z.string())
     .optional()
     .describe(
-      'When set, install only these scanners (must exist in the catalogue). When omitted, install ' +
-        'the default set: semgrep, trivy, gitleaks, syft, pre-commit (+ ruff/bandit/jscpd if stack ' +
-        'detected).',
+      'Install only these catalogued scanners. Default: the standard set for the stack.',
     ),
   dry_run: z
     .boolean()
@@ -67,11 +66,7 @@ const inputSchema = {
     .boolean()
     .optional()
     .describe(
-      'Set true to allow install steps that require sudo/admin (apt, choco, npm install -g). ' +
-        'Default: false — steps needing elevation are reported under `requires_elevation` instead. ' +
-        'Install steps run without a terminal, so on Linux/macOS this only works with passwordless ' +
-        'sudo; "sudo: a terminal is required to read the password" means the user must run the ' +
-        'reported command themselves.',
+      'Allow steps that need sudo or admin (else listed in `requires_elevation`).',
     ),
 };
 
@@ -98,16 +93,12 @@ interface InstallResult {
 
 const tool: ToolModule = {
   name: 'install_toolchain',
-  title: 'Install missing toolchain',
+  title: 'Install missing scanners',
   description:
-    'Install missing scanners. Defaults to the standard set; pass `tools=[...]` to limit. ' +
-    'Linux/macOS delegate to scripts/install/install-{linux,macos}.sh. Windows uses winget/scoop/' +
-    'choco/WSL. Syft, Trivy and gitleaks are a pinned release checked against its sha256 (on Windows ' +
-    'a ZIP fetched with PowerShell), or a package manager asked for that same version — never ' +
-    '"latest" — except on macOS, where Syft and gitleaks come from Homebrew first (Trivy: the pinned ' +
-    'archive first, then homebrew-core). A pinned release goes to ~/.local/bin (%USERPROFILE%\\.local\\bin), ' +
-    'which the server searches itself; the result names where each binary went (binary_path) and says ' +
-    'when a terminal will not find it (path_note). dry_run prints commands without executing.',
+    'Install missing scanners — the standard set, or `tools` — with the install scripts (Linux, macOS) or ' +
+    'winget, scoop, choco or WSL (Windows). Syft, Trivy and gitleaks come at a pinned version (a release ' +
+    'checked against its sha256 goes to ~/.local/bin); `binary_path` and `path_note` say where each went. ' +
+    'This changes the system: run dry_run first, which only lists the commands.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -472,8 +463,7 @@ async function isWslUsable(): Promise<boolean> {
   const wslPath = await resolveBinary('wsl');
   if (!wslPath) return false;
   try {
-    const { execa } = await import('execa');
-    const r = await execa(commandFor('wsl'), ['-l', '--quiet'], { timeout: 5_000, reject: false });
+    const r = await captureOutput(commandFor('wsl'), ['-l', '--quiet'], { timeoutMs: 5_000 });
     // `wsl -l --quiet` prints one distro name per line. UTF-16 BOM on
     // Windows means even with a distro, stdout starts with `\x00\x00\x00`
     // bytes — looking for non-whitespace is enough.
@@ -490,12 +480,8 @@ async function ensurePipxOnPath(ctx: PluginContext): Promise<void> {
   // best-effort polish, not a fatal step.
   const pipx = await resolveBinary('pipx');
   if (!pipx) return;
-  const { execa } = await import('execa');
-  await execa(commandFor('pipx'), ['ensurepath'], {
-    cwd: ctx.scriptsDir,
-    reject: false,
-    timeout: 10_000,
-  }).catch(() => {
+  // Through the runner: pipx's launcher starts a Python, and the timeout must reach it too.
+  await runProcess({ command: commandFor('pipx'), args: ['ensurepath'], cwd: ctx.scriptsDir, timeoutMs: 10_000 }).catch(() => {
     /* swallow */
   });
 }

@@ -31,7 +31,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const WPSCAN_TOOL_NAME = 'wpscan';
+const WPSCAN_TOOL_NAME = 'wpscan';
 
 export const wpscanParser: ScannerParser = {
   name: WPSCAN_TOOL_NAME,

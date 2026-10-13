@@ -135,7 +135,7 @@ function originRuleId(check: DastCheck, origin: string, parts: readonly string[]
  * Whatever goes in `parts` must therefore be a property of the OBSERVED FACT,
  * never of the request that happened to observe it first.
  */
-export function originFingerprint(
+function originFingerprint(
   check: DastCheck,
   origin: string,
   parts: readonly string[] = [],

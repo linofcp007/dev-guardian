@@ -33,7 +33,7 @@ export const MAX_BRIEF_TOKENS = 25_000;
 /** US-1.AC-12: the verify brief's P95 over the verification set. */
 export const VERIFY_BRIEF_P95_TOKENS = 8_000;
 /** The excerpt is the function holding the line, at most this many lines. */
-export const MAX_EXCERPT_LINES = 200;
+const MAX_EXCERPT_LINES = 200;
 /**
  * The prompt version a brief is rendered with unless the plan names another.
  * v5 (D-11, D-12): the model writes its working in prose before the answer
@@ -94,7 +94,7 @@ export function randomBoundary(): string {
   return `BOUNDARY-${randomBytes(12).toString('hex')}`;
 }
 
-export function estimateTokens(text: string): number {
+function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
@@ -194,7 +194,9 @@ function isKeyBodyLine(line: string): boolean {
  * the END line" there removed the rest of the excerpt (measured: 179 lines).
  */
 function scrubSecrets(text: string, firstLine = 1): string {
-  const hits = scanForSecrets(text);
+  // Redaction keeps what a warning skips: a documented example key, a
+  // passphrase with spaces (review 8, items 10-11).
+  const hits = scanForSecrets(text, { skipPlaceholders: false });
   if (hits.length === 0) return text;
   const lines = text.split(/\r?\n/);
   const rulesByLine = new Map<number, string[]>();

@@ -253,7 +253,7 @@ describe('create_fix_pr', () => {
       { project_path: join(repo, 'does-not-exist-xyz') },
       ctx() as never,
     );
-    expect(res).toMatchObject({ ok: false, error: { code: 'not_a_git_repo' } });
+    expect(res).toMatchObject({ ok: false, error: { code: 'target_not_found' } });
   });
 
   it('I5 / Task 11 items 2-3: a WPScan finding that merely MENTIONS an npm package never becomes a candidate at all', async () => {

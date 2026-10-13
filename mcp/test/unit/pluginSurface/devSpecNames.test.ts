@@ -47,6 +47,7 @@ afterAll(cleanupTempDirs);
 const PROSE_ROOTS = [
   'skills',
   'commands',
+  'evals',
   'docs',
   'host-rules',
   'hooks',

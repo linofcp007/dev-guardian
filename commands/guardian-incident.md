@@ -1,5 +1,5 @@
 ---
-description: Incident response — panic (prod broke), leak (secret exposed), rollback (is it safe?), postmortem. Incidente. Incidente.
+description: "Incident response — production down (panic), a leaked secret (leak), rollback, postmortem."
 argument-hint: "<panic | leak | rollback | postmortem> [symptom, suspected secret, rollback target or incident description]"
 ---
 
@@ -20,7 +20,7 @@ Terse and operational — the user is on fire, every extra word costs. In this o
 
 1. **What changed**: `git log --since="24 hours ago" --oneline --stat`, the last tag or deployed SHA, recently merged PRs.
 2. **Open 🔴 findings**: `prioritize_findings { project_path: "<project>", limit: 10 }` and `guardian://findings/critical`.
-3. **Regression**: `regression_alert { project_path: "<project>" }` — the latest scan against its baseline.
+3. **Regression**: `diff_scans { mode: "regression", project_path: "<project>" }` — the latest scan against its baseline.
 4. **Secrets in play**: `scan_secrets { project_path: "<project>", scope: { since: "1 day ago" } }` — in case a key leaked with the change.
 5. **Suppressions**: the `status` CLI (`node "${CLAUDE_PLUGIN_ROOT}/cli/dev-guardian.mjs" status --project .`) shows active and soon-expiring ones; no tool lists when a suppression was added, so say so rather than guess.
 6. **Likely culprits, ranked by confidence**, each with its evidence, and a rollback target when one exists (then `/guardian-incident rollback <target>`).
@@ -41,7 +41,7 @@ High stakes: clear, ordered, urgent without drama.
 Code rolls back easily; data and migrations do not. Mostly a checklist over git, plus one tool for EF Core.
 
 1. Target: the argument (tag or SHA), else the previous tag or the previous deployed SHA. `git diff --stat <target>..HEAD`.
-2. **Migrations** added since the target (`git diff --name-only --diff-filter=A <target>..HEAD`, filtered to migration directories). For each: schema-only and reversible → safe; adds a `NOT NULL` column → safe forward, broken backward; drops a column or table → destructive, the rollback loses data. For an EF Core project, `dotnet_efcore_audit { project_path: "<project>" }` flags `DropTable`, `DropColumn` and non-nullable `AlterColumn` without a default.
+2. **Migrations** added since the target (`git diff --name-only --diff-filter=A <target>..HEAD`, filtered to migration directories). For each: schema-only and reversible → safe; adds a `NOT NULL` column → safe forward, broken backward; drops a column or table → destructive, the rollback loses data. For an EF Core project, `dotnet_check { project_path: "<project>", check: "efcore" }` flags `DropTable`, `DropColumn` and non-nullable `AlterColumn` without a default.
 3. **Lock files**: major version bumps whose API the old code may not expect.
 4. **Configuration**: new required environment variables production may not have (`.env.example`, config schemas).
 5. **API contracts**: diff OpenAPI / GraphQL / protobuf schemas; removed fields break clients that already upgraded.

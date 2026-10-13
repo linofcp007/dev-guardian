@@ -7,8 +7,8 @@
  * Two callers locate the directory two ways, deliberately:
  *
  *   - the MCP server resolves `configs/` through `resolveConfigsDir()`,
- *     which probes for the bundled (`dist/server.js`) and unbundled
- *     (`dist/pkgvet/*.js`, `src/pkgvet/*.ts`) layouts alike;
+ *     which probes for the bundled (`dist/engine.js`) and unbundled
+ *     (`src/pkgvet/*.ts`, under tsx and vitest) layouts alike;
  *   - the hook passes the directory explicitly, computed from its own
  *     location (`<plugin>/hooks/..`), because it knows the plugin root
  *     without probing.

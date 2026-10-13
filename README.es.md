@@ -9,7 +9,7 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 ## Qué incluye
 
 - **13 skills** y **10 comandos** slash para Claude Code / Cowork (abajo).
-- Un **servidor MCP** con **63 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés).
+- Un **servidor MCP** con **52 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés). Los 13 nombres de herramientas que 3.3.0 agrupó en `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` y `prioritize_findings` siguen respondiendo a las llamadas; ya no se listan.
 - **154 reglas Semgrep en 12 packs** escritas para este proyecto: clases de bugs para siete lenguajes, un pack RGPD, un pack de inventario de rutas para nueve lenguajes, un pack Node/Express (SQL montado por interpolación, ruta de la petición en una API de ficheros, URL de la petición solicitada) y un pack para aplicaciones con LLM (salida del modelo en eval/shell/SQL, código remoto al cargar un modelo, superficie de inyección de prompt, llamadas sin límite de tokens) que `scan_sast` ejecuta — ver [docs/rule-packs.md](docs/rule-packs.md).
 - **Hooks de protección** que bloquean comandos de shell catastróficos, revisan paquetes en el momento de instalarlos y avisan cuando se escribe un secreto en un archivo — ver [docs/hooks.md](docs/hooks.md).
 - Una **CLI** (`cli/dev-guardian.mjs`) para gates de CI, configuración de hosts, un resumen en terminal y un panel HTML.
@@ -22,7 +22,7 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 - **Opcional: Docker.** Sin un `semgrep` nativo, `scan_sast` y `map_attack_surface` recurren a la imagen `semgrep/semgrep`.
 - **Windows:** todos los escaneos se ejecutan de forma nativa, sin shell. Solo hace falta un bash para el informe de estado inicial de `init_project` y para el recurso a WSL de `install_toolchain` cuando no hay winget, scoop ni choco. dev-guardian busca primero Git Bash, luego WSL y luego cualquier `bash` en el `PATH`.
 
-No hace falta `npm install`: el servidor MCP y la CLI se ejecutan sobre `mcp/dist/server.js` y `mcp/dist/cli.js`, que están en el repositorio como bundles autónomos.
+No hace falta `npm install`: el servidor MCP y la CLI se ejecutan sobre `mcp/dist/engine.js`, y los hooks sobre `mcp/dist/hooks.js`, que están en el repositorio como bundles autónomos.
 
 ## Inicio rápido (Claude Code)
 
@@ -85,11 +85,11 @@ La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo,
 | Dependencias y cadena de suministro | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Superficie de ataque | `map_attack_surface`, `scan_dast`, `validate_finding` |
 | Escaneo asistido por LLM | `llm_scan_start`, `llm_scan_task`, `llm_scan_submit` — el modelo de tu host verifica los findings y busca lo que los escáneres no ven; el servidor no llama a ningún modelo ([docs/llm-scan.md](docs/llm-scan.md), en inglés) |
-| Historial y triaje | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
+| Historial y triaje | `diff_scans`, `set_baseline`, `suppress_finding`, `risk_score`, `prioritize_findings`, `health_status` |
 | Informes | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
 | Configuración y operación | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |
-| WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
-| C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
+| WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_report` |
+| C# / .NET | `dotnet_check` |
 
 Los recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) sirven los resultados guardados en JSON. Todo se guarda en `.guardian/guardian.db`; el servidor mantiene `.guardian/` fuera de git, salvo `.guardian/baseline.json`, que la CI necesita en el repositorio. El historial, las supresiones y las baselines van ligados a la ruta del proyecto: mover o renombrar el repositorio los empieza de cero (las filas antiguas quedan en la ruta antigua). Un `guardian.db` que su dev-guardian no creó (llegado con un clon o un archivo, o que esté en el repositorio) nunca se abre. **Al actualizar desde 3.0.0:** su `guardian.db` existente tampoco se considera fiable automáticamente — hasta que lo registre, los análisis van a una base de datos de respaldo del usuario y `health_status` lo indica. Si es suyo, ejecute una vez, usted mismo, `node <plugin>/cli/dev-guardian.mjs db adopt --project . --yes` (sin `--yes` muestra primero lo que contiene; `--rehome` mueve también los análisis registrados a través de un enlace al proyecto). Ver [SECURITY.md](SECURITY.md).
 
@@ -130,17 +130,16 @@ Detalles, configuración y formas de desactivarlos: [docs/hooks.md](docs/hooks.m
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline y Claude Desktop reciben el servidor MCP y un archivo de reglas (sin skills, comandos ni hooks). Clona una vez y después ejecuta la CLI **por su ruta absoluta** desde tu proyecto:
 
 ```text
-git clone --depth 1 --branch v3.2.1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.3.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-El clon de arriba fija la 3.2.1; para seguir una versión posterior, clona su etiqueta `vX.Y.Z`. `--update-mcp`, `--global` y `ci-init` necesitan la 3.0.0 o posterior — 2.0.0 además escribe las configuraciones globales de Windsurf y Claude Desktop con `mcp-config all --write`. La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
+El clon de arriba fija la 3.3.0; para seguir una versión posterior, clona su etiqueta `vX.Y.Z`. `--update-mcp`, `--global` y `ci-init` necesitan la 3.0.0 o posterior — 2.0.0 además escribe las configuraciones globales de Windsurf y Claude Desktop con `mcp-config all --write`. La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 
 ```text
-npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                                  # una vez: paquetes de runtime de scan
 node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write                # también gitlab, bitbucket
 node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .           # haz commit de .guardian/baseline.json
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
@@ -148,7 +147,7 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high -
 
 `ci-init` genera un pipeline con cada action fijada por SHA de commit y cada escáner por versión y checksum. `scan` termina con 0 si pasa, 1 cuando un finding nuevo respecto a la baseline alcanza `--fail-on`, **2 cuando un escáner no se ejecutó** (nunca lo leas como aprobado) y 3 ante un error de uso. En un pull request, el pipeline generado evalúa contra la baseline y las reglas Semgrep del commit base (`--baseline-ref`, `--rules-ref`), nunca contra las del propio pull request. Ver [docs/ci.md](docs/ci.md). Ejecútalos desde tu proyecto, con la ruta de tu clon (la copia del propio plugin también sirve). Para una vista local: `status` y `dashboard` (una página HTML autónoma, sin red). Para traer el log SARIF de otro analizador al mismo historial, usa la herramienta `import_sarif` o `import-sarif <archivo>` — ver [docs/sarif-import.md](docs/sarif-import.md) (en inglés).
 
-**Con dev-spec-driven.** Su `/spec-finish` puede ejecutar este gate como check del proyecto (`dev-spec init --guardian`, o `spec_init { guardian: true }` en una sesión): solo un finding nuevo respecto a la baseline, de severidad `high` o superior, bloquea el cierre, y el exit 2 es un escaneo incompleto, nunca un aprobado. Un finding que ya revisaste se acepta con `baseline update` o con una supresión que lea el propio escáner, nunca forzando el cierre — ver [docs/ci.md](docs/ci.md) (en inglés).
+**Con dev-spec-driven (1.29+).** Su `/spec-finish` puede ejecutar este gate como check del proyecto (`spec_init { guardian: true }` en una sesión, o `node "<plugin dev-spec-driven>/cli/dev-spec.js" init --guardian` en un terminal): solo un finding nuevo respecto a la baseline, de severidad `high` o superior, bloquea el cierre, y el exit 2 es un escaneo incompleto, nunca un aprobado. Registra la baseline en la rama base antes de activar el check. Un finding que ya revisaste se acepta con una supresión que lea el propio escáner (`nosemgrep: <regla> -- <motivo>`, `.trivyignore`, `.gitleaksignore`), nunca con `baseline update` — acepta todos los findings actuales, incluidos los de la propia feature — y nunca forzando el cierre; ver [docs/ci.md](docs/ci.md) (en inglés).
 
 ## Privacidad y red
 

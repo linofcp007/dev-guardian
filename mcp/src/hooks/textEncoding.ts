@@ -8,8 +8,8 @@
  * UTF-16 is recognised by its byte-order mark, or — without one — when the
  * bytes are NUL-interleaved the way mostly-ASCII UTF-16 is (a NUL in nearly
  * every other byte, on one side only). Anything else is UTF-8, a UTF-8
- * byte-order mark dropped. Node built-ins only: the CLI imports the compiled
- * copy from `mcp/dist/hooks/`.
+ * byte-order mark dropped. Node built-ins only: the CLI loads it with its
+ * bundle, `mcp/dist/engine.js`, at start.
  */
 
 /** How much of the start of a file the NUL-interleaving guess reads. */

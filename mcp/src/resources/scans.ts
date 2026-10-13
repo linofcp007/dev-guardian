@@ -16,9 +16,9 @@
 
 import type { PluginContext } from '../context.js';
 import { countableFindings } from '../history/openSet.js';
-import { SEVERITY_ORDER, type Finding, type FindingsCountBySeverity } from '../types.js';
 import { registerResourceModule } from './index.js';
 import { boundFinding, serverProjectPath } from './paging.js';
+import { countBySeverity, topFindings } from '../severity/counts.js';
 
 registerResourceModule({
   name: 'guardian-scans-latest',
@@ -91,28 +91,6 @@ function enrich(scanId: string, ctx: PluginContext): Record<string, unknown> {
     findings_count_by_severity: counts,
     top_findings: top.map(boundFinding),
   } as unknown as Record<string, unknown>;
-}
-
-function countBySeverity(findings: Finding[]): FindingsCountBySeverity {
-  const out: FindingsCountBySeverity = {
-    info: 0,
-    low: 0,
-    medium: 0,
-    high: 0,
-    critical: 0,
-  };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}
-
-function topFindings(findings: Finding[], limit: number): Finding[] {
-  return [...findings]
-    .sort(
-      (a, b) =>
-        SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
-        a.fingerprint.localeCompare(b.fingerprint),
-    )
-    .slice(0, limit);
 }
 
 interface JsonRpcError extends Error {

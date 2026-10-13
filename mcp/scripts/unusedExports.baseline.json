@@ -1,0 +1,21 @@
+[
+  "src/history/scanRoles.ts#SarifSlot",
+  "src/pkgvet/parseCommand.ts#powershellAsPosix",
+  "src/platform/boundedParse.ts#BoundedParse",
+  "src/schemas.ts#BaseScanInput",
+  "src/schemas.ts#BaseScanInputT",
+  "src/schemas.ts#BaseScanWithFixInput",
+  "src/schemas.ts#BaseScanWithFixInputT",
+  "src/schemas.ts#Categories",
+  "src/schemas.ts#CategoryEnum",
+  "src/schemas.ts#DomainErrorCodeEnum",
+  "src/schemas.ts#SeverityEnum",
+  "src/storage/userData.ts#DataDirContext",
+  "src/tools/gitState.ts#WorkingTreeState",
+  "src/tools/scanCoverage.ts#CoverageAssessment",
+  "src/tools/scanCoverage.ts#CoverageContext",
+  "src/tools/scanCoverage.ts#ScanCoverage",
+  "src/tools/scanToolFactory.ts#RulePackContext",
+  "src/tools/scanToolFactory.ts#ScanToolConfig",
+  "src/tools/sourceToolArg.ts#SourceToolChoice"
+]

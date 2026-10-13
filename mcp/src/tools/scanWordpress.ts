@@ -22,7 +22,7 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { runSemgrep } from '../runners/semgrepRun.js';
+import { runSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
@@ -53,13 +53,12 @@ const WP_STANDARDS = ['WordPress', 'WordPress-Core', 'WordPress-Extra', 'WordPre
 registerToolModule(
   makeScanTool({
     name: 'scan_wordpress',
-    title: 'WordPress code scan (Semgrep + Trivy + gitleaks + PHPCS-WPCS)',
+    title: 'WordPress code scan',
     description:
-      'Aggregated source-side scan for a WordPress plugin / theme / site project: Semgrep PHP + ' +
-      'WP rule pack, Trivy fs for dependency CVEs (a manifest it cannot read, e.g. composer.json with no ' +
-      'composer.lock, is a named gap), gitleaks for secrets, PHPCS WordPress standard. Each scanner that ' +
-      'is missing is skipped with reason. Use wp_audit / wp_vuln_check ' +
-      'for live-install scenarios.',
+      'Source scan of a WordPress plugin, theme or site: Semgrep PHP with the WordPress pack, Trivy on ' +
+      'composer.lock (a composer.json with no lock is a named gap), gitleaks and PHPCS with a WordPress ' +
+      'standard. A missing scanner is skipped with its reason. For an install: wp_audit; for known ' +
+      'vulnerabilities: wp_vuln_check.',
     scan_type: 'wordpress',
     // Its secrets pass reads git history: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
@@ -113,6 +112,7 @@ registerToolModule(
             const args = [
               '--config=p/php',
               '--config=p/wordpress',
+              ...semgrepScanFlags(ctx.configRoot).args,
               '--json',
               '--quiet',
               '--output',
@@ -138,6 +138,7 @@ registerToolModule(
             if (entry !== undefined) {
               const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
                 scannedNothing: entry.status === 'skipped',
+                reports: raw !== null ? [raw] : [],
               });
               tools_run[at] = applied.toolRun;
               if (applied.missing) markMissing(missing_tools, 'semgrep-wp');

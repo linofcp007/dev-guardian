@@ -1,5 +1,5 @@
 ---
-description: Infrastructure scan — containers (Dockerfile, image, compose) and IaC (Terraform, Kubernetes, CloudFormation, Helm). Foco infra. Foco infra.
+description: "Container (Dockerfile, image, compose) and IaC (Terraform, Kubernetes, Helm) scan."
 argument-hint: "[docker | iac] [Dockerfile path, image reference or IaC path]"
 ---
 

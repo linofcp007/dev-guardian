@@ -18,7 +18,7 @@ import type { Finding, Severity } from '../types.js';
 import { sarifTaxonomyTags } from '../frameworks/taxonomy.js';
 import { resolveVersion } from '../platform/version.js';
 
-export interface SarifOptions {
+interface SarifOptions {
   toolName?: string;
   /** Defaults to the real plugin/package release version (`platform/version.ts`),
    *  resolved once below — not a hardcoded literal that can drift behind a

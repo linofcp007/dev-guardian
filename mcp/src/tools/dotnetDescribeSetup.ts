@@ -16,7 +16,7 @@
 
 import type { PluginContext } from '../context.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { ScanRecord, ScanType, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -44,7 +44,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
 
   // The target-framework check reports through `meta`, so its scanner
@@ -105,10 +105,10 @@ async function handler(
     open_critical: dotnetFindings.filter((f) => f.severity === 'critical').length,
     open_high: dotnetFindings.filter((f) => f.severity === 'high').length,
     recommended_next:
-      !tfm ? 'Run `dotnet_target_framework_check` to find EOL frameworks.'
-      : !secrets ? 'Run `scan_dotnet_secrets` to find MS-specific secrets in configs.'
-      : !efcore ? 'If you use EF Core, run `dotnet_efcore_audit` for risky migration patterns.'
-      : dotnetFindings.length > 0 ? 'Open .NET findings exist. Try `triage_findings` + `suggest_fix`.'
+      !tfm ? 'Run `dotnet_check` with `check: "target_framework"` to find end-of-life frameworks.'
+      : !secrets ? 'Run `dotnet_check` with `check: "secrets"` to find .NET secrets in configs.'
+      : !efcore ? 'If you use EF Core, run `dotnet_check` with `check: "efcore"` for risky migrations.'
+      : dotnetFindings.length > 0 ? 'Open .NET findings exist. Try `prioritize_findings` (`view: "triage"`) + `suggest_fix`.'
       : 'Posture looks clean. Consider running `scan_sast` again if code changed.',
   };
 }

@@ -1,6 +1,6 @@
 # dev-guardian MCP server
 
-The stdio MCP server behind the dev-guardian plugin: **63 tools** and **18 resources** for security, quality, bug hunting, dependencies, compliance, observability and performance. Every tool and resource, with its parameters, is listed in [`docs/tools.md`](../docs/tools.md), which `npm run build` generates from the registry.
+The stdio MCP server behind the dev-guardian plugin: **52 tools** and **18 resources** for security, quality, bug hunting, dependencies, compliance, observability and performance. Every tool and resource, with its parameters, is listed in [`docs/tools.md`](../docs/tools.md), which `npm run build` generates from the registry.
 
 Claude Code starts it from `.claude-plugin/plugin.json`:
 
@@ -20,7 +20,7 @@ Any other MCP host starts the same file by absolute path — see [`docs/hosts.md
 
 ## Requirements
 
-Node.js **≥ 22.13** (`engines`). Storage is the built-in `node:sqlite`, used without any flag; on an older Node the server prints `dev-guardian requires Node.js >= 22.13 (node:sqlite)` and exits 1. `dist/server.js` is an esbuild bundle with no runtime `node_modules`, and it is committed: installing the plugin needs no build.
+Node.js **≥ 22.13** (`engines`). Storage is the built-in `node:sqlite`, used without any flag; on an older Node the server prints `dev-guardian requires Node.js >= 22.13 (node:sqlite)` and exits 1. `dist/server.js` starts the server from `dist/engine.js`, an esbuild bundle with no runtime `node_modules` that the CLI runs too, and both are committed: installing the plugin needs no build.
 
 ## Layout
 
@@ -44,7 +44,7 @@ mcp/
 │   └── docs/            generator and tests for docs/tools.md and docs/rule-packs.md
 ├── scripts/             build steps: copy-assets, generateHostRules, bundle; smoke.mjs;
 │                        generatePopularPackages.mjs (refreshes configs/popular-packages/)
-└── dist/                compiled output, committed
+└── dist/                the build, committed: engine.js (server + CLI), hooks.js, server.js, SQL migrations
 ```
 
 ## Build, run, test
@@ -53,7 +53,7 @@ mcp/
 cd mcp
 npm ci                 # dev dependencies: tsc, esbuild, vitest, tsx
 npm run lint           # tsc over src/ and test/
-npm run build          # tsc, copy SQL migrations, regenerate host rules, bundle, regenerate docs/
+npm run build          # type-check, bundle, copy SQL migrations, regenerate host rules and docs/
 npm test               # vitest (the whole suite)
 node scripts/smoke.mjs # stdio handshake against the built server
 npm run dev            # tsx src/server.ts, no build
@@ -111,7 +111,7 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 - `<project>/.gitignore` — the two `.guardian` lines above, once.
 - Files you asked for: `init_project` and `observability_setup` with `apply: true`, `precommit_install` (git hooks, through `pre-commit install`), and `scan_sast` / `bug_hunt` / `scan_wordpress` / `security_scan_full` with `auto_fix: true` — which refuses unless git confirms a clean tree or `allow_dirty: true` is passed.
 - `create_fix_pr` works in disposable git worktrees and removes them; only `apply: true` commits, pushes and opens pull requests.
-- `wp_vuln_check_source` caches the Wordfence feed in the user cache directory, never in the project.
+- `wp_vuln_check` with `mode: "source"` caches the Wordfence feed in the user cache directory, never in the project.
 - `wp_vuln_check` writes its WPScan report under the install's `.guardian/reports/` when the install is on this machine, else under `wp-vuln-check/<site>-<hash>/` in that user cache directory — never the server's working directory. Each site there keeps its newest N reports, N being the scan retention (`GUARDIAN_RETENTION_SCANS`, default 50, `0` keeps all).
 - Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards — and a scan's report directory, `guardian-reports-<tool>-…`, when `.guardian` or `.guardian/reports` in the project is a link (a junction included) or not a directory: reports are never written through one.
 - Every write into the project goes through `src/platform/projectFs.ts`: never through a link or a directory that leads out of the project, always a temp file beside the target renamed into place. Every read of a project file goes through it too — contained in the project, regular files only, bounded — and `test/unit/platform/rawRepoFsSites.test.ts` fails on a raw `fs` call it does not list.

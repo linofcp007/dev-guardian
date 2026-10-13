@@ -53,6 +53,7 @@ import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
 import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
 import { probeShell } from '../platform/shellProbe.js';
+import { loadScanSettings, type ScanSettingsLoad } from '../platform/scanSettings.js';
 import { GuardianDatabase } from '../storage/db.js';
 import { runMigrations } from '../storage/migrations/runner.js';
 import { Storage } from '../storage/index.js';
@@ -107,6 +108,13 @@ export interface RunScansResult {
   steps: ScanStepResult[];
   /** Where the rules and configuration came from: the tree, or `rulesRef`. */
   rulesSource: RulesSource;
+  /**
+   * The project's `.guardian/scan.yml` as the scans read it — the
+   * `rulesRef` copy's when given (a pull request cannot accept its own
+   * timeouts): the gate's `semgrep.accept_timeouts`, and an `invalid` file
+   * the CLI refuses (`platform/scanSettings.ts`).
+   */
+  scanSettings: ScanSettingsLoad;
 }
 
 export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
@@ -141,12 +149,15 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
         };
       }
 
+      // Read before the copy goes with the temporary directory.
+      const scanSettings = loadScanSettings(ctx.repoConfigFromRef?.root ?? opts.projectPath);
+
       const steps: ScanStepResult[] = [];
       for (const name of buildSequence(opts)) {
         steps.push(await runStep(name, buildInput(name, opts), ctx));
       }
 
-      return { findings: collectFindings(storage, opts.projectPath), steps, rulesSource };
+      return { findings: collectFindings(storage, opts.projectPath), steps, rulesSource, scanSettings };
     } finally {
       try {
         db.close();

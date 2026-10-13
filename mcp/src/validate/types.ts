@@ -18,10 +18,10 @@ export type Verdict = (typeof VERDICTS)[number];
  * those are the verdicts the evidence providers give, and `validate_finding`'s
  * summary counts exactly them.
  */
-export const LLM_VERDICTS = ['exploitable', 'not_exploitable', 'undetermined'] as const;
+const LLM_VERDICTS = ['exploitable', 'not_exploitable', 'undetermined'] as const;
 export type LlmStoredVerdict = (typeof LLM_VERDICTS)[number];
 
-export const PROVIDERS = ['static', 'runtime', 'dependency', 'llm'] as const;
+const PROVIDERS = ['static', 'runtime', 'dependency', 'llm'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 /** The providers this version implements, in the order they run and report. */

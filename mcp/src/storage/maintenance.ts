@@ -98,7 +98,7 @@ export const PRUNE_BATCH_ROWS = 5000;
  * indexed reads (`findings.scan_id`, `scan_cves.scan_id`), outside the write
  * transaction.
  */
-export function takePruneBatch(db: DB, pending: string[], maxScans: number, maxRows = PRUNE_BATCH_ROWS): string[] {
+function takePruneBatch(db: DB, pending: string[], maxScans: number, maxRows = PRUNE_BATCH_ROWS): string[] {
   const head = pending.slice(0, Math.max(1, maxScans));
   if (head.length <= 1) return pending.splice(0, head.length);
   const list = head.map(() => '?').join(', ');
@@ -124,15 +124,15 @@ export function takePruneBatch(db: DB, pending: string[], maxScans: number, maxR
 }
 
 /** Work (not wall-clock) time retention may spend per server start. */
-export const RETENTION_BUDGET_MS = 1000;
+const RETENTION_BUDGET_MS = 1000;
 
 /** How long after connecting retention starts, so the host's handshake goes first. */
 export const RETENTION_START_DELAY_MS = 2000;
 
 /** Pause between batches, so another process can take the write lock in between. */
-export const RETENTION_BATCH_GAP_MS = 20;
+const RETENTION_BATCH_GAP_MS = 20;
 
-export interface RetentionLimit {
+interface RetentionLimit {
   /** Scans to keep per (project, scan type); 0 disables pruning. */
   keep: number;
   /** Set when the configured value was unusable and the default applies. */
@@ -367,7 +367,7 @@ function deleteRows(db: DB, eligible: readonly string[]): number {
   return db.prepare<string[]>(`DELETE FROM scans WHERE id IN (${del})`).run(...eligible).changes;
 }
 
-export interface PruneBudget {
+interface PruneBudget {
   /** Scans per write transaction, at most. Default {@link PRUNE_BATCH}; rows are capped at {@link PRUNE_BATCH_ROWS} too. */
   batchSize?: number;
   /** Stop after this many batches. Default: no limit. */
@@ -380,7 +380,7 @@ export interface PruneBudget {
   protect?: ReadonlySet<string>;
 }
 
-export interface PruneResult {
+interface PruneResult {
   /** Scans deleted (their findings, CVE rows and cache rows went with them). */
   deleted: number;
   /** Prunable scans left for a later run because the budget ran out. */
@@ -416,7 +416,7 @@ export function pruneScans(db: DB, keep: number, budget: PruneBudget = {}): Prun
 }
 
 /** Stack snapshots {@link pruneStackSnapshots} deletes per call. */
-export const STACK_PRUNE_BATCH = 500;
+const STACK_PRUNE_BATCH = 500;
 
 /**
  * Deletes up to `limit` stack snapshots beyond the newest
@@ -464,7 +464,7 @@ export function pruneStackSnapshots(db: DB, limit = STACK_PRUNE_BATCH): { delete
  * that added this and CHANGELOG (the open set per candidate project, once
  * per start, inside retention's work budget).
  */
-export function openSetSourceIds(storage: Storage, candidates: readonly string[]): Set<string> {
+function openSetSourceIds(storage: Storage, candidates: readonly string[]): Set<string> {
   const protect = new Set<string>();
   if (candidates.length === 0) return protect;
   const db = storage.rawHandle();
@@ -498,7 +498,7 @@ export function pruneScansFor(storage: Storage, keep: number, budget: PruneBudge
 }
 
 /** The slice of `Storage` startup maintenance needs. */
-export interface MaintenanceTarget {
+interface MaintenanceTarget {
   scans: { reapRunning(): number };
   rawHandle(): DB;
 }
@@ -526,7 +526,7 @@ const defaultDefer: Defer = (fn, ms) => {
   return () => clearTimeout(timer);
 };
 
-export interface RetentionSchedule {
+interface RetentionSchedule {
   env?: Record<string, string | undefined>;
   defer?: Defer;
   budgetMs?: number;

@@ -67,7 +67,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -82,12 +82,12 @@ const inputSchema = {
     .string()
     .uuid()
     .optional()
-    .describe("The older generate_sbom scan. Default: this project's second-newest completed SBOM scan."),
+    .describe('The older SBOM scan. Default: the second-newest.'),
   to_scan_id: z
     .string()
     .uuid()
     .optional()
-    .describe("The newer generate_sbom scan. Default: this project's newest completed SBOM scan."),
+    .describe('The newer SBOM scan. Default: the newest.'),
   /** No longer changes behaviour — full-file comparison always happens now
    *  when the SBOM file is still on disk. Kept so an existing caller that
    *  passes it does not break. */
@@ -95,21 +95,17 @@ const inputSchema = {
     .boolean()
     .optional()
     .describe(
-      'Ignored; kept so existing callers do not break. The full SBOM file is always compared when it is ' +
-        'still on disk, and the capped summary stored with the scan only when it is not (component_source says which).',
+      'Ignored; kept for old callers.',
     ),
 };
 
 const tool: ToolModule = {
   name: 'sbom_diff',
-  title: 'SBOM diff (added / removed / changed components)',
+  title: 'Compare two SBOMs',
   description:
-    'Compare two generate_sbom scans, full component list, keyed by (ecosystem, name) with a ' +
-    'version SET per key so multiple versions of the same package in the same ecosystem are ' +
-    'reported per-version, never collapsed. Default to/from: the two latest completed SBOM scans ' +
-    'of project_path. Refuses a comparison that would mix a full component list against a capped ' +
-    '25-item summary (spurious results); response arrays are capped but summary carries the true, ' +
-    'uncapped totals except on the (flagged) both-capped fallback path.',
+    'Compare two generate_sbom scans of project_path (default: its two latest): components added, removed ' +
+    'and changed, keyed by ecosystem and name with every version kept. Refuses to compare a full list ' +
+    'with a capped summary; the response arrays are capped, `summary` has the true totals.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -144,7 +140,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;

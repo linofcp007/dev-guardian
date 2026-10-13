@@ -40,7 +40,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
-import { listProjectDir, presentInProject, projectPathKind, readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { presentInProject, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import {
   classifyRestoreFailure,
@@ -54,7 +54,7 @@ import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { honouredRootFiles, nameRepoConfig, withProjectConfig, type HonouredFile } from '../runners/repoConfig.js';
-import { checkRequirements, INDEX_KINDS, SOURCE_KINDS, type PipRefusal } from '../deps/pipRequirements.js';
+import { checkRequirements, findRequirementFiles, INDEX_KINDS, SOURCE_KINDS, type PipRefusal } from '../deps/pipRequirements.js';
 import { checkPyproject, checkSetupCfg } from '../deps/pythonProject.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
@@ -126,19 +126,12 @@ function detectBots(projectPath: string): BotConfigured {
 registerToolModule(
   makeScanTool({
     name: 'deps_audit',
-    title: 'Dependency audit (Trivy + native auditors + bot detection)',
+    title: 'Dependency audit (Trivy and native auditors)',
     description:
-      'Run Trivy fs (vuln+license) plus stack-specific auditors when applicable: npm audit; ' +
-      'pip-audit, once per requirements*.txt (or the project dir for pyproject.toml), never the ' +
-      'host Python — it builds a TEMPORARY virtualenv and installs those requirements into it ' +
-      'from PyPI, or from an index the requirements file names (named in tools_run) — network ' +
-      'access; an sdist\'s build step runs there; and for any .sln/.csproj, ' +
-      '`dotnet restore --locked-mode` then `dotnet list package --vulnerable --include-transitive ' +
-      '--no-restore`. That restore EXECUTES the project\'s own MSBuild (targets, imported .props) ' +
-      'and contacts its NuGet feeds; it never rewrites or creates a packages.lock.json (an ' +
-      'out-of-sync lock, or one a restore would create, is reported as a gap). Returns Findings, ' +
-      'indexed CVEs, and a `bot_configured` flag indicating whether Renovate or Dependabot is set ' +
-      'up in this repo.',
+      "Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs " +
+      "the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list " +
+      "package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync " +
+      'lock is a gap). Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).',
     // Its own type, not scan_deps' 'deps': the two shared cache entries and
     // answered for each other. Readers that want "the latest deps_audit" use
     // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.
@@ -411,38 +404,7 @@ function auditEnv(ctx: { scriptEnv: NodeJS.ProcessEnv }): { env: NodeJS.ProcessE
 // --------------------------------------------------------------- pip-audit
 
 /**
- * `requirements*.txt` at the project root, plus one level into a
- * `requirements/` directory (the common `requirements/base.txt` +
- * `requirements/dev.txt` split) — never a recursive walk, matching this
- * file's other manifest checks (`package.json`, `pyproject.toml`), which are
- * root-level existence checks too.
- *
- * `files` are handed to pip-audit. `outside` — project-relative, a
- * `requirements/` directory with its trailing `/` — are candidates that lead
- * out of the project through a link (`platform/projectFs.ts`): never listed,
- * read or handed over, and named as not audited rather than skipped silently.
- */
-function findRequirementsFiles(projectPath: string): { files: string[]; outside: string[] } {
-  const files: string[] = [];
-  const outside: string[] = [];
-  const sort = (abs: string, rel: string): void => {
-    const kind = projectPathKind(projectPath, abs);
-    if (kind === 'file') files.push(abs);
-    else if (kind === 'outside') outside.push(rel);
-  };
-  for (const { name } of listProjectDir(projectPath, projectPath)) {
-    if (/^requirements.*\.txt$/i.test(name)) sort(join(projectPath, name), name);
-  }
-  const reqDir = join(projectPath, 'requirements');
-  if (projectPathKind(projectPath, reqDir) === 'outside') outside.push('requirements/');
-  for (const { name } of listProjectDir(projectPath, reqDir)) {
-    if (name.toLowerCase().endsWith('.txt')) sort(join(reqDir, name), `requirements/${name}`);
-  }
-  return { files, outside };
-}
-
-/**
- * `run` naming the requirements candidates {@link findRequirementsFiles} did
+ * `run` naming the requirements candidates `findRequirementFiles` did
  * not hand to pip-audit because they lead out of the project: in the reason,
  * each as not audited. Not in `honoured_config` — nothing was taken from them.
  */
@@ -503,7 +465,12 @@ async function runPipAudit(opts: {
   parser_inputs: ScannerInvocation['parser_inputs'];
 }): Promise<void> {
   const { ctx, reportDir, tools_run, missing_tools, parser_inputs } = opts;
-  const { files: requirementsFiles, outside } = findRequirementsFiles(ctx.projectPath);
+  // The one finder (`deps/pipRequirements.ts`): requirements*.txt at the root and
+  // one level into requirements/; a candidate linked out of the project is named
+  // as not audited, never read or handed over.
+  const found = findRequirementFiles(ctx.projectPath);
+  const requirementsFiles = found.files.map((rel) => join(ctx.projectPath, ...rel.split('/')));
+  const outside = found.outside;
   const hasPyproject = presentInProject(ctx.projectPath, 'pyproject.toml');
   // Nothing to audit — not a gap. A candidate that leads out of the project is one.
   if (requirementsFiles.length === 0 && !hasPyproject && outside.length === 0) return;

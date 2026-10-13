@@ -56,7 +56,7 @@ import { describeReadRefusal, presentInProject, readProjectText, type ProjectTex
 import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './boundedParse.js';
 import { readManifest } from '../configdrift/manifest.js';
 
-export interface ProjectSemgrepConfig {
+interface ProjectSemgrepConfig {
   /** Absolute path, ready to be interpolated into `--config=`. */
   path: string;
   /** Project-relative path, for messages the user reads. */
@@ -65,13 +65,13 @@ export interface ProjectSemgrepConfig {
   via: 'manifest' | 'convention';
 }
 
-export interface UnusableSemgrepConfig {
+interface UnusableSemgrepConfig {
   target: string;
   /** Short phrase naming the defect, for a `tools_run` reason. */
   reason: string;
 }
 
-export interface ProjectSemgrepInspection {
+interface ProjectSemgrepInspection {
   usable: ProjectSemgrepConfig[];
   /**
    * Candidates that exist but would abort the scan. Reported rather than

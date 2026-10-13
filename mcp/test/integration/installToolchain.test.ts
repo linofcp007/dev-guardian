@@ -3,7 +3,7 @@
  * server sees after an install.
  *
  * Mocks sit at the process boundary only — `runProcess` (so nothing is
- * installed), `execa` (the `wsl -l` probe), the OS and the PATH lookups —
+ * installed), `captureOutput` (the `wsl -l` probe), the OS and the PATH lookups —
  * while `runShellScript` and `scanHelpers` are the real ones, because the
  * defects under test live in them: the WSL argv, and the scanner cache.
  */
@@ -21,9 +21,12 @@ vi.mock('../../src/platform/pkgManagerDetect.js', async () => {
   );
   return { ...actual, resolveBinary: vi.fn(), firstWindowsAvailable: vi.fn() };
 });
-vi.mock('execa', () => ({ execa: vi.fn() }));
+vi.mock('../../src/runners/spawn.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/runners/spawn.js')>('../../src/runners/spawn.js');
+  return { ...actual, captureOutput: vi.fn() };
+});
 
-import { execa } from 'execa';
+import { captureOutput } from '../../src/runners/spawn.js';
 import { runProcess } from '../../src/runners/processRunner.js';
 import { detectOs } from '../../src/platform/osDetect.js';
 import { firstWindowsAvailable, resolveBinary } from '../../src/platform/pkgManagerDetect.js';
@@ -66,7 +69,7 @@ beforeEach(() => {
   vi.mocked(runProcess).mockResolvedValue(ok);
   vi.mocked(resolveBinary).mockReset();
   vi.mocked(firstWindowsAvailable).mockReset();
-  vi.mocked(execa).mockReset();
+  vi.mocked(captureOutput).mockReset();
   vi.mocked(detectOs).mockReturnValue('win32');
 });
 
@@ -75,7 +78,7 @@ describe('install_toolchain WSL fallback', () => {
     // No winget/scoop/choco; WSL present with a distro.
     vi.mocked(firstWindowsAvailable).mockResolvedValue(null);
     vi.mocked(resolveBinary).mockImplementation(async (name) => (name === 'wsl' ? 'C:\\wsl.exe' : null));
-    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Ubuntu\n' } as never);
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: 'Ubuntu\n' } as never);
 
     const r = (await tool('install_toolchain').handler({}, plugin())) as { ok: boolean };
     expect(r.ok).toBe(true);
@@ -130,7 +133,7 @@ describe('install_toolchain and the scanner cache', () => {
     vi.mocked(resolveBinary).mockImplementation(async (name) =>
       name === 'gitleaks' ? 'C:\\bin\\gitleaks.exe' : name === 'scoop' ? 'C:\\scoop.cmd' : null,
     );
-    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: '' } as never);
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: '' } as never);
     await tool('install_toolchain').handler({ tools: ['gitleaks'] }, plugin());
 
     // …and the cached "missing" must not outlive it.

@@ -16,7 +16,7 @@
 import { dirname } from 'node:path';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 
-export interface NucleiRunOptions {
+interface NucleiRunOptions {
   binaryPath: string;
   targetUrl: string;
   outputPath: string;
@@ -33,7 +33,7 @@ export interface NucleiRunOptions {
  * far gentler ceiling, so this is deliberately conservative rather than
  * reusing nuclei's own default.
  */
-export const DEFAULT_NUCLEI_RATE_LIMIT = 10;
+const DEFAULT_NUCLEI_RATE_LIMIT = 10;
 
 /**
  * Tag families excluded from every nuclei run regardless of `allowIntrusive`.

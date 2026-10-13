@@ -39,7 +39,7 @@ export const CSF_FUNCTIONS = [
   { id: 'RS', title: 'RESPOND' },
   { id: 'RC', title: 'RECOVER' },
 ] as const;
-export type CsfFunctionId = (typeof CSF_FUNCTIONS)[number]['id'];
+type CsfFunctionId = (typeof CSF_FUNCTIONS)[number]['id'];
 
 export const CSF_CATEGORIES = [
   { id: 'GV.OC', function: 'GV', title: 'Organizational Context' },
@@ -65,35 +65,9 @@ export const CSF_CATEGORIES = [
   { id: 'RC.RP', function: 'RC', title: 'Incident Recovery Plan Execution' },
   { id: 'RC.CO', function: 'RC', title: 'Incident Recovery Communication' },
 ] as const satisfies ReadonlyArray<{ id: string; function: CsfFunctionId; title: string }>;
-export type CsfCategoryId = (typeof CSF_CATEGORIES)[number]['id'];
+type CsfCategoryId = (typeof CSF_CATEGORIES)[number]['id'];
 
-/** The text of every CSF 2.0 subcategory {@link OWASP_TO_CSF} cites, verbatim from NIST. */
-export const CSF_SUBCATEGORY_TEXT: Readonly<Record<string, string>> = {
-  'GV.SC-07':
-    'The risks posed by a supplier, their products and services, and other third parties are understood, ' +
-    'recorded, prioritized, assessed, responded to, and monitored over the course of the relationship',
-  'ID.RA-01': 'Vulnerabilities in assets are identified, validated, and recorded',
-  'PR.AA-01': 'Identities and credentials for authorized users, services, and hardware are managed by the organization',
-  'PR.AA-03': 'Users, services, and hardware are authenticated',
-  'PR.AA-05':
-    'Access permissions, entitlements, and authorizations are defined in a policy, managed, enforced, and ' +
-    'reviewed, and incorporate the principles of least privilege and separation of duties',
-  'PR.DS-01': 'The confidentiality, integrity, and availability of data-at-rest are protected',
-  'PR.DS-02': 'The confidentiality, integrity, and availability of data-in-transit are protected',
-  'PR.DS-10': 'The confidentiality, integrity, and availability of data-in-use are protected',
-  'PR.PS-01': 'Configuration management practices are established and applied',
-  'PR.PS-02': 'Software is maintained, replaced, and removed commensurate with risk',
-  'PR.PS-04': 'Log records are generated and made available for continuous monitoring',
-  'PR.PS-06':
-    'Secure software development practices are integrated, and their performance is monitored throughout ' +
-    'the software development life cycle',
-  'PR.IR-03': 'Mechanisms are implemented to achieve resilience requirements in normal and adverse situations',
-  'DE.CM-09':
-    'Computing hardware and software, runtime environments, and their data are monitored to find potentially ' +
-    'adverse events',
-};
-
-export interface CsfReference {
+interface CsfReference {
   category: CsfCategoryId;
   /** The subcategories of `category` the weakness class bears on. */
   subcategories: readonly string[];

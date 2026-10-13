@@ -13,7 +13,7 @@
 import { runProcess } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
 
-export type TreeState = { ok: true; prefix: string; dirty: ReadonlySet<string> } | { ok: false; reason: string };
+type TreeState = { ok: true; prefix: string; dirty: ReadonlySet<string> } | { ok: false; reason: string };
 
 /**
  * The project's place in its repository (`git rev-parse --show-prefix`:

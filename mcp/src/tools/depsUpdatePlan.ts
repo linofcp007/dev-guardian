@@ -112,13 +112,12 @@
  */
 
 import { dirname, join, relative, sep } from 'node:path';
-import { execa } from 'execa';
 import { parseYamlBounded } from '../platform/boundedParse.js';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
-import { commandFor } from '../platform/binaryPath.js';
-import { applyGitSafety, gitSafetyFor } from '../platform/gitSafety.js';
+import { runProcess } from '../runners/processRunner.js';
+import { exactPin, findRequirementFiles, parseRequirementSpec, requirementMentions, type RequirementSpec } from '../deps/pipRequirements.js';
 import { matchesAny } from '../platform/glob.js';
 import {
   listProjectDir,
@@ -141,7 +140,6 @@ import {
 } from '../deps/dotnetRestore.js';
 import {
   compareVersions,
-  compareVersionsLoose,
   isCleanVersion,
   isLooseVersion,
   minCleanVersionAbove,
@@ -150,7 +148,7 @@ import {
 import { findLatestUsable } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
 
 type Classification = 'security' | 'patch' | 'minor' | 'major';
@@ -288,19 +286,11 @@ const tool: ToolModule = {
   name: 'deps_update_plan',
   title: 'Dependency upgrade plan',
   description:
-    'Produce an ordered upgrade plan from the project. npm/composer/cargo/go/rubygems/dotnet use ' +
-    'each stack\'s own "outdated" command; for .NET that is preceded by `dotnet restore ' +
-    '--locked-mode`, which EXECUTES the project\'s own MSBuild and contacts its NuGet feeds (it ' +
-    'never creates or rewrites a packages.lock.json). pip reads this project\'s own ' +
-    'requirements*.txt / pyproject.toml pins and never touches the host Python. pnpm and yarn ' +
-    'projects get no npm commands — their CVEs are listed with the pnpm overrides (where the ' +
-    "project's pnpm version reads them) / resolutions fix to apply by hand (workspace members " +
-    'included). Classifies each entry as security (an ' +
-    'active CVE in the same project\'s latest deps scan — npm/pip target the MINIMUM fixed version, ' +
-    'other stacks the latest available) / patch / minor / major, and returns a sortable, structured ' +
-    'plan (package_name, ecosystem, installed_version, latest_version, cve_ids, upgrade_command), ' +
-    '`unplanned` (every CVE that got no step, with why) and `runner_failures` (every ecosystem ' +
-    'command that failed, with its code — e.g. NU1004 lock out of sync vs NU1301 feed unreachable).',
+    "Ordered upgrades from each stack's own outdated command (npm, composer, cargo, go, rubygems; dotnet " +
+    "after a locked restore, which runs MSBuild) and pip's own pins. Each entry: security (an active CVE " +
+    'in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest ' +
+    'available), patch, minor or major, with its upgrade_command; pnpm and yarn get overrides to apply by ' +
+    'hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.',
   inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
@@ -317,7 +307,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   // create_fix_pr plans on a disposable checkout of HEAD (Task 11): the
@@ -906,8 +896,8 @@ async function runNpmOutdated(
     // to lift; the CVE row's own recorded version is the fallback when the
     // tree gives no version at all.
     const belowFix = versions
-      .filter((v) => isLooseVersion(v) && cve.fixedVersion !== undefined && compareVersionsLoose(v, cve.fixedVersion) < 0)
-      .sort(compareVersionsLoose);
+      .filter((v) => isLooseVersion(v) && cve.fixedVersion !== undefined && compareVersions(v, cve.fixedVersion) < 0)
+      .sort(compareVersions);
     const installed = belowFix[0] ?? cve.installedVersion;
     const target = minCleanVersionAboveLoose(installed, [cve.fixedVersion]);
     if (!installed || !target) {
@@ -1549,11 +1539,7 @@ function buildOverrideStep(input: {
   };
 }
 
-/** What an `execa(…, { reject: false })` result says about a runner that
- *  could not do its job: the command could not start at all (no exit code —
- *  not installed, not on PATH), or it exited with a code outside `okCodes`.
- *  `null` when the exit code is one the caller treats as success. */
-/** What a package-manager run answers: execa's result, or a refusal in the same shape. */
+/** What a package-manager run answers: its exit code and output, or why it did not run (`code`, `shortMessage`). */
 interface PmResult {
   exitCode?: number;
   stdout?: unknown;
@@ -1562,12 +1548,20 @@ interface PmResult {
   shortMessage?: unknown;
 }
 
+/** The most a package manager may print: `go list -m -u -json all` on a large module graph is megabytes. */
+const PM_OUTPUT_CAP_BYTES = 64 * 1024 * 1024;
+
 /**
  * A package manager run in `cwd` — `npm outdated`, `go list -m`, `bundle
- * outdated`, `dotnet restore` … — hardened for git (`platform/gitSafety.ts`):
- * each of them may run git itself (a git dependency, a VCS module, a
+ * outdated`, `dotnet restore` … — through the runner (`runners/processRunner.ts`):
+ * by its absolute path on the child's PATH, never the project directory it
+ * runs in (`platform/binaryPath.ts`); hardened for git (`platform/gitSafety.ts`)
+ * — each of them may run git itself (a git dependency, a VCS module, a
  * Bundler git source), and none of those gits may run a command the
- * project's own git configuration or hooks name. In create_fix_pr's
+ * project's own git configuration or hooks name; and with a timeout that
+ * kills the whole tree and returns at the deadline (review 8, finding 4:
+ * execa's own `timeout`, used here before, signalled `npm.cmd`'s `cmd.exe`
+ * and then waited on the `node` it had started). In create_fix_pr's
  * package-manager environment when inside one (`fixpr/childEnv.ts`), this
  * server's otherwise, or `env` when the caller names one. A repository whose
  * configuration cannot be read safely is not run: `code:
@@ -1579,14 +1573,20 @@ async function execPackageManager(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<PmResult> {
   const pm = packageManagerEnvOptions();
-  const base: NodeJS.ProcessEnv = opts.env ?? ('env' in pm ? pm.env : { ...process.env });
-  const safety = await gitSafetyFor([opts.cwd], { env: base });
-  if (safety.refused !== null) return { code: 'git_config_refused', shortMessage: safety.refused, stdout: '', stderr: '' };
-  // By its absolute path on the child's PATH, never the project directory it runs in (platform/binaryPath.ts).
-  const env = applyGitSafety(safety, base);
-  return execa(commandFor(command, env), args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env, extendEnv: false });
+  const env: NodeJS.ProcessEnv = opts.env ?? ('env' in pm ? pm.env : { ...process.env });
+  const r = await runProcess({ command, args, cwd: opts.cwd, env, extendEnv: false, timeoutMs: opts.timeout, stdoutCapBytes: PM_OUTPUT_CAP_BYTES });
+  if (r.notRun !== undefined) {
+    return { code: r.notRun.code === 'not_found' ? 'ENOENT' : r.notRun.code, shortMessage: r.notRun.message, stdout: '', stderr: r.stderr };
+  }
+  if (r.outcome === 'timed_out') return { shortMessage: `timed out after ${opts.timeout} ms`, stdout: r.stdout, stderr: r.stderr };
+  if (r.outcome === 'output_too_large') return { shortMessage: `printed more than ${PM_OUTPUT_CAP_BYTES} bytes`, stdout: '', stderr: r.stderr };
+  return { ...(r.exitCode !== null ? { exitCode: r.exitCode } : {}), stdout: r.stdout, stderr: r.stderr };
 }
 
+/** What a run says about a runner that could not do its job: the command
+ *  could not start at all (no exit code — not installed, not on PATH,
+ *  refused, timed out), or it exited with a code outside `okCodes`. `null`
+ *  when the exit code is one the caller treats as success. */
 function describeExecFailure(
   label: string,
   result: { exitCode?: number; stderr?: unknown; code?: unknown; shortMessage?: unknown },
@@ -1728,131 +1728,45 @@ function buildPipSecurityStep(opts: {
   };
 }
 
-/** `requirements*.txt` at the project root, plus one level into a
- *  `requirements/` directory — same shallow scope `deps_audit.ts`'s own
- *  pip-audit wiring uses (not shared code: that module belongs to a
- *  different tool). */
+/** The project's requirements files, by the one finder `deps_audit` uses (`deps/pipRequirements.ts`), read. */
 function findPipRequirementsFiles(projectPath: string): Array<{ relPath: string; content: string }> {
   const out: Array<{ relPath: string; content: string }> = [];
-  const tryRead = (relPath: string): void => {
+  for (const relPath of findRequirementFiles(projectPath).files) {
     const content = readProjectTextOrUndefined(projectPath, relPath);
     if (content !== undefined) out.push({ relPath, content });
-  };
-  for (const { name } of listProjectDir(projectPath, projectPath)) {
-    if (/^requirements.*\.txt$/i.test(name)) tryRead(name);
-  }
-  for (const { name } of listProjectDir(projectPath, join(projectPath, 'requirements'))) {
-    if (name.toLowerCase().endsWith('.txt')) tryRead(join('requirements', name));
   }
   return out;
 }
 
 /**
- * Every package MENTION in a requirements file — exact `==` pins (returned
- * with `version` set, the only specifier precise enough to name a single
- * "installed" version without inspecting an environment) AND range/unpinned
- * mentions (returned with `unplannableReason` set instead, so an active CVE
- * on one is reported in `unplanned` rather than silently dropped — fix
- * round 1, item 7).
- *
- * Handles the shapes a real `requirements.txt` uses beyond a bare
- * `pkg==1.2.3`:
- *   - pip-compile's hash-pinned, line-continued form
- *     (`django==4.2.0 \` followed by `    --hash=sha256:...` lines) — a
- *     trailing backslash joins the logical line, and `--hash=...` tokens
- *     are stripped before parsing;
- *   - extras (`celery[redis]==5.3.0`) — the `[redis]` marker is stripped;
- *     the package identity for CVE matching is `celery`, not the bracketed
- *     form;
- *   - environment markers (`pkg==1.0.0; python_version >= "3.8"`) — the
- *     marker (after `;`) is dropped, the pin itself is still read.
+ * Every package MENTION in a requirements file, read as pip reads it
+ * (`deps/pipRequirements.ts#requirementMentions` — continuations, comments,
+ * `--hash` options, extras and markers as pip-compile writes them) — exact
+ * `==` pins with `version` set (the only specifier precise enough to name a
+ * single "installed" version without inspecting an environment), and
+ * range / unpinned mentions with `unplannableReason` set instead, so an
+ * active CVE on one is reported in `unplanned` rather than silently dropped
+ * (fix round 1, item 7).
  */
 function parsePinnedRequirements(content: string): RequirementMention[] {
-  const out: RequirementMention[] = [];
-  for (const rawLine of joinContinuedLines(content)) {
-    let line = rawLine.split('#')[0]?.trim() ?? '';
-    if (!line || line.startsWith('-')) continue; // -r other.txt, --index-url, etc.
-    line = line.replace(/\s+--hash=\S+/g, '').trim(); // pip-compile hash annotations
-    const semi = line.indexOf(';');
-    if (semi >= 0) line = line.slice(0, semi).trim(); // environment marker
-    if (!line) continue;
-    const mention = parseOneRequirementSpec(line);
-    if (mention) out.push(mention);
-  }
-  return out;
+  return requirementMentions(content).map(planMention);
 }
 
 /**
- * Parses ONE already-isolated requirement specifier — no comments, no
- * `--hash=...` annotations, no line continuation: the caller (a
- * requirements-file line, or one element of a pyproject
- * `dependencies = [...]` array) already stripped those. Shared so both
- * shapes get the SAME extras/exact/range/bare handling rather than two
- * copies that can drift (fix round 2, item 7).
- *
- * The environment marker (everything from a top-level `;` onward,
- * `pkg==1.0.0; python_version >= "3.8"`) IS stripped here, internally (fix
- * round 3, "cheap" item) — `parsePinnedRequirements` already stripped it
- * before this function existed as a shared helper, but a pyproject array
- * element (`"urllib3==1.26.0; python_version >= '3.8'"`) went straight from
- * `parsePyprojectPins` to this function with no such preprocessing, so the
- * marker's trailing text made every one of the regexes below fail to match
- * at all — the whole mention silently vanished, not even reported
- * `unplanned`. Doing it here, once, means BOTH callers get it whether or
- * not they remembered to strip it themselves.
- *
- * Returns an exact `==` pin with `version` set, a non-exact specifier or
- * bare name with `unplannableReason` set (fix round 1, item 7 — never
- * silently dropped), or `null` when the text is not a package mention at
- * all (a VCS URL, a local path, `-e .`, …).
+ * One requirement as this planner sees it: an exact `==` pin, or why it
+ * cannot be planned — a non-exact specifier (`>=`, `~=`, `===`, a wildcard),
+ * or no specifier at all. Shared by the requirements files and pyproject's
+ * `dependencies` array, so both get the same handling (fix round 2, item 7).
  */
-function parseOneRequirementSpec(specRaw: string): RequirementMention | null {
-  const semi = specRaw.indexOf(';');
-  const spec = (semi >= 0 ? specRaw.slice(0, semi) : specRaw).trim();
-  if (!spec) return null;
-
-  // Extras: `celery[redis]==5.3.0` -> name `celery`, rest `==5.3.0`.
-  const extras = /^([A-Za-z0-9._-]+)\[[^\]]*\](.*)$/.exec(spec);
-  const target = extras ? `${extras[1]}${extras[2]}` : spec;
-
-  const exact = /^([A-Za-z0-9._-]+)\s*==\s*([A-Za-z0-9._-]+)$/.exec(target);
-  if (exact) {
-    const [, name, version] = exact;
-    if (name && version) return { name, version };
-    return null;
-  }
-  const range = /^([A-Za-z0-9._-]+)\s*(>=|<=|~=|!=|===|<|>)/.exec(target);
-  if (range?.[1] && range[2]) {
-    return {
-      name: range[1],
-      unplannableReason: `non-exact specifier (${range[2]}) — cannot determine a safe target without inspecting the installed environment`,
-    };
-  }
-  const bare = /^[A-Za-z0-9._-]+$/.exec(target);
-  if (bare) {
-    return { name: target, unplannableReason: 'no version specifier — cannot determine an installed version' };
-  }
-  // Anything else (a VCS URL, a local path, `-e .`, …) is not a package
-  // mention this module can reason about at all — silently skipped, same
-  // as before.
-  return null;
-}
-
-/** Joins a pip-compile-style backslash line continuation
- *  (`django==4.2.0 \` followed by `    --hash=sha256:...`) into one logical
- *  line, so `parsePinnedRequirements` sees the whole pin on one line. */
-function joinContinuedLines(content: string): string[] {
-  const out: string[] = [];
-  let buffer = '';
-  for (const line of content.split(/\r?\n/)) {
-    const continued = /\\\s*$/.test(line);
-    buffer += continued ? line.replace(/\\\s*$/, ' ') : line;
-    if (continued) continue;
-    out.push(buffer);
-    buffer = '';
-  }
-  if (buffer) out.push(buffer);
-  return out;
+function planMention(spec: RequirementSpec): RequirementMention {
+  const version = spec.specifier.startsWith('===') ? undefined : exactPin(spec.specifier);
+  if (version !== undefined) return { name: spec.name, version };
+  if (spec.specifier === '') return { name: spec.name, unplannableReason: 'no version specifier — cannot determine an installed version' };
+  const op = /^(~=|===|==|!=|<=|>=|<|>)/.exec(spec.specifier)?.[1] ?? spec.specifier;
+  return {
+    name: spec.name,
+    unplannableReason: `non-exact specifier (${op}) — cannot determine a safe target without inspecting the installed environment`,
+  };
 }
 
 /**
@@ -1873,7 +1787,7 @@ function joinContinuedLines(content: string): string[] {
  * table's own text (from its header to the next `[section]` header or EOF)
  * first; `extractDependenciesArray` then searches only within that slice.
  *
- * Every element goes through `parseOneRequirementSpec` (fix round 2, item
+ * Every element goes through `parseRequirementSpec` and `planMention` (fix round 2, item
  * 7): a range specifier (`django>=4.2`) and an extras pin
  * (`celery[redis]==5.3.0`) are now returned as proper `RequirementMention`s
  * — an exact pin with `version` set, or an unplannable one with a reason —
@@ -1891,8 +1805,8 @@ function parsePyprojectPins(projectPath: string): RequirementMention[] {
   const entryPattern = /["']([^"']*)["']/g;
   let m: RegExpExecArray | null;
   while ((m = entryPattern.exec(block)) !== null) {
-    const mention = parseOneRequirementSpec(m[1] ?? '');
-    if (mention) out.push(mention);
+    const spec = parseRequirementSpec(m[1] ?? '');
+    if (spec !== null) out.push(planMention(spec));
   }
   return out;
 }

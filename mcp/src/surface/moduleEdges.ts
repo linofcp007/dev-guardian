@@ -34,7 +34,7 @@ export interface ModuleEdge {
   language: string;
 }
 
-export interface ResolvedEdge {
+interface ResolvedEdge {
   file: string;
   module_file: string;
 }
@@ -283,7 +283,7 @@ export function externalImports(unresolved: readonly ModuleEdge[]): ExternalImpo
 export const MAX_FILES_PER_PACKAGE = 1000;
 
 /** A package whose importing files were capped: how many are recorded, of how many. */
-export interface TruncatedImport {
+interface TruncatedImport {
   specifier: string;
   language: string;
   recorded: number;

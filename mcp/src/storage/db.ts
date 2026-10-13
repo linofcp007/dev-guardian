@@ -60,7 +60,7 @@ import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { presentInProject } from '../platform/projectFs.js';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import type { StatementSync, SQLInputValue } from 'node:sqlite';
+import type { StatementSync } from 'node:sqlite';
 import { storedPathTarget, type StoredPathTarget } from '../platform/pathSpelling.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
@@ -94,6 +94,13 @@ import {
   untrustedObjects,
   type SchemaSnapshot,
 } from './schemaCheck.js';
+
+/**
+ * A value a statement binds. Spelled here, not imported: `@types/node` is held
+ * to the Node floor, 22.13 (review 8, finding 1), whose declarations name it
+ * `SupportedValueType`; later ones call it `SQLInputValue` and widen it.
+ */
+type SQLInputValue = null | number | bigint | string | Uint8Array;
 
 // `node:sqlite` is pulled in via createRequire rather than a static value
 // import on purpose: the production bundler (esbuild) and the test runner
@@ -140,6 +147,18 @@ export function nodeSqliteAvailable(): boolean {
  * held by one server made the next one's startup exit 1.
  */
 export const BUSY_TIMEOUT_MS = 5000;
+
+/**
+ * How long the MCP server's connection waits for another process's lock once
+ * it has started (`server.ts`, after the startup work above was done at
+ * {@link BUSY_TIMEOUT_MS}). `node:sqlite` is synchronous: while a statement
+ * waits, the server answers nothing — another process holding `BEGIN
+ * IMMEDIATE` for 9 s froze a ping for 8.8 s and failed `detect_stack` with a
+ * bare "database is locked" (review 8, finding 11). The wait is shorter now,
+ * and a call that runs out of it answers `database_busy`, which says what to
+ * do (`tools/index.ts`).
+ */
+export const SESSION_BUSY_TIMEOUT_MS = 2000;
 
 /** Result of a write statement — matches better-sqlite3's `RunResult` shape. */
 export interface RunResult {
@@ -210,6 +229,11 @@ export class GuardianDatabase {
     return new GuardianStatement<P, R>(this.raw.prepare(source));
   }
 
+  /** How long this connection waits for another's lock — see {@link SESSION_BUSY_TIMEOUT_MS}. */
+  setBusyTimeout(ms: number): void {
+    this.raw.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(ms))}`);
+  }
+
   /** Run one or more statements for their side effects (DDL, PRAGMA, BEGIN…). */
   exec(sql: string): void {
     this.raw.exec(sql);
@@ -273,13 +297,14 @@ export class GuardianDatabase {
   }
 
   /**
-   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0. On 22.13–22.15
-   * it reads `undefined` at runtime (whatever the type declarations say), and
+   * `DatabaseSync#isTransaction` exists from Node 22.16 / 24.0 — not in the
+   * floor's declarations, so it is read as an optional property. On
+   * 22.13–22.15 it reads `undefined` at runtime, and
    * the answer is "unknown": the rollback is then attempted and its own
    * failure swallowed.
    */
   private inTransaction(): boolean | undefined {
-    const flag: unknown = this.raw.isTransaction;
+    const flag: unknown = (this.raw as { isTransaction?: unknown }).isTransaction;
     return typeof flag === 'boolean' ? flag : undefined;
   }
 
@@ -657,7 +682,7 @@ function foreignReason(projectPath: string, dbPath: string, foreign: Foreign): s
     case 'unregistered-id':
       return (
         `'${dbPath}' carries a dev-guardian id this user never registered — another user's or another machine's ` +
-        `database — and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ` +
+        `database, or one registered under another GUARDIAN_DATA_DIR — and is not trusted. If it is yours, review it with \`${adopt}\` and register it with --yes, ` +
         `${yourself}; otherwise delete it`
       );
     case 'registered-elsewhere':
@@ -726,6 +751,14 @@ export interface ProjectDatabaseReport {
   paths: StoredPath[];
   /** What `--rehome` would move to {@link canonical_project}: the `this-project` paths. */
   rehome: { paths: number; rows: number };
+  /**
+   * The per-user fallback database this project's history went to while
+   * its own was not used (`resolveFallbackDbPath`), when there is one that
+   * holds anything. Registering the project's database switches the project
+   * back to it, and the fallback's scans and suppressions are not merged —
+   * said first, in `warnings` (review 8, finding 10). Null: none.
+   */
+  fallback: { db_path: string; scans: number; suppressions: number } | null;
 }
 
 /**
@@ -750,6 +783,7 @@ export function inspectProjectDatabase(projectPath: string): ProjectDatabaseRepo
     contents: null,
     paths: [],
     rehome: { paths: 0, rows: 0 },
+    fallback: fallbackHolding(project),
   };
   if (!report.exists) return report;
 
@@ -791,7 +825,32 @@ export function inspectProjectDatabase(projectPath: string): ProjectDatabaseRepo
   report.paths = contents.paths.map((p) => ({ ...p, target: storedPathTarget(p.project_path, canonicalProject) }));
   const moving = report.paths.filter((p) => p.target === 'this-project');
   report.rehome = { paths: moving.length, rows: moving.reduce((n, p) => n + p.rows, 0) };
+  const fb = report.fallback;
+  if (fb !== null && report.status !== 'trusted') {
+    report.warnings.push(
+      `while this database was not used, this project's history went to dev-guardian's per-user database ` +
+        `'${fb.db_path}' (${fb.scans} scan(s), ${fb.suppressions} suppression(s)). Registering this one switches the ` +
+        'project back to it, and that history is NOT merged: a suppression made meanwhile stops applying — note the ' +
+        'ones you still want and apply them again (suppress_finding) after registering',
+    );
+  }
   return report;
+}
+
+/**
+ * The project's per-user fallback database, when it holds a scan or a
+ * suppression: read-only, never created. Null when there is none, it is
+ * empty, or it cannot be read (an unusable data directory included).
+ */
+function fallbackHolding(projectPath: string): ProjectDatabaseReport['fallback'] {
+  try {
+    const dbPath = resolveFallbackDbPath(projectPath);
+    const contents = summarizeDatabase(dbPath);
+    if (contents.scans === 0 && contents.suppressions === 0) return null;
+    return { db_path: dbPath, scans: contents.scans, suppressions: contents.suppressions };
+  } catch {
+    return null;
+  }
 }
 
 /** The one-line status of a foreign database, for `db adopt`'s report. */
@@ -800,7 +859,7 @@ function shortReason(foreign: Foreign): string {
     case 'legacy':
       return 'created before dev-guardian 3.1.0 (it carries no id): not used until you register it';
     case 'unregistered-id':
-      return 'it carries an id this user never registered (another user or another machine): not used';
+      return 'it carries an id this user never registered (another user or another machine, or another GUARDIAN_DATA_DIR): not used';
     case 'registered-elsewhere':
       return `it was registered at '${foreign.at}', not here (a copy): not used here`;
     case 'tracked':
@@ -1197,6 +1256,17 @@ function retryWhileBusy(op: () => void): void {
 function isBusyError(error: unknown): boolean {
   const primary = sqliteErrorCode(error);
   return primary === 5 || primary === 6;
+}
+
+/**
+ * Whether `error` is another process's lock on the database outlasting the
+ * busy timeout — SQLITE_BUSY / SQLITE_LOCKED, or their message when the code
+ * did not travel with it.
+ */
+export function isDatabaseBusyError(error: unknown): boolean {
+  if (isBusyError(error)) return true;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /\bdatabase (?:table )?is locked\b|\bSQLITE_(?:BUSY|LOCKED)\b/.test(message);
 }
 
 /** The primary SQLite result code of a `node:sqlite` error, if it is one. */

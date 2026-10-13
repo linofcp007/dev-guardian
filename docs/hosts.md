@@ -4,13 +4,13 @@ The engine is the MCP server, so any host that speaks MCP over stdio can use dev
 
 ## 1. Clone once
 
-The server and the CLI are committed pre-built and bundled (`mcp/dist/server.js` and `mcp/dist/cli.js` need no runtime `node_modules`), so there is nothing to install or build — only Node.js ≥ 22.13 and git.
+The server and the CLI are committed pre-built and bundled (`mcp/dist/server.js` starts the server from `mcp/dist/engine.js`, which the CLI runs too, and neither needs a runtime `node_modules`), so there is nothing to install or build — only Node.js ≥ 22.13 and git.
 
 ```text
-git clone --depth 1 --branch v3.2.1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.3.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 ```
 
-The clone above pins 3.2.1; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
+The clone above pins 3.3.0; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
 
 ## 2. Wire a host into a project
 
@@ -47,7 +47,7 @@ Exit codes: 0 done, 1 missing or unknown host, 2 usage error.
 ### How rules files are merged
 
 - `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.clinerules` are files you may already have. dev-guardian manages only a delimited block inside them (`<!-- dev-guardian:begin -->` … `<!-- dev-guardian:end -->`); everything outside it is never touched. A stale block is reported as `needs_update` until you pass `--update-mcp`. A file that mentions dev-guardian without the markers and is not byte-for-byte a template an earlier release installed is reported as `manual_merge_required` and left alone.
-- `.cursor/rules/dev-guardian.mdc` and `.windsurf/rules/dev-guardian.md` belong to dev-guardian alone and are written whole, because both hosts only honour a rules file whose YAML frontmatter is its very first bytes.
+- `.cursor/rules/dev-guardian.mdc` and `.windsurf/rules/dev-guardian.md` belong to dev-guardian alone and are written whole, because both hosts only honour a rules file whose YAML frontmatter is its very first bytes. Both are agent-requested (Cursor: a description, `alwaysApply: false`; Windsurf: `trigger: model_decision`): the host loads them when the task matches their description — security, dependencies, bugs, quality, compliance, or installing a package, an AI skill or an MCP server — instead of on every request.
 - Codex's TOML entry is compared by content; `--update-mcp` replaces every `[mcp_servers.dev-guardian]` table and sub-table in the file, wherever they are.
 
 ## Manual configuration

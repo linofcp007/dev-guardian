@@ -14,8 +14,10 @@
  * no install. Every test was green, because every test ran the CLI from here.
  * dev-spec-driven 1.29's `/spec-finish` runs `scan --project . --fail-on high
  * --format json` from the installed plugin as its gate — with 3.2.0 it could
- * only fail. The CLI now runs on the self-contained bundle `mcp/dist/cli.js`
- * (`mcp/src/cli.ts`), as the server runs on `mcp/dist/server.js`.
+ * only fail. The CLI then ran on its own self-contained bundle; since 3.3.0
+ * the CLI and the server share one, `mcp/dist/engine.js` (`mcp/src/engine.ts`;
+ * `mcp/dist/server.js` starts it), the hooks load theirs, `mcp/dist/hooks.js`,
+ * and the build ships no per-file output at all (review 8, findings 2 and 3).
  *
  * ---- How the install is made --------------------------------------------------
  *
@@ -114,11 +116,23 @@ describe('a plugin install — the tracked files, no node_modules', () => {
     expect(statuses, `exit ${String(r.status)}\n${r.stderr}`).toContain(r.status);
   }
 
+  it('what ships in mcp/dist: the two bundles, the server’s entry and the assets — no per-file output, no source map', () => {
+    const dist = join(install, 'mcp', 'dist');
+    const shipped = execGitSync(REPO_ROOT, ['ls-files', '-z', '--', 'mcp/dist'], { timeoutMs: 60_000 })
+      .stdout.split('\0')
+      .filter((f) => f !== '')
+      .map((f) => f.slice('mcp/dist/'.length));
+    expect(shipped.filter((f) => f.endsWith('.js')).sort()).toEqual(['engine.js', 'hooks.js', 'server.js']);
+    expect(shipped.filter((f) => f.endsWith('.map'))).toEqual([]);
+    expect(shipped.filter((f) => !/^(?:engine|hooks|server)\.js$|^storage\/migrations\/\d{3}_\w+\.sql$|^hostsetup\/legacyRulesTemplates\//.test(f))).toEqual([]);
+    expect(existsSync(join(dist, 'engine.js')) && existsSync(join(dist, 'hooks.js'))).toBe(true);
+  });
+
   it('positive control: the copy is an install — none of mcp/package.json’s dependencies resolves from it', () => {
     const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'mcp', 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
     const deps = Object.keys(pkg.dependencies);
     expect(deps).toContain('yaml');
-    // Resolved from inside the copy's mcp/dist, where tsc's output resolves its packages.
+    // Resolved from inside the copy's mcp/dist, where the bundles are.
     const probe = join(install, 'mcp', 'dist', 'resolve-probe.mjs');
     writeFileSync(
       probe,
@@ -195,7 +209,9 @@ describe('a plugin install — the tracked files, no node_modules', () => {
         loaded(r, 0, 1, 2);
         const verdict = JSON.parse(r.stdout) as { exit_code: number; coverage: string };
         expect(verdict.exit_code).toBe(r.status);
-        expect(['full', 'partial']).toContain(verdict.coverage);
+        // `none` where no scanner is installed at all (the first Linux container run): exit 2, never a pass.
+        expect(['full', 'partial', 'none']).toContain(verdict.coverage);
+        if (verdict.coverage === 'none') expect(r.status).toBe(2);
       },
       timeoutAbove(SCAN_TIMEOUT_MS),
     );
@@ -256,11 +272,32 @@ describe('a plugin install — the tracked files, no node_modules', () => {
       const { output } = hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
       expect(output).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     });
+
+    // Each from its own loader in mcp/dist/hooks.js: the install gate and package vetting, the secret scan.
+    it('PreToolUse vets an npx download — offline, it says so: the vetting loaded', () => {
+      const { output, run: r } = hook({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'npx -y zz-no-such-pkg-install-test' },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(JSON.stringify(output)).toMatch(/could not vet zz-no-such-pkg-install-test/);
+    });
+
+    it('PostToolUse warns about a secret just written', () => {
+      const key = ['AKIA', 'Z7Q4', 'XR2M', 'P9LK', 'W3TB'].join('');
+      const { output } = hook({
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: join(project, 'aws.js'), content: `const k = "${key}";\n` },
+      });
+      expect(JSON.stringify(output)).toMatch(/AWS access key/);
+    });
   });
 
   describe('the MCP server', () => {
     it(
-      'dist/server.js answers initialize and lists its tools',
+      'dist/server.js answers initialize with its instructions, lists the folded tools, and a hidden alias answers',
       async () => {
         const child = spawn(process.execPath, [join(install, 'mcp', 'dist', 'server.js')], {
           cwd: project,
@@ -271,7 +308,14 @@ describe('a plugin install — the tracked files, no node_modules', () => {
         child.stderr.setEncoding('utf8').on('data', (c: string) => (stderr += c));
         interface Reply {
           id?: number;
-          result?: { serverInfo?: { name?: string }; tools?: unknown[] };
+          result?: {
+            serverInfo?: { name?: string };
+            instructions?: string;
+            tools?: Array<{ name: string }>;
+            content?: Array<{ type: string; text?: string }>;
+            isError?: boolean;
+          };
+          error?: { message?: string };
         }
         const replies = new Map<number, Reply>();
         let buffered = '';
@@ -291,6 +335,12 @@ describe('a plugin install — the tracked files, no node_modules', () => {
                 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
               }
               if (message.id === 2) {
+                // A hidden alias (the triage view of prioritize_findings), called by its own name.
+                child.stdin.write(
+                  `${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'triage_findings', arguments: { project_path: project } } })}\n`,
+                );
+              }
+              if (message.id === 3) {
                 clearTimeout(timer);
                 done();
               }
@@ -314,7 +364,16 @@ describe('a plugin install — the tracked files, no node_modules', () => {
         }
         expect(stderr).not.toMatch(UNRESOLVED);
         expect(replies.get(1)?.result?.serverInfo?.name).toBe('dev-guardian');
-        expect(replies.get(2)?.result?.tools?.length).toBeGreaterThan(50);
+        expect(replies.get(1)?.result?.instructions).toMatch(/dev-guardian/i);
+        const listed = (replies.get(2)?.result?.tools ?? []).map((t) => t.name);
+        expect(listed.length).toBeGreaterThan(40);
+        // The folds' custom tools/list: the fold is listed, its member alias is not.
+        expect(listed).toContain('prioritize_findings');
+        expect(listed).not.toContain('triage_findings');
+        // …and the alias still answers from the bundle: a tool result, never "unknown tool".
+        const alias = replies.get(3);
+        expect(alias?.error, JSON.stringify(alias)).toBeUndefined();
+        expect(alias?.result?.content?.length).toBeGreaterThan(0);
       },
       timeoutAbove(FAST_TIMEOUT_MS),
     );

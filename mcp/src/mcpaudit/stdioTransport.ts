@@ -2,7 +2,7 @@
  * The stdio transport `audit_mcp_tools` starts a server with.
  *
  * The SDK's own `StdioClientTransport` spawns the same way — `cross-spawn`
- * (here through execa, which uses it), `shell: false`, the SDK's
+ * (here through `runners/childProcess.ts`, which uses it), `shell: false`, the SDK's
  * `getDefaultEnvironment()` allowlist plus the entry's own `env` — but its
  * `close()` signals only the direct child, and it hands every message to the
  * client the moment it arrives. Both matter against a server that is not
@@ -13,7 +13,8 @@
  * A server started as `npx -y pkg`, `uvx pkg` or `cmd /c …` is a launcher
  * with the real server as a GRANDCHILD, and that grandchild would outlive the
  * audit. So this transport owns the process the way
- * `runners/processRunner.ts` does, with the same tree kill:
+ * `runners/processRunner.ts` does, with the same tree kill
+ * (`runners/childProcess.ts`):
  *
  *   - POSIX: spawned `detached`, the leader of its own process group, and
  *     the NEGATIVE pid signals the whole group (SIGTERM, then SIGKILL). A
@@ -33,9 +34,8 @@
  *     by the deadline, but an SMB request all the same (`launch.ts`).
  *
  * `close()` ALWAYS kills the tree — after a successful listing too: a server
- * that answered is still running, and nothing here needs it afterwards.
- * `detached` opts the child out of execa's kill-on-parent-exit, so a
- * `signal-exit` hook signals the group if this process exits mid-probe.
+ * that answered is still running, and nothing here needs it afterwards. If
+ * this process exits mid-probe, a `signal-exit` hook SIGKILLs the group.
  *
  * ## What the server may send
  *
@@ -61,14 +61,11 @@
  * server's environment — tokens, keys — reaches the third-party process.
  */
 
-import { randomUUID } from 'node:crypto';
 import { getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
-import { execa, type ResultPromise } from 'execa';
-import { onExit } from 'signal-exit';
-import { killWindowsTree, PROC_TREE_ENV } from '../runners/windowsTreeKill.js';
+import { startChild, stopTree, type Child } from '../runners/childProcess.js';
 
 export interface StdioLaunch {
   command: string;
@@ -78,7 +75,7 @@ export interface StdioLaunch {
   cwd: string;
 }
 
-export interface ProcessExit {
+interface ProcessExit {
   exitCode: number | null;
   signal: string | null;
   /** Set when the process never started (`spawn … ENOENT`). */
@@ -86,7 +83,7 @@ export interface ProcessExit {
 }
 
 /** What one server may send before the transport closes itself. */
-export interface InboundLimits {
+interface InboundLimits {
   /** Epoch ms: past it, the transport closes itself from its data handler. */
   deadline: number;
   /** Bytes, stdout and stderr together. */
@@ -118,15 +115,15 @@ const STDERR_TAIL_CHARS = 2048;
 const TERM_GRACE_MS = 2_000;
 const KILL_GRACE_MS = 2_000;
 
-export function formatBytes(n: number): string {
+function formatBytes(n: number): string {
   return n % MiB === 0 ? `${n / MiB} MiB` : `${n} bytes`;
 }
 
-/** The environment a probed server is started with. Exported for the tests. */
-export function probeEnvironment(entryEnv: Record<string, string>, treeToken: string | null): Record<string, string> {
+/** The environment a probed server is started with (the Windows tree token is added when it starts). */
+export function probeEnvironment(entryEnv: Record<string, string>): Record<string, string> {
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(getDefaultEnvironment())) if (typeof v === 'string') base[k] = v;
-  return { ...base, ...entryEnv, ...(treeToken === null ? {} : { [PROC_TREE_ENV]: treeToken }) };
+  return { ...base, ...entryEnv };
 }
 
 export class ProbeStdioTransport implements Transport {
@@ -134,12 +131,9 @@ export class ProbeStdioTransport implements Transport {
   onerror?: (error: Error) => void;
   onmessage?: <T extends JSONRPCMessage>(message: T) => void;
 
-  private child: ResultPromise | undefined;
+  private child: Child | undefined;
   private done: Promise<void> | undefined;
   private readonly readBuffer: ReadBuffer;
-  private readonly posixGroup = process.platform !== 'win32';
-  private readonly treeToken = process.platform === 'win32' ? randomUUID() : null;
-  private removeExitHook: (() => void) | null = null;
   private stderr = '';
   private exited: ProcessExit | null = null;
   private closing: Promise<void> | null = null;
@@ -172,26 +166,21 @@ export class ProbeStdioTransport implements Transport {
 
   async start(): Promise<void> {
     if (this.child !== undefined) throw new Error('ProbeStdioTransport already started');
-    const child = execa(this.launch.command, this.launch.args, {
+    // Exactly this environment — nothing else of this server's reaches the
+    // third-party process — and SIGKILL for its tree if this process exits first.
+    const child = startChild(this.launch.command, this.launch.args, {
       cwd: this.launch.cwd,
-      env: probeEnvironment(this.launch.env, this.treeToken),
-      extendEnv: false,
-      shell: false,
+      env: probeEnvironment(this.launch.env),
       stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      buffer: false,
-      reject: false,
-      detached: this.posixGroup,
-      windowsHide: true,
+      signalOnParentExit: 'SIGKILL',
     });
     this.child = child;
-    if (this.posixGroup) this.removeExitHook = onExit(() => signalGroup(child.pid, 'SIGKILL'));
+    const { stdout, stderr, stdin } = child.process;
 
-    child.stdout?.on('data', (chunk: Buffer | string) => {
+    stdout?.on('data', (chunk: Buffer | string) => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
       if (!this.admit(buf.length)) return;
-      child.stdout?.pause();
+      stdout.pause();
       try {
         this.readBuffer.append(buf);
       } catch {
@@ -216,29 +205,26 @@ export class ProbeStdioTransport implements Transport {
         this.onmessage?.(message);
         if (this.closing !== null) return;
       }
-      this.resumeLater(child.stdout);
+      this.resumeLater(stdout);
     });
-    child.stderr?.on('data', (chunk: Buffer | string) => {
+    stderr?.on('data', (chunk: Buffer | string) => {
       const text = chunk.toString();
       if (!this.admit(Buffer.byteLength(text))) return;
-      child.stderr?.pause();
+      stderr.pause();
       this.stderr = (this.stderr + text).slice(-STDERR_TAIL_CHARS);
-      this.resumeLater(child.stderr);
+      this.resumeLater(stderr);
     });
-    child.stdin?.on('error', (e: Error) => this.onerror?.(e));
+    stdin?.on('error', (e: Error) => this.onerror?.(e));
 
-    const spawned = new Promise<'spawned'>((resolve) => child.once('spawn', () => resolve('spawned')));
+    const spawned = new Promise<'spawned'>((resolve) => child.process.once('spawn', () => resolve('spawned')));
     // Resolves after the process has exited AND its pipes have closed, so
     // stderr is complete by then.
-    this.done = child.then((result) => {
+    this.done = child.done.then((exit) => {
       this.exited = {
-        exitCode: result.exitCode ?? null,
-        signal: result.signal ?? null,
-        ...(result.exitCode === undefined && result.signal === undefined && result.failed
-          ? { spawnError: result.shortMessage }
-          : {}),
+        exitCode: exit.exitCode,
+        signal: exit.signal,
+        ...(exit.spawnError !== undefined ? { spawnError: exit.spawnError.message } : {}),
       };
-      this.removeExitHook?.();
       this.notifyClosed();
     });
     const first = await Promise.race([spawned, this.done.then(() => 'ended' as const)]);
@@ -277,7 +263,7 @@ export class ProbeStdioTransport implements Transport {
 
   send(message: JSONRPCMessage): Promise<void> {
     return new Promise((resolve, reject) => {
-      const stdin = this.child?.stdin;
+      const stdin = this.child?.process.stdin;
       if (stdin === undefined || stdin === null || this.exited !== null || this.closing !== null) {
         reject(new Error('Not connected'));
         return;
@@ -295,47 +281,22 @@ export class ProbeStdioTransport implements Transport {
 
   private async killAndWait(): Promise<void> {
     const child = this.child;
-    const done = this.done;
-    if (child === undefined || done === undefined) {
+    if (child === undefined || this.done === undefined) {
       this.notifyClosed();
       return;
     }
     try {
-      child.stdin?.end();
+      child.process.stdin?.end();
     } catch {
       /* already closed */
     }
-    const pid = child.pid;
-    if (pid !== undefined) {
-      if (this.treeToken !== null) {
-        const direct = (): void => {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* already gone */
-          }
-        };
-        await killWindowsTree(pid, this.launch.command, this.treeToken, direct).catch(direct);
-      } else {
-        signalGroup(pid, 'SIGTERM');
-      }
-    }
     // Nothing more is read: drain what the pipes hold so the process can exit.
-    child.stdout?.resume();
-    child.stderr?.resume();
-    if (!(await settlesWithin(done, TERM_GRACE_MS))) {
-      if (this.treeToken === null) signalGroup(pid, 'SIGKILL');
-      else child.kill('SIGKILL');
-      if (!(await settlesWithin(done, KILL_GRACE_MS))) {
-        // Something outside the tree holds the pipes: stop reading them.
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      }
-    } else if (this.treeToken === null) {
-      // The leader is gone; a group member that ignored SIGTERM is not.
-      signalGroup(pid, 'SIGKILL');
-    }
-    this.removeExitHook?.();
+    child.process.stdout?.resume();
+    child.process.stderr?.resume();
+    // The whole tree: SIGTERM (POSIX group) or taskkill + MSYS (Windows), the
+    // kill after TERM_GRACE_MS, and pipes something outside the tree holds
+    // abandoned after KILL_GRACE_MS more.
+    await stopTree(child, { graceMs: TERM_GRACE_MS, abandonMs: KILL_GRACE_MS });
     this.readBuffer.clear();
     this.notifyClosed();
   }
@@ -345,25 +306,4 @@ export class ProbeStdioTransport implements Transport {
     this.closeNotified = true;
     this.onclose?.();
   }
-}
-
-/** Signal a POSIX process group (negative pid). ESRCH = already gone. */
-function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
-  if (pid === undefined) return;
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    /* ESRCH: the group is already gone */
-  }
-}
-
-async function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), ms);
-    timer.unref();
-  });
-  const settled = await Promise.race([p.then(() => true as const, () => true as const), timeout]);
-  if (timer !== undefined) clearTimeout(timer);
-  return settled;
 }

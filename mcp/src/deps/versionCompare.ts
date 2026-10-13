@@ -15,6 +15,8 @@
  * `security` — a downgrade presented as a fix.
  */
 
+import { compareVersions } from '../pkgvet/versions.js';
+
 /** `1.2.3`, `1.2`, or `1` — optionally `v`-prefixed — and nothing else. The
  *  only shape this module trusts as an installable, comparable version;
  *  anything else (an open range, a comma-separated list of branches, free
@@ -24,21 +26,17 @@ export function isCleanVersion(v: string | undefined): v is string {
 }
 
 /**
- * Numeric dotted-segment comparison. Both inputs SHOULD already be clean
- * (`isCleanVersion`) — a non-clean input degrades to a string comparison
- * rather than throwing, so a caller that forgets to gate still gets an
- * answer, just not a numerically meaningful one.
+ * The one version comparator (review 8, finding 16: three, two of them named
+ * `compareVersions` with different pre-release and garbage handling):
+ * `pkgvet/versions.ts`'s — the dotted release numerically, then dev < pre-release
+ * < final < post, then the suffix segment by segment (`beta.2 < beta.10`,
+ * `alpha < beta`). Every caller here gates its input first (`isCleanVersion`,
+ * `isLooseVersion`), where it orders exactly as this module's own numeric and
+ * pre-release comparisons did. (`platform/semverCompare.ts#compareSemver` is
+ * another job: it pulls `major.minor[.patch]` out of a tool's `--version`
+ * text, and answers null when there is none.)
  */
-export function compareVersions(a: string, b: string): number {
-  const pa = a.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10));
-  const pb = b.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10));
-  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return a.localeCompare(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
+export { compareVersions };
 
 /**
  * The smallest candidate that is STRICTLY GREATER than `installed` — never
@@ -70,56 +68,6 @@ export function isLooseVersion(v: string | undefined): v is string {
   return v !== undefined && /^v?\d+(\.\d+)*(-[0-9A-Za-z.]+)?$/.test(v.trim());
 }
 
-function parseLoose(v: string): { core: number[]; pre: string[] | null } {
-  const m = /^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.]+))?$/i.exec(v.trim());
-  const core = (m?.[1] ?? '0').split('.').map((n) => parseInt(n, 10));
-  const pre = m?.[2] ? m[2].split('.') : null;
-  return { core, pre };
-}
-
-/**
- * Semver-ish comparison that ALSO understands a pre-release suffix (fix
- * round 3, item N2): the dotted numeric CORE is compared exactly like
- * `compareVersions`; when the cores are equal, a version WITH a
- * pre-release suffix is ALWAYS lower precedence than the same core with
- * none (`2.0.0-beta.1 < 2.0.0`), and two pre-release suffixes compare
- * segment by segment (numeric segments numerically, everything else as a
- * string) — the common `beta.1 < beta.2` / `alpha < beta` shapes, not the
- * full SPDX/semver alphanumeric-identifier spec.
- *
- * Both inputs SHOULD already pass `isLooseVersion` — an input that does not
- * parse degrades to treating its whole numeric core as `0`, which is
- * deliberately conservative (reads as "very old") rather than throwing.
- */
-export function compareVersionsLoose(a: string, b: string): number {
-  const pa = parseLoose(a);
-  const pb = parseLoose(b);
-  const len = Math.max(pa.core.length, pb.core.length);
-  for (let i = 0; i < len; i += 1) {
-    const diff = (pa.core[i] ?? 0) - (pb.core[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  if (pa.pre === null && pb.pre === null) return 0;
-  if (pa.pre === null) return 1; // a is a real release; b (same core) is a pre-release of it
-  if (pb.pre === null) return -1;
-  const plen = Math.max(pa.pre.length, pb.pre.length);
-  for (let i = 0; i < plen; i += 1) {
-    const sa = pa.pre[i];
-    const sb = pb.pre[i];
-    if (sa === undefined) return -1; // fewer pre-release fields sort lower
-    if (sb === undefined) return 1;
-    const na = /^\d+$/.test(sa) ? parseInt(sa, 10) : null;
-    const nb = /^\d+$/.test(sb) ? parseInt(sb, 10) : null;
-    if (na !== null && nb !== null) {
-      if (na !== nb) return na - nb;
-    } else {
-      const c = sa.localeCompare(sb);
-      if (c !== 0) return c;
-    }
-  }
-  return 0;
-}
-
 /**
  * `minCleanVersionAbove`'s counterpart for a possibly PRE-RELEASE
  * `installed` version (fix round 3, item N2): the CANDIDATE fix must still
@@ -140,7 +88,7 @@ export function minCleanVersionAboveLoose(
   let best: string | undefined;
   for (const c of candidates) {
     if (!isCleanVersion(c)) continue;
-    if (compareVersionsLoose(c, installed) <= 0) continue;
+    if (compareVersions(c, installed) <= 0) continue;
     if (best === undefined || compareVersions(c, best) < 0) best = c;
   }
   return best;

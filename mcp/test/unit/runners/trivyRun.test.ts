@@ -14,9 +14,12 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
-vi.mock('execa', () => ({ execa: vi.fn() }));
+vi.mock('../../../src/runners/spawn.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/runners/spawn.js')>('../../../src/runners/spawn.js');
+  return { ...actual, captureOutput: vi.fn() };
+});
 
-import { execa } from 'execa';
+import { captureOutput } from '../../../src/runners/spawn.js';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import {
   honouredNote,
@@ -39,8 +42,8 @@ beforeEach(() => {
   mockedRun.mockReset();
   mockedRun.mockResolvedValue({ outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false });
   // No version known unless a test says so: the flags are then withheld.
-  vi.mocked(execa).mockReset();
-  vi.mocked(execa).mockRejectedValue(new Error('no trivy here'));
+  vi.mocked(captureOutput).mockReset();
+  vi.mocked(captureOutput).mockRejectedValue(new Error('no trivy here'));
   resetTrivyVersionCache();
 });
 
@@ -203,12 +206,12 @@ describe('Trivy never phones home', () => {
   });
 
   it('asks the installed Trivy its version once, and passes the flags when it is new enough', async () => {
-    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\nVulnerability DB:\n' } as never);
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\nVulnerability DB:\n' } as never);
     const work = makeTempDir('trivy-run-work-');
     await runTrivy({ args: ['fs'], target: '/p', workDir: work });
     await runTrivy({ args: ['config'], target: '/p', workDir: work });
-    expect(vi.mocked(execa)).toHaveBeenCalledTimes(1);
-    const probe = vi.mocked(execa).mock.calls[0];
+    expect(vi.mocked(captureOutput)).toHaveBeenCalledTimes(1);
+    const probe = vi.mocked(captureOutput).mock.calls[0];
     // By the absolute path `trivy` resolves to on PATH, when it is installed (platform/binaryPath.ts).
     expect(String(probe?.[0]).split(/[\\/]/).pop()?.replace(/\.exe$/i, '')).toBe('trivy');
     expect(probe?.[1]).toEqual(['--version']);
@@ -343,7 +346,7 @@ describe("what the repository's .trivyignore suppressed", () => {
   });
 
   it('runTrivy passes the flag and reads the report it wrote', async () => {
-    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\n' } as never);
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\n' } as never);
     const project = makeTempDir('trivy-run-project-');
     const work = makeTempDir('trivy-run-work-');
     writeFileSync(join(project, '.trivyignore'), 'CVE-2020-8203\nNSWG-ECO-516\n');
@@ -364,7 +367,7 @@ describe("what the repository's .trivyignore suppressed", () => {
   });
 
   it('a config pass, or a Trivy too old to list them, says so rather than claiming none', async () => {
-    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\n' } as never);
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.69.3\n' } as never);
     const project = makeTempDir('trivy-run-project-');
     const work = makeTempDir('trivy-run-work-');
     writeFileSync(join(project, '.trivyignore'), 'AVD-AWS-0107\n');
@@ -380,7 +383,7 @@ describe("what the repository's .trivyignore suppressed", () => {
     );
 
     resetTrivyVersionCache();
-    vi.mocked(execa).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.49.1\n' } as never);
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: 'Version: 0.49.1\n' } as never);
     const old = await runTrivy({
       args: ['fs', '--format', 'json', '--output', join(work, 'deps.json')],
       target: project,

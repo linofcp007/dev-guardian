@@ -11,9 +11,11 @@
  *     shares a name with a skill — a command named like a skill shadows it,
  *     and nine skills were unreachable that way (the command said "invoke the
  *     X skill", the model found X already loaded, and looped);
- *   - every `tool { key: … }` / `tool(key=…)` call names a registered tool,
- *     only parameters its schema has (nested `scope.diff.base` included),
- *     only enum values the schema allows, and every parameter it requires;
+ *   - every `tool { key: … }` / `tool(key=…)` call names a listed tool — never
+ *     a hidden alias, which a Claude Code model cannot call —, only parameters
+ *     its schema has (nested `scope.diff.base` included), only enum values the
+ *     schema allows, and every parameter it requires; a fold's call, those of
+ *     the member its mode runs;
  *   - every `guardian://` resource named is a registered resource;
  *   - every backticked tool-shaped identifier is a tool or a parameter;
  *   - every `/command` a command, skill or hook message points at exists;
@@ -28,7 +30,8 @@ import type { ZodTypeAny } from 'zod';
 import { loadBudgets } from '../../../src/budgets/budgets.js';
 import { RESOURCES } from '../../../src/resources/index.js';
 import { TOOL_CATALOG } from '../../../src/runners/installCatalog.js';
-import { TOOLS } from '../../../src/tools/index.js';
+import { FOLDS } from '../../../src/tools/fold.js';
+import { listedTools, TOOLS } from '../../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import {
   REPO_ROOT,
@@ -100,7 +103,7 @@ let allParamNames: Set<string>;
 let toolPrefixes: Set<string>;
 
 beforeAll(() => {
-  toolByName = new Map(TOOLS.map((t) => [t.name, t]));
+  toolByName = new Map(listedTools().map((t) => [t.name, t]));
   allParamNames = new Set<string>();
   const collect = (shape: Record<string, ZodTypeAny>): void => {
     for (const [k, v] of Object.entries(shape)) {
@@ -110,7 +113,8 @@ beforeAll(() => {
       if (nested !== null) collect(nested);
     }
   };
-  for (const t of TOOLS) collect(t.inputSchema);
+  for (const t of listedTools()) collect(t.inputSchema);
+  // Every registered name's prefix, hidden aliases included: a hidden name in the prose is caught.
   toolPrefixes = new Set(TOOLS.map((t) => t.name.split('_')[0] ?? ''));
 });
 
@@ -161,7 +165,7 @@ describe('the command set', () => {
 describe('tool calls in commands and skills', () => {
   const docs = allDocs();
 
-  it.each(docs.map((d) => [d.rel, d] as const))('%s: every call names a registered tool', (_rel, doc) => {
+  it.each(docs.map((d) => [d.rel, d] as const))('%s: every call names a listed tool', (_rel, doc) => {
     const unknown = toolCalls(doc.text, isToolShaped)
       .filter((c) => !toolByName.has(c.tool))
       .map((c) => c.snippet);
@@ -220,6 +224,22 @@ describe('tool calls in commands and skills', () => {
           }
         };
         check(tool.inputSchema, []);
+        // A fold runs one member per mode: the call passes what THAT member requires, and nothing it does not take.
+        const fold = FOLDS.find((f) => f.name === call.tool);
+        if (fold === undefined) continue;
+        const mode = call.keys.find((k) => k.path.join('.') === fold.modeKey)?.literals[0] ?? fold.defaultMode;
+        const member = TOOLS.find((t) => t.name === (mode !== undefined ? fold.modes[mode] : undefined));
+        if (member === undefined) {
+          missing.push(`${call.tool}: no ${fold.modeKey} — in ${call.snippet}`);
+          continue;
+        }
+        for (const k of call.keys) {
+          const top = k.path[0] ?? '';
+          if (top !== fold.modeKey && !(top in member.inputSchema)) {
+            missing.push(`${call.tool} {${fold.modeKey}: "${mode}"} does not take ${top} — in ${call.snippet}`);
+          }
+        }
+        check(member.inputSchema, []);
       }
       expect(missing).toEqual([]);
     },

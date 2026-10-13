@@ -79,7 +79,7 @@ import {
 } from '../validate/dependencyProvider.js';
 import { buildPurl, purlType, purlsFor, type SbomInventory } from './sbom.js';
 
-export type VexStatus = 'not_affected' | 'affected' | 'under_investigation';
+type VexStatus = 'not_affected' | 'affected' | 'under_investigation';
 
 export interface VexStatement {
   /** The vulnerability's id: a CVE when the group has one, else its first own id (GHSA, PYSEC, …). */
@@ -185,7 +185,7 @@ function memberOfFinding(finding: Finding): Member | null {
 }
 
 /** Which statement: the id it is named by, its package (case-folded) and exact version (null: a range). */
-export interface StatementKey {
+interface StatementKey {
   name: string;
   pkg: string;
   version: string | null;

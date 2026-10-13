@@ -93,7 +93,7 @@ export function toolsOfKey(key: string): string[] {
   return [key];
 }
 
-export interface RunName {
+interface RunName {
   /**
    * The finding keys ({@link findingKey}) this entry speaks for. Empty: it
    * reports no findings (evidence only, or metadata).

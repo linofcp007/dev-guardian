@@ -37,7 +37,7 @@ import { findLatestUsable, openSetForProject } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { isUncorrelatedFinding } from '../intel/rank.js';
 import type { CveIntelResult } from '../intel/types.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, type Cve, type Finding, type ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -46,17 +46,11 @@ const tool: ToolModule = {
   name: 'risk_score',
   title: 'Risk score (0-100)',
   description:
-    'Compute a single 0-100 risk score for one project (project_path, default: the server\'s ' +
-    'working directory) from its persisted scans/findings/CVEs/baseline. Open findings are the ' +
-    'union of the newest usable scan of every finding-producing type, suppressions removed. CVEs ' +
-    'are weighted up when CISA KEV-listed or high FIRST EPSS (cached 24h, offline-safe). Returns ' +
-    'the score, a band (low/medium/high/critical), per-component breakdown, the next action to ' +
-    'recommend, and `coverage` — which scans it read, which newer scans it skipped because they ' +
-    'measured nothing, `coverage.cve_intel` (KEV/EPSS measured vs unavailable, plus `uncorrelated`: ' +
-    'findings from a CVE-capable scanner with no extractable CVE id, e.g. npm-audit v2), and ' +
-    '`coverage_caveat` when the numbers are incomplete. `suppressed_count`: findings an active ' +
-    'suppression took out of the score — a mass suppression shows here, never as a clean project. ' +
-    '`future_dated_note` when scans dated in the future were ignored.',
+    'A 0-100 risk score and band for one project from its recorded scans, open findings (newest usable ' +
+    'scan of each type, suppressions out), CVEs (weighted up for CISA KEV or a high EPSS) and baseline, ' +
+    'with the breakdown, the next action and `coverage` (`coverage_caveat` when incomplete). ' +
+    '`suppressed_count`: what suppressions took out — a mass suppression is never a clean project. ' +
+    '`future_dated_note`: future-dated scans ignored.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -72,7 +66,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
   const now = Date.now();
   const storage = ctx.storage;

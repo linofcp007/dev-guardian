@@ -37,7 +37,7 @@ export { OFFLINE_REASON } from './verify.js';
 
 type ParserTask = { parser: ScannerParser; input: unknown };
 
-export interface GitleaksVerificationInput {
+interface GitleaksVerificationInput {
   parser_inputs: readonly ParserTask[];
   /**
    * The raw values per parser input — keyed by the entry object itself —
@@ -53,7 +53,7 @@ export interface GitleaksVerificationInput {
   options?: VerifyOptions;
 }
 
-export interface VerifiedFindingRecord {
+interface VerifiedFindingRecord {
   fingerprint: string;
   rule_id: string;
   file_path?: string;
@@ -65,7 +65,7 @@ export interface VerifiedFindingRecord {
 }
 
 /** The `secret_verification` block of the result (and of the scan row's meta). */
-export interface SecretVerificationSummary {
+interface SecretVerificationSummary {
   /** Findings whose value was sent to its provider. */
   verified: number;
   live: number;
@@ -87,7 +87,7 @@ export interface SecretVerificationSummary {
   findings_not_listed?: number;
 }
 
-export interface GitleaksVerification {
+interface GitleaksVerification {
   parser_inputs: ParserTask[];
   summary: SecretVerificationSummary;
   warnings: string[];

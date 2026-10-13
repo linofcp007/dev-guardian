@@ -180,7 +180,7 @@ export interface TyposquatMatch {
   distance: number;
 }
 
-export interface TyposquatOptions {
+interface TyposquatOptions {
   /**
    * Default `true`: a name that is itself in the popular list is never
    * flagged. `false` exists for one purpose — measuring how many entries of

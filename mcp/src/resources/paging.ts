@@ -69,7 +69,7 @@ export class QueryTolerantUriTemplate extends UriTemplate {
   }
 }
 
-export interface Page<T> {
+interface Page<T> {
   items: T[];
   total: number;
   page: number;

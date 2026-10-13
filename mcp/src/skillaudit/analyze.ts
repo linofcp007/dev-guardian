@@ -36,7 +36,7 @@ const TOOL = 'guardian-scanskill';
 /** The same words every other `GUARDIAN_OFFLINE` caller reports. */
 export const OSV_OFFLINE_REASON = 'network disabled (GUARDIAN_OFFLINE=1)';
 
-export interface SkillAuditReport {
+interface SkillAuditReport {
   findings: Finding[];
   score: ScoreResult;
   category_breakdown: Record<ThreatCategory, number>;
@@ -46,7 +46,7 @@ export interface SkillAuditReport {
   hidden_unicode_files: number;
 }
 
-export interface AnalyzeOptions {
+interface AnalyzeOptions {
   checkDeps?: boolean;
   signal?: AbortSignal;
   /**

@@ -6,7 +6,7 @@
  * handling, exception handling, where findings come from, temp-dir hygiene
  * — never scanning itself, so none of it needs Semgrep installed.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { evaluateGate } from '../../src/ci/gate.js';
@@ -254,11 +254,13 @@ describe('runScans', () => {
     expect(of('detect_stack')?.partial_parses).toBeUndefined();
   });
 
-  // Review of the LLM pack, round 2 (I-C): a file whose taint analysis timed
-  // out travels to the gate with its own type, and the gate treats it exactly
-  // as a per-file Timeout — exit 2, never accepted by --accept-partial-parse.
-  it('a Fixpoint timeout reaches the gate like a per-file Timeout, and gates the same way', async () => {
-    const exitFor = async (type: string, accept: string[]) => {
+  // A file whose taint analysis timed out travels to the gate with its own
+  // type (review of the LLM pack, round 2, I-C). Since review 8 (finding 3)
+  // the gate reports it as a note and never gates on it — a medium-sized
+  // codebase never reached exit 0 — while a per-file Timeout still gates
+  // unless the project's committed .guardian/scan.yml accepts it.
+  it('a Fixpoint timeout reaches the gate with its type and is a note; a per-file Timeout gates unless scan.yml accepts it', async () => {
+    const gateFor = async (type: string, acceptTimeouts: string[]) => {
       mockTool('security_scan_full', async () =>
         ok({
           tools_run: [{ name: 'semgrep', status: 'ok', reason: 'partial', partially_parsed: [{ file: 'sql/base.py', type, message: 'x' }] }],
@@ -268,14 +270,30 @@ describe('runScans', () => {
       const { steps } = await runScans({ projectPath: makeProjectDir() });
       const step = steps.find((s) => s.tool === 'security_scan_full');
       expect(step?.partial_parses).toEqual({ semgrep: [{ file: 'sql/base.py', type }] });
-      const v = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps, droppedBaselineEntries: 0, acceptedPartialParses: accept });
-      return { exitCode: v.exitCode, coverage: v.coverage, accepted: v.acceptedGaps.length };
+      const v = evaluateGate({
+        findings: [],
+        baseline: null,
+        failOn: 'high',
+        steps,
+        droppedBaselineEntries: 0,
+        acceptedPartialParses: ['sql/base.py'],
+        acceptedTimeouts: acceptTimeouts,
+      });
+      return { exitCode: v.exitCode, coverage: v.coverage, accepted: v.acceptedGaps.length, notes: v.coverageNotes.length };
     };
-    for (const accept of [[], ['sql/base.py']]) {
-      const timeout = await exitFor('Timeout', accept);
-      expect(timeout).toEqual({ exitCode: CI_EXIT.INCOMPLETE_SCAN, coverage: 'partial', accepted: 0 });
-      expect(await exitFor('Fixpoint timeout', accept)).toEqual(timeout);
-    }
+    expect(await gateFor('Timeout', [])).toEqual({ exitCode: CI_EXIT.INCOMPLETE_SCAN, coverage: 'partial', accepted: 0, notes: 0 });
+    expect(await gateFor('Timeout', ['sql/base.py'])).toEqual({ exitCode: CI_EXIT.PASS, coverage: 'partial', accepted: 1, notes: 0 });
+    expect(await gateFor('Fixpoint timeout', [])).toEqual({ exitCode: CI_EXIT.PASS, coverage: 'partial', accepted: 0, notes: 1 });
+  });
+
+  it("returns the project's .guardian/scan.yml as the scans read it", async () => {
+    const dir = makeProjectDir();
+    mkdirSync(join(dir, '.guardian'), { recursive: true });
+    writeFileSync(join(dir, '.guardian', 'scan.yml'), 'semgrep:\n  accept_timeouts:\n    - big.js\n');
+    mockTool('security_scan_full', async () => ok({ tools_run: [], missing_tools: [] }));
+    const { scanSettings } = await runScans({ projectPath: dir });
+    expect(scanSettings.kind).toBe('loaded');
+    expect(scanSettings.settings.semgrep.acceptTimeouts).toEqual(['big.js']);
   });
 
   // Round 3 (N-1): the plugin pack's own fixpoint timeouts stay on the run

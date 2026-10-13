@@ -30,9 +30,9 @@ import { isWithinDir, projectEntryKind, readProjectText } from './projectFs.js';
 import { readSmallText } from '../hooks/configFile.js';
 
 /** The hook types `precommit_install` asks pre-commit to install. */
-export const PRECOMMIT_HOOK_NAMES = ['pre-commit', 'commit-msg', 'pre-push'] as const;
+const PRECOMMIT_HOOK_NAMES = ['pre-commit', 'commit-msg', 'pre-push'] as const;
 
-export type HookInstallTarget = { ok: true; hooksDir: string } | { ok: false; reason: string };
+type HookInstallTarget = { ok: true; hooksDir: string } | { ok: false; reason: string };
 
 const MAX_GIT_POINTER_BYTES = 64 * 1024;
 

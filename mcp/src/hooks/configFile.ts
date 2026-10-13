@@ -94,6 +94,35 @@ export function isRemoteOrDeviceTarget(target: string): boolean {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
 
+/**
+ * A path that is itself on the network or a device — `\\host\share\…`,
+ * `//host/share/…`, `\\?\UNC\…`, `\\.\pipe\…` — rather than a local drive
+ * spelled in the device namespace (`\\?\C:\…`, `\\.\C:\…`, which stay local).
+ * Nothing is asked of the filesystem about such a path (review 8, item 13): a
+ * `Write` to an unreachable `\\10.255.255.1\share\…` held the hook 21 s in
+ * `lstat`, past Claude Code's 15 s, and the write then went unguarded.
+ */
+export function isNetworkPath(path: string): boolean {
+  if (!/^(?:[\\/]{2}|\\\?\?\\)/.test(path)) return false;
+  return !/^(?:[\\/]{2}[?.]|\\\?\?)[\\/][A-Za-z]:(?:[\\/]|$)/.test(path);
+}
+
+/**
+ * `\\localhost\C$\x` (also `127.0.0.1`, `[::1]`, `.` and this machine's own
+ * name, and the `\\?\UNC\…` spelling) as the local path it is — `C:\x` — or
+ * `undefined` for any other path (review 8, item 19: the admin share reached
+ * the user-level hook configuration past the Write guard).
+ */
+export function localShareAsLocal(path: string, hostname = ''): string | undefined {
+  const m = /^[\\/]{2}(?:\?[\\/]UNC[\\/])?([^\\/]+)[\\/]([A-Za-z])\$(?=[\\/]|$)(.*)$/i.exec(path);
+  if (m === null) return undefined;
+  const host = (m[1] ?? '').toLowerCase().replace(/^\[|\]$/g, '');
+  const local = ['localhost', '127.0.0.1', '::1', '0:0:0:0:0:0:0:1'].includes(host) || (hostname !== '' && host === hostname.toLowerCase());
+  if (!local) return undefined;
+  const rest = m[3] ?? '';
+  return `${(m[2] ?? '').toUpperCase()}:${rest === '' ? '\\' : rest}`;
+}
+
 export type LinkWalk = { ok: true } | { ok: false; reason: 'remote-link' | 'unreadable'; at: string };
 
 /**
@@ -147,7 +176,22 @@ export function walkLinksUnder(under: string, path: string): LinkWalk {
   return { ok: true };
 }
 
-function readText(path: string, maxBytes: number): TextRead {
+/** A bounded read of one file: its bytes, absent, or why it was not read. */
+export type BytesRead =
+  | { status: 'absent' }
+  | { status: 'ok'; bytes: Buffer }
+  | { status: 'refused'; reason: Exclude<RefusalReason, 'remote-link'> };
+
+/**
+ * The one bounded read (review 8, finding 14: the hooks' and
+ * `platform/projectFs.ts`'s two were copies of it): open `path` non-blocking
+ * — a FIFO opens at once — judge what was OPENED with `fstat`, never the path,
+ * and read a regular file of at most `maxBytes`, reading cap + 1 bytes at
+ * most, so a file that grew after the `fstat` is still refused. With `head`,
+ * a longer file is not refused: its first `maxBytes` bytes are read and the
+ * rest is left unread.
+ */
+export function readBoundedBytes(path: string, maxBytes: number, opts: { head?: boolean } = {}): BytesRead {
   let fd: number;
   try {
     fd = openSync(path, OPEN_FLAGS);
@@ -162,6 +206,16 @@ function readText(path: string, maxBytes: number): TextRead {
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) return { status: 'refused', reason: 'not-a-regular-file' };
+    if (opts.head === true) {
+      const buf = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
+      let total = 0;
+      while (total < buf.length) {
+        const n = readSync(fd, buf, total, buf.length - total, null);
+        if (n === 0) break;
+        total += n;
+      }
+      return { status: 'ok', bytes: buf.subarray(0, total) };
+    }
     if (st.size > maxBytes) return { status: 'refused', reason: 'too-large' };
     // Sized from the descriptor, not the cap: a caller with a 16 MiB cap
     // must not zero-fill 16 MiB to read a 1 KiB file. The buffer grows (up
@@ -181,9 +235,7 @@ function readText(path: string, maxBytes: number): TextRead {
     }
     // More than the cap: the file grew after the fstat. Still refused.
     if (total > maxBytes) return { status: 'refused', reason: 'too-large' };
-    let text = buf.subarray(0, total).toString('utf8');
-    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-    return { status: 'ok', text };
+    return { status: 'ok', bytes: buf.subarray(0, total) };
   } catch {
     return { status: 'refused', reason: 'unreadable' };
   } finally {
@@ -193,6 +245,17 @@ function readText(path: string, maxBytes: number): TextRead {
       /* nothing left to do with it */
     }
   }
+}
+
+/** UTF-8 text from a read's bytes, a leading byte-order mark stripped. */
+export function textOf(bytes: Buffer): string {
+  const text = bytes.toString('utf8');
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+function readText(path: string, maxBytes: number): TextRead {
+  const r = readBoundedBytes(path, maxBytes);
+  return r.status === 'ok' ? { status: 'ok', text: textOf(r.bytes) } : r;
 }
 
 /**

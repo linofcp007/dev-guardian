@@ -19,7 +19,7 @@ import type { PluginContext } from '../context.js';
 import { latestStateScan } from '../history/openSet.js';
 import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
 import { isScopedScan } from '../history/scanRoles.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type DomainError, type ScanType, type ToolResult } from '../types.js';
@@ -35,22 +35,19 @@ const inputSchema = {
   scan_type: z
     .enum(SCAN_TYPES)
     .optional()
-    .describe('Without scan_id: baseline the newest scan of this type. Default: any finding-producing type.'),
+    .describe('Without scan_id: baseline the newest scan of this type.'),
   source_tool: SourceToolInput,
   note: z.string().max(500).optional().describe('Free-form note attached to the baseline row.'),
 };
 
 const tool: ToolModule = {
   name: 'set_baseline',
-  title: 'Set regression baseline',
+  title: 'Set the regression baseline',
   description:
-    "Mark a scan as its project's regression baseline for its scan type. Without scan_id, uses " +
-    "project_path's (default: the server's working directory) newest usable scan — of scan_type " +
-    'when given — never an SBOM, stack detection, diff review, scoped scan (meta.scope; refused ' +
-    'as scan_id too) or a scan whose scanners did not run. Future `diff_scans from=baseline` and ' +
-    '`regression_alert` calls compare scans of that ' +
-    'type against it. Older baselines are kept for history but inactive. For scan_type sarif_import (import_sarif), ' +
-    "source_tool says which tool's newest import is baselined — each tool keeps its own baseline.",
+    "Mark a scan as its project's baseline for its type — by default the newest usable one (of " +
+    'scan_type), never an SBOM, stack, diff-review, scoped or unmeasured scan. diff_scans compares ' +
+    'against it (from: baseline, and mode regression). For sarif_import, source_tool picks the tool. To ' +
+    'accept one reviewed finding, suppress it instead.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -92,7 +89,7 @@ async function handler(
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return failDomain('not_a_git_repo', (e as Error).message);
+      return failDomain(projectPathErrorCode(e), (e as Error).message);
     }
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
     if (!choice.ok) return failDomain('unsupported_target', choice.message);
@@ -146,8 +143,8 @@ async function handler(
             `This baseline's scan did not fully measure ${notMeasured.join(', ')} (a scanner, or a pass ` +
             'of one, failed or was not installed), so it holds only some of their findings, or none. Later ' +
             'comparisons against this baseline report a finding from them that it does not hold as ' +
-            '"not previously measured" — never as new, and never counted in regression_alert\'s ' +
-            'score. Re-run the scan once the scanner works and set the baseline again.',
+            '"not previously measured" — never as new, and never counted in the regression score of ' +
+            'diff_scans {mode: "regression"}. Re-run the scan once the scanner works and set the baseline again.',
         }
       : {}),
   };

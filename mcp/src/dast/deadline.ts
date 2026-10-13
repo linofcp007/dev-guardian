@@ -30,7 +30,7 @@
  */
 export const DEFAULT_WALL_CLOCK_MS = 600_000;
 
-export interface ScanDeadline {
+interface ScanDeadline {
   /** Pass to `ProbeOptions.signal`. Aborts on the deadline OR a host cancel. */
   signal: AbortSignal;
   /** True exactly when the ceiling fired. False for a host cancellation. */

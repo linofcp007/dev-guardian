@@ -21,7 +21,7 @@ import type { ProbeRequest, ProbeResult } from './types.js';
 
 export const RATE_LIMIT_BURST = 30;
 
-export const AUTH_PATH_HINTS = [
+const AUTH_PATH_HINTS = [
   'login', 'signin', 'sign-in', 'auth', 'authenticate', 'token', 'session', 'oauth',
 ] as const;
 

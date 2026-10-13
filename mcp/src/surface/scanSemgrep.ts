@@ -16,14 +16,16 @@ import { scannerAvailable } from '../tools/scanHelpers.js';
 import type { PartialParse, ToolRun } from '../types.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
 
-export interface SemgrepRunOptions {
+interface SemgrepRunOptions {
   projectPath: string;
   rulesPath: string;
   outFile: string;
   reportDir: string;
+  /** Flags after the config: the per-file timeouts and `--exclude=.guardian` (`runners/semgrepRun.ts#semgrepScanFlags`). */
+  extraArgs?: readonly string[];
 }
 
-export interface SemgrepInvocation {
+interface SemgrepInvocation {
   /** The PROCESS verdict alone (exit code, outcome) — never the report's; see {@link judgeSurfaceReport}. */
   toolRun: ToolRun;
   /** The process that ran, or null when the Docker fallback could not even stage the rules. */
@@ -53,7 +55,7 @@ export async function invokeSemgrep(options: SemgrepRunOptions): Promise<Semgrep
     // UTF-8 mode, like every other Semgrep call site: otherwise the locale
     // codec reads the rule pack and writes `--output` (runners/semgrepRun.ts).
     const run = await runSemgrep({
-      args: ['--config', rulesPath, '--json', '--output', outFile, '--quiet', projectPath],
+      args: ['--config', rulesPath, ...(options.extraArgs ?? []), '--json', '--output', outFile, '--quiet', projectPath],
       cwd: projectPath,
       env: process.env,
     });
@@ -89,6 +91,7 @@ export async function invokeSemgrep(options: SemgrepRunOptions): Promise<Semgrep
       outFileHost: outFile,
       image,
       configs: [containerRules],
+      ...(options.extraArgs !== undefined ? { extraArgs: options.extraArgs } : {}),
       git: await gitSafetyFor([projectPath]),
     }),
     cwd: projectPath,
@@ -243,7 +246,7 @@ function countListedRouteTargets(projectPath: string, files: readonly string[], 
  *   no target, one naming the rule file itself), or per-file errors on a run
  *   that scanned nothing. Nothing persisted.
  */
-export type SurfaceReportVerdict = SemgrepVerdict;
+type SurfaceReportVerdict = SemgrepVerdict;
 
 /**
  * Global Constraint 3 for the surface scan, as the controller ruled it for

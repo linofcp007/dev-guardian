@@ -40,7 +40,7 @@ import type { ProbeRequest, ProbeResult, ProbeVariant } from './types.js';
  * bounds what reaches disk across potentially hundreds of findings. It is
  * reported per record (`body_truncated`) rather than applied silently.
  */
-export const EVIDENCE_BODY_CHARS = 2000;
+const EVIDENCE_BODY_CHARS = 2000;
 
 /**
  * Ceiling on how many evidence files one scan writes. Findings are handed to
@@ -48,9 +48,9 @@ export const EVIDENCE_BODY_CHARS = 2000;
  * and the caller reports it rather than letting a finding quietly point at a
  * file that was never written.
  */
-export const MAX_EVIDENCE_FILES = 200;
+const MAX_EVIDENCE_FILES = 200;
 
-export interface EvidenceResponse {
+interface EvidenceResponse {
   outcome: ProbeResult['outcome'];
   status: number | null;
   headers: Record<string, string>;
@@ -60,7 +60,7 @@ export interface EvidenceResponse {
   error: string | null;
 }
 
-export interface EvidenceExchange {
+interface EvidenceExchange {
   variant: ProbeVariant;
   request: {
     method: string;
@@ -182,7 +182,7 @@ export function buildBurstEvidence(
   return record;
 }
 
-export interface EvidenceWriteOutcome {
+interface EvidenceWriteOutcome {
   /**
    * Fingerprints whose file is genuinely on disk — not a count, because the
    * caller stores an `evidence_file` pointer on each finding and a pointer to

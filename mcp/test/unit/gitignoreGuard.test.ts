@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ensureGuardianIgnored } from '../../src/gitignoreGuard.js';
+import { ensureGuardianDirIgnored, ensureGuardianIgnored, SHARED_GUARDIAN_FILES } from '../../src/gitignoreGuard.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -47,7 +47,7 @@ describe('ensureGuardianIgnored', () => {
     const dir = fixture('git-empty');
     writeFileSync(
       join(dir, '.gitignore'),
-      'node_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
+      'node_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n!**/.guardian/budgets.yml\n!**/.guardian/hooks.config.json\n!**/.guardian/hooks-allowlist.json\n!**/.guardian/scan.yml\n',
     );
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'already_present' });
   });
@@ -111,7 +111,7 @@ describe('ensureGuardianIgnored', () => {
       expect(r).toEqual({ updated: true, reason: 'upgraded' });
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
-      expect(content).toBe('# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n');
+      expect(content).toBe('# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n!**/.guardian/budgets.yml\n!**/.guardian/hooks.config.json\n!**/.guardian/hooks-allowlist.json\n!**/.guardian/scan.yml\n');
       expect(content.match(/# dev-guardian outputs/g)).toHaveLength(1);
     });
 
@@ -128,7 +128,7 @@ describe('ensureGuardianIgnored', () => {
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
       expect(content).toBe(
-        '# header\nnode_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
+        '# header\nnode_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n!**/.guardian/budgets.yml\n!**/.guardian/hooks.config.json\n!**/.guardian/hooks-allowlist.json\n!**/.guardian/scan.yml\n',
       );
       expect(content.match(/# dev-guardian outputs/g)).toHaveLength(1);
     });
@@ -148,7 +148,7 @@ describe('ensureGuardianIgnored', () => {
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
       expect(content).toBe(
-        '# header\r\nnode_modules/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
+        '# header\r\nnode_modules/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n!**/.guardian/budgets.yml\r\n!**/.guardian/hooks.config.json\r\n!**/.guardian/hooks-allowlist.json\r\n!**/.guardian/scan.yml\r\n',
       );
       // No bare LF anywhere — every line ending stayed CRLF.
       expect(content).not.toMatch(/(?<!\r)\n/);
@@ -162,7 +162,7 @@ describe('ensureGuardianIgnored', () => {
       expect(r).toEqual({ updated: true, reason: 'upgraded' });
 
       const content = readFileSync(join(dir, '.gitignore'), 'utf8');
-      expect(content).toBe('# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n');
+      expect(content).toBe('# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n!**/.guardian/budgets.yml\r\n!**/.guardian/hooks.config.json\r\n!**/.guardian/hooks-allowlist.json\r\n!**/.guardian/scan.yml\r\n');
       expect(content).not.toMatch(/(?<!\r)\n/);
     });
 
@@ -174,7 +174,7 @@ describe('ensureGuardianIgnored', () => {
       writeFileSync(join(dir, '.gitignore'), 'a/\r\nb/\nc/\r\nd/\r\n');
       expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
       expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-        'a/\r\nb/\nc/\r\nd/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
+        'a/\r\nb/\nc/\r\nd/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n!**/.guardian/budgets.yml\r\n!**/.guardian/hooks.config.json\r\n!**/.guardian/hooks-allowlist.json\r\n!**/.guardian/scan.yml\r\n',
       );
     });
 
@@ -183,7 +183,7 @@ describe('ensureGuardianIgnored', () => {
       writeFileSync(join(dir, '.gitignore'), 'a/\nb/\r\n# dev-guardian outputs\r\n.guardian/\nc/\nd/\n');
       expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'upgraded' });
       expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-        'a/\nb/\r\nc/\nd/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
+        'a/\nb/\r\nc/\nd/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n!**/.guardian/budgets.yml\n!**/.guardian/hooks.config.json\n!**/.guardian/hooks-allowlist.json\n!**/.guardian/scan.yml\n',
       );
     });
 
@@ -192,7 +192,7 @@ describe('ensureGuardianIgnored', () => {
       writeFileSync(join(dir, '.gitignore'), 'a/\r\nb/\nc/');
       expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
       expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-        'a/\r\nb/\nc/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
+        'a/\r\nb/\nc/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n!**/.guardian/budgets.yml\r\n!**/.guardian/hooks.config.json\r\n!**/.guardian/hooks-allowlist.json\r\n!**/.guardian/scan.yml\r\n',
       );
     });
   });
@@ -223,7 +223,7 @@ describe('ensureGuardianIgnored', () => {
     );
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'upgraded' });
     expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-      '# header\nnode_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n',
+      '# header\nnode_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n!**/.guardian/budgets.yml\n!**/.guardian/hooks.config.json\n!**/.guardian/hooks-allowlist.json\n!**/.guardian/scan.yml\n',
     );
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'already_present' });
   });
@@ -242,5 +242,77 @@ describe('ensureGuardianIgnored', () => {
     expect(ignored('.guardian/baseline.json')).toBe(false);
     expect(ignored('packages/api/.guardian/baseline.json')).toBe(false);
     expect(ignored('src/guardian.ts')).toBe(false);
+    // Review 8, C6: the files a team shares are committable too.
+    for (const shared of ['budgets.yml', 'hooks.config.json', 'hooks-allowlist.json', 'scan.yml']) {
+      expect(ignored(`.guardian/${shared}`), shared).toBe(false);
+      expect(ignored(`packages/api/.guardian/${shared}`), shared).toBe(false);
+    }
+  });
+
+  // Review 8, C6: 3.2.x wrote the entry and the baseline negation only, so
+  // budgets.yml and hooks.config.json were ignored. The missing negations go
+  // right below the block — never a second block, never a second header.
+  it('adds the shared files below a 3.2.x block, in place', () => {
+    const dir = fixture('git-empty');
+    writeFileSync(
+      join(dir, '.gitignore'),
+      'node_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\ndist/\n',
+    );
+    expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
+    const content = readFileSync(join(dir, '.gitignore'), 'utf8');
+    expect(content).toBe(
+      'node_modules/\n# dev-guardian outputs\n**/.guardian/*\n!**/.guardian/baseline.json\n' +
+        '!**/.guardian/budgets.yml\n!**/.guardian/hooks.config.json\n!**/.guardian/hooks-allowlist.json\n' +
+        '!**/.guardian/scan.yml\ndist/\n',
+    );
+    expect(content.match(/# dev-guardian outputs/g)).toHaveLength(1);
+    expect(ensureGuardianIgnored(dir)).toEqual({ updated: false, reason: 'already_present' });
+  });
+
+  it('a negation above the entry does not count (the last matching line wins): the block is appended whole', () => {
+    const dir = fixture('git-empty');
+    writeFileSync(join(dir, '.gitignore'), '!**/.guardian/budgets.yml\n**/.guardian/*\n!**/.guardian/baseline.json\n');
+    expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'added' });
+    const lines = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
+    expect(lines.lastIndexOf('!**/.guardian/budgets.yml')).toBeGreaterThan(lines.indexOf('**/.guardian/*'));
+  });
+});
+
+// Review 8, C5: the CLI never starts the server, so a project scanned only from
+// a terminal or in CI had `?? .guardian/` in git status. The CLI drops a
+// `.guardian/.gitignore` of its own — never the root one (a tracked file
+// rewritten by a scan would make the tree dirty in turn).
+describe('ensureGuardianDirIgnored', () => {
+  it('as git reads it: reports, the database and itself ignored, the shared files not — the tree stays clean', () => {
+    const dir = makeTempDir('guard-dir-');
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    expect(git('init', '-q').status).toBe(0);
+    expect(ensureGuardianDirIgnored(dir)).toBe(true);
+    mkdirSync(join(dir, '.guardian', 'reports', 'sast-00000001'), { recursive: true });
+    writeFileSync(join(dir, '.guardian', 'reports', 'sast-00000001', 'sast.json'), '{}');
+    writeFileSync(join(dir, '.guardian', 'guardian.db'), '');
+    expect(git('status', '--porcelain', '--untracked-files=all').stdout).toBe('');
+    const ignored = (path: string): boolean => git('check-ignore', '-q', '--no-index', path).status === 0;
+    expect(ignored('.guardian/.gitignore')).toBe(true);
+    for (const shared of SHARED_GUARDIAN_FILES) expect(ignored(`.guardian/${shared}`), shared).toBe(false);
+  });
+
+  it('never overwrites a .guardian/.gitignore that is there', () => {
+    const dir = makeTempDir('guard-dir-own-');
+    mkdirSync(join(dir, '.guardian'));
+    writeFileSync(join(dir, '.guardian', '.gitignore'), 'mine\n');
+    expect(ensureGuardianDirIgnored(dir)).toBe(false);
+    expect(readFileSync(join(dir, '.guardian', '.gitignore'), 'utf8')).toBe('mine\n');
+  });
+
+  it('re-includes the shared files even under an old root block that ignores them', () => {
+    const dir = makeTempDir('guard-dir-root-');
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    expect(git('init', '-q').status).toBe(0);
+    writeFileSync(join(dir, '.gitignore'), '**/.guardian/*\n!**/.guardian/baseline.json\n');
+    ensureGuardianDirIgnored(dir);
+    const ignored = (path: string): boolean => git('check-ignore', '-q', '--no-index', path).status === 0;
+    expect(ignored('.guardian/budgets.yml')).toBe(false);
+    expect(ignored('.guardian/reports/x.json')).toBe(true);
   });
 });

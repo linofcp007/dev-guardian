@@ -127,6 +127,6 @@ function recommendation(score: number, open: number, cves: number, hasBaseline: 
   if (score >= 70) return 'Run audit_executive and triage critical findings before any new deploy.';
   if (cves > 0) return 'Address active CVEs via deps_update_plan with prefer=security.';
   if (!hasBaseline) return 'Set a baseline with set_baseline so diff_scans can track regressions.';
-  if (open > 50) return 'Run triage_findings to identify likely false positives, then suppress.';
+  if (open > 50) return 'Run prioritize_findings with view triage to identify likely false positives, then suppress.';
   return 'Posture is stable. Consider a periodic audit_executive to confirm.';
 }

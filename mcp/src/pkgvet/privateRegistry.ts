@@ -77,7 +77,7 @@ import type { PkgEcosystem } from './types.js';
  * packages are looked up (review I4: a 3000-directory workspace was walked
  * once PER PACKAGE, and 17 packages took 16.5 s — past the hook's 15 s).
  */
-export interface RegistryCache {
+interface RegistryCache {
   /** A file's read, by path and the directory its links were walked below. */
   reads: Map<string, TextRead>;
   /** The package names under a workspace root, by manifest file name and root. */
@@ -155,7 +155,7 @@ export interface CustomRegistry {
 export const MAX_WORKSPACE_DIRS = 3000;
 
 /** What an unread path was: a registry configuration file, a workspace manifest, or a directory that could not be listed. */
-export type UnreadKind = 'configuration' | 'workspace manifest' | 'directory';
+type UnreadKind = 'configuration' | 'workspace manifest' | 'directory';
 
 const PUBLIC_HOSTS: Record<PkgEcosystem, RegExp> = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,

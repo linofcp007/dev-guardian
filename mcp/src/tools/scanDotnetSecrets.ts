@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { describeReadRefusal, listProjectDir, readProjectText } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import {
   makeFinding,
@@ -152,7 +152,7 @@ async function handler(
   } catch (e) {
     return {
       ok: false,
-      error: { code: 'not_a_git_repo', message: (e as Error).message },
+      error: { code: projectPathErrorCode(e), message: (e as Error).message },
     };
   }
 

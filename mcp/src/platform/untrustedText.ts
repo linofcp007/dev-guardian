@@ -77,7 +77,7 @@ function exemptFlagOffsets(s: string): Set<number> {
   return out;
 }
 
-export interface UntrustedTextOptions {
+interface UntrustedTextOptions {
   /** Keep `\n` and `\t` (default true). False for a path, a name, an id. */
   multiline?: boolean;
 }

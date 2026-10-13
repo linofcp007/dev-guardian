@@ -300,7 +300,7 @@ function nugetRange(range: string): Pred[][] | null {
   return [preds];
 }
 
-export interface VersionContext {
+interface VersionContext {
   /** Every published version string. */
   versions: readonly string[];
   /** What the registry calls latest (npm `dist-tags.latest`, PyPI `info.version`). */

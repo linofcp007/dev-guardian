@@ -1,7 +1,8 @@
 # Contributing to dev-guardian
 
 Thanks for helping. This is a Claude Code / Cowork plugin plus an MCP server;
-[CLAUDE.md](CLAUDE.md) is the orientation, and holds the conventions in full.
+[CLAUDE.md](CLAUDE.md) is the orientation and its hard rules; the conventions in full are in
+[docs/maintainers/](docs/maintainers/), one file per area.
 
 ## Build & test
 
@@ -10,10 +11,12 @@ Node.js ≥ 22.13. All work happens from `mcp/`:
 ```bash
 cd mcp
 npm ci               # reproducible install — no native modules, storage is node:sqlite
-npm run lint         # tsc over src/ and test/ (two tsconfigs)
-npm run build        # tsc -> mcp/dist, copy SQL migrations, regenerate host rules,
-                     # esbuild bundles (dist/server.js, dist/cli.js), regenerate docs/tools.md and docs/rule-packs.md
-npm test             # vitest run (full suite)
+npm run lint         # tsc over src/ and test/ (tsconfig.test.json)
+npm run build        # type-check src/, esbuild bundles (dist/engine.js, dist/hooks.js, dist/server.js),
+                     # copy SQL migrations, regenerate host rules, docs/tools.md and docs/rule-packs.md
+npm test             # vitest run (full suite) — the gate before a commit
+npm run test:fast    # the unit tests minus the slowest files — the inner loop
+npm run test:docker  # the suite in Linux containers: the Node floor (with coverage) and the LTS
 ```
 
 On Windows, run the full suite from Git Bash: from PowerShell, `bash` can be the
@@ -31,7 +34,8 @@ npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "do
 - **Commit the compiled `mcp/dist/`.** The repo *is* the distribution — Claude
   Code runs `mcp/dist/server.js` directly, no install-time build. Rebuild
   (`npm run build`) and stage `mcp/dist/` in the **same** commit as the `src/`
-  change — a comment-only change too, since comments reach the sourcemaps.
+  change — a comment-only change too: esbuild keeps a `//` comment inside a
+  function body (`distSync.test.ts` says whether the bundles moved).
   There is no CI to catch drift, so it is on you to verify before committing.
 - **Generated files are regenerated, never edited**: `host-rules/*`, the in-repo
   rules copies (root `AGENTS.md`, `GEMINI.md`, `.cursor/rules/`, `.windsurf/rules/`,
@@ -57,6 +61,11 @@ Conventional Commits: `feat(scope): …`, `fix(scope): …`, `chore(release): �
 
 ## Releases
 
+0. Run `npm run test:docker` from `mcp/` on the commit to be released (Docker
+   with Linux containers; the first run needs the network): the Node 22.13
+   floor, with the coverage thresholds enforced, and the current LTS. Add
+   `--toolchain` to require the pinned scanners. There is no CI: this is the
+   one run on Linux, on the floor and against the coverage floor.
 1. Bump the version in all three: [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
    [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and
    [`mcp/package.json`](mcp/package.json). The server reports the `plugin.json`

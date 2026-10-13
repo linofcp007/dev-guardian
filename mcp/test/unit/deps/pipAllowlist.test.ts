@@ -151,6 +151,7 @@ for name in sorted(os.listdir(root)):
     out[name] = info
 print(json.dumps(out))
 `;
+import { hangBound } from '../../helpers/timing.js';
 
 describe.skipIf(PIP_VERSION === null)(`the allowlist against pip ${PIP_VERSION ?? '(not found)'}'s own parser`, () => {
   const root = corpusDir();
@@ -277,7 +278,7 @@ describe('what a refusal says', () => {
       make(join(dir, 'more.txt'));
       const t0 = Date.now();
       const got = checkRequirements(dir, ['requirements.txt'], dir).refusals;
-      expect(Date.now() - t0).toBeLessThan(3_000);
+      expect(Date.now() - t0).toBeLessThan(hangBound(3_000));
       expect(got.map((r) => r.kind)).toEqual(['unreadable']);
     }
   });

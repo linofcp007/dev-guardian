@@ -4,6 +4,8 @@ import { join, parse, relative } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   InvalidProjectPathError,
+  isNetworkPath,
+  projectPathErrorCode,
   resolveProjectPath,
 } from '../../../src/platform/projectPath.js';
 import { makeTempDir, cleanupTempDirs, rmDirOrDefer } from '../../helpers/tempDir.js';
@@ -110,5 +112,61 @@ describe('resolveProjectPath returns one canonical spelling per project', () => 
     const home = homedir();
     const spelled = isWindows ? home.replace(/\\/g, '/') : `${home}/.`;
     expect(() => resolveProjectPath(spelled)).toThrowError(InvalidProjectPathError);
+  });
+});
+
+// Review 8, finding 8: `existsSync` / `statSync` / `realpathSync` on a UNC path
+// whose host does not answer block the event loop for about 21 s each — the
+// whole server froze on one `detect_stack`. The path is refused on its spelling,
+// before any file-system call.
+describe('a network (UNC) project_path is refused before any file-system call', () => {
+  it('reads two leading separators as a network path on Windows only', () => {
+    for (const p of ['\\\\host\\share\\proj', '//host/share/proj', '\\/host/share', '\\\\?\\C:\\x', '\\\\.\\pipe\\x']) {
+      expect(isNetworkPath(p, 'win32')).toBe(true);
+      expect(isNetworkPath(p, 'linux')).toBe(false);
+    }
+    for (const p of ['C:\\Users\\x', 'C:/Users/x', '\\Users\\x', 'relative\\dir', '/home/x']) {
+      expect(isNetworkPath(p, 'win32')).toBe(false);
+    }
+  });
+
+  // A non-routable address: a regression (an fs call first) blocks ~21 s and
+  // fails on the test's timeout rather than on its assertion.
+  it.runIf(isWindows)('refuses \\\\host\\share with reason network_path, without touching it', () => {
+    for (const p of ['\\\\10.255.255.7\\share\\proj', '//10.255.255.7/share/proj']) {
+      let error: unknown;
+      try {
+        resolveProjectPath(p);
+      } catch (e) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(InvalidProjectPathError);
+      expect((error as InvalidProjectPathError).reason).toBe('network_path');
+      expect((error as Error).message).toMatch(/network \(UNC\) path/);
+      expect(projectPathErrorCode(error)).toBe('unsupported_target');
+    }
+  }, 5_000);
+});
+
+// Review 8, finding 16: every tool answered a refused project_path with
+// `not_a_git_repo`, a cause none of these has.
+describe('projectPathErrorCode', () => {
+  it('names a missing path target_not_found and an unusable one unsupported_target', () => {
+    const dir = tempProject();
+    const file = join(dir, 'README');
+    writeFileSync(file, 'hi');
+    const codeOf = (p: string): string => {
+      try {
+        resolveProjectPath(p);
+      } catch (e) {
+        return projectPathErrorCode(e);
+      }
+      return 'resolved';
+    };
+    expect(codeOf(join(dir, 'missing'))).toBe('target_not_found');
+    expect(codeOf(file)).toBe('unsupported_target');
+    expect(codeOf(homedir())).toBe('unsupported_target');
+    expect(codeOf(parse(process.cwd()).root)).toBe('unsupported_target');
+    expect(projectPathErrorCode(new Error('anything else'))).toBe('unsupported_target');
   });
 });

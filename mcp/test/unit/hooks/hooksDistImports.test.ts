@@ -1,107 +1,99 @@
 /**
- * The hook dispatcher (`hooks/guardian-hook.mjs`) imports compiled modules
- * straight from `mcp/dist/` in an install that has no `node_modules` — the
- * repository is the distribution (CLAUDE.md). A module it loads that reaches
- * a package, directly or through any file it imports, fails to load, and the
- * dispatcher fails OPEN: the guard it was loading is silently off. This walks
- * every module the dispatcher names, and everything they import, in the
- * committed `dist/`, and holds each import to a Node built-in or a relative
- * file — and every module under `dist/hooks/` to `dist/hooks/` itself, so the
- * guards never load the storage layer. (The rule began with the CLI, whose
- * `check` and `--help` loaded these files with `dist/storage/` absent; since
- * 3.2.1 the CLI runs on its bundle, `dist/cli.js`, and `pluginInstall.test.ts`
- * runs the dispatcher itself from an install's files.) Review of 3.0, W2E: the
- * data directory's resolution, once mirrored in `hooks/dataRegistry.ts` and
- * `storage/userData.ts`, is now one module, `hooks/userDataDir.ts` — a first
- * attempt that imported `storage/userData.js` from the hook broke the CLI.
+ * The hook dispatcher (`hooks/guardian-hook.mjs`) loads its detectors from one
+ * bundle, `mcp/dist/hooks.js` (`src/hooksEntry.ts`), in an install that has no
+ * `node_modules` — the repository is the distribution (CLAUDE.md). A loader it
+ * calls that the bundle lacks, or one whose module lacks a function it takes,
+ * fails, and the dispatcher fails OPEN: that guard is silently off (SessionStart
+ * says so, `hooksDispatcher.test.ts`). Until 3.3.0 the dispatcher imported 27
+ * of tsc's per-file modules, and this file walked their imports; the build now
+ * emits no per-file output (review 8, finding 3).
+ *
+ * Held here:
+ *
+ * - every loader the dispatcher calls is one the bundle exports, and each
+ *   resolves to a module with the functions the dispatcher takes from it —
+ *   on the committed `dist/hooks.js`;
+ * - the bundle's inputs are this repository's own sources, no npm package and
+ *   no storage layer (`node:sqlite`): the hook runs on every tool call, and a
+ *   package one detector pulls in grows every call's load. Review of 3.0, W2E:
+ *   the data directory's resolution, once mirrored in `hooks/dataRegistry.ts`
+ *   and `storage/userData.ts`, is one module, `hooks/userDataDir.ts` — a first
+ *   attempt that imported the storage layer from the hook broke the CLI.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
+import type { BuildOptions } from 'esbuild';
+import { describe, expect, it, vi } from 'vitest';
+import { MCP_ROOT } from '../../helpers/tsxNode.js';
 
-const MCP = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const DISPATCHER = join(MCP, '..', 'hooks', 'guardian-hook.mjs');
+vi.setConfig({ testTimeout: 60_000 });
 
-/** Every `mcp/dist/...js` module the dispatcher names. */
-function dispatcherEntries(): string[] {
+const DISPATCHER = join(MCP_ROOT, '..', 'hooks', 'guardian-hook.mjs');
+const BUNDLE = join(MCP_ROOT, 'dist', 'hooks.js');
+
+/** The functions the dispatcher takes from each loader's module. */
+const USED: Readonly<Record<string, readonly string[]>> = {
+  loadConfigFile: ['readSmallJsonFile', 'walkLinksUnder', 'readSmallTextFile', 'isNetworkPath'],
+  loadGuardedPath: ['guardedPath', 'hardLinkedTo'],
+  loadBashGuard: ['assessBashCommand'],
+  loadInstallGate: ['mayInstall'],
+  loadInstallVetting: ['decideInstallCommand'],
+  loadSecretScan: ['scanForSecrets'],
+  loadSettingsGuard: ['isClaudeSettingsPath', 'newlyLoosened', 'applyEdit'],
+  loadDataRegistry: ['writesRegistry'],
+  loadGitSafety: ['execGitSync'],
+  loadDbRegistry: ['databaseRegistration'],
+};
+
+/** Every loader the dispatcher names: `detector('loadX')` calls and the `GUARD_MODULES` table. */
+function dispatcherLoaders(): string[] {
   const text = readFileSync(DISPATCHER, 'utf8');
   const out = new Set<string>();
-  for (const m of text.matchAll(/join\(DIST_HOOKS, '([^']+\.js)'\)/g)) out.add(join(MCP, 'dist', 'hooks', m[1] ?? ''));
-  for (const m of text.matchAll(/join\(DIST_PKGVET, '([^']+\.js)'\)/g)) out.add(join(MCP, 'dist', 'pkgvet', m[1] ?? ''));
-  for (const m of text.matchAll(/join\(PLUGIN_ROOT, 'mcp', 'dist', '([^']+)', '([^']+\.js)'\)/g)) {
-    out.add(join(MCP, 'dist', m[1] ?? '', m[2] ?? ''));
-  }
+  for (const m of text.matchAll(/detector\('(load\w+)'\)/g)) out.add(m[1] ?? '');
+  for (const m of text.matchAll(/\bloader: '(load\w+)'/g)) out.add(m[1] ?? '');
   return [...out].sort();
 }
 
-/** The specifiers a compiled ES module's text imports: static, re-export, bare and dynamic. */
-function specifiers(text: string): string[] {
-  const out: string[] = [];
-  for (const m of text.matchAll(/(?:^|[;\s])(?:import|export)\s[^'"]*?\sfrom\s*['"]([^'"]+)['"]/g)) out.push(m[1] ?? '');
-  for (const m of text.matchAll(/(?:^|[;\s])import\s*['"]([^'"]+)['"]/g)) out.push(m[1] ?? '');
-  for (const m of text.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)) out.push(m[1] ?? '');
-  return out;
-}
-
-describe('the modules the hook dispatcher loads need no node_modules', () => {
-  const entries = dispatcherEntries();
-
-  it('finds the dispatcher’s modules, dataRegistry.js and the registry reader among them', () => {
-    const rel = entries.map((e) => relative(join(MCP, 'dist'), e).split('\\').join('/'));
-    expect(rel).toEqual(expect.arrayContaining(['hooks/dataRegistry.js', 'hooks/bashGuard.js', 'storage/dbRegistry.js', 'pkgvet/hookDecision.js']));
+describe('the hooks bundle has what the dispatcher loads', () => {
+  it('the dispatcher loads every detector through the bundle, by the loaders it exports', () => {
+    expect(dispatcherLoaders()).toEqual(Object.keys(USED).sort());
+    const text = readFileSync(DISPATCHER, 'utf8');
+    // One file from the build, and no per-file dist path.
+    expect(text).toContain("join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks.js')");
+    expect(text).not.toMatch(/'dist', '(?:hooks|pkgvet|platform|storage)', /);
   });
 
-  it('import only Node built-ins and relative files, transitively', () => {
-    const seen = new Set<string>();
-    const bad: string[] = [];
-    const queue = [...entries];
-    for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-      if (seen.has(file)) continue;
-      seen.add(file);
-      expect(existsSync(file), `${file} is not built`).toBe(true);
-      for (const spec of specifiers(readFileSync(file, 'utf8'))) {
-        if (spec.startsWith('node:')) continue;
-        if (spec.startsWith('./') || spec.startsWith('../')) {
-          queue.push(resolve(dirname(file), spec));
-          continue;
-        }
-        bad.push(`${relative(MCP, file)} imports '${spec}'`);
+  it('each loader of the committed dist/hooks.js resolves to a module with the functions the dispatcher takes', async () => {
+    const bundle = (await import(pathToFileURL(BUNDLE).href)) as Record<string, unknown>;
+    const missing: string[] = [];
+    for (const [loader, names] of Object.entries(USED)) {
+      const load = bundle[loader];
+      if (typeof load !== 'function') {
+        missing.push(`${loader}: not exported`);
+        continue;
       }
+      const mod = (await (load as () => Promise<Record<string, unknown>>)()) as Record<string, unknown>;
+      for (const name of names) if (typeof mod[name] !== 'function') missing.push(`${loader}: ${name}`);
     }
-    expect(seen.has(join(MCP, 'dist', 'hooks', 'userDataDir.js'))).toBe(true);
-    expect(bad).toEqual([]);
+    expect(missing).toEqual([]);
   });
 
-  it('a module under dist/hooks/ imports nothing outside dist/hooks/, transitively', () => {
-    const hooksDir = join(MCP, 'dist', 'hooks');
-    const inside = (f: string): boolean => !relative(hooksDir, f).startsWith('..');
-    const outside: string[] = [];
-    const seen = new Set<string>();
-    const queue = entries.filter(inside);
-    for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-      if (seen.has(file)) continue;
-      seen.add(file);
-      for (const spec of specifiers(readFileSync(file, 'utf8'))) {
-        if (!spec.startsWith('./') && !spec.startsWith('../')) continue;
-        const target = resolve(dirname(file), spec);
-        if (inside(target)) queue.push(target);
-        else outside.push(`${relative(MCP, file)} imports '${spec}'`);
-      }
-    }
-    expect(seen.has(join(hooksDir, 'dataRegistry.js'))).toBe(true);
-    expect(outside).toEqual([]);
-  });
-
-  it('sees every import shape (positive control)', () => {
-    const text = [
-      "import { execa } from 'execa';",
-      "import * as z from 'zod';",
-      "export { a } from './a.js';",
-      "import 'side-effect';",
-      "const m = await import('yaml');",
-      "import { readFileSync } from 'node:fs';",
-    ].join('\n');
-    expect(specifiers(text)).toEqual(['execa', 'zod', './a.js', 'node:fs', 'side-effect', 'yaml']);
+  it('its inputs are this repository’s sources — no npm package, no storage layer', async () => {
+    const options = (
+      (await import(pathToFileURL(join(MCP_ROOT, 'scripts', 'bundleOptions.mjs')).href)) as { bundleOptions: (root: string) => BuildOptions }
+    ).bundleOptions(MCP_ROOT);
+    const entries = options.entryPoints as Array<{ in: string; out: string }>;
+    const hooks = entries.filter((e) => e.out === 'hooks');
+    expect(hooks).toHaveLength(1);
+    const result = await build({ ...options, entryPoints: hooks, write: false, metafile: true, logLevel: 'silent' });
+    const inputs = Object.keys(result.metafile.inputs);
+    expect(inputs).toContain('src/hooks/userDataDir.ts');
+    expect(inputs).toContain('src/hooks/bashGuard.ts');
+    expect(inputs.filter((p) => !p.startsWith('src/')), 'a package the hooks bundle inlines').toEqual([]);
+    expect(inputs.filter((p) => /^src\/storage\/(?:db|index)\.ts$/.test(p)), 'the storage layer').toEqual([]);
+    const imports = Object.values(result.metafile.outputs).flatMap((o) => o.imports.map((i) => i.path));
+    expect(imports).not.toContain('node:sqlite');
   });
 });

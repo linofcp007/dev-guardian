@@ -249,6 +249,11 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: 'an SBOM file generate_sbom wrote, at the path its own scan row recorded',
   },
+  'src/tools/scanHelpers.ts': {
+    apis: { readdirSync: 1 },
+    kind: 'own',
+    reason: 'the .guardian/reports directory ensureReportDir just verified link-free, listed to prune older report directories',
+  },
   'src/tools/scanIac.ts': {
     apis: { writeFileSync: 1 },
     kind: 'own',

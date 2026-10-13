@@ -21,7 +21,7 @@ export interface McpPin {
   hash: string;
 }
 
-export interface PinnedKey {
+interface PinnedKey {
   server_key: string;
   key: string;
 }

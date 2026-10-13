@@ -32,7 +32,7 @@ const SINKS: Array<{ id: string; re: RegExp }> = [
   { id: 'mail', re: /\b(smtplib|sendmail|nodemailer|Send-MailMessage)\b/i },
 ];
 
-export interface TaintFlow {
+interface TaintFlow {
   source_id: string;
   source_line: number;
   source_snippet: string;

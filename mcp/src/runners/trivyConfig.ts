@@ -81,13 +81,13 @@ import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { withHonoured, type TrivyRunResult } from './trivyRun.js';
 
-export interface TrivyConfigParseError {
+interface TrivyConfigParseError {
   /** The file Trivy names (`file_path=`), relative to its target; null when it names none. */
   file: string | null;
   message: string;
 }
 
-export interface TrivyConfigLog {
+interface TrivyConfigLog {
   /** `Detected config files num=N`; null when Trivy logged no count. */
   detected: number | null;
   /** One per file (Trivy repeats a Terraform file's error per pass). */
@@ -205,7 +205,7 @@ function looksLikeIacText(text: string): boolean {
   return /^Resources:\s*$/m.test(text) && /^\s+Type:\s*['"]?AWS::/m.test(text);
 }
 
-export interface IacFiles {
+interface IacFiles {
   /** Project-relative (`/`), sorted. */
   files: string[];
   /** Why the walk may have missed some. Absent: it did not. */
@@ -314,7 +314,7 @@ export function iacLookingFiles(
 
 // ---------------------------------------------------------------- the judgement
 
-export interface TrivyConfigJudgement {
+interface TrivyConfigJudgement {
   toolRun: ToolRun;
   /** The pass's own name when it is partial; empty otherwise. */
   missing: string[];

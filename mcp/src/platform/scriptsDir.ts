@@ -4,33 +4,26 @@
  *
  * Shared by `server.ts` and `ci/runScans.ts` on purpose: two independent
  * copies of this arithmetic, one per caller's own file depth, is exactly
- * how a stray `..` gets introduced the day either file moves. But sharing
- * the FUNCTION does not mean a single fixed `..` count is correct for both
- * callers — this module's own `import.meta.url` means something different
- * depending on HOW a caller reaches it, for a reason specific to this
- * project's build (confirmed by inspecting the built `dist/server.js`, not
- * assumed):
+ * how a stray `..` gets introduced the day either file moves. But a single
+ * fixed `..` count is still not correct everywhere — this module's own
+ * `import.meta.url` means something different depending on HOW it runs:
  *
- *   - `server.ts` pulls this in through `scripts/bundle.mjs`'s esbuild
- *     bundle, which inlines every transitive import into ONE file,
- *     `dist/server.js`. `import.meta.url` is a runtime construct — esbuild
- *     does not (and cannot, without extra shimming it doesn't apply) rewrite
- *     it per original source file — so at runtime, for code that started
- *     life in THIS file, `import.meta.url` is `dist/server.js`'s own URL:
- *     two directories under the plugin root (`dist/` -> `mcp/` -> root).
- *     `storage/migrations/runner.ts#resolveMigrationsDir` hits the identical
- *     effect for the identical reason — see its own doc comment.
- *   - `ci/runScans.ts` reaches this as a normal, unbundled ES module import
- *     (plain `tsc` output — one real file per source file, same as dev
- *     under `tsx`/vitest). At runtime `import.meta.url` there is THIS
- *     file's own separate location, `dist/platform/scriptsDir.js` (or
- *     `src/platform/scriptsDir.ts` in dev) — three directories under the
- *     plugin root.
+ *   - Shipped, it runs inside an esbuild bundle (`scripts/bundle.mjs`):
+ *     `dist/engine.js`, which the server and the CLI run, or `dist/hooks.js`.
+ *     `import.meta.url` is a runtime construct — esbuild does not rewrite it
+ *     per original source file — so for code that started life in THIS file
+ *     it is the bundle's own URL: two directories under the plugin root
+ *     (`dist/` -> `mcp/` -> root). `storage/migrations/runner.ts#resolveMigrationsDir`
+ *     hits the identical effect for the identical reason.
+ *   - Under tsx and vitest (`npm run dev`, every test) it runs as its own
+ *     file, `src/platform/scriptsDir.ts` — three directories under the plugin
+ *     root. (Until 3.3.0 tsc's per-file `dist/platform/` shipped too, at the
+ *     same depth.)
  *
- * A fixed `..` count can be right for exactly one of those two callers.
+ * A fixed `..` count can be right for exactly one of those two shapes.
  * Probing for the directory that actually contains a real script is right
- * for both, and for dev/test execution too — the same fix, for the same
- * reason, `resolveMigrationsDir` already applies to the SQL migrations.
+ * for both — the same fix, for the same reason, `resolveMigrationsDir`
+ * already applies to the SQL migrations.
  */
 
 import { existsSync } from 'node:fs';
@@ -54,13 +47,13 @@ const MARKER_SCRIPT = ['scan', 'initial-scan.sh'];
 export function resolveScriptsDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
 
-  // Bundled: this code is executing as part of dist/server.js, so `here` is
+  // Bundled: this code is executing as part of dist/engine.js (or dist/hooks.js), so `here` is
   // dist/ itself.
   const bundled = join(here, '..', '..', 'scripts');
   if (existsSync(join(bundled, ...MARKER_SCRIPT))) return bundled;
 
   // Unbundled: this code is executing as its own file, one directory
-  // deeper than server.ts/server.js (src/platform/ or dist/platform/).
+  // deeper than the bundles (src/platform/ under tsx or vitest).
   const unbundled = join(here, '..', '..', '..', 'scripts');
   if (existsSync(join(unbundled, ...MARKER_SCRIPT))) return unbundled;
 

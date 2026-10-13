@@ -49,7 +49,7 @@ import {
   suppressedOfEither,
 } from '../history/openSet.js';
 import { classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps } from '../history/runCompare.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { sameImportSlot, sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
@@ -75,9 +75,8 @@ const inputSchema = {
     .optional()
     .describe('The older side: this exact scan. Takes precedence over from. Default: see from.'),
   from: FromEnum.optional().describe(
-    "The older side, when from_scan_id is not given: 'previous' — this project's usable scan of the same " +
-      "type just before the to scan — or 'baseline' — the baseline set_baseline recorded for that type. " +
-      "Default: 'previous'.",
+    "The older side when from_scan_id is not given: previous (default) or baseline (set_baseline's for " +
+      'that type).',
   ),
   to_scan_id: z
     .string()
@@ -85,8 +84,7 @@ const inputSchema = {
     .optional()
     .describe('The newer side: this exact scan. Takes precedence over to. Default: see to.'),
   to: ToEnum.optional().describe(
-    "The newer side, when to_scan_id is not given: 'latest' — this project's newest usable scan (of " +
-      "scan_type, when given). Default: 'latest'.",
+    'The newer side when to_scan_id is not given: latest (default).',
   ),
 };
 
@@ -224,7 +222,7 @@ function resolveTo(
       try {
         projectPath = resolveProjectPath(inp.project_path).path;
       } catch (e) {
-        return { ok: false, err: failDomain('not_a_git_repo', (e as Error).message) };
+        return { ok: false, err: failDomain(projectPathErrorCode(e), (e as Error).message) };
       }
       if (scan.project_path !== projectPath) {
         return {
@@ -245,7 +243,7 @@ function resolveTo(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, err: failDomain('not_a_git_repo', (e as Error).message) };
+    return { ok: false, err: failDomain(projectPathErrorCode(e), (e as Error).message) };
   }
   // Default: this project's newest usable state scan.
   const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);

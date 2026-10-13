@@ -32,7 +32,7 @@ import type { PluginContext } from '../context.js';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { partitionSuppressed } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import {
   CVE_SOURCE_SCAN_TYPES,
@@ -67,9 +67,7 @@ const inputSchema = {
     .enum(['not_affected'])
     .optional()
     .describe(
-      "Also record a VEX statement: the product is not_affected by the finding's vulnerability. " +
-        'Requires justification; only for a finding with a vulnerability id (CVE, GHSA, PYSEC, …). ' +
-        'export_vex publishes it.',
+      "Also record a VEX not_affected statement for the finding's vulnerability. Needs justification.",
     ),
   justification: z
     .enum(OPENVEX_JUSTIFICATIONS)
@@ -85,19 +83,13 @@ const inputSchema = {
 
 const tool: ToolModule = {
   name: 'suppress_finding',
-  title: 'Suppress finding',
+  title: 'Suppress a finding',
   description:
-    "Mark a finding of project_path (default: the server's working directory) — named by the " +
-    'fingerprint a scan response shows — as a false positive. Resources that surface open findings ' +
-    'exclude it while the suppression is active — including after the code around it moves: the ' +
-    "finding's line-independent identity is recorded alongside the fingerprint and either one " +
-    'matches. A fingerprint no completed scan of this project ever reported is `unknown_finding`. ' +
-    'Pass expires_at for a temporary snooze. For a vulnerability finding (its own CVE/GHSA/PYSEC id — ' +
-    'never one its text mentions), vex_status: not_affected with an ' +
-    'OpenVEX justification (and optional impact_statement) also makes it a VEX statement that ' +
-    'export_vex publishes — only for a finding that names a package version (`vex.exportable`), ' +
-    'and as not_affected only once every copy of the vulnerability has one: the reply names the ' +
-    'other open copies (`vex.other_open_findings`, `warning`).',
+    'Mark a finding (by the fingerprint a scan showed) as a false positive; it stays hidden after the ' +
+    'code moves. A fingerprint no scan of this project reported is `unknown_finding`. expires_at snoozes. ' +
+    'For a finding with its own CVE, GHSA or PYSEC id and a package version, vex_status: not_affected ' +
+    'with a justification also makes a VEX statement (export_vex); the reply names other open copies of ' +
+    'the vulnerability.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -134,7 +126,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);

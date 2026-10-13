@@ -16,12 +16,26 @@
  *
  * Each case runs the same native history in two projects — one with the
  * imports interleaved, one without — so (3) compares like with like.
+ *
+ * ---- The clock ---------------------------------------------------------------
+ *
+ * A slot's newest scan is the one with the latest `started_at`, then the
+ * latest row (`scansRepo.ts`, `ORDER BY started_at DESC, rowid DESC`): history
+ * is ordered by the wall clock, and only a tie falls back to the insert order.
+ * This test's oracle is the insert order. On the host's clock the two agree
+ * until the clock steps back between two imports of one tool — then the older
+ * import is, by date, the newer, and stays open. That happened once, in the
+ * Node 22.13 container of `npm run test:docker` (case 63; a Docker VM's clock
+ * is stepped by the host's time sync), and never alone. So `Date` is frozen
+ * here: every import starts in the same millisecond, the order has only the
+ * row to go by, and the property is checked on the tie it must break — never
+ * on whatever the host's clock did.
  */
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
-import { openSetForProject, type OpenFinding } from '../../src/history/openSet.js';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { latestStateScan, openSetForProject, type OpenFinding } from '../../src/history/openSet.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { importSarif } from '../../src/sarif/importSarif.js';
 import { persistSarifImport } from '../../src/sarif/persistImport.js';
@@ -33,6 +47,15 @@ import { mulberry32 } from '../helpers/yamlFuzz.js';
 
 vi.setConfig({ testTimeout: 120_000 });
 afterAll(cleanupTempDirs);
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Every `new Date()` / `Date.now()` from here on is this one instant (timers stay real). */
+function freezeClock(): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now());
+}
 
 const CASES = 200;
 const SOURCE_TOOLS = ['CodeQL', 'Snyk Code', 'ESLint'] as const;
@@ -85,6 +108,7 @@ describe('T-07 the open set with imports of several tools (US-1.AC-7) — proper
     const root = resolveProjectPath(makeTempDir('sarif-openset-')).path;
     const r = mulberry32(7_102_026);
     let seq = 0;
+    freezeClock();
 
     for (let c = 0; c < CASES; c += 1) {
       const mixed = join(root, `case-${String(c)}-mixed`);
@@ -137,5 +161,42 @@ describe('T-07 the open set with imports of several tools (US-1.AC-7) — proper
       const control = openSetForProject(s.storage, plain).findings.map(nativeKey).sort();
       expect(natives, `${label}: native findings unchanged by imports`).toEqual(control);
     }
+  });
+
+  it('two imports of one tool in the same millisecond: the later replaces the earlier, which is its previous import', () => {
+    const s: Seeded = freshPlugin();
+    const project = resolveProjectPath(makeTempDir('sarif-openset-tie-')).path;
+    const importOf = (id: number): string => {
+      const log = sarifLog([
+        sarifRun({
+          tool: 'CodeQL',
+          results: [
+            sarifResult({
+              ruleId: 'CodeQL/rule-0',
+              uri: `src/f${String(id)}.js`,
+              startLine: id,
+              partialFingerprints: { primaryLocationLineHash: `tie-${String(id)}` },
+            }),
+          ],
+        }),
+      ]);
+      const written = persistSarifImport(s.storage, project, importSarif(sarifText(log), { projectPath: project }), {
+        sourceFile: `tie-${String(id)}.sarif`,
+      });
+      const scanId = written[0]?.scan_id;
+      if (scanId === undefined) throw new Error('the import wrote no scan');
+      return scanId;
+    };
+
+    freezeClock();
+    const first = importOf(1);
+    const second = importOf(2);
+    const started = [first, second].map((id) => s.storage.scans.getById(id)?.started_at);
+    expect(started[0], 'the tie is real: both imports started in the same millisecond').toBe(started[1]);
+
+    expect(openSetForProject(s.storage, project).findings.map((f) => f.scan_id)).toEqual([second]);
+    expect(latestStateScan(s.storage, project, 'sarif_import', { sourceTool: 'CodeQL' }).scan?.scan_id).toBe(second);
+    expect(latestStateScan(s.storage, project, 'sarif_import', { beforeScanId: second }).scan?.scan_id).toBe(first);
+    expect(latestStateScan(s.storage, project, 'sarif_import', { beforeScanId: first }).scan).toBeNull();
   });
 });

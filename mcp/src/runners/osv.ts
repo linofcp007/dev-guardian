@@ -22,7 +22,7 @@ export interface OsvPackageQuery {
   version?: string;
 }
 
-export interface OsvVulnGroup {
+interface OsvVulnGroup {
   ecosystem: string;
   name: string;
   version?: string;
@@ -37,7 +37,7 @@ export interface OsvResult {
   error?: string;
 }
 
-export interface OsvQueryOptions {
+interface OsvQueryOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   /** Injectable for tests; defaults to the global `fetch`. */

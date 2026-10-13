@@ -18,12 +18,12 @@ interface StackRow {
   json: string;
 }
 
-export interface InsertStackSnapshotInput {
+interface InsertStackSnapshotInput {
   project_path: string;
   snapshot: StackSnapshot;
 }
 
-export interface PersistedStackSnapshot {
+interface PersistedStackSnapshot {
   id: number;
   project_path: string;
   captured_at: string;

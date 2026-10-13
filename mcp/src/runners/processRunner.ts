@@ -12,7 +12,8 @@
  *     `failed`, the reason in stderr.
  *
  * `runShellScript` builds on this — direct scanner invocations (Semgrep,
- * Trivy CLI, gitleaks) call `runProcess` straight.
+ * Trivy CLI, gitleaks), the package managers `deps_update_plan` runs and the
+ * archive extraction `scan_skill` does call `runProcess` straight.
  *
  * A bare command name is resolved in-process on the child's PATH and the
  * absolute path is spawned: never a binary the scanned project planted in
@@ -21,40 +22,22 @@
  * ---- Every kill is a TREE kill ----------------------------------------------
  *
  * Timeout, cancellation and the stdout cap all stop the child's whole process
- * tree, not just the direct child. Scanners fork (bash → semgrep →
- * semgrep-core), and a grandchild that survives keeps the stdout pipe open, so
- * `await child` waits for IT: measured before this was fixed, execa's own
- * `timeout: 2000` returned after 25 151 ms — the full lifetime of a
- * `sleep 25` grandchild. So the timeout is implemented here rather than
- * handed to execa, and it goes through the same `killTree` as the rest:
- *
- *   - Windows: `taskkill /PID <pid> /T /F` walks the OS parent/child table,
- *     and — because that table loses every process Git Bash `exec`s — the
- *     MSYS descendants are found by a per-child environment token and
- *     killed too. See `windowsTreeKill.ts`.
- *   - POSIX: the child is spawned `detached`, which makes it the leader of
- *     its own process group, and the NEGATIVE pid signals the whole group.
- *     Same mechanism as `ci/appRunner.ts`, with the same honest limit: a
- *     grandchild that calls `setsid()` itself leaves the group and cannot be
- *     reached this way.
- *
- * `detached` opts the child out of execa's kill-on-parent-exit cleanup (execa
- * skips it for detached children), so the runner supplies that cleanup
- * itself through the same `signal-exit` hook execa uses: when this process
- * exits — `process.exit()` in the MCP server's shutdown, or an unhandled
- * SIGINT/SIGTERM in the CLI — each live group gets a SIGTERM.
- *
- * If a pipe is still held open after the SIGKILL grace (a `setsid`
- * grandchild), the runner stops reading it rather than wait on it for ever.
+ * tree, not just the direct child (`childProcess.ts#stopTree`). Scanners fork
+ * (bash → semgrep → semgrep-core), and a grandchild that survives keeps the
+ * stdout pipe open, so waiting for the child waits for IT: measured before
+ * this was fixed, execa's own `timeout: 2000` returned after 25 151 ms — the
+ * full lifetime of a `sleep 25` grandchild. So the timeout is implemented
+ * here, and it goes through the same tree kill as the rest: a process group
+ * on POSIX, `taskkill /T` plus the MSYS descendants on Windows — and, if a
+ * pipe is still held open after the SIGKILL grace (a `setsid` grandchild),
+ * the runner stops reading it rather than wait on it for ever. When this
+ * process exits first, every live child's tree gets a SIGTERM.
  */
 
-import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import { execa, type ResultPromise } from 'execa';
-import { onExit } from 'signal-exit';
 import { findOnPath, isBareName } from '../platform/binaryPath.js';
 import { applyGitSafety, gitSafetyFor, withoutHooksPath } from '../platform/gitSafety.js';
-import { killWindowsTree, PROC_TREE_ENV } from './windowsTreeKill.js';
+import { readText, startChild, stopTree } from './childProcess.js';
 
 const FIVE_MB = 5 * 1024 * 1024;
 const KILL_GRACE_MS = 5_000;
@@ -79,13 +62,13 @@ export interface ProcessRunOptions {
   env?: NodeJS.ProcessEnv;
   /**
    * False replaces the child's environment with `env` instead of merging
-   * `env` over the parent's. Defaults to execa's own default (true).
+   * `env` over the parent's. Defaults to true.
    *
-   * This is the difference between an allowlist and a decoration: execa merges
-   * with `process.env` by default, so passing a scrubbed `env` WITHOUT this
-   * set to false hands the child every parent variable anyway and scrubs
-   * nothing. Any caller passing `env` in order to withhold something must
-   * pass `extendEnv: false` too.
+   * This is the difference between an allowlist and a decoration: `env` is
+   * merged over `process.env` by default, so passing a scrubbed `env`
+   * WITHOUT this set to false hands the child every parent variable anyway
+   * and scrubs nothing. Any caller passing `env` in order to withhold
+   * something must pass `extendEnv: false` too.
    */
   extendEnv?: boolean;
   signal?: AbortSignal;
@@ -118,6 +101,13 @@ export interface ProcessRunOptions {
   gitRepos?: readonly string[];
 }
 
+/** Why a child never ran: not on PATH, a repository whose git configuration was refused, or a spawn error. */
+interface ProcessNotRun {
+  /** `not_found`, `git_config_refused`, or the spawn error's code (`ENOENT`, `EACCES`, …). */
+  code: string;
+  message: string;
+}
+
 export interface ProcessRunResult {
   outcome: ProcessOutcome;
   exitCode: number | null;
@@ -130,6 +120,8 @@ export interface ProcessRunResult {
    * when there were some — a caller whose result depends on them names them.
    */
   gitNotApplied?: readonly string[];
+  /** Set when the child was never started; `outcome` is then `failed` and `exitCode` null. */
+  notRun?: ProcessNotRun;
 }
 
 export async function runProcess(options: ProcessRunOptions): Promise<ProcessRunResult> {
@@ -140,103 +132,66 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
     options.timeoutMs ??
     (Number(process.env['GUARDIAN_SCAN_TIMEOUT_MS']) || DEFAULT_TIMEOUT_MS);
   const cap = options.stdoutCapBytes ?? FIVE_MB;
-  const posixGroup = process.platform !== 'win32';
-  // Windows only: what lets `killWindowsTree` find the MSYS descendants.
-  const treeToken = posixGroup ? null : randomUUID();
 
   let stdoutBuf = '';
   let stderrBuf = '';
   let truncated = false;
   let outcome: ProcessOutcome = 'completed';
 
-  // `?? true` restates execa's own default explicitly rather than relying on
-  // `undefined` meaning it, so the merge behaviour is visible here instead of
-  // only in execa's docs.
-  let env = options.env;
-  let extendEnv = options.extendEnv ?? true;
+  // The environment the child would have had: `env` over this process's, or
+  // `env` alone.
+  const extendEnv = options.extendEnv ?? true;
+  let childEnv: NodeJS.ProcessEnv = extendEnv ? { ...process.env, ...(options.env ?? {}) } : { ...(options.env ?? {}) };
   let gitNotApplied: readonly string[] = [];
   if (options.gitHardening !== false) {
-    // The environment the child would have had, hardened — merged here, so
-    // the child is handed exactly this (extendEnv false) and the user's own
-    // GIT_CONFIG_COUNT entries are counted before ours are appended.
-    const base: NodeJS.ProcessEnv = extendEnv ? { ...process.env, ...(options.env ?? {}) } : { ...(options.env ?? {}) };
-    const full = await gitSafetyFor([options.cwd, ...(options.gitRepos ?? [])], { env: base });
+    // Hardened — the user's own GIT_CONFIG_COUNT entries are counted before
+    // ours are appended.
+    const full = await gitSafetyFor([options.cwd, ...(options.gitRepos ?? [])], { env: childEnv });
     const safety = options.gitHardening === 'except-hooks-path' ? withoutHooksPath(full) : full;
     if (safety.refused !== null) {
-      return {
-        outcome: 'failed',
-        exitCode: null,
-        stdout: '',
-        stderr: `dev-guardian did not run ${basename(options.command)}: ${safety.refused}`,
-        truncated: false,
-      };
+      const message = `dev-guardian did not run ${basename(options.command)}: ${safety.refused}`;
+      return notRun({ code: 'git_config_refused', message }, message);
     }
-    env = applyGitSafety(safety, base);
-    extendEnv = false;
+    childEnv = applyGitSafety(safety, childEnv);
     gitNotApplied = safety.notApplied;
   }
 
   // A bare name is spawned by the absolute path it resolves to on the CHILD's PATH, looked up here —
   // never in `cwd`, which is usually the project being scanned (platform/binaryPath.ts). Found on no
   // PATH entry, the one place left for a spawn to find it is `cwd`: it is not spawned at all.
-  const childEnv = extendEnv ? { ...process.env, ...env } : (env ?? {});
   const command = isBareName(options.command) ? findOnPath(options.command, childEnv) : options.command;
   if (command === null) {
-    return { outcome: 'failed', exitCode: null, stdout: '', stderr: `${options.command}: not found on PATH\n`, truncated: false };
+    return notRun({ code: 'not_found', message: `${options.command}: not found on PATH` }, `${options.command}: not found on PATH\n`);
   }
 
-  const child = execa(command, options.args ?? [], {
-    cwd: options.cwd,
-    env: envFor(command, env, treeToken),
-    extendEnv,
-    shell: false,
-    encoding: 'utf8',
-    // Own process group on POSIX, so `killTree` can signal the whole group.
-    // Never on Windows: there `detached` means a new console, not a group.
-    detached: posixGroup,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    reject: false,
-  });
-
-  let settled = false;
-  let stopping = false;
-  // Timeout, abort and the stdout cap can all fire; the tree is killed once.
-  const stopTree = (): void => {
-    if (stopping) return;
-    stopping = true;
-    killTree(child, command, treeToken, () => settled);
+  const child = startChild(command, options.args ?? [], { cwd: options.cwd, env: envFor(command, childEnv) });
+  // Timeout, abort and the stdout cap can all fire; the tree is stopped once.
+  const stop = (): void => {
+    void stopTree(child, { graceMs: KILL_GRACE_MS, abandonMs: PIPE_ABANDON_MS });
   };
 
-  // execa skips its own exit cleanup for a detached child; supply it.
-  const removeExitHook = posixGroup ? onExit(() => signalGroup(child.pid, 'SIGTERM')) : null;
-
-  attachStdoutCap(
-    child,
-    cap,
-    (chunk) => {
-      stdoutBuf += chunk;
-    },
-    () => {
+  readText(child.process.stdout, (text, totalBytes) => {
+    if (totalBytes > cap) {
       if (outcome === 'completed') outcome = 'output_too_large';
       truncated = true;
-      stopTree();
-    },
-  );
+      stop();
+      return;
+    }
+    stdoutBuf += text;
+  });
 
   // Cap stderr at 1/10 of the stdout cap (default 512 KB). Long-running
   // tools with `--verbose` flags can spew MBs of stderr; without a cap the
   // server would grow unbounded.
   const stderrCap = Math.max(64 * 1024, Math.floor(cap / 10));
-  let stderrBytes = 0;
-  attachStderr(child, (chunk) => {
-    stderrBytes += chunk.length;
-    if (stderrBytes <= stderrCap) {
-      stderrBuf += chunk;
+  readText(child.process.stderr, (text, totalBytes) => {
+    if (totalBytes <= stderrCap) {
+      stderrBuf += text;
     } else if (!stderrBuf.endsWith('…(truncated)\n')) {
       stderrBuf += '…(truncated)\n';
     }
     if (options.onLog) {
-      for (const line of chunk.split(/\r?\n/)) {
+      for (const line of text.split(/\r?\n/)) {
         if (line.length > 0) options.onLog(line);
       }
     }
@@ -247,7 +202,7 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
     timer = setTimeout(
       () => {
         if (outcome === 'completed') outcome = 'timed_out';
-        stopTree();
+        stop();
       },
       // What is left of the budget after the configuration read (at least 1 ms).
       Math.min(Math.max(1, timeoutMs - (Date.now() - started)), MAX_TIMER_MS),
@@ -258,149 +213,57 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
   if (options.signal) {
     if (options.signal.aborted) {
       outcome = 'cancelled';
-      stopTree();
+      stop();
     } else {
       abortListener = () => {
         if (outcome === 'completed') outcome = 'cancelled';
-        stopTree();
+        stop();
       };
       options.signal.addEventListener('abort', abortListener, { once: true });
     }
   }
 
-  const result = await child;
-  settled = true;
+  const exit = await child.done;
   if (timer) clearTimeout(timer);
-  removeExitHook?.();
   if (abortListener && options.signal) {
     options.signal.removeEventListener('abort', abortListener);
   }
 
-  if (outcome === 'completed' && result.exitCode !== 0) outcome = 'failed';
+  if (exit.spawnError !== undefined) {
+    const message = `${basename(command)}: ${exit.spawnError.message}`;
+    return { ...notRun({ code: exit.spawnError.code ?? 'spawn_failed', message }, `${stderrBuf}${message}\n`), ...gitNotAppliedField(gitNotApplied) };
+  }
+  if (outcome === 'completed' && exit.exitCode !== 0) outcome = 'failed';
 
   return {
     outcome,
-    exitCode: result.exitCode ?? null,
+    exitCode: exit.exitCode,
     stdout: stdoutBuf,
     stderr: stderrBuf,
     truncated,
-    ...(gitNotApplied.length > 0 ? { gitNotApplied } : {}),
+    ...gitNotAppliedField(gitNotApplied),
   };
 }
 
+function notRun(reason: ProcessNotRun, stderr: string): ProcessRunResult {
+  return { outcome: 'failed', exitCode: null, stdout: '', stderr, truncated: false, notRun: reason };
+}
+
+function gitNotAppliedField(keys: readonly string[]): { gitNotApplied?: readonly string[] } {
+  return keys.length > 0 ? { gitNotApplied: keys } : {};
+}
+
 /**
- * Environment for the child: the caller's `env`, plus
- *
- *   - on Windows, the tree token `killWindowsTree` finds descendants by;
- *   - for `docker` only, the two variables that stop Git Bash's MSYS layer
- *     rewriting POSIX-looking arguments. An MSYS parent turns `-w /src` into
- *     `-w C:/Program Files/Git/src` (measured). A Node parent does not
- *     rewrite anything itself, so from here this is defence for any MSYS
- *     process that ends up between us and docker — never for other commands,
- *     where scripts running under Git Bash rely on the conversion to hand
- *     Windows paths to native tools.
+ * Environment for the child: the caller's, plus — for `docker` only — the
+ * two variables that stop Git Bash's MSYS layer rewriting POSIX-looking
+ * arguments. An MSYS parent turns `-w /src` into `-w C:/Program
+ * Files/Git/src` (measured). A Node parent does not rewrite anything itself,
+ * so from here this is defence for any MSYS process that ends up between us
+ * and docker — never for other commands, where scripts running under Git
+ * Bash rely on the conversion to hand Windows paths to native tools.
  */
-function envFor(
-  command: string,
-  env: NodeJS.ProcessEnv | undefined,
-  treeToken: string | null,
-): NodeJS.ProcessEnv | undefined {
+function envFor(command: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const name = basename(command.replace(/\\/g, '/')).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
-  const isDocker = name === 'docker';
-  if (!isDocker && treeToken === null) return env;
-  return {
-    ...env,
-    ...(treeToken !== null ? { [PROC_TREE_ENV]: treeToken } : {}),
-    ...(isDocker ? { MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' } : {}),
-  };
-}
-
-function attachStdoutCap(
-  child: ResultPromise,
-  cap: number,
-  onChunk: (text: string) => void,
-  onOversize: () => void,
-): void {
-  let total = 0;
-  child.stdout?.on('data', (chunk: Buffer) => {
-    total += chunk.length;
-    if (total > cap) {
-      onOversize();
-      return;
-    }
-    onChunk(chunk.toString('utf8'));
-  });
-}
-
-function attachStderr(child: ResultPromise, onChunk: (text: string) => void): void {
-  child.stderr?.on('data', (chunk: Buffer) => {
-    onChunk(chunk.toString('utf8'));
-  });
-}
-
-/**
- * Stop the child's whole tree: a graceful signal now, SIGKILL after
- * `KILL_GRACE_MS`, and — if the pipes are STILL open after that, which means
- * something outside the tree holds them — stop reading them so the caller is
- * released. Called once per child — see `stopTree`.
- */
-function killTree(
-  child: ResultPromise,
-  command: string,
-  treeToken: string | null,
-  isSettled: () => boolean,
-): void {
-  const pid = child.pid;
-  if (pid === undefined) return;
-  let treeKill: Promise<void> = Promise.resolve();
-  if (treeToken !== null) {
-    // `taskkill /T /F` plus the MSYS orphans it cannot see — see
-    // `windowsTreeKill.ts`. The direct kill is only a FALLBACK, after
-    // taskkill failed: killing the root first would make taskkill's tree walk
-    // start from a pid that no longer exists ("process not found") and orphan
-    // every grandchild, which is what the old order did.
-    const direct = (): void => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already dead */
-      }
-    };
-    treeKill = killWindowsTree(pid, command, treeToken, direct).catch(direct);
-  } else {
-    signalGroup(pid, 'SIGTERM');
-  }
-  setTimeout(() => {
-    if (isSettled()) return;
-    // On Windows, never escalate while taskkill is still walking the tree
-    // (measured at up to ~5 s on a loaded host): SIGKILLing the root under
-    // it would orphan the grandchildren it has not reached yet.
-    void treeKill.then(() => {
-      if (isSettled()) return;
-      if (treeToken !== null) {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          /* already dead */
-        }
-      } else {
-        signalGroup(pid, 'SIGKILL');
-      }
-      setTimeout(() => {
-        if (isSettled()) return;
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      }, PIPE_ABANDON_MS).unref();
-    });
-  }, KILL_GRACE_MS).unref();
-}
-
-/** Signal a POSIX process group (negative pid). ESRCH = already gone. */
-function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
-  if (pid === undefined) return;
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    /* ESRCH: the group is already gone. */
-  }
+  if (name !== 'docker') return env;
+  return { ...env, MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' };
 }

@@ -43,12 +43,13 @@ import {
   describeMeasurementGaps,
   measurementGaps,
 } from '../history/runCompare.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type Finding, type ScanType, type Severity, type ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { countBySeverity } from '../severity/counts.js';
 
 const SEVERITY_WEIGHT: Record<Severity, number> = {
   info: 0.5,
@@ -105,7 +106,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
 
   const skipHits: SkipHit[] = [];
@@ -222,7 +223,7 @@ async function handler(
     ...(gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {}),
     ...(gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {}),
     hint: regressed
-      ? 'Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes.'
+      ? 'Severity-weighted change exceeded the threshold. Consider prioritize_findings (view: "triage") + audit_executive, or revert recent changes.'
       : measuredNote !== null
         ? `No significant regression among the findings that were measured. ${measuredNote}`
         : 'No significant regression.',
@@ -236,8 +237,3 @@ function weightedScore(findings: Finding[]): number {
   return findings.reduce((acc, f) => acc + (SEVERITY_WEIGHT[f.severity] ?? 0), 0);
 }
 
-function countBySeverity(findings: Finding[]): Record<Severity, number> {
-  const out: Record<Severity, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}

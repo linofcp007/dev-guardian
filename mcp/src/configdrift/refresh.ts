@@ -72,7 +72,7 @@ export interface ConfigFileSpec {
   reason: string;
 }
 
-export type RefreshAction =
+type RefreshAction =
   /** Not in the project yet — write it. */
   | 'create'
   /** Nothing to deliver: same baseline, or their edits with no newer baseline. */
@@ -106,7 +106,7 @@ export interface RefreshPlanItem {
   alongside_path?: string;
 }
 
-export interface RefreshInput {
+interface RefreshInput {
   projectPath: string;
   /** Absolute path to the plugin's `configs/`. */
   configsDir: string;
@@ -116,7 +116,7 @@ export interface RefreshInput {
   apply: boolean;
 }
 
-export interface RefreshOutcome {
+interface RefreshOutcome {
   applied: boolean;
   plan: RefreshPlanItem[];
 }

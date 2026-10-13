@@ -79,7 +79,7 @@ interface Row {
   content_key: string | null;
 }
 
-export interface RekeyOptions {
+interface RekeyOptions {
   /** The plugin's pack directory. Default: `runners/semgrepRuleIds.ts#pluginPacksDir`. */
   packsDir?: string;
   /** The rule ids its packs declare. Default: read from `packsDir`, once, when a candidate row exists. */

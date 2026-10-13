@@ -25,6 +25,7 @@
  * did not see may be the different one.
  */
 
+import { exactPin, requirementMentions } from '../deps/pipRequirements.js';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { listProjectFiles } from '../runners/projectFiles.js';
@@ -33,7 +34,7 @@ import type { PypiPin, PypiPinResolver } from './dependencyProvider.js';
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 
 /** Whether a project-relative POSIX path is a manifest this module reads. */
-export function isPypiPinFile(path: string): boolean {
+function isPypiPinFile(path: string): boolean {
   const lower = path.toLowerCase();
   const base = lower.split('/').pop() ?? '';
   if (/^requirements.*\.txt$/.test(base) || /-requirements\.txt$/.test(base)) return true;
@@ -75,14 +76,12 @@ function pinsOf(manifest: string, text: string): Array<[string, string]> | null 
   return requirementPins(text);
 }
 
+/** The exact pins of a requirements file, read as pip reads it (`deps/pipRequirements.ts#requirementMentions`). */
 function requirementPins(text: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];
-  const joined = text.replace(/\\\r?\n/g, ' ');
-  for (const raw of joined.split(/\r?\n/)) {
-    const line = raw.replace(/(^|\s)#.*$/, '').trim();
-    if (line === '' || line.startsWith('-')) continue;
-    const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*===?\s*([^\s;,]+)/.exec(line);
-    if (match?.[1] !== undefined && match[3] !== undefined) out.push([normalize(match[1]), match[3]]);
+  for (const mention of requirementMentions(text)) {
+    const version = exactPin(mention.specifier);
+    if (version !== undefined) out.push([normalize(mention.name), version]);
   }
   return out;
 }

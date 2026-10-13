@@ -1187,6 +1187,36 @@ describe('recoverMetavars — import forms the synthesizers used to lose', () =>
     expect(mv(outcome, '$MODULE')).toBe('./thing.js');
   });
 
+  /* Review 8, finding 1: TypeScript's `type` keyword, and multi-line
+     re-exports — the spans exactly as Semgrep 1.176.1 reported them. On a copy
+     of mcp/src, 368 `import type` and 16 multi-line re-export matches were
+     unrecoverable, and the surface run failed for them. */
+  it.each([
+    ["import type { Thing } from './types.js'", 'Thing', './types.js'],
+    ["import type Def from './def.js'", 'Def', './def.js'],
+    ["import type * as NS from './ns.js'", 'NS', './ns.js'],
+    ["import { type Inline, other } from './inline.js'", 'Inline', './inline.js'],
+    // A default import NAMED `type`: the keyword is the name.
+    ["import type from './typeisname.js'", 'type', './typeisname.js'],
+    // One span per name of a multi-line re-export, each from its name on.
+    ["first,\n  second,\n} from './multi.js'", 'first', './multi.js'],
+    ["second,\n} from './multi.js'", 'second', './multi.js'],
+    ["more as alias,\n} from './multi2.js'", 'more', './multi2.js'],
+    ["import {\n  spread1,\n  spread2,\n} from './spread.js'", 'spread1', './spread.js'],
+  ])('binds %j', (span, symbol, module) => {
+    const outcome = recoverSpan(span, ESM);
+    expect(outcome.unrecoverable).toBe(0);
+    expect(mv(outcome, '$SYMBOL')).toBe(symbol);
+    expect(mv(outcome, '$MODULE')).toBe(module);
+  });
+
+  it('an unreadable import edge is counted as a lost edge, not a lost route', () => {
+    const outcome = recoverSpan("not an import '/x'", ESM);
+    expect(outcome.unrecoverable).toBe(1);
+    expect(outcome.lostEdges).toBe(1);
+    expect(outcome.unreadableRouteFiles).toEqual([]);
+  });
+
   /* 1.86.0 binds the IMPORTED name, never the local alias — so recovery must
      too, even though `R2` is the name buildPrefixIndex would need. A router
      imported under an alias therefore does not resolve its mount; the route

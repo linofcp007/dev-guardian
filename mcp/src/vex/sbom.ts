@@ -13,7 +13,7 @@
  * ecosystem and never needed the purl itself.
  */
 
-export interface SbomComponent {
+interface SbomComponent {
   name: string;
   version?: string;
   purl?: string;

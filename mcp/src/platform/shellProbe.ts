@@ -20,12 +20,12 @@
  * suppress) keep working.
  */
 
-import { execa } from 'execa';
+import { captureOutput } from '../runners/spawn.js';
 import type { RuntimeMetaRepo } from '../storage/runtimeMetaRepo.js';
 import { detectOs, type DetectedOs } from './osDetect.js';
 
 export interface ShellChoice {
-  /** Absolute path or bare command, executed via `execa(command, args, …)`. */
+  /** Absolute path or bare command (resolved on PATH, never in the working directory), run without a shell. */
   command: string;
   /** Arguments to prepend before the user script (e.g. `['bash']` for WSL). */
   args_prefix: string[];
@@ -35,7 +35,7 @@ export interface ShellChoice {
   label: string;
 }
 
-export interface ShellProbeDeps {
+interface ShellProbeDeps {
   /** Returns the version line if the candidate is usable, else null. */
   testShell: (command: string, argsPrefix: string[]) => Promise<string | null>;
 }
@@ -132,12 +132,9 @@ function defaultDeps(): ShellProbeDeps {
     testShell: async (command, argsPrefix) => {
       try {
         const args = [...argsPrefix, '--version'];
-        const result = await execa(command, args, {
-          timeout: 3_000,
-          reject: false,
-          // bash --version prints to stdout, but some embedded shells use
-          // stderr — concat both to be safe.
-        });
+        // bash --version prints to stdout, but some embedded shells use
+        // stderr — both are read.
+        const result = await captureOutput(command, args, { timeoutMs: 3_000 });
         if (result.exitCode !== 0) return null;
         const text = (result.stdout || result.stderr || '').split(/\r?\n/)[0]?.trim() ?? '';
         // Sanity check — must look like a bash version line.

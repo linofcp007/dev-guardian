@@ -190,7 +190,7 @@ export interface CoverageState {
   owasp_languages?: { languages: string[] | null; source: string; incomplete?: string };
 }
 
-export interface OwaspCoverageEntry {
+interface OwaspCoverageEntry {
   id: string; // 'A05:2025'
   title: string;
   status: 'tested' | 'partial' | 'not_tested';

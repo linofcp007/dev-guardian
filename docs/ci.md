@@ -27,24 +27,29 @@ node dev-guardian.mjs baseline update --project .
 | --- | --- |
 | `--project <path>` | project to scan (default: current directory) |
 | `--fail-on <severity>` | `info`, `low`, `medium`, `high` (default) or `critical`: a finding new to the baseline at or above it fails the gate |
-| `--format human\|json` | report on stdout |
-| `--sarif <path>` | also write SARIF 2.1.0 |
-| `--local-only` | Keeps Semgrep local: only rules on disk — the project's own and the plugin's packs (the LLM-application pack still runs) — with `--metrics=off`: no registry download, no Semgrep metrics, fewer rules. It is not "nothing leaves the machine": Trivy still fetches its vulnerability database and a .NET project is still restored and built, which contacts its NuGet feeds — see [SECURITY.md](../SECURITY.md#network-egress). Semgrep's own version check is off on every run |
+| `--format human\|json` | report on stdout — the JSON keys: [below](#the-json-verdict) |
+| `--compact` | with `--format json`: `new_findings` holds only the blocking findings, beside `new_findings_count` and `new_findings_by_severity` — the same keys, small enough to hand to a tool call (623 KB of JSON for 487 new findings did not). Without `--format json` it is a usage error (exit 3) |
+| `--sarif <path>` | also write SARIF 2.1.0, its URIs relative to the repository root (a `--project` below the root is put in front, so `packages/api` annotates `packages/api/src/…`). Written after the verdict is printed: a write that fails is an error on stderr, and exit 3 only when the gate itself passed |
+| `--local-only` | Keeps Semgrep local: only rules on disk — the project's own and the plugin's packs (the LLM-application pack still runs) — with `--metrics=off`: no registry download, no Semgrep metrics, fewer rules. It needs Semgrep rules of the project's own (a committed `.semgrep.yml`, or rules registered with `register_custom_rules`; the `init_project` MCP tool installs dev-guardian's base ruleset as `.semgrep.yml`): without them Semgrep is skipped — the plugin's packs alone are not a SAST scan — and every scan exits 2 until you add rules or drop the flag. It is not "nothing leaves the machine": Trivy still fetches its vulnerability database and a .NET project is still restored and built, which contacts its NuGet feeds — see [SECURITY.md](../SECURITY.md#network-egress). Semgrep's own version check is off on every run |
 | `--base-url <url>` + `--authorized-target` | include `scan_dast` against a running app you are authorized to test |
 | `--start-command <cmd> [args…]` | start the app for the DAST pass (argv, never a shell) and kill its whole process tree afterwards; requires `--base-url`. **Command line only** — a `start_command` in `.guardian/ci.json` or any other repository file makes the CLI refuse, because a fork's pull request could edit that file and run code on your runner. |
-| `--accept-partial-parse <path>` | repeatable: accept that Semgrep could parse this file only in part — see [below](#files-semgrep-can-only-partly-parse). **Command line only**, like `--start-command`: an `accept_partial_parse` in `.guardian/ci.json` makes the CLI refuse. |
+| `--accept-partial-parse <path>` | repeatable: accept that Semgrep could parse this file only in part — see [below](#files-semgrep-can-only-partly-parse). **Command line only**, like `--start-command`: an `accept_partial_parse` in `.guardian/ci.json` makes the CLI refuse. `baseline update` takes it too. A per-file Semgrep timeout is accepted in [`.guardian/scan.yml`](#scan-settings-guardianscanyml) instead |
 | `--baseline-ref <ref>` | read `.guardian/baseline.json` from the commit `<ref>` names, never from the checkout — see [below](#a-pull-request-cannot-gate-itself) |
 | `--rules-ref <ref>` | read the project's Semgrep rules, `.guardianignore`, `.trivyignore` and `.bandit` from `<ref>` — see [below](#a-pull-request-cannot-gate-itself) |
 | `--reset-exclusions-from <ref>` | in CI only (`CI=true`): put every `.semgrepignore`, `.gitleaksignore` and `.gitleaks.toml` back to `<ref>`'s before scanning — see [below](#a-pull-request-cannot-gate-itself) |
 
 | Exit code | `scan` | `baseline update` |
 | ---: | --- | --- |
-| 0 | pass | written, full coverage |
+| 0 | pass | written, full coverage (accepted gaps and notes aside) |
 | 1 | gate failed | — |
 | 2 | **incomplete scan**: an expected scanner did not run — never read this as a pass | written, but a scanner did not run, so the baseline may under-represent findings |
-| 3 | usage or configuration error | usage or configuration error |
+| 3 | usage or configuration error — an unreadable `.guardian/baseline.json` or an invalid `.guardian/scan.yml` included | usage or configuration error — the same two included: an unreadable baseline is never rebuilt from nothing |
 
-`baseline update` is the only command that writes `.guardian/baseline.json`; `scan` never does. The file keeps `version: 1`; entries carry a line-independent `identity` next to the fingerprint, so a finding that merely moved down a line is not "new". A 2.0.x build still reads a file written by this one, and this one reads a 2.0.x file.
+Every other command's usage error is 3 too (`check` and `mcp-config` used 2 before 3.3.0), and so is an unknown command — a launcher calling an older or newer dev-guardian never reads "gate failed" for it.
+
+`baseline update` is the only command that writes `.guardian/baseline.json`; `scan` never does. It accepts **every** finding of the scan it runs, the newest included, so it is a human decision, made on the base commit — before a change, never to accept one finding: for that, suppress the finding where its scanner reads suppressions, with a reason (`nosemgrep: <rule> -- <reason>`, `# nosec`, a `.trivyignore` or `.gitleaksignore` entry), reviewed like code. A plugin install puts no `dev-guardian` on `PATH`; the command is `node "<plugin root>/cli/dev-guardian.mjs" baseline update --project .`, which every message of the CLI prints in full.
+
+The file keeps `version: 1`; entries carry a line-independent `identity` next to the fingerprint, so a finding that merely moved down a line is not "new". Since 3.3.0 they also carry a `match_id` the gate matches on when the identity does not: a dependency finding keyed without its installed version (an upgrade that fixes some CVEs of a package no longer turns the others into new findings), a secret keyed without the commit that saw it (a squash merge, a whitespace commit or an uncommitted edit of its file no longer makes it new), and the path the file had when the baseline was written (a file renamed since — `git diff -M` between the baseline's commit, or `--baseline-ref`, and the working tree — matches its old entries; that one works with an older baseline too). An older baseline gains `match_id` the next time `baseline update` runs, keeping every `added` date. A 2.0.x build still reads a file written by this one, and this one reads a 2.0.x file. A baseline that is there but not readable — merge-conflict markers, a wrong shape — is exit 3 naming the error, never "no baseline".
 
 ### Files Semgrep can only partly parse
 
@@ -53,7 +58,10 @@ Semgrep sometimes reads a file only in part and says so with a warning — PHP's
 ```text
 coverage gaps:
   - security_scan_full: semgrep ran with reduced coverage (partial: 1 file(s) only partly parsed — … (PartialParsing: wp/rest-controller.php)) — not accepted: wp/rest-controller.php (--accept-partial-parse <path> accepts one file, matched exactly)
+    fix: Review the named file; if the gap is acceptable, pass `--accept-partial-parse <path>` on the scan command line (never from a repository file).
 ```
+
+Every gap line is followed by its `fix:` — the same remedy the JSON carries in `coverage_gap_details` ([below](#the-json-verdict)).
 
 Once you have looked at the file and decided the gap is acceptable, name it:
 
@@ -61,15 +69,70 @@ Once you have looked at the file and decided the gap is acceptable, name it:
 node dev-guardian.mjs scan --project . --accept-partial-parse wp/rest-controller.php
 ```
 
-- When **every** file a Semgrep step only partly parsed is accepted, that gap prints under `accepted (--accept-partial-parse):` and no longer forces exit 2 (JSON: `accepted_gaps`). A path you accepted that nothing reported is printed as unused (JSON: `unused_partial_parse_acceptances`).
+- When **every** file a Semgrep step only partly parsed is accepted, that gap prints under `accepted (not gating):`, naming `--accept-partial-parse`, and no longer forces exit 2 (JSON: `accepted_gaps`, and a `coverage_gap_details` entry with `gating: false`). A path you accepted that nothing reported is printed as unused (JSON: `unused_partial_parse_acceptances`).
 - Coverage still reads `partial` — in the human report, the JSON and the SARIF (`executionSuccessful: false`). Accepting a gap is not measuring it.
 - Paths are relative to `--project` and matched exactly: `/` or `\` separators and a leading `./` are fine; no globs, no directories, no case folding. An absolute path or one with `..` is a usage error (exit 3).
 - A YAML target is a file like any other: a GitHub Actions workflow whose `run:` block a rule reads as shell (`typescript@${{ env.X }}`) is a `PartialParsing` on that workflow, not a failed Semgrep.
 - Bandit is judged the same way: a Python file it cannot parse (`syntax error while parsing AST from file`) makes Bandit partial, the file named with type `Syntax error`, which you can accept; any other Bandit error on a file is named as `Bandit error`, which you cannot.
-- Only a **parse** problem can be accepted: Semgrep's `PartialParsing`, `Syntax error` or `Lexical error` on a file you named. Semgrep reports other per-file problems the same way — a per-file `Timeout` means it gave up on the file, so nothing in it was analysed — and those still exit 2 whatever you accept; the gap line names the type (`not accepted: Timeout on wp/rest-controller.php`).
-- A Semgrep that was skipped, failed (a rule or config error, an unclean exit), or scanned nothing, and any partly parsed file you did not name, still exits 2.
+- Only a **parse** problem can be accepted here: Semgrep's `PartialParsing`, `Syntax error` or `Lexical error` on a file you named. A per-file `Timeout` (Semgrep gave up on the file for one rule) is accepted only by the project's committed [`.guardian/scan.yml`](#scan-settings-guardianscanyml); until it is, it exits 2 and the gap line names the type (`not accepted: Timeout on wp/rest-controller.php`). A taint **fixpoint** timeout is never a gap at all: it is a note, [below](#scan-settings-guardianscanyml).
+- A Semgrep that was skipped, failed (a rule or config error, an unclean exit), or scanned nothing, a run that also missed files over the size limit, a submodule or rules that did not load, and any partly parsed file you did not name, still exit 2.
 - With `--base-url`, the DAST step's `guardian-dast:partial-surface` gap is accepted with the same files, unless the surface has another gap (its route recovery failed). Accepting it means accepting that **routes in the unparsed spans were never in the inventory, so DAST never probed them** — not only that their static findings may be missing.
 - The findings an earlier scan reported inside an accepted file stay in the open set (`findings/open`, `risk_score`, the dashboard) marked `not_remeasured`: no scan has looked at them again, so none is ever read as fixed.
+
+### Scan settings: `.guardian/scan.yml`
+
+How Semgrep runs, and which of its per-file timeouts the gate accepts, is the project's own, committed file — reviewed like code, and read from the `--rules-ref` commit when that flag is given, so a pull request cannot accept the timeout its own change causes:
+
+```yaml
+semgrep:
+  timeout: 30            # seconds per rule per file — Semgrep's --timeout (0: no limit)
+  timeout_threshold: 0   # rules that may time out on a file before Semgrep drops the
+                         # whole file — --timeout-threshold (0: never drop it)
+  accept_timeouts:       # files whose per-file Timeout the gate accepts, after review
+    - src/generated/parser.js
+```
+
+- Without the file, every Semgrep scan dev-guardian runs passes `--timeout 30 --timeout-threshold 0` (Semgrep's own defaults are 5 s and 3). At 5 s a mid-size repository never passed the gate: dev-spec-driven's own tree had two files time out on every run (`cli/commands.js`, `engine/guards.js`); at 30 s neither did, and the scan took no longer (100 s and 96 s, Semgrep 1.176.1). A threshold of 0 matters for acceptance: at 3, three timeouts on one file made Semgrep drop the file for every rule still to run and name none of them, so a "timeout" under-stated what was lost.
+- `accept_timeouts`: paths relative to the project, matched exactly like `--accept-partial-parse` (`/` or `\`, a leading `./`; no globs). An accepted timeout prints under `accepted (not gating):` naming `.guardian/scan.yml`, and no longer forces exit 2; coverage still reads `partial`.
+- A file that is there but not valid — bad YAML, an unknown key, a negative timeout, an absolute path — is exit 3 before anything runs (the MCP tools warn and use the defaults); a typo never reads as a setting that silently never applies.
+- **Taint fixpoint timeouts** — Semgrep's dataflow analysis giving up on one function (`time.fixpoint_timeouts`; no setting tunes it) — are reported and never gate: they print under `notes (not gating):` and appear in the JSON as `coverage_notes` and as `coverage_gap_details` entries of kind `taint_timeout` with `gating: false`. Taint findings inside those functions may be missing; coverage reads `partial`. They used to count like a per-file `Timeout`, and nothing could accept them: dev-spec-driven's tree had them in 49 files on every run.
+- `.guardian/` itself is never a Semgrep target (`--exclude=.guardian`): a project whose `.gitignore` lacked the lines had Semgrep read its own old reports.
+
+### The JSON verdict
+
+`--format json` prints the gate's verdict for a program; dev-spec-driven's finish gate (1.29 or later) parses it. The keys are only ever added to:
+
+| Key | What it holds |
+| --- | --- |
+| `tool_version` | the dev-guardian version that judged (3.3.0 and later) |
+| `exit_code` | 0 pass · 1 gate failed · 2 incomplete · 3 usage or configuration error |
+| `coverage` | `full`, `partial` or `none` — over every gap, accepted ones and notes included |
+| `coverage_gaps` | one line per gap that gates, as the human report prints it (a string array) |
+| `coverage_gap_details` | the same gaps as data, same order — `tool`, `kind`, `detail` (the line), `remedy` (one English sentence: what clears it), `gating` — then the accepted gaps and the notes, with `gating: false` |
+| `coverage_notes` | gaps reported and never gating: taint fixpoint timeouts |
+| `accepted_gaps` | gaps accepted by `--accept-partial-parse` or `.guardian/scan.yml` |
+| `new_findings`, `new_findings_count`, `new_findings_by_severity` | the findings new to the baseline (with `--compact`, only the blocking ones), how many there are, and per severity |
+| `blocking_findings` | new findings at or above `--fail-on` — each with `file_path`, `line_start`, `severity`, `rule_id`, `title` |
+| `baseline_absent`, `baseline_status` | no baseline was read (`absent`) or one was (`present`); an unreadable one never gets here — it is exit 3 |
+| `baseline_source`, `rules_source`, `exclusions_reset`, `suppressed_by_repo_config`, `unused_partial_parse_acceptances` | where the baseline and the rules came from, what was reset, what the repository's own `.trivyignore` suppressed, acceptances nothing used |
+
+A gap's `kind` says what it is, so a reader can say the right thing about it — only a `missing_tool` is "install something":
+
+| `kind` | The gap | What clears it |
+| --- | --- | --- |
+| `missing_tool` | a scanner is not installed | install it (the `install_toolchain` MCP tool can) |
+| `no_lockfile` | Trivy found a manifest it cannot resolve (`no_supported_manifest`) | commit the ecosystem's lockfile |
+| `partial_parse` | Semgrep or Bandit read a file only in part | review it; `--accept-partial-parse <path>` |
+| `file_timeout` | Semgrep gave up on a file for a rule | a larger `semgrep.timeout`, or `semgrep.accept_timeouts`, in `.guardian/scan.yml` |
+| `taint_timeout` | the taint analysis of some functions gave up (a note, never gating) | nothing, for the gate |
+| `path_too_long` | Windows: a file at a path of 260 characters or more was never opened | enable long paths, or a shorter project path — [below](#windows-paths-too-long) |
+| `scanner_failed` | a scanner or its rules failed | the cause the detail names |
+| `skipped` | a scanner had nothing it could run on (`--local-only` with no project rules, say) | what the detail says |
+| `other` | everything else — a shallow clone, files over Semgrep's size limit, a submodule, a step that did not run | the remedy names it |
+
+### Windows: paths too long
+
+With Windows' default `LongPathsEnabled=0`, a scanner that is not long-path aware cannot open a file whose absolute path is 260 characters or more. Semgrep skipped such a file with no error at all — a JavaScript file at a 301-character path holding `exec('ls ' + req.query.dir)` was missing from its `paths.scanned`, and the gate read coverage full, exit 0. Every such file Semgrep would read and its report does not list as scanned is now a gap of kind `path_too_long`, named per file, which no flag accepts: enable long paths (`LongPathsEnabled=1` under `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`, then restart) or scan from a shorter path.
 
 ### A shallow checkout exits 2
 
@@ -144,14 +207,18 @@ The pipelines `ci-init` writes pass all three on a pull-request pipeline and not
 - **An incomplete scan's SARIF is not uploaded.** GitHub code scanning closes as fixed every open alert of a scanner an upload does not contain, whatever `executionSuccessful` says — so after an incomplete scan the missing scanner's findings would read as resolved. That is every exit 2, and an exit 1 too when a blocking finding outranked a scanner that did not run. The generated GitHub workflow uploads after exit 0, or after exit 1 only when every run in the SARIF says `executionSuccessful: true` (coverage full); the scan step records the decision as `steps.scan.outputs.upload-sarif` and the exit code as `exit-code`. A workflow of your own that uploads on `if: always()` should do the same. GitLab and Bitbucket keep the SARIF as a plain artifact, which closes nothing, so their templates keep it either way.
 - **CWE and OWASP tags say what a result is, not what was tested.** A result and its rule carry `external/cwe/cwe-<n>` and `owasp-2025-a<nn>` tags when the scanner named a CWE (Semgrep rule metadata, Trivy, Bandit) or the finding is one weakness by definition (a vulnerable dependency is CWE-1395, a committed secret CWE-798). A result without tags is unmapped, not harmless, and no OWASP category is clean because it has no results: which categories a scan actually tested — judged per source language of the project, since a rule set tests only the languages it has rules for — is in `report_export`'s "OWASP Top 10:2025 coverage" table and in `compliance_evidence` with `framework: "owasp-top10-2025"`.
 - **Code-scanning upload needs a public repository, or GitHub Code Security on a private one.** Otherwise the upload step fails for a reason unrelated to findings; drop it and use `--format json` plus the exit code.
-- **A CI run leaves `.guardian/` in the workspace** (`security_scan_full` and `map_attack_surface` write raw reports under `.guardian/reports/`). The MCP server adds the right `.gitignore` lines whenever it starts in a project; the CLI never does. A project scanned only in CI needs them by hand — and they must let the baseline through:
+- **A run leaves `.guardian/` in the workspace** (`security_scan_full` and `map_attack_surface` write raw reports under `.guardian/reports/`; the last 3 report sets of each kind are kept — `GUARDIAN_KEEP_REPORTS`, [env.md](env.md)). The CLI writes `.guardian/.gitignore` when there is none: everything in `.guardian/` ignored, itself included — so `git status` stays clean — but the files a team shares, which stay committable: `baseline.json`, `budgets.yml`, `hooks.config.json`, `hooks-allowlist.json` and `scan.yml`. It never rewrites that file, nor the project's own `.gitignore` (a tracked file a scan rewrote would make the tree dirty). The MCP server writes the same rule into the project's `.gitignore` whenever it starts in a project:
 
   ```text
   **/.guardian/*
   !**/.guardian/baseline.json
+  !**/.guardian/budgets.yml
+  !**/.guardian/hooks.config.json
+  !**/.guardian/hooks-allowlist.json
+  !**/.guardian/scan.yml
   ```
 
-  A bare `.guardian/` line would stop you committing the baseline: git cannot re-include a file inside an excluded directory. Without the `**/` the lines match at the repository root only, and a sub-project's `.guardian/` (a scan pointed at `packages/api`) shows up untracked.
+  A bare `.guardian/` line would stop you committing the baseline: git cannot re-include a file inside an excluded directory. Without the `**/` the lines match at the repository root only, and a sub-project's `.guardian/` (a scan pointed at `packages/api`) shows up untracked. Before 3.3.0 the block re-included `baseline.json` only, so `budgets.yml` and `hooks.config.json` were ignored, and a check read different budgets on each machine and in CI; the server adds the missing lines below an existing block.
 
 ## `ci-init`
 
@@ -214,6 +281,8 @@ Use the branch you passed to `--branch` (`ci-init` prints the command with it). 
 
 ## As dev-spec-driven's finish check
 
-dev-spec-driven can run this gate before a feature closes. `dev-spec init --guardian` (in a session, `spec_init { guardian: true }`) stores a project check named `guardian`, and `/spec-finish` — `finish --run` — runs `dev-guardian scan --project <dir> --fail-on high --format json` through a launcher that finds the newest dev-guardian installed. A plugin install puts no `dev-spec` on `PATH`: run the `node "<dev-spec plugin>/cli/dev-spec.js" init --guardian` line its own tool results print. Nothing needs installing in the plugin's `mcp/`: the CLI runs on the committed bundle `mcp/dist/cli.js`. That takes dev-guardian 3.2.1 or later — 3.2.0's `scan` failed in every plugin install with `Cannot find package 'yaml'` (exit 3).
+dev-spec-driven 1.29 or later can run this gate before a feature closes. In Claude Code, `/spec-setup init --guardian` (in a session, `spec_init { guardian: true }`) stores a project check named `guardian`; from a terminal it is `node "<dev-spec plugin root>/cli/dev-spec.js" init --guardian` — a plugin install puts no `dev-spec` on `PATH`, and dev-spec's own tool results print that line in full. `/spec-finish` — `finish --run` — then runs `scan --project <dir> --fail-on high --format json` through a launcher, `node .specs/guardian.cjs <args>`, that finds the newest dev-guardian installed and forwards every argument. Nothing needs installing in the plugin's `mcp/`: the CLI runs on the committed bundle `mcp/dist/engine.js` (`mcp/dist/cli.js` before 3.3.0). That takes dev-guardian 3.2.1 or later — 3.2.0's `scan` failed in every plugin install with `Cannot find package 'yaml'` (exit 3); the verdict names its version (`tool_version`) since 3.3.0, and dev-spec-driven warns below the one it needs.
 
-It is the same gate as here: only a finding new to `.guardian/baseline.json`, at `high` or above, blocks the finish, and exit 2 is reported as an incomplete scan, never as a pass. Record the baseline before you turn the check on, or every existing finding at `high` or above blocks the first finish. To accept a finding you have reviewed, run `baseline update` and commit `.guardian/baseline.json`, or suppress it where its scanner reads suppressions — an inline `nosemgrep`, a `.trivyignore` or `.gitleaksignore` entry, reviewed like code. A `suppress_finding` does not reach this gate, because `scan` works in a throwaway database. Never force the finish past it: the finding is still new to the next scan, and to CI.
+It is the same gate as here: only a finding new to `.guardian/baseline.json`, at `high` or above, blocks the finish, and exit 2 is reported as an incomplete scan, never as a pass — `coverage_gap_details` tells dev-spec-driven which gap it is, so it only says "install" for a missing scanner. **Record the baseline before you turn the check on**, on the base branch, and commit it: `node .specs/guardian.cjs baseline update --project .` (or `node "<dev-guardian plugin root>/cli/dev-guardian.mjs" baseline update --project .`). Without one every existing finding counts as new — the verdict says so (`baseline_status: "absent"`) — and the first finish is blocked by old debt.
+
+To accept **one** finding you have reviewed, suppress it where its scanner reads suppressions, with a reason — an inline `nosemgrep: <rule> -- <reason>` or `# nosec`, a `.trivyignore` or `.gitleaksignore` entry — reviewed like code. Never run `baseline update` for that: it accepts every current finding, the feature's own included. Rebuilding the baseline is a human decision, made on the base commit, before the feature's code. A `suppress_finding` does not reach this gate, because `scan` works in a throwaway database. Never force the finish past it: the finding is still new to the next scan, and to CI.

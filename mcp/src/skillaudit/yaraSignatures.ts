@@ -19,7 +19,7 @@
 import type { Severity } from '../types.js';
 import type { ThreatCategory } from './taxonomy.js';
 
-export interface YaraSignature {
+interface YaraSignature {
   id: string;
   category: ThreatCategory;
   severity: Severity;
@@ -32,14 +32,14 @@ export interface YaraSignature {
   minHits?: number;
 }
 
-export interface YaraMatch {
+interface YaraMatch {
   signature: YaraSignature;
   line: number;
   snippet: string;
   matched: number;
 }
 
-export const YARA_SIGNATURES: YaraSignature[] = [
+const YARA_SIGNATURES: YaraSignature[] = [
   {
     id: 'sig-exfil-host',
     category: 'data_exfiltration',

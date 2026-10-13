@@ -71,7 +71,25 @@ import {
 
 const HEADER = '# dev-guardian outputs';
 const ENTRY = '**/.guardian/*';
-const BASELINE_NEGATION = '!**/.guardian/baseline.json';
+
+/**
+ * The `.guardian/` files a team shares, re-included after {@link ENTRY}: the
+ * CI gate's baseline; the quality and performance budgets dev-spec-driven's
+ * duplication warning reads too; the project's stricter hook settings and the
+ * secret hook's allowlist; the scan settings (Semgrep timeouts, the timeouts
+ * the gate accepts). With only the baseline re-included, `budgets.yml` and
+ * `hooks.config.json` were ignored, so a check read different budgets on each
+ * machine and in CI (review 8, C6).
+ */
+export const SHARED_GUARDIAN_FILES: readonly string[] = [
+  'baseline.json',
+  'budgets.yml',
+  'hooks.config.json',
+  'hooks-allowlist.json',
+  'scan.yml',
+];
+
+const NEGATIONS: readonly string[] = SHARED_GUARDIAN_FILES.map((f) => `!**/.guardian/${f}`);
 
 /**
  * Every line an earlier release wrote that the current block replaces: the
@@ -87,7 +105,7 @@ const OLD_DIRECTORY_PATTERNS: ReadonlySet<string> = new Set([
   '!.guardian/baseline.json',
 ]);
 
-export interface GitignoreGuardResult {
+interface GitignoreGuardResult {
   updated: boolean;
   /**
    * `refused`: the `.gitignore` is a link (a junction or a dangling link
@@ -100,7 +118,7 @@ export interface GitignoreGuardResult {
 }
 
 /** The largest `.gitignore` this reads; a real one is a few KB. */
-export const MAX_GITIGNORE_BYTES = 4 * 1024 * 1024;
+const MAX_GITIGNORE_BYTES = 4 * 1024 * 1024;
 
 function fromWriteFailure(w: Exclude<ProjectWriteResult, { ok: true }>): GitignoreGuardResult {
   return {
@@ -135,7 +153,7 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
   }
   try {
     if (kind === 'absent') {
-      const w = writeProjectFile(projectPath, '.gitignore', `${HEADER}\n${ENTRY}\n${BASELINE_NEGATION}\n`, {
+      const w = writeProjectFile(projectPath, '.gitignore', `${HEADER}\n${[ENTRY, ...NEGATIONS].join('\n')}\n`, {
         mode: 'create',
       });
       return w.ok ? { updated: true, reason: 'created' } : fromWriteFailure(w);
@@ -170,16 +188,13 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
       if (prev !== undefined && prev.trim() === HEADER) toDrop.add(i - 1);
     });
     const kept = lines.filter((_, i) => !toDrop.has(i));
-    const hasEntry = kept.some((l) => l.trim() === ENTRY);
-    const hasNegation = kept.some((l) => l.trim() === BASELINE_NEGATION);
+    const entryAt = kept.findIndex((l) => l.trim() === ENTRY);
+    // A negation counts only below the entry: git's last matching line wins.
+    const missingNegations = NEGATIONS.filter((n) => !kept.some((l, i) => i > entryAt && l.trim() === n));
 
-    if (!hasOldPattern && hasEntry && hasNegation) {
+    if (!hasOldPattern && entryAt >= 0 && missingNegations.length === 0) {
       return { updated: false, reason: 'already_present' };
     }
-
-    const missing: string[] = [];
-    if (!hasEntry) missing.push(ENTRY);
-    if (!hasNegation) missing.push(BASELINE_NEGATION);
 
     // Trailing blank lines (and a trailing stray `\r`) go; the last line kept
     // ends in its own ending, or the dominant one when it had none.
@@ -190,9 +205,22 @@ export function ensureGuardianIgnored(projectPath: string): GitignoreGuardResult
       body.push({ text, eol: last.eol === '' ? eol : last.eol });
       break;
     }
-    const next =
-      body.map((l) => l.text + l.eol).join('') +
-      (missing.length > 0 ? `${HEADER}${eol}${missing.join(eol)}${eol}` : '');
+    let next: string;
+    const bodyEntryAt = body.findIndex((l) => l.text.trim() === ENTRY);
+    if (bodyEntryAt >= 0) {
+      // The block is there: the missing negations go right below its last
+      // line, never as a second block with a second header.
+      let anchor = bodyEntryAt;
+      body.forEach((l, i) => {
+        if (i > bodyEntryAt && NEGATIONS.includes(l.text.trim())) anchor = Math.max(anchor, i);
+      });
+      const anchorLine = body[anchor];
+      if (anchorLine !== undefined && anchorLine.eol === '') anchorLine.eol = eol;
+      body.splice(anchor + 1, 0, ...missingNegations.map((text) => ({ text, eol })));
+      next = body.map((l) => l.text + l.eol).join('');
+    } else {
+      next = body.map((l) => l.text + l.eol).join('') + `${HEADER}${eol}${[ENTRY, ...NEGATIONS].join(eol)}${eol}`;
+    }
     const w = writeProjectFile(projectPath, '.gitignore', next, { mode: 'replace' });
     if (!w.ok) return fromWriteFailure(w);
     return { updated: true, reason: hasOldPattern ? 'upgraded' : 'added' };
@@ -227,4 +255,37 @@ function dominantEol(content: string): '\r\n' | '\n' {
   if (crlf !== lf) return crlf > lf ? '\r\n' : '\n';
   const first = content.indexOf('\n');
   return first > 0 && content[first - 1] === '\r' ? '\r\n' : '\n';
+}
+
+/** Where {@link ensureGuardianDirIgnored} writes, relative to the project. */
+const DOT_GUARDIAN_GITIGNORE = '.guardian/.gitignore';
+
+/**
+ * The `.guardian/.gitignore` the CLI drops in a project it scans: everything
+ * in `.guardian/` ignored — reports, the database, itself — but the files a
+ * team shares ({@link SHARED_GUARDIAN_FILES}). The MCP server writes the root
+ * `.gitignore` lines at startup ({@link ensureGuardianIgnored}); the CLI never
+ * starts the server, so a project scanned only from a terminal or in CI had
+ * `?? .guardian/` in `git status`, one `git add -A` from committing 1.5 MB a
+ * run, and every later dev-spec-driven `--run` stamped dirty (review 8, C5).
+ * A file of its own, never the root `.gitignore`: a tracked file rewritten by
+ * a scan would make the tree dirty in turn. It ignores itself, so it never
+ * shows as untracked either. Lines below a root `**\/.guardian/*` win over
+ * it (the nearest `.gitignore` decides), which re-includes the shared files
+ * even under an older root block.
+ *
+ * Written only when absent — never over the user's own — and never through a
+ * link (`platform/projectFs.ts`). Never throws; true when it wrote the file.
+ */
+export function ensureGuardianDirIgnored(projectPath: string): boolean {
+  const content =
+    '# Written by dev-guardian: its working files (reports, the database) stay out of git,\n' +
+    '# the files a team shares stay in. Written when missing, never changed: edit it freely.\n' +
+    '*\n' +
+    SHARED_GUARDIAN_FILES.map((f) => `!${f}\n`).join('');
+  try {
+    return writeProjectFile(projectPath, DOT_GUARDIAN_GITIGNORE, content, { mode: 'create' }).ok;
+  } catch {
+    return false;
+  }
 }

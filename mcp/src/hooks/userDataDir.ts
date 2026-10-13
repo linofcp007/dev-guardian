@@ -4,11 +4,11 @@
  * it, and the hooks' registry guard (`hooks/dataRegistry.ts`) calls it; they
  * used to hold two copies that could drift.
  *
- * It lives here, not in `storage/`, because the hooks and the CLI's `check`
- * load `mcp/dist/hooks/` without the storage layer: `cli/dev-guardian.mjs`
- * must run `--help` and `check` with `dist/storage/` absent
- * (`test/e2e/cliLazyStorage.test.ts`), and a hook module that cannot load
- * fails open. Node built-ins only.
+ * It lives here, not in `storage/`, because the hooks' bundle,
+ * `mcp/dist/hooks.js`, carries no storage layer (`node:sqlite`), and the
+ * CLI's `--help` and `check` must run on a Node without it
+ * (`test/e2e/cliLazyStorage.test.ts`); a hook module that cannot load fails
+ * open. Node built-ins only.
  */
 
 import { homedir } from 'node:os';

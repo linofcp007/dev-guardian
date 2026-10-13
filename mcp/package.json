@@ -1,6 +1,6 @@
 {
   "name": "@dev-guardian/mcp-server",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "description": "MCP server for the dev-guardian plugin. Exposes security, quality, bugfix, deps, compliance, observability and performance capabilities as MCP tools and resources via stdio transport.",
   "type": "module",
   "main": "./dist/server.js",
@@ -11,33 +11,35 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/generateHostRules.mjs && node scripts/bundle.mjs && npm run docs",
+    "build": "tsc -p tsconfig.json && node scripts/bundle.mjs && node scripts/copy-assets.mjs && tsx scripts/generateHostRules.mjs && npm run docs",
     "docs": "tsx test/docs/generate.ts",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
+    "test:fast": "vitest run --config vitest.fast.config.ts",
     "test:watch": "vitest",
     "ablate": "tsx test/ablate/cli.ts",
     "eval:llm-scan": "tsx test/evals/llmScan/run.ts",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+    "test:docker": "node scripts/test-docker.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.test.json && node scripts/unusedExports.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",
-    "execa": "^9.5.1",
+    "cross-spawn": "^7.0.6",
     "signal-exit": "^4.1.0",
     "yaml": "^2.9.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^22.13.0",
+    "@types/node": "~22.13.17",
     "@vitest/coverage-v8": "^5.0.1",
     "ajv": "^8.20.0",
     "ajv-draft-04": "^1.0.0",
     "ajv-formats": "^3.0.1",
     "esbuild": "^0.28.0",
+    "execa": "^9.6.1",
     "tsx": "^4.19.1",
     "typescript": "^5.6.2",
     "vitest": "^5.0.1"

@@ -262,7 +262,7 @@ export interface ProjectExclusions {
   semgrepAnchor: string | null;
 }
 
-export interface ExclusionsLoadError {
+interface ExclusionsLoadError {
   file: string;
   error: string;
 }

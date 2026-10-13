@@ -11,9 +11,10 @@
  * Pure functions. No I/O — the caller supplies file contents.
  */
 
+import { exactPin, requirementMentions } from '../deps/pipRequirements.js';
 import type { OsvPackageQuery } from '../runners/osv.js';
 
-export interface ManifestFile {
+interface ManifestFile {
   relPath: string;
   content: string;
 }
@@ -60,20 +61,14 @@ function fromPackageJson(content: string): OsvPackageQuery[] {
   return out;
 }
 
+/** Every requirement a requirements file names, read as pip reads it (`deps/pipRequirements.ts#requirementMentions`). */
 function fromRequirements(content: string): OsvPackageQuery[] {
-  const out: OsvPackageQuery[] = [];
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.split('#')[0]?.trim() ?? '';
-    if (!line || line.startsWith('-')) continue;
-    const m = line.match(/^([A-Za-z0-9._-]+)\s*(?:==\s*([0-9][^\s;]*))?/);
-    if (m && m[1]) {
-      const q: OsvPackageQuery = { ecosystem: 'PyPI', name: m[1] };
-      const v = concreteVersion(m[2]);
-      if (v) q.version = v;
-      out.push(q);
-    }
-  }
-  return out;
+  return requirementMentions(content).map((mention) => {
+    const q: OsvPackageQuery = { ecosystem: 'PyPI', name: mention.name };
+    const v = concreteVersion(exactPin(mention.specifier));
+    if (v) q.version = v;
+    return q;
+  });
 }
 
 function fromGoMod(content: string): OsvPackageQuery[] {

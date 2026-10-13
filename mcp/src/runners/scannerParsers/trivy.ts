@@ -475,8 +475,8 @@ const WORKSPACE_YAML_MAX = 256 * 1024;
 /** A TOML manifest read for a workspace table or a dependency key, line by line. */
 const TOML_SCAN_MAX = 1024 * 1024;
 /** What the whole assessment may read. */
-export const COVERAGE_BUDGET_BYTES = 64 * 1024 * 1024;
-export const COVERAGE_BUDGET_FILES = 5_000;
+const COVERAGE_BUDGET_BYTES = 64 * 1024 * 1024;
+const COVERAGE_BUDGET_FILES = 5_000;
 /** Workspace patterns considered per declaration, their length, and their wildcards. */
 const MAX_WORKSPACE_PATTERNS = 1_000;
 const MAX_WORKSPACE_PATTERN_LENGTH = 256;
@@ -654,7 +654,7 @@ export interface ManifestCoverageGap {
   dev_only?: string[];
 }
 
-export interface ManifestCoverageAssessment {
+interface ManifestCoverageAssessment {
   /** Ecosystems with a manifest Trivy's own output shows no Result for — in
    *  the manifest's directory, or its workspace root's. Empty when nothing
    *  was missed. */
@@ -675,7 +675,7 @@ export interface ManifestCoverageAssessment {
   readNote?: string;
 }
 
-export interface ManifestWalkOptions {
+interface ManifestWalkOptions {
   /**
    * The project's `.guardianignore` (`ProjectExclusions.ignores`): a path it
    * excludes is not the project's own code, and Trivy was told to skip it.

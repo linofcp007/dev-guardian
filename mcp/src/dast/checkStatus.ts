@@ -44,7 +44,7 @@ export type RateLimitOutcome = 'not_requested' | 'no_candidate' | 'no_response' 
 /** How the optional nuclei pass ended, in the orchestrator's terms. */
 export type NucleiOutcome = 'not_requested' | 'unavailable' | 'failed' | 'ran';
 
-export interface CheckStatusInput {
+interface CheckStatusInput {
   plan: PlanOutcome;
   results: readonly ProbeResult[];
   /** A spec diff is what makes shadow / dead-doc reachability decidable. */

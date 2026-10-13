@@ -100,12 +100,12 @@ import { banditExcludeArgs, semgrepExcludeArgs } from '../platform/guardianIgnor
 import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
-import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { getProp, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { nameRepoConfig } from '../runners/repoConfig.js';
-import { runSemgrep as spawnSemgrep } from '../runners/semgrepRun.js';
+import { runSemgrep as spawnSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
   mayHoldTaintRules,
@@ -127,7 +127,7 @@ import {
   ProjectPath,
   SeverityMin,
 } from '../schemas.js';
-import type { ToolRun } from '../types.js';
+import type { PartialParse, ToolRun } from '../types.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import {
   CONTAINER_PACKS_ROOT,
@@ -151,7 +151,9 @@ import { listProjectDir, presentInProject, readProjectTextOrUndefined } from '..
 import { readSmallTextFile } from '../hooks/configFile.js';
 import {
   applySemgrepCoverageGaps,
+  describeTooLong,
   markMissing,
+  PATH_TOO_LONG_TYPE,
   scannedNothingBecause,
   semgrepCoverageGaps,
   type SemgrepCoverageGaps,
@@ -180,25 +182,11 @@ registerToolModule(
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description:
-      'Static analysis with Semgrep: the registry ruleset ' +
-      "(--config=auto), the project's own rules (.semgrep.yml, or whatever " +
-      '.dev-guardian/configs.json records), rules registered with ' +
-      "register_custom_rules, and the plugin's packs: web-js.yml (Node/Express: SQL by interpolation, request " +
-      'paths and URLs) and llm.yml (model output reaching eval/shell/SQL, trust_remote_code, …); a pack ' +
-      'that ran only in part: `tools_run[].plugin_packs`. Also runs Bandit when Python files are present, and ' +
-      'for a .NET project (root .csproj/.fsproj/.sln) restores it in --locked-mode (never writing a ' +
-      'packages.lock.json) and runs `dotnet build --no-restore` with the SDK security analyzers ' +
-      '(plus Security Code Scan when referenced) — that ' +
-      "restore and build EXECUTE the project's own MSBuild. A Semgrep run that scanned " +
-      'nothing or reported errors is never complete: a file it only partly parsed, or a rule that ' +
-      'did not load, is partial coverage, named; so are the project files that decided a run ' +
-      '(`tools_run[].honoured_config`: the root .bandit, each .semgrepignore). Reports go to ' +
-      '.guardian/reports/sast-<scan>/. PRIVACY: --config=auto ' +
-      'downloads registry rules and sends usage metrics to Semgrep Inc. ' +
-      'Pass local_only=true for a scan that contacts nothing and runs with --metrics=off, using ' +
-      'only rules already on disk. Pass scope to scan only some files (paths, a git diff, or ' +
-      'changes since a ref/date). .guardianignore paths are excluded from the results, and skipped by ' +
-      'Semgrep and Bandit where they can be named exactly.',
+      "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS " +
+      'and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; for .NET, a ' +
+      "locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What " +
+      'Semgrep could not process is partial coverage. `tools_run[].honoured_config`: the project files that ' +
+      'decided a run. local_only avoids the registry and its metrics.',
     scan_type: 'sast',
     category: 'security',
     supportsScope: true,
@@ -207,6 +195,11 @@ registerToolModule(
     // re-scans a worktree and needs the original project's rules.
     rulePacks: (input, { rulesProjectPath, plugin, projectPath }) =>
       planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
+    // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds.
+    cacheState: async (_input, { plugin, projectPath }) => {
+      const flags = semgrepScanFlags(plugin.repoConfigFromRef?.root ?? projectPath);
+      return { semgrep_flags: flags.args.join(' ') };
+    },
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
     configWarnings: (_input, { rulesProjectPath, plugin }) => {
@@ -223,11 +216,7 @@ registerToolModule(
         .boolean()
         .optional()
         .describe(
-          "Run only rules already on disk (the project's own Semgrep config, anything " +
-            "registered with register_custom_rules, and the plugin's own packs), skip " +
-            'the Semgrep registry, and pass --metrics=off so no telemetry leaves the machine. Fewer ' +
-            'rules than the default. When the project has no rules of its own the scan is reported ' +
-            'as skipped rather than as a clean result. Default: false.',
+          'Semgrep with rules on disk only, no metrics. With no project rules: skipped, not clean.',
         ),
       scope: ScanScopeInput,
     },
@@ -300,9 +289,12 @@ async function runSemgrep(args: Collect & {
     return;
   }
 
+  // `.guardian/scan.yml`'s timeouts, and `.guardian/` never a target (runners/semgrepRun.ts).
+  const flags = semgrepScanFlags(ctx.configRoot);
+  const notes = [...plan.notes, ...(flags.warning !== null ? [flags.warning] : [])];
   const semgrepBin = await scannerAvailable('semgrep');
   if (semgrepBin) {
-    const argv = [...plan.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
+    const argv = [...plan.args, ...flags.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
     if (autoFix) argv.push('--autofix');
     argv.push(ctx.projectPath);
     // UTF-8 mode comes with the helper: a non-ASCII file name otherwise makes
@@ -315,7 +307,7 @@ async function runSemgrep(args: Collect & {
       onLog: ctx.onLog,
     });
     recordSemgrepRun({
-      ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
+      ctx, result, outFile, notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx)), tools_run, missing_tools, parser_inputs,
     });
     return;
@@ -376,6 +368,7 @@ async function runSemgrep(args: Collect & {
       image,
       configs: [...dockerConfigs, ...packConfigs],
       metricsOff: localOnly,
+      extraArgs: flags.args,
       ...(packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}),
       git: await gitSafetyFor([ctx.projectPath]),
     }),
@@ -385,7 +378,7 @@ async function runSemgrep(args: Collect & {
     onLog: ctx.onLog,
   });
   recordSemgrepRun({
-    ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
+    ctx, result, outFile, notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
     packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir,
     // Which listing Semgrep uses inside the container cannot be checked from
     // here (git, or a walk of the mount): the submodules are named all the
@@ -427,7 +420,9 @@ function recordSemgrepRun(args: SemgrepRunRecord): void {
   // The shared gaps (runners/semgrepCoverageGaps.ts), on the entry just judged.
   const last = args.tools_run.at(-1);
   if (last !== undefined && last.name === 'semgrep') {
-    const applied = applySemgrepCoverageGaps(last, args.gaps);
+    // Its report says which too-long paths it did open (long paths enabled).
+    const report = args.gaps.longPaths !== undefined ? readJsonSafe(args.outFile) : null;
+    const applied = applySemgrepCoverageGaps(last, args.gaps, { reports: report !== null ? [report] : [] });
     args.tools_run[args.tools_run.length - 1] = applied.toolRun;
     if (applied.missing) markMissing(args.missing_tools, 'semgrep');
   }
@@ -626,20 +621,55 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   // the files named (project-relative) for the CI gate's
   // --accept-partial-parse, exactly as a partial Semgrep run.
   const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
-  const partial = (check.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
+  const parsed = (check.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
+  // Windows: a Python file at a path too long to open that Bandit did not
+  // analyse — absent from its `metrics`, often with no error at all — is a
+  // named gap, as it is for Semgrep (review 8, finding 2).
+  const tooLong = check.ok ? await banditLongPaths(ctx, raw, parsed) : [];
+  const partial = [...parsed, ...tooLong];
+  const reason = [
+    ...(parsed.length > 0 ? [describePartialParse(parsed, 'findings in the unparsed files may be missing')] : []),
+    ...(tooLong.length > 0 ? [describeTooLong(tooLong.map((p) => p.file))] : []),
+  ].join('; ');
   const run: ToolRun = !check.ok
     ? { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' }
     : partial.length > 0
-      ? {
-          name: 'bandit',
-          status: 'ok',
-          reason: describePartialParse(partial, 'findings in the unparsed files may be missing'),
-          partially_parsed: partial,
-        }
+      ? { name: 'bandit', status: 'ok', reason, partially_parsed: partial }
       : { name: 'bandit', status: 'ok' };
   if (partial.length > 0 && check.ok) missing_tools.push('bandit');
   // The root .bandit only — the one passed with --ini (`runners/repoConfig.ts`).
   tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, 'bandit') : run);
+}
+
+/**
+ * Windows only: the project's Python files at a path of 260 characters or
+ * more (`frameworks/projectLanguages.ts#WINDOWS_MAX_PATH`) that Bandit's
+ * report does not list in `metrics` (the files it analysed) and that are not
+ * named already — each a `Path too long` entry. Measured in review 8: Bandit
+ * sometimes reported such a file and sometimes dropped it silently.
+ */
+async function banditLongPaths(ctx: InvokeContext, raw: string | null, named: readonly PartialParse[]): Promise<PartialParse[]> {
+  if (process.platform !== 'win32') return [];
+  const candidates = ((await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx))).longPaths ?? []).filter((f) =>
+    f.toLowerCase().endsWith('.py'),
+  );
+  if (candidates.length === 0) return [];
+  const root = raw === null ? null : parseInputAsJson(raw);
+  const metrics = getProp(root, 'metrics');
+  const analysed =
+    metrics !== null && typeof metrics === 'object'
+      ? Object.keys(metrics).map((k) => k.split('\\').join('/').toLowerCase())
+      : [];
+  return candidates
+    .filter((f) => {
+      const key = f.toLowerCase();
+      return !named.some((p) => p.file.toLowerCase() === key) && !analysed.some((a) => a === key || a.endsWith(`/${key}`));
+    })
+    .map((file) => ({
+      file,
+      type: PATH_TOO_LONG_TYPE,
+      message: 'the path is 260 characters or longer, and Bandit did not analyse the file',
+    }));
 }
 
 /** The CI gate's `--rules-ref` copy of `.guardianignore`, for the shared coverage gaps; none otherwise. */
@@ -723,8 +753,9 @@ async function runSemgrepOnScope(args: Collect & {
     missing_tools.push('semgrep');
     return;
   }
+  const flags = semgrepScanFlags(ctx.configRoot);
   const run = await semgrepOnFiles({
-    configArgs: [...plan.args, ...(autoFix ? ['--autofix'] : [])],
+    configArgs: [...plan.args, ...flags.args, ...(autoFix ? ['--autofix'] : [])],
     files,
     cwd: ctx.projectPath,
     reportDir,
@@ -743,7 +774,7 @@ async function runSemgrepOnScope(args: Collect & {
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry: ToolRun = { ...run.toolRun };
   const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
-  const scopeNotes = [...plan.notes, ...(engineNote !== null ? [engineNote] : [])];
+  const scopeNotes = [...plan.notes, ...(flags.warning !== null ? [flags.warning] : []), ...(engineNote !== null ? [engineNote] : [])];
   if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== undefined).join('; ');
   if (entry.status === 'failed' && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
     entry.plugin_pack_only = true;
@@ -758,6 +789,7 @@ async function runSemgrepOnScope(args: Collect & {
   // (runners/semgrepCoverageGaps.ts): named, a gap.
   const gapped = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath, { files, ...ignoreFrom(ctx) }), {
     scannedNothing: run.nothingScanned,
+    reports: run.reports,
   });
   tools_run[tools_run.length - 1] = gapped.toolRun;
   if (gapped.missing) markMissing(missing_tools, 'semgrep');

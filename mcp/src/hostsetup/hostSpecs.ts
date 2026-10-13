@@ -37,16 +37,16 @@ export type McpScope = 'project' | 'global';
  *   - toml:            `[mcp_servers.<id>]` table (Codex CLI)
  *   - manual:          we can't reliably locate the config file → emit a snippet
  */
-export type McpFormat = 'json-mcpServers' | 'json-servers' | 'toml' | 'manual';
+type McpFormat = 'json-mcpServers' | 'json-servers' | 'toml' | 'manual';
 
-export interface RulesSpec {
+interface RulesSpec {
   /** File name under `host-rules/`. */
   template_file: string;
   /** Destination path within the user's project. */
   target_path: string;
 }
 
-export interface McpSpec {
+interface McpSpec {
   format: McpFormat;
   /** Container key for the server entry. Informational for toml/manual. */
   serverKey: 'mcpServers' | 'servers' | 'mcp_servers';

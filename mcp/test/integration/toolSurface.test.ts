@@ -4,12 +4,14 @@
  * The exact set of tools and resources is part of dev-guardian's contract.
  * Adding or removing one is an intentional, reviewed change: update the lists
  * below AND the counts in the README. Accidental surface drift fails here.
+ * A hidden alias is part of the contract too: a script or a host permission
+ * may name it, so it stays callable.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { RESOURCES } from '../../src/resources/index.js';
-import { TOOLS } from '../../src/tools/index.js';
+import { listedTools, TOOLS } from '../../src/tools/index.js';
 
 beforeAll(async () => {
   await import('../../src/registerAll.js');
@@ -30,6 +32,7 @@ const EXPECTED_TOOLS = [
   'deps_update_plan',
   'detect_stack',
   'diff_scans',
+  'dotnet_check',
   'dotnet_describe_setup',
   'dotnet_efcore_audit',
   'dotnet_target_framework_check',
@@ -77,8 +80,29 @@ const EXPECTED_TOOLS = [
   'wp_describe_setup',
   'wp_plugin_check',
   'wp_recommend_hardening',
+  'wp_report',
   'wp_rest_audit',
   'wp_vuln_check',
+  'wp_vuln_check_source',
+];
+
+/**
+ * The names `tools/list` leaves out: each still answers `tools/call`, and a fold
+ * (src/tools/folds.ts) lists it as one of its modes.
+ */
+const HIDDEN_ALIASES = [
+  'bulk_audit_wordpress_sites',
+  'dotnet_describe_setup',
+  'dotnet_efcore_audit',
+  'dotnet_target_framework_check',
+  'regression_alert',
+  'scan_dotnet_secrets',
+  'triage_findings',
+  'wp_cron_audit',
+  'wp_describe_setup',
+  'wp_plugin_check',
+  'wp_recommend_hardening',
+  'wp_rest_audit',
   'wp_vuln_check_source',
 ];
 
@@ -104,16 +128,22 @@ const EXPECTED_RESOURCES = [
 ];
 
 describe('MCP surface — stability snapshot', () => {
-  it('T-23 exposes exactly the snapshotted tools (import_sarif included)', () => {
+  it('T-23 registers exactly the snapshotted tools (import_sarif included)', () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
+  });
+
+  it('lists every registered tool but the hidden aliases', () => {
+    expect(TOOLS.filter((t) => t.listed === false).map((t) => t.name).sort()).toEqual(HIDDEN_ALIASES);
+    expect(listedTools().map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS.filter((n) => !HIDDEN_ALIASES.includes(n)));
   });
 
   it('exposes exactly the snapshotted resources', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('T-23 matches the counts documented in the README (63 tools, 18 resources)', () => {
-    expect(TOOLS).toHaveLength(63);
+  it('T-23 matches the counts documented in the README (52 tools listed, 18 resources)', () => {
+    expect(listedTools()).toHaveLength(52);
+    expect(TOOLS).toHaveLength(65);
     expect(RESOURCES).toHaveLength(18);
   });
 });

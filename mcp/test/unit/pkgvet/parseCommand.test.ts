@@ -313,6 +313,47 @@ describe('ruling (c) — a directory change before or in the install makes it un
   });
 });
 
+// Review 8, extra item: where a launcher runs, so the hook looks for the
+// installed bin there (`cd mcp && npx vitest run`).
+describe('workdir — the directory changes before a command, in order', () => {
+  const workdir = (command: string, shell: 'bash' | 'powershell' = 'bash'): unknown =>
+    parseInstallCommands(command, { shell }).map((c) => c.workdir);
+
+  it.each([
+    ['cd mcp && npx vitest run', [['mcp']]],
+    ['cd mcp; cd test && npx vitest', [['mcp', 'test']]],
+    ['cd -P ../web && npm i foo', [['../web']]],
+    ['pushd api && npx eslint .', [['api']]],
+    ['cd.. && npx eslint', [['..']]],
+    ["cd /d 'C:\\work' && npx eslint", [['C:\\work']]],
+    ["cd '/c/work' && npx eslint", [['/c/work']]],
+    ['cd ~/proj && npx eslint', [['~/proj']]],
+  ] as Array<[string, unknown]>)('%s', (command, expected) => {
+    expect(workdir(command)).toEqual(expected);
+  });
+
+  it('PowerShell: Set-Location / sl, with or without -Path', () => {
+    expect(workdir('Set-Location -Path web; npx eslint', 'powershell')).toEqual([['web']]);
+    expect(workdir('sl web; npx eslint', 'powershell')).toEqual([['web']]);
+  });
+
+  it.each(['cd "$DIR" && npx eslint', 'cd `pwd` && npx eslint', 'cd - && npx eslint', 'cd && npx eslint', 'popd && npx eslint', 'cd %TEMP% && npx eslint', 'cd a b && npx eslint'])(
+    '%s — a move that cannot be read is null',
+    (command) => {
+      expect(workdir(command)).toEqual([null]);
+    },
+  );
+
+  it('an unreadable move stays unreadable: a later cd is relative to an unknown place', () => {
+    expect(workdir('cd "$X" && cd web && npx eslint')).toEqual([null]);
+  });
+
+  it('no directory change: absent', () => {
+    expect(parseInstallCommands('npx vitest run')[0]).not.toHaveProperty('workdir');
+    expect(parseInstallCommands('npx vitest && cd dist')[0]).not.toHaveProperty('workdir');
+  });
+});
+
 describe('ruling (f) / I2 — workspace context makes it uncertain', () => {
   it.each([
     'pnpm add --workspace @acme/ui',

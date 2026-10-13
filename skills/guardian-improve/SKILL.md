@@ -1,6 +1,7 @@
 ---
 name: guardian-improve
-description: Turn measured tech debt into improvement specs — the bridge from dev-guardian's findings to the dev-spec-driven backlog. Takes the ROI-ranked hotspots, quality findings, duplication, over-budget metrics and systemic security weaknesses, and drafts each top item as an improvement spec seed (problem, affected files, current metric → target metric, draft EARS acceptance criteria) that the same scans can re-measure. Closes the loop measure → spec → fix → re-measure. EN triggers — "turn the debt into specs", "what should I refactor next and how", "make specs from the violations", "plan the cleanup", "spec the tech debt". PT — "transforma a dívida em specs", "o que refatoro a seguir e como", "cria specs das violações", "planeia a limpeza", "especifica a dívida técnica". ES — "convierte la deuda en specs", "qué refactorizo y cómo", "crea specs de las violaciones", "planifica la limpieza", "especifica la deuda técnica". Respond in the user's language.
+description: "Turn measured tech debt into improvement-spec seeds on the dev-spec-driven backlog — problem, files, current to target metric, draft EARS criteria — re-measurable by the same scans."
+disable-model-invocation: true
 ---
 
 # Guardian Improve — from debt to specs
@@ -37,7 +38,7 @@ Pull the current picture from what is already stored — rescan only when the la
 
 Don't emit one spec per violation — that's noise. Group findings that share a root cause or a file
 into a small number of **improvement units** (typically 3–7). A unit is one coherent piece of work,
-e.g. "split the 900-line `checkout` module and cover its branches", not 40 separate line items.
+e.g. "split checkout module" (900 lines today, its branches uncovered), not 40 separate line items.
 
 Rank units by ROI: biggest metric move for the smallest, safest change. Favour modularization
 (splitting oversized files/functions) — per the project's own budget rules, that's what drags the
@@ -48,7 +49,7 @@ other metrics up too.
 For each unit, produce this seed. Keep it **language-agnostic** and metric-anchored:
 
 ```markdown
-## Improvement: <short title>
+## Improvement: <name — at most 6 words, no numbers>
 
 **Why now (ROI):** <biggest impact / smallest risk in one line>
 **Affected:** <files / modules>
@@ -63,8 +64,8 @@ For each unit, produce this seed. Keep it **language-agnostic** and metric-ancho
 - THE refactor SHALL NOT change observable behaviour (characterization tests stay green).
 
 **Suggested track:** core (+tdd if behaviour must be pinned before refactor)
-**Grill first:** yes — run /guardian-grill on the current code (dev-spec-driven's `/clarify --grill`
-once the spec exists) so you understand the branches before you move them.
+**Grill first:** yes — the user runs /guardian-grill on the current code (dev-spec-driven's `/clarify --grill`
+once the spec exists) to understand the branches before moving them.
 ```
 
 The **Current → Target block is the spec's success criterion**: the same measurement that found the
@@ -99,17 +100,27 @@ at the end is your measurement or the project's coverage report, not a dev-guard
 
 ### 4. Hand off to dev-spec-driven
 
-For each seed, add it to the backlog so it shows in the roadmap:
+For each seed, put it in the backlog so it shows in the roadmap — without duplicates or stale notes:
 
-- Preferred: dev-spec-driven's MCP tool —
-  `spec_roadmap_edit { kind: "backlog", action: "add", name: "<title>", note: "<one-line note + target metric>" }`.
-- Without its MCP tools, its CLI: `node "<dev-spec plugin>/cli/dev-spec.js" backlog add "<title>" "<one-line note + target metric>"`.
-  A plugin install puts no `dev-spec` on `PATH`: use the exact `node "…/cli/dev-spec.js"` line that
-  dev-spec-driven's own tool results print, and a bare `dev-spec` only when the user has one on `PATH`.
-- Then offer to scaffold the chosen one into a full feature with `/spec <title>` (or `spec_create`),
-  carrying the seed's EARS criteria into `requirements.md`.
+1. **List the backlog first**: `spec_roadmap_edit { kind: "backlog", action: "list" }`. A unit already there
+   keeps its **exact** name — a reworded name makes a second entry.
+2. **Name** a new unit in at most 6 words, with no numbers, stable across re-measurements: "split checkout
+   module", not "split the 900-line checkout module". The name becomes the feature's slug and branch; the
+   metrics go in the note.
+3. **Add** it: `spec_roadmap_edit { kind: "backlog", action: "add", name: "<name>", note: "<problem · current → target metric>" }`.
+4. **Replace** an existing unit's note, never append to it: adding to a name that exists appends the new note
+   to the old one ("24% → 45% · 26% → 45%"). Remove it, then add it again with the new note:
+   `spec_roadmap_edit { kind: "backlog", action: "rm", name: "<name>" }`, then the `add` above.
 
-If `dev-spec-driven` isn't installed, write the seeds to `docs/improvement-specs/<title>.md` and tell
+Without its MCP tools, its CLI does the same (`backlog list`, `backlog add "<name>" "<note>"`, `backlog rm
+"<name>"`): `node "<dev-spec-driven plugin root>/cli/dev-spec.js" backlog …`. A plugin install puts no `dev-spec`
+on `PATH`: use the exact `node "…/cli/dev-spec.js"` line dev-spec-driven's own tool results print.
+
+Then offer to scaffold the chosen unit into a full feature with `/spec <name>` (or `spec_create`), and carry the
+seed's EARS criteria and its current → target block into `requirements.md` yourself — don't rely on the backlog
+note reaching the feature.
+
+If `dev-spec-driven` isn't installed, write the seeds to `docs/improvement-specs/<name>.md` and tell
 the user they can feed them to any spec workflow.
 
 ### 5. Recommend order and stop

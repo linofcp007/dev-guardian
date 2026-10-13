@@ -33,7 +33,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const HADOLINT_TOOL_NAME = 'hadolint';
+const HADOLINT_TOOL_NAME = 'hadolint';
 
 export const hadolintParser: ScannerParser = {
   name: HADOLINT_TOOL_NAME,

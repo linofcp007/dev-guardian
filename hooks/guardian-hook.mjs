@@ -8,11 +8,12 @@
  * `hookSpecificOutput` JSON on stdout.
  *
  * Design rules:
- *   - **Dependency-free.** Imports only `node:` builtins plus the pure,
- *     pre-compiled detectors in `../mcp/dist/hooks/*` (regex only, no native
- *     modules). This guarantees the hook runs in the *installed* plugin,
- *     where `mcp/node_modules` (storage is `node:sqlite`, no native deps —
- *     but still not shipped) is not present.
+ *   - **Dependency-free.** Imports only `node:` builtins plus the pure
+ *     detectors in the self-contained bundle `../mcp/dist/hooks.js` (built
+ *     from `mcp/src/hooksEntry.ts`; regex only, no native modules). This
+ *     guarantees the hook runs in the *installed* plugin, where
+ *     `mcp/node_modules` (storage is `node:sqlite`, no native deps — but
+ *     still not shipped) is not present.
  *   - **Fail-open.** Any unexpected error → exit 0 with no output. A guardrail
  *     must never break the user's workflow. Set GUARDIAN_HOOKS_DEBUG=1 to see
  *     diagnostics on stderr.
@@ -28,10 +29,22 @@
  *     (`GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`).
  */
 
-import { existsSync, lstatSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
+import module from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// Node's on-disk compile cache for the detectors this hook imports on every
+// call (review 8, dg-core 17): a no-op where Node lacks it, and a failure to
+// write it changes nothing but the time. Only under a temp directory that
+// exists: Node creates the cache's directory with every missing parent, and a
+// TMPDIR that is not there must stay not there.
+try {
+  if (existsSync(tmpdir())) module.enableCompileCache?.();
+} catch {
+  /* no cache: the hook only runs slower */
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
 // The plugin root is derived from this file's own location rather than read
@@ -40,9 +53,7 @@ const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/hooks
 // the variable is set, and this form also works when it is not (a manual run,
 // `dev-guardian check`, the e2e tests).
 const PLUGIN_ROOT = resolve(HERE, '..'); // <plugin>
-const DIST_HOOKS = join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks');
-const DIST_PKGVET = join(PLUGIN_ROOT, 'mcp', 'dist', 'pkgvet');
-const DIST_PLATFORM = join(PLUGIN_ROOT, 'mcp', 'dist', 'platform');
+const HOOKS_BUNDLE = join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks.js');
 const POPULAR_DIR = join(PLUGIN_ROOT, 'configs', 'popular-packages');
 
 const DEBUG = process.env.GUARDIAN_HOOKS_DEBUG === '1';
@@ -85,20 +96,22 @@ function noop() {
  * still holds the loop open — and even then it waits for the answer to have
  * been flushed to stdout (the write callback) before it exits, so the
  * backstop can never cut off the JSON it exists to deliver.
+ *
+ * The backstop runs {@link EXIT_GRACE_MS} after the answer was flushed, not 5 s
+ * after the call (review 8, item 4): a connect the 3 s network budget aborted
+ * on an unresponsive network still holds the loop, and Claude Code waits for
+ * the process — the answer came at 3.2 s and the process ended at 8.2 s.
+ * Measured with the grace at 250 ms: exit 0 at 3.5 s, no libuv assertion, and
+ * a real-registry deny still exits 0.
  */
+const EXIT_GRACE_MS = 250;
+
 function respond(eventName, extra) {
   process.exitCode = 0;
-  let flushed = !extra;
+  const backstop = () => setTimeout(() => process.exit(0), EXIT_GRACE_MS).unref();
   if (extra) {
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, ...extra } }), () => {
-      flushed = true;
-    });
-  }
-  const backstop = () => {
-    if (flushed) process.exit(0);
-    else setTimeout(backstop, 100).unref();
-  };
-  setTimeout(backstop, 5000).unref();
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, ...extra } }), backstop);
+  } else backstop();
 }
 
 async function readStdin() {
@@ -114,8 +127,28 @@ async function readStdin() {
 }
 
 /**
+ * The detectors' bundle, `mcp/dist/hooks.js` (`mcp/src/hooksEntry.ts`),
+ * imported once per call. Each detector module is behind one of its `load*`
+ * functions, which the bundle keeps lazy: an event evaluates only what it
+ * uses (review 8, item 17). `pathToFileURL`, never `file://${…}` by
+ * concatenation: a `#` in the install path read as a URL fragment, the import
+ * failed, and the shell guard and the secret scan failed open (review M2). A
+ * missing or damaged bundle rejects every {@link detector} call: each guard
+ * then fails open, and SessionStart names the ones that are off.
+ */
+let hooksBundle;
+
+/** The exports of one detector module, by its loader in the bundle (`loadBashGuard`, …). */
+async function detector(loader) {
+  hooksBundle ??= import(pathToFileURL(HOOKS_BUNDLE).href);
+  const bundle = await hooksBundle;
+  if (typeof bundle[loader] !== 'function') throw new Error(`${loader} is missing from mcp/dist/hooks.js`);
+  return bundle[loader]();
+}
+
+/**
  * How a hook configuration file is read: `readSmallJsonFile` from
- * `mcp/dist/hooks/configFile.js`, loaded in `main()` by `loadConfigReader`.
+ * `mcp/src/hooks/configFile.ts` (in the bundle), loaded in `main()` by `loadConfigReader`.
  * Given the directory the file lives under (the project, or the home
  * directory for the user-level file), it first walks the path's components
  * below it with `lstat` + `readlink` — never touching a link's target — and
@@ -127,8 +160,8 @@ async function readStdin() {
  * replaced read whatever was there: a FIFO or a link to `/dev/zero` at
  * `.guardian/hooks.config.json` blocked the hook until Claude Code killed it
  * at 15 s — and the tool call then ran unguarded (Task 23 fix round 2, N1).
- * Until it is loaded, and if it cannot be (no built `mcp/dist`), every file
- * reads as absent: the protective defaults.
+ * Until it is loaded, and if it cannot be (no built `mcp/dist/hooks.js`),
+ * every file reads as absent: the protective defaults.
  */
 let readSmallJsonFile = () => ({ status: 'absent' });
 /** `walkLinksUnder` from the same module — see `handleSessionStart`. */
@@ -136,7 +169,7 @@ let walkLinksUnder = () => ({ ok: true });
 /** `readSmallTextFile` from the same module — see `claudeSettingsWriteGuard`. */
 let readSmallTextFile = () => undefined;
 /**
- * `guardedPath` from `mcp/dist/hooks/guardedPath.js`: the file a write really
+ * `guardedPath` from `mcp/src/hooks/guardedPath.ts`: the file a write really
  * reaches — on Windows without an NTFS stream suffix or trailing dots and
  * spaces, and everywhere resolved through 8.3 names and links (review M1).
  * Until it is loaded, a path is taken as written.
@@ -145,31 +178,51 @@ let guardedPath = (p) => p;
 /** `hardLinkedTo` from the same module: which guarded file a path is a hard link to (review round 3, item 5). */
 let hardLinkedTo = () => undefined;
 /**
- * `writesRegistry` from `mcp/dist/hooks/dataRegistry.js`: whether a write
+ * `isNetworkPath` from the same module: a path on the network or a device,
+ * which no guard asks the filesystem about (review 8, item 13). Until it is
+ * loaded, a `\\…` or `//…` path is one.
+ */
+let isNetworkPath = (p) => /^[\\/]{2}/.test(String(p));
+/**
+ * `writesRegistry` from `mcp/src/hooks/dataRegistry.ts`: whether a write
  * reaches dev-guardian's registry of trusted databases (review 3.0 wave 2,
- * round 2). Until it is loaded, and if it cannot be, nothing does (fail-open,
- * and SessionStart says the guard is off).
+ * round 2). Loaded by the write guards only ({@link loadRegistryGuard}); until
+ * it is, and if it cannot be, nothing does (fail-open, and SessionStart says
+ * the guard is off).
  */
 let writesRegistry = () => false;
 
+/**
+ * What every event needs: the configuration reader and the path resolution
+ * the project root is found with. The guards themselves are imported by the
+ * event that uses them, and only then (review 8, item 17).
+ */
 async function loadConfigReader() {
   try {
-    const mod = await import(pathToFileURL(join(DIST_HOOKS, 'configFile.js')).href);
+    const mod = await detector('loadConfigFile');
     if (typeof mod.readSmallJsonFile === 'function') readSmallJsonFile = mod.readSmallJsonFile;
     if (typeof mod.walkLinksUnder === 'function') walkLinksUnder = mod.walkLinksUnder;
     if (typeof mod.readSmallTextFile === 'function') readSmallTextFile = mod.readSmallTextFile;
-    const paths = await import(pathToFileURL(join(DIST_HOOKS, 'guardedPath.js')).href);
+    if (typeof mod.isNetworkPath === 'function') isNetworkPath = mod.isNetworkPath;
+    const paths = await detector('loadGuardedPath');
     if (typeof paths.guardedPath === 'function') guardedPath = paths.guardedPath;
     if (typeof paths.hardLinkedTo === 'function') hardLinkedTo = paths.hardLinkedTo;
-    const registry = await import(pathToFileURL(join(DIST_HOOKS, 'dataRegistry.js')).href);
-    if (typeof registry.writesRegistry === 'function') writesRegistry = registry.writesRegistry;
   } catch (err) {
     debug(`config reader unavailable — protective defaults: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
+async function loadRegistryGuard() {
+  try {
+    const registry = await detector('loadDataRegistry');
+    if (typeof registry.writesRegistry === 'function') writesRegistry = registry.writesRegistry;
+  } catch (err) {
+    debug(`registry guard unavailable (fail-open): ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /**
- * `databaseRegistration` from `mcp/dist/storage/dbRegistry.js`: whether a
+ * `databaseRegistration` from `mcp/src/storage/dbRegistry.ts`: whether a
  * project's `.guardian/guardian.db` is registered as the user's, read from
  * the user's own registry — the database itself is never opened here. Loaded
  * for SessionStart only; until then, and if it cannot be, `unknown` (no line).
@@ -178,7 +231,7 @@ let databaseRegistration = () => 'unknown';
 
 async function loadRegistryReader() {
   try {
-    const mod = await import(pathToFileURL(join(PLUGIN_ROOT, 'mcp', 'dist', 'storage', 'dbRegistry.js')).href);
+    const mod = await detector('loadDbRegistry');
     if (typeof mod.databaseRegistration === 'function') databaseRegistration = mod.databaseRegistration;
   } catch (err) {
     debug(`registry reader unavailable: ${err instanceof Error ? err.message : String(err)}`);
@@ -371,7 +424,7 @@ function relativeTime(ms) {
 }
 
 /**
- * `execGitSync` from `mcp/dist/platform/gitSafety.js`: git hardened against
+ * `execGitSync` from `mcp/src/platform/gitSafety.ts`: git hardened against
  * the project's own git configuration (review 3.0, W2E-git). SessionStart's
  * `git status` in a project opened for the first time — an archive, a
  * download — used to run that project's `core.fsmonitor` and
@@ -382,7 +435,7 @@ let execGitSync = null;
 
 async function loadGitSafety() {
   try {
-    const mod = await import(pathToFileURL(join(DIST_PLATFORM, 'gitSafety.js')).href);
+    const mod = await detector('loadGitSafety');
     if (typeof mod.execGitSync === 'function') execGitSync = mod.execGitSync;
   } catch (err) {
     debug(`git hardening unavailable — git not run: ${err instanceof Error ? err.message : String(err)}`);
@@ -420,17 +473,6 @@ function extractInsertedText(toolName, input) {
 
 function normalizePath(p) {
   return String(p ?? '').replace(/\\/g, '/');
-}
-
-/**
- * The path a tool call targets. `NotebookEdit` carries it as `notebook_path`,
- * not `file_path` — reading only `file_path` (as this file used to,
- * uniformly) silently produced no path for every notebook edit, which meant
- * no ignore-path check and no file name in the warning context either.
- */
-function extractFilePath(toolName, input) {
-  if (!input || typeof input !== 'object') return '';
-  return toolName === 'NotebookEdit' ? (input.notebook_path ?? '') : (input.file_path ?? '');
 }
 
 /**
@@ -495,9 +537,14 @@ function isGuardianOwnConfigFile(filePath, cwd, root) {
   // in the home or project path, must not make the same file compare unequal.
   const abs = guardedPath(resolve(cwd, filePath));
   if (samePath(abs, guardedPath(userConfigPath()))) return true;
-  if (/(?:^|\/)\.guardian\/hooks[^/]*\.json$/i.test(normalizePath(abs))) {
+  const projectConfig = /(?:^|\/)\.guardian\/hooks[^/]*\.json$/i.test(normalizePath(abs));
+  if (projectConfig) {
     if (isBelow(guardedPath(resolve(root)), abs) || isBelow(guardedPath(resolve(cwd)), abs)) return true;
   }
+  // A network path is never resolved, and a share may lead back to this
+  // machine by any name: its tail decides (review 8, item 19). An admin share
+  // of this machine was mapped to its local path by `guardedPath` already.
+  if (isNetworkPath(abs)) return projectConfig || /(?:^|\/)\.config\/dev-guardian\/hooks\.json$/i.test(normalizePath(abs));
   // A HARD link to one of them is the same file under another name, which no
   // path comparison sees (review round 3, item 5): compared by device + inode.
   const guarded = [userConfigPath()];
@@ -567,23 +614,27 @@ function projectRootOf(cwd) {
   return resolve(cwd);
 }
 
-async function loadDetectors() {
-  // Dynamic import so a missing/un-built dist fails open rather than throwing
-  // at module load. `pathToFileURL`, never `file://${…}` by concatenation: a
-  // `#` in the install path read as a URL fragment, the import failed, and the
-  // shell guard and the secret scan failed open (review M2).
-  const secret = await import(pathToFileURL(join(DIST_HOOKS, 'secretScan.js')).href);
-  const bash = await import(pathToFileURL(join(DIST_HOOKS, 'bashGuard.js')).href);
-  return { scanForSecrets: secret.scanForSecrets, assessBashCommand: bash.assessBashCommand };
+/*
+ * The detectors, each imported by the event that uses it and no other (review
+ * 8, item 17: every Bash call loaded the secret scan, every write the 220 KB
+ * shell guard). Through the bundle's loaders, so a missing/un-built dist
+ * fails open rather than throwing at module load.
+ */
+async function loadSecretScan() {
+  return (await detector('loadSecretScan')).scanForSecrets;
 }
 
-/** The guards whose compiled modules the hooks load, and what each one is called in a notice. */
+async function loadBashGuard() {
+  return (await detector('loadBashGuard')).assessBashCommand;
+}
+
+/** The guards the hooks load from the bundle, by loader, and what each one is called in a notice. */
 const GUARD_MODULES = [
-  { file: join(DIST_HOOKS, 'bashGuard.js'), name: 'the shell guard', export: 'assessBashCommand' },
-  { file: join(DIST_HOOKS, 'secretScan.js'), name: 'the secret scan', export: 'scanForSecrets' },
-  { file: join(DIST_PKGVET, 'hookDecision.js'), name: 'package vetting', export: 'decideInstallCommand' },
-  { file: join(DIST_HOOKS, 'settingsGuard.js'), name: "the Claude Code settings guard", export: 'newlyLoosened' },
-  { file: join(DIST_HOOKS, 'dataRegistry.js'), name: 'the database registry guard', export: 'writesRegistry' },
+  { loader: 'loadBashGuard', name: 'the shell guard', export: 'assessBashCommand' },
+  { loader: 'loadSecretScan', name: 'the secret scan', export: 'scanForSecrets' },
+  { loader: 'loadInstallVetting', name: 'package vetting', export: 'decideInstallCommand' },
+  { loader: 'loadSettingsGuard', name: "the Claude Code settings guard", export: 'newlyLoosened' },
+  { loader: 'loadDataRegistry', name: 'the database registry guard', export: 'writesRegistry' },
 ];
 
 /**
@@ -596,7 +647,7 @@ async function unloadableGuardsNotice() {
   let reason = '';
   for (const g of GUARD_MODULES) {
     try {
-      const mod = await import(pathToFileURL(g.file).href);
+      const mod = await detector(g.loader);
       if (typeof mod[g.export] !== 'function') throw new Error(`${g.export} missing`);
     } catch (err) {
       broken.push(g.name);
@@ -659,12 +710,12 @@ async function handleSessionStart(root, cfg) {
   const reachable = walkLinksUnder(root, dbPath).ok;
   const initialized = reachable ? existsSync(guardianDir) : true;
   await loadGitSafety();
-  const branch = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  // One git call for the branch and the count (review 8, item 16): the
+  // porcelain v2 header names the branch, and every other line is a change.
   // `--ignore-submodules=dirty`: the count does not go into a submodule's
   // work tree, where that submodule's own drivers would run (they are also
   // neutralised by gitSafety); a submodule whose commit moved still counts.
-  const status = git(root, ['status', '--porcelain', '--ignore-submodules=dirty']);
-  const changed = status ? status.split('\n').filter(Boolean).length : 0;
+  const { branch, changed } = branchAndChanges(git(root, ['status', '--porcelain=v2', '--branch', '--ignore-submodules=dirty']));
 
   const state = guardsOff ? 'running with guards OFF (see below)' : 'active';
   const head = `🛡️ dev-guardian ${state} (v${pluginVersion()})` + (branch ? ` · branch \`${branch}\`` : '');
@@ -687,29 +738,66 @@ async function handleSessionStart(root, cfg) {
     if (reachable && databaseRegistration(dbPath) === 'unregistered') {
       const cli = join(PLUGIN_ROOT, 'cli', 'dev-guardian.mjs');
       lines.push(
-        '⚠️ dev-guardian is not using .guardian/guardian.db: it is not registered as the user\'s (a database from ' +
-          `before 3.1.0, or one that came with the files). The user can review it with \`node "${cli}" db adopt ` +
+        '⚠️ dev-guardian is not using .guardian/guardian.db: it is not registered as the user\'s (an older database, ' +
+          `or one that came with the files). The user can review it with \`node "${cli}" db adopt ` +
           `--project "${root}"\` in a terminal and register it with --yes if it is theirs — never run that for them.`,
       );
     }
-  } else {
-    lines.push('Not yet guardian-initialized — run /guardian-init to set up security & quality scanning.');
+  } else if (looksLikeCode(root)) {
+    // Said only where scanning could apply, and as something the user runs
+    // (review 8, item 20): it used to come in every session of every folder,
+    // and pushed the model to propose a setup nobody asked for.
+    lines.push('Not yet guardian-initialized — the user can run /guardian-init to set up security and quality scanning.');
   }
   if (notice) lines.push(notice);
 
   emit('SessionStart', { additionalContext: lines.join('\n') });
 }
 
-async function handlePostToolUse(toolName, input, cwd, root, cfg, allowlist) {
+/** `git status --porcelain=v2 --branch`'s branch (none when detached or unknown) and number of changed entries. */
+function branchAndChanges(status) {
+  let branch = '';
+  let changed = 0;
+  for (const line of status.split('\n')) {
+    if (line.startsWith('# branch.head ')) {
+      const head = line.slice('# branch.head '.length).trim();
+      branch = head === '(detached)' ? 'HEAD' : head;
+    } else if (line !== '' && !line.startsWith('#')) changed += 1;
+  }
+  return { branch, changed };
+}
+
+/** What marks a folder as a code project: version control, or a manifest of a language dev-guardian scans. */
+const CODE_MARKERS = [
+  '.git', 'package.json', 'pyproject.toml', 'requirements.txt', 'setup.py', 'Pipfile', 'go.mod', 'Cargo.toml', 'pom.xml',
+  'build.gradle', 'build.gradle.kts', 'composer.json', 'Gemfile', 'Dockerfile', 'global.json', 'Directory.Build.props',
+];
+
+/**
+ * Whether `root` holds one of {@link CODE_MARKERS} — `lstat` only, a link is
+ * never followed — or a .NET solution or project file (their names vary).
+ */
+function looksLikeCode(root) {
+  if (CODE_MARKERS.some((name) => presentNoFollow(join(root, name)))) return true;
+  try {
+    return readdirSync(root)
+      .slice(0, 2000)
+      .some((name) => /\.(?:sln|slnx|csproj|fsproj|vbproj)$/i.test(name));
+  } catch {
+    return false;
+  }
+}
+
+async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
   if (!cfg.secrets.warn) noop();
-  const text = extractInsertedText(toolName, input);
+  const text = write.text;
   if (!text) noop();
 
-  const rawPath = extractFilePath(toolName, input);
+  const rawPath = write.path;
   const absPath = rawPath ? resolve(cwd, rawPath) : '';
   if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, root, cfg.ignorePaths))) noop();
 
-  const { scanForSecrets } = await loadDetectors();
+  const scanForSecrets = await loadSecretScan();
   const hits = scanForSecrets(text, { allowlist, minConfidence: 'medium' });
   if (hits.length === 0) noop();
 
@@ -736,7 +824,7 @@ async function handlePostToolUse(toolName, input, cwd, root, cfg, allowlist) {
  * `bunx`, `uvx`, `uv tool install|run`, `pipx install|run`). The logic — command parsing,
  * the registry/OSV lookups under a 3 s total network budget and one 8 s
  * deadline for the whole hook call, the verdict and
- * the wording — lives in `mcp/dist/pkgvet/hookDecision.js`; this only calls
+ * the wording — lives in `mcp/src/pkgvet/hookDecision.ts` (in the bundle); this only calls
  * it. Returns `{ deny?, context? }`, or `null` when there is nothing to say
  * (no install command, every package clean) or anything at all went wrong:
  * a guardrail that cannot run lets the command through.
@@ -748,8 +836,13 @@ async function handlePostToolUse(toolName, input, cwd, root, cfg, allowlist) {
  */
 async function vetInstallCommand(command, cwd, toolName) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
+  // A command that names no installer installs nothing: the vetting modules
+  // are not even loaded (review 8, item 17 — `mcp/src/pkgvet/mayInstall.ts`).
+  // Without the gate, every command is vetted, as before it.
+  const gate = await detector('loadInstallGate').catch(() => undefined);
+  if (typeof gate?.mayInstall === 'function' && !gate.mayInstall(command)) return null;
   try {
-    const mod = await import(pathToFileURL(join(DIST_PKGVET, 'hookDecision.js')).href);
+    const mod = await detector('loadInstallVetting');
     // The PowerShell tool's commands are also read the way PowerShell reads
     // them (comma lists, backtick continuations) — see `parseInstallCommands`.
     const shell = toolName === 'PowerShell' ? 'powershell' : 'bash';
@@ -760,15 +853,17 @@ async function vetInstallCommand(command, cwd, toolName) {
   }
 }
 
-async function handlePreToolUseBash(input, cfg, cwd, allowlist, toolName) {
+async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   const command = input?.command;
   if (typeof command !== 'string' || !command) noop();
 
-  const { assessBashCommand } = await loadDetectors();
+  const assessBashCommand = await loadBashGuard();
   // The PowerShell tool's commands are also read with PowerShell's quoting:
   // under POSIX quoting alone, `Remove-Item "C:\Users\" -Recurse -Force` hid
-  // its path behind an escaped closing quote and read as ok.
-  const a = assessBashCommand(command, { shell: toolName === 'PowerShell' ? 'powershell' : 'bash' });
+  // its path behind an escaped closing quote and read as ok. Where the session
+  // runs: a guarded path spelled in full outside the project, the working
+  // directory and home warns instead of being denied (review 8, item 14).
+  const a = assessBashCommand(command, { shell: toolName === 'PowerShell' ? 'powershell' : 'bash', cwd, projectDir: root });
 
   if (a.level === 'block' && cfg.bash.block) {
     // Deliberately does not say HOW to turn this off (item 6) — that used to
@@ -803,7 +898,130 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist, toolName) {
     return respond('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: vet.deny });
   }
   if (vet?.context) notes.push(vet.context);
-  return respond('PreToolUse', notes.length > 0 ? { additionalContext: notes.join('\n') } : undefined);
+  const context = notes.length > 0 ? { additionalContext: notes.join('\n') } : {};
+  // The user's decision, not a hazard (review 8, C2: an agent-run `baseline
+  // update`): Claude Code asks the user, showing them why. With the block
+  // switched off it is only the warning above, as a block would be.
+  if (a.ask && cfg.bash.block) {
+    return respond('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: `dev-guardian: ${a.ask}.`, ...context });
+  }
+  return respond('PreToolUse', notes.length > 0 ? context : undefined);
+}
+
+/**
+ * What a write tool call does, as the guards below read it: the path it
+ * writes (`path`, for the secret scan and its ignore list), the text it
+ * inserts, the paths the hook configuration guard and the registry guard
+ * judge, and the change the settings guard judges. `null` for a call that
+ * writes nothing the hooks can see.
+ *
+ * Claude Code's own tools: `Write`, `Edit`, `MultiEdit` (every guard) and
+ * `NotebookEdit` (the registry and the secret scan, as before). And a
+ * third-party MCP server's write tool (review 8, item 18) — hooks.json matches
+ * an `mcp__<server>__<tool>` whose name holds a file verb (write, edit, create,
+ * move, rename, copy, append, patch, replace, save, put, upload, insert,
+ * delete, remove, unlink): `mcp__filesystem__write_file` wrote the hook
+ * configuration, Claude Code's settings or a provider token past every guard.
+ * Its path arguments are read by their usual names ({@link MCP_DEST_KEYS}; a
+ * `file://` URI too), a move's or rename's source as a path it takes away, and
+ * its text as `content` / `text` / `data` or `edits` (`oldText` / `newText`).
+ */
+function describeWrite(toolName, input) {
+  if (!input || typeof input !== 'object') return null;
+  const str = (v) => (typeof v === 'string' && v !== '' ? v : undefined);
+  switch (toolName) {
+    case 'Write':
+    case 'Edit':
+    case 'MultiEdit': {
+      const path = str(input.file_path);
+      if (path === undefined) return null;
+      const change =
+        toolName === 'Write'
+          ? typeof input.content === 'string'
+            ? { content: input.content }
+            : null
+          : { edits: toolName === 'Edit' ? [input] : Array.isArray(input.edits) ? input.edits : [] };
+      return { path, text: extractInsertedText(toolName, input), config: [path], registry: [path], settings: change ? [{ path, change }] : [] };
+    }
+    case 'NotebookEdit': {
+      const path = str(input.notebook_path);
+      return path === undefined ? null : { path, text: extractInsertedText(toolName, input), config: [], registry: [path], settings: [] };
+    }
+    default:
+      return toolName.startsWith('mcp__') ? describeMcpWrite(toolName, input) : null;
+  }
+}
+
+/** The argument names a third-party MCP write tool gives the path it writes. */
+const MCP_DEST_KEYS = [
+  'path', 'file_path', 'filePath', 'filepath', 'file', 'filename', 'fileName', 'destination', 'dest', 'target', 'targetPath',
+  'target_path', 'new_path', 'newPath', 'to', 'output', 'outputPath', 'output_path', 'notebook_path', 'uri',
+];
+/** …and the path a move or a rename takes away. */
+const MCP_SOURCE_KEYS = ['source', 'src', 'from', 'old_path', 'oldPath', 'sourcePath', 'source_path'];
+/** …and the text it writes. */
+const MCP_TEXT_KEYS = ['content', 'contents', 'text', 'data', 'body', 'new_string', 'newText', 'new_source'];
+
+/** The verbs of an MCP tool's name that make it a write — what hooks.json's matcher routes here. */
+const MCP_WRITE_VERB = /write|edit|create|move|rename|copy|append|patch|replace|save|put|upload|insert|delete|remove|unlink/i;
+
+function describeMcpWrite(toolName, input) {
+  const verb = toolName.slice(toolName.lastIndexOf('__') + 2);
+  if (!MCP_WRITE_VERB.test(verb)) return null;
+  const asPath = (v) => {
+    if (typeof v !== 'string' || v === '') return undefined;
+    if (!/^file:\/\//i.test(v)) return v;
+    try {
+      return fileURLToPath(v);
+    } catch {
+      return undefined;
+    }
+  };
+  const pathsOf = (keys) => {
+    const out = [];
+    for (const k of keys) {
+      const v = input[k];
+      for (const item of Array.isArray(v) ? v : [v]) {
+        const p = asPath(item);
+        if (p !== undefined) out.push(p);
+      }
+    }
+    for (const k of ['paths', 'files']) {
+      if (!Array.isArray(input[k])) continue;
+      for (const item of input[k]) {
+        const p = asPath(item);
+        if (p !== undefined) out.push(p);
+      }
+    }
+    return out;
+  };
+  const dests = pathsOf(MCP_DEST_KEYS);
+  const moves = /move|rename/i.test(verb);
+  const removes = /delete|remove|unlink/i.test(verb);
+  const sources = moves ? pathsOf(MCP_SOURCE_KEYS) : [];
+  if (dests.length === 0 && sources.length === 0) return null;
+  const content = MCP_TEXT_KEYS.map((k) => input[k]).find((v) => typeof v === 'string');
+  const edits = Array.isArray(input.edits)
+    ? input.edits
+        .map((e) => ({
+          old_string: e?.old_string ?? e?.oldText ?? e?.old_text,
+          new_string: e?.new_string ?? e?.newText ?? e?.new_text,
+          replace_all: e?.replace_all === true,
+        }))
+        .filter((e) => typeof e.old_string === 'string' && typeof e.new_string === 'string')
+    : [];
+  const change = content !== undefined ? { content } : edits.length > 0 ? { edits } : null;
+  const text = content ?? edits.map((e) => e.new_string).join('\n');
+  return {
+    path: dests[0] ?? '',
+    text,
+    // Removing or moving the configuration away is refused like writing it; a copy's source is only read.
+    config: [...dests, ...sources],
+    // Removing a registry entry only un-trusts a database; writing one is the user's decision.
+    registry: removes ? [] : dests,
+    // A move or copy onto the settings brings content no hook can read: a known limit, as for the shell.
+    settings: change === null || removes ? [] : dests.map((path) => ({ path, change })),
+  };
 }
 
 /**
@@ -814,13 +1032,12 @@ async function handlePreToolUseBash(input, cfg, cwd, allowlist, toolName) {
  * prevent — and by nothing a project file can set; only the user-level
  * switches that turn EVERY hook off (`"enabled": false` in the user config,
  * `GUARDIAN_HOOKS=off`) skip it, like everything else in `main()`. It sees
- * the Write/Edit/MultiEdit tools only; a shell write onto the same files is
+ * the write tools ({@link describeWrite}); a shell write onto the same files is
  * the shell guard's (`guard-config-shell-write` in `bashGuard.ts`). Emits and
  * exits (via `emit`) when it applies; returns normally (so the caller
  * proceeds to the ordinary write handling) when it does not.
  */
-function guardianConfigWriteGuard(toolName, input, cwd, root) {
-  const rawPath = extractFilePath(toolName, input);
+function guardianConfigWriteGuard(rawPath, cwd, root) {
   if (!rawPath || !isGuardianOwnConfigFile(rawPath, cwd, root)) return;
   emit('PreToolUse', {
     permissionDecision: 'deny',
@@ -831,16 +1048,15 @@ function guardianConfigWriteGuard(toolName, input, cwd, root) {
 }
 
 /**
- * Refuses an assistant's Write / Edit / MultiEdit / NotebookEdit into
- * dev-guardian's registry of trusted databases, `<user data dir>/registry`
- * (review 3.0 wave 2, round 2): an entry there is what `db adopt --yes`
- * writes, and which database to trust is the user's decision. The path is
- * compared as the filesystem opens it (NTFS stream suffixes, trailing dots,
- * 8.3 names, links) and a hard link to an entry by device and inode — see
+ * Refuses an assistant's Write / Edit / MultiEdit / NotebookEdit (or an MCP
+ * write) into dev-guardian's registry of trusted databases, `<user data
+ * dir>/registry` (review 3.0 wave 2, round 2): an entry there is what `db
+ * adopt --yes` writes, and which database to trust is the user's decision. The
+ * path is compared as the filesystem opens it (NTFS stream suffixes, trailing
+ * dots, 8.3 names, links) and a hard link to an entry by device and inode — see
  * `mcp/src/hooks/dataRegistry.ts`. Gated like `guardianConfigWriteGuard`.
  */
-function guardianRegistryWriteGuard(toolName, input, cwd) {
-  const rawPath = extractFilePath(toolName, input);
+function guardianRegistryWriteGuard(rawPath, cwd) {
   if (!rawPath) return;
   let hit = false;
   try {
@@ -853,7 +1069,7 @@ function guardianRegistryWriteGuard(toolName, input, cwd) {
     permissionDecision: 'deny',
     permissionDecisionReason:
       "dev-guardian: this is dev-guardian's registry of trusted databases. Which database to trust is the user's " +
-      'decision — ask them to run `dev-guardian db adopt` themselves, in a terminal.',
+      `decision — ask them to run \`node "${join(PLUGIN_ROOT, 'cli', 'dev-guardian.mjs')}" db adopt\` themselves, in a terminal.`,
   });
 }
 
@@ -870,21 +1086,22 @@ function walkRootFor(abs, cwd, root) {
 }
 
 /**
- * Refuses a Write/Edit/MultiEdit of Claude Code's own settings
- * (`.claude/settings.json` / `settings.local.json`, project or user level)
- * whose RESULT switches dev-guardian's hooks off — `"disableAllHooks": true`,
- * an `env` entry `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false`
- * or `GUARDIAN_PKG_VET=0`, or an `enabledPlugins` entry turning dev-guardian
- * off — that the file did not already set (final review M5; `enabledPlugins`:
- * follow-up Part Y). Every other edit of those files (permissions, other env vars, other
- * hooks) passes: agents make them legitimately. The new content is the Write's
- * `content`, or the Edit/MultiEdit applied to the file on disk; when that
- * cannot be reproduced, the edit's own strings are compared instead. Emits and
- * exits when it applies; any failure lets the call through (fail-open).
+ * Refuses a write of Claude Code's own settings (`.claude/settings.json` /
+ * `settings.local.json`, project or user level) whose RESULT switches
+ * dev-guardian's hooks off — `"disableAllHooks": true`, an `env` entry
+ * `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false` or
+ * `GUARDIAN_PKG_VET=0`, or an `enabledPlugins` entry turning dev-guardian off —
+ * that the file did not already set (final review M5; `enabledPlugins`:
+ * follow-up Part Y). Every other edit of those files (permissions, other env
+ * vars, other hooks) passes: agents make them legitimately. The new content is
+ * the write's `content`, or its edits applied to the file on disk; when that
+ * cannot be reproduced, the edit's own strings are compared instead. A file on
+ * the network is not read (review 8, item 13): its edit is judged on its own
+ * strings. Emits and exits when it applies; any failure lets the call through
+ * (fail-open).
  */
-async function claudeSettingsWriteGuard(toolName, input, cwd, root) {
-  const rawPath = extractFilePath(toolName, input);
-  if (!rawPath) return;
+async function claudeSettingsWriteGuard(rawPath, change, cwd, root) {
+  if (!rawPath || !change) return;
   // The file the write reaches (review M1: `settings.json::$DATA` IS
   // settings.json on Windows; round 3, item 5: a hard link to it is it too).
   // Then a cheap pre-check, so an ordinary edit never pays for the module import.
@@ -893,19 +1110,17 @@ async function claudeSettingsWriteGuard(toolName, input, cwd, root) {
   if (!/settings(?:\.local)?\.json$/i.test(abs)) return;
   let added = [];
   try {
-    const guard = await import(pathToFileURL(join(DIST_HOOKS, 'settingsGuard.js')).href);
+    const guard = await detector('loadSettingsGuard');
     // With CLAUDE_CONFIG_DIR set, the user's settings live there, not in
     // ~/.claude (review round 2) — resolved the way the written path is.
     const configDir = process.env.CLAUDE_CONFIG_DIR ? guardedPath(resolve(process.env.CLAUDE_CONFIG_DIR)) : undefined;
     if (!guard.isClaudeSettingsPath(abs, configDir)) return;
-    const before = readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRootFor(abs, cwd, root));
-    if (toolName === 'Write') {
-      if (typeof input.content !== 'string') return;
-      added = guard.newlyLoosened(before, input.content);
+    const walkRoot = walkRootFor(abs, cwd, root);
+    const before = isNetworkPath(abs) && walkRoot === undefined ? undefined : readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRoot);
+    if (typeof change.content === 'string') {
+      added = guard.newlyLoosened(before, change.content);
     } else {
-      const edits = (toolName === 'Edit' ? [input] : Array.isArray(input.edits) ? input.edits : []).filter(
-        (e) => e && typeof e.old_string === 'string' && typeof e.new_string === 'string',
-      );
+      const edits = (change.edits ?? []).filter((e) => e && typeof e.old_string === 'string' && typeof e.new_string === 'string');
       let after = before;
       for (const e of edits) {
         if (after === undefined) break;
@@ -932,19 +1147,19 @@ async function claudeSettingsWriteGuard(toolName, input, cwd, root) {
   });
 }
 
-async function handlePreToolUseWrite(toolName, input, cwd, root, cfg, allowlist) {
+async function handlePreToolUseWrite(write, cwd, root, cfg, allowlist) {
   // Blocking on write is opt-in (secrets.block). Default path does nothing here
   // — PostToolUse already warns.
   if (!cfg.secrets.block) noop();
-  const text = extractInsertedText(toolName, input);
+  const text = write.text;
   if (!text) noop();
 
-  const rawPath = extractFilePath(toolName, input);
+  const rawPath = write.path;
   const absPath = rawPath ? resolve(cwd, rawPath) : '';
   // `blockIgnorePaths`, not `ignorePaths`: see `loadConfig`.
   if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, root, cfg.blockIgnorePaths))) noop();
 
-  const { scanForSecrets } = await loadDetectors();
+  const scanForSecrets = await loadSecretScan();
   // Block only on unambiguous, high-confidence provider tokens. The project
   // allowlist exempts from a block only when the project enabled it (see
   // `loadConfig`'s `userSecretBlock`).
@@ -975,7 +1190,7 @@ async function main() {
 
   const payload = await readStdin();
   const event = payload.hook_event_name ?? process.argv[2] ?? '';
-  const toolName = payload.tool_name ?? '';
+  const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : '';
   const input = payload.tool_input ?? {};
   const cwd = payload.cwd && existsSync(payload.cwd) ? payload.cwd : process.cwd();
 
@@ -994,24 +1209,24 @@ async function main() {
     case 'SessionStart':
       await loadRegistryReader();
       return handleSessionStart(root, cfg);
-    case 'PostToolUse':
-      if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
-        return handlePostToolUse(toolName, input, cwd, root, cfg, allowlist);
-      }
-      return noop();
-    case 'PreToolUse':
+    case 'PostToolUse': {
+      const write = describeWrite(toolName, input);
+      return write === null ? noop() : handlePostToolUse(write, cwd, root, cfg, allowlist);
+    }
+    case 'PreToolUse': {
       if (toolName === 'Bash' || toolName === 'PowerShell') {
-        return handlePreToolUseBash(input, cfg, cwd, allowlist, toolName);
+        return handlePreToolUseBash(input, cfg, cwd, root, toolName);
       }
-      if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
-        guardianConfigWriteGuard(toolName, input, cwd, root); // exits via emit() if it applies
-        await claudeSettingsWriteGuard(toolName, input, cwd, root); // likewise
+      const write = describeWrite(toolName, input);
+      if (write === null) return noop();
+      for (const p of write.config) guardianConfigWriteGuard(p, cwd, root); // exits via emit() if it applies
+      for (const { path, change } of write.settings) await claudeSettingsWriteGuard(path, change, cwd, root); // likewise
+      if (write.registry.length > 0) {
+        await loadRegistryGuard();
+        for (const p of write.registry) guardianRegistryWriteGuard(p, cwd); // likewise
       }
-      if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
-        guardianRegistryWriteGuard(toolName, input, cwd); // likewise
-        return handlePreToolUseWrite(toolName, input, cwd, root, cfg, allowlist);
-      }
-      return noop();
+      return handlePreToolUseWrite(write, cwd, root, cfg, allowlist);
+    }
     default:
       return noop();
   }

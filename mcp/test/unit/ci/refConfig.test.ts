@@ -203,7 +203,7 @@ describe('copyConfigFromRef', () => {
     const copy = await copyConfigFromRef(repo, await resolveCiRef(repo, base, '--rules-ref'), into);
     expect(copy.root).toBe(into);
     expect([...copy.copied].sort()).toEqual(['.dev-guardian/configs.json', '.semgrep.yml', '.trivyignore', 'rules/team.yml']);
-    expect([...copy.absent].sort()).toEqual(['.bandit', '.guardianignore', '.semgrep.yaml']);
+    expect([...copy.absent].sort()).toEqual(['.bandit', '.guardian/scan.yml', '.guardianignore', '.semgrep.yaml']);
     expect(readFileSync(join(into, '.semgrep.yml'), 'utf8')).toContain('base-rule');
     expect(readFileSync(join(into, 'rules', 'team.yml'), 'utf8')).toContain('team-rule');
     expect(readFileSync(join(into, '.trivyignore'), 'utf8')).toBe('CVE-BASE\n');

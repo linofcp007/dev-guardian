@@ -32,23 +32,6 @@ export const SOURCE_LANGUAGES = [
 ] as const;
 export type SourceLanguage = (typeof SOURCE_LANGUAGES)[number];
 
-/**
- * The languages `runners/stackDetect.ts` can report. A detect_stack
- * snapshot's silence about any other language (C#, Swift, C, …) says
- * nothing — it cannot see them.
- */
-export const DETECT_STACK_LANGUAGES: readonly SourceLanguage[] = [
-  'go',
-  'java',
-  'javascript',
-  'kotlin',
-  'php',
-  'python',
-  'ruby',
-  'rust',
-  'typescript',
-];
-
 const ALIASES: Readonly<Record<string, SourceLanguage>> = {
   c: 'c',
   'c++': 'cpp',

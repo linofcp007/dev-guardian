@@ -24,7 +24,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const BANDIT_TOOL_NAME = 'bandit';
+const BANDIT_TOOL_NAME = 'bandit';
 
 export const banditParser: ScannerParser = {
   name: BANDIT_TOOL_NAME,

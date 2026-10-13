@@ -7,12 +7,28 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
+import { ListToolsRequestSchema, type ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z, type ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { SamplingFn } from '../llmscan/types.js';
 import type { ToolResult } from '../types.js';
 import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
+import { TOOL_ANNOTATIONS } from './annotations.js';
+import { isDatabaseBusyError, SESSION_BUSY_TIMEOUT_MS } from '../storage/db.js';
+
+/**
+ * What a call answers when another process held the database's lock past the
+ * wait (`storage/db.ts#SESSION_BUSY_TIMEOUT_MS`) — a coded, actionable error
+ * instead of the bare "database is locked" a host used to show (review 8,
+ * finding 11).
+ */
+export const DATABASE_BUSY_MESSAGE =
+  "dev-guardian's database is locked by another process — another dev-guardian server, hook or CLI writing to " +
+  `it (several can share one project) — and it was not released within ${SESSION_BUSY_TIMEOUT_MS / 1000} s. ` +
+  'Retry the call in a few seconds. If it keeps happening, close the other sessions working on this project, ' +
+  'or end a dev-guardian process that is stuck.';
 
 /**
  * The shape registered with the SDK. `inputSchema` is a raw zod shape (an
@@ -67,6 +83,12 @@ export interface ToolModule {
   description: string;
   /** Optional human title shown by some hosts. */
   title?: string;
+  /**
+   * The behaviour hints `tools/list` carries (read-only, destructive,
+   * idempotent, open-world). Filled in at registration from the table in
+   * `./annotations.ts` when the module does not declare its own.
+   */
+  annotations?: ToolAnnotations;
   inputSchema: ZodRawShape;
   /**
    * Handler returns a typed `ToolResult`. The registry wrapper turns it
@@ -89,18 +111,82 @@ export interface ToolModule {
    * representation every host shows the whole result.
    */
   contentOnlyKeys?: readonly string[];
+  /**
+   * `false` for a hidden alias: the name still answers `tools/call`, with its
+   * own parameters, but `tools/list` leaves it out — a fold (`./fold.ts`)
+   * lists one tool for its family. Default: listed.
+   */
+  listed?: boolean;
+  /**
+   * A fold only: the member module a call with this input runs. The result
+   * is shaped by that member (its `contentOnlyKeys`), not by the fold.
+   */
+  route?: (input: Record<string, unknown>) => ToolModule | undefined;
 }
 
 /**
  * Mutable global registry. Modules append themselves at import time via
  * `registerToolModule`, which lets us keep additions localized to each
  * tool's file rather than threading a list through the bootstrap.
+ *
+ * It holds every name `tools/call` answers, hidden aliases included;
+ * `listedTools()` is what `tools/list` shows.
  */
 export const TOOLS: ToolModule[] = [];
+
+/** The tools `tools/list` shows: every registered tool but the hidden aliases. */
+export function listedTools(tools: readonly ToolModule[] = TOOLS): ToolModule[] {
+  return tools.filter((t) => t.listed !== false);
+}
+
+/** One entry of `tools/list`, as this server sends it. */
+export interface ListedTool {
+  name: string;
+  title?: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  annotations?: ToolAnnotations;
+}
+
+/**
+ * The `tools/list` answer: the listed tools, each with the JSON schema the
+ * SDK would derive from its strict input schema (`toJsonSchemaCompat`, the
+ * SDK's own converter and options) — less what no client needs:
+ *
+ *   - `$schema` (`http://json-schema.org/draft-07/schema#`, 54 characters a
+ *     tool). The MCP specification makes it optional; without it a schema is
+ *     read as JSON Schema 2020-12, and these schemas use no keyword whose
+ *     meaning differs between the two (no tuple `items`, `definitions`,
+ *     `dependencies` or `$ref` — `toolFolds.test.ts` holds that);
+ *   - `execution: {taskSupport: "forbidden"}`, which the SDK adds to every
+ *     tool: an absent `execution` means exactly that.
+ *
+ * Computed once per server: the registry does not change after startup.
+ */
+export function toolListing(tools: readonly ToolModule[] = TOOLS): ListedTool[] {
+  return listedTools(tools).map((t) => {
+    const inputSchema = toJsonSchemaCompat(strictInputSchema(t), {
+      strictUnions: true,
+      pipeStrategy: 'input',
+    });
+    delete inputSchema['$schema'];
+    return {
+      name: t.name,
+      ...(t.title ? { title: t.title } : {}),
+      description: t.description,
+      inputSchema,
+      ...(t.annotations !== undefined ? { annotations: t.annotations } : {}),
+    };
+  });
+}
 
 export function registerToolModule(tool: ToolModule): void {
   if (TOOLS.some((t) => t.name === tool.name)) {
     throw new Error(`Tool '${tool.name}' is already registered`);
+  }
+  if (tool.annotations === undefined) {
+    const hints = TOOL_ANNOTATIONS[tool.name];
+    if (hints !== undefined) tool.annotations = { ...hints };
   }
   TOOLS.push(tool);
 }
@@ -120,6 +206,11 @@ export function registerToolModule(tool: ToolModule): void {
  * validates as `{}`. Measured on 430c797, before the schemas were strict, it
  * was already rejected — -32602 "Required" from every tool, `check_toolchain`
  * (no parameters at all) included — and an unknown key was stripped.
+ *
+ * Every registered tool answers `tools/call`, hidden aliases included; the
+ * `tools/list` handler the SDK installed is then replaced with one that
+ * serves `toolListing()` — the listed tools, without `$schema` and
+ * `execution` (`Server.setRequestHandler` replaces a handler by design).
  */
 export function attachAllTools(server: McpServer, ctx: PluginContext): void {
   for (const tool of TOOLS) {
@@ -129,6 +220,7 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
         ...(tool.title ? { title: tool.title } : {}),
         description: tool.description,
         inputSchema: strictInputSchema(tool),
+        ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
       },
       async (input, extra) => {
         const callMeta: ToolCallMeta = {};
@@ -145,11 +237,20 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
         if (server.server.getClientCapabilities()?.sampling !== undefined) {
           callMeta.sampling = (params, options) => server.server.createMessage(params, options);
         }
-        const result = await tool.handler(input as Record<string, unknown>, ctx, callMeta);
-        return toCallToolResult(result, tool.contentOnlyKeys ?? []);
+        let result: ToolResult<Record<string, unknown>>;
+        try {
+          result = await tool.handler(input as Record<string, unknown>, ctx, callMeta);
+        } catch (e) {
+          if (!isDatabaseBusyError(e)) throw e;
+          result = { ok: false, error: { code: 'database_busy', message: DATABASE_BUSY_MESSAGE } };
+        }
+        const shapedBy = tool.route?.(input as Record<string, unknown>) ?? tool;
+        return toCallToolResult(result, shapedBy.contentOnlyKeys ?? []);
       },
     );
   }
+  const listing = toolListing(TOOLS);
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: listing }));
 }
 
 /**

@@ -104,7 +104,7 @@ import {
 import { open as openAsync, lstat as lstatAsync, readlink as readlinkAsync } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
-import { readSmallText, walkLinksUnder, type RefusalReason } from '../hooks/configFile.js';
+import { readBoundedBytes, readSmallText, textOf, walkLinksUnder, type RefusalReason } from '../hooks/configFile.js';
 import { parseJsonBounded } from './boundedJson.js';
 
 /** A project file's default read cap: far above any config or source file, far below a denial of service. */
@@ -120,14 +120,14 @@ export const PROJECT_LOCKFILE_MAX_BYTES = 64 * 1024 * 1024;
  * Why an existing project path was not read. `read-budget`: the walk it was
  * found by had spent its {@link ReadBudget} before reaching it.
  */
-export type ProjectReadRefusal = RefusalReason | 'outside-project' | 'read-budget';
+type ProjectReadRefusal = RefusalReason | 'outside-project' | 'read-budget';
 
 export type ProjectTextRead =
   | { status: 'absent' }
   | { status: 'ok'; text: string }
   | { status: 'refused'; reason: ProjectReadRefusal };
 
-export type ProjectBytesRead =
+type ProjectBytesRead =
   | { status: 'absent' }
   | { status: 'ok'; bytes: Buffer }
   | { status: 'refused'; reason: ProjectReadRefusal };
@@ -228,43 +228,7 @@ export function readProjectJson(root: string, path: string, maxBytes: number = P
 export function readProjectBytes(root: string, path: string, maxBytes: number = PROJECT_FILE_MAX_BYTES): ProjectBytesRead {
   const where = locate(root, path);
   if (!where.ok) return where.read;
-  let fd: number;
-  try {
-    fd = openSync(where.real, OPEN_FLAGS);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { status: 'absent' };
-    if (code === 'EISDIR') return { status: 'refused', reason: 'not-a-regular-file' };
-    return { status: 'refused', reason: 'unreadable' };
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) return { status: 'refused', reason: 'not-a-regular-file' };
-    if (st.size > maxBytes) return { status: 'refused', reason: 'too-large' };
-    let buf = Buffer.allocUnsafe(st.size + 1);
-    let total = 0;
-    for (;;) {
-      if (total === buf.length) {
-        if (buf.length > maxBytes) break;
-        const bigger = Buffer.allocUnsafe(Math.min(buf.length * 2, maxBytes + 1));
-        buf.copy(bigger, 0, 0, total);
-        buf = bigger;
-      }
-      const n = readSync(fd, buf, total, buf.length - total, null);
-      if (n === 0) break;
-      total += n;
-    }
-    if (total > maxBytes) return { status: 'refused', reason: 'too-large' };
-    return { status: 'ok', bytes: buf.subarray(0, total) };
-  } catch {
-    return { status: 'refused', reason: 'unreadable' };
-  } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      /* nothing left to do with it */
-    }
-  }
+  return readBoundedBytes(where.real, maxBytes);
 }
 
 /**
@@ -280,37 +244,8 @@ export function readProjectBytes(root: string, path: string, maxBytes: number = 
 export function readProjectHead(root: string, path: string, maxBytes: number): ProjectTextRead {
   const where = locate(root, path);
   if (!where.ok) return where.read;
-  let fd: number;
-  try {
-    fd = openSync(where.real, OPEN_FLAGS);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { status: 'absent' };
-    if (code === 'EISDIR') return { status: 'refused', reason: 'not-a-regular-file' };
-    return { status: 'refused', reason: 'unreadable' };
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) return { status: 'refused', reason: 'not-a-regular-file' };
-    const buf = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
-    let total = 0;
-    while (total < buf.length) {
-      const n = readSync(fd, buf, total, buf.length - total, null);
-      if (n === 0) break;
-      total += n;
-    }
-    let text = buf.subarray(0, total).toString('utf8');
-    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-    return { status: 'ok', text };
-  } catch {
-    return { status: 'refused', reason: 'unreadable' };
-  } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      /* nothing left to do with it */
-    }
-  }
+  const r = readBoundedBytes(where.real, maxBytes, { head: true });
+  return r.status === 'ok' ? { status: 'ok', text: textOf(r.bytes) } : r;
 }
 
 /**
@@ -401,7 +336,7 @@ export function hashRegularFileSync(path: string): string | null {
 }
 
 /** What is at a project path, without following a link. */
-export type ProjectEntryKind = 'absent' | 'file' | 'directory' | 'link' | 'other';
+type ProjectEntryKind = 'absent' | 'file' | 'directory' | 'link' | 'other';
 
 /**
  * `lstat`'s answer for `path`: a link (a Windows junction included, which
@@ -421,7 +356,7 @@ export function projectEntryKind(path: string): ProjectEntryKind {
 }
 
 /** What is at a project path, judged without following anything: {@link ProjectEntryKind}, or `remote`. */
-export type ProjectEntryKindIn = ProjectEntryKind | 'remote';
+type ProjectEntryKindIn = ProjectEntryKind | 'remote';
 
 /**
  * {@link projectEntryKind} for a path below `root`, safe on any component:
@@ -483,7 +418,7 @@ export function realpathInProject(root: string, path: string): string | null {
 }
 
 /** What a project path is when followed — through links that stay inside the project only. */
-export type ProjectPathKind = 'absent' | 'file' | 'directory' | 'other' | 'outside';
+type ProjectPathKind = 'absent' | 'file' | 'directory' | 'other' | 'outside';
 
 /**
  * `statSync(path)`'s answer for a project path, except that a link leading
@@ -523,7 +458,7 @@ export function projectPathKind(root: string, path: string): ProjectPathKind {
  * For a walk that must tell a directory link out of the project (a
  * sub-project it did not enter) from a file link it names elsewhere.
  */
-export function linkTargetKind(root: string, path: string): 'directory' | 'file' | 'other' | 'absent' | 'remote' {
+function linkTargetKind(root: string, path: string): 'directory' | 'file' | 'other' | 'absent' | 'remote' {
   const abs = resolve(root, path);
   const walk = walkLinksUnder(root, abs);
   if (!walk.ok) return walk.reason === 'remote-link' ? 'remote' : 'other';
@@ -598,7 +533,7 @@ export function listProjectDirOrNull(root: string, dir: string): ProjectDirEntry
 }
 
 /** Why a project write did not happen. */
-export type ProjectWriteRefusal =
+type ProjectWriteRefusal =
   /** The target is not below the project root. */
   | 'outside-project'
   /** A directory on the way resolves outside the project, or is not a directory. */
@@ -616,7 +551,7 @@ export type ProjectWriteResult =
   | { ok: true; bytes: number }
   | { ok: false; reason: ProjectWriteRefusal; detail?: string };
 
-export interface ProjectWriteOptions {
+interface ProjectWriteOptions {
   /** `create`: only when nothing is at that name. `replace`: create, or replace a regular file. */
   mode: 'create' | 'replace';
 }

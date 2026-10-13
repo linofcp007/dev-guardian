@@ -40,11 +40,11 @@
  * find-links, trusted host, URL, VCS or editable requirement is refused.
  */
 
-import { dirname, relative, resolve, sep } from 'node:path';
-import { describeReadRefusal, isWithinDir, readProjectBytes } from '../platform/projectFs.js';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { describeReadRefusal, isWithinDir, listProjectDir, projectPathKind, readProjectBytes } from '../platform/projectFs.js';
 
 /** What made a requirements file not installable. */
-export type PipRefusalKind =
+type PipRefusalKind =
   | 'index option'
   | 'find-links option'
   | 'trusted-host option'
@@ -84,9 +84,9 @@ export interface PipRefusal {
 }
 
 /** Files one check follows, includes included. */
-export const MAX_REQUIREMENT_FILES = 200;
+const MAX_REQUIREMENT_FILES = 200;
 /** One requirements file is read up to this size; a real one is a few KB. */
-export const MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
+const MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
 
 /** `<file>:<line>: <kind> (<host>)` — the one wording every refusal and note uses. */
 export function describePipRefusal(r: PipRefusal): string {
@@ -105,7 +105,7 @@ export function describePipRefusal(r: PipRefusal): string {
  * UTF-8 (with or without a BOM), UTF-16 with a BOM and ASCII are decoded
  * here; anything else would be read differently by pip, and is refused.
  */
-export function decodeRequirements(bytes: Buffer): { ok: true; text: string } | { ok: false; detail: string } {
+function decodeRequirements(bytes: Buffer): { ok: true; text: string } | { ok: false; detail: string } {
   const starts = (sig: number[]): boolean => sig.every((b, i) => bytes[i] === b);
   const strict = (enc: 'utf-8' | 'utf-16le' | 'utf-16be', data: Buffer): { ok: true; text: string } | { ok: false; detail: string } => {
     try {
@@ -165,7 +165,7 @@ const COMMENT = /(^|[ \t]+)#.*$/;
  * `\` at either end of a joined line stripped, and a comment line never
  * joined — then `ignore_comments`.
  */
-export function* logicalLines(text: string): Generator<{ line: number; text: string }> {
+function* logicalLines(text: string): Generator<{ line: number; text: string }> {
   const physical = text.split(/\r\n|\r|\n/);
   if (physical.length > 0 && physical[physical.length - 1] === '' && /[\r\n]$/.test(text)) physical.pop();
   let joined: string[] = [];
@@ -402,7 +402,7 @@ function judgeInclude(target: string): Pick<PipRefusal, 'kind' | 'host'> | null 
   return null;
 }
 
-export interface PipCheck {
+interface PipCheck {
   /** Every refusal found, in the order met (bounded). Empty: installable. */
   refusals: PipRefusal[];
   /** The files read, relative to the project directory, `/`-separated. */
@@ -520,3 +520,104 @@ export const SOURCE_KINDS: ReadonlySet<PipRefusalKind> = new Set([
   'source table',
   'dynamic dependencies',
 ]);
+
+// ------------------------------------------------------------------ what a project's requirements name
+
+/**
+ * The requirements files dev-guardian reads for a project (review 8, finding
+ * 5: three finders, kept in step by a comment) — `requirements*.txt` at its
+ * root and every `*.txt` one level into `requirements/` (the
+ * `requirements/base.txt` + `dev.txt` split), never a recursive walk — as
+ * project-relative paths with `/`, sorted by where each leads
+ * (`platform/projectFs.ts#projectPathKind`): `files`, regular files inside the
+ * project; `outside`, a candidate that leads out of it through a link (a
+ * `requirements/` directory itself with its trailing `/`), never read;
+ * `other`, a candidate that is neither (a FIFO, a link loop). `deps_audit`
+ * hands `files` to pip-audit and names `outside` as not audited,
+ * `deps_update_plan` plans from `files`, and `create_fix_pr` judges every
+ * candidate a pip install would read.
+ */
+export function findRequirementFiles(projectPath: string): { files: string[]; outside: string[]; other: string[] } {
+  const files: string[] = [];
+  const outside: string[] = [];
+  const other: string[] = [];
+  const sort = (rel: string): void => {
+    const kind = projectPathKind(projectPath, join(projectPath, ...rel.split('/')));
+    if (kind === 'file') files.push(rel);
+    else if (kind === 'outside') outside.push(rel);
+    else if (kind === 'other') other.push(rel);
+  };
+  for (const { name } of listProjectDir(projectPath, projectPath)) {
+    if (/^requirements.*\.txt$/i.test(name)) sort(name);
+  }
+  const reqDir = join(projectPath, 'requirements');
+  if (projectPathKind(projectPath, reqDir) === 'outside') outside.push('requirements/');
+  for (const { name } of listProjectDir(projectPath, reqDir)) {
+    if (name.toLowerCase().endsWith('.txt')) sort(`requirements/${name}`);
+  }
+  return { files, outside, other };
+}
+
+/** A requirement as written: `name[extras] specifier`, its marker dropped. */
+export interface RequirementSpec {
+  name: string;
+  /** `[redis]`, as written; absent without extras. */
+  extras?: string;
+  /** `==1.2.3`, `>=1,<2`, `~=1.4`; `''` for a bare name. */
+  specifier: string;
+}
+
+/** `name`, optional `[extras]`, then the rest of the requirement. */
+const SPEC = new RegExp(`^(${NAME})[ \\t]*(\\[[^\\]]*\\])?[ \\t]*(.*)$`);
+/** A whole specifier set: PEP 440 clauses, comma-separated. */
+const SPECIFIER = new RegExp(`^${VERSIONS}$`);
+
+/**
+ * One PEP 508 requirement — the text of a requirements line with its options
+ * gone, or an element of a pyproject `dependencies` array: its environment
+ * marker (from a top-level `;`) dropped, its extras split off. `null` when it
+ * names no registry package: a direct reference (`name @ url`), a URL, a path,
+ * `-e .`.
+ */
+export function parseRequirementSpec(specRaw: string): RequirementSpec | null {
+  const semi = specRaw.indexOf(';');
+  const spec = (semi >= 0 ? specRaw.slice(0, semi) : specRaw).trim();
+  if (spec === '' || spec.startsWith('-') || /:\/\/|^[./\~]/.test(spec)) return null;
+  const m = SPEC.exec(spec);
+  if (m === null || m[1] === undefined) return null;
+  const specifier = (m[3] ?? '').trim().replace(/^\((.*)\)$/, '$1').trim();
+  // A direct reference (`@ url`) or anything that is not a specifier set — `==1.0#egg` — names nothing to look up.
+  if (specifier !== '' && !SPECIFIER.test(specifier)) return null;
+  return { name: m[1], ...(m[2] !== undefined ? { extras: m[2] } : {}), specifier };
+}
+
+/** The version of an exact pin — `==1.2.3` or `===1.2.3`, one clause, no wildcard — or undefined. */
+export function exactPin(specifier: string): string | undefined {
+  return /^===?[ \t]*([A-Za-z0-9._+!-]+)$/.exec(specifier)?.[1];
+}
+
+/** One requirement a requirements file names, with the line it starts on. */
+interface RequirementMention extends RequirementSpec {
+  line: number;
+}
+
+/**
+ * Every requirement a requirements file names, its lines read as pip reads
+ * them ({@link logicalLines}: continuations joined with nothing between, a `#`
+ * a comment only at the start or after whitespace): an option line (`-r`,
+ * `--index-url`, `-e …`) is none, the options after a requirement on its line
+ * (`--hash=…`, which `pip-compile --generate-hashes` writes on continuation
+ * lines) are dropped, and the rest is {@link parseRequirementSpec}. The one
+ * reading `deps_update_plan`, `validate_finding`'s PyPI pins and `scan_skill`
+ * share (review 8, finding 5: three cut at any `#`, one joined continuations
+ * with a space, one did not join them at all).
+ */
+export function requirementMentions(text: string): RequirementMention[] {
+  const out: RequirementMention[] = [];
+  for (const { line, text: logical } of logicalLines(text)) {
+    if (logical.startsWith('-')) continue;
+    const spec = parseRequirementSpec(logical.replace(/[ \t]+-.*$/, ''));
+    if (spec !== null) out.push({ line, ...spec });
+  }
+  return out;
+}

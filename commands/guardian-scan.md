@@ -1,5 +1,5 @@
 ---
-description: Security scan — the whole project, or only what changed (staged, uncommitted, unpushed, branch, since a ref, incoming) or given paths. Scan de segurança. Escaneo de seguridad.
+description: "Security scan of the whole project or only what changed (staged, unpushed, branch, since a ref)."
 argument-hint: "[--staged | --uncommitted | --unpushed | --branch [base] | --since <ref> | --incoming | <path>…]"
 ---
 

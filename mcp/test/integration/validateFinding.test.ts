@@ -292,12 +292,12 @@ describe('validate_finding — the tool description', () => {
 /* ------------------------------------------------------------------ */
 
 describe('validate_finding refusals', () => {
-  it('refuses an unusable project_path with not_a_git_repo, before reading storage', async () => {
+  it('refuses an unusable project_path with target_not_found, before reading storage', async () => {
     // No snapshot is seeded either, so an implementation that read storage
     // first would answer `no_surface_snapshot` here — a caller would then go
     // run map_attack_surface against a path that does not exist.
     const r = expectErr(await run({ project_path: join(projectPath, 'does-not-exist') }));
-    expect(r.error.code).toBe('not_a_git_repo');
+    expect(r.error.code).toBe('target_not_found');
     expect(rawRows('finding_validations')).toHaveLength(0);
   });
 

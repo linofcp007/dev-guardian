@@ -161,12 +161,12 @@ const SIGNATURE_NOT_VERIFIED_CWE = 'CWE-347';
 const AUTHENTICITY_NOT_VERIFIABLE_CWE = 'CWE-345';
 
 /** Findings of a real `cosign verify`. */
-export const COSIGN_VERIFY_TOOL_NAME = 'cosign-verify';
+const COSIGN_VERIFY_TOOL_NAME = 'cosign-verify';
 /** Findings of the existence check: what is attached as OCI referrers (and the legacy tags). */
-export const COSIGN_REFERRERS_TOOL_NAME = 'cosign-referrers';
+const COSIGN_REFERRERS_TOOL_NAME = 'cosign-referrers';
 
 /** Each cosign call's own ceiling; cosign's own default `--timeout` is 3 min too. */
-export const COSIGN_TIMEOUT_MS = 180_000;
+const COSIGN_TIMEOUT_MS = 180_000;
 /** One image's budget when `GUARDIAN_SCAN_TIMEOUT_MS` sets none — `runProcess`'s own default. */
 const DEFAULT_IMAGE_BUDGET_MS = 10 * 60 * 1000;
 /** The oldest cosign that reads OCI referrers by default. */
@@ -216,7 +216,7 @@ export interface SignerPolicy {
 // Readiness: `cosign version`
 // ---------------------------------------------------------------------------
 
-export type CosignReadiness = { ok: true; version: string } | { ok: false; status: 'skipped' | 'failed'; reason: string };
+type CosignReadiness = { ok: true; version: string } | { ok: false; status: 'skipped' | 'failed'; reason: string };
 
 /** Whether this cosign can be used — see the module comment for why 2.x cannot. */
 export function readinessFromProbe(r: ProcessRunResult): CosignReadiness {
@@ -243,9 +243,9 @@ export function readinessFromProbe(r: ProcessRunResult): CosignReadiness {
 // The digest: `cosign triangulate --type digest`
 // ---------------------------------------------------------------------------
 
-export type TriangulateCause = 'not_found' | 'denied' | 'rate_limited' | 'unreachable' | 'registry_error' | 'other';
+type TriangulateCause = 'not_found' | 'denied' | 'rate_limited' | 'unreachable' | 'registry_error' | 'other';
 
-export type Resolution =
+type Resolution =
   | { kind: 'digest'; ref: string; digest: string }
   | { kind: 'tag_only'; reason: string }
   | { kind: 'error'; detail: string; cause: TriangulateCause; why: string };
@@ -298,8 +298,8 @@ function triangulateCause(r: ProcessRunResult): TriangulateCause {
 // The registry's own answers: cosign's `-d` trace (round 3 I3, round 4 I4–I6)
 // ---------------------------------------------------------------------------
 
-export type Presence = 'present' | 'absent' | 'unknown';
-export type FetchOutcome = 'served' | 'missing' | 'failed';
+type Presence = 'present' | 'absent' | 'unknown';
+type FetchOutcome = 'served' | 'missing' | 'failed';
 
 /** The predicate type of a cosign v3 image signature. */
 const SIGN_PREDICATE = 'https://sigstore.dev/cosign/sign/v1';
@@ -309,10 +309,10 @@ const BUNDLE_MEDIA_TYPE = /^application\/vnd\.dev\.sigstore\.bundle/;
 /** The annotation cosign and GitHub put on a bundle referrer: its DSSE predicate type. */
 const PREDICATE_ANNOTATION = 'dev.sigstore.bundle.predicateType';
 /** The predicate types `download attestation` is asked for, newest first. */
-export const PROVENANCE_PREDICATE_TYPES = ['https://slsa.dev/provenance/v1', 'https://slsa.dev/provenance/v0.2'] as const;
+const PROVENANCE_PREDICATE_TYPES = ['https://slsa.dev/provenance/v1', 'https://slsa.dev/provenance/v0.2'] as const;
 
 /** The registry's final answer to one request (a 3xx followed). */
-export interface TraceAnswer {
+interface TraceAnswer {
   outcome: FetchOutcome;
   status: number | null;
   /** `200 https://…/manifests/sha256:…`, or a transport error — no query string, escaped. */
@@ -322,7 +322,7 @@ export interface TraceAnswer {
 }
 
 /** One referrer as the registry's referrers index lists it — the registry's JSON, not cosign's words. */
-export interface IndexedReferrer {
+interface IndexedReferrer {
   digest: string;
   artifactType: string;
   /** The `dev.sigstore.bundle.predicateType` annotation, when the index carries one. */
@@ -336,7 +336,7 @@ export interface IndexedReferrer {
   fromTag: boolean;
 }
 
-export type ReferrerIndex =
+type ReferrerIndex =
   | {
       state: 'listed';
       referrers: IndexedReferrer[];
@@ -346,7 +346,7 @@ export type ReferrerIndex =
   | { state: 'failed' | 'unprobed'; detail: string };
 
 /** What one traced cosign call shows the registry answered. */
-export interface RegistryTrace {
+interface RegistryTrace {
   /** By reference as requested (a digest, or a tag). */
   manifests: Map<string, TraceAnswer>;
   /** By digest. */
@@ -694,7 +694,7 @@ function describeListed(referrers: IndexedReferrer[]): string {
 // The downloads: `download signature`, `download attestation`
 // ---------------------------------------------------------------------------
 
-export interface SignatureDownload {
+interface SignatureDownload {
   state: 'present' | 'attestation_only' | 'absent' | 'unknown';
   /** The predicate types of the signed attestation bundles returned (for `attestation_only`), escaped. */
   attestationTypes: string[];
@@ -784,9 +784,9 @@ export function classifyAttestationDownload(r: ProcessRunResult): Presence {
 // `cosign verify`
 // ---------------------------------------------------------------------------
 
-export type RejectionReason = 'no_signature' | 'no_matching_signature' | 'no_certificate' | 'invalid_signature';
+type RejectionReason = 'no_signature' | 'no_matching_signature' | 'no_certificate' | 'invalid_signature';
 
-export type VerifyVerdict =
+type VerifyVerdict =
   | { verdict: 'verified'; types: string[]; digest?: string }
   | { verdict: 'no_signature_claimed'; detail: string }
   | { verdict: 'rejected'; reason: RejectionReason; detail: string }
@@ -1031,7 +1031,7 @@ export interface ImageSignatureSummary {
   note: string;
 }
 
-export interface CosignImageCheck {
+interface CosignImageCheck {
   /** The one `tools_run` entry: `cosign-verify` or `cosign-referrers`, with the image as its target. */
   run: ToolRun;
   findings: Finding[];
@@ -1048,7 +1048,7 @@ export interface CosignRunContext {
 }
 
 /** What to do about an unverified signature — the same words everywhere. */
-export const UNVERIFIED_NOTE =
+const UNVERIFIED_NOTE =
   'A signature exists, but its signer was NOT verified: anyone can sign an image. Pass signer_identity ' +
   '(or signer_identity_regexp) and signer_issuer (or signer_issuer_regexp) to verify who signed it.';
 

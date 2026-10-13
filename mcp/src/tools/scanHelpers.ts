@@ -14,9 +14,9 @@
  *   when one scanner inside a composite run was skipped.
  */
 
-import { mkdtempSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
 import { makeProjectDir } from '../platform/projectFs.js';
@@ -76,12 +76,95 @@ export function resetScannerCache(): void {
 export function ensureReportDir(projectPath: string, scanId: string, prefix: string): string {
   const short = scanId.slice(0, 8);
   const made = makeProjectDir(projectPath, join('.guardian', 'reports', `${prefix}-${short}`));
-  if (made !== null) return made;
+  if (made !== null) {
+    // Every component of the path was just verified a real directory.
+    pruneReports(dirname(made), prefix, made);
+    return made;
+  }
   process.stderr.write(
     `[dev-guardian] ${join(projectPath, '.guardian', 'reports')} is a link or not a directory; ` +
       `this scan's reports go to the temp directory instead\n`,
   );
   return mkdtempSync(join(tmpdir(), `guardian-reports-${prefix}-`));
+}
+
+/**
+ * How many report directories of one kind `.guardian/reports/` keeps — the
+ * newest, by modification time; `GUARDIAN_KEEP_REPORTS` overrides it (1 or
+ * more). Nothing pruned them: a toy project held 29 after about 8 scans, a
+ * mid-size one 4.3 MB after 3 CI runs, all of it untracked (review 8,
+ * finding 14 and C5).
+ */
+export const DEFAULT_KEPT_REPORTS = 3;
+
+/**
+ * The report kinds pruned: scan output read back into the database, which
+ * nothing reads again afterwards. A document a user asked for (`sbom-`,
+ * `vex-`, `perf-`), DAST evidence (`dast-`, which a stored finding points
+ * at) and a skill audit are never pruned.
+ */
+export const PRUNED_REPORT_PREFIXES: ReadonlySet<string> = new Set([
+  'sast',
+  'bugs',
+  'compliance',
+  'depsaudit',
+  'deps',
+  'iac',
+  'secrets',
+  'surface',
+  'review',
+  'containers',
+  'quality',
+  'wordpress',
+  'init-secrets',
+]);
+
+function keptReports(): number {
+  const n = Number(process.env['GUARDIAN_KEEP_REPORTS']);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_KEPT_REPORTS;
+}
+
+/**
+ * Removes the older `<prefix>-<id>` directories of `reportsDir` — a directory
+ * `ensureReportDir` just verified link-free — keeping the newest
+ * {@link keptReports}, `current` always among them. Only real directories
+ * are touched (a `Dirent` is typed without following a link, and `rmSync`
+ * removes a link inside one, never what it names). Best effort: a directory
+ * a running scanner still holds is left for the next scan.
+ */
+export function pruneReports(reportsDir: string, prefix: string, current: string): void {
+  if (!PRUNED_REPORT_PREFIXES.has(prefix)) return;
+  let entries;
+  try {
+    entries = readdirSync(reportsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const others: Array<{ path: string; mtime: number }> = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || !e.name.startsWith(`${prefix}-`)) continue;
+    // The id after the prefix: `deps-<id>` is not `depsaudit-<id>`'s, nor
+    // `init-secrets-<id>` a `secrets-` one (a prefix is never a hyphenated
+    // form of another's id: ids are hex or a tree hash).
+    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(prefix.length + 1))) continue;
+    const path = join(reportsDir, e.name);
+    if (path === current) continue;
+    try {
+      const st = lstatSync(path);
+      if (st.isDirectory() && !st.isSymbolicLink()) others.push({ path, mtime: st.mtimeMs });
+    } catch {
+      /* gone meanwhile */
+    }
+  }
+  others.sort((a, b) => b.mtime - a.mtime);
+  // `current` is one of the kept.
+  for (const d of others.slice(Math.max(0, keptReports() - 1))) {
+    try {
+      rmSync(d.path, { recursive: true, force: true });
+    } catch {
+      /* held by a running scanner: the next scan prunes it */
+    }
+  }
 }
 
 /**

@@ -29,12 +29,32 @@
  * out of it entirely.
  */
 
-import type { Finding } from '../types.js';
+import { SEVERITIES, type Finding, type Severity } from '../types.js';
 import { untrustedText } from '../platform/untrustedText.js';
 import { toSarif, type SarifSuppressed } from '../report/sarif.js';
 import { suppressionNote } from '../runners/trivyRun.js';
-import { CI_EXIT, type BaselineSource, type CiExitCode, type ExclusionReset, type RulesSource } from './types.js';
+import {
+  CI_EXIT,
+  type BaselineSource,
+  type CiExitCode,
+  type CoverageGapDetail,
+  type ExclusionReset,
+  type RulesSource,
+} from './types.js';
 import type { GateVerdict, RepoSuppressionEntry } from './gate.js';
+
+/**
+ * How the CLI is run, in the commands a report tells its reader to run. A
+ * plugin install puts no `dev-guardian` on PATH, so `cli/dev-guardian.mjs`
+ * passes the runnable `node "<plugin root>/cli/dev-guardian.mjs"` (review 8,
+ * C7); the default is what works from a dev-guardian checkout's root.
+ */
+export const DEFAULT_CLI_COMMAND = 'node cli/dev-guardian.mjs';
+
+export interface HumanOptions {
+  /** See {@link DEFAULT_CLI_COMMAND}. */
+  command?: string;
+}
 
 const EXIT_LABEL: Record<CiExitCode, string> = {
   [CI_EXIT.PASS]: 'PASS',
@@ -69,7 +89,8 @@ const EXIT_LABEL: Record<CiExitCode, string> = {
  * — which is exactly why `GateVerdict` carries it as its own field (see
  * `gate.ts`) rather than this function trying to derive it.
  */
-export function renderHuman(v: GateVerdict): string {
+export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
+  const command = opts.command ?? DEFAULT_CLI_COMMAND;
   const lines: string[] = [
     `dev-guardian CI: ${EXIT_LABEL[v.exitCode]} (exit code ${v.exitCode})`,
     `coverage: ${v.coverage}`,
@@ -83,9 +104,10 @@ export function renderHuman(v: GateVerdict): string {
   if (v.baselineAbsent) {
     lines.push(
       v.baselineSource.from === 'ref'
-        ? `no usable baseline at ${v.baselineSource.ref} — run \`dev-guardian baseline update\` on that branch and ` +
-            'commit .guardian/baseline.json there to adopt its findings'
-        : 'no baseline found — run `dev-guardian baseline update` to adopt these findings as the baseline',
+        ? `no usable baseline at ${v.baselineSource.ref}, so every finding counts as new — run ` +
+            `\`${command} baseline update --project .\` on that branch and commit .guardian/baseline.json there`
+        : 'no baseline found, so every finding counts as new — record one on the base commit with ' +
+            `\`${command} baseline update --project .\` and commit .guardian/baseline.json`,
     );
   }
 
@@ -93,17 +115,28 @@ export function renderHuman(v: GateVerdict): string {
     `new findings: ${v.newFindings.length} (${v.blocking.length} at or above the fail-on threshold)`,
   );
 
+  // Each gap with what clears it (its remedy: `coverage_gap_details` in the JSON).
   if (v.coverageGaps.length > 0) {
     lines.push('coverage gaps:');
-    for (const gap of v.coverageGaps) lines.push(`  - ${gap}`);
+    v.coverageGaps.forEach((gap, i) => {
+      lines.push(`  - ${gap}`);
+      const remedy = v.coverageGapDetails[i]?.remedy;
+      if (remedy !== undefined) lines.push(`    fix: ${remedy}`);
+    });
   }
 
-  // `--accept-partial-parse`: gaps the caller accepted, printed as such —
-  // never as coverage gaps, never silently. `coverage:` above still says
-  // `partial` for them.
+  // Gaps accepted — by `--accept-partial-parse`, or by the project's committed
+  // `.guardian/scan.yml` (each line says which) — printed as such: never as
+  // coverage gaps, never silently. `coverage:` above still says `partial`.
   if (v.acceptedGaps.length > 0) {
-    lines.push('accepted (--accept-partial-parse):');
+    lines.push('accepted (not gating):');
     for (const gap of v.acceptedGaps) lines.push(`  - ${gap}`);
+  }
+
+  // Reported and never gating: the taint analysis's fixpoint timeouts.
+  if (v.coverageNotes.length > 0) {
+    lines.push('notes (not gating):');
+    for (const note of v.coverageNotes) lines.push(`  - ${note}`);
   }
   for (const path of v.unusedPartialParseAcceptances) {
     lines.push(`note: --accept-partial-parse ${path}: no step reported it partly parsed (unused)`);
@@ -190,13 +223,40 @@ function describeFinding(f: Finding): string {
 // JSON
 // ---------------------------------------------------------------------------
 
-interface JsonVerdict {
+/**
+ * The JSON verdict. Its keys are a contract: dev-spec-driven's finish gate
+ * parses `exit_code`, `coverage`, `coverage_gaps` (a string array, kept so),
+ * `new_findings`, `blocking_findings` (`file_path`, `line_start`, `severity`,
+ * `rule_id`, `title`), `baseline_absent` and `accepted_gaps`, and since 3.3.0
+ * reads `tool_version`, `coverage_gap_details` and `baseline_status` when
+ * they are there (`test/unit/ci/verdictContract.test.ts` freezes them).
+ * Keys are only ever added.
+ */
+export interface JsonVerdict {
+  /** The dev-guardian version that judged — dev-spec warns below the one it needs. */
+  tool_version: string;
   exit_code: CiExitCode;
   coverage: GateVerdict['coverage'];
   coverage_gaps: string[];
+  /** Every gap as data: kind, remedy, gating (`gate.ts`). */
+  coverage_gap_details: CoverageGapDetail[];
+  /** Reported, never gating (taint fixpoint timeouts); not in `coverage_gaps`. */
+  coverage_notes: string[];
+  /** Every new finding — with `compact`, only the blocking ones. */
   new_findings: Finding[];
+  /** How many new findings there are, whatever `new_findings` holds. */
+  new_findings_count: number;
+  /** New findings per severity, every severity named. */
+  new_findings_by_severity: Record<Severity, number>;
+  /** `new_findings` holds only the blocking findings (`--compact`). */
+  compact: boolean;
   blocking_findings: Finding[];
   baseline_absent: boolean;
+  /**
+   * `present` or `absent` — never "corrupt": an unreadable baseline is a
+   * configuration error (exit 3, the parse error named), not "no baseline".
+   */
+  baseline_status: 'present' | 'absent';
   accepted_gaps: string[];
   unused_partial_parse_acceptances: string[];
   suppressed_by_repo_config: RepoSuppressionEntry[];
@@ -205,21 +265,43 @@ interface JsonVerdict {
   exclusions_reset: ExclusionReset | null;
 }
 
+export interface JsonOptions {
+  /** The version that judged; `0.0.0` when the caller cannot tell. */
+  toolVersion?: string;
+  /**
+   * `--compact`: the same keys, `new_findings` cut to the blocking ones.
+   * 623 KB of JSON for 487 new findings did not fit an MCP call, nor a
+   * terminal tool's output (review 8, C4); the blocking ones and the counts
+   * are what a finish gate needs.
+   */
+  compact?: boolean;
+}
+
 /**
  * snake_case keys, matching every other JSON-facing shape in `../types.ts`
  * (`Finding.file_path`, `ScanResult.findings_count_by_severity`, ...) so a
  * script consuming this alongside the rest of dev-guardian's JSON output
  * sees one convention, not two. Every field of `GateVerdict` is carried —
- * this is a full serialisation, not a summary.
+ * this is a full serialisation, not a summary (`compact` aside).
  */
-export function renderJson(v: GateVerdict): string {
+export function renderJson(v: GateVerdict, opts: JsonOptions = {}): string {
+  const compact = opts.compact === true;
+  const bySeverity = Object.fromEntries(SEVERITIES.map((s) => [s, 0])) as Record<Severity, number>;
+  for (const f of v.newFindings) bySeverity[f.severity] += 1;
   const payload: JsonVerdict = {
+    tool_version: opts.toolVersion ?? '0.0.0',
     exit_code: v.exitCode,
     coverage: v.coverage,
     coverage_gaps: v.coverageGaps,
-    new_findings: v.newFindings,
+    coverage_gap_details: v.coverageGapDetails,
+    coverage_notes: v.coverageNotes,
+    new_findings: compact ? v.blocking : v.newFindings,
+    new_findings_count: v.newFindings.length,
+    new_findings_by_severity: bySeverity,
+    compact,
     blocking_findings: v.blocking,
     baseline_absent: v.baselineAbsent,
+    baseline_status: v.baselineAbsent ? 'absent' : 'present',
     accepted_gaps: v.acceptedGaps,
     unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
     suppressed_by_repo_config: v.suppressedByRepoConfig,
@@ -227,7 +309,7 @@ export function renderJson(v: GateVerdict): string {
     rules_source: v.rulesSource,
     exclusions_reset: v.exclusionsReset,
   };
-  return JSON.stringify(payload, null, 2);
+  return JSON.stringify(payload, null, compact ? undefined : 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +384,7 @@ interface SarifDocument {
  * (The design of record originally read as excluding all of `coverage` from SARIF;
  * it is being amended to describe the above, so the doc and this code agree.)
  */
-export function renderSarif(v: GateVerdict, projectPath: string): string {
+export function renderSarif(v: GateVerdict, projectPath: string, opts: SarifOptions = {}): string {
   // A `file_path` that IS the project root relativises to `''`
   // (`toProjectRelativeUri`'s own "posixFile === posixRoot" branch). Passed
   // through, `toSarif`'s `if (f.file_path)` check (see `../report/sarif.ts`,
@@ -310,8 +392,17 @@ export function renderSarif(v: GateVerdict, projectPath: string): string {
   // `locations` entirely, rather than emitting an empty URI. That is the
   // right outcome, not a gap: a finding about the whole project has no
   // single line to annotate, so no location is more honest than one.
-  const relocate = (f: Finding): Finding =>
-    f.file_path === undefined ? f : { ...f, file_path: toProjectRelativeUri(f.file_path, projectPath) };
+  //
+  // A code-scanning service resolves a URI against the REPOSITORY root, so a
+  // project below it (`scan --project packages/api` in a monorepo) has its
+  // place in the repository put in front (review 8, finding 18): a URI
+  // relative to the project annotated the wrong file, or none.
+  const prefix = normalizeRepoPrefix(opts.repoPrefix);
+  const relocate = (f: Finding): Finding => {
+    if (f.file_path === undefined) return f;
+    const rel = toProjectRelativeUri(f.file_path, projectPath);
+    return { ...f, file_path: rel === '' ? '' : `${prefix}${rel}` };
+  };
   const relocated: Finding[] = v.newFindings.map(relocate);
   // Round 4, item 2: what the repository's own configuration suppressed, as
   // results carrying an `external` suppression that names the file — how
@@ -361,6 +452,23 @@ export function renderSarif(v: GateVerdict, projectPath: string): string {
  * reasoning that an approximate relative path is still less wrong than an
  * absolute one GitHub will silently refuse to annotate).
  */
+export interface SarifOptions {
+  /**
+   * The project's path inside its git repository (`git rev-parse
+   * --show-prefix`: `packages/api/`, `''` at the root) — put in front of every
+   * URI, so it resolves against the repository root. Omitted: the project is
+   * the root.
+   */
+  repoPrefix?: string;
+}
+
+/** `packages/api/` — `/`-separated, with one trailing `/`, no leading one; `''` for none. */
+function normalizeRepoPrefix(prefix: string | undefined): string {
+  const p = (prefix ?? '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  if (p === '' || p === '.' || p.split('/').includes('..')) return '';
+  return `${p}/`;
+}
+
 function toProjectRelativeUri(filePath: string, projectPath: string): string {
   const posixFile = filePath.replace(/\\/g, '/');
   const posixRoot = projectPath.replace(/\\/g, '/').replace(/\/+$/, '');

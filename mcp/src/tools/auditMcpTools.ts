@@ -66,12 +66,13 @@ import { comparePins, parsePinKey, type PinComparison } from '../mcpaudit/pins.j
 import { isListed, probeServer, type ProbeOutcome } from '../mcpaudit/probe.js';
 import { escapeInvisible } from '../mcpaudit/rules.js';
 import { planTargets, qualifiedName, serverNameOfPinKey, serverPinKey } from '../mcpaudit/select.js';
-import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
+import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import type { McpPin } from '../storage/mcpToolPinsRepo.js';
-import type { Finding, FindingsCountBySeverity, ToolResult, ToolRun } from '../types.js';
+import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
+import { countBySeverity } from '../severity/counts.js';
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 /** The whole audit's budget, unless `GUARDIAN_MCP_AUDIT_BUDGET_MS` sets another. */
@@ -87,35 +88,27 @@ const inputSchema = {
     .string()
     .min(1)
     .optional()
-    .describe('Absolute or relative path to the project whose MCP configs declare the servers. Defaults to the current working directory.'),
+    .describe("The project whose MCP configs declare them. Default: the server's working directory."),
   servers: z
     .array(z.string().min(1).regex(/^[^*?]+$/, 'exact server names only: no wildcards'))
     .min(1)
     .max(50)
     .describe(
-      'REQUIRED. The MCP servers to start and audit: an entry name as it appears in the config ' +
-        '(e.g. ["github"]), or `<source>::<name>` (e.g. ".mcp.json::github") to pick one entry when ' +
-        'several share a name. No wildcard and no default: only these are executed.',
+      'Config entry names to start and audit (e.g. ["github"]), or `<source>::<name>`. No wildcard.',
     ),
   include_user_config: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      'Also look the names up in the user-level configs (Claude Code, Claude Desktop, Cursor, Windsurf, ' +
-        'Gemini). Off by default.',
+      'Also look the names up in the user-level configs. Default false.',
     ),
   allow_remote: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      'Contact servers that reach another machine: a url entry (even at localhost), a command on a network ' +
-        'path, a URL in the command line or an env value (mcp-remote and other proxies, a database URL), ' +
-        'ssh, sshpass, plink, kubectl or oc anywhere in the command line, docker/podman/nerdctl told to use ' +
-        'another engine. A URL whose host is exactly localhost, 127.x.x.x or [::1] is local, unless it ' +
-        'carries a backslash, more than one @, or a query on a non-HTTP scheme; a local tunnel (ssh -L, a proxy) is ' +
-        'not seen. Off by default: they are skipped.',
+      'Also start servers that reach another machine (url, ssh, kubectl, remote docker). Default false.',
     ),
   timeout_ms: z
     .number()
@@ -124,30 +117,21 @@ const inputSchema = {
     .max(300_000)
     .optional()
     .default(DEFAULT_TIMEOUT_MS)
-    .describe('Per-server budget for starting, initialize and every list call. A server that does not answer in time fails.'),
+    .describe('Per-server time budget, in ms.'),
 };
 
 const tool: ToolModule = {
   name: 'audit_mcp_tools',
-  title: 'Audit the tool definitions MCP servers actually serve (poisoning, shadowing, rug pulls)',
+  title: 'Audit what MCP servers serve (poisoning, rug pulls)',
   // Worded so this description does not trip the checks it lists: measured,
   // a literal tag block or file name here was a finding on dev-guardian itself.
   description:
-    'Start the MCP servers named in `servers` (a name, or `<source>::<name>` when several entries share ' +
-    'it), list the tools, prompts, resources and templates each serves, and check them: instructions aimed ' +
-    'at the model, hidden Unicode and look-alike letters, instructions to read secrets or agent config, to ' +
-    'hide actions from the user, to send data out (a URL, an address, an image, a parameter), cross-server ' +
-    'shadowing, base64 blobs, oversized descriptions. Pins every definition and the server instructions: ' +
-    'a tool or the instructions changed since the previous audit is a high "rug pull", reported once. ' +
-    'THIS EXECUTES THIRD-PARTY CODE: it runs the named servers\' commands as the host would, ONLY for ' +
-    'the names the caller lists (no wildcard, no default), with a minimal environment plus the entry\'s ' +
-    'own env, cwd = the project; it never calls tools/call; it contacts remote servers (a url; a ' +
-    'network-path command; a non-loopback URL in the command line or env; ssh or kubectl; a remote ' +
-    'docker/podman engine) only with allow_remote; it kills the process tree ' +
-    'after. Run it only for servers the user asked to audit. A server can recognise this audit: a clean ' +
-    'result covers only what it chose to show this client. A name not declared or ambiguous, a remote ' +
-    'server without allow_remote, a server that fails or does not answer within timeout_ms, or a listing ' +
-    'a budget cut short is skipped/failed/partial with a reason and lowers coverage, never a clean pass.',
+    'Start the MCP servers named in `servers` and check what they serve — tools, prompts, resources — for ' +
+    'instructions aimed at the model, hidden Unicode, requests to read secrets or send data out, ' +
+    'cross-server shadowing and oversized descriptions; a definition changed since the last audit is a ' +
+    'high rug pull. This runs third-party code: only the servers the user named, with a minimal ' +
+    'environment, never tools/call; remote ones only with allow_remote. A failed server lowers coverage, ' +
+    'never a clean pass.',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
@@ -206,7 +190,7 @@ async function handler(
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
     if (e instanceof InvalidProjectPathError) {
-      return { ok: false, error: { code: 'target_not_found', message: e.message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: e.message } };
     }
     throw e;
   }
@@ -579,8 +563,3 @@ async function runAudit(
   };
 }
 
-function countBySeverity(findings: Finding[]): FindingsCountBySeverity {
-  const out: FindingsCountBySeverity = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.severity] += 1;
-  return out;
-}

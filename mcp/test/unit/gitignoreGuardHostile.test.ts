@@ -14,6 +14,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { ensureGuardianIgnored } from '../../src/gitignoreGuard.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { CAN_SYMLINK, POSIX } from '../helpers/fsCapabilities.js';
+import { hangBound } from '../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -75,7 +76,7 @@ describe('ensureGuardianIgnored — a hostile .gitignore', () => {
     symlinkSync('/dev/zero', join(dir, '.gitignore'));
     const t0 = Date.now();
     const r = ensureGuardianIgnored(dir);
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
     expect(r).toMatchObject({ updated: false, reason: 'refused' });
   });
 
@@ -84,7 +85,7 @@ describe('ensureGuardianIgnored — a hostile .gitignore', () => {
     expect(spawnSync('mkfifo', [join(dir, '.gitignore')]).status).toBe(0);
     const t0 = Date.now();
     const r = ensureGuardianIgnored(dir);
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
     expect(r).toMatchObject({ updated: false, reason: 'refused' });
   });
 
@@ -112,7 +113,7 @@ describe('ensureGuardianIgnored — a hostile .gitignore', () => {
     writeFileSync(join(dir, '.gitignore'), 'node_modules/\r\n.guardian/\r\n', 'utf8');
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'upgraded' });
     expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-      'node_modules/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
+      'node_modules/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n!**/.guardian/budgets.yml\r\n!**/.guardian/hooks.config.json\r\n!**/.guardian/hooks-allowlist.json\r\n!**/.guardian/scan.yml\r\n',
     );
     expect(readdirSync(dir).sort()).toEqual(['.git', '.gitignore']);
   });

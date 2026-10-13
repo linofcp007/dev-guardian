@@ -45,7 +45,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
@@ -65,8 +65,7 @@ const inputSchema = {
     .enum(['info', 'low', 'medium', 'high', 'critical'])
     .optional()
     .describe(
-      'Minimum severity a finding must have to be filed. Default: high — what this drops is ' +
-        'reported in `filtered`, never silently.',
+      'Lowest severity filed. Default high; the rest are counted in `filtered`.',
     ),
   max_issues: z
     .number()
@@ -75,37 +74,31 @@ const inputSchema = {
     .max(50)
     .optional()
     .describe(
-      'Cap on issues filed in one run, highest severity first. Default: 10 — findings beyond ' +
-        'the cap are counted in `filtered`, never silently dropped.',
+      'Issues per run, highest severity first. Default 10.',
     ),
   labels: z
     .array(z.string())
     .optional()
     .describe(
-      'Labels for every issue. Missing ones are created; one that cannot be is left off (labels_omitted). ' +
-        'Default: ["dev-guardian", "security"].',
+      'Labels for every issue. Default ["dev-guardian", "security"].',
     ),
   dry_run: z
     .boolean()
     .optional()
     .describe(
-      'true: list the issues that would be created and call nothing. Default: false — the call FILES REAL ' +
-        'ISSUES on GitHub through the local gh CLI.',
+      'true: list the issues without filing them. Default false.',
     ),
 };
 
 const tool: ToolModule = {
   name: 'create_github_issues',
-  title: 'Create GitHub issues for top findings',
+  title: 'File GitHub issues for top findings',
   description:
-    'Use the local `gh` CLI to open one issue per top open finding of project_path (default: the ' +
-    "server's working directory; suppressed findings are never filed). Uses the developer's " +
-    'existing GitHub auth, no API keys handled here, no GitHub Actions involved. Title encodes the ' +
-    'finding fingerprint; a finding with an issue in ANY state (open or closed) is skipped. ' +
-    'Missing labels are created, or left off when they cannot be (`labels_omitted`). Pass ' +
-    'dry_run=true to preview. severity_min defaults to high and max_issues to 10; every finding ' +
-    'those two dropped is counted in `filtered` and summarised in `filtered_reason`. ok:false ' +
-    'when every issue failed to file.',
+    'Open one GitHub issue per top open finding of project_path with the local gh CLI and its existing ' +
+    'login (never a suppressed finding). A finding with an issue in any state is skipped (its fingerprint ' +
+    'is in the title). severity_min (default high) and max_issues (default 10) cap the run; `filtered` ' +
+    'and `filtered_reason` count what they dropped. Missing labels are created, or left off ' +
+    '(`labels_omitted`). It files real issues unless dry_run: preview first.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -137,7 +130,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   const ghBin = await scannerAvailable('gh');

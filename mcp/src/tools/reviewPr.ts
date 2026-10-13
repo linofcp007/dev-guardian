@@ -52,6 +52,7 @@ import {
   type MaterialisedTree,
 } from '../runners/git.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
+import { semgrepScanFlags } from '../runners/semgrepRun.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import {
   judgeTrivyFs,
@@ -92,16 +93,11 @@ const reviewPr = makeScanTool<ReviewPrInput>({
   name: 'review_pr',
   title: 'Pre-PR diff review',
   description:
-    'Scan what a pull request changes: Semgrep (same rules as scan_sast) over every added/modified/' +
-    'renamed file between base_ref and head_ref, gitleaks over exactly those commits (plus uncommitted ' +
-    'files when head is checked out), Bandit over changed .py files, and Trivy when a dependency ' +
-    'manifest changed. Files are read at head: from the working tree when head is checked out, else ' +
-    'from a temporary checkout of head. base_ref defaults to ' +
-    'origin/HEAD, then main, then master; head_ref to HEAD. An unresolvable ref is an error, never ' +
-    '"no files changed". Pass local_only=true to skip the Semgrep registry (no telemetry); Trivy, when it ' +
-    'runs, may still download its database. `preexisting_manifest_gaps`: dependency manifests Trivy read ' +
-    "nothing for that the diff did not touch — the project's gap, in warnings, never the review's " +
-    'coverage. A diff that edits .guardianignore or .trivyignore is called out in warnings.',
+    "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules) and Bandit on " +
+    'changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy ' +
+    'when a manifest changed. An unresolvable ref is an error, never "no files changed". ' +
+    '`preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the ' +
+    "project's gap, not the review's.",
   scan_type: 'review_pr',
   category: 'security',
   supportsAutoFix: false,
@@ -118,9 +114,8 @@ const reviewPr = makeScanTool<ReviewPrInput>({
       .boolean()
       .optional()
       .describe(
-        "Semgrep runs only rules on disk — the project's own, registered custom rules and the plugin's " +
-          'LLM-application and web-JS sink packs — with --metrics=off. Trivy (run when a manifest changed) may still download ' +
-          'its database. Default: false.',
+        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). " +
+          'Trivy may still go out.',
       ),
     severity_min: SeverityMin,
     force: Force,
@@ -330,7 +325,8 @@ async function runSemgrep(
     return;
   }
   const run = await semgrepOnFiles({
-    configArgs: plan.args,
+    // `.guardian/scan.yml`'s timeouts, `.guardian/` excluded (runners/semgrepRun.ts).
+    configArgs: [...plan.args, ...semgrepScanFlags(args.scanRoot).args],
     files: args.present,
     cwd: args.scanRoot,
     reportDir: args.reportDir,

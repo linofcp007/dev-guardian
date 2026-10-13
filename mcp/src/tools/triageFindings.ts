@@ -29,7 +29,7 @@
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { describeOpenSet, isDemoting, openSetForProject } from '../history/openSet.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { Finding, ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
@@ -96,7 +96,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
   const set = openSetForProject(ctx.storage, projectPath);
   const open = set.findings;

@@ -25,7 +25,7 @@
 import type { RouteRecord, Severity } from '../types.js';
 import { dastFingerprint, dastRuleId, type DastFinding } from './analyze.js';
 
-export const RATE_LIMIT_FINDING_TITLE = 'No rate limiting observed on an authentication endpoint';
+const RATE_LIMIT_FINDING_TITLE = 'No rate limiting observed on an authentication endpoint';
 
 /**
  * Between `anonymous_exposure` (high — a confirmed bypass) and a missing

@@ -27,7 +27,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const ESLINT_TOOL_NAME = 'eslint';
+const ESLINT_TOOL_NAME = 'eslint';
 
 /** Core and common-plugin rules that measure complexity. */
 const COMPLEXITY_RULES = new Set([

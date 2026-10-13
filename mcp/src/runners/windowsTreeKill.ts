@@ -39,8 +39,7 @@
 
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { execa } from 'execa';
-import { commandFor } from '../platform/binaryPath.js';
+import { captureOutput } from './spawn.js';
 
 /** Environment variable carrying the per-child token. */
 export const PROC_TREE_ENV = 'GUARDIAN_PROC_TREE_ID';
@@ -48,7 +47,7 @@ export const PROC_TREE_ENV = 'GUARDIAN_PROC_TREE_ID';
 const TASKKILL_TIMEOUT_MS = 10_000;
 const MSYS_PROBE_TIMEOUT_MS = 3_000;
 
-export interface MsysProcess {
+interface MsysProcess {
   pid: number;
   /** 1 for a process started by a non-MSYS parent (e.g. Git's bash launcher). */
   ppid: number;
@@ -142,7 +141,7 @@ export function selectOwnMsysProcesses(
  * bash being run when the command is one, else the default install location.
  * Null when there is none — then there is no MSYS layer to handle.
  */
-export function findMsysBin(command: string): string | null {
+function findMsysBin(command: string): string | null {
   const candidates: string[] = [];
   const m = /^(.*)[\\/](?:usr[\\/])?bin[\\/]bash(?:\.exe)?$/i.exec(command);
   if (m?.[1] !== undefined) candidates.push(join(m[1], 'usr', 'bin'));
@@ -183,8 +182,8 @@ async function findOwnMsysProcesses(
   if (bin === null) return none;
   const self = { pid: process.pid, ppid: process.ppid };
   try {
-    const opts = { reject: false, timeout: MSYS_PROBE_TIMEOUT_MS, cwd: dirname(bin) } as const;
-    const ps = await execa(join(bin, 'ps.exe'), [], opts);
+    const opts = { timeoutMs: MSYS_PROBE_TIMEOUT_MS, cwd: dirname(bin) } as const;
+    const ps = await captureOutput(join(bin, 'ps.exe'), [], opts);
     if (ps.exitCode !== 0) return none;
     const snapshot = parseMsysPs(ps.stdout);
     // Only an MSYS process started by a NON-MSYS parent (ppid 1) can be the
@@ -193,7 +192,7 @@ async function findOwnMsysProcesses(
     if (roots.length === 0) return none;
     const needle = `${PROC_TREE_ENV}=${token}`;
     const grep = (files: string[]) =>
-      execa(join(bin, 'grep.exe'), ['-l', '-a', '-s', '-F', needle, ...files], opts);
+      captureOutput(join(bin, 'grep.exe'), ['-l', '-a', '-s', '-F', needle, ...files], opts);
     let matches: Set<number>;
     const all = await grep(roots);
     if (all.exitCode === 0 || all.exitCode === 1) {
@@ -224,7 +223,8 @@ async function taskkillTree(roots: readonly number[]): Promise<boolean> {
   const args = ['/F', '/T'];
   for (const root of roots) args.push('/PID', String(root));
   try {
-    const r = await execa(commandFor('taskkill'), args, { reject: false, timeout: TASKKILL_TIMEOUT_MS });
+    // By its absolute path on PATH (captureOutput), never one in a working directory.
+    const r = await captureOutput('taskkill', args, { timeoutMs: TASKKILL_TIMEOUT_MS });
     // 0: every root handled. 128: some root was not found — expected when
     // the MSYS step above already ended it, which is success here too as
     // long as SOMETHING was reported terminated. Anything else: failure.

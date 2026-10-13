@@ -51,7 +51,7 @@ import { readProjectBytes } from '../platform/projectFs.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
@@ -96,6 +96,7 @@ import type {
 import { registerToolModule, type ToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
 import { applySemgrepCoverageGaps, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
+import { semgrepScanFlags } from '../runners/semgrepRun.js';
 
 const SAMPLE_SIZE = 20;
 const WEBHOOK_PATTERN = /webhook|callback|hook/i;
@@ -135,18 +136,12 @@ const SpecPaths = z
   .min(1)
   .optional()
   .describe(
-    'Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when ' +
-      'supplied — must be non-empty; omit the field to use automatic discovery instead. ' +
-      'Relative paths resolve against project_path, not the current working ' +
-      'directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is ' +
-      'never persisted as the project\'s cached surface, so a later plain call cannot ' +
-      'inherit these paths. Any named path that cannot be read is reported in spec_files, ' +
-      'not silently dropped.',
+    'OpenAPI / Swagger documents to read instead of discovering them.',
   );
 
 const tool: ToolModule = {
   name: 'map_attack_surface',
-  title: 'Map the application attack surface',
+  title: 'Map the attack surface',
   // No "auth hint" in this description on purpose, for code-extracted routes:
   // `auth_hint` exists on every RouteRecord, but no Semgrep rule populates it
   // for a route extracted from source, so it is always 'unknown' there (see
@@ -160,16 +155,11 @@ const tool: ToolModule = {
   // general feature. Advertising a mostly-constant field as a feature is how
   // an agent ends up reasoning from it.
   description:
-    'Statically extract the externally reachable surface of the project — HTTP routes ' +
-    '(method, path, params), referenced environment variables, and declared ' +
-    'container ports — across all supported stacks. Also discovers OpenAPI 3.x / ' +
-    'Swagger 2.0 documents (or reads exactly the paths given as spec_paths) and diffs ' +
-    'them against the code-extracted routes, reporting shadow endpoints (routes the code ' +
-    'registers that no spec documents) and dead documentation (spec paths no code ' +
-    'implements). Persists a snapshot readable via guardian://surface/latest. Returns a ' +
-    'summary plus a 20-route code sample and a spec sample; read the resource for the ' +
-    'full route list and the full spec diff. Follow up with scan_dast to actively probe an ' +
-    'already-running instance of the application against this inventory.',
+    'Statically extract the reachable surface — HTTP routes (method, path, params), environment variables ' +
+    'read, container ports — across the supported stacks, and diff OpenAPI 3 / Swagger 2 documents ' +
+    'against the routes: shadow endpoints and dead documentation. Stores a snapshot ' +
+    '(guardian://surface/latest has the full route list) and returns a summary with samples. scan_dast ' +
+    'and validate_finding need it.',
   inputSchema: {
     project_path: ProjectPath,
     force: Force,
@@ -196,12 +186,9 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    // `not_a_git_repo` is what detect_stack returns for an unusable
-    // project_path (detectStack.ts:45-49), even though resolveProjectPath
-    // actually rejects missing / non-directory / root-or-home paths. Keeping
-    // the same code here means hosts and skills handle one failure, not two.
-    // Do not "fix" this in isolation — it would desync the two tools.
-    return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+    // The code every tool answers an unusable project_path with
+    // (`projectPathErrorCode`), so hosts and skills handle one failure.
+    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
   }
 
   const treeHash = await computeTreeHash(projectPath);
@@ -284,7 +271,9 @@ async function handler(
   const reportDir = ensureReportDir(projectPath, treeHash, 'surface');
   const outFile = join(reportDir, 'surface.json');
 
-  const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
+  // `.guardian/scan.yml`'s timeouts (the CI gate's --rules-ref copy of it), `.guardian/` excluded.
+  const extraArgs = semgrepScanFlags(ctx.repoConfigFromRef?.root ?? projectPath).args;
+  const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir, extraArgs });
   if (invocation === null) {
     return degradedResult(
       [
@@ -370,6 +359,7 @@ async function handler(
   const gaps = await semgrepCoverageGaps(projectPath, fromRef !== undefined ? { guardianIgnoreFrom: fromRef } : {});
   const gapped = applySemgrepCoverageGaps(judged.toolRun, gaps, {
     scannedNothing: judged.verdict === 'scanned_nothing',
+    reports: raw !== null ? [raw] : [],
   });
   const semgrepRun = gapped.toolRun;
   if (judged.verdict === 'scanned_nothing') {
@@ -388,7 +378,9 @@ async function handler(
   // looks for them. Reading the files is the impure half and belongs here;
   // `recoverMetavars` itself is pure and takes the text.
   const recovery = recoverMetavars(parsed, readSources(parsed, projectPath));
-  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable > 0) {
+  // Nothing readable at all, and a ROUTE among what was lost: no surface. Lost
+  // import / env edges alone are no reason to withhold one (review 8, finding 1).
+  if (recovery.intact === 0 && recovery.recovered === 0 && recovery.unrecoverable - recovery.lostEdges > 0) {
     return degradedResult(
       [semgrepRun, unreadableMatchesToolRun(recovery)],
       [],
@@ -531,14 +523,28 @@ function recoveryToolRun(recovery: RecoveryOutcome): ToolRun[] {
   if (recovery.unrecoverable === 0) {
     return [{ name: RECOVERY_STEP, status: 'ok', reason: base }];
   }
+  // Import and env edges the recovery could not read are reported and never
+  // fail the run: no route was lost, and a run that failed for them made the
+  // CI gate exit 2 on every TypeScript project (review 8, finding 1). A lost
+  // route or mount is a hole in the surface, and does fail it.
+  const edgesNote =
+    recovery.lostEdges > 0
+      ? `${recovery.lostEdges} import/env edge(s) could not be read (not a route: a mount's prefix that ` +
+        'relied on one may read partial)'
+      : '';
+  const routesLost = recovery.unrecoverable - recovery.lostEdges;
+  if (routesLost === 0) {
+    return [{ name: RECOVERY_STEP, status: 'ok', reason: `${base}; ${edgesNote}` }];
+  }
   return [
     {
       name: RECOVERY_STEP,
       status: 'failed',
       reason:
-        `${base}; ${recovery.unrecoverable} match(es) could not be read and are MISSING ` +
-        `from the surface (see coverage[].unreadable_matches for which languages) — ` +
-        `${REDACTION_REMEDY}`,
+        `${base}; ${routesLost} match(es) could not be read and are MISSING ` +
+        `from the surface (see coverage[].unreadable_matches for which languages)` +
+        (edgesNote !== '' ? `; ${edgesNote}` : '') +
+        ` — ${REDACTION_REMEDY}`,
     },
   ];
 }

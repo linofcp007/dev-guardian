@@ -22,7 +22,8 @@
  * Four refusals, four different facts — never one empty batch standing in for
  * all of them, because an empty result reads as "nothing to worry about":
  *
- *   1. `not_a_git_repo`        — the project path is unusable.
+ *   1. `target_not_found` / `unsupported_target` — the project path is
+ *                                unusable (`projectPathErrorCode`).
  *   2. `no_surface_snapshot`   — nothing to root a graph at; names the tool
  *                                that fixes it.
  *   3. `target_not_found`      — the named fingerprint is not open.
@@ -47,7 +48,7 @@ import type { PluginContext } from '../context.js';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -70,9 +71,7 @@ const Fingerprint = z
   .min(1)
   .optional()
   .describe(
-    'Validate exactly this finding. Omitted (the default) validates EVERY open finding — batch ' +
-      'is the point, since validating one finding at a time saves nobody any triage effort. A ' +
-      'fingerprint that matches no open finding is an error, never an empty result.',
+    'Validate only this finding. Default: every open finding.',
   );
 
 // Review 3.0 I1: suppress_finding and suggest_fix name the same thing
@@ -83,8 +82,7 @@ const FindingFingerprint = z
   .min(1)
   .optional()
   .describe(
-    'Same as fingerprint — the name suppress_finding and suggest_fix use. Pass either; both with ' +
-      'different values is an error.',
+    'Same as fingerprint (the name other tools use); pass one.',
   );
 
 const Providers = z
@@ -95,9 +93,7 @@ const Providers = z
   .min(1)
   .optional()
   .describe(
-    "Evidence providers to run: 'static' (the finding's own file, via the import graph) and " +
-      "'dependency' (a dependency finding's package, via the third-party imports). 'runtime' is " +
-      'planned. Omit the field to run every provider this version has. Non-empty when supplied.',
+    "static (the finding's file) and/or dependency (a CVE's package). Default: both.",
   );
 
 const tool: ToolModule = {
@@ -112,22 +108,11 @@ const tool: ToolModule = {
   // by tightening wording only: every limit below survived, each one tested
   // in validateFinding.test.ts.
   description:
-    'Answers, per finding, whether anything outside the process can reach the FILE the finding ' +
-    'lives in: a file-level import graph from the latest map_attack_surface snapshot, rooted at ' +
-    'the route files, gives reachable / unreachable / unknown with evidence (nearest route, hops, ' +
-    'live-confirmed anonymous exposure) and coverage gaps. The dependency provider adds, per ' +
-    'dependency CVE (npm, PyPI), reachable (a file a route reaches imports the package) / ' +
-    'imported / unknown — never unreachable. REQUIRES a prior map_attack_surface run (refuses ' +
-    'with no_surface_snapshot). Validates every open finding by default; an unknown fingerprint ' +
-    'is an error, not an empty result. REPORT ONLY: it never suppresses a finding and never ' +
-    'changes a severity. Limits: granularity is the file, not the function ("reachable" is NOT ' +
-    '"the vulnerable line runs"); "unreachable" is never emitted for Ruby, Java, C# or PHP, which ' +
-    'resolve code at runtime (autoload, DI container); only HTTP routes are entry points, so a ' +
-    'file reached solely by a CLI, cron job or queue consumer reads unreachable-by-route; and ' +
-    'NOTHING detects dynamic imports (import(expr), require(variable), reflection) — where they ' +
-    'are used, "unreachable" CAN BE WRONG AND THIS TOOL CANNOT TELL YOU WHEN. Verdicts are stored ' +
-    'against the snapshot and tree hash and flagged stale once the tree moves. Read ' +
-    'summary.coverage_gaps beside the counts.',
+    'Per open finding: does a file an HTTP route reaches import its file (static) or, for a dependency ' +
+    'CVE, its package (dependency)? reachable, unreachable or unknown, with evidence. Needs ' +
+    'map_attack_surface. Report only: it never suppresses a finding or changes a severity. The unit is ' +
+    'the file; Ruby, Java, C# and PHP never get unreachable; nothing detects a dynamic import, so where ' +
+    'one is used unreachable can be wrong and this tool cannot tell you when.',
   inputSchema: {
     project_path: ProjectPath,
     fingerprint: Fingerprint,
@@ -143,7 +128,7 @@ registerToolModule(tool);
  *  contract is readable in one glance. */
 type RefusalCode = Extract<
   DomainErrorCode,
-  'not_a_git_repo' | 'no_surface_snapshot' | 'target_not_found' | 'unsupported_target'
+  'no_surface_snapshot' | 'target_not_found' | 'unsupported_target'
 >;
 
 function fail(
@@ -194,9 +179,9 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    // Same code map_attack_surface, scan_dast and detect_stack return for an
-    // unusable project_path, so hosts and skills handle one failure, not four.
-    return fail('not_a_git_repo', (e as Error).message);
+    // The code every tool answers an unusable project_path with
+    // (`projectPathErrorCode`), so hosts and skills handle one failure.
+    return fail(projectPathErrorCode(e), (e as Error).message);
   }
 
   // PROJECT-SCOPED, deliberately. Everything downstream is keyed to

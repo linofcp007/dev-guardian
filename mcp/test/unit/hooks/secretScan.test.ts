@@ -25,6 +25,15 @@ import {
 } from '../../../src/hooks/secretScan.js';
 import { costOf, expectLinear, expectNearReference, PERF_STRICT } from '../../helpers/timing.js';
 
+/** A fake AWS key the scan reports: AWS's own `AKIAIOSFODNN7EXAMPLE` is a documented placeholder it skips (review 8). */
+const FAKE_AWS_KEY = ['AKIA', 'Q7XZ2M9KDP4RWT3B'].join('');
+
+/** `n` characters of a token's alphabet in mixed case and digits, no character run — what a real token looks like. */
+const tokenBody = (n: number): string => {
+  const alphabet = 'aB3cD5eF7gH9iJ1kL2mN4oP6qR8sT0uVwXyZ';
+  return Array.from({ length: n }, (_, i) => alphabet.charAt((i * 7 + 3) % alphabet.length)).join('');
+};
+
 /** A line of `length` characters with nothing a rule starts on twice: the reference of the ceilings. */
 const benignLine = (length: number): string => 'the quick brown fox. '.repeat(Math.ceil(length / 21)).slice(0, length);
 /** The ceiling: a pathological 250 KB line against a benign one. Current code reads 0.6-8.2x at 100% CPU; the defects it catches 308-531x. */
@@ -32,13 +41,13 @@ const MAX_REFERENCE_RATIO = 30;
 
 describe('scanForSecrets — high-confidence provider tokens', () => {
   it('detects an AWS access key id', () => {
-    const hits = scanForSecrets('const k = "AKIAIOSFODNN7EXAMPLE";');
+    const hits = scanForSecrets(`const k = "${FAKE_AWS_KEY}";`);
     expect(hits.map((h) => h.ruleId)).toContain('aws-access-key-id');
     expect(hits[0]?.confidence).toBe('high');
   });
 
   it('detects a classic GitHub token', () => {
-    const token = 'ghp_' + 'a'.repeat(36);
+    const token = 'ghp_' + tokenBody(36);
     const hits = scanForSecrets(`GITHUB_TOKEN=${token}`);
     expect(hits.map((h) => h.ruleId)).toContain('github-token');
   });
@@ -54,7 +63,7 @@ describe('scanForSecrets — high-confidence provider tokens', () => {
   });
 
   it('reports the 1-based line of the hit', () => {
-    const text = ['line one', 'line two', 'AKIAIOSFODNN7EXAMPLE'].join('\n');
+    const text = ['line one', 'line two', FAKE_AWS_KEY].join('\n');
     const hits = scanForSecrets(text);
     expect(hits.find((h) => h.ruleId === 'aws-access-key-id')?.line).toBe(3);
   });
@@ -62,7 +71,7 @@ describe('scanForSecrets — high-confidence provider tokens', () => {
 
 describe('scanForSecrets — redaction', () => {
   it('never returns the raw secret', () => {
-    const secret = 'AKIAIOSFODNN7EXAMPLE';
+    const secret = FAKE_AWS_KEY;
     const hits = scanForSecrets(`key = "${secret}"`);
     for (const h of hits) {
       expect(h.preview).not.toContain(secret);
@@ -70,7 +79,7 @@ describe('scanForSecrets — redaction', () => {
   });
 
   it('redact() keeps only a short shape preview', () => {
-    expect(redact('AKIAIOSFODNN7EXAMPLE')).toMatch(/^AKIA….* \(\d+\)$/);
+    expect(redact(FAKE_AWS_KEY)).toMatch(/^AKIA….* \(\d+\)$/);
   });
 });
 
@@ -103,12 +112,12 @@ describe('scanForSecrets — options', () => {
   });
 
   it('still reports high hits when minConfidence=high', () => {
-    const hits = scanForSecrets('AKIAIOSFODNN7EXAMPLE', { minConfidence: 'high' });
+    const hits = scanForSecrets(FAKE_AWS_KEY, { minConfidence: 'high' });
     expect(hits).toHaveLength(1);
   });
 
   it('allowlist substring skips a matching line', () => {
-    const text = 'AKIAIOSFODNN7EXAMPLE # pragma: allowlist secret';
+    const text = `${FAKE_AWS_KEY} # pragma: allowlist secret`;
     expect(scanForSecrets(text, { allowlist: ['allowlist secret'] })).toHaveLength(0);
   });
 });
@@ -193,12 +202,12 @@ describe('scanForSecrets — task-1: no double-report of an Anthropic key (findi
   });
 
   it('a real OpenAI key is still detected', () => {
-    const hits = scanForSecrets(`OPENAI_API_KEY="sk-${'a'.repeat(40)}"`);
+    const hits = scanForSecrets(`OPENAI_API_KEY="sk-${tokenBody(40)}"`);
     expect(hits.map((h) => h.ruleId)).toContain('openai-api-key');
   });
 
   it('an sk-proj-… key is still detected as OpenAI', () => {
-    const hits = scanForSecrets(`OPENAI_API_KEY="sk-proj-${'a'.repeat(40)}"`);
+    const hits = scanForSecrets(`OPENAI_API_KEY="sk-proj-${tokenBody(40)}"`);
     expect(hits.map((h) => h.ruleId)).toContain('openai-api-key');
   });
 });
@@ -377,5 +386,85 @@ describe('redact — task-1: short secrets reveal at most 4 characters (finding 
   it('a 16-character-or-longer secret still reveals a head and tail', () => {
     const secret = 'abcdefghijklmnop'; // 16 chars
     expect(redact(secret)).toBe(`abcd…op (${secret.length})`);
+  });
+});
+
+// Review 8, items 10-12: placeholders that a block denied, sentences that
+// warned, and token shapes the scan did not know. Keys are assembled at run
+// time, so this file carries no key-shaped literal.
+describe('scanForSecrets — review 8: documentation is not a credential (item 10)', () => {
+  const join = (...parts: string[]): string => parts.join('');
+  it.each([
+    ['AWS’s documented access key', `aws_access_key_id = ${join('AKIA', 'IOSFODNN7', 'EXAMPLE')}`],
+    ['AWS’s documented secret key', `aws_secret_access_key = ${join('wJalrXUtnFEMI/K7MDENG/', 'bPxRfiCY', 'EXAMPLEKEY')}`],
+    ['an Anthropic placeholder', `ANTHROPIC_API_KEY=${join('sk-ant-', 'x'.repeat(28))}`],
+    ['an OpenAI placeholder', `OPENAI_API_KEY=${join('sk-your-openai', '-api-key-goes-here-123456')}`],
+    ['a CSS class shaped like sk-', `<div class="${join('sk-loading', '-spinner-overlay-container-wide')}">`],
+    ['a GitHub token of one repeated character', `GITHUB_TOKEN=${join('ghp_', 'a'.repeat(36))}`],
+    ['a sample Slack token', `SLACK=${join('xoxb-', 'sample-token-1234567')}`],
+  ])('%s is not reported at high confidence', (_name, line) => {
+    expect(scanForSecrets(line, { minConfidence: 'high' })).toEqual([]);
+  });
+
+  it('a real-looking key next to them still is', () => {
+    expect(scanForSecrets(`k = "${FAKE_AWS_KEY}"`, { minConfidence: 'high' }).map((h) => h.ruleId)).toEqual(['aws-access-key-id']);
+    expect(scanForSecrets(`OPENAI_API_KEY=sk-proj-${tokenBody(48)}`, { minConfidence: 'high' }).map((h) => h.ruleId)).toEqual(['openai-api-key']);
+  });
+
+  it('redaction (skipPlaceholders: false) keeps every one of them', () => {
+    const example = join('AKIA', 'IOSFODNN7', 'EXAMPLE');
+    expect(scanForSecrets(`k = "${example}"`, { skipPlaceholders: false }).map((h) => h.ruleId)).toContain('aws-access-key-id');
+    expect(scanForSecrets('password = "correct horse battery staple"', { skipPlaceholders: false }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('scanForSecrets — review 8: a sentence is not a password (item 11)', () => {
+  it.each([
+    '"password": "Palavra-passe do utilizador"',
+    'password: "correct horse battery staple"',
+    "const secretLabel = 'Introduza o seu segredo aqui';",
+  ])('%s stays silent', (line) => {
+    expect(scanForSecrets(line)).toEqual([]);
+  });
+
+  it('a quoted value with one space, or none, still warns', () => {
+    expect(scanForSecrets('password = "Gx7$kPq2 zVw9MtRb"').length).toBeGreaterThan(0);
+    expect(scanForSecrets('password = "Gx7$kPq2zVw9MtRb"').length).toBeGreaterThan(0);
+  });
+});
+
+describe('scanForSecrets — review 8: token shapes it did not know (item 12)', () => {
+  const join = (...parts: string[]): string => parts.join('');
+  const hex = (n: number): string => Array.from({ length: n }, (_, i) => '0123456789abcdef'.charAt((i * 7 + 5) % 16)).join('');
+  it.each([
+    ['private-key-block', join('-----BEGIN PGP PRIVATE', ' KEY BLOCK-----')],
+    ['putty-private-key', join('PuTTY-User-Key-File-', '3: ssh-ed25519')],
+    ['huggingface-token', `HF_TOKEN=${join('hf_', 'aBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgH')}`],
+    ['digitalocean-token', `DO=${join('dop_v1_', hex(64))}`],
+    ['shopify-token', `SHOPIFY=${join('shpat_', hex(32))}`],
+    ['azure-storage-key', `DefaultEndpointsProtocol=https;${join('AccountKey=', tokenBody(86), '==')};EndpointSuffix=core.windows.net`],
+    ['telegram-bot-token', `TELEGRAM=${join('123456789:AA', tokenBody(33))}`],
+  ])('%s is reported at high confidence', (rule, line) => {
+    expect(scanForSecrets(line, { minConfidence: 'high' }).map((h) => h.ruleId)).toContain(rule);
+  });
+
+  it.each([
+    ['bearer-token', `curl -H "Authorization: Bearer ${tokenBody(40)}" https://api.example.test`],
+    ['yaml-credential', `  db_password: ${tokenBody(14)}`],
+  ])('%s warns', (rule, line) => {
+    const hits = scanForSecrets(line);
+    expect(hits.map((h) => h.ruleId)).toContain(rule);
+    expect(hits.find((h) => h.ruleId === rule)?.confidence).toBe('medium');
+  });
+
+  it.each([
+    'token: AccessToken',
+    'password: ${DB_PASSWORD}',
+    'secret: string',
+    '  password: changeme123',
+    'Authorization: Bearer <token>',
+    'Authorization: Bearer ${TOKEN}',
+  ])('%s stays silent', (line) => {
+    expect(scanForSecrets(line)).toEqual([]);
   });
 });

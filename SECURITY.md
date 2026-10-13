@@ -9,8 +9,8 @@ upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 3.2.x   | ✅        |
-| < 3.2   | ❌        |
+| 3.3.x   | ✅        |
+| < 3.3   | ❌        |
 
 ## Reporting a vulnerability
 
@@ -82,7 +82,8 @@ their respective projects.
   effect. Switching a protective hook off takes the user-level
   `~/.config/dev-guardian/hooks.json` or the environment (`GUARDIAN_HOOKS=off`,
   `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`). The write guard denies
-  an assistant's `Write` / `Edit` / `MultiEdit` of any hook configuration file,
+  an assistant's `Write` / `Edit` / `MultiEdit` (or a third-party MCP server's
+  write tool) of any hook configuration file,
   and the shell guard denies what it can see a command do to one: write it
   (`>`, `tee`, `sed -i`, `perl -pi`, `rsync`, `cp` / `mv` onto it, PowerShell
   `Set-Content` / `[IO.File]::WriteAllText`, cmd `>` inside `cmd /c "…"`, …),
@@ -104,7 +105,7 @@ their respective projects.
   configuration (`.npmrc`, `pip.conf`, `nuget.config`, …) through the same
   link walk; one that is there but could not be read counts as possibly a
   private registry, so a missing name warns. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
-  `MultiEdit` of `.claude/settings.json` or `settings.local.json` is denied
+  `MultiEdit` (or MCP write) of `.claude/settings.json` or `settings.local.json` is denied
   when it would newly set `disableAllHooks`, an `env` entry setting
   `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0` or `GUARDIAN_PKG_VET=0`,
   or an `enabledPlugins` entry turning dev-guardian off; every other edit of
@@ -592,8 +593,8 @@ project's own build and test commands.
 | `registry.npmjs.org`, `pypi.org`, `repo.packagist.org`, `api.nuget.org`, `azuresearch-usnc.nuget.org` | `vet_packages` ★, the install hook ★ (3 s budget) | per call; the hook only for a command that installs a package by name |
 | `www.cisa.gov` (KEV catalog), `api.first.org` (EPSS) | `prioritize_findings` ★, `risk_score` ★, `create_fix_pr` ★ | at most once per 24 h per CVE and for the catalog; `guardian://cves/active` only reads the cache |
 | The secret's own provider: `api.github.com`, `gitlab.com`, `slack.com`, `api.stripe.com`, `api.openai.com`, `api.anthropic.com`, `registry.npmjs.org`, `api.sendgrid.com` | `scan_secrets` with `verify_live: true` ★ | **off by default**. Each secret goes only to its own provider's read-only identity endpoint (a fixed URL per rule, never a host from the repository), 5 s timeout, at most 4 in flight and 50 per scan; `security_scan_full` never verifies |
-| `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check_source` ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |
-| The target you name | `scan_dast` (loopback only unless `authorized_target: true`), `wp_rest_audit`, the CLI's DAST health check | per call |
+| `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check` (`mode: "source"`) ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |
+| The target you name | `scan_dast` (loopback only unless `authorized_target: true`), `wp_vuln_check` (`mode: "rest"`), the CLI's DAST health check | per call |
 | The URL you name | `scan_skill` given an HTTP(S) or git URL | per call |
 | A remote MCP server you name — a URL entry, a UNC command, or the URL a proxy on the command line talks to | `audit_mcp_tools` with `allow_remote: true` (`initialize` and the list methods only) | per call; without `allow_remote` that server is skipped |
 
@@ -616,7 +617,7 @@ project's own build and test commands.
 | The GitHub API | `scan_iac`'s zizmor, when a GitHub token (`GH_TOKEN`) is in the server's environment | zizmor's online audits; without a token it runs offline |
 | WPScan API, and the site itself | `wp_vuln_check` (through the `wpscan` CLI) | per call |
 | WPScan's database (`data.wpscan.org`) | `wp_vuln_check` runs `wpscan --update` | only when WPScan reports its local database missing (`scan_aborted: Update required`), once per call, then the scan runs again; never with `GUARDIAN_OFFLINE=1` (the scan is then failed, naming `wpscan --update`). An existing database is never refreshed: scans pass `--no-update`. |
-| `api.wordpress.org` | `wp_audit`, `bulk_audit_wordpress_sites` (WP-CLI `verify-checksums`) | per call |
+| `api.wordpress.org` | `wp_audit` (`mode` install or bulk: WP-CLI `verify-checksums`) | per call |
 | The target you name | `perf_check` (Lighthouse URL, k6 script) | per call |
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
 | Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture") |
@@ -629,5 +630,5 @@ the rows above say: metrics when you are logged in (its version check is off). T
 hooks' SessionStart and secret-warning branches, `detect_stack`,
 `audit_agent_config`, `observability_setup`, the `status` and `dashboard` CLI
 commands and the history readers (`diff_scans`, `set_baseline`,
-`suppress_finding`, `regression_alert`, `triage_findings`, `health_status`,
+`suppress_finding`, `prioritize_findings` with `view: "triage"`, `health_status`,
 the resources) make no network request.

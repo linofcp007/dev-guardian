@@ -13,7 +13,7 @@ import { OVER_LIMIT_REASON_PREFIX } from './plan.js';
 import type { ScanCoverage } from '../types.js';
 import type { HuntResult, Independence, LlmScanPlan, LlmScanTask, LlmVerdict, TaskKind, VerifyVerdict } from './types.js';
 
-export interface EntryPointAccount {
+interface EntryPointAccount {
   entry_point: string;
   status: 'visited' | 'set_aside' | 'not_visited';
   /** The closed task that visited it. */
@@ -22,7 +22,7 @@ export interface EntryPointAccount {
   reason?: string;
 }
 
-export interface HuntFindingAccount {
+interface HuntFindingAccount {
   fingerprint: string;
   status: 'unverified' | LlmVerdict;
   /** Null while unverified. */

@@ -7,17 +7,15 @@
  * (`mcp/src/platform/`), so it is subject to the same two execution shapes,
  * and a fixed `..` count can only be right for one of them —
  *
- *   - `server.ts` pulls this in (transitively, via `bugHunt.ts`) through
- *     `scripts/bundle.mjs`'s esbuild bundle, which inlines every import into
- *     ONE file, `dist/server.js`. At runtime, for code that started life in
- *     THIS file, `import.meta.url` is then `dist/server.js`'s own URL — two
- *     directories under the plugin root (`dist/` -> `mcp/` -> root).
- *   - Every unit test (and `tsx`/plain `node` execution of the compiled
- *     output) reaches this as a normal, unbundled ES module import — one
- *     real file per source file. There, `import.meta.url` is THIS file's
- *     own separate location, `dist/platform/configsDir.js` (or
- *     `src/platform/configsDir.ts` in dev/test) — three directories under
- *     the plugin root.
+ *   - Shipped, it runs inside an esbuild bundle (`scripts/bundle.mjs`) —
+ *     `dist/engine.js`, reached from `bugHunt.ts`. At runtime, for code that
+ *     started life in THIS file, `import.meta.url` is then the bundle's own
+ *     URL — two directories under the plugin root (`dist/` -> `mcp/` -> root).
+ *   - Every unit test (and `tsx` execution) reaches this as a normal,
+ *     unbundled ES module import — one real file per source file. There,
+ *     `import.meta.url` is THIS file's own separate location,
+ *     `src/platform/configsDir.ts` — three directories under the plugin
+ *     root.
  *
  * Probing for the directory that actually contains a real config file is
  * right for both shapes, and for dev/test execution too — see
@@ -53,13 +51,13 @@ const MARKER_RULES = ['semgrep', 'base.yml'];
 export function resolveConfigsDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
 
-  // Bundled: this code is executing as part of dist/server.js, so `here` is
+  // Bundled: this code is executing as part of dist/engine.js (or dist/hooks.js), so `here` is
   // dist/ itself.
   const bundled = join(here, '..', '..', 'configs');
   if (existsSync(join(bundled, ...MARKER_RULES))) return bundled;
 
   // Unbundled: this code is executing as its own file, one directory
-  // deeper than server.ts/server.js (src/platform/ or dist/platform/).
+  // deeper than the bundles (src/platform/ under tsx or vitest).
   const unbundled = join(here, '..', '..', '..', 'configs');
   if (existsSync(join(unbundled, ...MARKER_RULES))) return unbundled;
 

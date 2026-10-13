@@ -35,7 +35,7 @@ export { userDataDir };
 export type { DataDirContext } from '../hooks/userDataDir.js';
 
 /** A {@link GuardianDbError} of kind `data-dir` for a per-user location this user does not own. */
-export function notPrivate(path: string, why: string): GuardianDbError {
+function notPrivate(path: string, why: string): GuardianDbError {
   return new GuardianDbError('data-dir', path, `'${path}' ${why}`);
 }
 
@@ -87,7 +87,7 @@ function statOrNull(path: string, follow: boolean): Stats | null {
  * The data directory, created 0700 when it does not exist, and checked —
  * before anything is created in it — when it does. Returns its path.
  */
-export function ensurePrivateDataDir(): string {
+function ensurePrivateDataDir(): string {
   const dir = userDataDir();
   const existing = statOrNull(dir, true);
   if (existing === null) {

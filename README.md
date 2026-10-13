@@ -9,7 +9,7 @@ Trilingual: the skills and commands answer in English, Portuguese or Spanish, wh
 ## What's inside
 
 - **13 skills** and **10 slash commands** for Claude Code / Cowork (below).
-- An **MCP server** with **63 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md).
+- An **MCP server** with **52 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md). The 13 tool names that 3.3.0 folded into `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` and `prioritize_findings` still answer calls; they are no longer listed.
 - **154 Semgrep rules in 12 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, a route-inventory pack for nine languages, a Node/Express pack (SQL built by interpolation, request path to a file API, request URL fetched), and an LLM-application pack (model output reaching eval/shell/SQL, remote code in a model load, prompt injection surface, no token cap) that `scan_sast` runs — see [docs/rule-packs.md](docs/rule-packs.md).
 - **Guardrail hooks** that deny catastrophic shell commands, vet packages at install time and warn on secrets as they are written — see [docs/hooks.md](docs/hooks.md).
 - A **CLI** (`cli/dev-guardian.mjs`) for CI gating, host setup, a terminal status view and an HTML dashboard.
@@ -22,7 +22,7 @@ Trilingual: the skills and commands answer in English, Portuguese or Spanish, wh
 - **Optional: Docker.** Without a native `semgrep`, `scan_sast` and `map_attack_surface` fall back to the `semgrep/semgrep` image.
 - **Windows:** every scan runs natively, with no shell. A bash is needed only for `init_project`'s first-pass status report and for `install_toolchain`'s WSL fallback when none of winget, scoop or choco is present. dev-guardian looks for Git Bash first, then WSL, then any `bash` on `PATH`.
 
-Nothing needs `npm install`: the MCP server and the CLI run on `mcp/dist/server.js` and `mcp/dist/cli.js`, committed as self-contained bundles.
+Nothing needs `npm install`: the MCP server and the CLI run on `mcp/dist/engine.js`, and the hooks on `mcp/dist/hooks.js`, committed as self-contained bundles.
 
 ## Quick start (Claude Code)
 
@@ -85,11 +85,11 @@ Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacem
 | Dependencies and supply chain | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Attack surface | `map_attack_surface`, `scan_dast`, `validate_finding` |
 | LLM-assisted scan | `llm_scan_start`, `llm_scan_task`, `llm_scan_submit` — your host's model verifies the findings and hunts what scanners miss; the server calls no model ([docs/llm-scan.md](docs/llm-scan.md)) |
-| History and triage | `diff_scans`, `set_baseline`, `suppress_finding`, `regression_alert`, `risk_score`, `prioritize_findings`, `triage_findings`, `health_status` |
+| History and triage | `diff_scans`, `set_baseline`, `suppress_finding`, `risk_score`, `prioritize_findings`, `health_status` |
 | Reports | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
 | Setup and ops | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |
-| WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_vuln_check_source`, `wp_plugin_check`, `wp_cron_audit`, `wp_rest_audit`, `wp_recommend_hardening`, `wp_describe_setup`, `bulk_audit_wordpress_sites` |
-| C# / .NET | `scan_dotnet_secrets`, `dotnet_target_framework_check`, `dotnet_efcore_audit`, `dotnet_describe_setup` |
+| WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_report` |
+| C# / .NET | `dotnet_check` |
 
 Resources (`guardian://scans/latest`, `guardian://findings/open`, `guardian://cves/active`, `guardian://surface/latest`, …) serve the stored results as JSON. Everything persists in `.guardian/guardian.db`; the server keeps `.guardian/` out of git except `.guardian/baseline.json`, which CI needs committed. History, suppressions and baselines are keyed by the project's path: moving or renaming the repository starts them afresh (the old rows stay under the old path). A `guardian.db` your dev-guardian did not create (one that came with a clone or an archive, or that git tracks) is never opened. **Upgrading from 3.0.0:** your existing `guardian.db` is not trusted automatically either — until you register it, scans go to a per-user fallback and `health_status` says so. If it is yours, run `node <plugin>/cli/dev-guardian.mjs db adopt --project . --yes` once, yourself (without `--yes` it first shows what it holds; `--rehome` also moves scans recorded under a link to the project). See [SECURITY.md](SECURITY.md).
 
@@ -130,17 +130,16 @@ Details, configuration and the escape hatches: [docs/hooks.md](docs/hooks.md). T
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline and Claude Desktop get the MCP server and a rules file (no skills, commands or hooks). Clone once, then run the CLI **by its absolute path** from your project:
 
 ```text
-git clone --depth 1 --branch v3.2.1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.3.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-The clone above pins 3.2.1; to follow a later release, clone its `vX.Y.Z` tag instead. `--update-mcp`, `--global` and `ci-init` need 3.0.0 or later — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
+The clone above pins 3.3.0; to follow a later release, clone its `vX.Y.Z` tag instead. `--update-mcp`, `--global` and `ci-init` need 3.0.0 or later — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 
 ```text
-npm ci --omit=dev --prefix ~/tools/dev-guardian/mcp                                  # once: runtime packages for scan
 node ~/tools/dev-guardian/cli/dev-guardian.mjs ci-init github --write                # also gitlab, bitbucket
 node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .           # commit .guardian/baseline.json
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
@@ -148,7 +147,7 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high -
 
 `ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. On a pull request the generated pipeline gates against the base commit's baseline and Semgrep rules (`--baseline-ref`, `--rules-ref`), never the pull request's own. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network). To bring another scanner's SARIF log into the same history, use the `import_sarif` tool or `import-sarif <file>` — see [docs/sarif-import.md](docs/sarif-import.md).
 
-**With dev-spec-driven.** Its `/spec-finish` can run this gate as a project check (`dev-spec init --guardian`, or `spec_init { guardian: true }` in a session): only a finding new to the baseline, at `high` or above, blocks the finish, and exit 2 is an incomplete scan, never a pass. Accept a finding you have reviewed with `baseline update` or a suppression its scanner reads, never by forcing the finish — see [docs/ci.md](docs/ci.md).
+**With dev-spec-driven (1.29+).** Its `/spec-finish` can run this gate as a project check (`spec_init { guardian: true }` in a session, or `node "<dev-spec-driven plugin>/cli/dev-spec.js" init --guardian` in a terminal): only a finding new to the baseline, at `high` or above, blocks the finish, and exit 2 is an incomplete scan, never a pass. Record the baseline on the base branch before you turn the check on. Accept one finding you have reviewed with a suppression its scanner reads (`nosemgrep: <rule> -- <reason>`, `.trivyignore`, `.gitleaksignore`), never with `baseline update` — it accepts every current finding, the feature's own included — and never by forcing the finish; see [docs/ci.md](docs/ci.md).
 
 ## Privacy and network
 

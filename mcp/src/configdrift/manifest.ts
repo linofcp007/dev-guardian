@@ -34,7 +34,6 @@
  * take a scan down with it.
  */
 
-import { join } from 'node:path';
 import { readProjectText, writeProjectFile } from '../platform/projectFs.js';
 
 /** Path of the manifest relative to the project root. POSIX-shaped by design
@@ -42,7 +41,7 @@ import { readProjectText, writeProjectFile } from '../platform/projectFs.js';
 export const MANIFEST_RELATIVE_PATH = '.dev-guardian/configs.json';
 
 /** The largest manifest read; one entry per installed config, a few KB. */
-export const MAX_MANIFEST_BYTES = 1024 * 1024;
+const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 /** Bumped only for a shape change that older readers cannot interpret. */
 export const MANIFEST_SCHEMA_VERSION = 1;
@@ -75,10 +74,6 @@ export interface ConfigManifestEntry {
 export interface ConfigManifest {
   schema_version: number;
   entries: ConfigManifestEntry[];
-}
-
-export function manifestPath(projectPath: string): string {
-  return join(projectPath, MANIFEST_RELATIVE_PATH);
 }
 
 export function emptyManifest(): ConfigManifest {

@@ -2,9 +2,9 @@
  * Shared types for install-time package vetting (`vet_packages` and the
  * PreToolUse install-command hook).
  *
- * Pure declarations. Everything under `pkgvet/` is imported by the hook
- * straight from `mcp/dist/pkgvet/*.js`, so nothing here may pull in a
- * dependency — Node built-ins only.
+ * Pure declarations. Everything under `pkgvet/` the hook uses is bundled
+ * into `mcp/dist/hooks.js`, loaded on every Bash call, so nothing here may
+ * pull in a dependency — Node built-ins only.
  */
 
 export const PKG_ECOSYSTEMS = ['npm', 'pypi', 'packagist', 'nuget'] as const;
@@ -45,7 +45,7 @@ export interface SkippedSpec {
  */
 export type PkgVerdict = 'block' | 'warn' | 'unknown' | 'ok';
 
-export type CheckStatus = 'pass' | 'warn' | 'fail' | 'unknown' | 'not_applicable';
+type CheckStatus = 'pass' | 'warn' | 'fail' | 'unknown' | 'not_applicable';
 
 export interface CheckResult {
   status: CheckStatus;

@@ -192,7 +192,7 @@ function optsIntoLockFile(project: string, root: string): boolean {
   }
 }
 
-export interface DotnetRestorePlan {
+interface DotnetRestorePlan {
   target: string;
   /** Every project file the restore touches (see `projectsForTarget`). */
   projects: string[];
@@ -268,9 +268,9 @@ export function removeCreatedLockFiles(plan: DotnetRestorePlan): string[] {
   return created;
 }
 
-export type DotnetFailureKind = 'lock_out_of_sync' | 'package_not_found' | 'feed_unreachable' | 'other';
+type DotnetFailureKind = 'lock_out_of_sync' | 'package_not_found' | 'feed_unreachable' | 'other';
 
-export interface DotnetRestoreFailure {
+interface DotnetRestoreFailure {
   /** The first NuGet/MSBuild error code in the output (`NU1004`, `NU1101`,
    *  `NU1301`, `MSB1011`, …), or `restore_failed` when there is none. */
   code: string;

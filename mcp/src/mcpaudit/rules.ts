@@ -32,7 +32,7 @@ export type McpRuleId =
   | 'mcp-tool-encoded-blob'
   | 'mcp-tool-description-oversized';
 
-export interface TextRule {
+interface TextRule {
   id: McpRuleId;
   severity: Severity;
   subcategory: ThreatCategory;
@@ -292,13 +292,13 @@ export const TEXT_RULES: readonly TextRule[] = [
  */
 const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u{FFF9}-\u{FFFB}]/u;
 
-export type InvisibleKind =
+type InvisibleKind =
   | 'tag characters'
   | 'variation selectors'
   | 'bidi controls'
   | 'zero-width and other invisible characters';
 
-export function invisibleKind(code: number): InvisibleKind | null {
+function invisibleKind(code: number): InvisibleKind | null {
   const ch = String.fromCodePoint(code);
   if (!INVISIBLE.test(ch)) return null;
   if (code >= 0xe0000 && code <= 0xe007f) return 'tag characters';
@@ -307,7 +307,7 @@ export function invisibleKind(code: number): InvisibleKind | null {
   return 'zero-width and other invisible characters';
 }
 
-export interface InvisibleScan {
+interface InvisibleScan {
   kinds: InvisibleKind[];
   count: number;
   /** What the tag characters spell, mapped back to ASCII ('' when none). */
@@ -327,7 +327,6 @@ function readable(text: string): boolean {
   }
   return printable / [...text].length >= 0.9;
 }
-
 
 export function scanInvisible(text: string): InvisibleScan | null {
   const points = [...text].map((ch) => ch.codePointAt(0) ?? 0);
@@ -422,9 +421,8 @@ export function mixedScriptWord(text: string): { word: string; index: number } |
  * token in a description — is not one.
  */
 const BASE64_RUN = /[A-Za-z0-9+/_-]{100,}={0,2}/g;
-export const BLOB_MIN_LENGTH = 100;
 
-export interface EncodedBlob {
+interface EncodedBlob {
   length: number;
   /** The decoded text when it is mostly printable, else null. */
   decodedText: string | null;

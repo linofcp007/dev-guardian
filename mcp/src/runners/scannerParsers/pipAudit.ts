@@ -59,7 +59,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const PIP_AUDIT_TOOL_NAME = 'pip-audit';
+const PIP_AUDIT_TOOL_NAME = 'pip-audit';
 
 export const pipAuditParser: ScannerParser = {
   name: PIP_AUDIT_TOOL_NAME,

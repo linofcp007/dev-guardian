@@ -88,7 +88,7 @@ const NUGET_CONFIGS = ['NuGet.config', 'nuget.config', 'NuGet.Config'];
  * per-requirement options count), a short option's value possibly attached
  * (`-ihttps://…`).
  */
-export const PIP_INDEX_OPTION = /^[ \t]*(?:-[if]|--(?:index-url|extra-index-url|no-index|find-links|trusted-host)(?=[\s=]|$))/m;
+const PIP_INDEX_OPTION = /^[ \t]*(?:-[if]|--(?:index-url|extra-index-url|no-index|find-links|trusted-host)(?=[\s=]|$))/m;
 
 /** Which project files each runner reads (or is handed), and what they decide. */
 export const REPO_CONFIG: Readonly<Record<RepoConfigRunner, readonly RepoConfigFile[]>> = {

@@ -23,7 +23,7 @@
 
 import { createHash } from 'node:crypto';
 
-export interface FingerprintInput {
+interface FingerprintInput {
   tool: string;
   rule_id?: string;
   file_path?: string;

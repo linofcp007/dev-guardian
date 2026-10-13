@@ -63,7 +63,7 @@ export function customRulesMetaKey(projectPath: string): string {
   return `${CUSTOM_RULES_META_KEY}:${projectPath}`;
 }
 
-export type RulesFileVerdict = { ok: true; rules: number } | { ok: false; reason: string };
+type RulesFileVerdict = { ok: true; rules: number } | { ok: false; reason: string };
 
 /** Keys that make a rule match something; one of them must be present. */
 const PATTERN_KEYS: readonly string[] = [
@@ -181,7 +181,7 @@ export function yamlFilesUnder(dir: string): string[] {
   return out;
 }
 
-export interface CustomRulesInspection {
+interface CustomRulesInspection {
   /** Rule files safe to pass to Semgrep, one `--config` each. */
   usable: string[];
   /** Registered files (or files inside a registered directory) that would
@@ -191,7 +191,7 @@ export interface CustomRulesInspection {
 
 /** This project's registered entries — its own key, plus the legacy global
  *  key's entries that lie inside it. Never throws. */
-export function registeredEntries(ctx: PluginContext, projectPath: string): string[] {
+function registeredEntries(ctx: PluginContext, projectPath: string): string[] {
   const own = readList(ctx, customRulesMetaKey(projectPath));
   const legacy = readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => isInside(projectPath, p));
   return [...new Set([...own, ...legacy])];
@@ -272,7 +272,7 @@ function readList(ctx: PluginContext, key: string): string[] {
 }
 
 /** `path` lies inside `root` (or is it). Case-insensitive on Windows. */
-export function isInside(root: string, path: string): boolean {
+function isInside(root: string, path: string): boolean {
   const norm = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p);
   const rel = relative(norm(root), norm(path));
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));

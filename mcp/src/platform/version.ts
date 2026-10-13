@@ -13,17 +13,14 @@
  *
  * Bundled/unbundled depth split: the identical structural problem
  * `scriptsDir.ts` documents and solves for `scripts/`, for the identical
- * reason. `server.ts` pulls this module in through `scripts/bundle.mjs`'s
- * esbuild bundle, which inlines every transitive import into ONE file,
- * `dist/server.js` — so at runtime, `import.meta.url` for code that started
- * life in THIS file is `dist/server.js`'s own URL, two directories under the
- * plugin root (`dist/` -> `mcp/` -> root). Every other path this module is
- * reached by — `ci/report.ts` and `report/sarif.ts`, both loaded from the
- * CLI as plain, unbundled `dist/ci/*.js` / `dist/report/*.js` imports; this
- * module's own test; and `server.ts` itself under `npm run dev`'s
- * `tsx src/server.ts` — loads this module as its own separate file, three
- * directories under the plugin root (`dist/platform/` or `src/platform/` ->
- * `dist`/`src` -> `mcp/` -> root). A fixed `..` count can only be right for
+ * reason. Shipped, this module runs inside the esbuild bundle
+ * `dist/engine.js` (`scripts/bundle.mjs`), which the server and the CLI both
+ * run — so at runtime, `import.meta.url` for code that started life in THIS
+ * file is the bundle's own URL, two directories under the plugin root
+ * (`dist/` -> `mcp/` -> root). Under tsx and vitest — this module's own test,
+ * and `server.ts` under `npm run dev`'s `tsx src/server.ts` — it loads as its
+ * own separate file, three directories under the plugin root
+ * (`src/platform/` -> `src` -> `mcp/` -> root). A fixed `..` count can only be right for
  * one of those two cases; trying both candidate depths for each filename,
  * and keeping whichever one actually parses, is right for both without
  * needing to know in advance which case applies.
@@ -50,7 +47,7 @@ export function resolveVersion(): string {
     // .claude-plugin/plugin.json — the real release version — tried at both
     // depths before falling back to mcp/package.json at either depth, same
     // preference order the pre-lift server.ts-local version used.
-    resolve(here, '..', '..', '.claude-plugin', 'plugin.json'), // bundled (dist/server.js) / tsx dev
+    resolve(here, '..', '..', '.claude-plugin', 'plugin.json'), // bundled (dist/engine.js)
     resolve(here, '..', '..', '..', '.claude-plugin', 'plugin.json'), // unbundled (this module's own file)
     resolve(here, '..', 'package.json'), // bundled / tsx dev — mcp/package.json (standalone npm use)
     resolve(here, '..', '..', 'package.json'), // unbundled — mcp/package.json

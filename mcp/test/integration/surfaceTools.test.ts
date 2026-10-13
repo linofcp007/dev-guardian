@@ -1430,7 +1430,7 @@ describe('map_attack_surface', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected failure');
-    expect(result.error.code).toBe('not_a_git_repo');
+    expect(result.error.code).toBe('target_not_found');
     expect(ctx.storage.surface.getLatest()).toBeNull();
   });
 

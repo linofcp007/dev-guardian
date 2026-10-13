@@ -38,7 +38,7 @@ export const THREAT_CATEGORIES = [
 
 export type ThreatCategory = (typeof THREAT_CATEGORIES)[number];
 
-export interface ThreatCategoryMeta {
+interface ThreatCategoryMeta {
   key: ThreatCategory;
   label: string;
   /** One-line, human-readable description of what the category catches. */
@@ -171,7 +171,7 @@ export const RECOMMENDATIONS = [
 ] as const;
 export type Recommendation = (typeof RECOMMENDATIONS)[number];
 
-export interface RecommendationBand {
+interface RecommendationBand {
   recommendation: Recommendation;
   /** Inclusive lower bound of the 0–100 score for this band. */
   min: number;
@@ -179,7 +179,7 @@ export interface RecommendationBand {
   max: number;
 }
 
-export const RECOMMENDATION_BANDS: RecommendationBand[] = [
+const RECOMMENDATION_BANDS: RecommendationBand[] = [
   { recommendation: 'SAFE', min: 0, max: 20 },
   { recommendation: 'REVIEW', min: 21, max: 35 },
   { recommendation: 'CAUTION', min: 36, max: 50 },

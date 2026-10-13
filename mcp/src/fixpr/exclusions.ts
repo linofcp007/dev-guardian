@@ -38,7 +38,7 @@ import type { FixGroup, FixSource } from './types.js';
 
 /** Why one finding is not a fix candidate. Exactly one applies to each — see
  *  the module comment on why they are evaluated in this order. */
-export type ExclusionReason =
+type ExclusionReason =
   /** `fix_available === false`: no scanner offered a fix. No floor recovers it. */
   | 'no_fix_available'
   /** Carries a fix, but ranks below `severity_min`. A lower floor recovers it. */
@@ -58,7 +58,7 @@ export type ExclusionReason =
    *  with the rule packs that produced it (so no fix could be verified). */
   | 'no_fix_source';
 
-export interface FixExclusions {
+interface FixExclusions {
   /** Every open finding the run started from. */
   considered: number;
   /** Findings covered by at least one group, BEFORE `max_prs` defers any.

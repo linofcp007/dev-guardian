@@ -23,6 +23,7 @@ import { ensureReportDir } from '../../src/tools/scanHelpers.js';
 import { computeTreeHash } from '../../src/treeHash/computeTreeHash.js';
 import { CAN_SYMLINK, POSIX } from '../helpers/fsCapabilities.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -88,7 +89,7 @@ describe('discoverSpecs — hostile candidates', () => {
     expect(spawnSync('mkfifo', [join(project, 'openapi.yaml')]).status).toBe(0);
     const t0 = Date.now();
     const r = discoverSpecs(project);
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
     expect(r.specs).toEqual([]);
   });
 
@@ -170,7 +171,7 @@ describe('budgets and .guardianignore — hostile files', () => {
     expect(spawnSync('mkfifo', [join(project, '.guardian', 'budgets.yml')]).status).toBe(0);
     const t0 = Date.now();
     const r = loadBudgets(project);
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
     expect(r.kind).toBe('invalid');
   });
 

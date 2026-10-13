@@ -650,9 +650,23 @@ function readPidPair(path: string): PidPair {
  * reads `TMPDIR` on POSIX and `TEMP`/`TMP` on Windows; overriding all three
  * keeps this meaningful on whichever platform runs it, matching this file's
  * own `PATH`/`Path` cross-platform-casing precedent above.
+ *
+ * Below a regular FILE, not merely a missing directory (3.3.0): the CLI turns
+ * Node's compile cache on at start, and Node creates the cache directory —
+ * with every missing parent — under the temp directory, which used to make
+ * that `mkdtemp()` succeed. Nothing can create a directory below a file.
  */
+const BROKEN_TMP_HOLDERS: string[] = [];
+afterAll(() => {
+  for (const dir of BROKEN_TMP_HOLDERS) rmDir(dir);
+});
+
 function envWithBrokenTmpdir(): NodeJS.ProcessEnv {
-  const bogus = join(tmpdir(), 'guardian-ci-cli-tmpdir-does-not-exist-xyz', 'nested');
+  const holder = makeBareDir('guardian-ci-cli-tmpdir-blocker-');
+  BROKEN_TMP_HOLDERS.push(holder);
+  const blocker = join(holder, 'a-file');
+  writeFileSync(blocker, '');
+  const bogus = join(blocker, 'nested');
   return { ...process.env, TMPDIR: bogus, TEMP: bogus, TMP: bogus };
 }
 

@@ -44,12 +44,12 @@
 export type SecretVerdict = 'live' | 'revoked' | 'unknown';
 
 /** What a provider answered — the body parsed as JSON (null when it was not), read for enumerated fields only. */
-export interface ProviderResponse {
+interface ProviderResponse {
   status: number;
   body: unknown;
 }
 
-export interface Classification {
+interface Classification {
   verdict: SecretVerdict;
   /** Built from constants and status numbers only — never from response text. */
   reason: string;

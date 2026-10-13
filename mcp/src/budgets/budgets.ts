@@ -51,12 +51,12 @@ export interface QualityBudgets {
   complexity?: number;
 }
 
-export interface Budgets {
+interface Budgets {
   perf?: PerfBudgets;
   quality?: QualityBudgets;
 }
 
-export type BudgetsLoadResult =
+type BudgetsLoadResult =
   | { kind: 'none' }
   | { kind: 'loaded'; path: string; budgets: Budgets }
   | { kind: 'invalid'; path: string; error: string };
@@ -141,7 +141,7 @@ function parseSection<K extends string>(
 
 // ---------------------------------------------------------------------- evaluation
 
-export interface BudgetViolation {
+interface BudgetViolation {
   /** `"perf.lcp_ms"` / `"quality.duplication_pct"` — the dotted budget name. */
   budget: string;
   measured: number;

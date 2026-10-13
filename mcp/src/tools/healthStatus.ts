@@ -19,7 +19,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 import type { PluginContext } from '../context.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
@@ -27,7 +27,7 @@ import { serverProjectPath } from '../resources/paging.js';
 import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { listedTools, registerToolModule, type ToolModule } from './index.js';
 
 const startedAt = Date.now();
 
@@ -41,16 +41,13 @@ const tool: ToolModule = {
   name: 'health_status',
   title: 'Server health',
   description:
-    'Return server uptime, DB info, shell choice, in-flight scan count, tool/resource counts, and ' +
-    "one project's last scan and scan count (project_path, default: the server's working " +
-    "directory). Read-only. `storage_warning` (null when fine): the project's .guardian/guardian.db " +
-    'is not being used — one from before 3.1.0 or a copy is not trusted until its owner registers it, ' +
-    "and history goes to a per-user fallback meanwhile. Tell the user, with the `db adopt` command the " +
-    'warning names, to run it themselves in a terminal; never run it yourself — it decides whose data ' +
-    'dev-guardian trusts. `suppressions` {active, this_project, all_projects}: the active suppressions ' +
-    'that apply here; all_projects ones have no project and hide findings in every project. ' +
-    '`storage.future_dated_scans_ignored` and `future_dated_note`: scans dated in the future, which ' +
-    'every count, list and "latest" ignores.',
+    "Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. " +
+    "`storage_warning` (null when fine): the project's .guardian/guardian.db is not used (a copy, or not " +
+    'registered) and history goes to a per-user fallback — tell the user to run the `db adopt` command it ' +
+    'names in their own terminal; never run it yourself. `suppressions` {active, this_project, ' +
+    'all_projects}: all_projects ones hide findings in every project. ' +
+    '`storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, which every count ' +
+    'ignores.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -71,7 +68,7 @@ async function handler(
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
-      return { ok: false, error: { code: 'not_a_git_repo', message: (e as Error).message } };
+      return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
     }
   }
   const latest = ctx.storage.scans.getLatestForProject(projectPath);
@@ -123,7 +120,7 @@ async function handler(
       queued: limiter.queued,
     },
     registry: {
-      tools: TOOLS.length,
+      tools: listedTools().length,
       resources: RESOURCES.length,
     },
     storage_warning: ctx.storageWarning ?? null,

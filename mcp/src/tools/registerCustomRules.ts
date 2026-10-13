@@ -53,7 +53,7 @@ import {
   yamlFilesUnder,
 } from '../platform/customRules.js';
 import { expandGlob, hasGlobMagic } from '../platform/glob.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { validateRuleFiles } from '../runners/semgrepValidate.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
@@ -66,28 +66,23 @@ const inputSchema = {
     .array(z.string())
     .optional()
     .describe(
-      'Files, directories or globs (e.g. rules/**/*.yml), relative to the project. When omitted, ' +
-        'auto-discovers .semgrep/, semgrep/ and rules/.',
+      'Rule files, directories or globs. Default: .semgrep/, semgrep/ and rules/.',
     ),
   clear: z
     .boolean()
     .optional()
-    .describe("When true, remove this project's registered custom rules — and the 2.0.x global registration, for every project — and exit."),
+    .describe("Remove this project's registered rules."),
 };
 
 const tool: ToolModule = {
   name: 'register_custom_rules',
   title: 'Register custom Semgrep rules',
   description:
-    'Discover or accept paths/globs to Semgrep YAML rules and persist them for THIS project ' +
-    '(registrations are per project). scan_sast and bug_hunt then run them as extra --config packs. ' +
-    'Every file is checked to be a Semgrep rules file (non-empty rules:, each rule with id, message, ' +
-    'languages, severity and a pattern) and, when Semgrep is installed, compiled with semgrep --validate ' +
-    '(an unknown language or a broken pattern is refused with Semgrep\'s message) — anything else is ' +
-    'returned in `rejected` with a reason and never registered, so a stray YAML (e.g. Prometheus alerts in ' +
-    'rules/) cannot break later scans; semgrep_validated says whether Semgrep looked. A ' +
-    'registered path that later disappears or stops validating is skipped rather than failing the ' +
-    'scan. Pass clear=true to remove the registration.',
+    'Register Semgrep rule files for this project (paths, or found in .semgrep/, semgrep/, rules/); ' +
+    'scan_sast and bug_hunt then run them. Each must be a valid rules file and, when Semgrep is ' +
+    'installed, pass semgrep --validate; anything else is returned in `rejected` with the reason, never ' +
+    'registered. A registered file that later disappears or breaks is skipped, not fatal. clear removes ' +
+    'the registration.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };
@@ -108,7 +103,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   if (inp.clear) {

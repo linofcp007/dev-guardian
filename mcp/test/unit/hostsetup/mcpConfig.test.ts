@@ -5,7 +5,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { performance } from 'node:perf_hooks';
+import { expectLinear } from '../../helpers/timing.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -360,16 +360,17 @@ describe('mergeTomlConfig', () => {
   // `String.prototype.trim` over the same WhiteSpace + LineTerminator set)
   // in one pass from the end.
   it('stays linear on a long whitespace run in the user\'s own config when force strips our entry (no ReDoS)', () => {
+    const withRun = (n: number): string => `[other]\nx = 1\n${' '.repeat(n)}\n# user comment\n\n[mcp_servers.dev-guardian]\ncommand = "node"\n`;
     const run = ' '.repeat(100_000);
-    const existing = `[other]\nx = 1\n${run}\n# user comment\n\n[mcp_servers.dev-guardian]\ncommand = "node"\n`;
     const fresh = contentOrThrow(mergeTomlConfig(null, entry, false));
-    const started = performance.now();
-    const r = mergeTomlConfig(existing, entry, true);
-    const elapsedMs = performance.now() - started;
+    const r = mergeTomlConfig(withRun(100_000), entry, true);
     expect(r.status).toBe('merged');
     expect(contentOrThrow(r)).toBe(`[other]\nx = 1\n${run}\n# user comment\n\n${fresh}`);
-    expect(elapsedMs).toBeLessThan(1_000);
-  });
+    // The shape, not the machine (review 8, finding 13; it was "under 1 s"):
+    // eight times the run costs well under 22.6 times as much.
+    const texts = new Map([5_000, 40_000].map((n) => [n, withRun(n)]));
+    expectLinear('a whitespace run before our TOML entry', (n) => mergeTomlConfig(texts.get(n) ?? '', entry, true), 5_000);
+  }, 60_000);
 });
 
 // Item 6b (2026-09-25 full review): `--force` used to `copyFileSync` over
@@ -567,13 +568,13 @@ describe('mergeRulesBlock', () => {
       // the round-3 code: 40 000 blank lines took 6.5 s. The user's own text
       // before the template is exactly where such a run would sit.
       it('stays linear on a long run of blank lines in the user\'s text before the template (no ReDoS)', () => {
+        const withRun = (n: number): string => `USERTEXT\n${'\n'.repeat(n)}MORE\n\n${legacyAgentsMd}`;
         const run = '\n'.repeat(50_000);
-        const existing = `USERTEXT\n${run}MORE\n\n${legacyAgentsMd}`;
-        const started = performance.now();
-        const r = mergeRulesBlock(existing, rendered, true, knownTemplates);
-        const elapsedMs = performance.now() - started;
+        const r = mergeRulesBlock(withRun(50_000), rendered, true, knownTemplates);
         expect(contentOrThrow(r)).toBe(`USERTEXT\n${run}MORE\n\n${RULES_BLOCK_BEGIN}\n${rendered}\n${RULES_BLOCK_END}\n`);
-        expect(elapsedMs).toBeLessThan(1_000);
+        // The shape, not the machine (review 8, finding 13; it was "under 1 s").
+        const texts = new Map([5_000, 40_000].map((n) => [n, withRun(n)]));
+        expectLinear('blank lines before the rules template', (n) => mergeRulesBlock(texts.get(n) ?? '', rendered, true, knownTemplates), 5_000);
       });
     });
 

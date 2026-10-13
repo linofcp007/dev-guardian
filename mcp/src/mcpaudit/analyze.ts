@@ -80,7 +80,7 @@ export interface OtherServer {
   toolNames: readonly string[];
 }
 
-export interface NormalizedListing {
+interface NormalizedListing {
   tools: ToolDefinition[];
   prompts: PromptDefinition[];
   resources: ResourceDefinition[];
@@ -187,7 +187,7 @@ const MiB = 1024 * 1024;
  * thinking). Past any bound the rest is not analysed and the server is
  * partial, with the reason; a string over its bound is itself a finding.
  */
-export interface AnalysisBounds {
+interface AnalysisBounds {
   /** All text of one server, in characters. */
   maxTextChars: number;
   /** One string: past this it is analysed only up to it. */
@@ -198,7 +198,7 @@ export interface AnalysisBounds {
   maxMentions: number;
 }
 
-export const ANALYSIS_BOUNDS: AnalysisBounds = {
+const ANALYSIS_BOUNDS: AnalysisBounds = {
   maxTextChars: 2 * MiB,
   maxStringChars: 64 * 1024,
   maxStrings: 50_000,
@@ -667,7 +667,7 @@ function distinctive(name: string): boolean {
 }
 
 /** Where a candidate name was first seen. */
-export interface MentionRef {
+interface MentionRef {
   item: string;
   path: string;
 }
@@ -978,7 +978,7 @@ export function analyzeServerListingDetailed(
   return finishRun(run, others);
 }
 
-export interface AsyncAnalysisOptions {
+interface AsyncAnalysisOptions {
   bounds?: AnalysisBounds;
   /** Asked between steps: a reason stops the analysis there (a cut, so the server is partial). */
   shouldStop?: () => string | null;

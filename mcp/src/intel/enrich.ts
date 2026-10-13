@@ -43,11 +43,11 @@ import type { CveIntelRepo, CveIntelRow, UpsertCveIntelInput } from '../storage/
 /** How long a cached row is served without attempting a refresh. */
 export const INTEL_TTL_MS = 24 * 60 * 60 * 1000;
 
-export interface EnrichStorage extends KevCatalogStorage {
+interface EnrichStorage extends KevCatalogStorage {
   cveIntel: Pick<CveIntelRepo, 'getMany' | 'upsertMany'>;
 }
 
-export interface EnrichOptions {
+interface EnrichOptions {
   /** Injected clock — never call `Date.now()` here directly. Default: `Date.now()`. */
   now?: number;
   /** Forces the offline path regardless of the environment. */

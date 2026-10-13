@@ -24,7 +24,7 @@ import {
   checkWildcardPermissions,
 } from './rules.js';
 
-export interface AgentAuditResult {
+interface AgentAuditResult {
   findings: Finding[];
   warnings: string[];
   mcpServersFound: number;
@@ -37,7 +37,7 @@ export interface AgentAuditResult {
 }
 
 /** A config source that exists and was not read (refused, too large, or not valid JSON). */
-export interface UnreadableSource {
+interface UnreadableSource {
   source: string;
   reason: string;
 }
@@ -88,12 +88,12 @@ function expandNestedProjectSources(source: ConfigSource, onlyProject?: string):
  * compared equal: forward slashes, no trailing slash, and case-insensitive
  * on Windows (`C:/Work/x` and `c:\work\x\` are one project there).
  */
-export function normalizeProjectKey(path: string): string {
+function normalizeProjectKey(path: string): string {
   const forward = path.replace(/\\/g, '/').replace(/\/+$/, '');
   return process.platform === 'win32' ? forward.toLowerCase() : forward;
 }
 
-export interface CollectMcpEntriesOptions {
+interface CollectMcpEntriesOptions {
   /** Expand only this project's `projects[...]` entry of Claude Code's global config. */
   onlyProject?: string;
 }

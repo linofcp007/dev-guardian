@@ -37,7 +37,7 @@ import type { Finding, ScanRecord, ScanType, ToolRun } from '../types.js';
 
 export { isSarifSlot, sarifSlot, type SarifSlot } from '../storage/slots.js';
 
-export type ScanTypeRole = 'state' | 'never';
+type ScanTypeRole = 'state' | 'never';
 
 /**
  * THE classification. `satisfies Record<ScanType, …>` makes it exhaustive at
@@ -98,10 +98,6 @@ export const STATE_SCAN_TYPES: readonly ScanType[] = (
  */
 export const TARGET_SCAN_TYPES: ReadonlySet<ScanType> = new Set<ScanType>(['skill_audit', 'wp_rest_audit']);
 
-export function isStateScanType(type: string): type is ScanType {
-  return (STATE_SCAN_TYPES as readonly string[]).includes(type);
-}
-
 /**
  * `security_full` rows come in two shapes, and the open set treats them
  * differently:
@@ -138,7 +134,7 @@ export function isScriptEraFullScan(scan: Pick<ScanRecord, 'scan_type' | 'meta'>
  * `trivy config Dockerfile` pass — exactly what `scan_containers` re-runs
  * under the same name.
  */
-export const SCRIPT_ERA_RUN_SLOTS: Readonly<Record<string, ScanType>> = {
+const SCRIPT_ERA_RUN_SLOTS: Readonly<Record<string, ScanType>> = {
   semgrep: 'sast',
   bandit: 'sast',
   gitleaks: 'secrets',

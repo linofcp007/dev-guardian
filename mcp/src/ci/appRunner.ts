@@ -23,24 +23,25 @@
  * argument for letting a CLI flag start a process collapses the moment a
  * shell is in the path.
  *
- * ---- The POSIX group kill's one honest limit -------------------------------
+ * ---- The tree kill, and its one honest limit -------------------------------
  *
- * `killTree`'s POSIX branch signals the NEGATIVE pid of the process group
- * `detached: true` put the direct child in — this reaches every descendant
- * that stayed in that group, which is what an ordinary `npm start` grandchild
- * does (confirmed against a real Linux container: a plain, non-detached
- * grandchild shares the parent's pgid and dies with it). A grandchild that
- * ITSELF calls `setsid()` (or spawns with its own `detached: true`) leaves
- * that group and forms its own — `-pid` cannot reach it, by construction, on
- * any platform; this is inherent to signal-based POSIX process-group kills,
- * not a gap specific to this implementation. `mcp/test/unit/ci/appRunner.ts`
- * mirrors this: its POSIX fixtures spawn a plain (non-detached) grandchild,
- * which is both the realistic case and the one this module can actually
- * reach.
+ * The app is started and stopped the way every child is
+ * (`runners/childProcess.ts`, review 8 finding 4): on POSIX the leader of its
+ * own process group, whose NEGATIVE pid reaches every descendant that stayed
+ * in it — what an ordinary `npm start` grandchild does (confirmed against a
+ * real Linux container: a plain, non-detached grandchild shares the parent's
+ * pgid and dies with it); on Windows `taskkill /T /F` plus the MSYS
+ * descendants the table loses. A grandchild that ITSELF calls `setsid()` (or
+ * spawns with its own `detached: true`) leaves that group and forms its own —
+ * `-pid` cannot reach it, by construction, on any platform; this is inherent
+ * to signal-based POSIX process-group kills, not a gap specific to this
+ * implementation. `mcp/test/unit/ci/appRunner.ts` mirrors this: its POSIX
+ * fixtures spawn a plain (non-detached) grandchild, which is both the
+ * realistic case and the one this module can actually reach.
  */
 
-import { execa, type ResultPromise } from 'execa';
-import { commandFor } from '../platform/binaryPath.js';
+import { findOnPath, isBareName } from '../platform/binaryPath.js';
+import { readText, startChild, stopTree, type Child, type ChildExit } from '../runners/childProcess.js';
 
 export interface StartAppOptions {
   /** argv array — never a shell string. `command[0]` is the executable. */
@@ -97,13 +98,12 @@ const POLL_INTERVAL_MS = 100;
  */
 const REQUEST_TIMEOUT_MS = 5_000;
 
-/** How long a POSIX process group gets to exit cleanly after SIGTERM before
- *  this module escalates to SIGKILL. Windows has no equivalent grace phase
- *  — `taskkill /F` is unconditionally forceful — so this constant is read
- *  only on POSIX. Matches `runners/processRunner.ts`'s own KILL_GRACE_MS,
- *  reused here as a value, not imported, since that module's constant is
- *  private. */
+/** How long the tree gets to exit cleanly after the first signal before it
+ *  is killed outright — the runner's own grace (`processRunner.ts`). */
 const KILL_GRACE_MS = 5_000;
+/** After the kill, how long to wait for pipes something outside the tree
+ *  holds before they are no longer read (`childProcess.ts#stopTree`). */
+const PIPE_ABANDON_MS = 1_000;
 
 /**
  * Bounded tail of the app's own stdout+stderr, surfaced only inside the
@@ -126,65 +126,26 @@ export async function startApp(opts: StartAppOptions): Promise<RunningApp> {
     throw new Error('startApp: command must not be empty');
   }
   const commandLabel = opts.command.join(' ');
+  const env = { ...process.env };
+  // A bare name by the absolute path it resolves to on PATH, never one in the
+  // project directory the app starts in (platform/binaryPath.ts).
+  const command = isBareName(file) ? findOnPath(file, env) : file;
+  if (command === null) {
+    throw new Error(`startApp: ${file} was not found on PATH (started: ${commandLabel})`);
+  }
 
-  const child = execa(file, args, {
-    cwd: opts.cwd,
-    shell: false,
-    // Piped, not ignored — `attachOutputTail` below drains both streams
-    // continuously for the process's whole lifetime (the listener is
-    // attached once, immediately, and never removed), so the child can
-    // never block on a full OS pipe no matter how chatty or long-lived it
-    // is. What is actually bounded, and by what: `attachOutputTail`'s OWN
-    // rolling buffer is capped at `OUTPUT_TAIL_BYTES` — that claim is true
-    // in isolation, but was stated here as if it covered this whole option
-    // block, which it did not. The app's full output is still never
-    // forwarded to THIS process's own stdout/stderr — only the bounded
-    // tail is ever surfaced, and only inside a thrown error — so a
-    // `--format json`/`--sarif` consumer parsing this CLI's own stdout is
-    // unaffected.
-    stdio: ['ignore', 'pipe', 'pipe'],
-    // `buffer: false` — load-bearing, not a micro-optimisation. execa's
-    // OWN default (`buffer: true`) accumulates a SECOND, SEPARATE, and
-    // genuinely unbounded copy of both streams behind `attachOutputTail`'s
-    // back, purely so `result.stdout`/`result.stderr` can be populated —
-    // properties this module never reads (`reject: false` below means the
-    // settled result is only ever inspected for `exitCode`/`signal`).
-    // Worse than idle memory growth: once that copy passes execa's own
-    // `maxBuffer` (100 MB, its default), execa KILLS the subprocess to
-    // enforce the limit — a real, measured regression from the fix for
-    // Finding 7 (bounded diagnosis output), confirmed directly: a healthy,
-    // merely chatty application (RSS 184 MB -> 491 MB in one second) was
-    // killed mid-scan, and the resulting error read as the APP dying, not
-    // as this module having killed it. `buffer: false` stops execa from
-    // keeping that second copy at all; `attachOutputTail`'s own listeners
-    // already read everything this module ever needs from the stream, so
-    // nothing downstream loses information.
-    buffer: false,
-    // Never throw for a nonzero exit or a spawn failure (e.g. the binary
-    // does not exist) — `waitForHealthy` below reads the settled result
-    // itself, turning either case into a specific "exited before healthy"
-    // error instead of an uncaught rejection.
-    reject: false,
-    // execa's default: kill the DIRECT child if this process exits first.
-    // Left explicit (rather than merely relying on the default) because it
-    // stops applying the moment `detached` is true (execa's own
-    // `cleanupOnExit` short-circuits on `detached` — confirmed by reading
-    // its source, see the task report) — stated here so that fact is not
-    // silently lost if the POSIX branch below ever changes. This is NOT a
-    // substitute for the CLI's own SIGINT/SIGTERM handling: `cleanup` only
-    // fires on THIS process's own natural exit paths, never on a delivered
-    // signal, and is inert under `detached` regardless (POSIX) — the CLI
-    // owns interrupt-driven teardown itself.
-    cleanup: true,
-    // POSIX only: makes `child` the leader of a new process group so
-    // `killTree` can signal the WHOLE group (direct child + any grandchild
-    // that did not itself detach) with one call to `process.kill(-pid, …)`.
-    // Windows has no equivalent concept; `killTree`'s Windows branch walks
-    // the OS parent/child table via `taskkill /T` instead, which needs no
-    // spawn-time flag — setting `detached` there would only change how the
-    // child's own console is handled, which is not what this module wants.
-    detached: process.platform !== 'win32',
-  });
+  // No shell (`startChild` never uses one), this process's environment, and
+  // both streams piped and drained for the process's whole lifetime by
+  // `attachOutputTail` below — so the child can never block on a full OS
+  // pipe, however chatty or long-lived. Only that bounded tail is kept, and
+  // only ever surfaced inside a thrown error: the app's output never reaches
+  // THIS process's stdout, so a `--format json`/`--sarif` consumer parsing it
+  // is unaffected. Nothing else keeps a copy — execa's own `buffer: true`
+  // once kept a second, unbounded one, and killed a merely chatty app (RSS
+  // 184 MB -> 491 MB in one second) when it passed 100 MB. A spawn failure (a
+  // binary that does not exist) is not a throw: `waitForHealthy` reads it
+  // from the settled exit as "exited before healthy".
+  const child = startChild(command, args, { cwd: opts.cwd, env });
 
   const getOutputTail = attachOutputTail(child);
   const stop = makeStop(child);
@@ -218,7 +179,7 @@ export async function startApp(opts: StartAppOptions): Promise<RunningApp> {
  * PROMISE instead means every caller, sequential or concurrent, awaits the
  * SAME teardown and only settles once it has actually finished.
  */
-function makeStop(child: ResultPromise): () => Promise<void> {
+function makeStop(child: Child): () => Promise<void> {
   let stopPromise: Promise<void> | null = null;
   return () => {
     stopPromise ??= killTree(child);
@@ -237,27 +198,16 @@ function makeStop(child: ResultPromise): () => Promise<void> {
 async function waitForHealthy(
   healthUrl: string,
   timeoutMs: number,
-  child: ResultPromise,
+  child: Child,
   commandLabel: string,
   getOutputTail: () => string,
   signal: AbortSignal | undefined,
 ): Promise<void> {
-  const exitState: { info: { exitCode: number | null; signal: string | null } | null } = {
-    info: null,
-  };
-  // `reject: false` (set at spawn) means this promise always RESOLVES, even
-  // for a crash or a nonzero exit, never rejects — so there is nothing for
-  // a `.catch` to do here in practice. It is attached anyway: a future
-  // change to that option turning this into a genuine rejection would
-  // otherwise surface as an unhandled rejection, which this project's own
-  // "pristine output" test discipline exists to catch.
-  child
-    .then((result) => {
-      exitState.info = { exitCode: result.exitCode ?? null, signal: result.signal ?? null };
-    })
-    .catch(() => {
-      /* unreachable while reject:false holds; see comment above */
-    });
+  const exitState: { info: ChildExit | null } = { info: null };
+  // `done` always RESOLVES — for a crash, a nonzero exit, a spawn failure.
+  void child.done.then((exit) => {
+    exitState.info = exit;
+  });
 
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -268,11 +218,12 @@ async function waitForHealthy(
     }
 
     if (exitState.info !== null) {
-      const { exitCode, signal: exitSignal } = exitState.info;
+      const { exitCode, signal: exitSignal, spawnError } = exitState.info;
       throw new Error(
         `${commandLabel} exited before ${healthUrl} ever responded ` +
           `(exit code ${exitCode === null ? 'null' : String(exitCode)}` +
-          `${exitSignal !== null ? `, signal ${exitSignal}` : ''})` +
+          `${exitSignal !== null ? `, signal ${exitSignal}` : ''}` +
+          `${spawnError !== undefined ? `, ${spawnError.message}` : ''})` +
           formatTail(getOutputTail()),
       );
     }
@@ -353,51 +304,14 @@ async function answers(
 }
 
 /**
- * Kills the whole process tree rooted at `child`, then waits for the direct
- * child to actually be reaped before returning — so a caller awaiting this
- * knows "stopped" means "gone", not merely "signal sent".
+ * Kills the whole process tree rooted at `child` (`runners/childProcess.ts`),
+ * then waits for the direct child to actually be reaped before returning — so
+ * a caller awaiting this knows "stopped" means "gone", not merely "signal
+ * sent".
  */
-async function killTree(child: ResultPromise): Promise<void> {
-  const pid = child.pid;
-  if (pid !== undefined) {
-    if (process.platform === 'win32') {
-      // `/T` walks the OS parent/child table and kills the whole tree;
-      // `/F` is unconditionally forceful — matches processRunner.ts's own
-      // Windows handling, deliberately mirrored rather than reinvented.
-      try {
-        await execa(commandFor('taskkill'), ['/PID', String(pid), '/T', '/F'], {
-          reject: false,
-          timeout: KILL_GRACE_MS,
-        });
-      } catch {
-        /* best-effort: taskkill missing, or the tree was already gone */
-      }
-    } else {
-      // `detached: true` at spawn made `pid` the leader of its own process
-      // group, so signalling the NEGATIVE pid reaches every member of that
-      // group at once — the direct child AND any grandchild that did not
-      // itself detach (e.g. the `node` process `npm start` launches).
-      // Signalling the bare (positive) pid would reach only the direct
-      // child and orphan exactly the process this module exists to catch.
-      // A grandchild that itself detaches (its own `setsid`/`detached`)
-      // leaves this group and forms its own — `-pid` cannot reach it, by
-      // construction; see the module doc comment's "one honest limit".
-      trySignal(-pid, 'SIGTERM');
-      await Promise.race([child.catch(() => undefined), sleep(KILL_GRACE_MS)]);
-      trySignal(-pid, 'SIGKILL');
-    }
-  }
-  // Wait for the direct child to actually be reaped, on every platform —
-  // this is the fact `stop()`'s callers rely on.
-  await child.catch(() => undefined);
-}
-
-function trySignal(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(pid, signal);
-  } catch {
-    /* ESRCH: already dead. Nothing left to signal. */
-  }
+async function killTree(child: Child): Promise<void> {
+  await stopTree(child, { graceMs: KILL_GRACE_MS, abandonMs: PIPE_ABANDON_MS });
+  await child.done;
 }
 
 /**
@@ -408,25 +322,25 @@ function trySignal(pid: number, signal: NodeJS.Signals): void {
  * resolves. Returns a getter rather than the buffer itself so a caller
  * always reads the CURRENT tail, not a snapshot taken at attach time.
  */
-function attachOutputTail(child: ResultPromise): () => string {
+function attachOutputTail(child: Child): () => string {
   let tail = '';
-  const onData = (chunk: Buffer): void => {
-    tail += chunk.toString('utf8');
+  const onText = (text: string): void => {
+    tail += text;
     if (tail.length > OUTPUT_TAIL_BYTES) {
       tail = tail.slice(tail.length - OUTPUT_TAIL_BYTES);
     }
   };
-  child.stdout?.on('data', onData);
-  child.stderr?.on('data', onData);
+  readText(child.process.stdout, onText);
+  readText(child.process.stderr, onText);
   return () => tail;
 }
 
 /**
- * NOT `unref()`'d — see `answers`'s comment. Every caller of `sleep` is
- * either the poll loop (waiting IS the operation `startApp` promised the
- * caller) or `killTree`'s SIGTERM grace period (waiting IS the operation
- * `stop()` promised the caller); in both cases an unref'd timer would let a
- * bare CLI process exit mid-wait instead of completing it.
+ * NOT `unref()`'d — see `answers`'s comment. The poll loop is its only
+ * caller, and waiting IS the operation `startApp` promised the caller: an
+ * unref'd timer would let a bare CLI process exit mid-wait instead of
+ * completing it. (`killTree`'s waits are the child's own: its `done` keeps
+ * the loop alive until it settles.)
  */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {

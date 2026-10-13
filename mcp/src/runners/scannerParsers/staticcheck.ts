@@ -23,7 +23,7 @@ import {
   type ScannerParser,
 } from './index.js';
 
-export const STATICCHECK_TOOL_NAME = 'staticcheck';
+const STATICCHECK_TOOL_NAME = 'staticcheck';
 
 const NAMING_CODES = new Set(['ST1003']);
 

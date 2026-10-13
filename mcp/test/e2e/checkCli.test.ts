@@ -4,7 +4,7 @@
  *   - `check --file short.js --bash ls` printed "OK" and exited 0, ignoring
  *     `--file`; `--min bogus` silently became `medium`; `--jsn` was accepted.
  *     Conflicting or unknown arguments, and a bad `--min`, are a usage error
- *     now — exit 2, with a message.
+ *     now — exit 3 (2 until 3.3.0: 2 is scan's "incomplete"), with a message.
  *   - A UTF-16 file — what PowerShell 5.1's `>` and `Out-File` write by
  *     default — was read as UTF-8, and a key in it read "No secrets
  *     detected". It is decoded by its byte-order mark, or when its bytes are
@@ -20,6 +20,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 
+/** A fake AWS key the scan reports: AWS's own `AKIAIOSFODNN7EXAMPLE` is a documented placeholder it skips (review 8). */
+const FAKE_AWS_KEY = ['AKIA', 'Q7XZ2M9KDP4RWT3B'].join('');
+
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 /** Hang-breaker for one CLI run; nothing asserts by reaching it. */
@@ -27,7 +30,7 @@ const TIMEOUT_MS = 30_000;
 // Above the cap, so a hung child is reported by the cap — naming it — and
 // not by vitest's 10 s default failing the test after the fact (R7-I1).
 vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
-const KEY = 'const k = "AKIAIOSFODNN7EXAMPLE";\n';
+const KEY = `const k = "${FAKE_AWS_KEY}";\n`;
 
 let dir: string;
 beforeEach(() => {
@@ -55,10 +58,10 @@ describe('check — arguments (review M3)', () => {
     [['--bash', 'ls', '--min', 'high'], /--min applies to --file/],
     [['--file', 'short.js', '--powershell'], /--powershell applies to --bash/],
     [[], /provide --file <path> or --bash/],
-  ])('check %j is a usage error (exit 2)', (args, message) => {
+  ])('check %j is a usage error (exit 3)', (args, message) => {
     writeFileSync(join(dir, 'short.js'), 'console.log(1);\n');
     const r = check(...args);
-    expect(r.status).toBe(2);
+    expect(r.status).toBe(3);
     expect(r.stderr).toMatch(message);
     expect(r.stdout).not.toMatch(/OK|No secrets/);
   });

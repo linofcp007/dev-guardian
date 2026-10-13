@@ -67,9 +67,9 @@ import { substituteCliPath } from './rulesTemplate.js';
  * (`mcp/dist/hostsetup/legacyRulesTemplates/`, copied there by
  * `scripts/copy-assets.mjs` — same convention as `storage/migrations/*.sql`).
  * Two candidates, tried in order, like the migrations
- * (`storage/migrations/runner.ts`): run as its own file (`src/` under tsx, or
- * tsc's `dist/hostsetup/`), this module's directory holds it; bundled into
- * `dist/cli.js` — what the CLI's `mcp-config` runs — `import.meta.url` is the
+ * (`storage/migrations/runner.ts`): run as its own file (`src/` under tsx),
+ * this module's directory holds it; bundled into `dist/engine.js` — what the
+ * CLI's `mcp-config` runs — `import.meta.url` is the
  * bundle's, so it is one level down, in `dist/hostsetup/`.
  */
 const LEGACY_TEMPLATES_DIRS: readonly string[] = (() => {
@@ -122,7 +122,7 @@ const OWNED_WHOLE_FILE_HOSTS: ReadonlySet<HostName> = new Set(['cursor', 'windsu
 /** The largest project rules or MCP config file read for a merge; a real one is a few KB. */
 const MAX_PROJECT_HOST_FILE_BYTES = 4 * 1024 * 1024;
 
-export type RulesStatus =
+type RulesStatus =
   | 'written'
   | 'merged'
   | 'already_present'
@@ -138,7 +138,7 @@ export type RulesStatus =
   // mcpConfig.ts. Never written; force-independent.
   | 'manual_merge_required';
 
-export interface RulesResult {
+interface RulesResult {
   template_file?: string;
   source_path?: string;
   target_path?: string;
@@ -147,7 +147,7 @@ export interface RulesResult {
   reason?: string;
 }
 
-export type McpStatus =
+type McpStatus =
   | 'written'
   | 'merged'
   | 'already_present'
@@ -159,7 +159,7 @@ export type McpStatus =
   | 'failed'
   | 'skipped';
 
-export interface McpResult {
+interface McpResult {
   status: McpStatus;
   config_path?: string;
   key?: string;
@@ -168,15 +168,10 @@ export interface McpResult {
   reason?: string;
 }
 
-export interface HostResult extends RulesResult {
+interface HostResult extends RulesResult {
   host: HostName;
   scope: McpScope;
   mcp: McpResult;
-}
-
-/** `<plugin>/host-rules` lives next to `<plugin>/scripts`. */
-export function resolveHostRulesDir(scriptsDir: string): string {
-  return resolve(scriptsDir, '..', 'host-rules');
 }
 
 export interface SetupOptions {
@@ -244,7 +239,7 @@ export function setupHost(opts: SetupOptions): HostResult[] {
   });
 }
 
-export interface PreviewResult {
+interface PreviewResult {
   host: HostName;
   scope: McpScope;
   format: HostSpec['mcp']['format'];

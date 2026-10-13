@@ -158,7 +158,7 @@ import { createWorktree } from '../fixpr/worktree.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { findingCveIds } from '../intel/rank.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
 import { planSemgrepConfigs } from '../runners/semgrepConfigs.js';
@@ -263,26 +263,14 @@ interface GroupResult {
 
 const tool: ToolModule = {
   name: 'create_fix_pr',
-  title: 'Apply scanner-produced fixes and open a pull request',
+  title: 'Apply scanner fixes as pull requests',
   description:
-    'Apply fixes the scanners already produced — deps_update_plan pinned upgrade ' +
-    'steps (npm with --ignore-scripts, pip pins edited in place) and the target rules\' own ' +
-    'Semgrep autofix (only those rules, --metrics=off) — inside an isolated git worktree, prove ' +
-    'them by re-running the SAME tool and rule packs that found them (scan_sast, bug_hunt, ' +
-    'deps_audit or scan_deps) plus a lazy test differential against a base-commit tree, ' +
-    'and open one pull request per ecosystem or scanner. apply defaults to false: a dry run works ' +
-    'in a detached worktree, writes no branch, never runs tests in your tree and leaves no scan ' +
-    'rows behind; only commit/push/gh pr create sit behind apply=true. Even a dry run runs the ' +
-    "project's own test command (npm test, pytest with its conftest.py, cargo test with build.rs, " +
-    "go test) in those worktrees — that is the project's code, run as you, with an allowlisted " +
-    'environment that carries no token or credential of this server. Package managers get it plus ' +
-    "your own package-manager config; the repo's .npmrc/.yarnrc/pip/Cargo/Bundler/NuGet configs " +
-    'are set aside (package_config_set_aside), and a non-plain pip requirement, an npm network path ' +
-    'or a Composer repository refuses the fix. Every open finding ' +
-    'that did NOT become a candidate is accounted for in `filtered` and `filtered_reason` (below ' +
-    'severity_min, no scanner-produced fix, file changed since HEAD, no requested source or re-scan ' +
-    'covers it). ' +
-    'A cancelled call answers ok with cancelled: true and the groups it finished.',
+    "Apply scanner-made fixes — deps_update_plan upgrades, the rules' own Semgrep autofixes — in a " +
+    'disposable worktree, verify them by re-running the scan and a test differential, and open one pull ' +
+    'request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the ' +
+    "project's own test command — the project's code, run as you. The repo's .npmrc/.yarnrc and like " +
+    'configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository ' +
+    'refuses the fix. `filtered` explains the rest.',
   inputSchema: {
     project_path: ProjectPath,
     // .describe() override, not the shared SeverityMin as-is (M8): that
@@ -294,7 +282,7 @@ const tool: ToolModule = {
     // rather than mutating the shared one, so every other caller keeps
     // seeing "include all".
     severity_min: SeverityMin.describe(
-      'Minimum severity a finding must have to be considered a fix candidate. Default: high.',
+      'Lowest severity to fix. Default high.',
     ),
     sources: z
       .array(z.enum(['deps', 'semgrep']))
@@ -307,18 +295,13 @@ const tool: ToolModule = {
       .max(10)
       .optional()
       .describe(
-        'Maximum number of groups (pull requests) to act on in one run, highest severity ' +
-          'first, then CISA KEV-listed, then higher FIRST EPSS. Groups beyond the cap are reported ' +
-          'in `deferred`, never dropped silently. Default: 3.',
+        'Pull requests per run, highest severity first; the rest in `deferred`. Default 3.',
       ),
     apply: z
       .boolean()
       .optional()
       .describe(
-        'When true, commit, push and open a pull request for every group that verifies. ' +
-          'Default: false — a dry run that still computes candidates, applies the fix in a ' +
-          "worktree, and runs both differentials — the project's own test command included — but " +
-          'commits, pushes and opens nothing.',
+        'true: commit, push, open the PRs. Default false: a dry run (still runs the test command).',
       ),
   },
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
@@ -343,7 +326,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   if (!(await isGitRepo(projectPath))) {

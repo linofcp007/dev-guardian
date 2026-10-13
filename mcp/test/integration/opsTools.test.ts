@@ -178,7 +178,7 @@ describe('detect_stack', () => {
     expect(plugin.storage.stack.getLatest()?.snapshot.languages).toEqual(['javascript']);
   });
 
-  it('reports not_a_git_repo when project_path does not resolve (invalid path)', async () => {
+  it('reports target_not_found when project_path does not resolve (invalid path)', async () => {
     const plugin = makePlugin(tempProject());
     const missing = join(tempProject(), 'does-not-exist');
     const tool = getTool('detect_stack');
@@ -186,7 +186,7 @@ describe('detect_stack', () => {
       | { ok: true }
       | { ok: false; error: { code: string } };
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('not_a_git_repo');
+    if (!r.ok) expect(r.error.code).toBe('target_not_found');
   });
 });
 

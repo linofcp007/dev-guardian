@@ -97,7 +97,7 @@ import { asArray, getProp, getString, parseInputAsJson, toPosixPath, toRelativeI
 
 export type SemgrepVerdict = 'ok' | 'partial' | 'scanned_nothing' | 'failed';
 
-export interface SemgrepReportCheck {
+interface SemgrepReportCheck {
   /** True only for a complete run (`verdict === 'ok'`). */
   ok: boolean;
   verdict: SemgrepVerdict;
@@ -149,7 +149,7 @@ export interface SemgrepReportCheck {
 }
 
 /** A rule a Semgrep run did not load, by its stored id, and Semgrep's reason. */
-export type RuleNotLoaded = FailedRule;
+type RuleNotLoaded = FailedRule;
 
 /** Longest error text carried into a reason. */
 const MAX_ERROR_TEXT = 300;
@@ -165,7 +165,7 @@ export const FIXPOINT_TIMEOUT_TYPE = 'Fixpoint timeout';
 export const FIXPOINT_TIMEOUT_PACK_TYPE = 'Fixpoint timeout (plugin pack)';
 
 /** How many files a partial reason names before "+N more" — parse errors and fixpoint timeouts alike. The stored list keeps every one. */
-export const FIXPOINT_FILES_NAMED = 5;
+const FIXPOINT_FILES_NAMED = 5;
 
 /**
  * Error types that describe the rules or the configuration, never one target
@@ -388,7 +388,7 @@ function fixpointMessage(functions: number): string {
  * function(s) across M file(s): a.ts, +K more — its findings in those
  * functions may be missing; the rest of the scan is complete`.
  */
-export function describePluginPackFixpoint(gap: PluginPackFixpoint): string {
+function describePluginPackFixpoint(gap: PluginPackFixpoint): string {
   const unscoped = gap.functions - gap.files.reduce((n, f) => n + (f.functions ?? 1), 0);
   return (
     `the plugin's LLM pack: ${describeFixpointTimeouts(gap.files, Math.max(0, unscoped))} — ` +
@@ -438,7 +438,7 @@ function describeFixpointTimeouts(files: readonly PartialParse[], unscoped = 0):
  * version and scanned files has none (1.86.0 … 1.120.1, measured), absent
  * when that cannot be told. Nothing at all for no report or no JSON.
  */
-export interface SemgrepEngine {
+interface SemgrepEngine {
   version?: string;
   fixpointTimeoutsReported?: boolean;
 }

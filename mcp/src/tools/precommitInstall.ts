@@ -10,7 +10,7 @@
 import type { PluginContext } from '../context.js';
 import { hookInstallTarget } from '../platform/hookInstallTarget.js';
 import { describeReadRefusal, readProjectText } from '../platform/projectFs.js';
-import { resolveProjectPath } from '../platform/projectPath.js';
+import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
@@ -38,7 +38,7 @@ async function handler(
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
   } catch (e) {
-    return failDomain('not_a_git_repo', (e as Error).message);
+    return failDomain(projectPathErrorCode(e), (e as Error).message);
   }
 
   // pre-commit reads the config and writes the hooks wherever the

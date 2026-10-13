@@ -90,7 +90,7 @@ import { THREAT_CATEGORY_META } from './taxonomy.js';
  * `description`: the frontmatter `description:` of an instruction file —
  * the text the host reads to decide when to load the skill (round 2).
  */
-export type RuleTarget = 'text' | 'code' | 'prose' | 'any' | 'description';
+type RuleTarget = 'text' | 'code' | 'prose' | 'any' | 'description';
 
 /**
  * The credentials of the agent and of the cloud CLIs beside it: Claude
@@ -256,7 +256,7 @@ const PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST}
 /** What precedes a secret that AUTHENTICATES a request rather than being its payload. */
 const AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 
-export interface SkillRule {
+interface SkillRule {
   id: string;
   category: ThreatCategory;
   /** Overrides the category default when present. */
@@ -294,7 +294,7 @@ export interface SkillRule {
  * or a `text`/`any` rule over the whole of an instruction file; the other
  * three are the views `markdownCode.ts` splits an instruction file into.
  */
-export type MatchSource = 'line' | 'fenced' | 'indented' | 'pre' | 'inline' | 'prose';
+type MatchSource = 'line' | 'fenced' | 'indented' | 'pre' | 'inline' | 'prose';
 
 export interface RuleMatch {
   rule: SkillRule;
@@ -887,7 +887,7 @@ export const SKILL_RULES: SkillRule[] = [
  * returning one match per (rule, line) hit. `isCode` selects which rule
  * targets apply.
  */
-export interface ScanOptions {
+interface ScanOptions {
   /**
    * The file is Markdown or plain text (`.md`, `.txt`, no extension): its
    * indented lines can be a code block. Default true; false for other text

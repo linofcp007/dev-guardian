@@ -189,7 +189,7 @@ function cleanAliases(raw: readonly unknown[] | undefined, ruleId: string | unde
  * Vulnerable Third-Party Component), a committed secret CWE-798 (Use of
  * Hard-coded Credentials). OWASP Top 10:2025 maps them to A03 and A07.
  */
-export const DEPENDENCY_CWE = 'CWE-1395';
+const DEPENDENCY_CWE = 'CWE-1395';
 export const SECRET_CWE = 'CWE-798';
 
 /**

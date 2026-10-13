@@ -20,6 +20,7 @@ import {
   type ConfigManifestEntry,
 } from '../../../src/configdrift/manifest.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -185,6 +186,6 @@ describe('detectConfigDrift — a hostile manifest', () => {
     expect(detect(h).entries.map((e) => e.state)).toEqual(['source_missing']);
     record(h, { target: relative(h.projectPath, '/dev/zero') });
     expect(detect(h).entries.map((e) => e.state)).toEqual(['target_missing']);
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
   });
 });

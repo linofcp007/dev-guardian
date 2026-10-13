@@ -14,15 +14,15 @@
 
 import { parseInputAsJson, getProp, getString, asArray } from './index.js';
 
-export type SbomFormat = 'cyclonedx-json' | 'spdx-json' | 'unknown';
+type SbomFormat = 'cyclonedx-json' | 'spdx-json' | 'unknown';
 
-export interface SbomComponent {
+interface SbomComponent {
   name: string;
   version?: string;
   type?: string;
 }
 
-export interface SbomSummary {
+interface SbomSummary {
   format: SbomFormat;
   components_count: number;
   top_packages: SbomComponent[];

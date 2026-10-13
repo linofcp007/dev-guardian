@@ -78,7 +78,7 @@ import {
 import { escapeInvisible } from './rules.js';
 
 /** The scheme every pin is written with. */
-export const PIN_SCHEME = 1;
+const PIN_SCHEME = 1;
 
 export type PinItemKind = 'tool' | 'prompt' | 'resource' | 'resource-template' | 'instructions';
 
@@ -134,7 +134,7 @@ function resourceHash(r: ResourceDefinition, uriKey: 'uri' | 'uriTemplate'): str
 }
 
 /** The scheme a stored pin (live or tombstone) was written with, or null when unrecognisable. */
-export function pinScheme(stored: string): number | null {
+function pinScheme(stored: string): number | null {
   const value = stored.startsWith(TOMBSTONE) ? stored.slice(TOMBSTONE.length) : stored;
   const m = /^v(\d+):[0-9a-f]{64}$/.exec(value);
   return m?.[1] === undefined ? null : Number(m[1]);
@@ -180,7 +180,7 @@ function pinnedItems(listing: ServerListing): PinnedItem[] {
  * (upper then lower, so `ß` and `SS` meet as full folding has them), and
  * trimmed — `Fetch`, `ｆｅｔｃｈ` and `fetch ` all read `fetch`.
  */
-export function readableName(name: string): string {
+function readableName(name: string): string {
   return name.normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC').trim();
 }
 
@@ -196,7 +196,7 @@ function duplicateToolNames(tools: readonly ToolDefinition[]): string[][] {
   return [...groups.values()].filter((g) => g.length > 1);
 }
 
-export interface CompareOptions {
+interface CompareOptions {
   /**
    * False when the listing was cut short (a budget): nothing is reported
    * removed, no tombstone is written, and the pins returned are only what

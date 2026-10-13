@@ -19,12 +19,14 @@
  *     worth one intent line is not worth registering;
  *   - the plugin's skills and commands, which is what Claude Code reads.
  *
- * A tool added later fails here until one line says when to use it.
+ * A tool added later fails here until one line says when to use it. Only the
+ * listed tools: a hidden alias (src/tools/fold.ts) is reached through its fold,
+ * and a model in Claude Code cannot call a name `tools/list` does not show.
  */
 
 import { describe, expect, it } from 'vitest';
 import { RULES_BODY } from '../../../src/hostsetup/rulesTemplate.js';
-import { TOOLS } from '../../../src/tools/index.js';
+import { listedTools, TOOLS } from '../../../src/tools/index.js';
 import { allDocs } from './pluginDocs.js';
 // Static: the registry must be full when the tests below read it.
 import '../../../src/registerAll.js';
@@ -37,14 +39,14 @@ describe('every registered tool is reachable from the prose that drives the mode
   });
 
   it('every tool is named in the host rules template', () => {
-    expect(TOOLS.map((t) => t.name).filter((name) => !RULES_BODY.includes(`\`${name}\``))).toEqual([]);
+    expect(listedTools().map((t) => t.name).filter((name) => !RULES_BODY.includes(`\`${name}\``))).toEqual([]);
   });
 
   it('every tool is named by at least one skill or command', () => {
     const text = allDocs()
       .map((d) => d.text)
       .join('\n');
-    expect(TOOLS.map((t) => t.name).filter((name) => !named(text, name))).toEqual([]);
+    expect(listedTools().map((t) => t.name).filter((name) => !named(text, name))).toEqual([]);
   });
 
   it('the rules template tells the model to vet a package before installing it', () => {

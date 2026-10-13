@@ -60,7 +60,7 @@ export function pathHasDir(dir: string, pathValue: string, platform: NodeJS.Plat
     .some((e) => normalised(e, win) === want);
 }
 
-export interface UserBinPath {
+interface UserBinPath {
   /** The per-user tools directory; null when there is no home. */
   dir: string | null;
   /** This call appended it to the PATH. */

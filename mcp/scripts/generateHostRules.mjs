@@ -15,10 +15,9 @@
  * `severity_filter`/`filtered_reason` guidance `host-rules/AGENTS.md` itself
  * already had.
  *
- * Run as part of `npm run build` (after `tsc`, which is what makes
- * `dist/hostsetup/{hostSpecs,rulesTemplate}.js` importable here — this
- * script reads the COMPILED output, never `src/`, the same convention
- * `copy-assets.mjs` and `bundle.mjs` already follow). `mcp/test/unit/
+ * Run as part of `npm run build`, under tsx (`tsx scripts/generateHostRules.mjs`):
+ * it imports `src/hostsetup/{hostSpecs,rulesTemplate}.ts` directly — the build
+ * emits no per-file output to import instead (review 8, finding 3). `mcp/test/unit/
  * hostsetup/hostRulesDrift.test.ts` fails the build if a generated file is
  * ever hand-edited without regenerating: it imports `rulesTemplate.ts`
  * straight from `src/` (TypeScript, type-checked by `tsconfig.test.json`)
@@ -42,8 +41,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ALL_HOSTS, HOST_SPECS } from '../dist/hostsetup/hostSpecs.js';
-import { DOGFOOD_RULE_TARGETS, renderHostRulesFile, substituteCliPath } from '../dist/hostsetup/rulesTemplate.js';
+import { ALL_HOSTS, HOST_SPECS } from '../src/hostsetup/hostSpecs.js';
+import { DOGFOOD_RULE_TARGETS, renderHostRulesFile, substituteCliPath } from '../src/hostsetup/rulesTemplate.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const mcpRoot = resolve(here, '..');

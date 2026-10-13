@@ -36,6 +36,7 @@ import {
 import { SeverityMin } from '../schemas.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
+import { topFindings } from '../severity/counts.js';
 
 const inputSchema = {
   target: z
@@ -43,8 +44,7 @@ const inputSchema = {
     .min(1)
     .optional()
     .describe(
-      'What to vet: a local directory, a single file, a .zip, or a git/HTTP(S) URL. ' +
-        'Defaults to the current project directory (audit the skill you are standing in).',
+      'A directory, file, .zip or git/HTTP(S) URL. Default: the current project.',
     ),
   check_deps: z
     .boolean()
@@ -61,8 +61,7 @@ const inputSchema = {
     .enum(RECOMMENDATIONS)
     .optional()
     .describe(
-      'If set, the result `passed` flag is false when the recommendation is at or worse than this ' +
-        'band (e.g. fail_on="CAUTION"). Lets a caller gate installs.',
+      '`passed` is false when the recommendation is this band or worse.',
     ),
 };
 
@@ -84,22 +83,13 @@ const RECOMMENDATION_RANK: Record<Recommendation, number> = {
 
 const tool: ToolModule = {
   name: 'scan_skill',
-  title: 'Vet an AI skill / MCP server / agent before install',
+  title: 'Vet an AI skill, MCP server or plugin before install',
   description:
-    'Security-audit a third-party AI agent skill, MCP server, or agent artifact BEFORE installing it. ' +
-    'Accepts a directory, file, .zip, or git/HTTP(S) URL. Detects prompt injection, data exfiltration, ' +
-    'privilege escalation, supply-chain risk, excessive agency, output-handling issues, system-prompt ' +
-    'leakage, memory poisoning, tool misuse, rogue-agent behaviour, trigger abuse, dangerous code, ' +
-    'taint flows, signature matches, and MCP least-privilege / tool-poisoning — plus OSV.dev CVE ' +
-    'lookups on declared dependencies. The commands in an instruction file (a SKILL.md\'s fenced, indented ' +
-    'and <pre> blocks, inline code and prose) and the commands a plugin\'s hooks.json, plugin.json and ' +
-    '.mcp.json run are scored like the skill\'s own scripts, including a file ' +
-    'downloaded and run further down. There, a fetch-or-send finding scores one level lower only where a ' +
-    'placeholder (…, <url>, example.com) stands for its target; any other finding, when nothing nearby is a ' +
-    'fetch target. An injection or persistence phrase quoted in Markdown under text that labels it an attack ' +
-    'to resist, and does not direct its use, is cited: reported at low, scored once per rule. Returns a 0-100 ' +
-    'risk score and an install recommendation ' +
-    '(SAFE / REVIEW / CAUTION / DO_NOT_INSTALL).',
+    'Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, ' +
+    '.zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, ' +
+    'tool poisoning, dangerous code, taint flows — the commands in instruction files and hook / plugin / ' +
+    'MCP configs scored like scripts — and OSV CVEs of its dependencies. Returns a 0-100 risk score and ' +
+    'SAFE, REVIEW, CAUTION or DO_NOT_INSTALL.',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
 };
@@ -280,13 +270,6 @@ function nonZeroBreakdown(
     }
   }
   return out.sort((a, b) => b.count - a.count);
-}
-
-function topFindings(findings: Finding[], limit: number): Finding[] {
-  const order = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
-  return [...findings]
-    .sort((a, b) => order[b.severity] - order[a.severity] || a.fingerprint.localeCompare(b.fingerprint))
-    .slice(0, limit);
 }
 
 function hashFiles(parts: string[]): string {

@@ -54,7 +54,7 @@ interface SuppressionRow {
   vex_impact_statement: string | null;
 }
 
-export interface InsertSuppressionInput {
+interface InsertSuppressionInput {
   finding_fingerprint: string;
   /** The finding's identity, when known — lets the suppression follow it across line shifts. */
   finding_identity?: string;
