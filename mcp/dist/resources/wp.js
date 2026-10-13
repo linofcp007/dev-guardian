@@ -60,7 +60,7 @@ registerResourceModule({
 registerResourceModule({
     name: 'guardian-wp-cron',
     uri: 'guardian://wp/cron',
-    description: 'Latest wp_cron_audit result: total scheduled events + flagged ones (suspicious hooks, ' +
+    description: 'Latest wp_audit {mode: "cron"} result: total scheduled events + flagged ones (suspicious hooks, ' +
         'base64-looking args, hooks from inactive plugins).',
     handler: async (_uri, _params, ctx) => {
         const scan = findLatestOfType(ctx, 'wp_cron_audit');

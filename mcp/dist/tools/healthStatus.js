@@ -24,7 +24,7 @@ import { RESOURCES } from '../resources/index.js';
 import { serverProjectPath } from '../resources/paging.js';
 import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
-import { registerToolModule, TOOLS } from './index.js';
+import { listedTools, registerToolModule } from './index.js';
 const startedAt = Date.now();
 // Same shared resolver server.ts and report/sarif.ts already use — was a
 // second hardcoded '0.1.0' here, independent of (and just as stale as) the
@@ -113,7 +113,7 @@ async function handler(input, ctx) {
             queued: limiter.queued,
         },
         registry: {
-            tools: TOOLS.length,
+            tools: listedTools().length,
             resources: RESOURCES.length,
         },
         storage_warning: ctx.storageWarning ?? null,

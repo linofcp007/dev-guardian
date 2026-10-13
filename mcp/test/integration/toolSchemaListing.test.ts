@@ -21,7 +21,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { TOOL_ANNOTATIONS } from '../../src/tools/annotations.js';
-import { attachAllTools, TOOLS } from '../../src/tools/index.js';
+import { attachAllTools, listedTools, TOOLS } from '../../src/tools/index.js';
 import { freshPlugin } from '../helpers/historySeed.js';
 import '../../src/registerAll.js';
 
@@ -84,7 +84,7 @@ describe('the behaviour hints a host is shown (tools/list annotations)', () => {
 
   it('every tool declares all four hints, as booleans', async () => {
     const tools = await listTools();
-    expect(tools.length).toBe(TOOLS.length);
+    expect(tools.length).toBe(listedTools().length);
     const incomplete = tools
       .filter((t) => HINTS.some((h) => typeof t.annotations?.[h] !== 'boolean'))
       .map((t) => t.name);

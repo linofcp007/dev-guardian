@@ -54,7 +54,7 @@ Load the `guardian-bugfix` skill (Skill tool, `dev-guardian:guardian-bugfix`) an
    | `iac` | `scan_iac { project_path: "<project>", force: true }` |
    | `containers` | `scan_containers { project_path: "<project>", dockerfile_path: "<same as the original>", image: "<same as the original>", force: true }` |
    | `wordpress` | `scan_wordpress { project_path: "<project>", force: true }` |
-   | `wp_vuln_check_source` | `wp_vuln_check_source { project_path: "<install root>", force: true }` |
+   | `wp_vuln_check_source` | `wp_vuln_check { mode: "source", project_path: "<install root>", force: true }` |
    | `security_full` | `security_scan_full { project_path: "<project>", force: true }` |
 
    `scan_containers` must be re-run with the same `dockerfile_path` and/or `image` the original scan used (pass only the ones it had) — a different target is a different scan, and its silence says nothing about the original finding.

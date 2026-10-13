@@ -128,7 +128,7 @@ function recommendation(score, open, cves, hasBaseline) {
     if (!hasBaseline)
         return 'Set a baseline with set_baseline so diff_scans can track regressions.';
     if (open > 50)
-        return 'Run triage_findings to identify likely false positives, then suppress.';
+        return 'Run prioritize_findings with view triage to identify likely false positives, then suppress.';
     return 'Posture is stable. Consider a periodic audit_executive to confirm.';
 }
 //# sourceMappingURL=risk.js.map

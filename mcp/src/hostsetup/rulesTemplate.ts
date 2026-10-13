@@ -62,7 +62,7 @@ export function substituteCliPath(body: string, cliPath: string): string {
  */
 export const RULES_BODY = `# dev-guardian
 
-This project has the **dev-guardian MCP server**: 63 tools and 18 resources for security, bugs, quality,
+This project has the **dev-guardian MCP server**: 52 tools and 18 resources for security, bugs, quality,
 dependencies, compliance, observability, performance, WordPress and .NET. Every scanner runs locally and results
 persist in \`.guardian/guardian.db\`. dev-guardian sends no telemetry of its own;
 Semgrep's registry mode sends metrics — pass \`local_only: true\` to avoid it.
@@ -90,7 +90,7 @@ Semgrep's registry mode sends metrics — pass \`local_only: true\` to avoid it.
   project's database is not used, history goes to a per-user fallback: tell the user, and give them
   \`node ${CLI_PATH_PLACEHOLDER} db adopt --project <project>\` to run in their own terminal (\`--yes\` registers the database).
   Point them at \`suppressions.all_projects\` and \`storage.future_dated_scans_ignored\` first.
-- Don't \`suppress_finding\` before \`triage_findings\`; don't write a fix before \`suggest_fix\`; don't run
+- Don't \`suppress_finding\` before \`prioritize_findings\` with \`view: "triage"\`; don't write a fix before \`suggest_fix\`; don't run
   \`scan_wordpress\` before \`detect_stack\` says WordPress.
 
 ## Intent → MCP tool
@@ -113,14 +113,14 @@ Semgrep's registry mode sends metrics — pass \`local_only: true\` to avoid it.
   \`apply=false\` first) → \`install_toolchain\` · installed scanners: \`check_toolchain\` · git hooks:
   \`precommit_install\` · custom Semgrep rules: \`register_custom_rules\` · logging / metrics: \`observability_setup\` ·
   performance: \`perf_check\`.
-- **WordPress** — code: \`scan_wordpress\` · a live install: \`wp_audit\` (needs WP-CLI) ·
-  CVEs from a live URL: \`wp_vuln_check\`, from source: \`wp_vuln_check_source\` · cron backdoors: \`wp_cron_audit\` ·
-  REST exposure: \`wp_rest_audit\` · posture: \`wp_describe_setup\` · hardening: \`wp_recommend_hardening\` · one
-  plugin: \`wp_plugin_check\` · many sites: \`bulk_audit_wordpress_sites\`.
-- **.NET** — secrets in configs: \`scan_dotnet_secrets\` · end-of-life frameworks: \`dotnet_target_framework_check\` ·
-  EF Core migrations: \`dotnet_efcore_audit\` · posture: \`dotnet_describe_setup\`.
+- **WordPress** — code: \`scan_wordpress\` · an install, with WP-CLI: \`wp_audit\` (\`mode\`: install, cron
+  backdoors, bulk for many sites) · CVEs and exposure: \`wp_vuln_check\` (\`mode\`: live URL, source, rest) ·
+  what is recorded — posture, hardening, one plugin: \`wp_report\` (\`kind\`: setup, hardening, plugin).
+- **.NET** — \`dotnet_check\` (\`check\`: secrets in configs, target_framework end of life, efcore migrations,
+  setup posture).
 - **History and reports** — full audit: \`audit_executive\` · \`risk_score\` · what is new: \`diff_scans\` ·
-  regressions: \`regression_alert\` · \`set_baseline\` · noise: \`triage_findings\` · order: \`prioritize_findings\` ·
+  regressions: \`diff_scans\` with \`mode: "regression"\` · \`set_baseline\` · order: \`prioritize_findings\`, noise:
+  its \`view: "triage"\` ·
   how to fix X: \`suggest_fix\` (context; you write the patch) · scanner
   fixes as PRs: \`create_fix_pr\` · \`report_export\` · GitHub issues: \`create_github_issues\` · server health:
   \`health_status\`.

@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { RULES_BODY } from '../../../src/hostsetup/rulesTemplate.js';
 import { RESOURCES } from '../../../src/resources/index.js';
-import { TOOLS } from '../../../src/tools/index.js';
+import { listedTools, TOOLS } from '../../../src/tools/index.js';
 import { MCP_ROOT } from '../../helpers/tsxNode.js';
 import { commandDocs, frontmatter, referenceDocs, skillDocs } from './pluginDocs.js';
 
@@ -255,6 +255,6 @@ describe('the host rules name the real tool and resource counts', () => {
   it('RULES_BODY says N tools and M resources, as registered', () => {
     const m = /(\d+) tools and (\d+) resources/.exec(RULES_BODY);
     expect(m).not.toBeNull();
-    expect([Number(m?.[1]), Number(m?.[2])]).toEqual([TOOLS.length, RESOURCES.length]);
+    expect([Number(m?.[1]), Number(m?.[2])]).toEqual([listedTools().length, RESOURCES.length]);
   });
 });

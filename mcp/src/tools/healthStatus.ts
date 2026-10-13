@@ -27,7 +27,7 @@ import { serverProjectPath } from '../resources/paging.js';
 import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { listedTools, registerToolModule, type ToolModule } from './index.js';
 
 const startedAt = Date.now();
 
@@ -123,7 +123,7 @@ async function handler(
       queued: limiter.queued,
     },
     registry: {
-      tools: TOOLS.length,
+      tools: listedTools().length,
       resources: RESOURCES.length,
     },
     storage_warning: ctx.storageWarning ?? null,

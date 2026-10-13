@@ -15,7 +15,7 @@ performance and compliance:
 
 - **Plugin front-end** — `skills/` (13 skills: a `SKILL.md`, plus `references/` read on demand) and `commands/`
   (10 slash commands), declared in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).
-- **MCP server** — `mcp/` (TypeScript on `node:sqlite`; Node ≥ 22.13, never `--experimental-sqlite`): 63 tools
+- **MCP server** — `mcp/` (TypeScript on `node:sqlite`; Node ≥ 22.13, never `--experimental-sqlite`): 52 tools
   and 18 resources, registered by `mcp/src/registerAll.ts`, built to `mcp/dist/`.
 - **Guardrail hooks** — `hooks/hooks.json` (auto-discovered) and the `hooks/guardian-hook.mjs` dispatcher:
   dependency-free, fail-open; detection in `mcp/src/hooks/`. User-facing detail: [`docs/hooks.md`](docs/hooks.md).

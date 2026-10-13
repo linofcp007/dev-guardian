@@ -126,8 +126,8 @@ async function handler(input, ctx) {
                 warning: `This baseline's scan did not fully measure ${notMeasured.join(', ')} (a scanner, or a pass ` +
                     'of one, failed or was not installed), so it holds only some of their findings, or none. Later ' +
                     'comparisons against this baseline report a finding from them that it does not hold as ' +
-                    '"not previously measured" — never as new, and never counted in regression_alert\'s ' +
-                    'score. Re-run the scan once the scanner works and set the baseline again.',
+                    '"not previously measured" — never as new, and never counted in the regression score of ' +
+                    'diff_scans {mode: "regression"}. Re-run the scan once the scanner works and set the baseline again.',
             }
             : {}),
     };

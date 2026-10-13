@@ -3889,10 +3889,10 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative38, options, skipNormalization) {
+    function resolveComponent(base2, relative38, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse11(serialize2(base, options), options);
+        base2 = parse11(serialize2(base2, options), options);
         relative38 = parse11(serialize2(relative38, options), options);
       }
       options = options || {};
@@ -3912,32 +3912,32 @@ var require_fast_uri = __commonJS({
           target.query = relative38.query;
         } else {
           if (!relative38.path) {
-            target.path = base.path;
+            target.path = base2.path;
             if (relative38.query !== void 0) {
               target.query = relative38.query;
             } else {
-              target.query = base.query;
+              target.query = base2.query;
             }
           } else {
             if (relative38.path[0] === "/") {
               target.path = removeDotSegments(relative38.path);
             } else {
-              if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
+              if ((base2.userinfo !== void 0 || base2.host !== void 0 || base2.port !== void 0) && !base2.path) {
                 target.path = "/" + relative38.path;
-              } else if (!base.path) {
+              } else if (!base2.path) {
                 target.path = relative38.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative38.path;
+                target.path = base2.path.slice(0, base2.path.lastIndexOf("/") + 1) + relative38.path;
               }
               target.path = removeDotSegments(target.path);
             }
             target.query = relative38.query;
           }
-          target.userinfo = base.userinfo;
-          target.host = base.host;
-          target.port = base.port;
+          target.userinfo = base2.userinfo;
+          target.host = base2.host;
+          target.port = base2.port;
         }
-        target.scheme = base.scheme;
+        target.scheme = base2.scheme;
       }
       target.fragment = relative38.fragment;
       return target;
@@ -5069,8 +5069,8 @@ var require_multipleOf = __commonJS({
         const { gen, data, schemaCode, it } = cxt;
         const prec = it.opts.multipleOfPrecision;
         const res = gen.let("res");
-        const invalid = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
-        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid}))`);
+        const invalid2 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
+        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid2}))`);
       }
     };
     exports.default = def;
@@ -26566,23 +26566,23 @@ var ZodEffects = class extends ZodType {
     }
     if (effect.type === "transform") {
       if (ctx.common.async === false) {
-        const base = this._def.schema._parseSync({
+        const base2 = this._def.schema._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: ctx
         });
-        if (!isValid(base))
+        if (!isValid(base2))
           return INVALID;
-        const result = effect.transform(base.value, checkCtx);
+        const result = effect.transform(base2.value, checkCtx);
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
         return { status: status.value, value: result };
       } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base) => {
-          if (!isValid(base))
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base2) => {
+          if (!isValid(base2))
             return INVALID;
-          return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base2.value, checkCtx)).then((result) => ({
             status: status.value,
             value: result
           }));
@@ -34216,19 +34216,19 @@ function parseNullableDef(def, refs) {
     };
   }
   if (refs.target === "openApi3") {
-    const base2 = parseDef(def.innerType._def, {
+    const base3 = parseDef(def.innerType._def, {
       ...refs,
       currentPath: [...refs.currentPath]
     });
-    if (base2 && "$ref" in base2)
-      return { allOf: [base2], nullable: true };
-    return base2 && { ...base2, nullable: true };
+    if (base3 && "$ref" in base3)
+      return { allOf: [base3], nullable: true };
+    return base3 && { ...base3, nullable: true };
   }
-  const base = parseDef(def.innerType._def, {
+  const base2 = parseDef(def.innerType._def, {
     ...refs,
     currentPath: [...refs.currentPath, "anyOf", "0"]
   });
-  return base && { anyOf: [base, { type: "null" }] };
+  return base2 && { anyOf: [base2, { type: "null" }] };
 }
 
 // node_modules/zod-to-json-schema/dist/esm/parsers/number.js
@@ -35655,8 +35655,8 @@ var Protocol = class {
 function isPlainObject2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function mergeCapabilities(base, additional) {
-  const result = { ...base };
+function mergeCapabilities(base2, additional) {
+  const result = { ...base2 };
   for (const key in additional) {
     const k = key;
     const addValue = additional[k];
@@ -39031,8 +39031,8 @@ function neutraliseListing(entries2, env) {
 function probeArgs(dir) {
   return ["-c", "safe.directory=*", "-C", dir, "config", "--includes", "--show-scope", "-z", "--get-regexp", COMMAND_KEYS_REGEX];
 }
-function probeEnv(base, platform2) {
-  const env = { ...base };
+function probeEnv(base2, platform2) {
+  const env = { ...base2 };
   for (const name of Object.keys(env)) if (sameName(name, "GIT_CONFIG", platform2)) delete env[name];
   const stat3 = staticGitSafety(platform2);
   return applyGitSafety({ ...stat3, config: [...stat3.config, [PROBE_KEY, "1"]] }, env, platform2);
@@ -39055,9 +39055,9 @@ function interpretExit(status, stdout, stderr, dir) {
   };
 }
 function combine(probes, env, platform2) {
-  const base = staticGitSafety(platform2);
-  const config2 = [...base.config];
-  const vars = { ...base.vars };
+  const base2 = staticGitSafety(platform2);
+  const config2 = [...base2.config];
+  const vars = { ...base2.vars };
   const notApplied = /* @__PURE__ */ new Set();
   const refusals = [];
   const seen = /* @__PURE__ */ new Set();
@@ -39306,8 +39306,8 @@ function probeError(error2, dir, timeoutMs) {
   }
   return { kind: "refused", message: `could not read the git configuration of ${dir}: ${error2.message}` };
 }
-function applyGitSafety(safety, base, platform2 = process.platform) {
-  const env = { ...base };
+function applyGitSafety(safety, base2, platform2 = process.platform) {
+  const env = { ...base2 };
   for (const [name, value] of Object.entries(safety.vars)) setVar(env, name, value, platform2);
   if (countProblem(env, platform2) !== null) return env;
   const countName = Object.keys(env).find((name) => sameName(name, "GIT_CONFIG_COUNT", platform2));
@@ -45006,8 +45006,8 @@ function lockFileAdvice(ecosystem) {
 var DEV_ONLY_ADVICE = "only devDependencies, which Trivy skips by default";
 var MANIFEST_ECOSYSTEM_LOCKFILES = ECOSYSTEM_MANIFESTS.map((e) => ({ ecosystem: e.ecosystem, lockfiles: e.lockfiles }));
 function manifestEcosystemOfTarget(target) {
-  const base = target.slice(Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\")) + 1).toLowerCase();
-  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base));
+  const base2 = target.slice(Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\")) + 1).toLowerCase();
+  const eco = ECOSYSTEM_MANIFESTS.find((e) => e.lockfiles.some((l) => l.toLowerCase() === base2));
   return eco?.ecosystem ?? null;
 }
 var NPM_DECLARING_FIELDS = [
@@ -45579,8 +45579,8 @@ async function runProcess(options) {
   let extendEnv = options.extendEnv ?? true;
   let gitNotApplied = [];
   if (options.gitHardening !== false) {
-    const base = extendEnv ? { ...process.env, ...options.env ?? {} } : { ...options.env ?? {} };
-    const full = await gitSafetyFor([options.cwd, ...options.gitRepos ?? []], { env: base });
+    const base2 = extendEnv ? { ...process.env, ...options.env ?? {} } : { ...options.env ?? {} };
+    const full = await gitSafetyFor([options.cwd, ...options.gitRepos ?? []], { env: base2 });
     const safety = options.gitHardening === "except-hooks-path" ? withoutHooksPath(full) : full;
     if (safety.refused !== null) {
       return {
@@ -45591,7 +45591,7 @@ async function runProcess(options) {
         truncated: false
       };
     }
-    env = applyGitSafety(safety, base);
+    env = applyGitSafety(safety, base2);
     extendEnv = false;
     gitNotApplied = safety.notApplied;
   }
@@ -45906,7 +45906,7 @@ async function resolveCommit(cwd, ref) {
   const sha = r.stdout.trim();
   return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
 }
-async function changedFiles(cwd, base, head) {
+async function changedFiles(cwd, base2, head) {
   const r = await git(cwd, [
     "diff",
     "-z",
@@ -45914,11 +45914,11 @@ async function changedFiles(cwd, base, head) {
     "--relative",
     "--diff-filter=ACMR",
     "--no-renames",
-    `${base}...${head}`,
+    `${base2}...${head}`,
     "--"
   ]);
   if (r.exitCode !== 0) {
-    throw new Error(`git diff ${base}...${head} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
+    throw new Error(`git diff ${base2}...${head} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
   }
   return splitNul(r.stdout);
 }
@@ -46554,8 +46554,8 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
   for (const name of gaps) {
     const colon = name.indexOf(":");
     if (colon <= 0 || hasOwnRun(name) || !ranOkNames.has(name.slice(0, colon))) continue;
-    const base = name.slice(0, colon);
-    partsOf.set(base, [...partsOf.get(base) ?? [], name.slice(colon + 1)]);
+    const base2 = name.slice(0, colon);
+    partsOf.set(base2, [...partsOf.get(base2) ?? [], name.slice(colon + 1)]);
   }
   const isPart = (name) => {
     const colon = name.indexOf(":");
@@ -46571,11 +46571,11 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
       `${unreadable.join(", ")} ran but ${anyDevOnly(manifestGaps) ? "reported on" : "read"} no dependency manifest \u2014 ` + manifestAdvice(manifestGaps)
     );
   }
-  for (const [base, allParts] of partsOf) {
+  for (const [base2, allParts] of partsOf) {
     const parts = allParts.filter((part) => part !== "manifest-walk");
     if (parts.length < allParts.length) {
       clauses.push(
-        `${base} ran, but the check of which dependency manifests it read stopped early (see its tools_run reason) \u2014 manifests beyond it were not checked`
+        `${base2} ran, but the check of which dependency manifests it read stopped early (see its tools_run reason) \u2014 manifests beyond it were not checked`
       );
     }
     if (parts.length === 0) continue;
@@ -46585,7 +46585,7 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
     });
     const covered = manifestGaps.filter((g) => parts.includes(g.ecosystem));
     clauses.push(
-      `${base} ran, but ${named2.join(", ")} was not covered` + (covered.length > 0 ? ` \u2014 ${manifestAdvice(covered)}` : "")
+      `${base2} ran, but ${named2.join(", ")} was not covered` + (covered.length > 0 ? ` \u2014 ${manifestAdvice(covered)}` : "")
     );
   }
   if (ranWithGaps.length > 0) {
@@ -46799,10 +46799,10 @@ function writeManifest(projectPath, manifest) {
   }).ok;
 }
 function upsertManifestEntry(manifest, entry) {
-  const base = manifest ?? emptyManifest();
+  const base2 = manifest ?? emptyManifest();
   return {
     schema_version: MANIFEST_SCHEMA_VERSION,
-    entries: [...base.entries.filter((e) => e.target !== entry.target), entry]
+    entries: [...base2.entries.filter((e) => e.target !== entry.target), entry]
   };
 }
 function findManifestEntry(manifest, target) {
@@ -49253,6 +49253,10 @@ var TOOL_ANNOTATIONS = {
   scan_dotnet_secrets: records(true),
   // a .NET build restores from NuGet feeds
   dotnet_efcore_audit: records(true),
+  // Folds (./folds.ts): every member's hints covered — read-only only when all are, open-world when any is.
+  dotnet_check: records(true),
+  wp_report: records(false),
+  // the plugin kind runs WP-CLI and records a row
   scan_skill: records(true),
   // OSV
   scan_wordpress: records(true),
@@ -49304,6 +49308,25 @@ var TOOL_ANNOTATIONS = {
 // src/tools/index.ts
 var DATABASE_BUSY_MESSAGE = `dev-guardian's database is locked by another process \u2014 another dev-guardian server, hook or CLI writing to it (several can share one project) \u2014 and it was not released within ${SESSION_BUSY_TIMEOUT_MS / 1e3} s. Retry the call in a few seconds. If it keeps happening, close the other sessions working on this project, or end a dev-guardian process that is stuck.`;
 var TOOLS = [];
+function listedTools(tools = TOOLS) {
+  return tools.filter((t) => t.listed !== false);
+}
+function toolListing(tools = TOOLS) {
+  return listedTools(tools).map((t) => {
+    const inputSchema34 = toJsonSchemaCompat(strictInputSchema(t), {
+      strictUnions: true,
+      pipeStrategy: "input"
+    });
+    delete inputSchema34["$schema"];
+    return {
+      name: t.name,
+      ...t.title ? { title: t.title } : {},
+      description: t.description,
+      inputSchema: inputSchema34,
+      ...t.annotations !== void 0 ? { annotations: t.annotations } : {}
+    };
+  });
+}
 function registerToolModule(tool54) {
   if (TOOLS.some((t) => t.name === tool54.name)) {
     throw new Error(`Tool '${tool54.name}' is already registered`);
@@ -49344,10 +49367,13 @@ function attachAllTools(server, ctx) {
           if (!isDatabaseBusyError(e)) throw e;
           result = { ok: false, error: { code: "database_busy", message: DATABASE_BUSY_MESSAGE } };
         }
-        return toCallToolResult(result, tool54.contentOnlyKeys ?? []);
+        const shapedBy = tool54.route?.(input) ?? tool54;
+        return toCallToolResult(result, shapedBy.contentOnlyKeys ?? []);
       }
     );
   }
+  const listing = toolListing(TOOLS);
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: listing }));
 }
 function strictInputSchema(tool54) {
   const schema = external_exports.object(tool54.inputSchema).strict();
@@ -49378,6 +49404,16 @@ function toCallToolResult(result, contentOnlyKeys) {
     structuredContent: errorPayload
   };
 }
+
+// src/tools/instructions.ts
+var SERVER_INSTRUCTIONS = [
+  "dev-guardian runs open-source scanners locally and keeps their history (baselines, diffs, suppressions). Use its tools, not the scanners in a shell.",
+  "Whole project: security_scan_full; a diff: review_pr or a scan with scope; bugs: bug_hunt; deps: deps_audit, and vet_packages before an install; WordPress: scan_wordpress, wp_*; .NET: dotnet_check; history: diff_scans, prioritize_findings, health_status.",
+  "A scanner that did not run is a gap, never 0 findings: read tools_run, missing_tools and coverage first.",
+  "Never run db adopt for the user. Never run baseline update to accept one finding: it accepts all of them.",
+  "create_fix_pr: dry run first. Ask before scan_secrets verify_live or audit_mcp_tools.",
+  "With .specs/ (dev-spec-driven): spec_next_action first; a reported bug goes to /spec-bugfix."
+].join("\n");
 
 // src/runners/findingMerge.ts
 function findingMergeKey(f) {
@@ -50567,8 +50603,8 @@ var SEMGREP_MAX_TARGET_BYTES = 1e6;
 var WINDOWS_MAX_PATH = 260;
 function longPathsOf(root, rels, platform2 = process.platform) {
   if (platform2 !== "win32") return [];
-  const base = resolve13(root);
-  return rels.filter((rel2) => join28(base, ...rel2.split("/")).length >= WINDOWS_MAX_PATH).sort();
+  const base2 = resolve13(root);
+  return rels.filter((rel2) => join28(base2, ...rel2.split("/")).length >= WINDOWS_MAX_PATH).sort();
 }
 function isScannedSource(rel2, exclusions) {
   if (languageOfFile(rel2) === null && !/\.h$/i.test(rel2)) return false;
@@ -50889,25 +50925,25 @@ function detectConfigDrift(input) {
   };
 }
 function classify2(entry, input) {
-  const base = {
+  const base2 = {
     target: entry.target,
     source: entry.source,
     recorded_plugin_version: entry.plugin_version,
     current_plugin_version: input.currentVersion
   };
   const sourceHash = hashConfigFile(input.configsDir, entry.source);
-  if (sourceHash === null) return { ...base, state: "source_missing" };
+  if (sourceHash === null) return { ...base2, state: "source_missing" };
   const targetHash = hashConfigFile(input.projectPath, entry.target);
-  if (targetHash === null) return { ...base, state: "target_missing" };
+  if (targetHash === null) return { ...base2, state: "target_missing" };
   if (entry.delivered_as !== void 0 && presentInProject(input.projectPath, entry.delivered_as)) {
-    return { ...base, state: "pending_merge", delivered_as: entry.delivered_as };
+    return { ...base2, state: "pending_merge", delivered_as: entry.delivered_as };
   }
   const oursMoved = sourceHash !== entry.source_sha256;
   const theirsMoved = targetHash !== entry.target_sha256;
-  if (oursMoved && theirsMoved) return { ...base, state: "diverged" };
-  if (oursMoved) return { ...base, state: "upstream_update" };
-  if (theirsMoved) return { ...base, state: "local_edit" };
-  return { ...base, state: "in_sync" };
+  if (oursMoved && theirsMoved) return { ...base2, state: "diverged" };
+  if (oursMoved) return { ...base2, state: "upstream_update" };
+  if (theirsMoved) return { ...base2, state: "local_edit" };
+  return { ...base2, state: "in_sync" };
 }
 
 // src/redaction/secretFindingRedaction.ts
@@ -51336,9 +51372,9 @@ async function resolveDiff(projectPath, diff) {
     meta: { diff: { staged: diff.staged === true, include_untracked: includeUntracked } }
   };
 }
-async function changedFilesOrThrow(projectPath, base, head) {
+async function changedFilesOrThrow(projectPath, base2, head) {
   try {
-    return (await changedFiles(projectPath, base, head)).map(normaliseRelPath);
+    return (await changedFiles(projectPath, base2, head)).map(normaliseRelPath);
   } catch (e) {
     throw new ScopeError(e instanceof Error ? e.message : String(e), "target_not_found");
   }
@@ -51438,14 +51474,14 @@ function makeProgressEmitter(options) {
     if (!lastPayload) return;
     heartbeatCounter += 1;
     const elapsedS = Math.round((Date.now() - startedAt2) / 1e3);
-    const base = noted ?? lastPayload.message;
+    const base2 = noted ?? lastPayload.message;
     const payload = {
       ...lastPayload,
       // Heartbeat: re-send the last step but with a bumped progress value so
       // the host knows the server is alive even if no boundary happened.
       progress: typeof lastPayload.total === "number" ? lastPayload.progress : lastPayload.progress + heartbeatCounter / 1e3
     };
-    payload.message = base !== void 0 ? `${base} (${elapsedS}s elapsed)` : `${elapsedS}s elapsed`;
+    payload.message = base2 !== void 0 ? `${base2} (${elapsedS}s elapsed)` : `${elapsedS}s elapsed`;
     sendMonotonic(options.notifier, payload);
   }, heartbeat);
   if (typeof interval.unref === "function") {
@@ -52551,16 +52587,16 @@ function commandLineLength(command, args) {
 }
 function batchArgs(items, options) {
   const budget = options.maxChars ?? ARG_CHAR_BUDGET;
-  const base = commandLineLength(options.command ?? "x".repeat(260), options.fixedArgs);
+  const base2 = commandLineLength(options.command ?? "x".repeat(260), options.fixedArgs);
   const batches = [];
   let current = [];
-  let used = base;
+  let used = base2;
   for (const item of items) {
     const cost = argCost(item);
     if (current.length > 0 && used + cost > budget) {
       batches.push(current);
       current = [];
-      used = base;
+      used = base2;
     }
     current.push(item);
     used += cost;
@@ -52588,15 +52624,15 @@ function loadScanSettings(root) {
   const path8 = SCAN_SETTINGS_RELATIVE_PATH;
   const read3 = readProjectText(root, path8, MAX_BYTES);
   if (read3.status === "absent") return { kind: "none", settings: defaultScanSettings() };
-  const invalid = (error2) => ({ kind: "invalid", path: path8, error: error2, settings: defaultScanSettings() });
-  if (read3.status === "refused") return invalid(`the file was not read: ${describeReadRefusal(read3.reason)}`);
+  const invalid2 = (error2) => ({ kind: "invalid", path: path8, error: error2, settings: defaultScanSettings() });
+  if (read3.status === "refused") return invalid2(`the file was not read: ${describeReadRefusal(read3.reason)}`);
   if (read3.text.trim() === "") return { kind: "loaded", path: path8, settings: defaultScanSettings() };
   const parsed = parseYamlBounded(read3.text);
   if (!parsed.ok) {
-    return invalid(parsed.reason === "invalid" ? `invalid YAML: ${(parsed.detail ?? "unparsable").split("\n")[0] ?? ""}` : describeYamlRefusal(parsed));
+    return invalid2(parsed.reason === "invalid" ? `invalid YAML: ${(parsed.detail ?? "unparsable").split("\n")[0] ?? ""}` : describeYamlRefusal(parsed));
   }
   const settings = parseSettings(parsed.value);
-  return typeof settings === "string" ? invalid(settings) : { kind: "loaded", path: path8, settings };
+  return typeof settings === "string" ? invalid2(settings) : { kind: "loaded", path: path8, settings };
 }
 function parseSettings(doc) {
   const out = defaultScanSettings();
@@ -53160,10 +53196,10 @@ function relativePath2(filePath, projectPath) {
   return rel2.startsWith(mount) ? rel2.slice(mount.length) : rel2;
 }
 function mapSeverity(rawSeverity, metadata) {
-  const base = normalizeSeverity(rawSeverity);
+  const base2 = normalizeSeverity(rawSeverity);
   const cat = getString(metadata, "category")?.toLowerCase();
-  if (base === "high" && (cat === "security" || cat === "vulnerability")) return "critical";
-  return base;
+  if (base2 === "high" && (cat === "security" || cat === "vulnerability")) return "critical";
+  return base2;
 }
 function mapCategory(metadata, checkId) {
   const explicit = getString(metadata, "category")?.toLowerCase();
@@ -53271,9 +53307,9 @@ function applyGaps(run2, gaps, opts, tooLong) {
   const notes = [...semgrepGapNotes(gaps), ...tooLong.length > 0 ? [describeTooLong(tooLong)] : []];
   if (notes.length === 0) return { toolRun: run2, missing: false };
   const because = opts.scannedNothing === true ? scannedNothingBecause(gaps) : null;
-  const base = because ?? run2.reason;
-  const added = notes.filter((n2) => base === void 0 || !base.includes(n2));
-  const reason = [base, ...added].filter((s) => s !== void 0 && s.length > 0).join("; ");
+  const base2 = because ?? run2.reason;
+  const added = notes.filter((n2) => base2 === void 0 || !base2.includes(n2));
+  const reason = [base2, ...added].filter((s) => s !== void 0 && s.length > 0).join("; ");
   const unscanned = {
     ...gaps.oversized.length > 0 ? { oversized: gaps.oversized.length } : {},
     ...gaps.submodules.length > 0 ? { submodules: gaps.submodules.length } : {},
@@ -54858,21 +54894,21 @@ async function resolveLogOpts(cwd, raw) {
 // src/secrets/verify/apply.ts
 function annotateFinding(f, check2) {
   if (check2.verdict === "skipped") return f;
-  const base = f.message !== void 0 && f.message.length > 0 ? `${f.message}. ` : "";
+  const base2 = f.message !== void 0 && f.message.length > 0 ? `${f.message}. ` : "";
   switch (check2.verdict) {
     case "live":
       return {
         ...f,
         severity: "critical",
-        message: `${base}verified: live \u2014 ${check2.reason}. This credential works: rotate it now${check2.rotate !== null ? ` (${check2.rotate})` : ""}, then replace it wherever it is used. Deleting it from the code does not disable it.`
+        message: `${base2}verified: live \u2014 ${check2.reason}. This credential works: rotate it now${check2.rotate !== null ? ` (${check2.rotate})` : ""}, then replace it wherever it is used. Deleting it from the code does not disable it.`
       };
     case "revoked":
       return {
         ...f,
-        message: `${base}verified: revoked \u2014 ${check2.reason}. Still remove it from the code (and the history).`
+        message: `${base2}verified: revoked \u2014 ${check2.reason}. Still remove it from the code (and the history).`
       };
     case "unknown":
-      return { ...f, message: `${base}verified: unknown \u2014 ${check2.reason}.` };
+      return { ...f, message: `${base2}verified: unknown \u2014 ${check2.reason}.` };
   }
 }
 function withSecretChecks(inner, checks) {
@@ -55208,7 +55244,7 @@ async function checkOne(provider, secret, opts) {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS3;
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = opts.signal !== void 0 ? AbortSignal.any([opts.signal, timeout]) : timeout;
-  const base = { provider: provider.name, host, sent: true, rotate: provider.rotate };
+  const base2 = { provider: provider.name, host, sent: true, rotate: provider.rotate };
   try {
     const res = await fetchImpl(provider.endpoint, {
       method: provider.method,
@@ -55219,9 +55255,9 @@ async function checkOne(provider, secret, opts) {
     });
     const body = await readJsonBody(res);
     const c3 = provider.classify({ status: res.status, body });
-    return { ...base, verdict: c3.verdict, reason: c3.reason };
+    return { ...base2, verdict: c3.verdict, reason: c3.reason };
   } catch (e) {
-    return { ...base, verdict: "unknown", reason: describeFailure(e, host, timeout, opts.signal, timeoutMs) };
+    return { ...base2, verdict: "unknown", reason: describeFailure(e, host, timeout, opts.signal, timeoutMs) };
   }
 }
 async function readJsonBody(res) {
@@ -55934,10 +55970,10 @@ var TERRAFORM_FILE = /\.(tf|tf\.json|tofu|tofu\.json)$/;
 function readByTrivy(file, read3, singleFile) {
   const slash = file.lastIndexOf("/");
   const dir = slash < 0 ? "" : file.slice(0, slash);
-  const base = file.slice(slash + 1);
+  const base2 = file.slice(slash + 1);
   return read3.some(({ target, type }) => {
     if (target === file) return true;
-    if (singleFile && target === base) return true;
+    if (singleFile && target === base2) return true;
     if (TERRAFORM_FILE.test(file) && type.startsWith("terraform")) {
       const t = target === "." ? "" : target;
       if (t === dir) return true;
@@ -56214,10 +56250,10 @@ registerToolModule(
   })
 );
 function childInput(name, input, projectPath) {
-  const base = { project_path: projectPath, force: true };
-  if (name !== "scan_sast") return base;
+  const base2 = { project_path: projectPath, force: true };
+  if (name !== "scan_sast") return base2;
   return {
-    ...base,
+    ...base2,
     ...input.local_only === true ? { local_only: true } : {},
     ...input.auto_fix === true ? { auto_fix: true, allow_dirty: true } : {}
   };
@@ -57384,8 +57420,8 @@ var scanContainers = makeScanTool({
     let anyOutcome = "completed";
     const inp = input;
     let imageSignature;
-    const invalid = invalidInput(ctx.projectPath, inp);
-    if (invalid) throw new Error(invalid);
+    const invalid2 = invalidInput(ctx.projectPath, inp);
+    if (invalid2) throw new Error(invalid2);
     const dockerfile = inp.dockerfile_path !== void 0 ? resolve18(ctx.projectPath, inp.dockerfile_path) : presentInProject(ctx.projectPath, "Dockerfile") ? join42(ctx.projectPath, "Dockerfile") : void 0;
     if (dockerfile !== void 0 || inp.image !== void 0) {
       const trivyBin = await scannerAvailable("trivy");
@@ -57559,8 +57595,8 @@ var tool2 = {
     } catch (e) {
       if (!(e instanceof InvalidProjectPathError)) throw e;
     }
-    const invalid = projectPath !== null ? invalidInput(projectPath, inp) : null;
-    if (invalid) return { ok: false, error: { code: "unsupported_target", message: invalid } };
+    const invalid2 = projectPath !== null ? invalidInput(projectPath, inp) : null;
+    if (invalid2) return { ok: false, error: { code: "unsupported_target", message: invalid2 } };
     return scanContainers.handler(input, plugin, callMeta);
   }
 };
@@ -57620,8 +57656,8 @@ function invalidSigner(inp) {
   return null;
 }
 function isInside2(root, candidate) {
-  const within = (base, target) => {
-    const rel2 = relative16(base, target);
+  const within = (base2, target) => {
+    const rel2 = relative16(base2, target);
     return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep11}`) && !isAbsolute12(rel2);
   };
   const abs = resolve18(root, candidate);
@@ -57760,11 +57796,11 @@ function buildPackList(opts) {
   ];
 }
 function bugCategoryParserFor(packs, ctx) {
-  const base = semgrepParserFor(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
+  const base2 = semgrepParserFor(packs, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   return {
     name: semgrepParser.name,
     parse(input, ctx2) {
-      const out = base.parse(input, ctx2);
+      const out = base2.parse(input, ctx2);
       return { findings: out.findings.map((f) => recategoriseAsBug(f)), cves: out.cves };
     }
   };
@@ -59075,13 +59111,13 @@ var reviewPr = makeScanTool({
     force: Force
   },
   invoke: async (input, ctx) => {
-    const base = await resolveCommit(ctx.projectPath, input.base_ref ?? "");
+    const base2 = await resolveCommit(ctx.projectPath, input.base_ref ?? "");
     const head = await resolveCommit(ctx.projectPath, input.head_ref ?? "HEAD");
-    if (base === null || head === null) throw new Error("review_pr: base_ref/head_ref do not name commits");
+    if (base2 === null || head === null) throw new Error("review_pr: base_ref/head_ref do not name commits");
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "review");
     const out = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
-    const changed = await changedFiles(ctx.projectPath, base, head);
-    const touched = await touchedPaths(ctx.projectPath, base, head, changed);
+    const changed = await changedFiles(ctx.projectPath, base2, head);
+    const touched = await touchedPaths(ctx.projectPath, base2, head, changed);
     const headIsCheckedOut = await resolveCommit(ctx.projectPath, "HEAD") === head;
     let tree = null;
     let cleanupNote = null;
@@ -59114,7 +59150,7 @@ var reviewPr = makeScanTool({
         const secrets = await runGitleaksScan({
           projectPath: ctx.projectPath,
           reportDir,
-          scope: { kind: "range", base, head, workingTree: headIsCheckedOut },
+          scope: { kind: "range", base: base2, head, workingTree: headIsCheckedOut },
           env: ctx.scriptEnv,
           signal: ctx.signal,
           ...ctx.onLog ? { onLog: ctx.onLog } : {}
@@ -59147,7 +59183,7 @@ var reviewPr = makeScanTool({
       report_paths: [reportDir],
       ...warnings.length > 0 ? { warnings } : {},
       extras: {
-        base_sha: base,
+        base_sha: base2,
         head_sha: head,
         scanned_tree: headIsCheckedOut ? "working_tree" : "head_checkout",
         changed_files: changed.length,
@@ -59290,8 +59326,8 @@ async function runTrivy2(ctx, out, args) {
     );
   }
 }
-async function touchedPaths(cwd, base, head, changed) {
-  const r = await git(cwd, ["diff", "-z", "--name-only", "--relative", "--no-renames", `${base}...${head}`, "--"]);
+async function touchedPaths(cwd, base2, head, changed) {
+  const r = await git(cwd, ["diff", "-z", "--name-only", "--relative", "--no-renames", `${base2}...${head}`, "--"]);
   return r.exitCode === 0 ? splitNul(r.stdout) : [...changed];
 }
 var MAX_PREEXISTING_NAMED = 5;
@@ -61471,10 +61507,10 @@ function buildOverrideStep(input) {
 }
 async function execPackageManager(command, args, opts) {
   const pm = packageManagerEnvOptions();
-  const base = opts.env ?? ("env" in pm ? pm.env : { ...process.env });
-  const safety = await gitSafetyFor([opts.cwd], { env: base });
+  const base2 = opts.env ?? ("env" in pm ? pm.env : { ...process.env });
+  const safety = await gitSafetyFor([opts.cwd], { env: base2 });
   if (safety.refused !== null) return { code: "git_config_refused", shortMessage: safety.refused, stdout: "", stderr: "" };
-  const env = applyGitSafety(safety, base);
+  const env = applyGitSafety(safety, base2);
   return execa(commandFor(command, env), args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env, extendEnv: false });
 }
 function describeExecFailure(label, result, okCodes) {
@@ -62106,9 +62142,9 @@ function detectPolicyDocs(projectPath) {
   };
   const candidates2 = listShallowFiles(projectPath, 2);
   for (const rel2 of candidates2) {
-    const base = rel2.split("/").pop() ?? rel2;
+    const base2 = rel2.split("/").pop() ?? rel2;
     for (const { kind, pattern } of POLICY_DOC_PATTERNS) {
-      if (pattern.test(base)) {
+      if (pattern.test(base2)) {
         found2[kind] = true;
         found2.paths.push(rel2);
       }
@@ -64042,7 +64078,7 @@ async function handler7(input, ctx) {
     ...baseline.note !== void 0 ? { note: baseline.note } : {},
     ...notMeasured2.length > 0 ? {
       not_measured: notMeasured2,
-      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, failed or was not installed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in regression_alert's score. Re-run the scan once the scanner works and set the baseline again.`
+      warning: `This baseline's scan did not fully measure ${notMeasured2.join(", ")} (a scanner, or a pass of one, failed or was not installed), so it holds only some of their findings, or none. Later comparisons against this baseline report a finding from them that it does not hold as "not previously measured" \u2014 never as new, and never counted in the regression score of diff_scans {mode: "regression"}. Re-run the scan once the scanner works and set the baseline again.`
     } : {}
   };
 }
@@ -64378,8 +64414,8 @@ var JS_TS_SUFFIXES = [
 ];
 function resolveJsTs(importingFile, specifier, byPosixPath) {
   if (!specifier.startsWith(".")) return void 0;
-  const base = stripJsTsExtension(joinAndNormalize(dirOf2(importingFile), specifier));
-  return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base}${suffix}`));
+  const base2 = stripJsTsExtension(joinAndNormalize(dirOf2(importingFile), specifier));
+  return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base2}${suffix}`));
 }
 function stripJsTsExtension(path8) {
   return path8.replace(/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/, "");
@@ -64387,9 +64423,9 @@ function stripJsTsExtension(path8) {
 var PYTHON_SUFFIXES = [".py", "/__init__.py"];
 function resolvePython(specifier, byPosixPath) {
   if (specifier.startsWith(".")) return void 0;
-  const base = specifier.split(".").join("/");
-  if (base.length === 0) return void 0;
-  return lookupCandidates(byPosixPath, PYTHON_SUFFIXES.map((suffix) => `${base}${suffix}`));
+  const base2 = specifier.split(".").join("/");
+  if (base2.length === 0) return void 0;
+  return lookupCandidates(byPosixPath, PYTHON_SUFFIXES.map((suffix) => `${base2}${suffix}`));
 }
 var RUST_SUFFIXES = [".rs", "/mod.rs"];
 function resolveRust(importingFile, specifier, byPosixPath) {
@@ -64406,8 +64442,8 @@ function resolveRust(importingFile, specifier, byPosixPath) {
   }
   const segments = tail.split("::").filter((segment) => segment.length > 0);
   for (let depth = segments.length; depth > 0; depth -= 1) {
-    const base = joinAndNormalize(root, segments.slice(0, depth).join("/"));
-    const hit = lookupCandidates(byPosixPath, RUST_SUFFIXES.map((suffix) => `${base}${suffix}`));
+    const base2 = joinAndNormalize(root, segments.slice(0, depth).join("/"));
+    const hit = lookupCandidates(byPosixPath, RUST_SUFFIXES.map((suffix) => `${base2}${suffix}`));
     if (hit !== void 0) return hit;
   }
   return void 0;
@@ -65091,12 +65127,12 @@ var MANIFEST_PATTERNS = [
 ];
 function ecosystemOfManifest(path8) {
   const posix5 = path8.replace(/\\/g, "/").toLowerCase();
-  const base = posix5.split("/").pop() ?? "";
-  const exact = MANIFEST_ECOSYSTEMS2[base];
+  const base2 = posix5.split("/").pop() ?? "";
+  const exact = MANIFEST_ECOSYSTEMS2[base2];
   if (exact !== void 0) return exact;
   if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix5)) return "pypi";
   for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
-    if (pattern.test(base)) return ecosystem;
+    if (pattern.test(base2)) return ecosystem;
   }
   return null;
 }
@@ -65233,8 +65269,8 @@ function record5(value) {
 function text(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
-function withOptional(base, version2, purl) {
-  return { ...base, ...version2 !== null ? { version: version2 } : {}, ...purl !== null ? { purl } : {} };
+function withOptional(base2, version2, purl) {
+  return { ...base2, ...version2 !== null ? { version: version2 } : {}, ...purl !== null ? { purl } : {} };
 }
 
 // src/vex/statements.ts
@@ -65325,7 +65361,7 @@ function statementFor(group, names, inputs, active) {
   const ecosystem = subjects.find((s) => s.ecosystem !== null)?.ecosystem ?? sbomEcosystem(inputs.sbom, name, version2);
   const sbomPurls = inputs.sbom === null ? [] : purlsFor(inputs.sbom, name, version2, ecosystem).purls;
   const built = buildPurl(ecosystem, name, version2);
-  const base = {
+  const base2 = {
     vulnerability,
     aliases,
     package_name: name,
@@ -65341,7 +65377,7 @@ function statementFor(group, names, inputs, active) {
   if (first !== void 0 && vex.every((s) => s !== void 0) && justifications.size === 1 && first.vex_justification !== void 0) {
     const impact = joinImpacts(vex.map((s) => s?.vex_impact_statement));
     return {
-      ...base,
+      ...base2,
       status: "not_affected",
       justification: first.vex_justification,
       ...impact !== null ? { impact_statement: impact } : {},
@@ -65354,21 +65390,21 @@ function statementFor(group, names, inputs, active) {
   const stale = inputs.staleSurface ?? null;
   if (assessment?.verdict === "reachable" && stale !== null) {
     return {
-      ...base,
+      ...base2,
       status: "under_investigation",
       status_notes: `${label}: reachable per ${assessment.evidence[0]?.detail ?? "a file an HTTP route reaches"} \u2014 but ${stale}, so it is not stated affected (run map_attack_surface).${suppressedNote}`
     };
   }
   if (assessment?.verdict === "reachable") {
     return {
-      ...base,
+      ...base2,
       status: "affected",
-      action_statement: base.fixed_version !== null ? `Upgrade ${name}${version2 === null ? "" : ` from ${version2}`} to ${base.fixed_version} or later.` : `No fixed version of ${name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
+      action_statement: base2.fixed_version !== null ? `Upgrade ${name}${version2 === null ? "" : ` from ${version2}`} to ${base2.fixed_version} or later.` : `No fixed version of ${name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
       status_notes: `${label}: ${assessment.evidence[0]?.detail ?? "imported by a file an HTTP route reaches"} (file-level reachability, not proof the vulnerable function runs).` + suppressedNote
     };
   }
   return {
-    ...base,
+    ...base2,
     status: "under_investigation",
     status_notes: `${label}: not known to affect the product \u2014 ${whyNot(assessment)}.${suppressedNote}`
   };
@@ -67688,7 +67724,7 @@ function recommendation(score, open, cves, hasBaseline) {
   if (score >= 70) return "Run audit_executive and triage critical findings before any new deploy.";
   if (cves > 0) return "Address active CVEs via deps_update_plan with prefer=security.";
   if (!hasBaseline) return "Set a baseline with set_baseline so diff_scans can track regressions.";
-  if (open > 50) return "Run triage_findings to identify likely false positives, then suppress.";
+  if (open > 50) return "Run prioritize_findings with view triage to identify likely false positives, then suppress.";
   return "Posture is stable. Consider a periodic audit_executive to confirm.";
 }
 
@@ -68382,7 +68418,7 @@ async function handler16(input, ctx) {
     suppressed_by_severity: countBySeverity3(suppressed),
     ...gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {},
     ...gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {},
-    hint: regressed ? "Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes." : measuredNote !== null ? `No significant regression among the findings that were measured. ${measuredNote}` : "No significant regression.",
+    hint: regressed ? 'Severity-weighted change exceeded the threshold. Consider prioritize_findings (view: "triage") + audit_executive, or revert recent changes.' : measuredNote !== null ? `No significant regression among the findings that were measured. ${measuredNote}` : "No significant regression.",
     ...skipHits.length > 0 ? { skipped: summarizeSkipped(skipHits) } : {},
     ...note,
     ...measuredNote !== null ? { not_measured_note: measuredNote } : {}
@@ -68786,22 +68822,22 @@ async function validateOnce(files, cwd) {
   return { answered: true, ok: false, message: validateMessage(run2.stderr, run2.stdout) };
 }
 async function validateRuleFiles(files, cwd) {
-  const invalid = /* @__PURE__ */ new Map();
-  if (files.length === 0) return { validated: true, invalid };
+  const invalid2 = /* @__PURE__ */ new Map();
+  if (files.length === 0) return { validated: true, invalid: invalid2 };
   const all = await validateOnce(files, cwd);
   if (!all.answered) return { validated: false, reason: all.reason };
-  if (all.ok) return { validated: true, invalid };
+  if (all.ok) return { validated: true, invalid: invalid2 };
   if (files.length === 1) {
     const only = files[0];
-    if (only !== void 0) invalid.set(only, all.message);
-    return { validated: true, invalid };
+    if (only !== void 0) invalid2.set(only, all.message);
+    return { validated: true, invalid: invalid2 };
   }
   for (const file of files) {
     const one = await validateOnce([file], cwd);
     if (!one.answered) return { validated: false, reason: one.reason };
-    if (!one.ok) invalid.set(file, one.message);
+    if (!one.ok) invalid2.set(file, one.message);
   }
-  return { validated: true, invalid };
+  return { validated: true, invalid: invalid2 };
 }
 
 // src/tools/registerCustomRules.ts
@@ -69035,7 +69071,7 @@ async function handler21(input, ctx) {
       queued: limiter2.queued
     },
     registry: {
-      tools: TOOLS.length,
+      tools: listedTools().length,
       resources: RESOURCES.length
     },
     storage_warning: ctx.storageWarning ?? null,
@@ -71929,15 +71965,15 @@ function defaultWordfenceCacheDir(env = process.env) {
   const override = env["GUARDIAN_CACHE_DIR"];
   if (override !== void 0 && override.length > 0) return override;
   if (process.platform === "win32") {
-    const base2 = env["LOCALAPPDATA"] ?? join64(homedir4(), "AppData", "Local");
-    return join64(base2, "dev-guardian", "cache");
+    const base3 = env["LOCALAPPDATA"] ?? join64(homedir4(), "AppData", "Local");
+    return join64(base3, "dev-guardian", "cache");
   }
   if (process.platform === "darwin") {
-    const base2 = env["XDG_CACHE_HOME"] ?? join64(homedir4(), "Library", "Caches");
-    return join64(base2, "dev-guardian");
+    const base3 = env["XDG_CACHE_HOME"] ?? join64(homedir4(), "Library", "Caches");
+    return join64(base3, "dev-guardian");
   }
-  const base = env["XDG_CACHE_HOME"] ?? join64(homedir4(), ".cache");
-  return join64(base, "dev-guardian");
+  const base2 = env["XDG_CACHE_HOME"] ?? join64(homedir4(), ".cache");
+  return join64(base2, "dev-guardian");
 }
 async function getWordfenceFeed(opts = {}) {
   const now = opts.now ?? Date.now();
@@ -72998,7 +73034,7 @@ async function handler28(input, ctx) {
   if (!wpBin) {
     return failDomain21(
       "missing_scanner",
-      'WP-CLI (`wp`) is required for wp_cron_audit. Run install_toolchain with tools=["wp-cli"].'
+      'WP-CLI (`wp`) is required for wp_audit {mode: "cron"}. Run install_toolchain with tools=["wp-cli"].'
     );
   }
   const cronResult = await runProcess({
@@ -73684,7 +73720,7 @@ async function handler33(input, ctx) {
     open_critical: open.filter((f) => f.severity === "critical").length,
     open_high: open.filter((f) => f.severity === "high").length,
     active_cves: cves,
-    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? "Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes." : !wpCron ? "Run `wp_cron_audit` to detect persistent backdoors." : open.length > 0 ? "Open findings exist. Try `triage_findings` + `wp_recommend_hardening`." : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
+    recommended_next: !wpAudit ? "Run `wp_audit` first to capture baseline state." : !wpVuln && !wpVulnSource ? 'Run `wp_vuln_check` (a live URL, or `mode: "source"` with no live URL) to map CVEs to your installed plugins and themes.' : !wpCron ? 'Run `wp_audit` with `mode: "cron"` to detect persistent backdoors.' : open.length > 0 ? 'Open findings exist. Try `prioritize_findings` (`view: "triage"`) + `wp_report` (`kind: "hardening"`).' : "Posture looks clean. Consider `audit_executive` for a full cross-stack pass."
   };
 }
 var META_REPORT = { skipCoverageNone: false };
@@ -74237,7 +74273,7 @@ async function handler37(input, ctx) {
     open_dotnet_findings_count: dotnetFindings.length,
     open_critical: dotnetFindings.filter((f) => f.severity === "critical").length,
     open_high: dotnetFindings.filter((f) => f.severity === "high").length,
-    recommended_next: !tfm ? "Run `dotnet_target_framework_check` to find EOL frameworks." : !secrets ? "Run `scan_dotnet_secrets` to find MS-specific secrets in configs." : !efcore ? "If you use EF Core, run `dotnet_efcore_audit` for risky migration patterns." : dotnetFindings.length > 0 ? "Open .NET findings exist. Try `triage_findings` + `suggest_fix`." : "Posture looks clean. Consider running `scan_sast` again if code changed."
+    recommended_next: !tfm ? 'Run `dotnet_check` with `check: "target_framework"` to find end-of-life frameworks.' : !secrets ? 'Run `dotnet_check` with `check: "secrets"` to find .NET secrets in configs.' : !efcore ? 'If you use EF Core, run `dotnet_check` with `check: "efcore"` for risky migrations.' : dotnetFindings.length > 0 ? 'Open .NET findings exist. Try `prioritize_findings` (`view: "triage"`) + `suggest_fix`.' : "Posture looks clean. Consider running `scan_sast` again if code changed."
   };
 }
 function findLatest2(ctx, projectPath, type, skipCoverageNone) {
@@ -74482,10 +74518,10 @@ import { join as join71 } from "node:path";
 var MAX_MANIFEST_BYTES2 = 8 * 1024 * 1024;
 function isPypiPinFile(path8) {
   const lower = path8.toLowerCase();
-  const base = lower.split("/").pop() ?? "";
-  if (/^requirements.*\.txt$/.test(base) || /-requirements\.txt$/.test(base)) return true;
+  const base2 = lower.split("/").pop() ?? "";
+  if (/^requirements.*\.txt$/.test(base2) || /-requirements\.txt$/.test(base2)) return true;
   if (/(^|\/)requirements\/[^/]+\.txt$/.test(lower)) return true;
-  return base === "pipfile.lock" || base === "poetry.lock" || base === "uv.lock";
+  return base2 === "pipfile.lock" || base2 === "poetry.lock" || base2 === "uv.lock";
 }
 function makePypiPinResolver(projectPath) {
   let index;
@@ -74512,9 +74548,9 @@ function readAllPins(projectPath) {
   return byName;
 }
 function pinsOf(manifest, text2) {
-  const base = (manifest.split("/").pop() ?? "").toLowerCase();
-  if (base === "pipfile.lock") return pipfileLockPins(text2);
-  if (base === "poetry.lock" || base === "uv.lock") return tomlPackagePins(text2);
+  const base2 = (manifest.split("/").pop() ?? "").toLowerCase();
+  if (base2 === "pipfile.lock") return pipfileLockPins(text2);
+  if (base2 === "poetry.lock" || base2 === "uv.lock") return tomlPackagePins(text2);
   return requirementPins(text2);
 }
 function requirementPins(text2) {
@@ -74821,13 +74857,13 @@ async function postJson(url2, body, opts, fetchImpl) {
 function extractDependencies(files) {
   const out = [];
   for (const f of files) {
-    const base = f.relPath.split("/").pop()?.toLowerCase() ?? "";
-    if (base === "package.json") out.push(...fromPackageJson(f.content));
-    else if (base === "requirements.txt") out.push(...fromRequirements(f.content));
-    else if (base === "go.mod") out.push(...fromGoMod(f.content));
-    else if (base === "cargo.toml") out.push(...fromCargoToml(f.content));
-    else if (base === "composer.json") out.push(...fromComposerJson(f.content));
-    else if (base === "gemfile.lock") out.push(...fromGemfileLock(f.content));
+    const base2 = f.relPath.split("/").pop()?.toLowerCase() ?? "";
+    if (base2 === "package.json") out.push(...fromPackageJson(f.content));
+    else if (base2 === "requirements.txt") out.push(...fromRequirements(f.content));
+    else if (base2 === "go.mod") out.push(...fromGoMod(f.content));
+    else if (base2 === "cargo.toml") out.push(...fromCargoToml(f.content));
+    else if (base2 === "composer.json") out.push(...fromComposerJson(f.content));
+    else if (base2 === "gemfile.lock") out.push(...fromGemfileLock(f.content));
   }
   return dedupe(out);
 }
@@ -76268,8 +76304,8 @@ var URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
 function downloadsIn(unit) {
   const out = [];
   const add = (end, file) => {
-    const base = basenameOf(file ?? "");
-    if (base !== "") out.push({ unit, end, file: base });
+    const base2 = basenameOf(file ?? "");
+    if (base2 !== "") out.push({ unit, end, file: base2 });
   };
   for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
     for (const m of unit.text.matchAll(re)) add(m.index + m[0].length, m[1]);
@@ -76283,8 +76319,8 @@ function downloadsIn(unit) {
   return out;
 }
 function basenameOf(path8) {
-  const base = (path8.split(/[/\\]/).pop() ?? "").replace(/[.,;:!?)\]}]+$/, "");
-  return /[A-Za-z0-9]/.test(base) ? base : "";
+  const base2 = (path8.split(/[/\\]/).pop() ?? "").replace(/[.,;:!?)\]}]+$/, "");
+  return /[A-Za-z0-9]/.test(base2) ? base2 : "";
 }
 var RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
 function runsFile(text2, file) {
@@ -76344,8 +76380,8 @@ function scoreFindings(signals2) {
   let executableFindings = 0;
   for (const s of signals2) {
     by_severity[s.severity] += 1;
-    const base = s.scored === false ? 0 : SEVERITY_POINTS[s.severity];
-    raw += s.isExecutable ? base * EXECUTABLE_MULTIPLIER : base;
+    const base2 = s.scored === false ? 0 : SEVERITY_POINTS[s.severity];
+    raw += s.isExecutable ? base2 * EXECUTABLE_MULTIPLIER : base2;
     if (s.isExecutable) executableFindings += 1;
   }
   const score = Math.min(100, Math.round(raw));
@@ -78360,14 +78396,14 @@ function walk4(root, dir) {
 function specCandidateTier(root, dir, name) {
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return null;
-  const base = name.slice(0, dot);
+  const base2 = name.slice(0, dot);
   const ext = name.slice(dot).toLowerCase();
   if (!SPEC_EXTENSIONS.has(ext)) return null;
-  if (SPEC_BASENAMES.has(base.toLowerCase())) return "exact";
+  if (SPEC_BASENAMES.has(base2.toLowerCase())) return "exact";
   const relDir = relative30(root, dir);
   const segments = relDir === "" ? [] : relDir.split(sep17);
   if (segments.some((segment) => segment.toLowerCase() === "openapi")) return "exact";
-  if (WIDENED_BASE.test(base) || segments.some((segment) => WIDENED_DIR.test(segment))) return "widened";
+  if (WIDENED_BASE.test(base2) || segments.some((segment) => WIDENED_DIR.test(segment))) return "widened";
   return null;
 }
 
@@ -78540,7 +78576,7 @@ function importSpec(file, text2) {
       }
     };
   }
-  const { base, partial: basePartial } = format2 === "openapi-3" ? openapiBasePath(root) : swaggerBasePath(root);
+  const { base: base2, partial: basePartial } = format2 === "openapi-3" ? openapiBasePath(root) : swaggerBasePath(root);
   const docSecurityRaw = prop5(root, "security");
   const docSecurityNonEmpty = Array.isArray(docSecurityRaw) && docSecurityRaw.length > 0;
   const routes = [];
@@ -78564,7 +78600,7 @@ function importSpec(file, text2) {
         method: operationMethod(opKey),
         provenance: "spec",
         path_raw: pathTemplate,
-        path_resolved: partial3 ? pathTemplate : `${base}${pathTemplate}`,
+        path_resolved: partial3 ? pathTemplate : `${base2}${pathTemplate}`,
         path_partial: partial3,
         file,
         line,
@@ -78947,24 +78983,24 @@ function readSources(parsed, projectPath) {
 var REDACTION_REMEDY = "this Semgrep version redacts match content unless you run `semgrep login`, so the captures are rebuilt by re-reading the source at the reported byte offsets, and that read failed for these matches. Either log in, or use a Semgrep older than ~1.100, and the captures arrive directly. dev-guardian does not require an account \u2014 every route family is rebuilt from byte offsets either way";
 function recoveryToolRun(recovery) {
   if (recovery.recovered === 0 && recovery.unrecoverable === 0) return [];
-  const base = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "") + // Not a loss and not a recovery: a bare `@Get()` / `[HttpGet]` /
+  const base2 = `recovered ${recovery.recovered} redacted match(es) from byte offsets` + (recovery.intact > 0 ? `; ${recovery.intact} already carried metavariables` : "") + // Not a loss and not a recovery: a bare `@Get()` / `[HttpGet]` /
   // `@GetMapping` captures nothing on any Semgrep version, and its route is
   // built from the rule's metadata (see RecoveryOutcome.noCaptures). Named
   // here so the two numbers below still add up for a reader.
   (recovery.noCaptures > 0 ? `; ${recovery.noCaptures} carry no path of their own and needed none` : "");
   if (recovery.unrecoverable === 0) {
-    return [{ name: RECOVERY_STEP, status: "ok", reason: base }];
+    return [{ name: RECOVERY_STEP, status: "ok", reason: base2 }];
   }
   const edgesNote = recovery.lostEdges > 0 ? `${recovery.lostEdges} import/env edge(s) could not be read (not a route: a mount's prefix that relied on one may read partial)` : "";
   const routesLost = recovery.unrecoverable - recovery.lostEdges;
   if (routesLost === 0) {
-    return [{ name: RECOVERY_STEP, status: "ok", reason: `${base}; ${edgesNote}` }];
+    return [{ name: RECOVERY_STEP, status: "ok", reason: `${base2}; ${edgesNote}` }];
   }
   return [
     {
       name: RECOVERY_STEP,
       status: "failed",
-      reason: `${base}; ${routesLost} match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages)` + (edgesNote !== "" ? `; ${edgesNote}` : "") + ` \u2014 ${REDACTION_REMEDY}`
+      reason: `${base2}; ${routesLost} match(es) could not be read and are MISSING from the surface (see coverage[].unreadable_matches for which languages)` + (edgesNote !== "" ? `; ${edgesNote}` : "") + ` \u2014 ${REDACTION_REMEDY}`
     }
   ];
 }
@@ -79150,9 +79186,9 @@ function resolveModuleFile(importingFile, specifier, knownFiles) {
     else stack.push(part);
   }
   const joined = `${absolute ? "/" : ""}${stack.join("/")}`;
-  const base = stripKnownExtension(joined);
+  const base2 = stripKnownExtension(joined);
   for (const file of knownFiles) {
-    if (stripKnownExtension(toPosixPath2(file)) === base) return file;
+    if (stripKnownExtension(toPosixPath2(file)) === base2) return file;
   }
   return joined;
 }
@@ -80107,8 +80143,8 @@ function matchRoute(pathname, routes) {
 }
 function buildMessage(templateId, matchedAt, description) {
   const where = matchedAt === "" ? "(no matched-at reported)" : matchedAt;
-  const base = `nuclei template '${templateId}' matched ${where}.`;
-  return description === void 0 || description === "" ? base : `${base} ${description}`;
+  const base2 = `nuclei template '${templateId}' matched ${where}.`;
+  return description === void 0 || description === "" ? base2 : `${base2} ${description}`;
 }
 function normalizeLine(line, routes) {
   let parsed;
@@ -80390,7 +80426,7 @@ async function runRateLimitBurst(opts) {
   }
   const verdict = rateLimitVerdict(burstResults);
   const cutByCeiling = burstResults.length < requests.length && !verdict.observed;
-  const base = {
+  const base2 = {
     path: selected.route.path_resolved,
     inferred: selected.inferred,
     burst_planned: RATE_LIMIT_BURST,
@@ -80400,7 +80436,7 @@ async function runRateLimitBurst(opts) {
     return {
       outcome: "ran",
       finding: null,
-      summary: { ...base, sent: verdict.at_request, observed: true, at_request: verdict.at_request },
+      summary: { ...base2, sent: verdict.at_request, observed: true, at_request: verdict.at_request },
       evidence: /* @__PURE__ */ new Map()
     };
   }
@@ -80408,7 +80444,7 @@ async function runRateLimitBurst(opts) {
     return {
       outcome: "no_response",
       finding: null,
-      summary: { ...base, sent: 0, observed: false },
+      summary: { ...base2, sent: 0, observed: false },
       evidence: /* @__PURE__ */ new Map()
     };
   }
@@ -80427,7 +80463,7 @@ async function runRateLimitBurst(opts) {
   return {
     outcome: "ran",
     finding: finding4,
-    summary: { ...base, sent: verdict.sent, observed: false },
+    summary: { ...base2, sent: verdict.sent, observed: false },
     evidence: /* @__PURE__ */ new Map([
       [
         finding4.fingerprint,
@@ -81794,18 +81830,18 @@ function findingEcosystem(finding4) {
   const byTool = TOOL_ECOSYSTEM[finding4.tool];
   if (byTool !== void 0) return byTool;
   if (finding4.tool !== "trivy") return null;
-  const base = (finding4.file_path ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
-  if (["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "package.json", "bun.lock"].includes(base)) {
+  const base2 = (finding4.file_path ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  if (["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "package.json", "bun.lock"].includes(base2)) {
     return "npm";
   }
-  if (/^requirements.*\.txt$/.test(base) || ["pipfile.lock", "poetry.lock", "pyproject.toml", "uv.lock", "setup.py"].includes(base)) {
+  if (/^requirements.*\.txt$/.test(base2) || ["pipfile.lock", "poetry.lock", "pyproject.toml", "uv.lock", "setup.py"].includes(base2)) {
     return "pip";
   }
-  if (base === "composer.lock" || base === "composer.json") return "composer";
-  if (base === "cargo.lock" || base === "cargo.toml") return "cargo";
-  if (base === "go.mod" || base === "go.sum") return "go";
-  if (base === "gemfile.lock" || base === "gemfile" || base.endsWith(".gemspec")) return "rubygems";
-  if (base === "packages.lock.json" || base === "packages.config" || /\.(csproj|fsproj|vbproj|deps\.json)$/.test(base)) {
+  if (base2 === "composer.lock" || base2 === "composer.json") return "composer";
+  if (base2 === "cargo.lock" || base2 === "cargo.toml") return "cargo";
+  if (base2 === "go.mod" || base2 === "go.sum") return "go";
+  if (base2 === "gemfile.lock" || base2 === "gemfile" || base2.endsWith(".gemspec")) return "rubygems";
+  if (base2 === "packages.lock.json" || base2 === "packages.config" || /\.(csproj|fsproj|vbproj|deps\.json)$/.test(base2)) {
     return "dotnet";
   }
   return null;
@@ -83208,15 +83244,15 @@ async function processGroup(opts) {
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c3) => c3.fingerprints);
   const findings = findingsForGroup(allFindings, group);
-  const base = { key: group.key, source: group.source, severity: group.severity, branch, findings };
+  const base2 = { key: group.key, source: group.source, severity: group.severity, branch, findings };
   if (!apply && await localBranchExists(projectPath, branch)) {
     const existing = await prExists({ projectPath, branch });
     if (existing.known && existing.exists) {
       const pr = existsOutcome(branch);
-      return { ...base, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
+      return { ...base2, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
     }
     return {
-      ...base,
+      ...base2,
       commands: [],
       outcome: "worktree_failed",
       scan: null,
@@ -83231,7 +83267,7 @@ async function processGroup(opts) {
     if (existing.known && existing.exists) {
       const pr = existsOutcome(branch);
       return {
-        ...base,
+        ...base2,
         commands: [],
         outcome: PR_STATUS_OUTCOME[pr.status],
         scan: null,
@@ -83241,7 +83277,7 @@ async function processGroup(opts) {
       };
     }
     return {
-      ...base,
+      ...base2,
       commands: [],
       outcome: "worktree_failed",
       scan: null,
@@ -83251,7 +83287,7 @@ async function processGroup(opts) {
     };
   }
   const { worktree } = created;
-  if (worktree.notApplied.length > 0) base.git_config_not_applied = [...worktree.notApplied];
+  if (worktree.notApplied.length > 0) base2.git_config_not_applied = [...worktree.notApplied];
   let keepBranch = !apply;
   let semgrepFix;
   let setAside = null;
@@ -83259,7 +83295,7 @@ async function processGroup(opts) {
     const projectDir = inWorktree(worktree.path, prefix);
     const commands = [];
     setAside = setAsidePackageConfig(worktree.path, projectDir);
-    if (setAside.moved.length > 0) base.package_config_set_aside = setAside.moved;
+    if (setAside.moved.length > 0) base2.package_config_set_aside = setAside.moved;
     const derivedTest = deriveTestCommand(readManifests(projectDir));
     const refused2 = installRefusal({
       projectDir,
@@ -83274,13 +83310,13 @@ async function processGroup(opts) {
       npmInstalls: derivedTest?.command === "npm"
     });
     if (refused2 !== null) {
-      return { ...base, commands, outcome: "refused", scan: null, tests: null, pr: null, note: `refused: ${refused2}` };
+      return { ...base2, commands, outcome: "refused", scan: null, tests: null, pr: null, note: `refused: ${refused2}` };
     }
     const env = await prepareTestEnvironment({ treePath: projectDir, derived: derivedTest });
     if (env.command !== null) commands.push(`${env.command} (test environment)`);
     if (!env.ok) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "apply_failed",
         scan: null,
@@ -83293,7 +83329,7 @@ async function processGroup(opts) {
       const planned = planSemgrepFix(semgrepFixSources(findings, origins, projectPath, ctx));
       if (!planned.ok) {
         return {
-          ...base,
+          ...base2,
           commands,
           outcome: "apply_failed",
           scan: null,
@@ -83318,7 +83354,7 @@ async function processGroup(opts) {
     commands.push(...applied.commands);
     if (!applied.applied) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "apply_failed",
         scan: null,
@@ -83333,7 +83369,7 @@ async function processGroup(opts) {
     );
     if (!rescan.ok) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "verification_failed",
         scan: null,
@@ -83357,7 +83393,7 @@ async function processGroup(opts) {
     if (!mayOpenPr(scanVerdict, testVerdict)) {
       const why = !scanVerdict.passed ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still present, ${scanVerdict.new_findings.length} new finding(s))` : testVerdict.outcome === "unattributed" ? "the test suite failed after the fix and the base-commit comparison could not be run" : "the fix broke the test suite";
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "not_verified",
         scan: scanVerdict,
@@ -83368,7 +83404,7 @@ async function processGroup(opts) {
     }
     if (!apply) {
       return {
-        ...base,
+        ...base2,
         commands,
         outcome: "verified_dry_run",
         scan: scanVerdict,
@@ -83383,7 +83419,7 @@ async function processGroup(opts) {
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
     keepBranch = KEEPS_BRANCH.has(pr.status);
     return {
-      ...base,
+      ...base2,
       commands,
       outcome: PR_STATUS_OUTCOME[pr.status],
       scan: scanVerdict,
@@ -84092,8 +84128,8 @@ function finding3(input) {
 }
 function launcherName(command) {
   if (!command) return void 0;
-  const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
-  return base.replace(/\.(cmd|exe|ps1|bat)$/i, "").toLowerCase();
+  const base2 = command.replace(/\\/g, "/").split("/").pop() ?? command;
+  return base2.replace(/\.(cmd|exe|ps1|bat)$/i, "").toLowerCase();
 }
 function firstNonFlag(args, fromIndex = 0) {
   for (let i2 = fromIndex; i2 < args.length; i2++) {
@@ -84799,26 +84835,26 @@ function walkRoot(kind, projectPath, path8) {
 }
 function readOne2(descriptor, projectPath) {
   const absolutePath = descriptor.resolve(projectPath);
-  const base = {
+  const base2 = {
     label: descriptor.label,
     kind: descriptor.kind,
     absolutePath,
     mcpServersField: descriptor.mcpServersField,
     ...descriptor.nestedProjects === true ? { nestedProjects: true } : {}
   };
-  if (absolutePath === "") return { ...base, exists: false };
+  if (absolutePath === "") return { ...base2, exists: false };
   const cap = descriptor.maxBytes ?? MAX_CONFIG_BYTES;
   const read3 = readSmallText(absolutePath, cap, walkRoot(descriptor.kind, projectPath, absolutePath));
-  if (read3.status === "absent") return { ...base, exists: false };
+  if (read3.status === "absent") return { ...base2, exists: false };
   if (read3.status === "refused") {
-    return { ...base, exists: true, refusal: read3.reason, parseError: refusalMessage(read3.reason, cap) };
+    return { ...base2, exists: true, refusal: read3.reason, parseError: refusalMessage(read3.reason, cap) };
   }
   const raw = read3.text;
   try {
     const json = parseJson(raw);
-    return { ...base, exists: true, raw, json };
+    return { ...base2, exists: true, raw, json };
   } catch (e) {
-    return { ...base, exists: true, raw, parseError: `invalid JSON: ${e.message}` };
+    return { ...base2, exists: true, raw, parseError: `invalid JSON: ${e.message}` };
   }
 }
 
@@ -89109,8 +89145,8 @@ function authorityOpen(written) {
   return !/[/?#]/.test(afterScheme);
 }
 function commandName(command) {
-  const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
-  return base.replace(/\.(exe|cmd|bat|com)$/i, "").toLowerCase();
+  const base2 = command.replace(/\\/g, "/").split("/").pop() ?? command;
+  return base2.replace(/\.(exe|cmd|bat|com)$/i, "").toLowerCase();
 }
 var REMOTE_COMMANDS = /* @__PURE__ */ new Set(["ssh", "sshpass", "plink", "kubectl", "oc"]);
 var ENGINES = /* @__PURE__ */ new Set(["docker", "podman", "nerdctl"]);
@@ -89228,7 +89264,7 @@ async function resolveCommand(command, env, cwd, deadline) {
   }
   if (process.platform !== "win32") return { ok: true, command };
   const exts = (envValue3(env, "PATHEXT") ?? process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";").filter((e) => e !== "");
-  const withExts = (base) => extname3(base) !== "" ? [base, ...exts.map((e) => base + e)] : exts.map((e) => base + e);
+  const withExts = (base2) => extname3(base2) !== "" ? [base2, ...exts.map((e) => base2 + e)] : exts.map((e) => base2 + e);
   let candidates2;
   const skipped2 = [];
   if (/[\\/]/.test(command) || isAbsolute22(command)) {
@@ -89313,9 +89349,9 @@ function formatBytes(n2) {
   return n2 % MiB2 === 0 ? `${n2 / MiB2} MiB` : `${n2} bytes`;
 }
 function probeEnvironment(entryEnv, treeToken) {
-  const base = {};
-  for (const [k, v] of Object.entries(getDefaultEnvironment())) if (typeof v === "string") base[k] = v;
-  return { ...base, ...entryEnv, ...treeToken === null ? {} : { [PROC_TREE_ENV]: treeToken } };
+  const base2 = {};
+  for (const [k, v] of Object.entries(getDefaultEnvironment())) if (typeof v === "string") base2[k] = v;
+  return { ...base2, ...entryEnv, ...treeToken === null ? {} : { [PROC_TREE_ENV]: treeToken } };
 }
 var ProbeStdioTransport = class {
   constructor(launch, limits) {
@@ -89968,18 +90004,18 @@ async function runAudit(ctx, run2, callMeta) {
     }
     const entry = target.entry;
     const qualified = escapeInvisible(qualifiedName(entry));
-    const base = {
+    const base2 = {
       server_key: qualified,
       source: escapeInvisible(entry.sourceLabel),
       ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: reportList(target.alsoDeclaredIn) } : {}
     };
     if (signal?.aborted === true) {
-      notRun(name, "skipped", "cancelled before it was started", base);
+      notRun(name, "skipped", "cancelled before it was started", base2);
       continue;
     }
     const left = auditDeadline - Date.now();
     if (left <= 0) {
-      notRun(name, "skipped", `the audit's overall budget of ${budgetMs} ms was used up before this server`, base);
+      notRun(name, "skipped", `the audit's overall budget of ${budgetMs} ms was used up before this server`, base2);
       continue;
     }
     const outcome = await probeServer(entry, {
@@ -89990,7 +90026,7 @@ async function runAudit(ctx, run2, callMeta) {
       ...signal === void 0 ? {} : { signal }
     });
     const withTransport = {
-      ...base,
+      ...base2,
       ...outcome.transport === void 0 ? {} : { transport: outcome.transport },
       ...outcome.warnings.length > 0 ? { warnings: reportList(outcome.warnings, MAX_REPORT_STRING_BYTES) } : {}
     };
@@ -91209,7 +91245,7 @@ function walkRoot2(path8, ctx, under) {
   const abs = resolve34(path8);
   if (isRemoteOrDeviceTarget(abs)) return void 0;
   if (under !== void 0) return under;
-  const holds = (dir2, base) => samePath3(dir2, base) || isInside3(dir2, base);
+  const holds = (dir2, base2) => samePath3(dir2, base2) || isInside3(dir2, base2);
   const project = ctx.projectDir === void 0 ? void 0 : resolve34(ctx.projectDir);
   const home = resolve34(homeOf(ctx));
   if (project !== void 0 && holds(abs, project) || holds(abs, home)) return void 0;
@@ -93758,11 +93794,11 @@ function planStatus(storage, planId, project, confirm) {
 var isLeasable = (t, now) => t.status === "open" || t.status === "leased" && t.lease_expires_at !== null && t.lease_expires_at <= now;
 function briefFor(storage, plan, task) {
   const root = plan.project_path;
-  const base = { root, reader: readProjectText, boundary: randomBoundary, prompt_version: plan.prompt_version, max_tokens: HOST_BRIEF_MAX_TOKENS };
+  const base2 = { root, reader: readProjectText, boundary: randomBoundary, prompt_version: plan.prompt_version, max_tokens: HOST_BRIEF_MAX_TOKENS };
   if (task.kind === "verify") {
     const fp = task.target.fingerprint;
     const hit = fp === void 0 ? null : storage.findings.findLatestInProject(root, fp);
-    return hit === null ? null : renderBrief(task, { ...base, finding: hit.finding }).text;
+    return hit === null ? null : renderBrief(task, { ...base2, finding: hit.finding }).text;
   }
   const ids2 = new Set(task.target.entry_points ?? []);
   const surface = plan.surface_snapshot_id === null ? null : storage.surface.getById(plan.surface_snapshot_id);
@@ -93772,7 +93808,7 @@ function briefFor(storage, plan, task) {
     const rel2 = f.file_path === void 0 ? null : relPosix(root, f.file_path);
     return f.tool !== "llm-hunt" && rel2 !== null && files.has(rel2);
   });
-  return renderBrief(task, { ...base, entry_points: routes, scanner_findings: known }).text;
+  return renderBrief(task, { ...base2, entry_points: routes, scanner_findings: known }).text;
 }
 function limitReason(plan, tasks, next, briefTokens) {
   const delivered = tasks.filter((t) => t.delivered_at !== null);
@@ -94213,6 +94249,204 @@ async function handler50(input, ctx) {
   return submitAnswer(ctx.storage, { plan_id, task_id, lease_token, independence, payload });
 }
 
+// src/tools/fold.ts
+var FOLDS = [];
+var WRAPPERS = /* @__PURE__ */ new Set(["ZodOptional", "ZodDefault", "ZodNullable", "ZodEffects"]);
+function base(field2) {
+  let cur = field2;
+  for (; ; ) {
+    const def = cur._def;
+    if (def.typeName === void 0 || !WRAPPERS.has(def.typeName)) return cur;
+    const next = def.innerType ?? def.schema;
+    if (next === void 0) return cur;
+    cur = next;
+  }
+}
+function asFoldParam(field2, description) {
+  const inner = field2 instanceof ZodDefault ? field2.removeDefault() : field2;
+  const optional2 = inner.isOptional() ? inner : inner.optional();
+  return description !== void 0 ? optional2.describe(description) : optional2;
+}
+function invalid(message2) {
+  return { ok: false, error: { code: "invalid_input", message: message2 } };
+}
+function registerFold(spec) {
+  const members = /* @__PURE__ */ new Map();
+  for (const [mode, memberName] of Object.entries(spec.modes)) {
+    const member = TOOLS.find((t) => t.name === memberName);
+    if (member === void 0) throw new Error(`fold ${spec.name}: member '${memberName}' is not registered`);
+    members.set(mode, member);
+  }
+  const modeValues = [...members.keys()];
+  const [firstMode, ...otherModes] = modeValues;
+  if (firstMode === void 0) throw new Error(`fold ${spec.name}: no modes`);
+  const headIndex = TOOLS.findIndex((t) => t.name === spec.name);
+  if (headIndex >= 0 && (spec.defaultMode === void 0 || spec.modes[spec.defaultMode] !== spec.name)) {
+    throw new Error(`fold ${spec.name} keeps a member's name, so that member must be its defaultMode`);
+  }
+  if (spec.defaultMode !== void 0 && !members.has(spec.defaultMode)) {
+    throw new Error(`fold ${spec.name}: defaultMode '${spec.defaultMode}' is not one of its modes`);
+  }
+  const modeField = external_exports.enum([firstMode, ...otherModes]);
+  const shape = {
+    [spec.modeKey]: (spec.defaultMode !== void 0 ? modeField.optional() : modeField).describe(spec.modeDescription)
+  };
+  for (const member of members.values()) {
+    for (const [key, field2] of Object.entries(member.inputSchema)) {
+      if (key === spec.modeKey) throw new Error(`fold ${spec.name}: member ${member.name} already takes '${key}'`);
+      const seen = shape[key];
+      if (seen !== void 0) {
+        const [a2, b] = [base(seen), base(field2)];
+        const typeA = a2._def.typeName;
+        const typeB = b._def.typeName;
+        const sameEnum = !(a2 instanceof ZodEnum) || !(b instanceof ZodEnum) || JSON.stringify(a2.options) === JSON.stringify(b.options);
+        if (typeA !== typeB || !sameEnum) {
+          throw new Error(`fold ${spec.name}: '${key}' has different types in its members`);
+        }
+        continue;
+      }
+      shape[key] = asFoldParam(field2, spec.params?.[key] ?? field2.description);
+    }
+  }
+  for (const key of Object.keys(spec.params ?? {})) {
+    if (shape[key] === void 0) throw new Error(`fold ${spec.name}: no member takes '${key}'`);
+  }
+  const pick2 = (input) => {
+    const mode = input[spec.modeKey] ?? spec.defaultMode;
+    return typeof mode === "string" ? members.get(mode) : void 0;
+  };
+  const fold = {
+    name: spec.name,
+    title: spec.title,
+    description: spec.description,
+    inputSchema: shape,
+    route: pick2,
+    handler: async (input, ctx, callMeta) => {
+      const member = pick2(input);
+      const mode = String(input[spec.modeKey] ?? spec.defaultMode ?? "");
+      if (member === void 0) {
+        return invalid(`${spec.name} needs ${spec.modeKey}: one of ${modeValues.map((v) => `"${v}"`).join(", ")}`);
+      }
+      const rest = Object.fromEntries(
+        Object.entries(input).filter(([key, value]) => key !== spec.modeKey && value !== void 0)
+      );
+      const takes = Object.keys(member.inputSchema);
+      const foreign = Object.keys(rest).filter((key) => !takes.includes(key));
+      if (foreign.length > 0) {
+        return invalid(
+          `${spec.name} {${spec.modeKey}: "${mode}"} does not take ${foreign.join(", ")}; ` + (takes.length > 0 ? `it takes ${takes.join(", ")}` : "it takes no other parameter")
+        );
+      }
+      const parsed = await strictInputSchema(member).safeParseAsync(rest);
+      if (!parsed.success) {
+        const why = parsed.error.issues.map((i2) => `${i2.path.join(".") || "input"}: ${i2.message}`).join("; ");
+        return invalid(`${spec.name} {${spec.modeKey}: "${mode}"}: ${why}`);
+      }
+      return member.handler(parsed.data, ctx, callMeta);
+    }
+  };
+  if (headIndex >= 0) TOOLS.splice(headIndex, 1);
+  for (const member of members.values()) {
+    if (member.name !== spec.name) member.listed = false;
+  }
+  const at = headIndex >= 0 ? headIndex : Math.min(...[...members.values()].map((m) => TOOLS.indexOf(m)));
+  registerToolModule(fold);
+  const added = TOOLS.pop();
+  if (added !== void 0) TOOLS.splice(at, 0, added);
+  FOLDS.push({
+    name: spec.name,
+    modeKey: spec.modeKey,
+    modes: { ...spec.modes },
+    ...spec.defaultMode !== void 0 ? { defaultMode: spec.defaultMode } : {}
+  });
+  return fold;
+}
+
+// src/tools/folds.ts
+registerFold({
+  name: "dotnet_check",
+  title: ".NET checks",
+  description: "One .NET check. secrets: appsettings*.json, *.config, nuget.config and launchSettings.json for what gitleaks' generic rules miss \u2014 SQL Server connection strings, Azure Storage and Service Bus keys, NuGet feed credentials, JWT signing keys. target_framework: each *.csproj / *.fsproj TargetFramework (LTS, STS, end of life, legacy .NET Framework); no SDK needed. efcore: EF Core migrations that drop tables or columns, make a column NOT NULL with no default, or carry credentials in raw SQL. setup: the recorded .NET posture \u2014 the latest of these checks, NuGet CVEs and open findings; runs no scanner.",
+  modeKey: "check",
+  modeDescription: "The check to run.",
+  modes: {
+    secrets: "scan_dotnet_secrets",
+    target_framework: "dotnet_target_framework_check",
+    efcore: "dotnet_efcore_audit",
+    setup: "dotnet_describe_setup"
+  }
+});
+registerFold({
+  name: "wp_audit",
+  title: "WordPress install audit (WP-CLI)",
+  description: "Audit a WordPress install with WP-CLI; changes nothing on the site. mode install (default): core and plugin checksums (WP-CLI has none for themes: reported not checked), administrator accounts with risky logins, DISALLOW_FILE_EDIT / WP_DEBUG / FORCE_SSL_ADMIN, plugins that auto-update. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin \u2014 where backdoors persist. mode bulk: the install audit of up to 50 installs, one row per site. Needs WP-CLI (install_toolchain); checksums come from api.wordpress.org.",
+  modeKey: "mode",
+  modeDescription: "install (default), cron or bulk.",
+  defaultMode: "install",
+  modes: { install: "wp_audit", cron: "wp_cron_audit", bulk: "bulk_audit_wordpress_sites" },
+  params: {
+    wp_install_path: "install, cron: the directory holding wp-config.php.",
+    wp_install_paths: "bulk: up to 50 install directories.",
+    concurrency: "bulk: installs audited at once, 1\u201310. Default 4.",
+    include_users: "install: list the administrators, flagging risky logins. Default true.",
+    include_options: "install: read the config flags. Default true.",
+    risky_login_names: "install: logins to flag, replacing the default list (admin, administrator, root, wpadmin)."
+  }
+});
+registerFold({
+  name: "wp_vuln_check",
+  title: "WordPress vulnerability checks",
+  description: "Known WordPress vulnerabilities and exposure. mode live (default): WPScan against target_url, or the URL in a local install's wp-config.php, for core, plugin and theme CVEs; with no API token it reads not checked, never clean. mode source: a local install's versions (project_path = the install root) against the Wordfence feed (WORDFENCE_API_KEY) and wp.org's directory (closed or stale plugins); with no key, partial. mode rest: GET probes of the live REST API for user enumeration, drafts, comments and xmlrpc.php \u2014 no POST, no login.",
+  modeKey: "mode",
+  modeDescription: "live (default), source or rest.",
+  defaultMode: "live",
+  modes: { live: "wp_vuln_check", source: "wp_vuln_check_source", rest: "wp_rest_audit" },
+  params: {
+    target_url: "live, rest: the live site's URL.",
+    wp_install_path: "live: a local install whose wp-config.php gives the URL.",
+    timeout_ms: "rest: per-request timeout, 1000\u201360000 ms. Default 15000."
+  }
+});
+registerFold({
+  name: "wp_report",
+  title: "WordPress recorded state",
+  description: "What dev-guardian has recorded about one WordPress project (project_path = the install root); no network call. kind setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings and CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one plugin slug's recorded CVEs and, with a local wp_install_path, its installed version and state from WP-CLI. Run wp_audit / wp_vuln_check first for fresh data.",
+  modeKey: "kind",
+  modeDescription: "setup, hardening or plugin.",
+  modes: { setup: "wp_describe_setup", hardening: "wp_recommend_hardening", plugin: "wp_plugin_check" },
+  params: {
+    target_url: "setup, plugin: the site URL its scans were recorded under. Nothing is sent to it.",
+    slug: 'plugin: the wp.org slug, e.g. "contact-form-7".',
+    wp_install_path: "plugin: a local install; WP-CLI reads the plugin's version and state."
+  }
+});
+registerFold({
+  name: "diff_scans",
+  title: "Compare two scans",
+  description: "Compare two scans of one project and scan type. mode diff (default): new, resolved, unchanged and not_remeasured findings (of a type the newer scan did not measure \u2014 never resolved), matched by line-independent identity; from_scan_id / to_scan_id, else from (previous or baseline) and the latest. mode regression: the latest scan against its baseline, else the previous scan, by severity weight: `regressed` when the change passes threshold. Suppressed findings are counted apart (summary.suppressed, suppressed_findings, suppressed_by_severity), unmeasured ones in not_remeasured_by_severity. Another project's scan id: unknown_scan_id.",
+  modeKey: "mode",
+  modeDescription: "diff (default) or regression.",
+  defaultMode: "diff",
+  modes: { diff: "diff_scans", regression: "regression_alert" },
+  params: {
+    scan_type: "Compare scans of this type. Default: the newest finding-producing scan.",
+    threshold: "regression: the severity-weighted change that sets regressed. Default 5 (one new critical passes it)."
+  }
+});
+registerFold({
+  name: "prioritize_findings",
+  title: "Rank or triage open findings",
+  description: "One project's open findings (the newest usable scan of each type, suppressions removed). view rank (default): ordered by severity, category, fix availability and age, boosted for CVEs on CISA KEV or with a high EPSS score, each CVE with a CISA SSVC decision (Act, Attend, Track*, Track); data it lacks is named, never invented. view triage: likely_false_positive / probably_safe / keep, from paths (tests, generated code, fixtures) \u2014 candidates for suppress_finding, your decision. No LLM call.",
+  modeKey: "view",
+  modeDescription: "rank (default) or triage.",
+  defaultMode: "rank",
+  modes: { rank: "prioritize_findings", triage: "triage_findings" },
+  params: {
+    limit: "rank: how many to return, 1\u2013500. Default 50.",
+    mission_wellbeing: "rank: SSVC Mission & Well-being of this system. Default medium, reported as assumed."
+  }
+});
+
 // src/resources/scans.ts
 registerResourceModule({
   name: "guardian-scans-latest",
@@ -94501,7 +94735,7 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-wp-cron",
   uri: "guardian://wp/cron",
-  description: "Latest wp_cron_audit result: total scheduled events + flagged ones (suspicious hooks, base64-looking args, hooks from inactive plugins).",
+  description: 'Latest wp_audit {mode: "cron"} result: total scheduled events + flagged ones (suspicious hooks, base64-looking args, hooks from inactive plugins).',
   handler: async (_uri, _params, ctx) => {
     const scan2 = findLatestOfType(ctx, "wp_cron_audit");
     if (!scan2) return { json: { last_run: null } };
@@ -94530,7 +94764,7 @@ function mcpInvalidParams3(message2) {
 registerResourceModule({
   name: "guardian-dotnet-target-frameworks",
   uri: "guardian://dotnet/target-frameworks",
-  description: "Latest dotnet_target_framework_check: per-project target framework moniker + EOL/legacy status.",
+  description: 'Latest dotnet_check {check: "target_framework"}: per-project target framework moniker + EOL/legacy status.',
   handler: async (_uri, _params, ctx) => {
     const scan2 = findLatestOfType2(ctx, "dotnet_target_framework");
     if (!scan2) return { json: { last_run: null } };
@@ -94546,7 +94780,7 @@ registerResourceModule({
 registerResourceModule({
   name: "guardian-dotnet-efcore",
   uri: "guardian://dotnet/efcore",
-  description: "Latest dotnet_efcore_audit: dangerous migration patterns detected (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials).",
+  description: 'Latest dotnet_check {check: "efcore"}: dangerous migration patterns detected (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials).',
   handler: async (_uri, _params, ctx) => {
     const scan2 = findLatestOfType2(ctx, "dotnet_efcore_audit");
     if (!scan2) return { json: { last_run: null } };
@@ -94686,7 +94920,7 @@ async function main() {
   else if (guard.reason === "refused" || guard.reason === "unwritable") {
     logErr(`.gitignore left alone (${guard.reason}): ${guard.detail ?? "no detail"}`);
   }
-  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION2 });
+  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION2 }, { instructions: SERVER_INSTRUCTIONS });
   const progressNotifier = {
     send: (payload) => {
       void mcp.server.notification({
@@ -94704,7 +94938,9 @@ async function main() {
   };
   attachAllTools(mcp, ctx);
   attachAllResources(mcp, ctx);
-  logErr(`registered ${TOOLS.length} tool(s), ${RESOURCES.length} resource(s)`);
+  logErr(
+    `registered ${listedTools().length} tool(s) (+${TOOLS.length - listedTools().length} hidden alias(es)), ${RESOURCES.length} resource(s)`
+  );
   const background = { cancel: () => {
   } };
   installShutdownHooks(mcp, storage, background);

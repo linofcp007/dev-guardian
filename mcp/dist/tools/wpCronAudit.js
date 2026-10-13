@@ -69,7 +69,7 @@ async function handler(input, ctx) {
     }
     const wpBin = await scannerAvailable('wp');
     if (!wpBin) {
-        return failDomain('missing_scanner', 'WP-CLI (`wp`) is required for wp_cron_audit. Run install_toolchain with tools=["wp-cli"].');
+        return failDomain('missing_scanner', 'WP-CLI (`wp`) is required for wp_audit {mode: "cron"}. Run install_toolchain with tools=["wp-cli"].');
     }
     // Cron events
     const cronResult = await runProcess({

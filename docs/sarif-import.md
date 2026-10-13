@@ -31,8 +31,8 @@ of the native scanners.
 
 ### One slot per source tool
 
-Every distinct `source_tool` has its own slot for the latest scan and for the baseline. Four tools take a
-`source_tool` argument to say which slot they read: `set_baseline`, `diff_scans`, `regression_alert` and
+Every distinct `source_tool` has its own slot for the latest scan and for the baseline. Three tools take a
+`source_tool` argument to say which slot they read: `set_baseline`, `diff_scans` (both modes) and
 `report_export`.
 
 - It is refused with any other `scan_type` than `sarif_import`, and next to an explicit scan id (which already
@@ -41,7 +41,7 @@ Every distinct `source_tool` has its own slot for the latest scan and for the ba
 - With several it is required, and the refusal lists the tools.
 - `diff_scans` compares two scans of the same tool and refuses two different tools.
 
-`suppress_finding`, `triage_findings` and `prioritize_findings` act on findings by fingerprint and work on
+`suppress_finding` and `prioritize_findings` (both views) act on findings by fingerprint and work on
 imported findings as on any other.
 
 ## Identity
