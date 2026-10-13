@@ -566,7 +566,8 @@ function writeProjectFile(root, path3, content, options) {
     return { ok: false, reason: "outside-project" };
   }
   const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
-  const badDir = ensureDirsInside(root, dirname(target));
+  const parent = dirname(target);
+  const badDir = options.refuseLinkedDirs === true ? caseFold(parent) === caseFold(resolve2(root)) || makeProjectDir(root, relative2(resolve2(root), parent)) !== null ? null : parent : ensureDirsInside(root, parent);
   if (badDir !== null) return { ok: false, reason: "escaping-directory", detail: relative2(resolve2(root), badDir) };
   let existing = null;
   try {
@@ -1857,7 +1858,7 @@ function ensureGuardianDirIgnored(projectPath) {
   const content = "# Written by dev-guardian: its working files (reports, the database) stay out of git,\n# the files a team shares stay in. Written when missing, never changed: edit it freely.\n*\n" + SHARED_GUARDIAN_FILES.map((f) => `!${f}
 `).join("");
   try {
-    return writeProjectFile(projectPath, DOT_GUARDIAN_GITIGNORE, content, { mode: "create" }).ok;
+    return writeProjectFile(projectPath, DOT_GUARDIAN_GITIGNORE, content, { mode: "create", refuseLinkedDirs: true }).ok;
   } catch {
     return false;
   }
