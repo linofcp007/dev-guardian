@@ -79071,9 +79071,7 @@ async function handler41(inp, ctx, callMeta) {
   const warnings = [];
   const credential = resolveCredential(inp, warnings);
   const redact2 = makeRedactor(collectSecrets(credential.value));
-  const timeoutMs = typeof inp.timeout_ms === "number" && inp.timeout_ms > 0 ? Math.floor(inp.timeout_ms) : DEFAULT_PROBE_TIMEOUT_MS;
-  const maxRequests = typeof inp.max_requests === "number" && inp.max_requests > 0 ? Math.floor(inp.max_requests) : DEFAULT_MAX_REQUESTS;
-  const wallClockMs = typeof inp.wall_clock_ms === "number" && inp.wall_clock_ms > 0 ? Math.floor(inp.wall_clock_ms) : DEFAULT_WALL_CLOCK_MS;
+  const { timeoutMs, maxRequests, wallClockMs } = runLimits(inp);
   const aborted3 = () => callMeta?.signal?.aborted === true;
   const livenessOpts = { timeoutMs, concurrency: 1 };
   if (callMeta?.signal !== void 0) livenessOpts.signal = callMeta.signal;
@@ -79148,35 +79146,12 @@ async function handler41(inp, ctx, callMeta) {
   const findings = [...analyzeRoutes(analyzeInput), ...analyzeOrigin(analyzeInput)];
   const outcomes = outcomeCounts(results);
   const completed = outcomes.completed;
-  const engineFailed = plan.requests.length > 0 && completed === 0;
-  const toolsRun = [
-    {
-      name: DAST_ENGINE,
-      status: engineFailed ? "failed" : "ok",
-      reason: `${plan.requests.length} request(s) planned, ${completed} completed, ${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` + (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : "")
-    }
-  ];
-  const unanswered = outcomes.timeout + outcomes.network_error;
-  if (!engineFailed && plan.requests.length > 0 && unanswered / plan.requests.length >= UNANSWERED_COVERAGE_THRESHOLD) {
-    toolsRun.push({
-      name: `${DAST_ENGINE}:unanswered`,
-      status: "failed",
-      reason: `the target never answered ${unanswered} of ${plan.requests.length} probe(s) (${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect) \u2014 the checks covering those routes reached no verdict, so this scan is not a complete picture of the inventory`
-    });
-  }
+  const toolsRun = engineRuns(plan.requests.length, outcomes);
   const missingTools = [];
   const surfaceGaps = surfaceGapsOf(snapshot);
   if (surfaceGaps !== null) {
     missingTools.push(`${DAST_ENGINE}:partial-surface`);
-    const files = surfaceGaps.partially_parsed.map((p) => p.file);
-    const failed = (surfaceGaps.failed_steps ?? []).map((run2) => run2.name);
-    const causes = [
-      ...files.length > 0 ? [`Semgrep only partly parsed ${nameAFew(files)}`] : [],
-      ...failed.length > 0 ? [`its ${failed.join(", ")} step failed`] : []
-    ];
-    warnings.push(
-      "The attack-surface snapshot is partial" + (causes.length > 0 ? ` \u2014 ${causes.join("; ")}` : ` \u2014 its own scan recorded gaps (${surfaceGaps.missing_tools.join(", ")})`) + ": routes the map could not read were never probed. Fix the gap and re-run map_attack_surface for a complete inventory."
-    );
+    warnings.push(partialSurfaceWarning(surfaceGaps));
   }
   const burst = await runRateLimitBurst({
     requested: inp.probe_rate_limit === true,
@@ -79197,14 +79172,9 @@ async function handler41(inp, ctx, callMeta) {
   const timedOut = deadline.hit();
   deadline.dispose();
   if (timedOut) {
-    toolsRun.push({
-      name: `${DAST_ENGINE}:wall-clock`,
-      status: "failed",
-      reason: `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms wall-clock ceiling was reached`
-    });
-    warnings.push(
-      `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran` + (burst.summary?.cut_by_ceiling === true ? `, and the rate-limit burst stopped after ${burst.summary.sent} of ${burst.summary.burst_planned} requests` : "") + ". Any check reporting target_error below may simply not have been reached rather than having failed against the target \u2014 raise wall_clock_ms and re-run before drawing a conclusion from it."
-    );
+    const cut = wallClockCut({ planned: plan.requests.length, outcomes, wallClockMs, burst: burst.summary });
+    toolsRun.push(cut.toolRun);
+    warnings.push(cut.warning);
   }
   const nuclei = await runNuclei({
     requested: inp.use_nuclei === true,
@@ -79222,29 +79192,16 @@ async function handler41(inp, ctx, callMeta) {
   if (nuclei.toolRun !== null) toolsRun.push(nuclei.toolRun);
   if (nuclei.missing) missingTools.push("nuclei");
   if (aborted3()) return cancel();
-  const ordered = [...findings].sort(
-    (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)
-  );
-  const records2 = ordered.map(
-    (f) => burst.evidence.get(f.fingerprint) ?? buildEvidence(f, target.origin, results)
-  );
-  const written = writeEvidenceFiles(evidenceDir, records2, redact2);
-  if (written.capped > 0) {
-    warnings.push(
-      `${written.capped} finding(s) have no evidence file: the per-scan evidence cap was reached. The findings themselves are complete; only their raw request/response pairs were dropped.`
-    );
-  }
-  if (written.failed > 0) {
-    warnings.push(`${written.failed} evidence file(s) could not be written to ${evidenceDir}.`);
-  }
-  ctx.storage.findings.bulkInsert(
-    ordered.map(
-      (f) => redactObject(
-        toInsertInput(f, scanId, written.written.has(f.fingerprint) ? evidenceDir : null),
-        redact2
-      )
-    )
-  );
+  const ordered = storeFindings(ctx, {
+    scanId,
+    findings,
+    burstEvidence: burst.evidence,
+    origin: target.origin,
+    results,
+    evidenceDir,
+    redact: redact2,
+    warnings
+  });
   const checks = computeCheckStatuses({
     plan,
     results,
@@ -79313,37 +79270,18 @@ async function handler41(inp, ctx, callMeta) {
       target_class: target.target_class,
       authorized_target: inp.authorized_target === true
     },
-    summary: {
-      routes_in_snapshot: snapshot.routes.length,
-      routes_planned: plan.routes.length,
-      requests_planned: plan.requests.length,
-      requests_completed: completed,
-      requests_failed: results.length - completed,
-      /** completed / timeout / cancelled / network_error, so a run cut by the
-       *  ceiling is not mistaken for a target that stopped answering. */
-      probe_outcomes: outcomes,
-      truncated: plan.truncated,
-      max_requests: maxRequests,
-      /** True when the wall-clock ceiling cut the run. Never silent. */
-      timed_out: timedOut,
-      wall_clock_ms: wallClockMs,
-      /**
-       * Probes the wall-clock ceiling cut. NOT "probes that never touched the
-       * target": up to `DEFAULT_CONCURRENCY` of these were in flight when the
-       * ceiling fired and had already reached the target, and the executor
-       * cannot say afterwards which. It was called `probes_not_run`, which
-       * claimed the stronger, unknowable thing and had an active scanner
-       * under-reporting its own traffic — the wrong direction for an audit
-       * trail. Renamed rather than adjusted by a guess: the count of probes
-       * cut is exact, the count of probes untouched is not.
-       */
-      probes_cut: timedOut ? outcomes.cancelled : 0,
-      skipped: plan.skipped,
+    summary: runSummary({
+      routesInSnapshot: snapshot.routes.length,
+      plan,
+      probes: results.length,
+      outcomes,
+      maxRequests,
+      timedOut,
+      wallClockMs,
       checks,
-      rate_limit: burst.summary,
-      // Present only when the surface probed was itself partial.
-      ...surfaceGaps !== null ? { surface_gaps: surfaceGaps } : {}
-    }
+      rateLimit: burst.summary,
+      surfaceGaps
+    })
   };
   return { ok: true, ...redactObject(payload, redact2) };
 }
@@ -79355,6 +79293,114 @@ function surfaceGapsOf(snapshot) {
     missing_tools: [...snapshot.missing_tools],
     partially_parsed: partiallyParsed,
     ...failedSteps.length > 0 ? { failed_steps: failedSteps } : {}
+  };
+}
+function partialSurfaceWarning(gaps) {
+  const files = gaps.partially_parsed.map((p) => p.file);
+  const failed = (gaps.failed_steps ?? []).map((run2) => run2.name);
+  const causes = [
+    ...files.length > 0 ? [`Semgrep only partly parsed ${nameAFew(files)}`] : [],
+    ...failed.length > 0 ? [`its ${failed.join(", ")} step failed`] : []
+  ];
+  return "The attack-surface snapshot is partial" + (causes.length > 0 ? ` \u2014 ${causes.join("; ")}` : ` \u2014 its own scan recorded gaps (${gaps.missing_tools.join(", ")})`) + ": routes the map could not read were never probed. Fix the gap and re-run map_attack_surface for a complete inventory.";
+}
+function runLimits(inp) {
+  const timeoutMs = typeof inp.timeout_ms === "number" && inp.timeout_ms > 0 ? Math.floor(inp.timeout_ms) : DEFAULT_PROBE_TIMEOUT_MS;
+  const maxRequests = typeof inp.max_requests === "number" && inp.max_requests > 0 ? Math.floor(inp.max_requests) : DEFAULT_MAX_REQUESTS;
+  const wallClockMs = typeof inp.wall_clock_ms === "number" && inp.wall_clock_ms > 0 ? Math.floor(inp.wall_clock_ms) : DEFAULT_WALL_CLOCK_MS;
+  return { timeoutMs, maxRequests, wallClockMs };
+}
+function engineRuns(planned, outcomes) {
+  const completed = outcomes.completed;
+  const engineFailed = planned > 0 && completed === 0;
+  const toolsRun = [
+    {
+      name: DAST_ENGINE,
+      status: engineFailed ? "failed" : "ok",
+      reason: `${planned} request(s) planned, ${completed} completed, ${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` + (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : "")
+    }
+  ];
+  const unanswered = outcomes.timeout + outcomes.network_error;
+  if (!engineFailed && planned > 0 && unanswered / planned >= UNANSWERED_COVERAGE_THRESHOLD) {
+    toolsRun.push({
+      name: `${DAST_ENGINE}:unanswered`,
+      status: "failed",
+      reason: `the target never answered ${unanswered} of ${planned} probe(s) (${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect) \u2014 the checks covering those routes reached no verdict, so this scan is not a complete picture of the inventory`
+    });
+  }
+  return toolsRun;
+}
+function wallClockCut(run2) {
+  const { planned, outcomes, wallClockMs, burst } = run2;
+  return {
+    toolRun: {
+      name: `${DAST_ENGINE}:wall-clock`,
+      status: "failed",
+      reason: `cut after ${outcomes.completed} of ${planned} probe(s): the ${wallClockMs}ms wall-clock ceiling was reached`
+    },
+    warning: `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ${outcomes.cancelled} of ${planned} probe(s) never ran` + (burst?.cut_by_ceiling === true ? `, and the rate-limit burst stopped after ${burst.sent} of ${burst.burst_planned} requests` : "") + ". Any check reporting target_error below may simply not have been reached rather than having failed against the target \u2014 raise wall_clock_ms and re-run before drawing a conclusion from it."
+  };
+}
+function storeFindings(ctx, run2) {
+  const { scanId, findings, burstEvidence, origin, results, evidenceDir, redact: redact2, warnings } = run2;
+  const ordered = [...findings].sort(
+    (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)
+  );
+  const records2 = ordered.map(
+    (f) => burstEvidence.get(f.fingerprint) ?? buildEvidence(f, origin, results)
+  );
+  const written = writeEvidenceFiles(evidenceDir, records2, redact2);
+  if (written.capped > 0) {
+    warnings.push(
+      `${written.capped} finding(s) have no evidence file: the per-scan evidence cap was reached. The findings themselves are complete; only their raw request/response pairs were dropped.`
+    );
+  }
+  if (written.failed > 0) {
+    warnings.push(`${written.failed} evidence file(s) could not be written to ${evidenceDir}.`);
+  }
+  ctx.storage.findings.bulkInsert(
+    ordered.map(
+      (f) => redactObject(
+        toInsertInput(f, scanId, written.written.has(f.fingerprint) ? evidenceDir : null),
+        redact2
+      )
+    )
+  );
+  return ordered;
+}
+function runSummary(run2) {
+  const { plan, outcomes, timedOut } = run2;
+  const completed = outcomes.completed;
+  return {
+    routes_in_snapshot: run2.routesInSnapshot,
+    routes_planned: plan.routes.length,
+    requests_planned: plan.requests.length,
+    requests_completed: completed,
+    requests_failed: run2.probes - completed,
+    /** completed / timeout / cancelled / network_error, so a run cut by the
+     *  ceiling is not mistaken for a target that stopped answering. */
+    probe_outcomes: outcomes,
+    truncated: plan.truncated,
+    max_requests: run2.maxRequests,
+    /** True when the wall-clock ceiling cut the run. Never silent. */
+    timed_out: timedOut,
+    wall_clock_ms: run2.wallClockMs,
+    /**
+     * Probes the wall-clock ceiling cut. NOT "probes that never touched the
+     * target": up to `DEFAULT_CONCURRENCY` of these were in flight when the
+     * ceiling fired and had already reached the target, and the executor
+     * cannot say afterwards which. It was called `probes_not_run`, which
+     * claimed the stronger, unknowable thing and had an active scanner
+     * under-reporting its own traffic — the wrong direction for an audit
+     * trail. Renamed rather than adjusted by a guess: the count of probes
+     * cut is exact, the count of probes untouched is not.
+     */
+    probes_cut: timedOut ? outcomes.cancelled : 0,
+    skipped: plan.skipped,
+    checks: run2.checks,
+    rate_limit: run2.rateLimit,
+    // Present only when the surface probed was itself partial.
+    ...run2.surfaceGaps !== null ? { surface_gaps: run2.surfaceGaps } : {}
   };
 }
 function resolveCredential(inp, warnings) {

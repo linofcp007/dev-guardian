@@ -48,9 +48,9 @@ import {
   executeProbes,
   type ProbeOptions,
 } from '../dast/probe.js';
-import { collectSecrets, makeRedactor, redactObject } from '../dast/redact.js';
+import { collectSecrets, makeRedactor, redactObject, type Redactor } from '../dast/redact.js';
 import { classifyTarget } from '../dast/target.js';
-import type { ProbeResult } from '../dast/types.js';
+import type { PlanOutcome, ProbeResult } from '../dast/types.js';
 import { ProjectPath } from '../schemas.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import { nameAFew } from '../runners/semgrepReport.js';
@@ -270,18 +270,7 @@ async function handler(
   const credential = resolveCredential(inp, warnings);
   const redact = makeRedactor(collectSecrets(credential.value));
 
-  const timeoutMs =
-    typeof inp.timeout_ms === 'number' && inp.timeout_ms > 0
-      ? Math.floor(inp.timeout_ms)
-      : DEFAULT_PROBE_TIMEOUT_MS;
-  const maxRequests =
-    typeof inp.max_requests === 'number' && inp.max_requests > 0
-      ? Math.floor(inp.max_requests)
-      : DEFAULT_MAX_REQUESTS;
-  const wallClockMs =
-    typeof inp.wall_clock_ms === 'number' && inp.wall_clock_ms > 0
-      ? Math.floor(inp.wall_clock_ms)
-      : DEFAULT_WALL_CLOCK_MS;
+  const { timeoutMs, maxRequests, wallClockMs } = runLimits(inp);
   const aborted = (): boolean => callMeta?.signal?.aborted === true;
 
   // ---- 5. Liveness -----------------------------------------------------
@@ -387,79 +376,15 @@ async function handler(
 
   const outcomes = outcomeCounts(results);
   const completed = outcomes.completed;
-  // The engine "ran" when it either measured something or had nothing to
-  // measure; it FAILED when probes were planned and the target answered none
-  // of them. That second case used to report `ok` unconditionally, which made
-  // a scan whose every probe timed out come back `coverage: 'full'` — a
-  // "0 findings" result that scanned nothing, reading as a clean bill of
-  // health. `computeCoverage`'s own contract says a run with nothing to do is
-  // 'full' (no gaps, just no work), which is why zero planned requests is not
-  // a failure here.
-  const engineFailed = plan.requests.length > 0 && completed === 0;
-  const toolsRun: ToolRun[] = [
-    {
-      name: DAST_ENGINE,
-      status: engineFailed ? 'failed' : 'ok',
-      reason:
-        `${plan.requests.length} request(s) planned, ${completed} completed, ` +
-        `${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` +
-        (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : ''),
-    },
-  ];
-  // A run in which the target answered SOME probes but silently dropped a
-  // material share of them is not a full-coverage run, and `engineFailed`
-  // above cannot say so — it only fires when literally nothing completed. A
-  // target answering 1 of 300 used to report `tools_run: ok`, `coverage:
-  // 'full'` and no warning, with `probe_outcomes.timeout: 299` sitting two
-  // fields away contradicting it. Lose the same probes to the wall clock
-  // instead and coverage correctly degrades; losing them to the target must
-  // read the same way.
-  //
-  // A separate entry rather than a status on the engine's own, mirroring the
-  // `:wall-clock` entry below: "the target did not answer" and "this tool
-  // stopped asking" are different gaps, and keeping them apart is what lets
-  // `computeCoverage` report 'partial' for a run that measured part of the
-  // inventory instead of collapsing everything to 'none'.
-  const unanswered = outcomes.timeout + outcomes.network_error;
-  if (
-    !engineFailed &&
-    plan.requests.length > 0 &&
-    unanswered / plan.requests.length >= UNANSWERED_COVERAGE_THRESHOLD
-  ) {
-    toolsRun.push({
-      name: `${DAST_ENGINE}:unanswered`,
-      status: 'failed',
-      reason:
-        `the target never answered ${unanswered} of ${plan.requests.length} probe(s) ` +
-        `(${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect) — ` +
-        'the checks covering those routes reached no verdict, so this scan is not a ' +
-        'complete picture of the inventory',
-    });
-  }
+  const toolsRun: ToolRun[] = engineRuns(plan.requests.length, outcomes);
   const missingTools: string[] = [];
 
-  // A surface map_attack_surface persisted as PARTIAL — a file Semgrep only
-  // partly parsed (`partially_parsed`), a step of its run that failed (the
-  // metavariable recovery lost matches), or any other gap its own run
-  // recorded. Routes the map could not read were never in the inventory, so
-  // never probed: this run is partial coverage too, never a complete one.
+  // A surface map_attack_surface persisted as PARTIAL: this run is partial
+  // coverage too, never a complete one (`partialSurfaceWarning`).
   const surfaceGaps = surfaceGapsOf(snapshot);
   if (surfaceGaps !== null) {
     missingTools.push(`${DAST_ENGINE}:partial-surface`);
-    const files = surfaceGaps.partially_parsed.map((p) => p.file);
-    const failed = (surfaceGaps.failed_steps ?? []).map((run) => run.name);
-    const causes = [
-      ...(files.length > 0 ? [`Semgrep only partly parsed ${nameAFew(files)}`] : []),
-      ...(failed.length > 0 ? [`its ${failed.join(', ')} step failed`] : []),
-    ];
-    warnings.push(
-      'The attack-surface snapshot is partial' +
-        (causes.length > 0
-          ? ` — ${causes.join('; ')}`
-          : ` — its own scan recorded gaps (${surfaceGaps.missing_tools.join(', ')})`) +
-        ': routes the map could not read were never probed. Fix the gap and re-run ' +
-        'map_attack_surface for a complete inventory.',
-    );
+    warnings.push(partialSurfaceWarning(surfaceGaps));
   }
 
   // ---- 8. Optional rate-limit burst ------------------------------------
@@ -498,29 +423,9 @@ async function handler(
   const timedOut = deadline.hit();
   deadline.dispose();
   if (timedOut) {
-    // A separate `tools_run` entry, not a status on the engine's own: "the
-    // run was cut" is a distinct gap from "the target did not answer", and
-    // keeping them apart is what lets `computeCoverage` report 'partial' for
-    // a run that measured some of the inventory before the ceiling fired, and
-    // 'none' for one that measured nothing at all.
-    toolsRun.push({
-      name: `${DAST_ENGINE}:wall-clock`,
-      status: 'failed',
-      reason:
-        `cut after ${completed} of ${plan.requests.length} probe(s): the ${wallClockMs}ms ` +
-        'wall-clock ceiling was reached',
-    });
-    warnings.push(
-      `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ` +
-        `${outcomes.cancelled} of ${plan.requests.length} probe(s) never ran` +
-        (burst.summary?.cut_by_ceiling === true
-          ? `, and the rate-limit burst stopped after ${burst.summary.sent} of ` +
-            `${burst.summary.burst_planned} requests`
-          : '') +
-        '. Any check reporting target_error below may simply not have been reached rather ' +
-        'than having failed against the target — raise wall_clock_ms and re-run before ' +
-        'drawing a conclusion from it.',
-    );
+    const cut = wallClockCut({ planned: plan.requests.length, outcomes, wallClockMs, burst: burst.summary });
+    toolsRun.push(cut.toolRun);
+    warnings.push(cut.warning);
   }
 
   // ---- 9. Optional nuclei pass -----------------------------------------
@@ -545,36 +450,16 @@ async function handler(
   if (aborted()) return cancel();
 
   // ---- 10. Evidence + persistence --------------------------------------
-  const ordered = [...findings].sort(
-    (a, b) =>
-      SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
-      a.fingerprint.localeCompare(b.fingerprint),
-  );
-  const records: EvidenceRecord[] = ordered.map(
-    (f) => burst.evidence.get(f.fingerprint) ?? buildEvidence(f, target.origin, results),
-  );
-  const written = writeEvidenceFiles(evidenceDir, records, redact);
-  if (written.capped > 0) {
-    warnings.push(
-      `${written.capped} finding(s) have no evidence file: the per-scan evidence cap was reached. ` +
-        'The findings themselves are complete; only their raw request/response pairs were dropped.',
-    );
-  }
-  if (written.failed > 0) {
-    warnings.push(`${written.failed} evidence file(s) could not be written to ${evidenceDir}.`);
-  }
-
-  // Redaction is applied to the stored rows as a whole, not to a hand-picked
-  // set of fields — see `redact.ts` for why "we never put it there" is not a
-  // guarantee.
-  ctx.storage.findings.bulkInsert(
-    ordered.map((f) =>
-      redactObject(
-        toInsertInput(f, scanId, written.written.has(f.fingerprint) ? evidenceDir : null),
-        redact,
-      ),
-    ),
-  );
+  const ordered = storeFindings(ctx, {
+    scanId,
+    findings,
+    burstEvidence: burst.evidence,
+    origin: target.origin,
+    results,
+    evidenceDir,
+    redact,
+    warnings,
+  });
 
   const checks = computeCheckStatuses({
     plan,
@@ -647,37 +532,18 @@ async function handler(
       target_class: target.target_class,
       authorized_target: inp.authorized_target === true,
     },
-    summary: {
-      routes_in_snapshot: snapshot.routes.length,
-      routes_planned: plan.routes.length,
-      requests_planned: plan.requests.length,
-      requests_completed: completed,
-      requests_failed: results.length - completed,
-      /** completed / timeout / cancelled / network_error, so a run cut by the
-       *  ceiling is not mistaken for a target that stopped answering. */
-      probe_outcomes: outcomes,
-      truncated: plan.truncated,
-      max_requests: maxRequests,
-      /** True when the wall-clock ceiling cut the run. Never silent. */
-      timed_out: timedOut,
-      wall_clock_ms: wallClockMs,
-      /**
-       * Probes the wall-clock ceiling cut. NOT "probes that never touched the
-       * target": up to `DEFAULT_CONCURRENCY` of these were in flight when the
-       * ceiling fired and had already reached the target, and the executor
-       * cannot say afterwards which. It was called `probes_not_run`, which
-       * claimed the stronger, unknowable thing and had an active scanner
-       * under-reporting its own traffic — the wrong direction for an audit
-       * trail. Renamed rather than adjusted by a guess: the count of probes
-       * cut is exact, the count of probes untouched is not.
-       */
-      probes_cut: timedOut ? outcomes.cancelled : 0,
-      skipped: plan.skipped,
+    summary: runSummary({
+      routesInSnapshot: snapshot.routes.length,
+      plan,
+      probes: results.length,
+      outcomes,
+      maxRequests,
+      timedOut,
+      wallClockMs,
       checks,
-      rate_limit: burst.summary,
-      // Present only when the surface probed was itself partial.
-      ...(surfaceGaps !== null ? { surface_gaps: surfaceGaps } : {}),
-    },
+      rateLimit: burst.summary,
+      surfaceGaps,
+    }),
   };
   // The final choke point: every string on the way out, whatever produced it.
   return { ok: true, ...redactObject(payload, redact) };
@@ -702,6 +568,240 @@ function surfaceGapsOf(
     missing_tools: [...snapshot.missing_tools],
     partially_parsed: partiallyParsed,
     ...(failedSteps.length > 0 ? { failed_steps: failedSteps } : {}),
+  };
+}
+
+/**
+ * The warning for a surface map_attack_surface persisted as PARTIAL — a file
+ * Semgrep only partly parsed (`partially_parsed`), a step of its run that
+ * failed (the metavariable recovery lost matches), or any other gap its own
+ * run recorded. Routes the map could not read were never in the inventory,
+ * so never probed.
+ */
+function partialSurfaceWarning(gaps: NonNullable<ReturnType<typeof surfaceGapsOf>>): string {
+  const files = gaps.partially_parsed.map((p) => p.file);
+  const failed = (gaps.failed_steps ?? []).map((run) => run.name);
+  const causes = [
+    ...(files.length > 0 ? [`Semgrep only partly parsed ${nameAFew(files)}`] : []),
+    ...(failed.length > 0 ? [`its ${failed.join(', ')} step failed`] : []),
+  ];
+  return (
+    'The attack-surface snapshot is partial' +
+    (causes.length > 0
+      ? ` — ${causes.join('; ')}`
+      : ` — its own scan recorded gaps (${gaps.missing_tools.join(', ')})`) +
+    ': routes the map could not read were never probed. Fix the gap and re-run ' +
+    'map_attack_surface for a complete inventory.'
+  );
+}
+
+/** The probe timeout, request ceiling and wall-clock ceiling a call asked for, else the defaults. */
+function runLimits(inp: Pick<Inputs, 'timeout_ms' | 'max_requests' | 'wall_clock_ms'>): {
+  timeoutMs: number;
+  maxRequests: number;
+  wallClockMs: number;
+} {
+  const timeoutMs =
+    typeof inp.timeout_ms === 'number' && inp.timeout_ms > 0
+      ? Math.floor(inp.timeout_ms)
+      : DEFAULT_PROBE_TIMEOUT_MS;
+  const maxRequests =
+    typeof inp.max_requests === 'number' && inp.max_requests > 0
+      ? Math.floor(inp.max_requests)
+      : DEFAULT_MAX_REQUESTS;
+  const wallClockMs =
+    typeof inp.wall_clock_ms === 'number' && inp.wall_clock_ms > 0
+      ? Math.floor(inp.wall_clock_ms)
+      : DEFAULT_WALL_CLOCK_MS;
+  return { timeoutMs, maxRequests, wallClockMs };
+}
+
+/**
+ * The engine's `tools_run` entries for a probe plan of `planned` requests.
+ *
+ * The engine "ran" when it either measured something or had nothing to
+ * measure; it FAILED when probes were planned and the target answered none
+ * of them. That second case used to report `ok` unconditionally, which made
+ * a scan whose every probe timed out come back `coverage: 'full'` — a
+ * "0 findings" result that scanned nothing, reading as a clean bill of
+ * health. `computeCoverage`'s own contract says a run with nothing to do is
+ * 'full' (no gaps, just no work), which is why zero planned requests is not
+ * a failure here.
+ *
+ * A run in which the target answered SOME probes but silently dropped a
+ * material share of them is not a full-coverage run either, and the engine
+ * failure cannot say so — it only fires when literally nothing completed. A
+ * target answering 1 of 300 used to report `tools_run: ok`, `coverage:
+ * 'full'` and no warning, with `probe_outcomes.timeout: 299` sitting two
+ * fields away contradicting it. Lose the same probes to the wall clock
+ * instead and coverage correctly degrades; losing them to the target must
+ * read the same way. A separate entry rather than a status on the engine's
+ * own, mirroring the `:wall-clock` entry (`wallClockCut`): "the target did
+ * not answer" and "this tool stopped asking" are different gaps, and keeping
+ * them apart is what lets `computeCoverage` report 'partial' for a run that
+ * measured part of the inventory instead of collapsing everything to 'none'.
+ */
+function engineRuns(planned: number, outcomes: Record<ProbeResult['outcome'], number>): ToolRun[] {
+  const completed = outcomes.completed;
+  const engineFailed = planned > 0 && completed === 0;
+  const toolsRun: ToolRun[] = [
+    {
+      name: DAST_ENGINE,
+      status: engineFailed ? 'failed' : 'ok',
+      reason:
+        `${planned} request(s) planned, ${completed} completed, ` +
+        `${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect` +
+        (outcomes.cancelled > 0 ? `, ${outcomes.cancelled} cut short` : ''),
+    },
+  ];
+  const unanswered = outcomes.timeout + outcomes.network_error;
+  if (!engineFailed && planned > 0 && unanswered / planned >= UNANSWERED_COVERAGE_THRESHOLD) {
+    toolsRun.push({
+      name: `${DAST_ENGINE}:unanswered`,
+      status: 'failed',
+      reason:
+        `the target never answered ${unanswered} of ${planned} probe(s) ` +
+        `(${outcomes.timeout} timed out, ${outcomes.network_error} failed to connect) — ` +
+        'the checks covering those routes reached no verdict, so this scan is not a ' +
+        'complete picture of the inventory',
+    });
+  }
+  return toolsRun;
+}
+
+/**
+ * What a run the wall-clock ceiling cut reports: a separate `tools_run`
+ * entry, not a status on the engine's own — "the run was cut" is a distinct
+ * gap from "the target did not answer", and keeping them apart is what lets
+ * `computeCoverage` report 'partial' for a run that measured some of the
+ * inventory before the ceiling fired, and 'none' for one that measured
+ * nothing at all — and a warning naming what was not sent.
+ */
+function wallClockCut(run: {
+  planned: number;
+  outcomes: Record<ProbeResult['outcome'], number>;
+  wallClockMs: number;
+  burst: { cut_by_ceiling: boolean; sent: number; burst_planned: number } | null;
+}): { toolRun: ToolRun; warning: string } {
+  const { planned, outcomes, wallClockMs, burst } = run;
+  return {
+    toolRun: {
+      name: `${DAST_ENGINE}:wall-clock`,
+      status: 'failed',
+      reason:
+        `cut after ${outcomes.completed} of ${planned} probe(s): the ${wallClockMs}ms ` +
+        'wall-clock ceiling was reached',
+    },
+    warning:
+      `The scan reached its wall-clock ceiling (${wallClockMs}ms) and was cut: ` +
+      `${outcomes.cancelled} of ${planned} probe(s) never ran` +
+      (burst?.cut_by_ceiling === true
+        ? `, and the rate-limit burst stopped after ${burst.sent} of ` +
+          `${burst.burst_planned} requests`
+        : '') +
+      '. Any check reporting target_error below may simply not have been reached rather ' +
+      'than having failed against the target — raise wall_clock_ms and re-run before ' +
+      'drawing a conclusion from it.',
+  };
+}
+
+/**
+ * The findings, most severe first, stored under `scanId` with their evidence
+ * files — each finding's request/response pair, or the burst's own aggregate
+ * record for its finding. Redaction is applied to the stored rows as a
+ * whole, not to a hand-picked set of fields — see `redact.ts` for why "we
+ * never put it there" is not a guarantee. An evidence file the cap or the
+ * disk refused is a warning; the findings themselves are complete.
+ */
+function storeFindings(
+  ctx: PluginContext,
+  run: {
+    scanId: string;
+    findings: readonly DastFinding[];
+    burstEvidence: ReadonlyMap<string, EvidenceRecord>;
+    origin: string;
+    results: readonly ProbeResult[];
+    evidenceDir: string;
+    redact: Redactor;
+    warnings: string[];
+  },
+): DastFinding[] {
+  const { scanId, findings, burstEvidence, origin, results, evidenceDir, redact, warnings } = run;
+  const ordered = [...findings].sort(
+    (a, b) =>
+      SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] ||
+      a.fingerprint.localeCompare(b.fingerprint),
+  );
+  const records: EvidenceRecord[] = ordered.map(
+    (f) => burstEvidence.get(f.fingerprint) ?? buildEvidence(f, origin, results),
+  );
+  const written = writeEvidenceFiles(evidenceDir, records, redact);
+  if (written.capped > 0) {
+    warnings.push(
+      `${written.capped} finding(s) have no evidence file: the per-scan evidence cap was reached. ` +
+        'The findings themselves are complete; only their raw request/response pairs were dropped.',
+    );
+  }
+  if (written.failed > 0) {
+    warnings.push(`${written.failed} evidence file(s) could not be written to ${evidenceDir}.`);
+  }
+  ctx.storage.findings.bulkInsert(
+    ordered.map((f) =>
+      redactObject(
+        toInsertInput(f, scanId, written.written.has(f.fingerprint) ? evidenceDir : null),
+        redact,
+      ),
+    ),
+  );
+  return ordered;
+}
+
+/** The response's `summary`: what was planned, sent and answered, and what cut it short. */
+function runSummary(run: {
+  routesInSnapshot: number;
+  plan: PlanOutcome;
+  /** Probe results — one per planned request sent or cut. */
+  probes: number;
+  outcomes: Record<ProbeResult['outcome'], number>;
+  maxRequests: number;
+  timedOut: boolean;
+  wallClockMs: number;
+  checks: ReturnType<typeof computeCheckStatuses>;
+  rateLimit: Awaited<ReturnType<typeof runRateLimitBurst>>['summary'];
+  surfaceGaps: ReturnType<typeof surfaceGapsOf>;
+}): Record<string, unknown> {
+  const { plan, outcomes, timedOut } = run;
+  const completed = outcomes.completed;
+  return {
+    routes_in_snapshot: run.routesInSnapshot,
+    routes_planned: plan.routes.length,
+    requests_planned: plan.requests.length,
+    requests_completed: completed,
+    requests_failed: run.probes - completed,
+    /** completed / timeout / cancelled / network_error, so a run cut by the
+     *  ceiling is not mistaken for a target that stopped answering. */
+    probe_outcomes: outcomes,
+    truncated: plan.truncated,
+    max_requests: run.maxRequests,
+    /** True when the wall-clock ceiling cut the run. Never silent. */
+    timed_out: timedOut,
+    wall_clock_ms: run.wallClockMs,
+    /**
+     * Probes the wall-clock ceiling cut. NOT "probes that never touched the
+     * target": up to `DEFAULT_CONCURRENCY` of these were in flight when the
+     * ceiling fired and had already reached the target, and the executor
+     * cannot say afterwards which. It was called `probes_not_run`, which
+     * claimed the stronger, unknowable thing and had an active scanner
+     * under-reporting its own traffic — the wrong direction for an audit
+     * trail. Renamed rather than adjusted by a guess: the count of probes
+     * cut is exact, the count of probes untouched is not.
+     */
+    probes_cut: timedOut ? outcomes.cancelled : 0,
+    skipped: plan.skipped,
+    checks: run.checks,
+    rate_limit: run.rateLimit,
+    // Present only when the surface probed was itself partial.
+    ...(run.surfaceGaps !== null ? { surface_gaps: run.surfaceGaps } : {}),
   };
 }
 
