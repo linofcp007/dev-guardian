@@ -45,11 +45,24 @@ describe('loadScanSettings', () => {
     expect(semgrepTimeoutArgs(r.settings)).toEqual(['--timeout', '60', '--timeout-threshold', '2']);
   });
 
+  it('a name with brackets or braces is a file, read as written (Next.js `pages/[id].js`)', () => {
+    const r = loadScanSettings(project('semgrep:\n  accept_timeouts:\n    - "pages/[id].js"\n    - "a/{b}.js"\n'));
+    expect(r.kind).toBe('loaded');
+    expect(r.settings.semgrep.acceptTimeouts).toEqual(['pages/[id].js', 'a/{b}.js']);
+  });
+
   it('an invalid file is never half-read: the defaults, and why', () => {
     for (const [yaml, why] of [
       ['semgrep: [', /invalid YAML/],
       ['scan:\n  timeout: 1\n', /unrecognised top-level key "scan"/],
-      ['semgrep:\n  timeout: fast\n', /semgrep\.timeout must be a number/],
+      ['semgrep:\n  timeout: fast\n', /semgrep\.timeout must be a whole number of seconds/],
+      // Semgrep refuses `--timeout 1.5`: every scan failed on it, scan.yml never named (review 10).
+      ['semgrep:\n  timeout: 1.5\n', /semgrep\.timeout must be a whole number of seconds from 0 to 3600, got 1\.5/],
+      // An entry is one file, matched exactly: a glob or a directory matched nothing, silently (review 10).
+      ['semgrep:\n  accept_timeouts:\n    - src/gen/*.js\n', /'src\/gen\/\*\.js' is a glob; name each file exactly/],
+      ['semgrep:\n  accept_timeouts:\n    - "src/**/parser.js"\n', /is a glob/],
+      ['semgrep:\n  accept_timeouts:\n    - src/parser?.js\n', /is a glob/],
+      ['semgrep:\n  accept_timeouts:\n    - src/gen/\n', /'src\/gen\/' is a directory/],
       ['semgrep:\n  timeout_threshold: 1.5\n', /whole number/],
       ['semgrep:\n  accept_timeouts: src/a.js\n', /must be a list/],
       ['semgrep:\n  accept_timeouts:\n    - /etc/passwd\n', /absolute/],

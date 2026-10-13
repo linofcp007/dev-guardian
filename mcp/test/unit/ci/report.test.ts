@@ -276,7 +276,7 @@ describe('renderSarif', () => {
 
   it('surfaces a dropped-baseline-entries gap as a run-level notification (carried from Task 2)', () => {
     const v = evaluateGate(input({ droppedBaselineEntries: 2 }));
-    expect(v.coverageGaps.some((g) => g.startsWith('baseline: '))).toBe(true); // sanity on the fixture
+    expect(v.coverageNotes.some((g) => g.startsWith('baseline: '))).toBe(true); // sanity on the fixture
     expect(v.coverage).toBe('full'); // sanity: dropped entries alone never downgrade coverage
     const doc = JSON.parse(renderSarif(v, PROJECT));
     const notifications: { message: { text: string } }[] =

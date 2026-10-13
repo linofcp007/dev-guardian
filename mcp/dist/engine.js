@@ -19458,6 +19458,7 @@ function evaluateGate(input) {
   const acceptParse = new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath));
   const acceptTimeouts = new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath));
   const reported = /* @__PURE__ */ new Set();
+  const timedOut = /* @__PURE__ */ new Set();
   const allToolsRun = [];
   const allMissingTools = [];
   const gatingMissingTools = [];
@@ -19487,7 +19488,10 @@ function evaluateGate(input) {
     for (const missing of step.missing_tools) {
       allMissingTools.push(missing);
       const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
-      for (const ref of refs) reported.add(ref.file);
+      for (const ref of refs) {
+        reported.add(ref.file);
+        if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) timedOut.add(ref.file);
+      }
       const judged = judgeMissing(step.tool, missing, refs, step.tools_run, acceptParse, acceptTimeouts);
       for (const note of judged.notes) {
         coverageNotes.push(note);
@@ -19515,7 +19519,9 @@ function evaluateGate(input) {
   if (droppedBaselineEntries > 0) {
     const noun = droppedBaselineEntries === 1 ? "entry" : "entries";
     const verb = droppedBaselineEntries === 1 ? "is" : "are";
-    pushGap(`baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`, "baseline", "other", false);
+    const note = `baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`;
+    coverageNotes.push(note);
+    noteDetails.push(detailOf("baseline", "other", note, false));
   }
   const coverage = computeCoverage(allToolsRun, allMissingTools);
   const gatingCoverage = computeCoverage(allToolsRun, gatingMissingTools);
@@ -19536,6 +19542,7 @@ function evaluateGate(input) {
     baselineAbsent: baseline === null,
     acceptedGaps,
     unusedPartialParseAcceptances: [...acceptParse].filter((path3) => !reported.has(path3)),
+    unusedTimeoutAcceptances: [...acceptTimeouts].filter((path3) => !timedOut.has(path3)),
     suppressedByRepoConfig,
     baselineSource: input.baselineSource ?? { from: "tree", path: BASELINE_RELATIVE_PATH },
     rulesSource: input.rulesSource ?? { from: "tree" },
@@ -19760,6 +19767,9 @@ function renderHuman(v, opts = {}) {
   for (const path3 of v.unusedPartialParseAcceptances) {
     lines.push(`note: --accept-partial-parse ${path3}: no step reported it partly parsed (unused)`);
   }
+  for (const path3 of v.unusedTimeoutAcceptances) {
+    lines.push(`note: .guardian/scan.yml semgrep.accept_timeouts ${path3}: no step reported a Timeout on it (unused \u2014 remove it)`);
+  }
   if (v.blocking.length > 0) {
     lines.push("blocking findings:");
     for (const f of v.blocking) lines.push(`  - ${describeFinding(f)}`);
@@ -19832,6 +19842,7 @@ function renderJson(v, opts = {}) {
     baseline_status: v.baselineAbsent ? "absent" : "present",
     accepted_gaps: v.acceptedGaps,
     unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
+    unused_timeout_acceptances: v.unusedTimeoutAcceptances,
     suppressed_by_repo_config: v.suppressedByRepoConfig,
     baseline_source: v.baselineSource,
     rules_source: v.rulesSource,
@@ -19852,7 +19863,7 @@ function renderSarif(v, projectPath, opts = {}) {
   );
   const parsed = JSON.parse(toSarif(relocated, { suppressed }));
   const doc = parsed;
-  const baselineGaps = v.coverageGaps.filter((gap) => gap.startsWith(BASELINE_GAP_PREFIX));
+  const baselineGaps = v.coverageNotes.filter((note) => note.startsWith(BASELINE_GAP_PREFIX));
   const run2 = doc.runs[0];
   if (run2 !== void 0) {
     const invocation = { executionSuccessful: v.coverage === "full" };
@@ -20206,8 +20217,8 @@ function parseSettings(doc) {
   if (!isRecord(semgrep)) return '"semgrep:" must be a mapping';
   for (const [key, value] of Object.entries(semgrep)) {
     if (key === "timeout") {
-      if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 3600) {
-        return `semgrep.timeout must be a number of seconds from 0 to 3600, got ${JSON.stringify(value)}`;
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 3600) {
+        return `semgrep.timeout must be a whole number of seconds from 0 to 3600, got ${JSON.stringify(value)}`;
       }
       out.semgrep.timeout = value;
     } else if (key === "timeout_threshold") {
@@ -20222,7 +20233,7 @@ function parseSettings(doc) {
         if (typeof entry !== "string" || entry.trim() === "") {
           return `semgrep.accept_timeouts holds ${JSON.stringify(entry)}, which is not a file path`;
         }
-        const problem = relativePathProblem(entry);
+        const problem = relativePathProblem(entry) ?? notOneFile(entry);
         if (problem !== null) return `semgrep.accept_timeouts: ${problem}`;
         const normal = normalizeRelative(entry);
         if (!out.semgrep.acceptTimeouts.includes(normal)) out.semgrep.acceptTimeouts.push(normal);
@@ -20240,6 +20251,11 @@ function normalizeRelative(path3) {
   let out = path3.trim().replace(/\\/g, "/");
   while (out.startsWith("./")) out = out.slice(2);
   return out;
+}
+function notOneFile(path3) {
+  if (/[*?]/.test(path3)) return `'${path3}' is a glob; name each file exactly (globs are not read)`;
+  if (/[\\/]$/.test(path3.trim())) return `'${path3}' is a directory; name each file exactly`;
+  return null;
 }
 function relativePathProblem(path3) {
   const posixPath = path3.replace(/\\/g, "/");

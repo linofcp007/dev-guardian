@@ -93,8 +93,10 @@ export interface GateInput {
    * corrupt line). Zero when the baseline is absent or parsed with nothing
    * dropped.
    *
-   * Purely informational: folded into `coverageGaps` for visibility, never
-   * into `coverage` or `exitCode`. A corrupt baseline LINE is not a scanner
+   * Purely informational: a NOTE (`coverageNotes`, a `coverage_gap_details`
+   * entry with `gating: false`), never in `coverageGaps` — "one line per gap
+   * that gates" (it was there until 3.4, review 10) — nor in `coverage` or
+   * `exitCode`. A corrupt baseline LINE is not a scanner
    * that failed to run, so it does not get to invent a second, independent
    * reason to fail or flag the build — and it does not need to, because any
    * finding a dropped entry actually un-suppresses is still caught, on its
@@ -157,8 +159,9 @@ export interface GateVerdict {
    */
   coverageGapDetails: CoverageGapDetail[];
   /**
-   * Gaps reported but never gating — today the taint fixpoint timeouts. Not
-   * in `coverageGaps`, not in the exit code; `coverage` still reads them.
+   * Gaps reported but never gating — the taint fixpoint timeouts, and the
+   * baseline entries that could not be read. Not in `coverageGaps`, not in
+   * the exit code; `coverage` still reads the taint ones.
    */
   coverageNotes: string[];
   /**
@@ -184,6 +187,14 @@ export interface GateVerdict {
   acceptedGaps: string[];
   /** `--accept-partial-parse` paths no step reported as partly parsed (normalised). */
   unusedPartialParseAcceptances: string[];
+  /**
+   * `semgrep.accept_timeouts` entries no step reported a per-file `Timeout`
+   * on (normalised): an entry that outlived its file's timeout, or one that
+   * never named a file — said on every run, as an unused
+   * `--accept-partial-parse` is, so a stale acceptance does not sit in the
+   * committed file unnoticed (review 10).
+   */
+  unusedTimeoutAcceptances: string[];
   /**
    * Findings the scanned repository's own configuration suppressed — its
    * `.trivyignore` (`ToolRun.suppressed_by_repo_config`), per step and
@@ -481,6 +492,8 @@ export function evaluateGate(input: GateInput): GateVerdict {
   const acceptParse = new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath));
   const acceptTimeouts = new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath));
   const reported = new Set<string>();
+  /** Files a step reported a per-file Semgrep `Timeout` on. */
+  const timedOut = new Set<string>();
 
   // Coverage comes from a single call to computeCoverage over the union of
   // every step's tool bookkeeping — never a second, hand-rolled notion of
@@ -524,7 +537,10 @@ export function evaluateGate(input: GateInput): GateVerdict {
     for (const missing of step.missing_tools) {
       allMissingTools.push(missing);
       const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
-      for (const ref of refs) reported.add(ref.file);
+      for (const ref of refs) {
+        reported.add(ref.file);
+        if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) timedOut.add(ref.file);
+      }
       const judged = judgeMissing(step.tool, missing, refs, step.tools_run, acceptParse, acceptTimeouts);
       for (const note of judged.notes) {
         coverageNotes.push(note);
@@ -556,8 +572,11 @@ export function evaluateGate(input: GateInput): GateVerdict {
   if (droppedBaselineEntries > 0) {
     const noun = droppedBaselineEntries === 1 ? 'entry' : 'entries';
     const verb = droppedBaselineEntries === 1 ? 'is' : 'are';
-    // Visible, never gating (see `GateInput.droppedBaselineEntries`).
-    pushGap(`baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`, 'baseline', 'other', false);
+    // Visible, never gating (see `GateInput.droppedBaselineEntries`): a note,
+    // not a line of `coverageGaps`, which are the gaps that gate.
+    const note = `baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`;
+    coverageNotes.push(note);
+    noteDetails.push(detailOf('baseline', 'other', note, false));
   }
 
   // Every gap, accepted ones and notes included: an accepted partial parse is
@@ -592,6 +611,7 @@ export function evaluateGate(input: GateInput): GateVerdict {
     baselineAbsent: baseline === null,
     acceptedGaps,
     unusedPartialParseAcceptances: [...acceptParse].filter((path) => !reported.has(path)),
+    unusedTimeoutAcceptances: [...acceptTimeouts].filter((path) => !timedOut.has(path)),
     suppressedByRepoConfig,
     baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
     rulesSource: input.rulesSource ?? { from: 'tree' },
