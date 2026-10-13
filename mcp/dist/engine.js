@@ -2542,6 +2542,14 @@ function parseRedirect(word) {
   const op = /^[<>]+[|&]?/.exec(tail2)?.[0] ?? tail2.charAt(0);
   return { prefix: word.value.slice(0, at), op, inline: tail2.slice(op.length) };
 }
+function psParam(args, names) {
+  for (let i = 0; i < args.length; i += 1) {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? "");
+    if (m === null || !names.includes((m[1] ?? "").toLowerCase())) continue;
+    return m[2] !== void 0 ? m[2] : args[i + 1];
+  }
+  return void 0;
+}
 var RUNNERS, RUNNER_VALUED, ASSIGNMENT;
 var init_command = __esm({
   "src/hooks/shell/command.ts"() {
@@ -95497,6 +95505,74 @@ function cmdInnerCommands(args, depth = 0) {
 
 // src/hooks/bashGuard.ts
 init_command();
+
+// src/hooks/shell/paths.ts
+init_command();
+function normalizedPath(path3) {
+  return path3.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+function isAbsolutePath(path3) {
+  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path3);
+}
+function resolveFrom(cwd, target) {
+  const joined = cwd === "" || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, "")}/${target}`;
+  const parts = joined.replace(/\\/g, "/").split("/");
+  const out = [];
+  parts.forEach((part, i) => {
+    if (part === "." || part === "" && i > 0 && i < parts.length - 1) return;
+    const prev = out[out.length - 1];
+    if (part === ".." && prev !== void 0 && prev !== ".." && prev !== "") {
+      out.pop();
+      return;
+    }
+    out.push(part);
+  });
+  return out.join("/");
+}
+function dirOf(path3) {
+  const cut = path3.lastIndexOf("/");
+  return cut < 0 ? "" : path3.slice(0, cut);
+}
+var MAX_CWD = 320;
+var CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+var CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
+function cwdAfter(name, args, cwd, dataDir) {
+  if (CD_RETURNS.has(name)) return "";
+  if (!CD_COMMANDS.has(name)) return void 0;
+  const dir = psParam(args, ["path", "literalpath"]) ?? args.find((a) => a === "-" || !(a.startsWith("-") || /^\/d$/i.test(a)));
+  if (dir === void 0) return "~";
+  if (dir === "-") return "";
+  const next = resolveFrom(cwd, dir);
+  if (next.length > MAX_CWD) return "";
+  const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) || dataDir !== void 0 && normalizedPath(next).startsWith(dataDir);
+  return tracked ? next : "";
+}
+function wildcardMatch(pattern, name) {
+  const pat = pattern.replace(/\[[^\]]*\]/g, "?");
+  let pi = 0;
+  let ni = 0;
+  let star = -1;
+  let mark = 0;
+  while (ni < name.length) {
+    const c = pat.charAt(pi);
+    if (pi < pat.length && (c === "?" || c === name.charAt(ni))) {
+      pi += 1;
+      ni += 1;
+    } else if (pi < pat.length && c === "*") {
+      star = pi;
+      mark = ni;
+      pi += 1;
+    } else if (star >= 0) {
+      pi = star + 1;
+      mark += 1;
+      ni = mark;
+    } else return false;
+  }
+  while (pat.charAt(pi) === "*") pi += 1;
+  return pi === pat.length;
+}
+
+// src/hooks/bashGuard.ts
 init_split();
 init_command();
 init_split();
@@ -95949,9 +96025,6 @@ function isSettingsPath(path3, configDirName) {
   }
   return false;
 }
-function normalizedPath(path3) {
-  return path3.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
-}
 var DATA_DIR_SPELLED = /(?:(?:\$\{?(?:env:)?(?:localappdata|xdg_data_home)\}?|%(?:localappdata|xdg_data_home)%|appdata\/local|\.local\/share)\/dev-guardian|\$\{?(?:env:)?guardian_data_dir\}?|%guardian_data_dir%)$/;
 function isDataDirPath(path3, dataDir) {
   const p = normalizedPath(path3);
@@ -96000,42 +96073,6 @@ function base64Literals(text2) {
 }
 function commandName(word) {
   return basename(word).toLowerCase().replace(/\.exe$/, "");
-}
-function isAbsolutePath(path3) {
-  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path3);
-}
-function resolveFrom(cwd, target) {
-  const joined = cwd === "" || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, "")}/${target}`;
-  const parts = joined.replace(/\\/g, "/").split("/");
-  const out = [];
-  parts.forEach((part, i) => {
-    if (part === "." || part === "" && i > 0 && i < parts.length - 1) return;
-    const prev = out[out.length - 1];
-    if (part === ".." && prev !== void 0 && prev !== ".." && prev !== "") {
-      out.pop();
-      return;
-    }
-    out.push(part);
-  });
-  return out.join("/");
-}
-function dirOf(path3) {
-  const cut = path3.lastIndexOf("/");
-  return cut < 0 ? "" : path3.slice(0, cut);
-}
-var MAX_CWD = 320;
-var CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
-var CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
-function cwdAfter(name, args, cwd, dataDir) {
-  if (CD_RETURNS.has(name)) return "";
-  if (!CD_COMMANDS.has(name)) return void 0;
-  const dir = psParam(args, ["path", "literalpath"]) ?? args.find((a) => a === "-" || !(a.startsWith("-") || /^\/d$/i.test(a)));
-  if (dir === void 0) return "~";
-  if (dir === "-") return "";
-  const next = resolveFrom(cwd, dir);
-  if (next.length > MAX_CWD) return "";
-  const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) || dataDir !== void 0 && normalizedPath(next).startsWith(dataDir);
-  return tracked ? next : "";
 }
 var GLOB = /[*?[]/;
 var USER_CONFIG_TAIL = [".config", "dev-guardian", "hooks.json"];
@@ -96136,30 +96173,6 @@ function expandWords(words) {
     for (const value of expanded) out.push({ value, quoted: false });
   }
   return out ?? words;
-}
-function wildcardMatch(pattern, name) {
-  const pat = pattern.replace(/\[[^\]]*\]/g, "?");
-  let pi = 0;
-  let ni = 0;
-  let star = -1;
-  let mark = 0;
-  while (ni < name.length) {
-    const c = pat.charAt(pi);
-    if (pi < pat.length && (c === "?" || c === name.charAt(ni))) {
-      pi += 1;
-      ni += 1;
-    } else if (pi < pat.length && c === "*") {
-      star = pi;
-      mark = ni;
-      pi += 1;
-    } else if (star >= 0) {
-      pi = star + 1;
-      mark += 1;
-      ni = mark;
-    } else return false;
-  }
-  while (pat.charAt(pi) === "*") pi += 1;
-  return pi === pat.length;
 }
 function noEffects() {
   return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
@@ -96321,14 +96334,6 @@ function withoutRedirections(words) {
 }
 function intoDir(dir, src) {
   return `${dir.replace(/[\\/]+$/, "")}/${lastSegment(src)}`;
-}
-function psParam(args, names) {
-  for (let i = 0; i < args.length; i += 1) {
-    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? "");
-    if (m === null || !names.includes((m[1] ?? "").toLowerCase())) continue;
-    return m[2] !== void 0 ? m[2] : args[i + 1];
-  }
-  return void 0;
 }
 function optionValues(args, short2, long) {
   const out = [];

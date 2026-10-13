@@ -608,6 +608,14 @@ function parseRedirect(word) {
   const op = /^[<>]+[|&]?/.exec(tail2)?.[0] ?? tail2.charAt(0);
   return { prefix: word.value.slice(0, at), op, inline: tail2.slice(op.length) };
 }
+function psParam(args, names) {
+  for (let i = 0; i < args.length; i += 1) {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? "");
+    if (m === null || !names.includes((m[1] ?? "").toLowerCase())) continue;
+    return m[2] !== void 0 ? m[2] : args[i + 1];
+  }
+  return void 0;
+}
 var RUNNERS, RUNNER_VALUED, ASSIGNMENT;
 var init_command = __esm({
   "src/hooks/shell/command.ts"() {
@@ -778,6 +786,78 @@ var init_cmd = __esm({
     init_arrays();
     init_command();
     MAX_CMD_NESTING = 8;
+  }
+});
+
+// src/hooks/shell/paths.ts
+function normalizedPath(path) {
+  return path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+function isAbsolutePath(path) {
+  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path);
+}
+function resolveFrom(cwd, target) {
+  const joined = cwd === "" || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, "")}/${target}`;
+  const parts = joined.replace(/\\/g, "/").split("/");
+  const out = [];
+  parts.forEach((part, i) => {
+    if (part === "." || part === "" && i > 0 && i < parts.length - 1) return;
+    const prev = out[out.length - 1];
+    if (part === ".." && prev !== void 0 && prev !== ".." && prev !== "") {
+      out.pop();
+      return;
+    }
+    out.push(part);
+  });
+  return out.join("/");
+}
+function dirOf(path) {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? "" : path.slice(0, cut);
+}
+function cwdAfter(name, args, cwd, dataDir) {
+  if (CD_RETURNS.has(name)) return "";
+  if (!CD_COMMANDS.has(name)) return void 0;
+  const dir = psParam(args, ["path", "literalpath"]) ?? args.find((a) => a === "-" || !(a.startsWith("-") || /^\/d$/i.test(a)));
+  if (dir === void 0) return "~";
+  if (dir === "-") return "";
+  const next = resolveFrom(cwd, dir);
+  if (next.length > MAX_CWD) return "";
+  const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) || dataDir !== void 0 && normalizedPath(next).startsWith(dataDir);
+  return tracked ? next : "";
+}
+function wildcardMatch(pattern, name) {
+  const pat = pattern.replace(/\[[^\]]*\]/g, "?");
+  let pi = 0;
+  let ni = 0;
+  let star = -1;
+  let mark = 0;
+  while (ni < name.length) {
+    const c = pat.charAt(pi);
+    if (pi < pat.length && (c === "?" || c === name.charAt(ni))) {
+      pi += 1;
+      ni += 1;
+    } else if (pi < pat.length && c === "*") {
+      star = pi;
+      mark = ni;
+      pi += 1;
+    } else if (star >= 0) {
+      pi = star + 1;
+      mark += 1;
+      ni = mark;
+    } else return false;
+  }
+  while (pat.charAt(pi) === "*") pi += 1;
+  return pi === pat.length;
+}
+var MAX_CWD, CD_COMMANDS, CD_RETURNS;
+var init_paths = __esm({
+  "src/hooks/shell/paths.ts"() {
+    "use strict";
+    init_command();
+    MAX_CWD = 320;
+    CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+    CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
   }
 });
 
@@ -1318,9 +1398,6 @@ function isSettingsPath(path, configDirName) {
   }
   return false;
 }
-function normalizedPath(path) {
-  return path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
-}
 function isDataDirPath(path, dataDir) {
   const p = normalizedPath(path);
   return dataDir !== void 0 && p === dataDir || DATA_DIR_SPELLED.test(p);
@@ -1367,39 +1444,6 @@ function base64Literals(text) {
 }
 function commandName(word) {
   return basename2(word).toLowerCase().replace(/\.exe$/, "");
-}
-function isAbsolutePath(path) {
-  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path);
-}
-function resolveFrom(cwd, target) {
-  const joined = cwd === "" || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, "")}/${target}`;
-  const parts = joined.replace(/\\/g, "/").split("/");
-  const out = [];
-  parts.forEach((part, i) => {
-    if (part === "." || part === "" && i > 0 && i < parts.length - 1) return;
-    const prev = out[out.length - 1];
-    if (part === ".." && prev !== void 0 && prev !== ".." && prev !== "") {
-      out.pop();
-      return;
-    }
-    out.push(part);
-  });
-  return out.join("/");
-}
-function dirOf(path) {
-  const cut = path.lastIndexOf("/");
-  return cut < 0 ? "" : path.slice(0, cut);
-}
-function cwdAfter(name, args, cwd, dataDir) {
-  if (CD_RETURNS.has(name)) return "";
-  if (!CD_COMMANDS.has(name)) return void 0;
-  const dir = psParam(args, ["path", "literalpath"]) ?? args.find((a) => a === "-" || !(a.startsWith("-") || /^\/d$/i.test(a)));
-  if (dir === void 0) return "~";
-  if (dir === "-") return "";
-  const next = resolveFrom(cwd, dir);
-  if (next.length > MAX_CWD) return "";
-  const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) || dataDir !== void 0 && normalizedPath(next).startsWith(dataDir);
-  return tracked ? next : "";
 }
 function globNamesConfig(path, tails = CONFIG_TAILS) {
   const t = tail(path);
@@ -1491,30 +1535,6 @@ function expandWords(words) {
     for (const value of expanded) out.push({ value, quoted: false });
   }
   return out ?? words;
-}
-function wildcardMatch(pattern, name) {
-  const pat = pattern.replace(/\[[^\]]*\]/g, "?");
-  let pi = 0;
-  let ni = 0;
-  let star = -1;
-  let mark = 0;
-  while (ni < name.length) {
-    const c = pat.charAt(pi);
-    if (pi < pat.length && (c === "?" || c === name.charAt(ni))) {
-      pi += 1;
-      ni += 1;
-    } else if (pi < pat.length && c === "*") {
-      star = pi;
-      mark = ni;
-      pi += 1;
-    } else if (star >= 0) {
-      pi = star + 1;
-      mark += 1;
-      ni = mark;
-    } else return false;
-  }
-  while (pat.charAt(pi) === "*") pi += 1;
-  return pi === pat.length;
 }
 function noEffects() {
   return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
@@ -1669,14 +1689,6 @@ function withoutRedirections(words) {
 }
 function intoDir(dir, src) {
   return `${dir.replace(/[\\/]+$/, "")}/${lastSegment(src)}`;
-}
-function psParam(args, names) {
-  for (let i = 0; i < args.length; i += 1) {
-    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? "");
-    if (m === null || !names.includes((m[1] ?? "").toLowerCase())) continue;
-    return m[2] !== void 0 ? m[2] : args[i + 1];
-  }
-  return void 0;
 }
 function optionValues(args, short, long) {
   const out = [];
@@ -3711,7 +3723,7 @@ function assessReadings(readings, cut, now, deadline, where) {
     ...ask === void 0 ? {} : { ask }
   };
 }
-var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, MAX_CWD, CD_COMMANDS, CD_RETURNS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
@@ -3721,6 +3733,7 @@ var init_bashGuard = __esm({
     init_arrays();
     init_cmd();
     init_command();
+    init_paths();
     init_split();
     init_command();
     init_split();
@@ -3980,9 +3993,6 @@ var init_bashGuard = __esm({
     CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
     DATA_DIR_SPELLED = /(?:(?:\$\{?(?:env:)?(?:localappdata|xdg_data_home)\}?|%(?:localappdata|xdg_data_home)%|appdata\/local|\.local\/share)\/dev-guardian|\$\{?(?:env:)?guardian_data_dir\}?|%guardian_data_dir%)$/;
     MAX_BASE64_LITERALS = 64;
-    MAX_CWD = 320;
-    CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
-    CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
     GLOB = /[*?[]/;
     USER_CONFIG_TAIL = [".config", "dev-guardian", "hooks.json"];
     CONFIG_TAILS = [

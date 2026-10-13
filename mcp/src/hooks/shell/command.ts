@@ -195,3 +195,12 @@ export function parseRedirect(word: ShellWord): Redirect | null {
   return { prefix: word.value.slice(0, at), op, inline: tail.slice(op.length) };
 }
 
+/** A PowerShell `-Name value` / `-Name:value` parameter's value, by any of `names`. */
+export function psParam(args: readonly string[], names: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? '');
+    if (m === null || !names.includes((m[1] ?? '').toLowerCase())) continue;
+    return m[2] !== undefined ? m[2] : args[i + 1];
+  }
+  return undefined;
+}

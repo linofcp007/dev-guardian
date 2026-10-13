@@ -103,12 +103,14 @@ import { windowsName } from './guardedPath.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 import { pushAll } from './shell/arrays.js';
 import { cmdCommandWords, cmdInnerCommands, cmdLine, cmdLineText, MAX_CMD_NESTING, posixWord } from './shell/cmd.js';
-import { ASSIGNMENT, basename, cmdSwitch, parseRedirect, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { ASSIGNMENT, basename, cmdSwitch, parseRedirect, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
 import { MASK, splitShell, type ShellStatement, type ShellWord } from './shell/split.js';
 
 // How a command is READ lives in `shell/` — the tokenizer (`split.ts`), the
-// command-word resolution (`command.ts`), cmd.exe's line reader (`cmd.ts`) —
-// and this module judges it. What it exported from them before stays exported
+// command-word resolution (`command.ts`), cmd.exe's line reader (`cmd.ts`),
+// paths as the command moves between directories (`paths.ts`) — and this
+// module judges it. What it exported from them before stays exported
 // from here.
 export { commandWordIndex } from './shell/command.js';
 export { splitShell, type ShellSplit, type ShellStatement, type ShellWord, type StatementEnd } from './shell/split.js';
@@ -815,11 +817,6 @@ function isSettingsPath(path: string, configDirName: string | undefined): boolea
   return false;
 }
 
-/** A path as the registry checks compare it: `/` separators, no doubled or trailing one, lower-cased. */
-function normalizedPath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '').toLowerCase();
-}
-
 /**
  * dev-guardian's data directory as a command spells its default locations and
  * its variable (review 3.0 wave 2, round 2): `%LOCALAPPDATA%` / `$env:LOCALAPPDATA`
@@ -920,73 +917,7 @@ function commandName(word: string): string {
   return basename(word).toLowerCase().replace(/\.exe$/, '');
 }
 
-// ── paths, as the command moves between directories
-
-/** A path that does not depend on the current directory: `/…`, `~…`, `$VAR…`, `%VAR%…`, `\\…`, `C:…`. */
-function isAbsolutePath(path: string): boolean {
-  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path);
-}
-
-/**
- * `target` as the command sees it after the `cd`s before it (`cwd`; `''` while
- * there was none): joined onto `cwd` unless absolute, every `\` read as `/`,
- * and `.` and `..` segments folded. So `cd ~/.config/dev-guardian && echo … >
- * hooks.json` names the file it writes, and so does `echo … >
- * .guardian/x/../hooks.config.json`.
- */
-function resolveFrom(cwd: string, target: string): string {
-  const joined = cwd === '' || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, '')}/${target}`;
-  const parts = joined.replace(/\\/g, '/').split('/');
-  const out: string[] = [];
-  parts.forEach((part, i) => {
-    if (part === '.' || (part === '' && i > 0 && i < parts.length - 1)) return;
-    const prev = out[out.length - 1];
-    if (part === '..' && prev !== undefined && prev !== '..' && prev !== '') {
-      out.pop();
-      return;
-    }
-    out.push(part);
-  });
-  return out.join('/');
-}
-
-/** `a/b/c` → `a/b`; `''` when there is no directory part. */
-function dirOf(path: string): string {
-  const cut = path.lastIndexOf('/');
-  return cut < 0 ? '' : path.slice(0, cut);
-}
-
-/** The longest current directory tracked. */
-const MAX_CWD = 320;
-
-const CD_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
-const CD_RETURNS = new Set(['popd', 'pop-location']);
-
-/**
- * The directory a `cd`, `pushd` or `Set-Location` moves to from `cwd`, or
- * `undefined` when `name` is none of them. A bare `cd` goes home; `cd -`,
- * `popd` and `Pop-Location` go back somewhere this does not track, which reads
- * as where the command started (`''`).
- */
-function cwdAfter(name: string, args: readonly string[], cwd: string, dataDir?: string): string | undefined {
-  if (CD_RETURNS.has(name)) return '';
-  if (!CD_COMMANDS.has(name)) return undefined;
-  const dir =
-    psParam(args, ['path', 'literalpath']) ?? args.find((a) => a === '-' || !(a.startsWith('-') || /^\/d$/i.test(a)));
-  if (dir === undefined) return '~';
-  if (dir === '-') return '';
-  const next = resolveFrom(cwd, dir);
-  // Only a directory a later relative path could need is tracked: one that
-  // names a configuration directory or a parent of one — or dev-guardian's
-  // data directory, whose registry is guarded too (review 3.0 wave 2, round
-  // 2). Any other relative target still names its own path in full. And
-  // never one longer than a real directory: a chain of `cd`s built to be slow.
-  if (next.length > MAX_CWD) return '';
-  const tracked =
-    /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) ||
-    (dataDir !== undefined && normalizedPath(next).startsWith(dataDir));
-  return tracked ? next : '';
-}
+// ── globs and braces (where a command moves between directories: `shell/paths.ts`)
 
 const GLOB = /[*?[]/;
 
@@ -1118,37 +1049,6 @@ function expandWords(words: ShellWord[]): ShellWord[] {
     for (const value of expanded) out.push({ value, quoted: false });
   }
   return out ?? words;
-}
-
-/**
- * `*` / `?` matching without backtracking (a `[…]` class matches any one
- * character): the classic two-pointer walk, O(pattern × name). A pattern
- * turned into a RegExp of `.*` runs backtracks exponentially on a name it
- * does not match.
- */
-function wildcardMatch(pattern: string, name: string): boolean {
-  const pat = pattern.replace(/\[[^\]]*\]/g, '?');
-  let pi = 0;
-  let ni = 0;
-  let star = -1;
-  let mark = 0;
-  while (ni < name.length) {
-    const c = pat.charAt(pi);
-    if (pi < pat.length && (c === '?' || c === name.charAt(ni))) {
-      pi += 1;
-      ni += 1;
-    } else if (pi < pat.length && c === '*') {
-      star = pi;
-      mark = ni;
-      pi += 1;
-    } else if (star >= 0) {
-      pi = star + 1;
-      mark += 1;
-      ni = mark;
-    } else return false;
-  }
-  while (pat.charAt(pi) === '*') pi += 1;
-  return pi === pat.length;
 }
 
 // ── what a command does to the filesystem
@@ -1402,16 +1302,6 @@ function withoutRedirections(words: readonly ShellWord[]): string[] {
 /** `DIR/<last segment of src>`, for a copy or move into a directory. */
 function intoDir(dir: string, src: string): string {
   return `${dir.replace(/[\\/]+$/, '')}/${lastSegment(src)}`;
-}
-
-/** A PowerShell `-Name value` / `-Name:value` parameter's value, by any of `names`. */
-function psParam(args: readonly string[], names: readonly string[]): string | undefined {
-  for (let i = 0; i < args.length; i += 1) {
-    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? '');
-    if (m === null || !names.includes((m[1] ?? '').toLowerCase())) continue;
-    return m[2] !== undefined ? m[2] : args[i + 1];
-  }
-  return undefined;
 }
 
 /** Values of `name`'s option, spelled `-o F`, `-oF`, `--output F` or `--output=F`. */
