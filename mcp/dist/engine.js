@@ -92540,7 +92540,11 @@ var init_llmScanSubmit = __esm({
       task_id: external_exports.string().min(1).max(40).describe("The task, as llm_scan_task returned it."),
       lease_token: external_exports.string().min(1).max(100).describe("The lease_token llm_scan_task returned with the task."),
       independence: external_exports.enum(["subagent", "same_context"]).describe("subagent: a fresh context ran the brief; same_context: you did (never demotes or confirms)."),
-      payload: external_exports.unknown().describe("The answer, matching the task response_schema. At most 64 KiB serialized.")
+      // Required: a call without it is refused here as invalid_input, before the
+      // task is touched. `z.unknown()` alone accepted a missing payload, and the
+      // validator then counted it as an invalid ANSWER — one of the task's three
+      // tries spent on a call that carried no answer at all.
+      payload: external_exports.unknown().refine((value) => value !== void 0, { message: "Required" }).describe("The answer, matching the task response_schema. At most 64 KiB serialized.")
     };
     parser3 = external_exports.object(inputSchema33).strict();
     tool53 = {

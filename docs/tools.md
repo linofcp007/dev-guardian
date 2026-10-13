@@ -311,7 +311,7 @@ Submit the JSON answer to a leased task: plan\_id, task\_id, lease\_token, indep
 | `task_id` | string | yes | — | The task, as llm\_scan\_task returned it. |
 | `lease_token` | string | yes | — | The lease\_token llm\_scan\_task returned with the task. |
 | `independence` | one of "subagent", "same\_context" | yes | — | subagent: a fresh context ran the brief; same\_context: you did (never demotes or confirms). |
-| `payload` | unknown | no | — | The answer, matching the task response\_schema. At most 64 KiB serialized. |
+| `payload` | unknown | yes | — | The answer, matching the task response\_schema. At most 64 KiB serialized. |
 
 ### `llm_scan_task`
 
