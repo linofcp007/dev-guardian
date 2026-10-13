@@ -7,7 +7,7 @@ description: Compliance through the dev-guardian MCP tools — GDPR / RGPD techn
 
 Compliance pragmático para projetos web/SaaS: RGPD (utilizadores na UE), licenças open-source e prontidão básica para auditorias. As partes mensuráveis passam pelas tools MCP do dev-guardian — ficam em `.guardian/guardian.db` e alimentam a evidência de auditoria; o resto é uma checklist técnica que se percorre no código.
 
-> Esta skill orienta tecnicamente. **Não substitui aconselhamento jurídico.** Para questões de direito português/europeu, sugere a skill `advogado-pt` se estiver disponível.
+> Esta skill verifica o código; **não é aconselhamento jurídico.** Para questões de direito português ou europeu (coimas, bases legais, contratos), sugere o plugin juridico-pt se estiver instalado — `/rgpd` para RGPD e violações de dados, `/advogado` para o resto. Responde no idioma do utilizador.
 
 ## 0. Estado atual (sempre primeiro)
 
