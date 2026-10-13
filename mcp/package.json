@@ -21,6 +21,7 @@
     "ablate": "tsx test/ablate/cli.ts",
     "eval:llm-scan": "tsx test/evals/llmScan/run.ts",
     "test:coverage": "vitest run --coverage",
+    "test:docker": "node scripts/test-docker.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.test.json && node scripts/unusedExports.mjs"
   },

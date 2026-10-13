@@ -10,9 +10,28 @@ cd mcp
 npm ci               # first time only — Node >= 22.13; no native modules, storage is node:sqlite
 npm run lint         # tsc over src/ AND test/ (tsconfig.test.json, which includes src/)
 npm run build        # tsc type-check, esbuild bundles -> mcp/dist, copy-assets, host-rules, docs
-npm test             # vitest run (full suite)
-npm run test:coverage # the only run that enforces the coverage thresholds
+npm test             # vitest run (full suite) — the gate before a commit
+npm run test:fast    # unit + docs minus the 15 slowest unit files (vitest.fast.config.ts) — the inner loop
+npm run test:coverage # the coverage thresholds, natively
+npm run test:docker  # Linux containers: Node 22.13 (with coverage) and the LTS (scripts/test-docker.mjs)
 ```
+
+**Linux, the Node floor, coverage (review 8, findings 1 and 8).** There is no
+CI by policy, the maintainer machine is Windows on a current Node, and 36
+POSIX-only tests, the 22.13–22.15 fallbacks in `storage/db.ts` and the coverage
+floor never ran. `npm run test:docker` streams `git archive HEAD` into
+`node:22.13-bookworm-slim` and `node:24-bookworm-slim` (git added, built once
+and cached), runs `npm ci` and `vitest run` there as the unprivileged `node`
+user — and on the floor image with `--coverage`, so the thresholds in
+`vitest.config.ts` are enforced in the run every release makes (CONTRIBUTING,
+Releases, step 0). Not in `npm test`: coverage instrumentation adds a third or
+more to an already long run on every commit, and the floor is a release
+question. `--toolchain` adds Semgrep and Bandit (pip-pinned) and gitleaks and
+Trivy (the release archives `src/runners/installCatalog.ts` pins, sha256-
+checked) and sets `GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`, so a missing scanner
+fails instead of skipping. Logs: `<tmpdir>/dev-guardian-docker/`. `@types/node`
+is held to `~22.13` for the same reason: an API newer than the floor does not
+type-check.
 
 What `npm run build` writes to `mcp/dist/` (review 8, findings 2 and 3), all
 of it committed:

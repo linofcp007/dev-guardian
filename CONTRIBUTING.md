@@ -14,7 +14,9 @@ npm ci               # reproducible install — no native modules, storage is no
 npm run lint         # tsc over src/ and test/ (tsconfig.test.json)
 npm run build        # type-check src/, esbuild bundles (dist/engine.js, dist/hooks.js, dist/server.js),
                      # copy SQL migrations, regenerate host rules, docs/tools.md and docs/rule-packs.md
-npm test             # vitest run (full suite)
+npm test             # vitest run (full suite) — the gate before a commit
+npm run test:fast    # the unit tests minus the slowest files — the inner loop
+npm run test:docker  # the suite in Linux containers: the Node floor (with coverage) and the LTS
 ```
 
 On Windows, run the full suite from Git Bash: from PowerShell, `bash` can be the
@@ -59,6 +61,11 @@ Conventional Commits: `feat(scope): …`, `fix(scope): …`, `chore(release): �
 
 ## Releases
 
+0. Run `npm run test:docker` from `mcp/` on the commit to be released (Docker
+   with Linux containers; the first run needs the network): the Node 22.13
+   floor, with the coverage thresholds enforced, and the current LTS. Add
+   `--toolchain` to require the pinned scanners. There is no CI: this is the
+   one run on Linux, on the floor and against the coverage floor.
 1. Bump the version in all three: [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
    [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and
    [`mcp/package.json`](mcp/package.json). The server reports the `plugin.json`
