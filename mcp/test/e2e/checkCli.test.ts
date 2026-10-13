@@ -20,6 +20,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 
+/** A fake AWS key the scan reports: AWS's own `AKIAIOSFODNN7EXAMPLE` is a documented placeholder it skips (review 8). */
+const FAKE_AWS_KEY = ['AKIA', 'Q7XZ2M9KDP4RWT3B'].join('');
+
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const CLI = resolve(REPO_ROOT, 'cli', 'dev-guardian.mjs');
 /** Hang-breaker for one CLI run; nothing asserts by reaching it. */
@@ -27,7 +30,7 @@ const TIMEOUT_MS = 30_000;
 // Above the cap, so a hung child is reported by the cap — naming it — and
 // not by vitest's 10 s default failing the test after the fact (R7-I1).
 vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
-const KEY = 'const k = "AKIAIOSFODNN7EXAMPLE";\n';
+const KEY = `const k = "${FAKE_AWS_KEY}";\n`;
 
 let dir: string;
 beforeEach(() => {

@@ -1,12 +1,13 @@
 {
-  "description": "dev-guardian guardrails — secret detection on writes, catastrophic-command blocking on Bash and PowerShell, install-time package vetting on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands (denies nonexistent or malicious packages, 3 s network budget), and a security-posture briefing at session start. Dependency-free and fail-open; tune via .guardian/hooks.config.json (project files may only make it stricter) or disable with GUARDIAN_HOOKS=off (package vetting alone: GUARDIAN_PKG_VET=0).",
+  "description": "dev-guardian guardrails — secret detection on writes, catastrophic-command blocking on Bash and PowerShell, install-time package vetting on npm/pnpm/yarn/bun/pip/uv/poetry/composer/dotnet install commands (denies nonexistent or malicious packages, 3 s network budget), the hook configuration and Claude Code's settings guarded from Write/Edit and third-party MCP write tools, and a security-posture briefing at session start. Dependency-free and fail-open; exec form (Claude Code 2.1.139 or later); tune via .guardian/hooks.config.json (project files may only make it stricter) or disable with GUARDIAN_HOOKS=off (package vetting alone: GUARDIAN_PKG_VET=0).",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" SessionStart",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs", "SessionStart"],
             "timeout": 15
           }
         ]
@@ -14,11 +15,12 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|mcp__.+__[\\w-]*?([Ww]rite|[Ee]dit|[Cc]reate|[Mm]ove|[Rr]ename|[Cc]opy|[Aa]ppend|[Pp]atch|[Rr]eplace|[Ss]ave|[Pp]ut|[Uu]pload|[Ii]nsert)[\\w-]*)$",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" PostToolUse",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs", "PostToolUse"],
             "timeout": 15
           }
         ]
@@ -26,21 +28,23 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell",
+        "matcher": "^(Bash|PowerShell)$",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" PreToolUse",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs", "PreToolUse"],
             "timeout": 15
           }
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit|mcp__.+__[\\w-]*?([Ww]rite|[Ee]dit|[Cc]reate|[Mm]ove|[Rr]ename|[Cc]opy|[Aa]ppend|[Pp]atch|[Rr]eplace|[Ss]ave|[Pp]ut|[Uu]pload|[Ii]nsert|[Dd]elete|[Rr]emove|[Uu]nlink)[\\w-]*)$",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs\" PreToolUse",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs", "PreToolUse"],
             "timeout": 15
           }
         ]

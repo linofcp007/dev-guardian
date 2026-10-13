@@ -146,7 +146,9 @@ function isKeyBodyLine(line) {
  * the END line" there removed the rest of the excerpt (measured: 179 lines).
  */
 function scrubSecrets(text, firstLine = 1) {
-    const hits = scanForSecrets(text);
+    // Redaction keeps what a warning skips: a documented example key, a
+    // passphrase with spaces (review 8, items 10-11).
+    const hits = scanForSecrets(text, { skipPlaceholders: false });
     if (hits.length === 0)
         return text;
     const lines = text.split(/\r?\n/);

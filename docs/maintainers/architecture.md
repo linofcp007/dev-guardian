@@ -34,5 +34,17 @@ quality, deps, observability, performance and compliance. Two halves:
   only a regular file of at most 64 KiB (1 MiB for registry configuration).
   Never judge the path and then read it: a FIFO swapped in between, or a
   Windows link to a named pipe (which `stat`s as an empty regular file), hangs
-  the read, and a hook that hits its 15 s timeout lets the tool call through. User-facing
-  detail: [`docs/hooks.md`](../../docs/hooks.md).
+  the read, and a hook that hits its 15 s timeout lets the tool call through.
+  A path on the network (`\\host\share`) is never asked of the filesystem at
+  all (`isNetworkPath`): an unreachable host held a Write 21 s. Every
+  `hooks.json` entry is in exec form (`"command": "node"`, the dispatcher and
+  the event in `"args"` — Claude Code ≥ 2.1.139; no shell per call, and no
+  shell quoting of the plugin path); keep it that way. The write matchers also
+  route third-party MCP write tools (`mcp__<server>__<tool>` with a file verb),
+  which `describeWrite` in the dispatcher turns into the path and text the
+  write guards judge. Each event imports only its own detectors, and the
+  install vetting loads only behind `pkgvet/mayInstall.ts` (held to
+  `parseInstallCommands` by its test) — the hook runs on every Bash call. The
+  shell guard can also return `ask` (`BashAssessment.ask`, an agent-run
+  `baseline update`), which the hook sends as `permissionDecision: "ask"`.
+  User-facing detail: [`docs/hooks.md`](../../docs/hooks.md).

@@ -101,6 +101,13 @@ import { homedir } from 'node:os';
 import { userDataDir } from './dataRegistry.js';
 import { windowsName } from './guardedPath.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
+import { ASSIGNMENT, basename, cmdSwitch, parseRedirect, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { MASK, splitShell, type ShellStatement, type ShellWord } from './shell/split.js';
+
+// The tokenizer and the command-word resolution live in `shell/`; what this
+// module exported from them before stays exported from here.
+export { commandWordIndex } from './shell/command.js';
+export { splitShell, type ShellSplit, type ShellStatement, type ShellWord, type StatementEnd } from './shell/split.js';
 
 export type BashRiskLevel = 'ok' | 'warn' | 'block';
 
@@ -142,6 +149,14 @@ export interface BashAssessment {
    * whenever another rule blocks too.
    */
   denyMessage?: string;
+  /**
+   * Set when the command is the user's decision to take rather than a hazard —
+   * `dev-guardian baseline update` (review 8, C2) — and nothing blocks it: the
+   * hook asks the user, with this as the reason, instead of letting it run.
+   * The level stays `warn`, which is what `check --bash` and a hook whose
+   * block is switched off report.
+   */
+  ask?: string;
 }
 
 /**
@@ -265,9 +280,12 @@ export const BASH_RULES: BashRule[] = [
     // Scoped to the whole command: `(`, `)`, `|`, `&` and `;` are the very
     // characters splitShell() separates on, so this signature only exists
     // before segmentation. Quoted spans are still masked, so
-    // `echo ':(){ :|:& };:'` stays inert.
-    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
+    // `echo ':(){ :|:& };:'` stays inert. Any function name, not only `:`
+    // (review 8, item 9: `f(){ f|f& };f` was ok); the backreference is the
+    // specification, `forkBomb` the linear reading of it.
+    pattern: /(?<![\w:.-])([\w:.-]{1,64})\s*\(\s*\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}\s*;\s*\1(?![\w:.-])/,
     scope: 'command',
+    test: forkBomb,
   },
   {
     id: 'chmod-777-root',
@@ -364,6 +382,30 @@ function processSubstitutionFetch(text: string): boolean {
   return false;
 }
 
+/** A character of a fork bomb's function name. */
+const FORK_NAME_CHAR = /[\w:.-]/;
+
+/**
+ * `fork-bomb`'s pattern in linear time: at each `( ) {`, the name right before
+ * it (1-64 characters, whole), then the body `NAME | NAME & } ; NAME` read
+ * once from there. The pattern's backreference retried every name length at
+ * every position of a long word.
+ */
+function forkBomb(text: string): boolean {
+  for (const m of text.matchAll(/\(\s*\)\s*\{\s*/g)) {
+    let end = m.index;
+    for (let k = 0; end > 0 && k < 64 && /\s/.test(text.charAt(end - 1)); k += 1) end -= 1;
+    let start = end;
+    while (start > 0 && end - start < 64 && FORK_NAME_CHAR.test(text.charAt(start - 1))) start -= 1;
+    if (start === end || (start > 0 && FORK_NAME_CHAR.test(text.charAt(start - 1)))) continue;
+    const name = text.slice(start, end).replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+    const body = new RegExp(`${name}\\s*\\|\\s*${name}\\s*&\\s*\\}\\s*;\\s*${name}(?![\\w:.-])`, 'y');
+    body.lastIndex = m.index + m[0].length;
+    if (body.test(text)) return true;
+  }
+  return false;
+}
+
 const SUDO_RULE = {
   id: 'sudo',
   level: 'warn',
@@ -378,739 +420,7 @@ interface MatchedRule {
   reason: string;
 }
 
-// ─────────────────────────────────────────────────────────── shell scanning
-
-/**
- * Stands in for a quoted span in the text a pattern is matched against.
- *
- * A single space, so a quoted argument contributes *word separation and
- * nothing else*: `echo 'git push --force'` masks to `echo`, while
- * `git push --force "$REMOTE"` and `chmod -R 777 "$dir"` still match — the
- * hazard is in the unquoted words there and the quoted one is a mere operand.
- * An opaque non-space sentinel was the other candidate and gains nothing:
- * quoted spans never carry a separator, so a space cannot let a match cross
- * a boundary that segmentation already removed, and it breaks `\s` — which
- * would stop `> "$HOME"/.bash_history` reading as a history wipe.
- */
-const MASK = ' ';
-
-export interface ShellWord {
-  /** The word after quote removal — what the shell would actually pass. */
-  value: string;
-  /** True when any character of the word came from inside quotes. */
-  quoted: boolean;
-  /**
-   * Offsets in `value` of each `<` or `>` that was UNQUOTED code — a
-   * redirection operator, not data (`echo "a > b"` has none). Absent when
-   * there is none.
-   */
-  redirectAt?: number[];
-}
-
-export interface ShellStatement {
-  /** Raw statement text with every quoted span replaced by {@link MASK}. */
-  masked: string;
-  /** Pipeline members, one word list per simple command. */
-  commands: ShellWord[][];
-  /**
-   * The body text of every heredoc opened on this statement's line, in
-   * order. Data on the receiving command's stdin, not shell code in
-   * general — `git commit -F - <<'EOF'` never executes it — EXCEPT when the
-   * receiving command is itself a bare shell reading a script from stdin
-   * (`bash <<EOF … EOF`), which is exactly what this exists for
-   * `collect()` to recognise. Undefined when this statement opened none.
-   */
-  heredocBodies?: string[];
-  /** The separator that ended this statement; absent for the last one. */
-  end?: StatementEnd;
-}
-
-/** What ends a statement: a list operator, a line end, or a subshell / substitution boundary. */
-export type StatementEnd = '&&' | '||' | ';' | '&' | '\n' | '(' | ')' | '`';
-
-export interface ShellSplit {
-  /** The whole command, masked, with separators intact and heredocs removed. */
-  maskedCommand: string;
-  /**
-   * `maskedCommand` with, after the mask of each double-quoted span, the
-   * variables that span interpolates ({@link interpolatedVariables}): `$b =
-   * "$a"` reads `$b =  $a `. A copy through a string is still a copy — the
-   * one thing {@link powershellDownloadExecution} reads this for; every other
-   * rule reads `maskedCommand`, where a quoted span is data. A quoted variable
-   * NAME where a name goes (`-OutVariable 'r'`, {@link quotedName}) is
-   * written back the same way, so it names that variable and no other.
-   */
-  interpolatedCommand: string;
-  statements: ShellStatement[];
-}
-
-interface PendingHeredoc {
-  word: string;
-  /**
-   * The statement that OPENED this heredoc — captured by reference at the
-   * moment `<<` is parsed, while that statement is still being built (see
-   * `currentStatement` in `splitShell`). Never the statement that happens to
-   * be last on the source line: `bash <<EOF; echo done` has two statements
-   * on one line, and the heredoc belongs to the first, not `echo done`.
-   */
-  statement: ShellStatement;
-}
-
-/** Reads a quoted span starting at `start`, returning its content and the index after it. */
-function scanQuote(source: string, start: number): { inner: string; next: number } {
-  const quote = source.charAt(start);
-  let inner = '';
-  let i = start + 1;
-  while (i < source.length) {
-    const ch = source.charAt(i);
-    if (quote === '"' && ch === '\\') {
-      const next = source.charAt(i + 1);
-      if (next === '"' || next === '\\' || next === '$' || next === '`') {
-        inner += next;
-        i += 2;
-        continue;
-      }
-      if (next === '\n') {
-        i += 2;
-        continue;
-      }
-      inner += ch;
-      i += 1;
-      continue;
-    }
-    if (ch === quote) return { inner, next: i + 1 };
-    inner += ch;
-    i += 1;
-  }
-  // Unterminated quote: treat the rest of the input as quoted.
-  return { inner, next: source.length };
-}
-
-/**
- * A variable a double-quoted string interpolates (`$a`, `${a}`, `$script:a`),
- * a subexpression opening, or a parenthesis — the tokens
- * {@link interpolatedVariables} reads. `${…}` is capped, so a run of unclosed
- * `${` cannot make each one rescan the rest.
- */
-const INTERPOLATION = /\$\{[^}\n]{0,128}\}|\$[\w:]+|\$\(|[()]/g;
-
-/**
- * The variables a double-quoted string's text interpolates, as written: `$a`
- * and `${a}` in the string itself — its whole value, whatever follows
- * (`"$a.txt"` is `$a` and then `.txt`) — and, inside a `$( … )` subexpression,
- * one that is not read for a member or an index: `"$($items.Count)"` holds a
- * count, not `$items`.
- */
-function interpolatedVariables(inner: string): string[] {
-  if (!inner.includes('$')) return [];
-  const out: string[] = [];
-  let depth = 0;
-  for (const m of inner.matchAll(INTERPOLATION)) {
-    const t = m[0];
-    if (t === '$(') depth += 1;
-    else if (t === '(') depth += depth > 0 ? 1 : 0;
-    else if (t === ')') depth -= depth > 0 ? 1 : 0;
-    else {
-      const next = inner.charAt(m.index + t.length);
-      if (depth === 0 || (next !== '.' && next !== '[')) out.push(t);
-    }
-  }
-  return out;
-}
-
-/**
- * The end of the masked text where a variable's NAME comes next: after
- * `-OutVariable` / `-ov`, `Tee-Object`'s `-Variable`, `-Name`, or right after
- * `Set-` / `New-` / `Get-Variable`. A quoted name there is written back too
- * (review 3.0 wave 2, round 2), so `-OutVariable 'r'` fills `$r` and not, as a
- * masked name did, every variable.
- */
-const NAME_POSITION =
-  /(?:(?:^|[\s;|&(])-(?:ov|outv[a-z]*|v[a-z]*|n[a-z]*)[ \t]*:?[ \t]*|(?:^|[\s;|&(])(?:set-variable|new-variable|get-variable|sv|nv|gv)[ \t]+)$/i;
-/** A variable's name, with its scope — never one of the words the flow tokens read as a command. */
-const QUOTED_NAME = /^(?:(?:global|script|local|private|using|variable):)?[A-Za-z_]\w{0,63}$/i;
-const TOKEN_WORD =
-  /^(?:iex|invoke-expression|irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|set-variable|new-variable|get-variable|sv|nv|gv|tee|tee-object)$/i;
-
-/** A quoted span's text, when it is a variable's name in a place a name goes ({@link NAME_POSITION}). */
-function quotedName(maskedBefore: string, inner: string): string | undefined {
-  if (!QUOTED_NAME.test(inner) || TOKEN_WORD.test(inner)) return undefined;
-  return NAME_POSITION.test(maskedBefore.slice(-48)) ? inner : undefined;
-}
-
-/** `masked` with each interpolation's variables written back after the mask that ends at its offset. */
-function withInterpolations(masked: string, interpolations: ReadonlyArray<{ at: number; vars: string }>): string {
-  if (interpolations.length === 0) return masked;
-  let out = '';
-  let from = 0;
-  for (const { at, vars } of interpolations) {
-    out += `${masked.slice(from, at)}${vars} `;
-    from = at;
-  }
-  return out + masked.slice(from);
-}
-
-const HEREDOC_WORD = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/**
- * Reads a `<<`/`<<-` heredoc operator at `start`. Returns null when the
- * delimiter is not a plain identifier — `$((1 << 2))` must not be mistaken for
- * a heredoc, because doing so would swallow the rest of the command.
- */
-function readHeredocOperator(
-  source: string,
-  start: number,
-): { word: string; next: number } | null {
-  let i = start + 2;
-  if (source.charAt(i) === '-') i += 1; // `<<-` strips leading tabs from the body
-  while (source.charAt(i) === ' ' || source.charAt(i) === '\t') i += 1;
-
-  const quote = source.charAt(i);
-  let word = '';
-  if (quote === "'" || quote === '"') {
-    const scanned = scanQuote(source, i);
-    word = scanned.inner;
-    i = scanned.next;
-  } else {
-    while (i < source.length && /[A-Za-z0-9_]/.test(source.charAt(i))) {
-      word += source.charAt(i);
-      i += 1;
-    }
-  }
-  if (!HEREDOC_WORD.test(word)) return null;
-  return { word, next: i };
-}
-
-/**
- * Attaches a captured heredoc body to the statement that opened it
- * ({@link PendingHeredoc.statement}), appending rather than overwriting —
- * `bash <<A; bash <<B` opens two heredocs on the SAME statement's command
- * list in principle (two simple commands, but if a single command opened
- * two, e.g. via redirection tricks, both bodies belong to it).
- */
-function attachHeredocBody(heredoc: PendingHeredoc, body: string): void {
-  const target = heredoc.statement;
-  if (target.heredocBodies === undefined) target.heredocBodies = [];
-  target.heredocBodies.push(body);
-}
-
-/**
- * Skips the bodies of every heredoc opened on the line just ended, CAPTURING
- * each body's text along the way and attaching it to the STATEMENT THAT
- * OPENED IT (`heredoc.statement`, set when `<<` was parsed) — never to
- * whichever statement happens to be last on the source line. That
- * distinction matters the moment a line carries more than one statement:
- * `bash <<EOF; echo done` opens its heredoc on `bash`, and `echo done` is a
- * second, unrelated statement that follows it on the same line; attaching by
- * position (`statements[statements.length - 1]`) attached to `echo done`
- * instead, so `bash`'s own heredoc — the one shape this file exists to
- * assess as a command — silently lost its body. `bash <<A; cat <<B` was the
- * other failure mode of that same bug: two heredocs opened on one line, both
- * bodies landing on the second statement (`cat`) and none on the first.
- *
- * The body is data on the command's stdin, never shell code in general; a
- * commit message written through `git commit -F - <<'EOF'` is the shape that
- * made skipping necessary in the first place. It is captured, not just
- * skipped, because that stops being true for exactly one shape — `bash
- * <<EOF … EOF` hands the body to bash as the script it runs — and
- * `collect()` is what tells the two apart, by whether the statement's own
- * command is a bare shell reading stdin ({@link isBareShellStdin}); this
- * function has no way to know that itself, since it only ever sees raw
- * source text, not resolved commands.
- *
- * The delimiter is matched on the trimmed line, which covers `<<` and `<<-`
- * alike and errs toward ending the heredoc *early*. That is the safe side:
- * ending early resumes treating text as shell, so the worst case is a false
- * positive, never a hazard swallowed as data.
- */
-function skipHeredocBodies(source: string, from: number, pending: PendingHeredoc[]): number {
-  let pos = from;
-  while (pending.length > 0) {
-    const heredoc = pending.shift();
-    if (heredoc === undefined) break;
-    const lines: string[] = [];
-    for (;;) {
-      if (pos >= source.length) {
-        attachHeredocBody(heredoc, lines.join('\n'));
-        return source.length;
-      }
-      const newline = source.indexOf('\n', pos);
-      const line = newline === -1 ? source.slice(pos) : source.slice(pos, newline);
-      pos = newline === -1 ? source.length : newline + 1;
-      if (line.trim() === heredoc.word) break;
-      lines.push(line);
-      if (newline === -1) {
-        attachHeredocBody(heredoc, lines.join('\n'));
-        return source.length;
-      }
-    }
-    attachHeredocBody(heredoc, lines.join('\n'));
-  }
-  return pos;
-}
-
-/**
- * Shell reserved words that can stand where a command name belongs and are not
- * themselves a command: the words that open or close a loop, a conditional or
- * a brace group, plus `!` (pipeline negation). `splitShell` drops one of these
- * — unquoted, at a command position — so the command that follows it is the
- * one the rules see. Never `for`/`case`/`select`: the words after those are a
- * variable name and a word list, not a command.
- */
-const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'esac', '{', '}', '!']);
-
-/**
- * Segments a command into statements and their pipeline members. Quote-,
- * escape- and heredoc-aware; not a shell parser (see the module comment).
- * The body of a compound command is split like any other statement: the
- * separators around it (`;`, newline, `&&`, `|`) already end a statement, and
- * the reserved word that opens it is dropped (`COMPOUND_RESERVED`).
- */
-export function splitShell(command: string): ShellSplit {
-  const statements: ShellStatement[] = [];
-  let maskedCommand = '';
-  /** Where in `maskedCommand` a double-quoted span's mask ends, and the variables it interpolates. */
-  const interpolations: Array<{ at: number; vars: string }> = [];
-
-  let masked = '';
-  let commands: ShellWord[][] = [];
-  let words: ShellWord[] = [];
-  let buf = '';
-  let bufQuoted = false;
-  let bufRedirects: number[] = [];
-  let hasWord = false;
-  /** Every word of the current command after its first is an unquoted `-` flag. */
-  let dashTail = true;
-  /** Last code character emitted, to tell a background `&` from `2>&1`. */
-  let lastCode = '';
-  const heredocs: PendingHeredoc[] = [];
-  /**
-   * What each open `(` is: `word` for a substitution that is part of a word
-   * (`$(`, `$((`, `<(`, `>(`, `=(`, `@(`), `group` for a subshell. After a
-   * `)` that closed a word — or after a closing backtick — a `#` continues the
-   * word and is no comment: `echo $(date)#x; rm -rf /` runs `rm` (fix round 5).
-   */
-  const parens: Array<'word' | 'group' | 'case'> = [];
-  let closedWord = false;
-  let inBacktick = false;
-  /**
-   * The `ShellStatement` object for whatever statement is currently being
-   * built — created up front, then mutated (not replaced) by `endStatement`
-   * once its `masked`/`commands` are known, and pushed by that SAME
-   * reference. A heredoc opened mid-statement (`<<` is parsed by
-   * `heredocs.push`, below) records a reference to this object — the object
-   * identity is what lets its body attach to the right statement later, once
-   * `skipHeredocBodies` reads it, even though the two events (opening a
-   * heredoc, and reading its body) happen many characters apart and possibly
-   * after other statements/heredocs on the same source line.
-   */
-  let currentStatement: ShellStatement = { masked: '', commands: [] };
-
-  const endWord = (): void => {
-    // A reserved word where a command name belongs opens or closes a compound
-    // command (`do rm -rf /`, `then …`, `{ …`); the command is the word AFTER
-    // it. Kept, it read as a command called `do`, and every loop, `if` and
-    // brace-group body went unassessed (final review I13).
-    const reserved = hasWord && !bufQuoted && words.length === 0 && COMPOUND_RESERVED.has(buf);
-    // `case … esac` patterns end in a bare `)`: inside `$(…)` they must not
-    // close the substitution (fix round 6).
-    if (hasWord && !bufQuoted && words.length === 0) {
-      if (buf === 'case') parens.push('case');
-      else if (buf === 'esac' && parens[parens.length - 1] === 'case') parens.pop();
-    }
-    // A `{` also opens a body after a function header (`function f { … }`) and
-    // after the `time` runner (`time { … }`, `time -p { … }`). The header is not
-    // a command, so it goes with the brace; `time` stays, a runner the command
-    // after the brace is resolved through (re-review follow-up to I13).
-    const opensBody = hasWord && !bufQuoted && buf === '{';
-    const first = words[0];
-    const unquotedHead = first !== undefined && !first.quoted ? first.value : '';
-    if (opensBody && unquotedHead === 'function' && words.length === 2) {
-      words = [];
-      dashTail = true;
-      buf = '';
-      bufQuoted = false;
-      bufRedirects = [];
-      hasWord = false;
-      return;
-    }
-    // `dashTail`: every word after the first is an unquoted `-` flag — kept
-    // as the words arrive (re-checking them at every `{` was quadratic).
-    const afterTime = opensBody && unquotedHead === 'time' && dashTail;
-    if (hasWord && !reserved && !afterTime) {
-      if (words.length >= 1 && (bufQuoted || !buf.startsWith('-'))) dashTail = false;
-      words.push(
-        bufRedirects.length > 0
-          ? { value: buf, quoted: bufQuoted, redirectAt: bufRedirects }
-          : { value: buf, quoted: bufQuoted },
-      );
-    }
-    buf = '';
-    bufQuoted = false;
-    bufRedirects = [];
-    hasWord = false;
-  };
-  const endCommand = (): void => {
-    endWord();
-    if (words.length > 0) commands.push(words);
-    words = [];
-    dashTail = true;
-  };
-  const endStatement = (end?: StatementEnd): void => {
-    endCommand();
-    const text = masked.trim();
-    if (text.length > 0 || commands.length > 0) {
-      currentStatement.masked = text;
-      currentStatement.commands = commands;
-      if (end !== undefined) currentStatement.end = end;
-      statements.push(currentStatement);
-    }
-    masked = '';
-    commands = [];
-    lastCode = '';
-    currentStatement = { masked: '', commands: [] };
-  };
-  const emitCode = (ch: string): void => {
-    if (ch === '>' || ch === '<') bufRedirects.push(buf.length);
-    buf += ch;
-    hasWord = true;
-    masked += ch;
-    maskedCommand += ch;
-    lastCode = ch;
-  };
-
-  let i = 0;
-  while (i < command.length) {
-    const ch = command.charAt(i);
-
-    if (ch === '\\') {
-      const next = command.charAt(i + 1);
-      if (next === '') {
-        emitCode('\\');
-        i += 1;
-        continue;
-      }
-      if (next === '\n') {
-        i += 2; // line continuation
-        continue;
-      }
-      // Escaped literal — the character loses any special meaning, which is
-      // what keeps `find … -exec rm {} \;` a single statement.
-      buf += next;
-      hasWord = true;
-      masked += next;
-      maskedCommand += next;
-      lastCode = '';
-      i += 2;
-      continue;
-    }
-
-    // A `#` that starts a word comments out the rest of the line, in a POSIX
-    // shell and in PowerShell alike. Read as code, the apostrophe in `# clean
-    // the user's build dir` opened a quote that ran to the end of the command
-    // and hid every line after it — `rm -rf /` included (fix round 4, C1).
-    // Heredoc bodies never reach here (`skipHeredocBodies`).
-    if (ch === '#' && !hasWord && !(closedWord && /[)`]/.test(command.charAt(i - 1)))) {
-      while (i < command.length && command.charAt(i) !== '\n' && command.charAt(i) !== '\r') i += 1;
-      continue;
-    }
-
-    if (ch === "'" || ch === '"') {
-      const scanned = scanQuote(command, i);
-      buf += scanned.inner;
-      bufQuoted = true;
-      hasWord = true;
-      const name = quotedName(maskedCommand, scanned.inner);
-      masked += MASK;
-      maskedCommand += MASK;
-      const vars = ch === '"' ? interpolatedVariables(scanned.inner) : [];
-      if (name !== undefined) vars.push(name);
-      if (vars.length > 0) interpolations.push({ at: maskedCommand.length, vars: vars.join(' ') });
-      lastCode = MASK;
-      i = scanned.next;
-      continue;
-    }
-
-    if (ch === '\n') {
-      endStatement('\n');
-      maskedCommand += '\n';
-      // skipHeredocBodies attaches each body directly, via the statement
-      // reference each PendingHeredoc recorded when its `<<` was parsed —
-      // not to whichever statement is last here. `endStatement()` above may
-      // have just pushed several statements onto a single line before this
-      // point (every `;` on the line already ran it), so "last" would be
-      // wrong whenever more than one statement shares this line.
-      i = heredocs.length > 0 ? skipHeredocBodies(command, i + 1, heredocs) : i + 1;
-      continue;
-    }
-
-    if (ch === ';') {
-      endStatement(';');
-      maskedCommand += ';';
-      i += 1;
-      continue;
-    }
-
-    // A bare CR — not the first half of CRLF — ends a line in PowerShell, so
-    // a `cd` and the write after it are two statements (fix round 1, M5). A
-    // POSIX shell reads it as part of a word; ending the statement there only
-    // ever assesses more. Pending heredocs keep waiting for the real newline.
-    if (ch === '\r' && command.charAt(i + 1) !== '\n') {
-      endStatement('\n');
-      maskedCommand += '\n';
-      i += 1;
-      continue;
-    }
-
-    // Subshells, groups and command substitution: whatever is inside runs as
-    // its own command, so the boundary is a statement boundary.
-    if (ch === '(' || ch === ')' || ch === '`') {
-      if (ch === '(') parens.push(/[$<>=@(]/.test(command.charAt(i - 1)) ? 'word' : 'group');
-      // A `case` pattern's `)` has no `(` of its own (fix round 6); an `esac`
-      // right before this `)` has closed its `case` already.
-      else if (ch === ')') {
-        if (buf === 'esac' && !bufQuoted && words.length === 0 && parens[parens.length - 1] === 'case') parens.pop();
-        closedWord = parens[parens.length - 1] === 'case' ? false : parens.pop() === 'word';
-      }
-      else {
-        closedWord = inBacktick;
-        inBacktick = !inBacktick;
-      }
-      endStatement(ch === '(' ? '(' : ch === ')' ? ')' : '`');
-      maskedCommand += ch;
-      i += 1;
-      continue;
-    }
-
-    if (ch === '&') {
-      const next = command.charAt(i + 1);
-      if (next === '&') {
-        endStatement('&&');
-        maskedCommand += '&&';
-        i += 2;
-        continue;
-      }
-      // `2>&1`, `&>log`, `|&` — a redirection, not a separator.
-      if (next === '>' || lastCode === '>' || lastCode === '<' || lastCode === '|') {
-        emitCode('&');
-        i += 1;
-        continue;
-      }
-      endStatement('&');
-      maskedCommand += '&';
-      i += 1;
-      continue;
-    }
-
-    if (ch === '|') {
-      // `>|` is a redirection (write, overriding noclobber), not a pipe.
-      if (lastCode === '>') {
-        emitCode('|');
-        i += 1;
-        continue;
-      }
-      const next = command.charAt(i + 1);
-      if (next === '|') {
-        endStatement('||');
-        maskedCommand += '||';
-        i += 2;
-        continue;
-      }
-      // A pipe stays *inside* the statement: `curl … | sh` is one hazard.
-      endCommand();
-      masked += '|';
-      maskedCommand += '|';
-      lastCode = '|';
-      i += 1;
-      continue;
-    }
-
-    // Not the tail of a `<<<` here-string, whose `<<x` is no heredoc (fix round 5).
-    if (ch === '<' && command.charAt(i + 1) === '<' && command.charAt(i + 2) !== '<' && command.charAt(i - 1) !== '<') {
-      const heredoc = readHeredocOperator(command, i);
-      if (heredoc !== null) {
-        heredocs.push({ word: heredoc.word, statement: currentStatement });
-        endWord();
-        masked += ' ';
-        maskedCommand += ' ';
-        lastCode = '';
-        i = heredoc.next;
-        continue;
-      }
-    }
-
-    if (ch === ' ' || ch === '\t' || ch === '\r') {
-      endWord();
-      masked += ' ';
-      maskedCommand += ch;
-      i += 1;
-      continue;
-    }
-
-    emitCode(ch);
-    i += 1;
-  }
-  endStatement();
-
-  return { maskedCommand, interpolatedCommand: withInterpolations(maskedCommand, interpolations), statements };
-}
-
 // ────────────────────────────────────────────────────── tokenised rules
-
-function basename(value: string): string {
-  const parts = value.split(/[\\/]/);
-  const last = parts[parts.length - 1];
-  return last === undefined || last.length === 0 ? value : last;
-}
-
-/** Commands whose job is to run another command, so the real one follows. */
-const RUNNERS = new Set([
-  'sudo',
-  'doas',
-  'env',
-  'command',
-  'exec',
-  'builtin',
-  'nohup',
-  'nice',
-  'time',
-  'timeout',
-  'setsid',
-  'stdbuf',
-  'xargs',
-  'watch',
-  // cmd's `start [/b] ["title"] PROGRAM` (fix round 2).
-  'start',
-]);
-
-/**
- * Each runner's own options that consume a value — short letters (also at the
- * end of a cluster: `-Eu root`) and long names (`--user root`, `--user=root`).
- * Per runner, never one table for all: a shared set made `-n`, `-i`, `-s` and
- * `-k` take a value, which they do for `nice`, `xargs` or `timeout` but not
- * for `sudo` or `env` — so `sudo -n rm -rf /` read `rm` as the value of `-n`
- * and only warned as sudo, and `env -i rm -rf /` was ok (review I1). Options
- * whose value is optional and attached (`xargs -i[R]`, `-e[EOF]`) take none.
- */
-const RUNNER_VALUED: Readonly<Record<string, { short: string; long: ReadonlySet<string> }>> = {
-  sudo: {
-    short: 'CDgpRrTtUu',
-    long: new Set(['user', 'group', 'host', 'prompt', 'close-from', 'chdir', 'chroot', 'role', 'type', 'other-user', 'command-timeout']),
-  },
-  doas: { short: 'uC', long: new Set() },
-  env: { short: 'uCSa', long: new Set(['unset', 'chdir', 'split-string', 'argv0']) },
-  exec: { short: 'a', long: new Set() },
-  nice: { short: 'n', long: new Set(['adjustment']) },
-  time: { short: 'fo', long: new Set(['format', 'output']) },
-  timeout: { short: 'sk', long: new Set(['signal', 'kill-after']) },
-  stdbuf: { short: 'ioe', long: new Set(['input', 'output', 'error']) },
-  xargs: {
-    // `J` is BSD's `-J replstr`.
-    short: 'adEIJLnPs',
-    long: new Set(['arg-file', 'delimiter', 'max-args', 'max-procs', 'max-chars', 'process-slot-var']),
-  },
-  watch: { short: 'nq', long: new Set(['interval', 'equexit']) },
-};
-
-/** How many words a runner's option takes: 1 for a switch or an attached value, 2 when the value is the next word. */
-function runnerOptionWords(runner: string, option: string): number {
-  const valued = RUNNER_VALUED[runner];
-  if (valued === undefined) return 1;
-  if (option.startsWith('--')) {
-    return !option.includes('=') && valued.long.has(option.slice(2)) ? 2 : 1;
-  }
-  // A short cluster: the first letter that takes a value takes the rest of the
-  // cluster, or — when it is the last letter — the next word.
-  for (let k = 1; k < option.length; k += 1) {
-    if (valued.short.includes(option.charAt(k))) return k === option.length - 1 ? 2 : 1;
-  }
-  return 1;
-}
-
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
-/**
- * Walks past `VAR=x` assignments and runner prefixes (`sudo`, `env`, `xargs`,
- * `timeout 30`, …) to the index of the word that actually names the command,
- * reporting on the way whether privilege was elevated. `through`, when given,
- * limits the runners walked past to those named (the rest end the walk).
- */
-function resolveCommand(words: readonly ShellWord[], through?: ReadonlySet<string>): { index: number; elevated: boolean } {
-  let i = 0;
-  let elevated = false;
-  // No hop cap: every pass consumes at least one word, so this is linear —
-  // and a cap of 32 made `nice` x40 + `rm -rf /` a silent ok (fix round 4).
-  while (i < words.length) {
-    const word = words[i];
-    if (word === undefined) break;
-    if (ASSIGNMENT.test(word.value)) {
-      i += 1;
-      continue;
-    }
-    // A redirection may come before the command name: `2>/dev/null rm -rf /`
-    // runs `rm` (fix round 4). Its target, when it is the next word, goes too.
-    const redirect = parseRedirect(word);
-    if (redirect !== null && /^(?:\d*|&|\{[A-Za-z_]\w*\})$/.test(redirect.prefix)) {
-      i += redirect.inline === '' ? 2 : 1;
-      continue;
-    }
-    const name = basename(word.value);
-    if (!RUNNERS.has(name) || (through !== undefined && !through.has(name))) break;
-    if (name === 'sudo' || name === 'doas') elevated = true;
-    i += 1;
-    if (name === 'start') {
-      // Its `/x` switches (`/d DIR` takes a value) and one quoted title.
-      let titled = false;
-      while (i < words.length) {
-        const arg = words[i];
-        if (arg === undefined) break;
-        if (!titled && arg.quoted) {
-          titled = true;
-          i += 1;
-        } else if (/^\/[A-Za-z]+$/.test(arg.value)) i += /^\/d$/i.test(arg.value) ? 2 : 1;
-        else break;
-      }
-      continue;
-    }
-    while (i < words.length) {
-      const arg = words[i];
-      if (arg === undefined) break;
-      if (ASSIGNMENT.test(arg.value)) {
-        i += 1;
-        continue;
-      }
-      if (arg.value === '--') {
-        i += 1;
-        break;
-      }
-      if (arg.value.startsWith('-') && arg.value.length > 1) {
-        i += runnerOptionWords(name, arg.value);
-        continue;
-      }
-      // `env -` is `env -i`.
-      if (name === 'env' && arg.value === '-') {
-        i += 1;
-        continue;
-      }
-      if ((name === 'timeout' || name === 'watch') && /^\d+(?:\.\d+)?[smhd]?$/.test(arg.value)) {
-        i += 1;
-        continue;
-      }
-      break;
-    }
-  }
-  return { index: i, elevated };
-}
-
-/**
- * The index of the word that names the command, past `VAR=x` and runner
- * prefixes read with their own options (`sudo -n`, `env -i`, `timeout 30`,
- * …) — for the install parser, which must find the same command the shell
- * guard does.
- */
-export function commandWordIndex(words: readonly ShellWord[]): number {
-  return resolveCommand(words).index;
-}
 
 function stripQuotes(token: string): string {
   // Loops, not `/['"`]+$/`: that regex restarts at every quote of a long run.
@@ -1122,53 +432,116 @@ function stripQuotes(token: string): string {
   return token.slice(a, b);
 }
 
+/** What a catastrophic target is: the filesystem root, a drive root or a system directory — or a home directory. */
+type TargetKind = 'root' | 'home';
+
+/** The top-level directories of a POSIX system and of macOS, whose loss takes the system with it. */
+const SYSTEM_DIRS = ['etc', 'usr', 'bin', 'sbin', 'var', 'lib', 'lib64', 'boot', 'sys', 'proc', 'root', 'home', 'opt', 'dev', 'Users', 'System'];
+
+/**
+ * Windows' own folders under a drive root, in every spelling a command reaches
+ * them by (review 8, item 3): after `C:\`, `C:/`, `C:` (the POSIX reader drops
+ * an unquoted `\`), Git Bash's `/c/` and WSL's `/mnt/c/`, in any case, and
+ * `Program Files` by its 8.3 name (`PROGRA~1`).
+ */
+const WINDOWS_DIR =
+  /^(?:[A-Za-z]:[\\/]?|\/(?:mnt\/)?[A-Za-z]\/)(?:Windows(?:[\\/]?(?:System32|SysWOW64))?|Users|Program Files(?: \(x86\))?|ProgramData|PROGRA~\d)(?:[\\/]\*?)?$/i;
+
+/** The same folders, one path segment each, for a glob to be matched against. */
+const WINDOWS_DIR_NAMES = ['windows', 'users', 'program files', 'program files (x86)', 'programdata'];
+
 /**
  * Filesystem locations whose recursive deletion is effectively never
- * intended. Covers POSIX roots and home, macOS's `/Users`/`/System`, Git
- * Bash / WSL drive-root spellings (`/c`, `/c/*`, `/mnt/c`, `/mnt/c/*`) and
- * native Windows drive roots (`C:/`, `C:\`, `C:/*`) — the same set applies
- * whether the command deleting them is `rm`, PowerShell's `Remove-Item`, or
- * `rd`/`del`, so this is shared by every delete-assessing function below.
+ * intended, and which kind each is. Covers POSIX roots and home, macOS's
+ * `/Users`/`/System`, Git Bash / WSL drive-root spellings (`/c`, `/c/*`,
+ * `/mnt/c`, `/mnt/c/*`), native Windows drive roots (`C:/`, `C:\`, `C:/*`) and
+ * Windows' own folders under any of them — the same set applies whether the
+ * command deleting them is `rm`, PowerShell's `Remove-Item`, `rd`/`del` or
+ * `find`, so this is shared by every delete-assessing function below. A glob
+ * that can name one of them counts as naming it (`/[a-z]*`, `/?*`, `/c/U*`).
  */
-function isCatastrophicTarget(raw: string): boolean {
+function catastrophicKind(raw: string, tildeUsers = true): TargetKind | null {
   const t = stripQuotes(raw);
-  if (t === '/' || /^\/\*+$/.test(t)) return true; // root, or everything under root
+  if (t === '/' || /^\/\*+$/.test(t)) return 'root'; // root, or everything under root
   // PowerShell's `\` and `\*` are the current drive's root; in bash the `\`
   // is an escape, so `rm -rf \*` arrives here as `*` and is not this.
-  if (/^\\\*?$/.test(t)) return true;
+  if (/^\\\*?$/.test(t)) return 'root';
   // Home, and everything under it — with either separator, since PowerShell
   // and Git Bash take both (review I2: `Remove-Item ~\* -Recurse -Force` and
   // `$HOME\*` only warned). PowerShell's `$HOME` is `$home` too.
-  if (/^~(?:[\\/]\*?)?$/.test(t)) return true;
-  if (/^\$\{?HOME\}?(?:[\\/]\*?)?$/i.test(t)) return true; // $HOME, $HOME/, $HOME\*, ${HOME}, …
+  if (/^~(?:[\\/]\*?)?$/.test(t)) return 'home';
+  // Another account's home: `~alice` is `/home/alice` (review 8, item 3). Not
+  // from the PowerShell tool, which has no `~name` — and whose POSIX reading
+  // turns `~\project\build` into `~projectbuild`.
+  if (tildeUsers && /^~[A-Za-z_][\w.-]*(?:[\\/]\*?)?$/.test(t)) return 'home';
+  if (/^\$\{?HOME\}?(?:[\\/]\*?)?$/i.test(t)) return 'home'; // $HOME, $HOME/, $HOME\*, ${HOME}, …
   // Git Bash sees the Windows environment: `$USERPROFILE`, `$HOMEDRIVE$HOMEPATH`.
   if (
     /^(?:\$\{?USERPROFILE\}?|\$\{?HOMEDRIVE\}?\$\{?HOMEPATH\}?|\$\{?env:HOMEDRIVE\}?\$\{?env:HOMEPATH\}?)(?:[\\/]\*?)?$/i.test(t)
   ) {
-    return true;
+    return 'home';
   }
   // Git Bash / WSL drive-root spellings: /c, /c/, /c/*, /mnt/c, /mnt/c/*.
-  if (/^\/[a-z](?:\/\*?)?$/i.test(t)) return true;
-  if (/^\/mnt\/[a-z](?:\/\*?)?$/i.test(t)) return true;
+  if (/^\/[a-z](?:\/\*?)?$/i.test(t)) return 'root';
+  if (/^\/mnt\/[a-z](?:\/\*?)?$/i.test(t)) return 'root';
   // Native Windows drive roots: C:/, C:\, C:/*, C:\*.
-  if (/^[A-Za-z]:[\\/]\*?$/.test(t)) return true;
+  if (/^[A-Za-z]:[\\/]\*?$/.test(t)) return 'root';
   // The same through cmd's and PowerShell's environment spellings — the home
   // directory, the system drive and the system directories — and those
   // directories named outright (fix round 2: `rmdir /s /q %USERPROFILE%`).
-  // The POSIX tokenizer drops an unquoted `\`, so `C:\Windows` may arrive
-  // as `C:Windows`.
-  if (
-    /^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)
-  ) {
-    return true;
+  if (/^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEPATH)%|\$\{?env:(?:USERPROFILE|HOMEPATH)\}?)(?:[\\/]\*?)?$/i.test(t)) {
+    return 'home';
   }
-  if (/^[A-Za-z]:[\\/]?(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]\*?)?$/i.test(t)) return true;
+  if (
+    /^(?:%(?:HOMEDRIVE|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:HOMEDRIVE|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)
+  ) {
+    return 'root';
+  }
+  if (WINDOWS_DIR.test(t)) return 'root';
   // Top-level system directories (exact, optionally trailing / or /*),
   // including macOS's capitalised ones.
   if (/^\/(?:etc|usr|bin|sbin|var|lib|lib64|boot|sys|proc|root|home|opt|dev|Users|System)(?:\/\*?)?$/.test(t)) {
-    return true;
+    return 'root';
   }
-  return false;
+  return globNamesCatastrophic(t) ? 'root' : null;
+}
+
+function isCatastrophicTarget(raw: string, tildeUsers = true): boolean {
+  return catastrophicKind(raw, tildeUsers) !== null;
+}
+
+/** Whether glob segment `seg` can match one of `names`, case-insensitively. */
+function segmentMatches(seg: string, names: readonly string[]): boolean {
+  const pattern = seg.toLowerCase();
+  return names.some((n) => wildcardMatch(pattern, n.toLowerCase()));
+}
+
+const DRIVE_LETTERS = Array.from({ length: 26 }, (_, k) => String.fromCharCode(97 + k));
+
+/**
+ * A glob that can name the filesystem root's own directories, a drive root or
+ * a Windows folder under one (review 8, item 3): `/[a-z]*` and `/?*` name
+ * `/bin` and `/etc`, `/c/U*` names `/c/Users`, `/mnt/?` a drive. A glob below
+ * one of them (`/tmp/*`, `/usr/local/*`) names none. Only short paths are
+ * read: no catastrophic target is long.
+ */
+function globNamesCatastrophic(t: string): boolean {
+  if (t.length > 256 || !GLOB.test(t)) return false;
+  const path = t.replace(/\\/g, '/').replace(/\/+(?:\*)?$/, '');
+  const drive = /^([^/]*):(?:\/|$)/.exec(path);
+  let segs: string[];
+  if (drive !== null) {
+    if (!segmentMatches(drive[1] ?? '', DRIVE_LETTERS)) return false;
+    segs = path.slice((drive[0] ?? '').length).split('/').filter((s) => s !== '');
+    return segs.length === 0 || (segs.length === 1 && segmentMatches(segs[0] ?? '', WINDOWS_DIR_NAMES));
+  }
+  if (!path.startsWith('/')) return false;
+  segs = path.slice(1).split('/').filter((s) => s !== '');
+  const [a = '', b = '', c = ''] = segs;
+  if (segs.length === 1) return segmentMatches(a, SYSTEM_DIRS) || segmentMatches(a, DRIVE_LETTERS);
+  const letter = (s: string): boolean => segmentMatches(s, DRIVE_LETTERS);
+  if (segs.length === 2) return (letter(a) && segmentMatches(b, WINDOWS_DIR_NAMES)) || (segmentMatches(a, ['mnt']) && letter(b));
+  return segs.length === 3 && segmentMatches(a, ['mnt']) && letter(b) && segmentMatches(c, WINDOWS_DIR_NAMES);
 }
 
 /** The home directory as {@link targetKey} spells it, and whether paths compare case-insensitively (Windows). */
@@ -1224,7 +597,7 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
  * aliases in PowerShell, its dash flags too).
  */
-function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir): MatchedRule | null {
+function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
   const head = words[start];
   if (head === undefined) return null;
   const name = basename(head.value).toLowerCase();
@@ -1233,7 +606,6 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
   if (!dashStyle && !slashStyle) return null;
 
   let recursive = false;
-  let force = false;
   let noPreserve = false;
   const targets: string[] = [];
 
@@ -1241,10 +613,10 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
   for (let k = 0; k < rest.length; k += 1) {
     // PowerShell takes an en or em dash for a parameter's `-` (fix round 4).
     const token = (rest[k]?.value ?? '').replace(/^[\u2013\u2014\u2015]/, '-');
+    // `/q` (quiet) asks nothing \u2014 but neither does a tool with no terminal, so
+    // `/s` alone decides. Git Bash's `//s` reaches cmd as `/s` (review 8, item 2).
     if (slashStyle && token.startsWith('/')) {
-      const lower = token.toLowerCase();
-      if (lower === '/s') recursive = true;
-      else if (lower === '/q') force = true;
+      if (cmdSwitch(token).toLowerCase() === '/s') recursive = true;
       continue;
     }
     // Dash flags: `rm`'s and `Remove-Item`'s — and, since `rd`, `rmdir`, `del`
@@ -1252,7 +624,6 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
     // `rmdir C:\Users -Recurse -Force` was ok (fix round 4).
     if (token === '--no-preserve-root') noPreserve = true;
     else if (token === '--recursive') recursive = true;
-    else if (token === '--force') force = true;
     else if (token.startsWith('--')) continue;
     else if (token.startsWith('-') && token.length > 1) {
       // A PowerShell parameter may be given its value after a colon, split at
@@ -1272,75 +643,112 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
       if (value !== undefined && value !== '' && PS_PATH_PARAM.test(lower)) targets.push(value);
       // `-Recurse:$true` is on, `-Recurse:$false` off.
       const on = value === undefined || !/^\$?(?:false|0)$/i.test(value);
-      // PowerShell's whole-word parameter names first — `-Recurse`,
-      // `-Force`, and their common abbreviations. Checked before the
-      // GNU-cluster heuristic below because that heuristic (does the flag
-      // text contain the letter r/f anywhere?) is right for a *cluster* of
-      // single-letter flags like `-rf`/`-fo`, where every character really
-      // is its own flag, and wrong for a whole parameter name — `-Filter`
-      // or `-Confirm` both contain an 'f', and would otherwise read as
-      // `-Force` by accident.
+      // PowerShell's whole-word parameter names first — `-Recurse` and its
+      // abbreviation. Checked before the GNU-cluster heuristic below because
+      // that heuristic (does the flag text contain the letter r anywhere?) is
+      // right for a *cluster* of single-letter flags like `-rf`, where every
+      // character really is its own flag, and wrong for a whole parameter
+      // name. `-Force` / `-fo` decide nothing any more (review 8, item 1);
+      // they are read only so that their value is not taken for a target.
       if (lower === 'recurse' || lower === 'rec') recursive ||= on;
-      else if (lower === 'force' || lower === 'fo') force ||= on;
-      else if (value === undefined && flags.length <= 3) {
-        if (/r/i.test(flags)) recursive = true;
-        if (/f/i.test(flags)) force = true;
-      }
+      else if (!isSwitch && value === undefined && flags.length <= 3 && /r/i.test(flags)) recursive = true;
     } else targets.push(token);
   }
 
-  if (!((recursive && force) || noPreserve)) return null;
+  // Recursion decides, not force (review 8, item 1): the Bash and PowerShell
+  // tools have no terminal to ask on, so `rm -r ~` and `Remove-Item ~ -Recurse`
+  // delete as much as their forced forms — measured: both removed a whole tree.
+  if (!(recursive || noPreserve)) return null;
 
-  if (noPreserve || targets.some((t) => isCatastrophicTarget(t) || isHomeTarget(t, home))) {
-    return {
-      id: 'rm-rf-root',
-      level: 'block',
-      reason: 'Recursive force-delete targeting the filesystem root or home directory',
-    };
-  }
-  return {
-    id: 'rm-rf-broad',
-    level: 'warn',
-    reason: 'Recursive force-delete — confirm the target path is intended',
-  };
+  if (noPreserve || targets.some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) return { ...RULE_RM_ROOT };
+  return { ...RULE_RM_BROAD };
 }
 
+const RULE_RM_ROOT: MatchedRule = {
+  id: 'rm-rf-root',
+  level: 'block',
+  reason: 'Recursive delete of the filesystem root, a drive root, a system directory or a home directory',
+};
+
+const RULE_RM_BROAD: MatchedRule = {
+  id: 'rm-rf-broad',
+  level: 'warn',
+  reason: 'Recursive delete — confirm the target path is intended',
+};
+
+/** `find`'s tests that narrow what it finds — with one, `find ~ … -delete` is a cleanup, not a wipe. */
+const FIND_FILTERS = new Set([
+  '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename', '-regex', '-iregex', '-lname', '-ilname',
+  '-newer', '-anewer', '-cnewer', '-newerxy', '-mtime', '-mmin', '-atime', '-amin', '-ctime', '-cmin', '-used',
+  '-size', '-empty', '-perm', '-user', '-group', '-uid', '-gid', '-nouser', '-nogroup', '-inum', '-samefile',
+  '-links', '-readable', '-writable', '-executable', '-context',
+]);
+
+/** What `find -exec` / `-execdir` / `-ok` runs to delete what it found. */
+const FIND_DELETERS = new Set(['rm', 'unlink', 'rmdir', 'shred', 'remove-item', 'ri', 'del', 'erase', 'rd']);
+
+const RULE_FIND_ROOT: MatchedRule = {
+  id: 'find-delete-root',
+  level: 'block',
+  reason: 'find … -delete (or -exec rm) on the filesystem root, a drive root, a system directory or a home directory deletes everything under it',
+};
+const RULE_FIND_HOME: MatchedRule = {
+  id: 'find-delete-home',
+  level: 'warn',
+  reason: 'find … -delete targets the home directory — confirm this is intended',
+};
+const RULE_FIND_BROAD: MatchedRule = {
+  id: 'find-delete-broad',
+  level: 'warn',
+  reason: 'find . -delete with no test to narrow it deletes everything under the working directory — confirm this is intended',
+};
+
 /**
- * `find … -delete` — like `rm`/`Remove-Item`, the *target* decides severity:
- * the filesystem root is catastrophic, the home directory is merely risky
- * (an ordinary `find some/path -delete` is neither and stays 'ok'). Only the
- * leading, non-flag operands are read as paths — `find / -name foo -delete`
- * still targets `/`, but a flag value that happens to equal `/` or `~` after
- * a primary (e.g. `-path /`) is not mistaken for `find`'s own start path.
+ * `find … -delete` — like `rm`/`Remove-Item`, the *target* decides severity
+ * (review 8, item 7): the filesystem root, a drive root or a system directory
+ * blocks; the home directory blocks when no test narrows what is found
+ * (`find ~ -delete`) and warns when one does (`find ~ -name '*.pyc' -delete`);
+ * the working directory with nothing to narrow it warns, as `rm -rf .` does;
+ * anything else (`find ./tmp -delete`) stays 'ok'. A delete is `-delete` or an
+ * `-exec` / `-execdir` / `-ok` of `rm` and the like — whose own targets are
+ * judged as any delete's (`-exec rm -rf / \;`). The start paths come after
+ * `find`'s own options (`-H`, `-L`, `-P`, `-O3`, `-D tree`) and end at the
+ * first test; a value after a test (`-path /`) is not a start path. With none,
+ * GNU find starts at `.`.
  */
-function assessFind(words: ShellWord[], start: number): MatchedRule | null {
+function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
   const head = words[start];
   if (head === undefined || basename(head.value) !== 'find') return null;
 
   const rest = words.slice(start + 1);
-  if (!rest.some((w) => w.value === '-delete')) return null;
+  const execs = findExecCommands(words, start);
+  const viaExec = execs.some((cmd) => FIND_DELETERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? '')));
+  // A delete inside an `-exec` is judged on its own targets too.
+  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers)).find((r) => r?.level === 'block');
+  if (inner !== undefined && inner !== null) return inner;
+  if (!viaExec && !rest.some((w) => w.value === '-delete')) return null;
 
+  let k = 0;
+  while (k < rest.length) {
+    const v = rest[k]?.value ?? '';
+    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
+    else if (v === '-D') k += 2;
+    else break;
+  }
   const targets: string[] = [];
-  for (const word of rest) {
-    if (word.value.startsWith('-')) break; // first primary/flag ends the path list
-    targets.push(stripQuotes(word.value));
+  for (; k < rest.length; k += 1) {
+    const v = rest[k]?.value ?? '';
+    if (v.startsWith('-') || v === '(' || v === '!' || v === ')' || v === ',') break; // the first test ends the paths
+    targets.push(stripQuotes(v));
   }
-  if (targets.length === 0) return null;
+  if (targets.length === 0) targets.push('.');
+  const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
 
-  if (targets.some((t) => t === '/' || /^\/\*+$/.test(t))) {
-    return {
-      id: 'find-delete-root',
-      level: 'block',
-      reason: 'find … -delete on the filesystem root deletes everything under it',
-    };
+  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'root')) return { ...RULE_FIND_ROOT };
+  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'home' || isHomeTarget(t, home))) {
+    return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
-  if (targets.some((t) => t === '~' || t === '~/' || /^\$\{?HOME\}?\/?$/.test(t))) {
-    return {
-      id: 'find-delete-home',
-      level: 'warn',
-      reason: 'find … -delete targets the home directory — confirm this is intended',
-    };
-  }
+  if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
   return null;
 }
 
@@ -1462,10 +870,45 @@ function namesLooseningKey(text: string): boolean {
   );
 }
 
-/** Whether the whole command names a loosening key — computed once per assessment (fix round 3). */
+/**
+ * Whether the whole command names a loosening key — computed once per
+ * assessment (fix round 3), and only for a command that writes the settings.
+ * Also through an escape (`disableAllHook\x73`, `s`, `\163`) and inside
+ * a base64 literal the command decodes (`echo eyJ… | base64 -d >
+ * .claude/settings.local.json`) — review 8, item 15.
+ */
 function loosens(scope: Scope): boolean {
-  if (scope.notes.loosens === undefined) scope.notes.loosens = namesLooseningKey(scope.raw);
+  if (scope.notes.loosens === undefined) {
+    const raw = scope.raw;
+    scope.notes.loosens =
+      namesLooseningKey(raw) ||
+      (raw.includes('\\') && namesLooseningKey(unescapeText(raw))) ||
+      base64Literals(raw).some((text) => namesLooseningKey(text) || namesLooseningKey(unescapeText(text)));
+  }
   return scope.notes.loosens;
+}
+
+/** `\xHH`, `\u{H…}`, `\uHHHH` and octal `\NNN` escapes — printf's, `$'…'`'s, JSON's, JavaScript's — read as what they spell. */
+function unescapeText(text: string): string {
+  return text.replace(/\\(?:x([0-9A-Fa-f]{2})|u\{([0-9A-Fa-f]{1,6})\}|u([0-9A-Fa-f]{4})|([0-7]{1,3}))/g, (all, x?: string, u1?: string, u2?: string, o?: string) => {
+    const code = x !== undefined ? parseInt(x, 16) : u1 !== undefined ? parseInt(u1, 16) : u2 !== undefined ? parseInt(u2, 16) : parseInt(o ?? '', 8);
+    return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : all;
+  });
+}
+
+/** The most base64 literals of one command decoded to look for a settings key. */
+const MAX_BASE64_LITERALS = 64;
+
+/** The text of each base64 literal in `text` (16+ characters) that decodes to UTF-8 text. */
+function base64Literals(text: string): string[] {
+  const out: string[] = [];
+  let tried = 0;
+  for (const m of text.matchAll(/[A-Za-z0-9+/]{16,}={0,2}/g)) {
+    if ((tried += 1) > MAX_BASE64_LITERALS) break;
+    const decoded = decodeBase64(m[0]);
+    if (decoded !== undefined && !decoded.includes('�')) out.push(decoded);
+  }
+  return out;
 }
 
 /** A command word's name: its last path segment, lower-cased, without `.exe`. */
@@ -1543,19 +986,134 @@ function cwdAfter(name: string, args: readonly string[], cwd: string, dataDir?: 
 
 const GLOB = /[*?[]/;
 
-/** The configuration files a directory holds, by the directory's kind. */
-function configNamesIn(dir: string): string[] {
-  if (USER_CONFIG_DIR.test(dir)) return ['hooks.json'];
-  if (/\.guardian\/?$/i.test(dir)) return ['hooks.config.json', 'hooks-allowlist.json'];
-  return [];
+/** The user-level configuration file's path, segment by segment from its end. */
+const USER_CONFIG_TAIL: readonly string[] = ['.config', 'dev-guardian', 'hooks.json'];
+/** Every configuration file's path, segment by segment from its end, for a glob to be matched against. */
+const CONFIG_TAILS: ReadonlyArray<readonly string[]> = [
+  ['.guardian', 'hooks.config.json'],
+  ['.guardian', 'hooks-allowlist.json'],
+  USER_CONFIG_TAIL,
+];
+
+/**
+ * True when a glob in `path` can name a configuration file (of `tails`): in
+ * its last segment (`.guardian/hooks*`), or in a directory above it (review
+ * 8, item 6: `> ~/.config/dev-guardia?/hooks.json` overwrote the file — bash
+ * expands a redirection's target too).
+ */
+function globNamesConfig(path: string, tails: ReadonlyArray<readonly string[]> = CONFIG_TAILS): boolean {
+  const t = tail(path);
+  if (!GLOB.test(t)) return false;
+  const segs = t.split('/').filter((s) => s !== '');
+  return tails.some(
+    (names) =>
+      names.length <= segs.length &&
+      names.every((name, k) => wildcardMatch((segs[segs.length - names.length + k] ?? '').toLowerCase(), name)),
+  );
 }
 
-/** True when a glob in `path`'s last segment can match a configuration file of the config directory it sits in. */
-function globNamesConfig(path: string): boolean {
-  const last = path.slice(path.lastIndexOf('/') + 1);
-  if (!GLOB.test(last)) return false;
-  const names = configNamesIn(dirOf(path));
-  return names.some((n) => wildcardMatch(last.toLowerCase(), n));
+/** The most words one word's brace expansion may become; past it the word is read as written. */
+const MAX_BRACE_WORDS = 64;
+/** The longest word whose braces are expanded. */
+const MAX_BRACE_WORD = 1024;
+
+/**
+ * Where `word`'s first expandable brace is (bash's brace expansion): a `{`
+ * not after `$`, its matching `}`, and between them a top-level `,` or a
+ * sequence (`1..3`, `a..e`). `{}`, `{x}` and `${…}` are not expansions.
+ */
+function braceAt(word: string): { pre: string; alts: string[]; post: string } | undefined | 'too-many' {
+  for (let i = word.indexOf('{'); i >= 0; i = word.indexOf('{', i + 1)) {
+    if (word.charAt(i - 1) === '$') continue;
+    let depth = 0;
+    const commas: number[] = [];
+    let close = -1;
+    for (let j = i + 1; j < word.length; j += 1) {
+      const c = word.charAt(j);
+      if (c === '{') depth += 1;
+      else if (c === '}') {
+        if (depth === 0) {
+          close = j;
+          break;
+        }
+        depth -= 1;
+      } else if (c === ',' && depth === 0) commas.push(j);
+    }
+    if (close < 0) return undefined;
+    const pre = word.slice(0, i);
+    const post = word.slice(close + 1);
+    if (commas.length > 0) {
+      const alts: string[] = [];
+      let from = i + 1;
+      for (const c of [...commas, close]) {
+        alts.push(word.slice(from, c));
+        from = c + 1;
+      }
+      return { pre, alts, post };
+    }
+    const seq = /^(-?\d{1,6}|[A-Za-z])\.\.(-?\d{1,6}|[A-Za-z])$/.exec(word.slice(i + 1, close));
+    if (seq !== null) {
+      const [a = '', b = ''] = [seq[1], seq[2]];
+      const numeric = /\d/.test(a) && /\d/.test(b);
+      if (!numeric && (/\d/.test(a) || /\d/.test(b))) continue;
+      const lo = numeric ? Number(a) : a.charCodeAt(0);
+      const hi = numeric ? Number(b) : b.charCodeAt(0);
+      if (Math.abs(hi - lo) + 1 > MAX_BRACE_WORDS) return 'too-many';
+      const step = lo <= hi ? 1 : -1;
+      const alts: string[] = [];
+      for (let v = lo; ; v += step) {
+        alts.push(numeric ? String(v) : String.fromCharCode(v));
+        if (v === hi) break;
+      }
+      return { pre, alts, post };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Bash's brace expansion of one word (review 8, item 6): `{rm,-rf,/}` is
+ * `rm -rf /`, `{rm,} -rf /` is `rm -rf /`, `/{bin,etc}` is `/bin /etc`,
+ * `x{1..3}` is `x1 x2 x3`, nested braces included. An empty result is dropped,
+ * as bash drops it. `undefined` when nothing expands, or when the word would
+ * become more than {@link MAX_BRACE_WORDS} words — then it is read as written.
+ */
+function expandBraces(word: string): string[] | undefined {
+  if (word.length > MAX_BRACE_WORD || !word.includes('{') || !word.includes('}')) return undefined;
+  const out: string[] = [];
+  const stack = [word];
+  let expanded = false;
+  for (let steps = 0; stack.length > 0; steps += 1) {
+    if (steps > 8 * MAX_BRACE_WORDS) return undefined;
+    const w = stack.pop() ?? '';
+    const at = braceAt(w);
+    if (at === 'too-many') return undefined;
+    if (at === undefined) {
+      if (w !== '') out.push(w);
+      if (out.length > MAX_BRACE_WORDS) return undefined;
+      continue;
+    }
+    expanded = true;
+    for (let k = at.alts.length - 1; k >= 0; k -= 1) stack.push(`${at.pre}${at.alts[k] ?? ''}${at.post}`);
+    if (stack.length > 8 * MAX_BRACE_WORDS) return undefined;
+  }
+  return expanded ? out : undefined;
+}
+
+/** A command's words with every unquoted brace expanded ({@link expandBraces}); the same array when none is. */
+function expandWords(words: ShellWord[]): ShellWord[] {
+  if (!words.some((w) => !w.quoted && w.value.includes('{'))) return words;
+  let out: ShellWord[] | undefined;
+  for (const [k, w] of words.entries()) {
+    const expanded = w.quoted || w.redirectAt !== undefined ? undefined : expandBraces(w.value);
+    if (expanded === undefined) {
+      out?.push(w);
+      continue;
+    }
+    out ??= words.slice(0, k);
+    for (const value of expanded) out.push({ value, quoted: false });
+  }
+  return out ?? words;
 }
 
 /**
@@ -1612,10 +1170,16 @@ interface Effects {
    * which a write reaches it (review round 3, item 5).
    */
   hardLinkSources: string[];
+  /**
+   * Directories whose whole content a command deletes without a delete command
+   * (review 8, item 9): `rsync --delete` and `robocopy /MIR` into them, a
+   * recursive `[IO.Directory]::Delete`.
+   */
+  trees: string[];
 }
 
 function noEffects(): Effects {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [] };
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
 }
 
 /**
@@ -1635,6 +1199,7 @@ function mergeEffects(into: Effects, from: Effects): void {
   pushAll(into.special, from.special);
   pushAll(into.links, from.links);
   pushAll(into.hardLinkSources, from.hardLinkSources);
+  pushAll(into.trees, from.trees);
 }
 
 
@@ -1885,7 +1450,8 @@ function posixWord(word: string): string {
  * its `C:\`). cmd's own `&`, `&&`, `||` and `|` read the same way to the
  * POSIX reader.
  */
-function cmdLineText(args: readonly string[]): string | undefined {
+function cmdLineText(rawArgs: readonly string[]): string | undefined {
+  const args = rawArgs.map(cmdSwitch);
   const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
   if (at < 0) return undefined;
   const [first, ...more] = args.slice(at + 1);
@@ -1911,7 +1477,8 @@ function cmdTextAsPosix(line: string): string {
 }
 
 /** The commands `cmd /c LINE` (or `/k`) runs — see {@link cmdEffects} for how the line is read. */
-function cmdLine(args: readonly string[]): CmdCommand[] {
+function cmdLine(rawArgs: readonly string[]): CmdCommand[] {
+  const args = rawArgs.map(cmdSwitch);
   const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
   if (at < 0) return [];
   const first = args[at + 1];
@@ -1954,24 +1521,6 @@ function cmdEffects(args: readonly string[], cwd: string, depth = 0): Effects {
     dir = cwdAfter(name, rest, dir) ?? dir;
   }
   return e;
-}
-
-interface Redirect {
-  /** What precedes the operator in the same word: `''`, an fd number, `&`, or an ordinary word (`x>f`). */
-  prefix: string;
-  /** `>`, `>>`, `>|`, `>&`, `<`, `<>`, `<<<`, `<&`, … */
-  op: string;
-  /** The operand written in the same word (`>f`), or `''` when it is the next word. */
-  inline: string;
-}
-
-/** The first unquoted redirection in `word`, if it has one. */
-function parseRedirect(word: ShellWord): Redirect | null {
-  const at = word.redirectAt?.[0];
-  if (at === undefined) return null;
-  const tail = word.value.slice(at);
-  const op = /^[<>]+[|&]?/.exec(tail)?.[0] ?? tail.charAt(0);
-  return { prefix: word.value.slice(0, at), op, inline: tail.slice(op.length) };
 }
 
 /**
@@ -2196,6 +1745,33 @@ function perlLike(
 
 const SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
 
+/** vi / vim / ex options whose value is the next word (a short cluster ending in one of these letters, too). */
+const EDITOR_VALUED_LETTERS = 'cSuUiTwWtq';
+
+/** The files `vi`, `vim`, `nvim` or `ex` opens — every operand but an option's value and a `+cmd`. */
+function editorFiles(args: readonly string[]): string[] {
+  const out: string[] = [];
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (!optionsDone && a === '--') {
+      optionsDone = true;
+      continue;
+    }
+    if (!optionsDone && a === '--cmd') {
+      i += 1;
+      continue;
+    }
+    if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
+      if (EDITOR_VALUED_LETTERS.includes(a.charAt(a.length - 1))) i += 1;
+      continue;
+    }
+    if (!optionsDone && (a.startsWith('-') || a.startsWith('+'))) continue;
+    out.push(a);
+  }
+  return out;
+}
+
 /**
  * The files a command itself writes — `tee`, `sed -i`, `dd of=`, `curl -o`,
  * `wget -O`, `sort -o`, `truncate`, `sponge`, `shred`, `perl -i` / `ruby -i`,
@@ -2232,6 +1808,19 @@ function commandWriteDestinations(name: string, args: readonly string[]): string
       const p = perlLike(args, 'e', 'IrCEFx');
       return p.inPlace ? p.files : [];
     }
+    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
+    // `vim -es -c '…' -c wq f` write the files they open.
+    case 'ed':
+    case 'red':
+      return operands(args, new Set(['-p', '--prompt']));
+    case 'ex':
+    case 'vi':
+    case 'vim':
+    case 'nvim':
+    case 'gvim':
+      return editorFiles(args);
+    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
+    case 'sc':
     case 'set-content':
     case 'add-content':
     case 'ac':
@@ -2250,6 +1839,9 @@ function commandWriteDestinations(name: string, args: readonly string[]): string
 /** Commands that delete what they are given. */
 const REMOVERS = new Set(['rm', 'unlink', 'ri', 'remove-item', 'del', 'erase', 'rd', 'rmdir']);
 
+/** cmd.exe commands with `/x` switches, which Git Bash spells `//x` ({@link cmdSwitch}). */
+const CMD_SWITCHED = new Set(['copy', 'move', 'xcopy', 'robocopy', 'mklink', 'del', 'erase', 'rd', 'rmdir', 'ren', 'rename']);
+
 /**
  * What `name args` does to the filesystem, from `cwd` — every path resolved
  * ({@link resolveFrom}). A copy writes its destination (and each source's name
@@ -2260,8 +1852,10 @@ const REMOVERS = new Set(['rm', 'unlink', 'ri', 'remove-item', 'del', 'erase', '
  * command ({@link cmdEffects}). Never a link's SOURCE: `ln -s
  * ~/.config/dev-guardian/hooks.json backup.json` reads the config.
  */
-function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0): Effects {
-  if (name === 'cmd') return cmdEffects(args, cwd, depth);
+function effectsOf(name: string, rawArgs: readonly string[], cwd: string, depth = 0): Effects {
+  if (name === 'cmd') return cmdEffects(rawArgs, cwd, depth);
+  // cmd's own commands, run from Git Bash, take their switches as `//Y` (review 8, item 2).
+  const args = CMD_SWITCHED.has(name) ? rawArgs.map(cmdSwitch) : rawArgs;
   const at = (p: string): string => resolveFrom(cwd, p);
   const e = noEffects();
   switch (name) {
@@ -2328,6 +1922,8 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
         e.dirs.push(at(dest));
         e.writes.push(at(dest));
         pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
+        // `/MIR` and `/PURGE` delete what the source lacks: from an empty source, everything.
+        if (name === 'robocopy' && args.some((a) => /^\/(?:mir|purge)$/i.test(a))) e.trees.push(at(dest));
       }
       return e;
     }
@@ -2338,6 +1934,7 @@ function effectsOf(name: string, args: readonly string[], cwd: string, depth = 0
       e.writes.push(at(dest));
       pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
       if (args.some((a) => a === '--recursive' || a === '--archive' || /^-[a-zA-Z]*[ra]/.test(a))) e.dirs.push(at(dest));
+      if (args.some((a) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a))) e.trees.push(at(dest));
       return e;
     }
     case 'ren':
@@ -2784,23 +2381,29 @@ function asWindowsOpens(paths: readonly string[]): string[] {
  * or one assembled from parts (`join(home, '.config', 'dev-guardian',
  * 'hooks.json')`). A sentence that merely mentions a path does not end in it.
  */
-function literalsNameHookConfig(literals: readonly string[]): boolean {
+function literalsNameHookConfig(literals: readonly string[], scope: Scope): Placement {
   const paths = literalPaths(literals);
-  if (paths.some((p) => HOOK_CONFIG_PATH.test(p) || USER_CONFIG_DIR.test(p))) return true;
+  // A literal spelled in full is placed like a shell write's target; one
+  // assembled from parts is not known, so this session's (review 8, item 14).
+  const named = locate(paths, (p) => HOOK_CONFIG_PATH.test(p) || USER_CONFIG_DIR.test(p), scope);
+  if (named === 'inside') return named;
   const has = (re: RegExp): boolean => paths.some((p) => re.test(p));
-  if (has(/(?:^|\/)dev-guardian\/?$/i) && has(/(?:^|\/)hooks\.json$/i)) return true;
-  return has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i);
+  if (has(/(?:^|\/)dev-guardian\/?$/i) && has(/(?:^|\/)hooks\.json$/i)) return 'inside';
+  if (has(/(?:^|\/)\.guardian\/?$/i) && has(/(?:^|\/)hooks[.-][^/]*\.json$/i)) return 'inside';
+  return named;
 }
 
 /** The same for Claude Code's settings files. */
-function literalsNameClaudeSettings(literals: readonly string[], configDirName: string | undefined): boolean {
+function literalsNameClaudeSettings(literals: readonly string[], scope: Scope): Placement {
+  const configDirName = scope.configDirName;
   const paths = literalPaths(literals);
-  if (paths.some((p) => isSettingsPath(p, configDirName))) return true;
+  const named = locate(paths, (p) => isSettingsPath(p, configDirName), scope);
+  if (named === 'inside') return named;
   const has = (re: RegExp): boolean => paths.some((p) => re.test(p));
   const inDir =
     has(/(?:^|\/)\.claude\/?$/i) ||
     (configDirName !== undefined && paths.some((p) => p.toLowerCase().replace(/\/+$/, '').endsWith(configDirName)));
-  return inDir && has(/^settings(?:\.local)?\.json$/i);
+  return inDir && has(/^settings(?:\.local)?\.json$/i) ? 'inside' : named;
 }
 
 // ── .NET file calls in PowerShell
@@ -2896,7 +2499,8 @@ const DOTNET_CALL = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(File|Directory)\s*\]\s*:
  */
 function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
   const e = noEffects();
-  if (!text.includes('::')) return e;
+  const newObject = /new-object/i.test(text);
+  if (!text.includes('::') && !newObject) return e;
   const unquotedAt = quoteTracker(text);
   for (const m of text.matchAll(DOTNET_CALL)) {
     if (!unquotedAt(m.index)) continue;
@@ -2907,8 +2511,11 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
     const paths = call.args.map((a) => resolveFrom(cwd, argPath(a)));
     const [first, second] = paths;
     if (first === undefined) continue;
-    if (method === 'delete') e.removes.push(first);
-    else if (method === 'createsymboliclink') e.links.push(first);
+    if (method === 'delete') {
+      e.removes.push(first);
+      // `[IO.Directory]::Delete('C:\', $true)`: the whole tree (review 8, item 9).
+      if (kind === 'directory' && /^\$?true$/i.test(call.args[1] ?? '')) e.trees.push(first);
+    } else if (method === 'createsymboliclink') e.links.push(first);
     else if (method === 'move' || method === 'replace') {
       e.removes.push(first);
       if (second !== undefined) (kind === 'directory' ? e.dirs : e.writes).push(second);
@@ -2918,8 +2525,38 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
       e.writes.push(first);
     }
   }
+  // A stream opened for writing (review 8, item 15): `[IO.StreamWriter]::new(p)`,
+  // `New-Object IO.StreamWriter(p)` / `-ArgumentList p`, and a `FileStream` not
+  // opened only to read.
+  if (!/streamwriter|filestream/i.test(text)) return e;
+  const unquotedWriterAt = quoteTracker(text);
+  for (const m of text.matchAll(DOTNET_WRITER)) {
+    if (!unquotedWriterAt(m.index)) continue;
+    const kind = (m[1] ?? m[2] ?? '').toLowerCase();
+    const after = m.index + m[0].length;
+    const open = /^\s*@?\(/.exec(text.slice(after, after + 64));
+    let args: string[];
+    if (open !== null) {
+      const call = callArgs(text, after + open[0].length);
+      if (call.cut && notes !== undefined) notes.calls = true;
+      args = call.args;
+    } else {
+      const word = /^\s*('(?:[^']|'')*'|"(?:[^"`]|`.)*"|[^\s;|,)]+)/.exec(text.slice(after, after + MAX_CALL_ARGS));
+      args = word === null ? [] : [word[1] ?? ''];
+    }
+    const first = args[0];
+    if (first === undefined || first === '') continue;
+    // Every argument of the call, not only the first two `callArgs` reads.
+    const all = text.slice(after, after + MAX_CALL_ARGS).split(')')[0] ?? '';
+    if (kind === 'filestream' && /\bRead\b/i.test(all) && !/Write|Create|Append|Truncate/i.test(all)) continue;
+    e.writes.push(resolveFrom(cwd, argPath(first)));
+  }
   return e;
 }
+
+/** `[IO.StreamWriter]::new(`, `New-Object [-TypeName] System.IO.StreamWriter [-ArgumentList]` and the same for `FileStream`. */
+const DOTNET_WRITER =
+  /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\s*\]\s*::\s*new\b|\bNew-Object\s+(?:-TypeName\s+)?(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\b(?:\s+-ArgumentList\b|\s+-Args?\b)?/gi;
 
 // ── the rules
 
@@ -2943,7 +2580,7 @@ const RULE_REGISTRY: MatchedRule = {
   level: 'block',
   reason:
     "Writes dev-guardian's registry of trusted databases (<data dir>/registry) — which database to trust is the " +
-    "user's decision: they run `dev-guardian db adopt` themselves, in a terminal",
+    "user's decision: they run the dev-guardian CLI's `db adopt` themselves, in a terminal",
 };
 
 /** Program text naming the registry: a literal path in it, or its parts (`'dev-guardian', 'registry'`). */
@@ -2986,6 +2623,102 @@ const RULE_SETTINGS: MatchedRule = {
 };
 
 /**
+ * Where a guarded path a command names lies: `inside` — where the hooks of
+ * this session read it (the project, the working directory, the home
+ * directory, `CLAUDE_CONFIG_DIR`), or anywhere a variable, a relative path or
+ * a mangled spelling leaves unknown; `outside` — provably elsewhere (another
+ * project, a test fixture's fake HOME); `null` — not a guarded path at all.
+ */
+type Placement = 'inside' | 'outside' | null;
+
+/** The more serious of several placements. */
+function worst(placements: readonly Placement[]): Placement {
+  if (placements.includes('inside')) return 'inside';
+  return placements.includes('outside') ? 'outside' : null;
+}
+
+/** The places a guarded path counts as this session's, as {@link targetKey} spells them. */
+interface Places {
+  fold: boolean;
+  home?: string | undefined;
+  cwd?: string | undefined;
+  project?: string | undefined;
+  configDir?: string | undefined;
+}
+
+/** `key` is `dir` or below it. */
+function keyAtOrBelow(dir: string | undefined, key: string): boolean {
+  return dir !== undefined && dir !== '' && (key === dir || key.startsWith(`${dir}/`));
+}
+
+/**
+ * Where the guarded paths of `paths` (those `pred` accepts) lie ({@link
+ * Placement}). Without {@link Scope.places} — the CLI's `check`, the tests'
+ * default — every one is `inside`, as it always was. A path is `outside` only
+ * when it is spelled in full (`/tmp/x/…`, `C:/x/…`, `~other/…`, or `~/…` and
+ * `$HOME/…` below home) and lies under none of the places: a project's
+ * `.guardian/hooks*.json` counts under the project or the working directory,
+ * the user-level `hooks.json` only as the home directory's own, Claude Code's
+ * settings under any of them.
+ */
+function locate(paths: readonly string[], pred: (p: string) => boolean, scope: Scope): Placement {
+  let found: Placement = null;
+  for (const p of paths) {
+    if (!pred(p)) continue;
+    if (placeOf(p, scope) === 'inside') return 'inside';
+    found = 'outside';
+  }
+  return found;
+}
+
+function placeOf(raw: string, scope: Scope): Placement {
+  const places = scope.places;
+  if (places === undefined) return 'inside';
+  let t = stripQuotes(raw).replace(/\\/g, '/');
+  const homeSpelled = /^(?:~|\$\{?HOME\}?|\$\{?USERPROFILE\}?|\$\{?env:USERPROFILE\}?|%USERPROFILE%)(?=\/|$)/i.exec(t);
+  if (homeSpelled !== null) {
+    if (places.home === undefined) return 'inside';
+    t = `${places.home}${t.slice(homeSpelled[0].length)}`;
+  } else if (/^~[A-Za-z_]/.test(t)) {
+    // `~other/…` is another account's: never this session's hooks.
+    return 'outside';
+  } else if (!/^(?:\/|[A-Za-z]:\/)/.test(t)) {
+    // Relative (the working directory), a variable, or a spelling the POSIX
+    // reader mangled (`C:proj.guardian…`): unknown, so this session's.
+    return 'inside';
+  }
+  // A glob may name the place itself: unknown, so this session's.
+  if (GLOB.test(t)) return 'inside';
+  const key = targetKey(t, places.fold);
+  if (/(?:^|\/)\.config\/dev-guardian(?:\/|$)/i.test(key)) {
+    if (places.home === undefined) return 'inside';
+    return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? 'inside' : 'outside';
+  }
+  if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
+    return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
+  }
+  return [places.project, places.cwd].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
+}
+
+/** The guarded path one elsewhere: a warning, since it is not this session's (review 8, item 14). */
+const RULE_ELSEWHERE: MatchedRule = {
+  id: 'guard-config-elsewhere',
+  level: 'warn',
+  reason:
+    "Writes a file named like the guardrail hooks' configuration or Claude Code's settings outside this project, " +
+    'the working directory and the home directory — not the one this session reads; confirm the target',
+};
+
+/** A block device: what `tee` or `cp` must not be pointed at (review 8, item 9). */
+const BLOCK_DEVICE = /^\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)|PhysicalDrive\d/i;
+
+const RULE_DISK_WRITE: MatchedRule = {
+  id: 'disk-overwrite',
+  level: 'block',
+  reason: 'Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/…)',
+};
+
+/**
  * The rules a command's filesystem effects break. The guard's own
  * configuration: a FIFO, device node or link created at a config file (a link
  * also at a config directory — final review I12 and fix round 2, N1); a write
@@ -3002,23 +2735,33 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     special: asWindowsOpens(effects.special.map(tail)),
     links: asWindowsOpens(effects.links.map(tail)),
     hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
+    trees: effects.trees.map(tail),
   };
   const out: MatchedRule[] = [];
-  if (e.special.some(isHookConfigPath) || e.links.some((p) => isHookConfigPath(p) || isHookConfigDir(p))) {
-    out.push({ ...RULE_SPECIAL });
-  }
-  if (e.writes.some((p) => isHookConfigPath(p) || globNamesConfig(p))) out.push({ ...RULE_WRITE });
+  // Each guarded path is this session's only where the hooks read it; one
+  // elsewhere — another project's, a test fixture's HOME — warns (review 8, item 14).
+  const judged = (rule: MatchedRule, where: Placement): void => {
+    if (where === 'inside') out.push({ ...rule });
+    else if (where === 'outside') out.push({ ...RULE_ELSEWHERE });
+  };
+  const configAt = (p: string): boolean => isHookConfigPath(p) || globNamesConfig(p);
+  judged(RULE_SPECIAL, worst([locate(e.special, isHookConfigPath, scope), locate(e.links, (p) => isHookConfigPath(p) || isHookConfigDir(p), scope)]));
+  judged(RULE_WRITE, locate(e.writes, configAt, scope));
   const removesConfig = (p: string): boolean =>
-    isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || (USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p));
-  if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
-  if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
+    isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || globNamesConfig(p, [USER_CONFIG_TAIL]);
+  judged(RULE_REMOVE, locate(e.removes, removesConfig, scope));
+  judged(RULE_DIR, locate(e.dirs, isHookConfigDir, scope));
   // A hard link to a configuration file, to Claude Code's settings (the Write
   // guard judges a write through one as that file; a shell write through one
   // names neither), or — `cp -al` — to every file of a directory that holds
   // them (review 3.0, wave 2).
   const linksGuarded = (p: string): boolean =>
     isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
-  if (e.hardLinkSources.some(linksGuarded)) out.push({ ...RULE_HARD_LINK });
+  judged(RULE_HARD_LINK, locate(e.hardLinkSources, linksGuarded, scope));
+  // A whole tree deleted by a copy or a .NET call (review 8, item 9), and a
+  // block device written by `tee` or `cp` (`cat /dev/zero | tee /dev/sda`).
+  if (e.trees.some((p) => isCatastrophicTarget(p, scope.tildeUsers) || isHomeTarget(p, scope.home))) out.push({ ...RULE_RM_ROOT });
+  if (e.writes.some((p) => BLOCK_DEVICE.test(p))) out.push({ ...RULE_DISK_WRITE });
   // dev-guardian's registry of trusted databases (round 2): an entry written,
   // linked or copied into it, a hard link to one, or the registry or the whole
   // data directory replaced. Removing one only un-trusts a database.
@@ -3033,7 +2776,8 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   ) {
     out.push({ ...RULE_REGISTRY });
   }
-  if (e.writes.some((p) => isSettingsPath(p, scope.configDirName)) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
   return out;
 }
 
@@ -3074,8 +2818,12 @@ const RULE_DB_ADOPT: MatchedRule = {
   reason: 'db adopt --yes marks a database as trusted; run it yourself in a terminal after reading `db adopt` without --yes',
 };
 
-/** The CLI, as a command or a script: `dev-guardian`, `dev-guardian.mjs`, `dev-guardian.cmd`, `dev-guardian@3.0.1`. */
-const CLI_NAME = /^dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?$/i;
+/**
+ * The CLI, as a command or a script: `dev-guardian`, `dev-guardian.mjs`,
+ * `dev-guardian.cmd`, `dev-guardian@3.0.1` — and `guardian.cjs`, the launcher
+ * dev-spec-driven writes into `.specs/`, which hands every argument on to it.
+ */
+const CLI_NAME = /^(?:dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?|guardian\.cjs)$/i;
 /** What runs the CLI named as its program: node and the other runtimes, and the package runners. */
 const CLI_HOSTS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'npx', 'pnpx', 'bunx', 'npm', 'pnpm', 'yarn']);
 /** A package runner's or a runtime's subcommand before the program: `pnpm dlx`, `npm exec`, `bun x`, `deno run`. */
@@ -3129,10 +2877,40 @@ function adoptsDatabase(words: readonly ShellWord[], at: number): boolean {
  * read as a nested script instead: it can hand on any command.)
  */
 function adoptsDatabaseThroughLauncher(words: readonly ShellWord[], at: number): boolean {
-  const started = startProcessArgv(words, at);
-  if (started !== undefined && adoptsDatabase(started, 0)) return true;
-  return findExecCommands(words, at).some((cmd) => adoptsDatabase(cmd, resolveCommand(cmd).index));
+  return throughLauncher(words, at, adoptsDatabase);
 }
+
+/** `runs` of the command `Start-Process` starts, or of one `find -exec` runs. */
+function throughLauncher(words: readonly ShellWord[], at: number, runs: (words: readonly ShellWord[], at: number) => boolean): boolean {
+  const started = startProcessArgv(words, at);
+  if (started !== undefined && runs(started, 0)) return true;
+  return findExecCommands(words, at).some((cmd) => runs(cmd, resolveCommand(cmd).index));
+}
+
+/**
+ * `dev-guardian baseline update` run by the assistant (review 8, C2): it
+ * accepts EVERY current finding into `.guardian/baseline.json` — a feature's
+ * own new finding included — and the gate then reports none of them. That is
+ * the user's decision, so the hook asks ({@link BashAssessment.ask}) instead
+ * of denying: `dev-guardian baseline update`, `node …/dev-guardian.mjs
+ * baseline update`, `node .specs/guardian.cjs baseline update`, behind `npx`
+ * or a runner, in a nested script or launched by `Start-Process` / `find -exec`.
+ */
+function updatesBaseline(words: readonly ShellWord[], at: number): boolean {
+  const args = cliArgs(words, at);
+  if (args === undefined) return false;
+  const plain = args.filter((a) => !a.startsWith('-'));
+  return plain[0] === 'baseline' && plain[1] === 'update';
+}
+
+const RULE_BASELINE_UPDATE: MatchedRule = {
+  id: 'baseline-update',
+  level: 'warn',
+  reason:
+    'dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the ' +
+    'gate stops reporting them — the user decides. To accept one reviewed finding, suppress it inline with a reason ' +
+    '(`nosemgrep: <rule> -- <reason>`, `# nosec`), or rebuild the baseline on the base commit',
+};
 
 const START_PROCESS = new Set(['start-process', 'saps', 'start']);
 
@@ -3245,8 +3023,13 @@ function envSplitScript(words: readonly ShellWord[], end: number): string | unde
 function judgeCode(code: string, lang: CodeLang, scope: Scope): MatchedRule[] {
   const literals = codeLiterals(code, lang);
   const out: MatchedRule[] = [];
-  if (literalsNameHookConfig(literals)) out.push({ ...RULE_INLINE });
-  if (literalsNameClaudeSettings(literals, scope.configDirName) && loosens(scope)) out.push({ ...RULE_SETTINGS });
+  const placed = (rule: MatchedRule, where: Placement): void => {
+    if (where === 'inside') out.push({ ...rule });
+    else if (where === 'outside') out.push({ ...RULE_ELSEWHERE });
+  };
+  placed(RULE_INLINE, literalsNameHookConfig(literals, scope));
+  const settings = literalsNameClaudeSettings(literals, scope);
+  if (settings !== null && loosens(scope)) placed(RULE_SETTINGS, settings);
   if (literalsNameRegistry(literals, scope.dataDir)) out.push({ ...RULE_REGISTRY });
   return out;
 }
@@ -3267,6 +3050,16 @@ interface Scope {
   dataDir?: string | undefined;
   /** These statements are a `cmd /c` line: cmd.exe runs a bare name from the working directory. */
   cmdLine?: boolean;
+  /** `~name` is another account's home: a POSIX shell's reading, never the PowerShell tool's. */
+  tildeUsers?: boolean;
+  /** Where a guarded path is this session's ({@link placeOf}); none: everywhere. */
+  places?: Places | undefined;
+  /** Where the command was before its last `cd` — what `cd -` returns to ({@link moveCwd}). */
+  prevCwd?: string;
+  /** `pushd`'s stack, replaced on every change. */
+  dirStack?: readonly string[];
+  /** `CDPATH`, when the command set it. */
+  cdpath?: readonly string[];
 }
 
 /**
@@ -3361,6 +3154,10 @@ function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
   }
   // PowerShell's `eval`: `iex "& { $(irm …) }"` runs its argument — quoted or
   // not — as PowerShell (review I1).
+  if (launcher === 'wsl') {
+    const script = wslScript(words, start);
+    return script === undefined || script.trim() === '' ? [] : [shellScript(script)];
+  }
   if (launcher === 'iex' || launcher === 'invoke-expression') {
     const script = words
       .slice(start + 1)
@@ -3386,12 +3183,33 @@ function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
     // that was quadratic (`-c -c -c …`, `find -exec`, `git -c`, `python
     // -c`: 64 KB took 15 s — fix round 3, I-2).
     if (!word.quoted && DASH_C.test(word.value) && sawShell) {
-      const script = words[i + 1];
-      return script === undefined ? [] : [shellScript(script.value)];
+      const script = scriptAfterDashC(words, i + 1);
+      return script === undefined ? [] : [shellScript(script)];
     }
     if (SHELLS.has(basename(word.value))) sawShell = true;
   }
   return [];
+}
+
+/**
+ * The script a shell's `-c` runs: its first operand — the shell's other
+ * options may come between (`bash -c -e 'cmd'`, `-o pipefail`), and `--`
+ * ends them (review 8, item 8: `bash -c -- 'rm -rf /'` took `--` for the
+ * script and was ok).
+ */
+function scriptAfterDashC(words: readonly ShellWord[], from: number): string | undefined {
+  for (let j = from; j < words.length; j += 1) {
+    const w = words[j];
+    if (w === undefined) return undefined;
+    if (!w.quoted && w.value === '--') return words[j + 1]?.value;
+    if (!w.quoted && /^[-+][oO]$/.test(w.value)) {
+      j += 1;
+      continue;
+    }
+    if (!w.quoted && /^[-+][A-Za-z]+$/.test(w.value)) continue;
+    return w.value;
+  }
+  return undefined;
 }
 
 /**
@@ -3427,8 +3245,8 @@ function isBareShellStdin(words: readonly ShellWord[]): boolean {
 function fedScripts(
   statement: ShellStatement,
   reads: (words: readonly ShellWord[]) => boolean,
-): Array<{ text: string; reader: readonly ShellWord[] }> {
-  const scripts: Array<{ text: string; reader: readonly ShellWord[] }> = [];
+): Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> {
+  const scripts: Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> = [];
 
   if (statement.commands.length === 1 && statement.heredocBodies) {
     const only = statement.commands[0];
@@ -3437,19 +3255,139 @@ function fedScripts(
 
   if (statement.commands.length >= 2) {
     const last = statement.commands[statement.commands.length - 1];
-    const prev = statement.commands[statement.commands.length - 2];
-    if (last !== undefined && prev !== undefined && reads(last)) {
-      const prevHead = prev[0];
-      const prevName = prevHead === undefined ? '' : basename(prevHead.value);
-      const args = prev.slice(1);
-      let fed = '';
-      if (prevName === 'echo') fed = args.map((w) => w.value).join(' ').trim();
-      else if (prevName === 'printf') fed = (args[args.length - 1]?.value ?? '').trim();
-      if (fed.length > 0) scripts.push({ text: fed, reader: last });
+    if (last !== undefined && reads(last)) {
+      const fed = textOutputOf(statement.commands.slice(0, -1));
+      if (fed === 'opaque') scripts.push({ text: '', reader: last, opaque: true });
+      else if (fed !== undefined && fed.trim().length > 0) scripts.push({ text: fed.trim(), reader: last });
     }
   }
 
   return scripts;
+}
+
+/** The most encoded text decoded to judge what it decodes to. */
+const MAX_DECODED = 64 * 1024;
+
+const RULE_DECODED_SCRIPT: MatchedRule = {
+  id: 'decoded-script',
+  level: 'warn',
+  reason:
+    'Runs decoded text as a script (base64 -d, xxd -r, gunzip, openssl … fed to a shell or an interpreter) — what it runs could not be assessed',
+};
+
+/** A command that turns encoded text back into something else: base64 (which is decoded here), or a decoder whose output is not read. */
+function decoderOf(words: readonly ShellWord[]): 'base64' | 'other' | undefined {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? '');
+  const args = withoutRedirections(words.slice(at + 1));
+  if (name === 'base64' || name === 'base32' || name === 'basenc') {
+    if (!args.some((a) => /^(?:--decode|-[A-Za-z]*[dD][A-Za-z]*)$/.test(a))) return undefined;
+    return name === 'base64' ? 'base64' : 'other';
+  }
+  if (name === 'openssl') {
+    if (!args.includes('-d')) return undefined;
+    return args.some((a) => a === 'base64' || a === '-base64' || a === '-a') && !args.some((a) => /^-(?:aes|des|chacha|bf|camellia|in$)/.test(a))
+      ? 'base64'
+      : 'other';
+  }
+  if (name === 'xxd') return args.some((a) => /^-[A-Za-z]*r/.test(a)) ? 'other' : undefined;
+  if (name === 'gzip' || name === 'bzip2' || name === 'xz' || name === 'zstd' || name === 'lz4') {
+    return args.some((a) => a === '--decompress' || /^-[A-Za-z]*d/.test(a)) ? 'other' : undefined;
+  }
+  return ['gunzip', 'zcat', 'bunzip2', 'bzcat', 'unxz', 'xzcat', 'unzstd', 'zstdcat', 'uudecode', 'rev'].includes(name) ? 'other' : undefined;
+}
+
+/** `text` as base64, decoded to UTF-8 — or `undefined` when it is not base64 at all. */
+function decodeBase64(text: string): string | undefined {
+  const compact = text.replace(/\s+/g, '');
+  if (compact.length === 0 || compact.length > MAX_DECODED || !/^[A-Za-z0-9+/=_-]+$/.test(compact)) return undefined;
+  return Buffer.from(compact.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+}
+
+/** A here-string's text in `words` (`<<< 'text'`, `<<<text`), when it has one. */
+function hereStringText(words: readonly ShellWord[]): string | undefined {
+  for (let i = 0; i < words.length; i += 1) {
+    const w = words[i];
+    if (w === undefined || !w.value.startsWith('<<<') || w.redirectAt?.[0] !== 0) continue;
+    const inline = w.value.slice(3);
+    return inline.length > 0 ? inline : words[i + 1]?.value;
+  }
+  return undefined;
+}
+
+/**
+ * What a pipeline writes to its stdout, as far as the command line says (review
+ * 8, item 8): `echo`'s words, `printf`'s last argument, and base64 decoded
+ * from either (or from a `<<<` here-string) — `echo cm0gLXJmIC8K | base64 -d`
+ * writes `rm -rf /`. `opaque` when a decoder writes text that cannot be read
+ * here (`base64 -d payload.b64`, `xxd -r`, `gunzip`); `undefined` for anything
+ * else (`cat f`), which is no different from running a file.
+ */
+function textOutputOf(members: readonly ShellWord[][]): string | 'opaque' | undefined {
+  const last = members[members.length - 1];
+  if (last === undefined) return undefined;
+  const at = resolveCommand(last).index;
+  const name = commandName(last[at]?.value ?? '');
+  const args = withoutRedirections(last.slice(at + 1));
+  if (name === 'echo') return args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(' ');
+  if (name === 'printf') return args[args.length - 1] ?? '';
+  const decoder = decoderOf(last);
+  if (decoder === undefined) return undefined;
+  if (decoder === 'other') return 'opaque';
+  const here = hereStringText(last);
+  const input = here ?? (members.length > 1 ? textOutputOf(members.slice(0, -1)) : undefined);
+  if (typeof input !== 'string') return 'opaque';
+  return decodeBase64(input) ?? 'opaque';
+}
+
+/**
+ * What a `$( … )` or `` `…` `` substitution that IS the whole of `script` writes
+ * ({@link textOutputOf}) — `bash -c "$(echo … | base64 -d)"` runs it. Only a
+ * substitution of one statement is read.
+ */
+function substitutionOutput(script: string): string | 'opaque' | undefined {
+  const s = script.trim();
+  const inner = s.startsWith('$(') && s.endsWith(')') ? s.slice(2, -1) : s.startsWith('`') && s.endsWith('`') ? s.slice(1, -1) : undefined;
+  if (inner === undefined || inner.length > MAX_DECODED) return undefined;
+  const statements = splitShell(inner).statements;
+  const only = statements.length === 1 ? statements[0] : undefined;
+  return only === undefined ? undefined : textOutputOf(only.commands.map(expandWords));
+}
+
+/**
+ * Scripts a shell (or `source` / `.`) reads from a process substitution
+ * (review 8, item 8): `bash <(echo 'rm -rf /')`, `source <(echo … | base64
+ * -d)`. The `<(` ends statement `k` with the reader's `<`; the statements up to
+ * the one the `)` ends are what it runs. A download there is
+ * `process-substitution-remote-fetch`'s.
+ */
+function processSubstitutionScripts(statements: readonly ShellStatement[]): Array<string | 'opaque'> {
+  const out: Array<string | 'opaque'> = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined || statement.end !== '(' || !statement.masked.endsWith('<')) continue;
+    const words = statement.commands[statement.commands.length - 1];
+    const lastWord = words?.[words.length - 1];
+    if (words === undefined || lastWord === undefined || lastWord.value !== '<' || lastWord.redirectAt?.[0] !== 0) continue;
+    const head = words.slice(0, -1);
+    const at = resolveCommand(head).index;
+    const name = commandName(head[at]?.value ?? '');
+    const shell = STDIN_SHELLS.has(name) && scriptOperand(head, at, name) === undefined && !head.some((w) => !w.quoted && DASH_C.test(w.value));
+    if (!shell && name !== 'source' && name !== '.') continue;
+    const texts: string[] = [];
+    let opaque = false;
+    for (let j = k + 1; j < statements.length; j += 1) {
+      const body = statements[j];
+      if (body === undefined) break;
+      const text = textOutputOf(body.commands.map(expandWords));
+      if (text === 'opaque') opaque = true;
+      else if (text !== undefined) texts.push(text);
+      if (body.end === ')') break;
+    }
+    if (opaque) out.push('opaque');
+    if (texts.length > 0) out.push(texts.join('\n'));
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────── download, then run it
@@ -4150,7 +4088,7 @@ function commandRuns(statement: ShellStatement, c: number, heads: readonly numbe
     if (file >= 0) out.push(rest[file + 1] ?? '');
     else out.push(...operands);
   } else if (name === 'cmd') {
-    const run = rest.findIndex((v) => /^\/[ck]$/i.test(v));
+    const run = rest.findIndex((v) => /^\/[ck]$/i.test(cmdSwitch(v)));
     if (run >= 0) out.push(rest[run + 1] ?? '');
   } else if (SCRIPT_SHELLS.has(name) || isInterpreter(name)) {
     const script = scriptOperand(words, at, name);
@@ -4545,6 +4483,168 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
   return null;
 }
 
+/** A POSIX shell's `CDPATH=a:b`: the directories a relative `cd` also searches. */
+function cdpathValue(word: string): string[] | undefined {
+  const m = /^CDPATH=(.*)$/.exec(word);
+  return m === null ? undefined : (m[1] ?? '').split(':').filter((d) => d !== '');
+}
+
+/**
+ * Where the command is after `words` ({@link cwdAfter}), with what a `cd`
+ * can return to (review 8, item 15): `cd -` and `cd "$OLDPWD"` go back to the
+ * directory before the last move, `pushd` / `popd` keep a stack, and a
+ * relative `cd` also searches `CDPATH` — set before the command
+ * (`CDPATH=~/.config cd dev-guardian`) or earlier in the command (`export
+ * CDPATH=…`, `CDPATH=…;`). Each used to read as "where the command started",
+ * so `cd ~/.config/dev-guardian; cd /tmp; cd -; echo > hooks.json` was ok. A
+ * `CDPATH` entry that names a guarded directory is taken: the conservative
+ * reading. Stacks are replaced, never mutated: a nested scope shares them.
+ */
+function moveCwd(scope: Scope, words: readonly ShellWord[], at: number): void {
+  // `CDPATH=x` alone, or `export CDPATH=x`: for the rest of the command.
+  const head = words[at];
+  const exported = head !== undefined && commandName(head.value) === 'export';
+  for (const w of exported ? words.slice(at + 1) : head === undefined ? words : []) {
+    const dirs = cdpathValue(w.value);
+    if (dirs !== undefined) scope.cdpath = dirs;
+  }
+  if (head === undefined) return;
+  const name = commandName(head.value);
+  const args = withoutRedirections(words.slice(at + 1));
+  const prefix = words.slice(0, at).map((w) => cdpathValue(w.value)).find((d) => d !== undefined);
+  const cdpath = prefix ?? scope.cdpath ?? [];
+  const here = scope.cwd;
+  if (name === 'popd' || name === 'pop-location') {
+    const stack = scope.dirStack ?? [];
+    scope.prevCwd = here;
+    scope.cwd = stack[stack.length - 1] ?? '';
+    scope.dirStack = stack.slice(0, -1);
+    return;
+  }
+  if (!CD_COMMANDS.has(name)) return;
+  const target = psParam(args, ['path', 'literalpath']) ?? args.find((a) => a === '-' || !(a.startsWith('-') || /^\/d$/i.test(a)));
+  const pushes = name === 'pushd' || name === 'push-location';
+  let next: string | undefined;
+  if (target === '-' || (target !== undefined && /^\$\{?OLDPWD\}?$/.test(target))) next = scope.prevCwd ?? '';
+  else if (pushes && target === undefined) {
+    // `pushd` alone swaps the top two.
+    const stack = scope.dirStack ?? [];
+    next = stack[stack.length - 1] ?? '';
+    scope.dirStack = [...stack.slice(0, -1), here];
+    scope.prevCwd = here;
+    scope.cwd = next;
+    return;
+  } else {
+    next = cwdAfter(name, args, here, scope.dataDir) ?? here;
+    if (target !== undefined && !isAbsolutePath(target) && !/^\.\.?(?:[\\/]|$)/.test(target)) {
+      for (const dir of cdpath) {
+        const via = cwdAfter('cd', [resolveFrom(dir, target)], '', scope.dataDir);
+        if (via !== undefined && via !== '') {
+          next = via;
+          break;
+        }
+      }
+    }
+  }
+  if (pushes) scope.dirStack = [...(scope.dirStack ?? []), here];
+  scope.prevCwd = here;
+  scope.cwd = next;
+}
+
+// ─────────────────────────────── other catastrophic and destructive commands
+
+/** The filesystem root or a drive root — not a directory below one. */
+const ROOT_ITSELF = /^(?:\/\*?|\\\*?|[A-Za-z]:[\\/]?\*?|\/(?:mnt\/)?[A-Za-z]\/?\*?)$/i;
+
+/**
+ * `chmod -R` / `chown -R` / `chgrp -R` of the filesystem root, a drive root or
+ * a system directory (review 8, item 9): `chmod -R a+rwx /` matched no rule
+ * (only a numeric 777 did), and `chown -R x /` none at all — a recursive owner
+ * change clears every setuid bit, `sudo`'s included. The root itself blocks;
+ * a system directory (`/usr`, `/etc`, `C:\Windows`) warns.
+ */
+function recursivePermsOnRoot(words: readonly ShellWord[], at: number, tildeUsers = true): MatchedRule | null {
+  const name = commandName(words[at]?.value ?? '');
+  if (name !== 'chmod' && name !== 'chown' && name !== 'chgrp') return null;
+  const args = withoutRedirections(words.slice(at + 1));
+  if (!args.some((a) => a === '--recursive' || /^-[A-Za-z]*R[A-Za-z]*$/.test(a))) return null;
+  const operandWords = args.filter((a) => !a.startsWith('-') || /^-[rwxXst]+$/.test(a));
+  const targets = args.some((a) => a.startsWith('--reference')) ? operandWords : operandWords.slice(1);
+  const roots = targets.filter((t) => catastrophicKind(t, tildeUsers) === 'root');
+  if (roots.length === 0) return null;
+  return roots.some((t) => ROOT_ITSELF.test(stripQuotes(t)))
+    ? { id: 'recursive-perms-root', level: 'block', reason: 'Recursively changes the permissions or the owner of the filesystem root' }
+    : { id: 'recursive-perms-system', level: 'warn', reason: 'Recursively changes the permissions or the owner of a system directory — confirm this is intended' };
+}
+
+/**
+ * Commands that destroy something no delete rule sees (review 8, item 9) —
+ * warnings, since each is sometimes the job: Windows' restore points
+ * (`vssadmin delete shadows`, `wmic shadowcopy delete`), a machine-wide
+ * registry key (`reg delete HKLM\…`), the infrastructure Terraform manages
+ * (`terraform destroy`, `apply -destroy`), an S3 bucket's objects (`aws s3 rm
+ * --recursive`, `aws s3 rb --force`) and a GitHub repository (`gh repo delete`).
+ */
+function destructiveCommand(words: readonly ShellWord[], at: number): MatchedRule | null {
+  const name = commandName(words[at]?.value ?? '');
+  const args = withoutRedirections(words.slice(at + 1));
+  const plain = args.filter((a) => !a.startsWith('-') && !/^\/[A-Za-z]/.test(a)).map((a) => a.toLowerCase());
+  if ((name === 'vssadmin' && plain[0] === 'delete' && plain[1] === 'shadows') || (name === 'wmic' && plain[0] === 'shadowcopy' && plain.includes('delete'))) {
+    return { id: 'shadow-copy-delete', level: 'warn', reason: "Deletes Windows' volume shadow copies (restore points)" };
+  }
+  // `HKLM\SYSTEM` reaches the POSIX reader as `HKLMSYSTEM`.
+  if (name === 'reg' && plain[0] === 'delete' && /^(?:hklm|hkey_local_machine)/i.test(plain[1] ?? '')) {
+    return { id: 'registry-delete', level: 'warn', reason: 'Deletes a machine-wide registry key (HKLM)' };
+  }
+  if ((name === 'terraform' || name === 'tofu' || name === 'terragrunt') && (plain[0] === 'destroy' || (plain[0] === 'apply' && args.includes('-destroy')))) {
+    return { id: 'terraform-destroy', level: 'warn', reason: 'Destroys the infrastructure Terraform manages' };
+  }
+  if (name === 'aws' && plain[0] === 's3' && ((plain[1] === 'rm' && args.includes('--recursive')) || (plain[1] === 'rb' && args.includes('--force')))) {
+    return { id: 's3-recursive-delete', level: 'warn', reason: "Deletes an S3 bucket's objects recursively" };
+  }
+  if (name === 'gh' && plain[0] === 'repo' && plain[1] === 'delete') {
+    return { id: 'gh-repo-delete', level: 'warn', reason: 'Deletes a GitHub repository' };
+  }
+  return null;
+}
+
+/**
+ * The command line PowerShell's `Start-Process` / `saps` starts, as a script
+ * ({@link startProcessArgv}): its program and `-ArgumentList` (review 8, item
+ * 9 — `Start-Process cmd -ArgumentList '/c rd /s /q C:\'` was ok).
+ */
+function startedCommandLine(words: readonly ShellWord[], at: number): string | undefined {
+  const name = commandName(words[at]?.value ?? '');
+  if (name !== 'start-process' && name !== 'saps') return undefined;
+  const argv = startProcessArgv(words, at);
+  return argv === undefined ? undefined : argv.map((w) => posixWord(w.value)).join(' ');
+}
+
+/** `wsl`'s own options that take a value. */
+const WSL_VALUED = new Set(['-d', '--distribution', '-u', '--user', '--cd', '--shell-type', '--distribution-id']);
+
+/**
+ * The command `wsl [options] [--] command…` runs in Linux (review 8, item 9:
+ * `wsl rm -rf /mnt/c` was ok): the words after its options — after `-e` /
+ * `--exec` run without a shell, otherwise through the default shell. A
+ * management option (`--install`, `--list`, `--shutdown`, …) runs none.
+ */
+function wslScript(words: readonly ShellWord[], start: number): string | undefined {
+  for (let i = start + 1; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (v === '--') return words.slice(i + 1).map((w) => w.value).join(' ');
+    if (v === '-e' || v === '--exec') return words.slice(i + 1).map((w) => posixWord(w.value)).join(' ');
+    if (WSL_VALUED.has(v)) {
+      i += 1;
+      continue;
+    }
+    if (v === '--system' || v === '-s') continue;
+    if (v.startsWith('-')) return undefined;
+    return words.slice(i).map((w) => w.value).join(' ');
+  }
+  return undefined;
+}
+
 // ──────────────────────────────────────────────────────────── assessment
 
 const MAX_NESTING = 3;
@@ -4591,19 +4691,32 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   if (/<\(\s*(?:curl|wget)/i.test(commandText) && statements.some((_s, k) => interpreterRunsFetch(statements, k))) {
     out.push(RULE_PROCESS_FETCH);
   }
+  // `bash <(echo 'rm -rf /')`: what the substitution writes is the script (review 8, item 8).
+  if (commandText.includes('<(')) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
 
-  for (const statement of statements) {
+  for (const written of statements) {
     // The total time budget: a hook that outlives Claude Code's 15 s timeout
     // lets the command run unassessed, so what is left is reported instead.
     if (scope.notes.now() > scope.notes.deadline) {
       scope.notes.budget = true;
       return;
     }
+    // Brace expansion first, as bash does it (review 8, item 6): `{rm,-rf,/}`
+    // runs `rm -rf /`. The statement's words are read expanded from here on.
+    const commands = written.commands.map(expandWords);
+    const expanded = commands.some((c, k) => c !== written.commands[k]);
+    const statement: ShellStatement = expanded ? { ...written, commands } : written;
     // The ReDoS cap applies to each STATEMENT — never to a line before it is
     // split, which let padding hide every statement after it (fix round 1).
     const masked = capText(collapseBlanks(statement.masked), scope.notes);
+    // An expanded statement is read as its words, too, a quoted word masked.
+    const expandedText = expanded
+      ? capText(collapseBlanks(commands.map((ws) => ws.map((w) => (w.quoted ? MASK : w.value)).join(' ')).join(' | ')), scope.notes)
+      : undefined;
     for (const rule of BASH_RULES) {
-      if (rule.scope !== 'command' && (rule.test ?? ((t: string) => rule.pattern.test(t)))(masked)) {
+      if (rule.scope === 'command') continue;
+      const test = rule.test ?? ((t: string): boolean => rule.pattern.test(t));
+      if (test(masked) || (expandedText !== undefined && test(expandedText))) {
         out.push({ id: rule.id, level: rule.level, reason: rule.reason });
       }
     }
@@ -4618,19 +4731,35 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const del = assessRecursiveDelete(words, resolved.index, scope.home);
+      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers);
       if (del !== null) out.push(del);
-      const find = assessFind(words, resolved.index);
+      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers);
       if (find !== null) out.push(find);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
+      // `bash <<< 'rm -rf /'`, `sh <<< "$(echo … | base64 -d)"`: the here-string is the script (review 8, item 8).
+      const here = hereStringText(words);
+      if (here !== undefined && isBareShellStdin(withoutRedirectWords(words.slice(resolved.index)))) {
+        const generated = substitutionOutput(here);
+        collectGenerated([generated ?? here], depth, out, scope);
+      }
       // `python3 -c "$(curl …)"`, `node -e "$(curl …)"`: the program IS a
       // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
       if (adoptsDatabase(words, resolved.index) || adoptsDatabaseThroughLauncher(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
+      if (updatesBaseline(words, resolved.index) || throughLauncher(words, resolved.index, updatesBaseline)) {
+        out.push({ ...RULE_BASELINE_UPDATE });
+      }
+      const perms = recursivePermsOnRoot(words, resolved.index, scope.tildeUsers);
+      if (perms !== null) out.push(perms);
+      const destructive = destructiveCommand(words, resolved.index);
+      if (destructive !== null) out.push(destructive);
       const scripts = nestedScripts(words, resolved.index);
       const split = envSplitScript(words, resolved.index);
       if (split !== undefined) scripts.push(shellScript(split));
+      // `Start-Process cmd -ArgumentList '/c rd /s /q C:\'`: the command it starts (review 8, item 9).
+      const started = startedCommandLine(words, resolved.index);
+      if (started !== undefined) scripts.push(shellScript(started));
       const cmdHead = words[resolved.index];
       const line =
         cmdHead !== undefined && commandName(cmdHead.value) === 'cmd'
@@ -4648,6 +4777,9 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // BASH_RULES fires on it at the next depth. Checked directly, in
           // addition to (not instead of) recursing.
           if (isBareRemoteFetch(script)) out.push(RULE_FETCH_EXEC);
+          // `bash -c "$(echo … | base64 -d)"`: what the substitution writes is
+          // the script (review 8, item 8).
+          if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           // `iex "& { $(irm …) }"`: whatever `iex` is handed is code, so a
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
@@ -4660,11 +4792,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
         if (line !== undefined) collect(line, depth + 1, out, { ...scope, cmdLine: true });
       }
-      const head = words[resolved.index];
-      if (head !== undefined) {
-        const args = withoutRedirections(words.slice(resolved.index + 1));
-        scope.cwd = cwdAfter(commandName(head.value), args, scope.cwd, scope.dataDir) ?? scope.cwd;
-      }
+      moveCwd(scope, words, resolved.index);
     }
     // Finding 4: text a shell actually reads as its script — `bash <<EOF …
     // EOF`, `echo '…' | bash`, `printf '…' | sh` — is assessed as a command
@@ -4676,12 +4804,29 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // interpreter reads the same way (`python - <<EOF`) is judged as program
     // text, like `python -c`.
     const fed = fedScripts(statement, isBareShellStdin);
+    if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
     if (depth < MAX_NESTING) {
-      for (const { text } of fed) collect(text, depth + 1, out, { ...scope, cmdLine: false });
+      for (const { text, opaque } of fed) if (opaque !== true) collect(text, depth + 1, out, { ...scope, cmdLine: false });
     } else if (fed.length > 0) scope.notes.depth = true;
-    for (const { text, reader } of fedScripts(statement, isBareInterpreterStdin)) {
-      pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope));
+    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin)) {
+      if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
+      else pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope));
     }
+  }
+}
+
+/**
+ * A script whose text is only known as what another command writes — a
+ * process substitution a shell reads, or a `$(…)` handed to `bash -c` /
+ * `eval` (review 8, item 8): assessed like any nested script, and a decoder
+ * whose output cannot be read is a warning, never a silent ok.
+ */
+function collectGenerated(texts: ReadonlyArray<string | 'opaque' | undefined>, depth: number, out: MatchedRule[], scope: Scope): void {
+  for (const text of texts) {
+    if (text === undefined) continue;
+    if (text === 'opaque') out.push({ ...RULE_DECODED_SCRIPT });
+    else if (depth >= MAX_NESTING) scope.notes.depth = true;
+    else collect(text, depth + 1, out, { ...scope, cmdLine: false });
   }
 }
 
@@ -4722,6 +4867,16 @@ export interface AssessOptions {
    * `$GUARDIAN_DATA_DIR`) are recognised whatever this is.
    */
   dataDir?: string;
+  /**
+   * The directory the command runs in, and the project the session belongs to
+   * (the hook's payload `cwd` and its project root). With either, a guarded
+   * path spelled in full that lies outside them both and the home directory —
+   * another project's `.guardian/hooks.config.json`, a fake HOME's
+   * `~/.config/dev-guardian/hooks.json` — warns instead of being denied
+   * (review 8, item 14). Without them, every one is denied.
+   */
+  cwd?: string;
+  projectDir?: string;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -4790,12 +4945,22 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   // respelled `'` is four characters (fix round 4).
   const cut = whole.length > MAX_COMMAND_LENGTH;
   const text = cut ? whole.slice(0, MAX_COMMAND_LENGTH) : whole;
-  const home = homeDirFor(opts.homeDir ?? safeHomedir(), opts.platform ?? process.platform);
+  const homeRaw = opts.homeDir ?? safeHomedir();
+  const platform = opts.platform ?? process.platform;
+  const home = homeDirFor(homeRaw, platform);
   const dataDir = normalizedPath(opts.dataDir ?? safeUserDataDir());
+  const configDir = opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR'];
+  const fold = platform === 'win32';
+  const placeKey = (p: string | undefined): string | undefined => (p === undefined || p.trim() === '' ? undefined : targetKey(p, fold));
   const where: Where = {
     home,
-    configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR']),
+    configDirName: configDirNameOf(configDir),
     dataDir: dataDir === '' ? undefined : dataDir,
+    tildeUsers: opts.shell !== 'powershell',
+    places:
+      opts.cwd === undefined && opts.projectDir === undefined
+        ? undefined
+        : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) },
   };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
@@ -4813,6 +4978,10 @@ interface Where {
   configDirName: string | undefined;
   /** dev-guardian's data directory, normalised. */
   dataDir: string | undefined;
+  /** `~name` names a home directory — false for the PowerShell tool. */
+  tildeUsers: boolean;
+  /** Where the guarded paths are this session's, when the caller said where it runs. */
+  places: Places | undefined;
 }
 
 /** {@link userDataDir}, or `''` when it cannot be worked out. */
@@ -4876,11 +5045,13 @@ function assessReadings(
   const blocks = effective.filter((r) => r.level === 'block');
   const only = blocks.length === 1 ? blocks[0] : undefined;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
+  const ask = blocks.length === 0 ? byId.get(RULE_BASELINE_UPDATE.id)?.reason : undefined;
 
   return {
     level: effective[0]?.level ?? 'ok',
     reasons: effective.map((r) => r.reason),
     rules: effective.map((r) => r.id),
     ...(own === undefined ? {} : { denyMessage: own }),
+    ...(ask === undefined ? {} : { ask }),
   };
 }

@@ -665,9 +665,13 @@ describe('assessBashCommand — task-1: previously unflagged catastrophic comman
     });
   }
 
-  it('find ~ -delete warns rather than blocks', () => {
-    const a = assessBashCommand('find ~ -delete');
+  // Review 8, item 7: `find ~ -delete` deletes the whole home directory, as
+  // `rm -rf ~` does; a test that narrows what it finds makes it a cleanup.
+  it('find ~ -delete blocks like rm -rf ~; with a test that narrows it, it warns', () => {
+    expect(assessBashCommand('find ~ -delete').level).toBe('block');
+    const a = assessBashCommand("find ~ -name '*.pyc' -delete");
     expect(a.level).toBe('warn');
+    expect(a.rules).toEqual(['find-delete-home']);
   });
 
   it('git push origin +main warns (force-push shorthand)', () => {
@@ -3389,5 +3393,428 @@ describe("assessBashCommand — dev-guardian's registry of trusted databases (re
     ['Remove-Item $env:LOCALAPPDATA\\dev-guardian\\registry\\abc.json', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
   ] as const)('%s stays ok', (command, shell, dataDir) => {
     expect(judge(command, shell, dataDir)).toEqual({ command, level: 'ok', rules: [] });
+  });
+});
+
+// Review 8 (dev-guardian 3.3.0): spellings of the catastrophic deletes, and
+// scripts fed to a shell, that the guard read as ok — each with the ordinary
+// commands next to it that must stay as they were.
+describe('assessBashCommand — review 8: a recursive delete is judged by its target, not by -f (item 1)', () => {
+  const win = { homeDir: 'C:\\Users\\alice', platform: 'win32' as const };
+  it.each([
+    ['rm -r ~', {}],
+    ['rm -r ~/*', {}],
+    ['rm -rv ~', {}],
+    ['rm -R $HOME', {}],
+    ['rm --recursive /', {}],
+    ['rm -r /c/Users/alice', win],
+    ['rd /s C:\\', {}],
+    ["del /s 'C:\\*'", {}],
+  ] as const)('%s blocks', (command, opts) => {
+    const a = assessBashCommand(command, opts);
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'block', rules: ['rm-rf-root'] });
+  });
+
+  it.each(['Remove-Item ~ -Recurse', 'Remove-Item $HOME -Recurse', 'ri ~\\* -Recurse', 'rm -r C:\\Users\\alice'])(
+    'PowerShell: %s blocks',
+    (command) => {
+      expect(assessBashCommand(command, { ...win, shell: 'powershell' }).level).toBe('block');
+    },
+  );
+
+  it.each([
+    ['rm -r node_modules', 'bash'],
+    ['rm -r ./build dist', 'bash'],
+    ['Remove-Item .\\build -Recurse', 'powershell'],
+    ['del /s *.tmp', 'bash'],
+  ] as const)('%s only warns, as its forced form does', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'warn', rules: ['rm-rf-broad'] });
+  });
+
+  it.each([
+    ['rm -f ~/*', 'bash'],
+    ['rm notes.txt', 'bash'],
+    ['del /q report.txt', 'bash'],
+    ['Remove-Item C:\\x -Recurse:$false', 'powershell'],
+    ['Remove-Item -Force .\\x.txt', 'powershell'],
+    ['Remove-Item -Filter *.tmp -Path .\\build', 'powershell'],
+  ] as const)('%s stays ok: nothing recursive', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+});
+
+describe('assessBashCommand — review 8: `cmd //c`, the form Git Bash runs (item 2)', () => {
+  it.each([
+    "cmd //c 'rd /s /q C:\\Users'",
+    "cmd //C 'del /s /q /f C:\\*'",
+    'cmd.exe //c rd /s /q C:\\',
+    'cmd //c rd //s //q C:\\',
+    'cmd //k rd //s C:\\',
+  ])('%s blocks', (command) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('rm-rf-root');
+  });
+
+  it('cmd //c copy onto the user-level hook configuration is a config write', () => {
+    expect(assessBashCommand("cmd //c 'copy evil.json %USERPROFILE%\\.config\\dev-guardian\\hooks.json'").rules).toContain(
+      'guard-config-shell-write',
+    );
+  });
+
+  it.each(['cmd //c echo hello', 'cmd //c dir', "cmd //c 'ver'", 'cmd //c rd //s //q .\\build'])('%s is not a catastrophe', (command) => {
+    expect(assessBashCommand(command).level).not.toBe('block');
+  });
+});
+
+describe('assessBashCommand — review 8: Windows folders, other homes and root globs in every spelling (item 3)', () => {
+  it.each([
+    'rm -rf /c/Windows',
+    'rm -rf /C/WINDOWS/System32',
+    'rm -rf C:/Windows',
+    'rm -rf c:/windows/',
+    'rm -rf /mnt/c/Windows',
+    "rm -rf '/mnt/c/Program Files'",
+    'rm -rf /c/users',
+    'rm -rf C:/PROGRA~1',
+    'rm -rf /c/ProgramData/*',
+    'rm -rf ~alice',
+    'rm -rf ~alice/*',
+    'rm -rf /[a-z]*',
+    'rm -rf /?*',
+    'rm -rf /*/',
+    'rm -rf /c/U*',
+    'rm -rf ?:/',
+  ])('%s blocks', (command) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'block', rules: ['rm-rf-root'] });
+  });
+
+  it.each(['rm -rf /tmp*', 'rm -rf /tmp/*', 'rm -rf /usr/local/*', 'rm -rf ~+', 'rm -rf /c/Users/alice/project', 'rm -rf C:/Windows/Temp/*'])(
+    '%s only warns',
+    (command) => {
+      expect(assessBashCommand(command, { homeDir: 'C:\\Users\\alice', platform: 'win32' }).level).toBe('warn');
+    },
+  );
+
+  it('the PowerShell tool has no ~name: `~\\project\\build` read the POSIX way is not another home', () => {
+    expect(assessBashCommand('Remove-Item ~\\project\\build -Recurse -Force', { shell: 'powershell' }).rules).toEqual(['rm-rf-broad']);
+  });
+});
+
+describe('assessBashCommand — review 8: brace expansion and globs in a directory (item 6)', () => {
+  it.each([
+    ['{rm,-rf,/}', 'rm-rf-root'],
+    ['{rm,} -rf /', 'rm-rf-root'],
+    ['rm -rf /{bin,etc,usr}', 'rm-rf-root'],
+    ['rm -rf /{a..z}', 'rm-rf-root'],
+    ['{chmod,-R,777,/}', 'chmod-777-root'],
+    ['tee ~/.config/dev-guardian/{hooks,x}.json', 'guard-config-shell-write'],
+    ['echo x > ~/.config/dev-guardia?/hooks.json', 'guard-config-shell-write'],
+    ['echo x > ~/.c*/dev-guardian/hooks.json', 'guard-config-shell-write'],
+    ['cp a.json .guard*/hooks.config.json', 'guard-config-shell-write'],
+    ['rm ~/.config/dev-guardia?/hooks.json', 'guard-config-remove'],
+  ])('%s is denied (%s)', (command, rule) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each([
+    'mkdir -p src/{a,b,c}',
+    'echo {1..100}',
+    'echo {a,b}{c,d}',
+    "find . -name '*.{js,ts}'",
+    'echo ${HOME}',
+    'git commit -m "{rm,-rf,/}"',
+    "echo '{rm,-rf,/}'",
+    'cp src/{a,b}.ts dest/',
+    'echo {1..100000}',
+    'rm -rf ./{dist,build}',
+  ])('%s is not denied', (command) => {
+    expect(assessBashCommand(command).level).not.toBe('block');
+  });
+
+  timeShape('a word of nested braces', (n) => assessBashCommand(`echo ${'{a,'.repeat(n)}${'}'.repeat(n)}`), 128, 500);
+  timeShape('a word of many brace pairs', (n) => assessBashCommand(`echo ${'{a,b}'.repeat(n)}`), 64, 500);
+});
+
+describe('assessBashCommand — review 8: find deletes the root in every spelling (item 7)', () => {
+  it.each([
+    'find -L / -delete',
+    'find -P / -delete',
+    'find -H -O3 / -delete',
+    'find -D tree / -delete',
+    'find / -exec rm -rf {} +',
+    'find / -type f -exec rm {} \\;',
+    'find / -execdir rm {} \\;',
+    'find /c -delete',
+    'find /c/Windows -delete',
+    'find ~ -delete',
+    'find $HOME -type f -delete',
+    'find . -exec rm -rf / \\;',
+  ])('%s blocks', (command) => {
+    expect({ command, level: assessBashCommand(command).level }).toEqual({ command, level: 'block' });
+  });
+
+  it.each([
+    ['find . -delete', 'find-delete-broad'],
+    ['find -delete', 'find-delete-broad'],
+    ["find ~ -name '*.pyc' -delete", 'find-delete-home'],
+  ])('%s warns (%s)', (command, rule) => {
+    expect(assessBashCommand(command).rules).toEqual([rule]);
+  });
+
+  it.each([
+    'find ./tmp -delete',
+    'find . -name "*.log" -mtime +7 -delete',
+    'find . -name x -exec rm {} +',
+    "find . -name '*.tmp' -print0 | xargs -0 rm -f",
+    'find / -name "*.log"',
+    'find . -type f -exec grep -l x {} +',
+    'find . -empty -delete',
+  ])('%s stays ok', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
+  });
+});
+
+describe('assessBashCommand — review 8: scripts fed to a shell by process substitution, -c -- and decoders (item 8)', () => {
+  it.each([
+    ["bash <(echo 'rm -rf /')", 'rm-rf-root'],
+    ['bash <(echo "echo x > ~/.config/dev-guardian/hooks.json")', 'guard-config-shell-write'],
+    ["source <(echo 'rm -rf ~')", 'rm-rf-root'],
+    [". <(printf '%s' 'rm -rf /')", 'rm-rf-root'],
+    ["bash -c -- 'rm -rf /'", 'rm-rf-root'],
+    ["bash -c -e 'rm -rf /'", 'rm-rf-root'],
+    ["bash -c -o pipefail 'rm -rf /'", 'rm-rf-root'],
+    ['echo cm0gLXJmIC8K | base64 -d | sh', 'rm-rf-root'],
+    ['echo cm0gLXJmIC8K | base64 --decode | bash', 'rm-rf-root'],
+    ['base64 -d <<< cm0gLXJmIC8K | sh', 'rm-rf-root'],
+    ['bash -c "$(echo cm0gLXJmIC8K | base64 -d)"', 'rm-rf-root'],
+    ['eval "$(echo cm0gLXJmIC8K | base64 -d)"', 'rm-rf-root'],
+    ["sh -c \"$(echo 'rm -rf /')\"", 'rm-rf-root'],
+    ["bash <<< 'rm -rf /'", 'rm-rf-root'],
+    ['bash <<< "$(echo cm0gLXJmIC8K | base64 -d)"', 'rm-rf-root'],
+  ])('%s is denied (%s)', (command, rule) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each(['base64 -d payload.b64 | sh', 'echo H4sIAAAA | base64 -d | gunzip | sh', 'xxd -r -p x.hex | bash', 'cat p.b64 | base64 -d | python3'])(
+    '%s warns: what it runs cannot be read',
+    (command) => {
+      const a = assessBashCommand(command);
+      expect({ command, level: a.level }).toEqual({ command, level: 'warn' });
+      expect(a.rules).toContain('decoded-script');
+    },
+  );
+
+  it.each([
+    'echo ZWNobyBoaQo= | base64 -d | sh',
+    'echo aGVsbG8= | base64 -d',
+    'echo cm0gLXJmIC8K | base64 -d > out.txt',
+    'cat x.b64 | base64 -d > img.png',
+    'bash <(cat script.sh)',
+    'diff <(sort a) <(sort b)',
+    "grep x <<< 'rm -rf /'",
+    "bash <<< 'echo hi'",
+    'gunzip -c logs.gz | grep error',
+  ])('%s stays ok', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
+  });
+});
+
+describe('assessBashCommand — review 8: other catastrophic equivalents (item 9)', () => {
+  it.each([
+    ['rsync -a --delete empty/ /', 'bash', 'rm-rf-root'],
+    ['rsync -a --delete-after empty/ ~/', 'bash', 'rm-rf-root'],
+    ['chmod -R a+rwx /', 'bash', 'recursive-perms-root'],
+    ['chown -R nobody /', 'bash', 'recursive-perms-root'],
+    ['cat /dev/zero | tee /dev/sda', 'bash', 'disk-overwrite'],
+    ['cp image.img /dev/sdb', 'bash', 'disk-overwrite'],
+    ["[IO.Directory]::Delete('C:\\', $true)", 'powershell', 'rm-rf-root'],
+    ['robocopy empty C:\\Users /MIR', 'powershell', 'rm-rf-root'],
+    ['wsl rm -rf /mnt/c', 'bash', 'rm-rf-root'],
+    ['wsl -d Ubuntu -- rm -rf /', 'bash', 'rm-rf-root'],
+    ['wsl -e rm -rf /', 'bash', 'rm-rf-root'],
+    ["Start-Process cmd -ArgumentList '/c rd /s /q C:\\'", 'powershell', 'rm-rf-root'],
+    ['f(){ f|f& };f', 'bash', 'fork-bomb'],
+    ['bomb () { bomb | bomb & } ; bomb', 'bash', 'fork-bomb'],
+  ] as const)('%s is denied (%s)', (command, shell, rule) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each([
+    ['chown -R me /usr', 'recursive-perms-system'],
+    ['vssadmin delete shadows /all /quiet', 'shadow-copy-delete'],
+    ['wmic shadowcopy delete', 'shadow-copy-delete'],
+    ['reg delete HKLM\\SYSTEM /f', 'registry-delete'],
+    ['terraform destroy -auto-approve', 'terraform-destroy'],
+    ['terraform apply -destroy', 'terraform-destroy'],
+    ['aws s3 rm s3://bucket --recursive', 's3-recursive-delete'],
+    ['aws s3 rb s3://bucket --force', 's3-recursive-delete'],
+    ['gh repo delete me/x --yes', 'gh-repo-delete'],
+  ])('%s warns (%s)', (command, rule) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'warn' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each([
+    ['rsync -a --delete src/ dest/', 'bash'],
+    ['chown -R me ./build', 'bash'],
+    ['chmod -R 755 ~', 'bash'],
+    ['cp /dev/sda disk.img', 'bash'],
+    ["[IO.Directory]::Delete('C:\\temp\\x', $true)", 'powershell'],
+    ['robocopy src dest /MIR', 'powershell'],
+    ['wsl --list --verbose', 'bash'],
+    ['wsl ls -la', 'bash'],
+    ['Start-Process notepad readme.txt', 'powershell'],
+    ["echo 'f(){ f|f& };f'", 'bash'],
+    ['reg query HKLM\\SOFTWARE', 'bash'],
+    ['terraform plan', 'bash'],
+    ['aws s3 ls s3://bucket', 'bash'],
+    ['gh repo view', 'bash'],
+    ['function build(){ make | tee log & }; build', 'bash'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+
+  it('the fork-bomb test agrees with its pattern', () => {
+    const rule = BASH_RULES.find((r) => r.id === 'fork-bomb');
+    const samples = [
+      ':(){ :|:& };:', 'f(){ f|f& };f', 'f(){ f|g& };f', 'f(){ f|f& };g', 'ff(){ f|f& };f', 'a.b(){ a.b|a.b& };a.b',
+      'x f(){ f|f& };f y', 'f (){ f | f & } ; f', 'f(){ f|f&};fx', `${'a'.repeat(70)}(){ a|a& };a`, '(){ |& };',
+    ];
+    for (const s of samples) {
+      expect({ s, linear: rule?.test?.(s) }).toEqual({ s, linear: rule?.pattern.test(s) });
+    }
+  });
+
+  timeShape('a long word before ( ) {', (n) => assessBashCommand(`${'a'.repeat(n)}(){ x`), 2_000, 500);
+});
+
+describe('assessBashCommand — review 8: a guarded path elsewhere warns, here it is denied (item 14)', () => {
+  const here = { cwd: '/work/proj', projectDir: '/work/proj', homeDir: '/home/alice', platform: 'linux' as const };
+  it.each([
+    'echo x > test/fixtures/p/.guardian/hooks.config.json',
+    'echo x > /work/proj/.guardian/hooks.config.json',
+    'echo x > /work/proj/packages/api/.guardian/hooks-allowlist.json',
+    'echo x > /home/alice/.config/dev-guardian/hooks.json',
+    'echo x > ~/.config/dev-guardian/hooks.json',
+    'echo x > $HOME/.config/dev-guardian/hooks.json',
+    'echo x > $X/.guardian/hooks.config.json',
+    'cd /tmp/proj && echo x > .guardian/hooks.config.json',
+    `node -e "require('fs').readFileSync('.guardian/hooks.config.json')"`,
+    `echo '{"disableAllHooks":true}' > /home/alice/.claude/settings.json`,
+  ])('%s is denied', (command) => {
+    expect({ command, level: assessBashCommand(command, here).level }).toEqual({ command, level: 'block' });
+  });
+
+  it.each([
+    'echo x > /tmp/proj/.guardian/hooks.config.json',
+    'echo x > /tmp/fakehome/.config/dev-guardian/hooks.json',
+    'rm /tmp/proj/.guardian/hooks.config.json',
+    `node -e "require('fs').readFileSync('/tmp/proj/.guardian/hooks.config.json')"`,
+    `echo '{"disableAllHooks":true}' > /tmp/fx/.claude/settings.json`,
+    'echo x > ~bob/.config/dev-guardian/hooks.json',
+  ])('%s warns: not this session’s', (command) => {
+    const a = assessBashCommand(command, here);
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'warn', rules: ['guard-config-elsewhere'] });
+  });
+
+  it('Windows: a fixture under the temp directory warns, the project’s own is denied', () => {
+    const win = { cwd: 'C:\\work\\proj', projectDir: 'C:\\work\\proj', homeDir: 'C:\\Users\\alice', platform: 'win32' as const };
+    expect(assessBashCommand("echo x > 'C:\\Users\\alice\\AppData\\Local\\Temp\\h\\.config\\dev-guardian\\hooks.json'", win).rules).toEqual([
+      'guard-config-elsewhere',
+    ]);
+    expect(assessBashCommand('echo x > /c/work/proj/.guardian/hooks.config.json', win).level).toBe('block');
+    expect(assessBashCommand('echo x > /c/Users/ALICE/.config/dev-guardian/hooks.json', win).level).toBe('block');
+  });
+
+  it('without a cwd or a project (check --bash), every one is denied as before', () => {
+    expect(assessBashCommand('echo x > /tmp/proj/.guardian/hooks.config.json').level).toBe('block');
+  });
+});
+
+describe('assessBashCommand — review 8: configuration writes the guard did not model (item 15)', () => {
+  it.each([
+    ['ed .guardian/hooks.config.json', 'bash'],
+    ["ex -sc '%s/true/false/|x' ~/.config/dev-guardian/hooks.json", 'bash'],
+    ["vim -es -c '%s/a/b/' -c wq .guardian/hooks-allowlist.json", 'bash'],
+    ['cd ~/.config/dev-guardian && cd /tmp && cd - && echo x > hooks.json', 'bash'],
+    ['cd ~/.config/dev-guardian; cd /tmp; cd "$OLDPWD"; echo x > hooks.json', 'bash'],
+    ['pushd ~/.config/dev-guardian && pushd /tmp && popd && echo x > hooks.json', 'bash'],
+    ['CDPATH=~/.config cd dev-guardian && echo x > hooks.json', 'bash'],
+    ['export CDPATH=~/.config; cd dev-guardian; echo x > hooks.json', 'bash'],
+    ["sc .guardian\\hooks.config.json '{}'", 'powershell'],
+    ['$w = [IO.StreamWriter]::new("$HOME\\.config\\dev-guardian\\hooks.json")', 'powershell'],
+    ["$w = New-Object IO.StreamWriter('.guardian\\hooks.config.json')", 'powershell'],
+    ["New-Object System.IO.StreamWriter -ArgumentList '.guardian\\hooks.config.json'", 'powershell'],
+    ["[IO.FileStream]::new('.guardian\\hooks.config.json', 'Create')", 'powershell'],
+  ] as const)('%s is denied', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('guard-config-shell-write');
+  });
+
+  it.each([
+    String.raw`printf '{"disableAllHook\x73":true}' > .claude/settings.json`,
+    String.raw`printf '{"disableAllHooks\u0022:true}' > .claude/settings.json`,
+    'echo eyJkaXNhYmxlQWxsSG9va3MiOnRydWV9 | base64 -d > .claude/settings.local.json',
+  ])('%s: an escaped or encoded key still names it', (command) => {
+    expect(assessBashCommand(command).rules).toContain('claude-settings-loosen');
+  });
+
+  it.each([
+    ['vim notes.txt', 'bash'],
+    ['cd /tmp && cd - && echo x > notes.txt', 'bash'],
+    ["$r = New-Object IO.StreamReader('.guardian\\hooks.config.json')", 'powershell'],
+    ["[IO.FileStream]::new('.guardian\\hooks.config.json', 'Open', 'Read')", 'powershell'],
+    ['echo eyJwZXJtaXNzaW9ucyI6e319 | base64 -d > .claude/settings.local.json', 'bash'],
+    [`jq '.permissions.allow += ["Bash(ls)"]' .claude/settings.json > tmp && mv tmp .claude/settings.json`, 'bash'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+});
+
+describe('assessBashCommand — review 8: an agent-run `baseline update` is the user’s to decide (C2)', () => {
+  it.each([
+    ['dev-guardian baseline update --project .', 'bash'],
+    ['node "C:/Users/me/.claude/plugins/cache/m/dev-guardian/3.3.0/cli/dev-guardian.mjs" baseline update --project .', 'bash'],
+    ['node .specs/guardian.cjs baseline update --project .', 'bash'],
+    ['npx dev-guardian baseline update', 'bash'],
+    ["bash -c 'node .specs/guardian.cjs baseline update'", 'bash'],
+    ["cmd /c 'node .specs\\guardian.cjs baseline update'", 'bash'],
+    ["Start-Process node -ArgumentList '.specs/guardian.cjs baseline update'", 'powershell'],
+  ] as const)('%s asks', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'warn', rules: ['baseline-update'] });
+    expect(a.ask).toMatch(/EVERY current finding.*user decides.*nosemgrep/s);
+  });
+
+  it('a block wins over the question', () => {
+    const a = assessBashCommand('dev-guardian baseline update && rm -rf /');
+    expect(a.level).toBe('block');
+    expect(a.ask).toBeUndefined();
+  });
+
+  it.each([
+    'node .specs/guardian.cjs scan --project . --format json',
+    'dev-guardian baseline --help',
+    'git commit -m "run dev-guardian baseline update later"',
+    'echo dev-guardian baseline update',
+  ])('%s asks nothing', (command) => {
+    const a = assessBashCommand(command);
+    expect(a.ask).toBeUndefined();
+    expect(a.level).toBe('ok');
+  });
+
+  it('the launcher counts for db adopt --yes too', () => {
+    expect(assessBashCommand('node .specs/guardian.cjs db adopt --yes').rules).toEqual(['db-adopt-yes']);
   });
 });
