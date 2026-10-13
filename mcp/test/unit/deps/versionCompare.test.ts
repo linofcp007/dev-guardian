@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   compareVersions,
-  compareVersionsLoose,
   isCleanVersion,
   isLooseVersion,
   minCleanVersionAbove,
@@ -74,20 +73,20 @@ describe('isLooseVersion', () => {
   });
 });
 
-describe('compareVersionsLoose', () => {
+describe('compareVersions — pre-releases (the one comparator, review 8 finding 16)', () => {
   it('a pre-release is below the same core with no suffix', () => {
-    expect(compareVersionsLoose('2.0.0-beta.1', '2.0.0')).toBeLessThan(0);
-    expect(compareVersionsLoose('2.0.0', '2.0.0-beta.1')).toBeGreaterThan(0);
+    expect(compareVersions('2.0.0-beta.1', '2.0.0')).toBeLessThan(0);
+    expect(compareVersions('2.0.0', '2.0.0-beta.1')).toBeGreaterThan(0);
   });
 
   it('a pre-release core below a later release core is below it regardless of the suffix', () => {
     // The coordinator's own example: 2.0.0-beta.1 < 2.0.1.
-    expect(compareVersionsLoose('2.0.0-beta.1', '2.0.1')).toBeLessThan(0);
+    expect(compareVersions('2.0.0-beta.1', '2.0.1')).toBeLessThan(0);
   });
 
   it('compares pre-release identifiers segment by segment, numeric segments numerically', () => {
-    expect(compareVersionsLoose('2.0.0-beta.2', '2.0.0-beta.10')).toBeLessThan(0); // not lexical
-    expect(compareVersionsLoose('2.0.0-alpha', '2.0.0-beta')).toBeLessThan(0);
+    expect(compareVersions('2.0.0-beta.2', '2.0.0-beta.10')).toBeLessThan(0); // not lexical
+    expect(compareVersions('2.0.0-alpha', '2.0.0-beta')).toBeLessThan(0);
   });
 });
 

@@ -36224,19 +36224,318 @@ var init_npmAudit = __esm({
   }
 });
 
+// src/pkgvet/versions.ts
+function parse7(version2) {
+  let s = version2.trim().replace(/^[vV=]+/, "");
+  const plus = s.indexOf("+");
+  if (plus >= 0) s = s.slice(0, plus);
+  const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s);
+  if (m === null) return null;
+  const releaseText = m[1] ?? "";
+  const rest = m[2] ?? "";
+  const release = releaseText.split(".").map((x) => Number(x));
+  if (release.some((n) => !Number.isFinite(n))) return null;
+  let stage = 2;
+  if (rest !== "") {
+    if (POST_REST.test(rest)) stage = 3;
+    else if (DEV_REST.test(rest)) stage = 0;
+    else stage = 1;
+  }
+  return { release, stage, rest };
+}
+function compareRelease(a, b) {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+function compareRest(a, b) {
+  const ta = a.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const tb = b.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const n = Math.max(ta.length, tb.length);
+  for (let i = 0; i < n; i += 1) {
+    const x = ta[i];
+    const y = tb[i];
+    if (x === void 0) return -1;
+    if (y === void 0) return 1;
+    const nx = Number(x);
+    const ny = Number(y);
+    if (Number.isFinite(nx) && Number.isFinite(ny)) {
+      if (nx !== ny) return nx - ny;
+    } else if (x.toLowerCase() !== y.toLowerCase()) {
+      return x.toLowerCase() < y.toLowerCase() ? -1 : 1;
+    }
+  }
+  return 0;
+}
+function compareVersions(a, b) {
+  const pa = parse7(a);
+  const pb = parse7(b);
+  if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
+  const r = compareRelease(pa.release, pb.release);
+  if (r !== 0) return r;
+  if (pa.stage !== pb.stage) return pa.stage - pb.stage;
+  return compareRest(pa.rest, pb.rest);
+}
+function isPrerelease(version2) {
+  const p = parse7(version2);
+  return p === null || p.stage < 2;
+}
+function partial(text2) {
+  const t = text2.trim().replace(/^[vV]/, "");
+  if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
+  const plus = t.indexOf("+");
+  const noBuild = plus >= 0 ? t.slice(0, plus) : t;
+  const dash = noBuild.search(/-/);
+  const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
+  const pre = dash >= 0 ? noBuild.slice(dash) : "";
+  const nums = [];
+  for (const part of core.split(".")) {
+    if (WILD.test(part)) break;
+    if (!/^\d+$/.test(part)) return null;
+    nums.push(Number(part));
+  }
+  return { nums, pre };
+}
+function bump(nums) {
+  const next = nums.slice();
+  const last = next.length - 1;
+  next[last] = (next[last] ?? 0) + 1;
+  return fmt(next);
+}
+function comparator(op, text2, composerTilde) {
+  const p = partial(text2);
+  if (p === null) return null;
+  const { nums, pre } = p;
+  const full = nums.length >= 3;
+  const exact = full ? fmt(nums) + pre : fmt(nums);
+  switch (op) {
+    case "":
+    case "=":
+    case "==":
+      if (nums.length === 0) return [ANY];
+      if (full) return [eq(exact)];
+      return [gte(fmt(nums)), lt(bump(nums))];
+    case "^": {
+      if (nums.length === 0) return [ANY];
+      const [major = 0, minor, patch] = nums;
+      if (major > 0 || nums.length === 1) return [gte(exact), lt(bump([major]))];
+      if ((minor ?? 0) > 0 || nums.length === 2) return [gte(exact), lt(bump([0, minor ?? 0]))];
+      return [gte(exact), lt(bump([0, 0, patch ?? 0]))];
+    }
+    case "~":
+    case "~>": {
+      if (nums.length === 0) return [ANY];
+      if (nums.length === 1) return [gte(exact), lt(bump(nums))];
+      if (composerTilde && nums.length === 2) return [gte(exact), lt(bump(nums.slice(0, 1)))];
+      return [gte(exact), lt(bump(nums.slice(0, 2)))];
+    }
+    case ">=":
+      return [gte(exact)];
+    case ">":
+      return full ? [gt(exact)] : nums.length === 0 ? [() => false] : [gte(bump(nums))];
+    case "<":
+      return [lt(exact)];
+    case "<=":
+      return full ? [lte(exact)] : nums.length === 0 ? [ANY] : [lt(bump(nums))];
+    case "!=":
+      return [(v) => !eq(exact)(v)];
+    default:
+      return null;
+  }
+}
+function semverishRange(range, composer) {
+  const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
+  const out = [];
+  for (const alt of alternatives) {
+    let text2 = alt.trim();
+    if (composer) text2 = text2.replace(/@[a-zA-Z]+$/, "").trim();
+    if (text2 === "" || text2 === "*" || WILD.test(text2)) {
+      out.push([ANY]);
+      continue;
+    }
+    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text2);
+    if (hyphen !== null) {
+      const lo = comparator(">=", hyphen[1] ?? "", composer);
+      const hiPartial = partial(hyphen[2] ?? "");
+      if (lo === null || hiPartial === null) return null;
+      const hi = hiPartial.nums.length >= 3 ? [lte(fmt(hiPartial.nums) + hiPartial.pre)] : hiPartial.nums.length === 0 ? [ANY] : [lt(bump(hiPartial.nums))];
+      out.push([...lo, ...hi]);
+      continue;
+    }
+    const tokens = text2.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
+    const preds = [];
+    for (const token of tokens) {
+      if (token === "") continue;
+      const m = COMPARATOR.exec(token);
+      if (m === null) return null;
+      const c = comparator(m[1] ?? "", m[2] ?? "", composer);
+      if (c === null) return null;
+      preds.push(...c);
+    }
+    out.push(preds);
+  }
+  return out;
+}
+function pep440Range(range) {
+  const preds = [];
+  for (const spec of range.split(",")) {
+    if (spec.trim() === "") continue;
+    const m = PEP440.exec(spec);
+    if (m === null) return null;
+    const op = m[1] ?? "";
+    const ver = m[2] ?? "";
+    if (op === "===") {
+      preds.push((v) => v === ver);
+      continue;
+    }
+    if (ver.endsWith(".*")) {
+      const prefix = partial(ver.slice(0, -2));
+      if (prefix === null || prefix.nums.length === 0) return null;
+      const inPrefix = (v) => {
+        const p = parse7(v);
+        return p !== null && prefix.nums.every((n, i) => (p.release[i] ?? 0) === n);
+      };
+      if (op === "==") preds.push(inPrefix);
+      else if (op === "!=") preds.push((v) => !inPrefix(v));
+      else return null;
+      continue;
+    }
+    if (parse7(ver) === null) return null;
+    switch (op) {
+      case "==":
+        preds.push(eq(ver));
+        break;
+      case "!=":
+        preds.push((v) => !eq(ver)(v));
+        break;
+      case ">=":
+        preds.push(gte(ver));
+        break;
+      case "<=":
+        preds.push(lte(ver));
+        break;
+      case ">":
+        preds.push(gt(ver));
+        break;
+      case "<":
+        preds.push(lt(ver));
+        break;
+      case "~=": {
+        const p = parse7(ver);
+        if (p === null || p.release.length < 2) return null;
+        const prefix = p.release.slice(0, -1);
+        preds.push(gte(ver), (v) => {
+          const q = parse7(v);
+          return q !== null && prefix.every((n, i) => (q.release[i] ?? 0) === n);
+        });
+        break;
+      }
+      default:
+        return null;
+    }
+  }
+  return [preds];
+}
+function nugetRange(range) {
+  const r = range.trim();
+  const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
+  if (m === null) return parse7(r) === null ? null : [[eq(r)]];
+  const open = m[1];
+  const lo = m[2] ?? "";
+  const hasComma = r.includes(",");
+  const hi = m[3] ?? "";
+  const close = m[4];
+  if (!hasComma) return lo === "" ? null : [[eq(lo)]];
+  const preds = [];
+  if (lo !== "") preds.push(open === "[" ? gte(lo) : gt(lo));
+  if (hi !== "") preds.push(close === "]" ? lte(hi) : lt(hi));
+  return [preds];
+}
+function isExactVersion(ecosystem, range) {
+  if (range === void 0) return false;
+  const r = range.trim();
+  switch (ecosystem) {
+    case "npm":
+      return EXACT_SEMVER.test(r);
+    case "pypi":
+      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse7(r) !== null && !/[,<>=!~*]/.test(r);
+    case "packagist":
+      return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
+    case "nuget":
+      return parse7(r) !== null && !/[[\](),]/.test(r);
+    default:
+      return false;
+  }
+}
+function highest(versions) {
+  let best;
+  for (const v of versions) if (best === void 0 || compareVersions(v, best) > 0) best = v;
+  return best;
+}
+function resolveVersion2(ecosystem, range, ctx) {
+  const stable = ctx.versions.filter((v) => !isPrerelease(v));
+  const r = range?.trim() ?? "";
+  if (r === "" || ecosystem === "npm" && r === "latest") {
+    if (ctx.latest !== void 0 && ctx.versions.includes(ctx.latest)) return ctx.latest;
+    return highest(stable);
+  }
+  if (ecosystem === "npm") {
+    const tagged = ctx.tags?.[r];
+    if (tagged !== void 0) return ctx.versions.includes(tagged) ? tagged : void 0;
+  }
+  if (ecosystem === "packagist" && /^dev-|-dev$/i.test(r)) return void 0;
+  if (isExactVersion(ecosystem, r)) {
+    const wanted = r.replace(/^===?\s*/, "");
+    return ctx.versions.find((v) => v === wanted) ?? ctx.versions.find((v) => compareVersions(v, wanted) === 0);
+  }
+  let alternatives;
+  switch (ecosystem) {
+    case "npm":
+      alternatives = semverishRange(r, false);
+      break;
+    case "packagist":
+      alternatives = semverishRange(r, true);
+      break;
+    case "pypi":
+      alternatives = /^(?:\^|~(?!=)|\*$|\d+(?:\.\d+)*\.\*$)/.test(r) ? semverishRange(r, false) : pep440Range(r);
+      break;
+    case "nuget":
+      alternatives = nugetRange(r);
+      break;
+    default:
+      alternatives = null;
+  }
+  if (alternatives === null) return void 0;
+  const matching = stable.filter((v) => alternatives.some((preds) => preds.every((p) => p(v))));
+  if (ecosystem === "npm" && ctx.latest !== void 0 && matching.includes(ctx.latest)) return ctx.latest;
+  return highest(matching);
+}
+var POST_REST, DEV_REST, gte, gt, lt, lte, eq, ANY, WILD, fmt, COMPARATOR, PEP440, EXACT_SEMVER;
+var init_versions = __esm({
+  "src/pkgvet/versions.ts"() {
+    "use strict";
+    POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
+    DEV_REST = /(?:^|[-._])dev/i;
+    gte = (x) => (v) => compareVersions(v, x) >= 0;
+    gt = (x) => (v) => compareVersions(v, x) > 0;
+    lt = (x) => (v) => compareVersions(v, x) < 0;
+    lte = (x) => (v) => compareVersions(v, x) <= 0;
+    eq = (x) => (v) => compareVersions(v, x) === 0;
+    ANY = () => true;
+    WILD = /^[xX*]$/;
+    fmt = (nums) => [0, 1, 2].map((i) => nums[i] ?? 0).join(".");
+    COMPARATOR = /^(\^|~>|~|>=|<=|>|<|==|=|!=)?\s*(.*)$/;
+    PEP440 = /^\s*(~=|===|==|!=|<=|>=|<|>)\s*([^\s,]+)\s*$/;
+    EXACT_SEMVER = /^[vV=]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+  }
+});
+
 // src/deps/versionCompare.ts
 function isCleanVersion(v) {
   return v !== void 0 && /^v?\d+(\.\d+)*$/i.test(v.trim());
-}
-function compareVersions(a, b) {
-  const pa = a.replace(/^v/i, "").split(".").map((n) => parseInt(n, 10));
-  const pb = b.replace(/^v/i, "").split(".").map((n) => parseInt(n, 10));
-  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return a.localeCompare(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
 }
 function minCleanVersionAbove(installed, candidates2) {
   if (!isCleanVersion(installed)) return void 0;
@@ -36251,46 +36550,12 @@ function minCleanVersionAbove(installed, candidates2) {
 function isLooseVersion(v) {
   return v !== void 0 && /^v?\d+(\.\d+)*(-[0-9A-Za-z.]+)?$/.test(v.trim());
 }
-function parseLoose(v) {
-  const m = /^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.]+))?$/i.exec(v.trim());
-  const core = (m?.[1] ?? "0").split(".").map((n) => parseInt(n, 10));
-  const pre = m?.[2] ? m[2].split(".") : null;
-  return { core, pre };
-}
-function compareVersionsLoose(a, b) {
-  const pa = parseLoose(a);
-  const pb = parseLoose(b);
-  const len = Math.max(pa.core.length, pb.core.length);
-  for (let i = 0; i < len; i += 1) {
-    const diff = (pa.core[i] ?? 0) - (pb.core[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  if (pa.pre === null && pb.pre === null) return 0;
-  if (pa.pre === null) return 1;
-  if (pb.pre === null) return -1;
-  const plen = Math.max(pa.pre.length, pb.pre.length);
-  for (let i = 0; i < plen; i += 1) {
-    const sa = pa.pre[i];
-    const sb = pb.pre[i];
-    if (sa === void 0) return -1;
-    if (sb === void 0) return 1;
-    const na2 = /^\d+$/.test(sa) ? parseInt(sa, 10) : null;
-    const nb = /^\d+$/.test(sb) ? parseInt(sb, 10) : null;
-    if (na2 !== null && nb !== null) {
-      if (na2 !== nb) return na2 - nb;
-    } else {
-      const c = sa.localeCompare(sb);
-      if (c !== 0) return c;
-    }
-  }
-  return 0;
-}
 function minCleanVersionAboveLoose(installed, candidates2) {
   if (!isLooseVersion(installed)) return void 0;
   let best;
   for (const c of candidates2) {
     if (!isCleanVersion(c)) continue;
-    if (compareVersionsLoose(c, installed) <= 0) continue;
+    if (compareVersions(c, installed) <= 0) continue;
     if (best === void 0 || compareVersions(c, best) < 0) best = c;
   }
   return best;
@@ -36298,6 +36563,7 @@ function minCleanVersionAboveLoose(installed, candidates2) {
 var init_versionCompare = __esm({
   "src/deps/versionCompare.ts"() {
     "use strict";
+    init_versions();
   }
 });
 
@@ -39455,7 +39721,7 @@ async function runNpmOutdated(projectPath, cves) {
       unplanned.push(alreadyFixedEntry(info.name, cve, versions.join(", ")));
       continue;
     }
-    const belowFix = versions.filter((v) => isLooseVersion(v) && cve.fixedVersion !== void 0 && compareVersionsLoose(v, cve.fixedVersion) < 0).sort(compareVersionsLoose);
+    const belowFix = versions.filter((v) => isLooseVersion(v) && cve.fixedVersion !== void 0 && compareVersions(v, cve.fixedVersion) < 0).sort(compareVersions);
     const installed = belowFix[0] ?? cve.installedVersion;
     const target = minCleanVersionAboveLoose(installed, [cve.fixedVersion]);
     if (!installed || !target) {
@@ -43485,11 +43751,11 @@ function dependencySubjectOf(finding4) {
   return {
     package_name: coordinates.name,
     ecosystem: ecosystemOf(finding4),
-    version: isExactVersion(coordinates.version) ? coordinates.version : null,
+    version: isExactVersion2(coordinates.version) ? coordinates.version : null,
     manifest
   };
 }
-function isExactVersion(version2) {
+function isExactVersion2(version2) {
   return /^v?\d[\w.+-]*$/.test(version2) && !/(^|\.)[xX*](\.|$)/.test(version2);
 }
 function ecosystemOf(finding4) {
@@ -47871,7 +48137,7 @@ __export(util_exports, {
   numKeys: () => numKeys,
   omit: () => omit,
   optionalKeys: () => optionalKeys,
-  partial: () => partial,
+  partial: () => partial2,
   pick: () => pick,
   prefixIssues: () => prefixIssues,
   primitiveTypes: () => primitiveTypes,
@@ -48151,7 +48417,7 @@ function merge(a, b) {
     // delete existing checks
   });
 }
-function partial(Class2, schema, mask) {
+function partial2(Class2, schema, mask) {
   const oldShape = schema._zod.def.shape;
   const shape = { ...oldShape };
   if (mask) {
@@ -48438,7 +48704,7 @@ var init_errors2 = __esm({
 });
 
 // node_modules/zod/v4/core/parse.js
-var _parse, parse7, _parseAsync, parseAsync, _safeParse, safeParse, _safeParseAsync, safeParseAsync;
+var _parse, parse8, _parseAsync, parseAsync, _safeParse, safeParse, _safeParseAsync, safeParseAsync;
 var init_parse = __esm({
   "node_modules/zod/v4/core/parse.js"() {
     init_core();
@@ -48457,7 +48723,7 @@ var init_parse = __esm({
       }
       return result.value;
     };
-    parse7 = /* @__PURE__ */ _parse($ZodRealError);
+    parse8 = /* @__PURE__ */ _parse($ZodRealError);
     _parseAsync = (_Err) => async (schema, value, _ctx, params) => {
       const ctx = _ctx ? Object.assign(_ctx, { async: true }) : { async: true };
       let result = schema._zod.run({ value, issues: [] }, ctx);
@@ -48997,7 +49263,7 @@ var init_doc = __esm({
 
 // node_modules/zod/v4/core/versions.js
 var version;
-var init_versions = __esm({
+var init_versions2 = __esm({
   "node_modules/zod/v4/core/versions.js"() {
     version = {
       major: 4,
@@ -49205,7 +49471,7 @@ var init_schemas2 = __esm({
     init_parse();
     init_regexes();
     init_util2();
-    init_versions();
+    init_versions2();
     init_util2();
     $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
       var _a;
@@ -51769,7 +52035,7 @@ var init_core2 = __esm({
     init_errors2();
     init_schemas2();
     init_checks();
-    init_versions();
+    init_versions2();
     init_util2();
     init_regexes();
     init_locales();
@@ -51812,7 +52078,7 @@ var init_schemas3 = __esm({
         throw new Error("Uninitialized schema in ZodMiniType.");
       $ZodType.init(inst, def);
       inst.def = def;
-      inst.parse = (data, params) => parse7(inst, data, params, { callee: inst.parse });
+      inst.parse = (data, params) => parse8(inst, data, params, { callee: inst.parse });
       inst.safeParse = (data, params) => safeParse(inst, data, params);
       inst.parseAsync = async (data, params) => parseAsync(inst, data, params, { callee: inst.parseAsync });
       inst.safeParseAsync = async (data, params) => safeParseAsync(inst, data, params);
@@ -52152,12 +52418,12 @@ var init_errors3 = __esm({
 });
 
 // node_modules/zod/v4/classic/parse.js
-var parse8, parseAsync2, safeParse3, safeParseAsync3;
+var parse9, parseAsync2, safeParse3, safeParseAsync3;
 var init_parse3 = __esm({
   "node_modules/zod/v4/classic/parse.js"() {
     init_core2();
     init_errors3();
-    parse8 = /* @__PURE__ */ _parse(ZodRealError);
+    parse9 = /* @__PURE__ */ _parse(ZodRealError);
     parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
     safeParse3 = /* @__PURE__ */ _safeParse(ZodRealError);
     safeParseAsync3 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
@@ -52393,7 +52659,7 @@ var init_schemas4 = __esm({
         reg.add(inst, meta);
         return inst;
       });
-      inst.parse = (data, params) => parse8(inst, data, params, { callee: inst.parse });
+      inst.parse = (data, params) => parse9(inst, data, params, { callee: inst.parse });
       inst.safeParse = (data, params) => safeParse3(inst, data, params);
       inst.parseAsync = async (data, params) => parseAsync2(inst, data, params, { callee: inst.parseAsync });
       inst.safeParseAsync = async (data, params) => safeParseAsync3(inst, data, params);
@@ -89418,7 +89684,7 @@ var init_popular = __esm({
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync18, readdirSync as readdirSync17 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { dirname as dirname28, isAbsolute as isAbsolute23, join as join93, parse as parse9, relative as relative35, resolve as resolve35 } from "node:path";
+import { dirname as dirname28, isAbsolute as isAbsolute23, join as join93, parse as parse10, relative as relative35, resolve as resolve35 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -89444,7 +89710,7 @@ function walkRoot2(path3, ctx, under) {
   const dir = dirname28(abs);
   if (project !== void 0 && holds(dir, project)) return dir;
   if (isInside3(home, abs)) return home;
-  return parse9(abs).root;
+  return parse10(abs).root;
 }
 function noteUnread3(path3, what) {
   firstUnread = firstUnread ?? { path: path3, what };
@@ -90181,315 +90447,6 @@ var init_types7 = __esm({
   }
 });
 
-// src/pkgvet/versions.ts
-function parse10(version2) {
-  let s = version2.trim().replace(/^[vV=]+/, "");
-  const plus = s.indexOf("+");
-  if (plus >= 0) s = s.slice(0, plus);
-  const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s);
-  if (m === null) return null;
-  const releaseText = m[1] ?? "";
-  const rest = m[2] ?? "";
-  const release = releaseText.split(".").map((x) => Number(x));
-  if (release.some((n) => !Number.isFinite(n))) return null;
-  let stage = 2;
-  if (rest !== "") {
-    if (POST_REST.test(rest)) stage = 3;
-    else if (DEV_REST.test(rest)) stage = 0;
-    else stage = 1;
-  }
-  return { release, stage, rest };
-}
-function compareRelease(a, b) {
-  const n = Math.max(a.length, b.length);
-  for (let i = 0; i < n; i += 1) {
-    const d = (a[i] ?? 0) - (b[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
-}
-function compareRest(a, b) {
-  const ta = a.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
-  const tb = b.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
-  const n = Math.max(ta.length, tb.length);
-  for (let i = 0; i < n; i += 1) {
-    const x = ta[i];
-    const y = tb[i];
-    if (x === void 0) return -1;
-    if (y === void 0) return 1;
-    const nx = Number(x);
-    const ny = Number(y);
-    if (Number.isFinite(nx) && Number.isFinite(ny)) {
-      if (nx !== ny) return nx - ny;
-    } else if (x.toLowerCase() !== y.toLowerCase()) {
-      return x.toLowerCase() < y.toLowerCase() ? -1 : 1;
-    }
-  }
-  return 0;
-}
-function compareVersions2(a, b) {
-  const pa = parse10(a);
-  const pb = parse10(b);
-  if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
-  const r = compareRelease(pa.release, pb.release);
-  if (r !== 0) return r;
-  if (pa.stage !== pb.stage) return pa.stage - pb.stage;
-  return compareRest(pa.rest, pb.rest);
-}
-function isPrerelease(version2) {
-  const p = parse10(version2);
-  return p === null || p.stage < 2;
-}
-function partial2(text2) {
-  const t = text2.trim().replace(/^[vV]/, "");
-  if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
-  const plus = t.indexOf("+");
-  const noBuild = plus >= 0 ? t.slice(0, plus) : t;
-  const dash = noBuild.search(/-/);
-  const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
-  const pre = dash >= 0 ? noBuild.slice(dash) : "";
-  const nums = [];
-  for (const part of core.split(".")) {
-    if (WILD.test(part)) break;
-    if (!/^\d+$/.test(part)) return null;
-    nums.push(Number(part));
-  }
-  return { nums, pre };
-}
-function bump(nums) {
-  const next = nums.slice();
-  const last = next.length - 1;
-  next[last] = (next[last] ?? 0) + 1;
-  return fmt(next);
-}
-function comparator(op, text2, composerTilde) {
-  const p = partial2(text2);
-  if (p === null) return null;
-  const { nums, pre } = p;
-  const full = nums.length >= 3;
-  const exact = full ? fmt(nums) + pre : fmt(nums);
-  switch (op) {
-    case "":
-    case "=":
-    case "==":
-      if (nums.length === 0) return [ANY];
-      if (full) return [eq(exact)];
-      return [gte(fmt(nums)), lt(bump(nums))];
-    case "^": {
-      if (nums.length === 0) return [ANY];
-      const [major = 0, minor, patch] = nums;
-      if (major > 0 || nums.length === 1) return [gte(exact), lt(bump([major]))];
-      if ((minor ?? 0) > 0 || nums.length === 2) return [gte(exact), lt(bump([0, minor ?? 0]))];
-      return [gte(exact), lt(bump([0, 0, patch ?? 0]))];
-    }
-    case "~":
-    case "~>": {
-      if (nums.length === 0) return [ANY];
-      if (nums.length === 1) return [gte(exact), lt(bump(nums))];
-      if (composerTilde && nums.length === 2) return [gte(exact), lt(bump(nums.slice(0, 1)))];
-      return [gte(exact), lt(bump(nums.slice(0, 2)))];
-    }
-    case ">=":
-      return [gte(exact)];
-    case ">":
-      return full ? [gt(exact)] : nums.length === 0 ? [() => false] : [gte(bump(nums))];
-    case "<":
-      return [lt(exact)];
-    case "<=":
-      return full ? [lte(exact)] : nums.length === 0 ? [ANY] : [lt(bump(nums))];
-    case "!=":
-      return [(v) => !eq(exact)(v)];
-    default:
-      return null;
-  }
-}
-function semverishRange(range, composer) {
-  const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
-  const out = [];
-  for (const alt of alternatives) {
-    let text2 = alt.trim();
-    if (composer) text2 = text2.replace(/@[a-zA-Z]+$/, "").trim();
-    if (text2 === "" || text2 === "*" || WILD.test(text2)) {
-      out.push([ANY]);
-      continue;
-    }
-    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text2);
-    if (hyphen !== null) {
-      const lo = comparator(">=", hyphen[1] ?? "", composer);
-      const hiPartial = partial2(hyphen[2] ?? "");
-      if (lo === null || hiPartial === null) return null;
-      const hi = hiPartial.nums.length >= 3 ? [lte(fmt(hiPartial.nums) + hiPartial.pre)] : hiPartial.nums.length === 0 ? [ANY] : [lt(bump(hiPartial.nums))];
-      out.push([...lo, ...hi]);
-      continue;
-    }
-    const tokens = text2.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
-    const preds = [];
-    for (const token of tokens) {
-      if (token === "") continue;
-      const m = COMPARATOR.exec(token);
-      if (m === null) return null;
-      const c = comparator(m[1] ?? "", m[2] ?? "", composer);
-      if (c === null) return null;
-      preds.push(...c);
-    }
-    out.push(preds);
-  }
-  return out;
-}
-function pep440Range(range) {
-  const preds = [];
-  for (const spec of range.split(",")) {
-    if (spec.trim() === "") continue;
-    const m = PEP440.exec(spec);
-    if (m === null) return null;
-    const op = m[1] ?? "";
-    const ver = m[2] ?? "";
-    if (op === "===") {
-      preds.push((v) => v === ver);
-      continue;
-    }
-    if (ver.endsWith(".*")) {
-      const prefix = partial2(ver.slice(0, -2));
-      if (prefix === null || prefix.nums.length === 0) return null;
-      const inPrefix = (v) => {
-        const p = parse10(v);
-        return p !== null && prefix.nums.every((n, i) => (p.release[i] ?? 0) === n);
-      };
-      if (op === "==") preds.push(inPrefix);
-      else if (op === "!=") preds.push((v) => !inPrefix(v));
-      else return null;
-      continue;
-    }
-    if (parse10(ver) === null) return null;
-    switch (op) {
-      case "==":
-        preds.push(eq(ver));
-        break;
-      case "!=":
-        preds.push((v) => !eq(ver)(v));
-        break;
-      case ">=":
-        preds.push(gte(ver));
-        break;
-      case "<=":
-        preds.push(lte(ver));
-        break;
-      case ">":
-        preds.push(gt(ver));
-        break;
-      case "<":
-        preds.push(lt(ver));
-        break;
-      case "~=": {
-        const p = parse10(ver);
-        if (p === null || p.release.length < 2) return null;
-        const prefix = p.release.slice(0, -1);
-        preds.push(gte(ver), (v) => {
-          const q = parse10(v);
-          return q !== null && prefix.every((n, i) => (q.release[i] ?? 0) === n);
-        });
-        break;
-      }
-      default:
-        return null;
-    }
-  }
-  return [preds];
-}
-function nugetRange(range) {
-  const r = range.trim();
-  const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
-  if (m === null) return parse10(r) === null ? null : [[eq(r)]];
-  const open = m[1];
-  const lo = m[2] ?? "";
-  const hasComma = r.includes(",");
-  const hi = m[3] ?? "";
-  const close = m[4];
-  if (!hasComma) return lo === "" ? null : [[eq(lo)]];
-  const preds = [];
-  if (lo !== "") preds.push(open === "[" ? gte(lo) : gt(lo));
-  if (hi !== "") preds.push(close === "]" ? lte(hi) : lt(hi));
-  return [preds];
-}
-function isExactVersion2(ecosystem, range) {
-  if (range === void 0) return false;
-  const r = range.trim();
-  switch (ecosystem) {
-    case "npm":
-      return EXACT_SEMVER.test(r);
-    case "pypi":
-      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse10(r) !== null && !/[,<>=!~*]/.test(r);
-    case "packagist":
-      return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
-    case "nuget":
-      return parse10(r) !== null && !/[[\](),]/.test(r);
-    default:
-      return false;
-  }
-}
-function highest(versions) {
-  let best;
-  for (const v of versions) if (best === void 0 || compareVersions2(v, best) > 0) best = v;
-  return best;
-}
-function resolveVersion2(ecosystem, range, ctx) {
-  const stable = ctx.versions.filter((v) => !isPrerelease(v));
-  const r = range?.trim() ?? "";
-  if (r === "" || ecosystem === "npm" && r === "latest") {
-    if (ctx.latest !== void 0 && ctx.versions.includes(ctx.latest)) return ctx.latest;
-    return highest(stable);
-  }
-  if (ecosystem === "npm") {
-    const tagged = ctx.tags?.[r];
-    if (tagged !== void 0) return ctx.versions.includes(tagged) ? tagged : void 0;
-  }
-  if (ecosystem === "packagist" && /^dev-|-dev$/i.test(r)) return void 0;
-  if (isExactVersion2(ecosystem, r)) {
-    const wanted = r.replace(/^===?\s*/, "");
-    return ctx.versions.find((v) => v === wanted) ?? ctx.versions.find((v) => compareVersions2(v, wanted) === 0);
-  }
-  let alternatives;
-  switch (ecosystem) {
-    case "npm":
-      alternatives = semverishRange(r, false);
-      break;
-    case "packagist":
-      alternatives = semverishRange(r, true);
-      break;
-    case "pypi":
-      alternatives = /^(?:\^|~(?!=)|\*$|\d+(?:\.\d+)*\.\*$)/.test(r) ? semverishRange(r, false) : pep440Range(r);
-      break;
-    case "nuget":
-      alternatives = nugetRange(r);
-      break;
-    default:
-      alternatives = null;
-  }
-  if (alternatives === null) return void 0;
-  const matching = stable.filter((v) => alternatives.some((preds) => preds.every((p) => p(v))));
-  if (ecosystem === "npm" && ctx.latest !== void 0 && matching.includes(ctx.latest)) return ctx.latest;
-  return highest(matching);
-}
-var POST_REST, DEV_REST, gte, gt, lt, lte, eq, ANY, WILD, fmt, COMPARATOR, PEP440, EXACT_SEMVER;
-var init_versions2 = __esm({
-  "src/pkgvet/versions.ts"() {
-    "use strict";
-    POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
-    DEV_REST = /(?:^|[-._])dev/i;
-    gte = (x) => (v) => compareVersions2(v, x) >= 0;
-    gt = (x) => (v) => compareVersions2(v, x) > 0;
-    lt = (x) => (v) => compareVersions2(v, x) < 0;
-    lte = (x) => (v) => compareVersions2(v, x) <= 0;
-    eq = (x) => (v) => compareVersions2(v, x) === 0;
-    ANY = () => true;
-    WILD = /^[xX*]$/;
-    fmt = (nums) => [0, 1, 2].map((i) => nums[i] ?? 0).join(".");
-    COMPARATOR = /^(\^|~>|~|>=|<=|>|<|==|=|!=)?\s*(.*)$/;
-    PEP440 = /^\s*(~=|===|==|!=|<=|>=|<|>)\s*([^\s,]+)\s*$/;
-    EXACT_SEMVER = /^[vV=]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-  }
-});
-
 // src/pkgvet/vet.ts
 function popularIndexFor(ecosystem, opts) {
   const override = opts.popular?.[ecosystem];
@@ -90515,7 +90472,7 @@ function resolveFor(w, info) {
   const ctx = { versions: info.versions, latest: info.latest, tags: info.tags ?? {} };
   const v = resolveVersion2(w.spec.ecosystem, w.spec.range, ctx);
   if (v !== void 0) w.version = v;
-  else if (isExactVersion2(w.spec.ecosystem, w.spec.range)) w.versionMissing = true;
+  else if (isExactVersion(w.spec.ecosystem, w.spec.range)) w.versionMissing = true;
   const published = v === void 0 ? void 0 : info.times[v];
   if (published !== void 0) w.publishedAt = published;
 }
@@ -90799,7 +90756,7 @@ var init_vet = __esm({
     init_registry();
     init_typosquat();
     init_types7();
-    init_versions2();
+    init_versions();
     FRESH_HOURS = 72;
     TOOL_BUDGET_MS = 1e4;
     HOUR = 3600 * 1e3;

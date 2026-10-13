@@ -140,7 +140,6 @@ import {
 } from '../deps/dotnetRestore.js';
 import {
   compareVersions,
-  compareVersionsLoose,
   isCleanVersion,
   isLooseVersion,
   minCleanVersionAbove,
@@ -905,8 +904,8 @@ async function runNpmOutdated(
     // to lift; the CVE row's own recorded version is the fallback when the
     // tree gives no version at all.
     const belowFix = versions
-      .filter((v) => isLooseVersion(v) && cve.fixedVersion !== undefined && compareVersionsLoose(v, cve.fixedVersion) < 0)
-      .sort(compareVersionsLoose);
+      .filter((v) => isLooseVersion(v) && cve.fixedVersion !== undefined && compareVersions(v, cve.fixedVersion) < 0)
+      .sort(compareVersions);
     const installed = belowFix[0] ?? cve.installedVersion;
     const target = minCleanVersionAboveLoose(installed, [cve.fixedVersion]);
     if (!installed || !target) {

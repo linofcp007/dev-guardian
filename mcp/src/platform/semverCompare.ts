@@ -1,5 +1,9 @@
 /**
- * Tiny semver-ish comparator.
+ * A tool's version against a documented floor: `major.minor[.patch]` pulled
+ * out of `--version` text (`Version: 0.69.3`, `gitleaks v8.18.0`), compared
+ * numerically. Not the dependency comparator — that one orders whole PEP 440
+ * / semver versions, pre-releases included (`pkgvet/versions.ts#compareVersions`,
+ * review 8 finding 16); this answers null where the text names no version.
  *
  * We avoid a full semver dep because all we ever need is "does the
  * installed version meet the floor we documented?". Pre-release tags
