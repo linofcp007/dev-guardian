@@ -3619,7 +3619,7 @@ function assignIdentities(findings, opts = {}) {
   const contentKeys = /* @__PURE__ */ new Map();
   let currentPath = null;
   let currentLines = null;
-  const linesOf = (readable2) => {
+  const linesOf2 = (readable2) => {
     if (readable2 !== currentPath) {
       currentPath = readable2;
       const text2 = opts.readSource === void 0 ? null : opts.readSource(readable2);
@@ -3631,7 +3631,7 @@ function assignIdentities(findings, opts = {}) {
     (a, b) => compareStrings(a.location.readable ?? "", b.location.readable ?? "")
   );
   for (const { finding: finding4, index, location } of byPath2) {
-    contentKeys.set(index, sha2562(contentSource(finding4, location.readable, linesOf)));
+    contentKeys.set(index, sha2562(contentSource(finding4, location.readable, linesOf2)));
   }
   const keyed = located.map(({ finding: finding4, index, location }) => ({
     finding: finding4,
@@ -3783,6 +3783,7 @@ ${pass2}`;
     if (members === void 0) groups.set(key, [member]);
     else members.push(member);
   });
+  const slots = /* @__PURE__ */ new Map();
   for (const members of groups.values()) {
     members.sort(
       (a, b) => (a.finding.line_start ?? 0) - (b.finding.line_start ?? 0) || (a.finding.line_end ?? 0) - (b.finding.line_end ?? 0) || compareStrings(sha2562(a.finding.snippet ?? ""), sha2562(b.finding.snippet ?? "")) || compareStrings(a.finding.fingerprint, b.finding.fingerprint) || a.index - b.index
@@ -3790,15 +3791,30 @@ ${pass2}`;
     let occurrence = -1;
     let lastLine;
     for (const m of members) {
-      const sameSecret = m.pass === "history" && m.finding.line_start !== void 0 && m.finding.line_start === lastLine;
-      if (!sameSecret) occurrence += 1;
+      const sameLine = m.pass === "history" && m.finding.line_start !== void 0 && m.finding.line_start === lastLine;
+      if (!sameLine) occurrence += 1;
       lastLine = m.finding.line_start;
+      const slotKey = `${m.head}
+${occurrence}`;
+      const slot = slots.get(slotKey);
+      if (slot === void 0) slots.set(slotKey, [m]);
+      else slot.push(m);
+    }
+  }
+  for (const [slotKey, members] of slots) {
+    if (opts.secretValue !== void 0 && mixedSlot(members.map((m) => m.finding), opts.secretValue)) continue;
+    const matchKey = sha2562(slotKey);
+    for (const m of members) {
       const slot = out[m.index];
-      if (slot !== void 0) slot.matchKey = sha2562(`${m.head}
-${occurrence}`);
+      if (slot !== void 0) slot.matchKey = matchKey;
     }
   }
   return out;
+}
+function mixedSlot(findings, secretValue) {
+  if (findings.length < 2 || !findings.every(isGitleaksSecret)) return false;
+  const values2 = findings.map((f) => secretValue(f));
+  return values2.some((v) => v === void 0) || new Set(values2).size > 1;
 }
 function matchContentKey(f) {
   const dependency = dependencyCoordinates(f);
@@ -3825,7 +3841,7 @@ function locate3(filePath, projectPath) {
   const key = normalizePathPosix(path3).replace(/^(\.\/)+/, "");
   return { key, readable: insideProject ? path3.replace(/\\/g, "/") : null };
 }
-function contentSource(f, readable2, linesOf) {
+function contentSource(f, readable2, linesOf2) {
   const dependency = dependencyCoordinates(f);
   if (dependency !== null) return `dep
 ${dependency.name}@${dependency.version}`;
@@ -3838,7 +3854,7 @@ ${f.rule_id ?? ""}${locator}`;
   if (isHistoryLocator(f) && f.snippet !== void 0) return `text
 ${collapse(f.snippet)}`;
   if (readable2 !== null && f.line_start !== void 0) {
-    const fileLines = linesOf(readable2);
+    const fileLines = linesOf2(readable2);
     const lines = fileLines === null ? null : sourceLines(fileLines, f.line_start, f.line_end);
     if (lines !== null) return `text
 ${collapse(lines)}`;
@@ -13591,6 +13607,333 @@ var init_types2 = __esm({
   }
 });
 
+// src/platform/guardianOutput.ts
+function isGuardianOutput(rel2) {
+  let p = rel2.split("\\").join("/");
+  while (p.startsWith("./")) p = p.slice(2);
+  return OUTPUT_FILES.includes(p) || OUTPUT_DIRS.some((dir) => p === dir || p.startsWith(`${dir}/`));
+}
+function semgrepGuardianOutputExcludes() {
+  return GUARDIAN_OUTPUT_PATHS.map((p) => `--exclude=${p}`);
+}
+var GUARDIAN_DIR, OUTPUT_DIRS, OUTPUT_FILES, GUARDIAN_OUTPUT_PATHS;
+var init_guardianOutput = __esm({
+  "src/platform/guardianOutput.ts"() {
+    "use strict";
+    GUARDIAN_DIR = ".guardian";
+    OUTPUT_DIRS = [".guardian/reports"];
+    OUTPUT_FILES = [
+      ".guardian/guardian.db",
+      ".guardian/guardian.db-wal",
+      ".guardian/guardian.db-shm",
+      ".guardian/guardian.db-journal",
+      ".guardian/dashboard.html",
+      ".guardian/last-grill.md",
+      ".guardian/.gitignore"
+    ];
+    GUARDIAN_OUTPUT_PATHS = [...OUTPUT_DIRS, ...OUTPUT_FILES];
+  }
+});
+
+// src/platform/textLines.ts
+function* textLines(text2) {
+  let start = 0;
+  while (start < text2.length) {
+    const nl = text2.indexOf("\n", start);
+    const end = nl < 0 ? text2.length : nl;
+    const line = text2.slice(start, end > start && text2.charCodeAt(end - 1) === 13 ? end - 1 : end);
+    yield line;
+    if (nl < 0) return;
+    start = nl + 1;
+  }
+}
+var init_textLines = __esm({
+  "src/platform/textLines.ts"() {
+    "use strict";
+  }
+});
+
+// src/runners/git.ts
+var git_exports = {};
+__export(git_exports, {
+  SHALLOW_UNDETERMINED: () => SHALLOW_UNDETERMINED,
+  changedFiles: () => changedFiles,
+  countCommits: () => countCommits,
+  describeSubmodules: () => describeSubmodules,
+  git: () => git,
+  gitlinksAmong: () => gitlinksAmong,
+  historyState: () => historyState,
+  initialisedSubmodules: () => initialisedSubmodules,
+  materialiseCommit: () => materialiseCommit,
+  repoState: () => repoState,
+  resolveCommit: () => resolveCommit,
+  shallowBoundary: () => shallowBoundary,
+  showPrefix: () => showPrefix,
+  splitNul: () => splitNul,
+  trackedGuardianOutput: () => trackedGuardianOutput,
+  uncommittedFiles: () => uncommittedFiles
+});
+import { createHash as createHash5 } from "node:crypto";
+import { existsSync as existsSync8, mkdtempSync, rmSync as rmSync3 } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute as isAbsolute7, join as join17, parse as parse5 } from "node:path";
+async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS2) {
+  const r = await execGit(cwd, args, { timeoutMs });
+  const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
+  if (r.failure?.code === "refused") return { exitCode: 126, stdout: "", stderr: r.stderr, ...notApplied };
+  if (r.status === null) {
+    const exitCode = r.failure?.code === "not-found" ? 127 : 124;
+    return { exitCode, stdout: "", stderr: r.failure?.message ?? "git could not be run", ...notApplied };
+  }
+  return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
+}
+function splitNul(text2) {
+  return text2.split("\0").filter((s) => s.length > 0);
+}
+async function repoState(cwd) {
+  const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (top.exitCode !== 0) {
+    if (/not a git repository/i.test(top.stderr) || top.exitCode === 127) return { kind: "not_git" };
+    return { kind: "error", message: firstLine2(top.stderr) || `git exited ${top.exitCode}` };
+  }
+  const toplevel = top.stdout.trim();
+  const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+  if (head.exitCode === 0) return { kind: "has_commits", toplevel };
+  if (head.exitCode === 1) return { kind: "no_commits", toplevel };
+  return { kind: "error", message: firstLine2(head.stderr) || `git exited ${head.exitCode}` };
+}
+async function shallowBoundary(cwd) {
+  const where = await git(cwd, ["rev-parse", "--git-path", "shallow"], SHALLOW_QUERY_TIMEOUT_MS);
+  const rel2 = where.stdout.trim();
+  if (where.exitCode !== 0 || rel2 === "") return [SHALLOW_UNDETERMINED];
+  const path3 = isAbsolute7(rel2) ? rel2 : join17(cwd, rel2);
+  const kind = projectEntryKindIn(parse5(path3).root, path3);
+  if (kind === "absent") return null;
+  if (kind !== "file") return [SHALLOW_UNDETERMINED];
+  const shallow = await git(cwd, ["rev-parse", "--is-shallow-repository"], SHALLOW_QUERY_TIMEOUT_MS);
+  if (shallow.exitCode !== 0) return [SHALLOW_UNDETERMINED];
+  if (shallow.stdout.trim() !== "true") return null;
+  const read3 = readSmallText(path3, SHALLOW_FILE_MAX_BYTES);
+  if (read3.status !== "ok") return ["(unknown)"];
+  const shas = [];
+  for (const line of textLines(read3.text)) {
+    const sha = line.trim();
+    if (/^[0-9a-f]{40,64}$/.test(sha)) shas.push(sha);
+  }
+  return shas.length > 0 ? shas : ["(unknown)"];
+}
+async function initialisedSubmodules(cwd) {
+  const r = await git(cwd, ["ls-files", "-z", "--stage", "--", "."]);
+  if (r.exitCode !== 0) return [];
+  const out = /* @__PURE__ */ new Set();
+  for (const entry of splitNul(r.stdout)) {
+    const tab = entry.indexOf("	");
+    if (tab < 0 || !entry.startsWith("160000 ")) continue;
+    const path3 = entry.slice(tab + 1);
+    if (listProjectDir(cwd, join17(cwd, path3)).some(({ name }) => name !== ".git")) out.add(path3.split("\\").join("/"));
+  }
+  return [...out].sort();
+}
+async function gitlinksAmong(cwd, rev, paths) {
+  if (paths.length === 0) return [];
+  const r = await git(cwd, ["ls-tree", "-r", "-z", rev, "--", "."]);
+  if (r.exitCode !== 0) return [];
+  const wanted = new Set(paths.map((p) => p.split("\\").join("/")));
+  const out = [];
+  for (const entry of splitNul(r.stdout)) {
+    const tab = entry.indexOf("	");
+    if (tab < 0 || !entry.startsWith("160000 ")) continue;
+    const path3 = entry.slice(tab + 1);
+    if (wanted.has(path3)) out.push(path3);
+  }
+  return out.sort();
+}
+async function trackedGuardianOutput(cwd) {
+  const r = await git(cwd, ["ls-files", "-z", "--cached", "--", ...GUARDIAN_OUTPUT_PATHS.map((p) => `:(literal)${p}`)]);
+  if (r.exitCode !== 0) return [];
+  return [...new Set(splitNul(r.stdout).map((p) => p.split("\\").join("/")))].sort();
+}
+function describeSubmodules(paths) {
+  const shown = paths.slice(0, 5).join(", ");
+  return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""}`;
+}
+async function resolveCommit(cwd, ref) {
+  const r = await git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
+  if (r.exitCode !== 0) return null;
+  const sha = r.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+async function changedFiles(cwd, base2, head) {
+  const r = await git(cwd, [
+    "diff",
+    "-z",
+    "--name-only",
+    "--relative",
+    "--diff-filter=ACMR",
+    "--no-renames",
+    `${base2}...${head}`,
+    "--"
+  ]);
+  if (r.exitCode !== 0) {
+    throw new Error(`git diff ${base2}...${head} failed: ${firstLine2(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return splitNul(r.stdout);
+}
+async function countCommits(cwd, range) {
+  const r = await git(cwd, ["rev-list", "--count", range, "--"]);
+  const n = Number(r.stdout.trim());
+  if (r.exitCode !== 0 || !Number.isInteger(n)) {
+    throw new Error(`git rev-list --count ${range} failed: ${firstLine2(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return n;
+}
+async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
+  const excludes = excludeDirs.map((d) => `--exclude=${d}/`);
+  const untracked2 = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard", ...excludes]);
+  if (untracked2.exitCode !== 0) {
+    throw new Error(`git ls-files failed: ${firstLine2(untracked2.stderr) || `exit ${untracked2.exitCode}`}`);
+  }
+  const tracked = hasCommits ? await git(cwd, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "--ignore-submodules=dirty", "HEAD", "--"]) : await git(cwd, ["ls-files", "-z", "--cached"]);
+  if (tracked.exitCode !== 0) {
+    throw new Error(`git failed listing changed files: ${firstLine2(tracked.stderr) || `exit ${tracked.exitCode}`}`);
+  }
+  return [.../* @__PURE__ */ new Set([...splitNul(tracked.stdout), ...splitNul(untracked2.stdout)])];
+}
+async function historyState(cwd) {
+  const head = await resolveCommit(cwd, "HEAD");
+  if (head === null) return {};
+  const refs = await git(cwd, ["for-each-ref", "--format=%(objectname) %(refname)"]);
+  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine2(refs.stderr)}`);
+  return { head, refs: createHash5("sha256").update(refs.stdout).digest("hex") };
+}
+async function showPrefix(cwd) {
+  const r = await git(cwd, ["rev-parse", "--show-prefix"]);
+  if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine2(r.stderr)}`);
+  return r.stdout.trim();
+}
+async function materialiseCommit(cwd, sha) {
+  const holder = mkdtempSync(join17(tmpdir(), "guardian-review-"));
+  const root = join17(holder, "head");
+  const noHooks = join17(holder, "no-hooks");
+  const add = await git(
+    cwd,
+    ["-c", `core.hooksPath=${noHooks}`, "worktree", "add", "--detach", "--no-checkout", "--quiet", root, sha],
+    CHECKOUT_TIMEOUT_MS
+  );
+  const r = add.exitCode === 0 ? await git(root, ["reset", "--hard", "--quiet", "--no-recurse-submodules"], CHECKOUT_TIMEOUT_MS) : add;
+  const notApplied = [.../* @__PURE__ */ new Set([...add.notApplied ?? [], ...r === add ? [] : r.notApplied ?? []])].sort();
+  const remove = async () => {
+    const problems = [];
+    const rm2 = await git(cwd, ["worktree", "remove", "--force", root]);
+    if (rm2.exitCode !== 0 && existsSync8(root)) problems.push(firstLine2(rm2.stderr) || `git worktree remove exited ${rm2.exitCode}`);
+    try {
+      rmSync3(holder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (e) {
+      problems.push(e instanceof Error ? e.message : String(e));
+    }
+    await git(cwd, ["worktree", "prune"]);
+    return problems.length > 0 ? `temporary checkout ${root} not fully removed: ${problems.join("; ")}` : null;
+  };
+  if (r.exitCode !== 0) {
+    await remove();
+    const step = r === add ? "git worktree add" : "git reset --hard (the checkout)";
+    throw new Error(`${step} ${sha.slice(0, 12)} failed: ${firstLine2(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return { root, remove, notApplied };
+}
+function firstLine2(text2) {
+  return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
+}
+var GIT_TIMEOUT_MS2, CHECKOUT_TIMEOUT_MS, SHALLOW_UNDETERMINED, SHALLOW_QUERY_TIMEOUT_MS, SHALLOW_FILE_MAX_BYTES;
+var init_git = __esm({
+  "src/runners/git.ts"() {
+    "use strict";
+    init_configFile();
+    init_guardianOutput();
+    init_projectFs();
+    init_textLines();
+    init_gitSafety();
+    GIT_TIMEOUT_MS2 = 6e4;
+    CHECKOUT_TIMEOUT_MS = 10 * 6e4;
+    SHALLOW_UNDETERMINED = "(undetermined)";
+    SHALLOW_QUERY_TIMEOUT_MS = 1e4;
+    SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
+  }
+});
+
+// src/ci/secretValues.ts
+import { createHmac, randomBytes as randomBytes4 } from "node:crypto";
+import { isAbsolute as isAbsolute8 } from "node:path";
+function secretValueOf(finding4) {
+  return values.get(finding4);
+}
+function secretValuesRead(findings) {
+  return findings.some((f) => attempted.has(f));
+}
+function commitOf(snippet) {
+  const m = /;commit=([0-9a-f]{7,64})$/i.exec(snippet ?? "");
+  return m?.[1] ?? null;
+}
+function linesOf(text2, from, to) {
+  const lines = text2.split(/\r?\n/);
+  if (from < 1 || from > lines.length) return null;
+  return lines.slice(from - 1, Math.max(from, Math.min(to, lines.length))).join("\n").replace(/\s+/g, "");
+}
+function hmac(text2) {
+  return createHmac("sha256", RUN_KEY).update(text2).digest("hex");
+}
+async function rememberSecretValues(projectPath, findings) {
+  const blobs = /* @__PURE__ */ new Map();
+  const blob = (commit, path3) => {
+    const key = `${commit}
+${path3}`;
+    let text2 = blobs.get(key);
+    if (text2 === void 0) {
+      if (blobs.size >= MAX_BLOBS) return Promise.resolve(null);
+      text2 = git(projectPath, ["cat-file", "blob", `${commit}:./${path3}`]).then(
+        (r) => r.exitCode === 0 && r.stdout.length <= MAX_BLOB_BYTES ? r.stdout : null
+      );
+      blobs.set(key, text2);
+    }
+    return text2;
+  };
+  const tree = /* @__PURE__ */ new Map();
+  const working = (path3) => {
+    if (!tree.has(path3)) {
+      const r = readProjectText(projectPath, path3, MAX_BLOB_BYTES);
+      tree.set(path3, r.status === "ok" ? r.text : null);
+    }
+    return tree.get(path3) ?? null;
+  };
+  for (const f of findings) {
+    if (f.tool.toLowerCase() !== "gitleaks") continue;
+    attempted.add(f);
+    if (f.line_start === void 0) continue;
+    const path3 = (f.file_path ?? "").split("\\").join("/");
+    if (path3 === "" || isAbsolute8(path3) || path3 === ".." || path3.startsWith("../")) continue;
+    try {
+      const commit = commitOf(f.snippet);
+      const text2 = commit !== null ? await blob(commit, path3) : working(path3);
+      const line = text2 === null ? null : linesOf(text2, f.line_start, f.line_end ?? f.line_start);
+      if (line !== null) values.set(f, hmac(line));
+    } catch {
+    }
+  }
+}
+var RUN_KEY, MAX_BLOB_BYTES, MAX_BLOBS, values, attempted;
+var init_secretValues = __esm({
+  "src/ci/secretValues.ts"() {
+    "use strict";
+    init_projectFs();
+    init_git();
+    RUN_KEY = randomBytes4(32);
+    MAX_BLOB_BYTES = 16 * 1024 * 1024;
+    MAX_BLOBS = 2e3;
+    values = /* @__PURE__ */ new WeakMap();
+    attempted = /* @__PURE__ */ new WeakSet();
+  }
+});
+
 // src/ci/baseline.ts
 var baseline_exports = {};
 __export(baseline_exports, {
@@ -13690,7 +14033,10 @@ function baselineMatcher(baseline, findings, renamedFrom) {
   for (const entry of entries2) {
     if (entry.match_id !== void 0 && !byMatchKey.has(entry.match_id)) byMatchKey.set(entry.match_id, entry);
   }
-  const keys = gateMatchKeys(findings, renamedFrom !== void 0 ? { renamedFrom } : {});
+  const keys = gateMatchKeys(findings, {
+    ...renamedFrom !== void 0 ? { renamedFrom } : {},
+    ...secretValuesRead(findings) ? { secretValue: secretValueOf } : {}
+  });
   return {
     keys,
     entryFor: (finding4, index) => {
@@ -13711,38 +14057,21 @@ var init_baseline = __esm({
     "use strict";
     init_findingIdentity();
     init_types2();
+    init_secretValues();
     BASELINE_RELATIVE_PATH = ".guardian/baseline.json";
     BASELINE_VERSION = 1;
   }
 });
 
-// src/platform/textLines.ts
-function* textLines(text2) {
-  let start = 0;
-  while (start < text2.length) {
-    const nl = text2.indexOf("\n", start);
-    const end = nl < 0 ? text2.length : nl;
-    const line = text2.slice(start, end > start && text2.charCodeAt(end - 1) === 13 ? end - 1 : end);
-    yield line;
-    if (nl < 0) return;
-    start = nl + 1;
-  }
-}
-var init_textLines = __esm({
-  "src/platform/textLines.ts"() {
-    "use strict";
-  }
-});
-
 // src/treeHash/computeTreeHash.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
-import { join as join17, relative as relative6, resolve as resolve11, sep as sep4 } from "node:path";
+import { join as join18, relative as relative6, resolve as resolve11, sep as sep4 } from "node:path";
 async function computeTreeHash(projectPath, options = {}) {
   const root = resolve11(projectPath);
   const files = options.forceFilesystemWalk ? await walkFiles(root) : await tryGitListFiles(root) ?? await walkFiles(root);
   files.sort();
-  const hash = createHash5("sha256");
+  const hash = createHash6("sha256");
   for (const rel2 of files) {
     const contentHash = await hashProjectFile(root, rel2);
     hash.update(`${rel2}:${contentHash}
@@ -13778,7 +14107,7 @@ async function walk2(root, dir, out) {
   }
   for (const entry of entries2) {
     if (entry.name === TOOL_OUTPUT_DIR ? dir === root : FS_EXCLUDE.has(entry.name)) continue;
-    const abs = join17(dir, entry.name);
+    const abs = join18(dir, entry.name);
     if (entry.isDirectory()) {
       await walk2(root, abs, out);
     } else if (entry.isFile()) {
@@ -13823,7 +14152,7 @@ var init_computeTreeHash = __esm({
 
 // src/runners/projectFiles.ts
 import { readdirSync as readdirSync7 } from "node:fs";
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 function readDir(dir) {
   try {
     return readdirSync7(dir, { withFileTypes: true });
@@ -13838,7 +14167,7 @@ function hasFileWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUDE) 
     if (dir === void 0) break;
     for (const entry of readDir(dir)) {
       if (entry.isDirectory()) {
-        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join18(dir, entry.name));
+        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join19(dir, entry.name));
       } else if (entry.isFile()) {
         const lower = entry.name.toLowerCase();
         if (extensions.some((ext) => lower.endsWith(ext))) return true;
@@ -13855,7 +14184,7 @@ function countFilesWithExtension(root, extensions, exclude = PROJECT_WALK_EXCLUD
     if (dir === void 0) break;
     for (const entry of readDir(dir)) {
       if (entry.isDirectory()) {
-        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join18(dir, entry.name));
+        if (!exclude.has(entry.name) && !entry.name.startsWith(".")) stack.push(join19(dir, entry.name));
       } else if (entry.isFile()) {
         const lower = entry.name.toLowerCase();
         if (extensions.some((ext) => lower.endsWith(ext)) && !skipFile(lower)) count += 1;
@@ -13873,7 +14202,7 @@ function listProjectFiles(root, exclude = PROJECT_WALK_EXCLUDE) {
     for (const entry of readDir(next.abs)) {
       const rel2 = next.rel === "" ? entry.name : `${next.rel}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (!exclude.has(entry.name)) stack.push({ abs: join18(next.abs, entry.name), rel: rel2 });
+        if (!exclude.has(entry.name)) stack.push({ abs: join19(next.abs, entry.name), rel: rel2 });
       } else if (entry.isFile()) {
         out.push(rel2);
       }
@@ -14465,7 +14794,7 @@ var init_scannerParsers = __esm({
 });
 
 // src/runners/scannerParsers/trivy.ts
-import { dirname as dirname8, join as join19, relative as relative7, sep as sep5 } from "node:path";
+import { dirname as dirname8, join as join20, relative as relative7, sep as sep5 } from "node:path";
 function mapVulnerability(raw, target, ctx) {
   const cveId = getString(raw, "VulnerabilityID");
   const pkg = getString(raw, "PkgName");
@@ -14604,9 +14933,9 @@ function present(r, path3) {
   return presentInProject(r.root, path3);
 }
 function npmLockFilesLockNothing(r, dir) {
-  for (const name of NPM_UNREAD_LOCKFILES) if (present(r, join19(dir, name))) return false;
+  for (const name of NPM_UNREAD_LOCKFILES) if (present(r, join20(dir, name))) return false;
   for (const name of NPM_JSON_LOCKFILES) {
-    const path3 = join19(dir, name);
+    const path3 = join20(dir, name);
     if (!present(r, path3)) continue;
     const lock = readJsonFile(r, path3, LOCK_PARSE_MAX);
     if (typeof lock !== "object" || lock === null || Array.isArray(lock)) return false;
@@ -14617,7 +14946,7 @@ function npmLockFilesLockNothing(r, dir) {
     }
     if (!isEmptyField(dependencies)) return false;
   }
-  const yarnLock = join19(dir, "yarn.lock");
+  const yarnLock = join20(dir, "yarn.lock");
   if (present(r, yarnLock)) {
     const text2 = readText2(r, yarnLock, YARN_LOCK_SCAN_MAX);
     if (text2 === null) return false;
@@ -14692,7 +15021,7 @@ function walkManifests(projectPath, opts) {
       return { found: found2, incomplete: `the manifest walk stopped after ${maxDirs} directories` };
     }
     visited += 1;
-    const abs = rel2 === "" ? projectPath : join19(projectPath, ...rel2.split("/"));
+    const abs = rel2 === "" ? projectPath : join20(projectPath, ...rel2.split("/"));
     const entries2 = listProjectDirOrNull(projectPath, abs);
     if (entries2 === null) {
       if (rel2 === "") return null;
@@ -14713,10 +15042,10 @@ function walkManifests(projectPath, opts) {
       const eco = ECOSYSTEM_MANIFESTS.find((m) => m.matches(e.name));
       if (eco !== void 0) {
         if (ignores !== null && ignores(child, false)) continue;
-        found2.push({ rel: child, dir: rel2, abs: join19(abs, e.name), eco });
+        found2.push({ rel: child, dir: rel2, abs: join20(abs, e.name), eco });
         continue;
       }
-      const out = e.kind === "link" ? linkNotFollowed(projectPath, join19(abs, e.name)) : null;
+      const out = e.kind === "link" ? linkNotFollowed(projectPath, join20(abs, e.name)) : null;
       if (out !== null) linksOut.push(`${child}${out.kind === "directory" ? "/" : ""} (${out.says})`);
     }
   }
@@ -14814,8 +15143,8 @@ function readWorkspace(r, rootAbs, ecosystem) {
       if (p.startsWith("!")) exclude.push(p.slice(1));
       else include.push(p);
     };
-    if (present(r, join19(rootAbs, "package.json"))) {
-      const manifest = readJsonFile(r, join19(rootAbs, "package.json"), MANIFEST_JSON_PARSE_MAX);
+    if (present(r, join20(rootAbs, "package.json"))) {
+      const manifest = readJsonFile(r, join20(rootAbs, "package.json"), MANIFEST_JSON_PARSE_MAX);
       if (typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)) {
         const ws = manifest["workspaces"];
         const list2 = Array.isArray(ws) ? ws : typeof ws === "object" && ws !== null ? ws["packages"] : void 0;
@@ -14824,8 +15153,8 @@ function readWorkspace(r, rootAbs, ecosystem) {
         }
       }
     }
-    if (present(r, join19(rootAbs, "pnpm-workspace.yaml"))) {
-      const pnpm = readText2(r, join19(rootAbs, "pnpm-workspace.yaml"), WORKSPACE_YAML_MAX);
+    if (present(r, join20(rootAbs, "pnpm-workspace.yaml"))) {
+      const pnpm = readText2(r, join20(rootAbs, "pnpm-workspace.yaml"), WORKSPACE_YAML_MAX);
       const parsed = pnpm === null ? null : parseYamlBounded(pnpm);
       if (parsed?.ok === true) {
         const doc = parsed.value;
@@ -14838,7 +15167,7 @@ function readWorkspace(r, rootAbs, ecosystem) {
     return compileDecl(include, exclude);
   }
   if (ecosystem === "cargo" || ecosystem === "python") {
-    const file = join19(rootAbs, ecosystem === "cargo" ? "Cargo.toml" : "pyproject.toml");
+    const file = join20(rootAbs, ecosystem === "cargo" ? "Cargo.toml" : "pyproject.toml");
     if (!present(r, file)) return null;
     const text2 = readText2(r, file, TOML_SCAN_MAX);
     if (text2 === null) return null;
@@ -14876,7 +15205,7 @@ function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
     for (const t of eco.trivyTypes) for (const d of dirsByType.get(t) ?? []) out2.add(d);
     return out2;
   };
-  const abs = (rel2) => rel2 === "" ? projectPath : join19(projectPath, ...rel2.split("/"));
+  const abs = (rel2) => rel2 === "" ? projectPath : join20(projectPath, ...rel2.split("/"));
   const covered = (eco, dir, dirs) => {
     if (dirs.has(dir)) return true;
     const segments = dir === "" ? [] : dir.split("/");
@@ -14889,7 +15218,7 @@ function assessManifestCoverage(projectPath, rawTrivyOutput, opts = {}) {
     return false;
   };
   const hasLockFile = (eco, dir) => {
-    const lockIn = (rel2) => eco.lockfiles.some((name) => present(reader, join19(abs(rel2), name)));
+    const lockIn = (rel2) => eco.lockfiles.some((name) => present(reader, join20(abs(rel2), name)));
     if (lockIn(dir)) return true;
     const segments = dir === "" ? [] : dir.split("/");
     for (let n = segments.length - 1; n >= 0; n--) {
@@ -15077,8 +15406,8 @@ var init_trivy = __esm({
 
 // src/platform/semverCompare.ts
 function compareSemver(a, b) {
-  const pa = parse5(a);
-  const pb = parse5(b);
+  const pa = parse6(a);
+  const pb = parse6(b);
   if (!pa || !pb) return null;
   if (pa.major !== pb.major) return pa.major - pb.major;
   if (pa.minor !== pb.minor) return pa.minor - pb.minor;
@@ -15089,7 +15418,7 @@ function meetsFloor(installed, floor) {
   if (cmp === null) return null;
   return cmp >= 0;
 }
-function parse5(input) {
+function parse6(input) {
   if (!input) return null;
   const m = /v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(input);
   if (!m) return null;
@@ -15134,9 +15463,9 @@ var init_pkgManagerDetect = __esm({
 });
 
 // src/platform/userBin.ts
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { delimiter, join as join20, resolve as resolve12 } from "node:path";
+import { delimiter, join as join21, resolve as resolve12 } from "node:path";
 function userBinDir(home) {
   let h = home;
   if (h === void 0) {
@@ -15146,7 +15475,7 @@ function userBinDir(home) {
       return null;
     }
   }
-  return h.trim() === "" ? null : join20(h, ".local", "bin");
+  return h.trim() === "" ? null : join21(h, ".local", "bin");
 }
 function normalised(entry, win) {
   const unquoted = entry.trim().replace(/^"(.*)"$/, "$1");
@@ -15163,14 +15492,14 @@ function ensureUserBinOnPath(env = process.env, home) {
   if (dir === null) return { dir: null, added: false, onUserPath: false };
   const onUserPath = pathHasDir(dir, STARTUP_PATH);
   const current = env["PATH"] ?? "";
-  if (pathHasDir(dir, current) || !existsSync8(dir)) return { dir, added: false, onUserPath };
+  if (pathHasDir(dir, current) || !existsSync9(dir)) return { dir, added: false, onUserPath };
   env["PATH"] = current === "" ? dir : `${current}${current.endsWith(delimiter) ? "" : delimiter}${dir}`;
   return { dir, added: true, onUserPath };
 }
 function userBinPlacement(binary, home) {
   const dir = userBinDir(home);
   if (dir === null) return null;
-  const binaryPath = join20(dir, binary);
+  const binaryPath = join21(dir, binary);
   if (pathHasDir(dir, STARTUP_PATH)) return { binary_path: binaryPath };
   return {
     binary_path: binaryPath,
@@ -16044,8 +16373,8 @@ var init_spawn = __esm({
 });
 
 // src/runners/windowsTreeKill.ts
-import { existsSync as existsSync9 } from "node:fs";
-import { dirname as dirname9, join as join21 } from "node:path";
+import { existsSync as existsSync10 } from "node:fs";
+import { dirname as dirname9, join as join22 } from "node:path";
 function parseMsysPs(output) {
   const out = [];
   for (const line of output.split(/\r?\n/)) {
@@ -16095,10 +16424,10 @@ function selectOwnMsysProcesses(snapshot, tokenPids, self) {
 function findMsysBin(command) {
   const candidates2 = [];
   const m = /^(.*)[\\/](?:usr[\\/])?bin[\\/]bash(?:\.exe)?$/i.exec(command);
-  if (m?.[1] !== void 0) candidates2.push(join21(m[1], "usr", "bin"));
+  if (m?.[1] !== void 0) candidates2.push(join22(m[1], "usr", "bin"));
   const programFiles = process.env["ProgramFiles"];
-  if (programFiles) candidates2.push(join21(programFiles, "Git", "usr", "bin"));
-  return candidates2.find((c) => existsSync9(join21(c, "ps.exe")) && existsSync9(join21(c, "grep.exe"))) ?? null;
+  if (programFiles) candidates2.push(join22(programFiles, "Git", "usr", "bin"));
+  return candidates2.find((c) => existsSync10(join22(c, "ps.exe")) && existsSync10(join22(c, "grep.exe"))) ?? null;
 }
 async function killWindowsTree(pid, command, token, fallback) {
   const own = await findOwnMsysProcesses(command, token);
@@ -16116,13 +16445,13 @@ async function findOwnMsysProcesses(command, token) {
   const self = { pid: process.pid, ppid: process.ppid };
   try {
     const opts = { timeoutMs: MSYS_PROBE_TIMEOUT_MS, cwd: dirname9(bin) };
-    const ps = await captureOutput(join21(bin, "ps.exe"), [], opts);
+    const ps = await captureOutput(join22(bin, "ps.exe"), [], opts);
     if (ps.exitCode !== 0) return none;
     const snapshot = parseMsysPs(ps.stdout);
     const roots = snapshot.filter((p) => p.ppid === 1).map((p) => `/proc/${p.pid}/environ`);
     if (roots.length === 0) return none;
     const needle = `${PROC_TREE_ENV}=${token}`;
-    const grep = (files) => captureOutput(join21(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
+    const grep = (files) => captureOutput(join22(bin, "grep.exe"), ["-l", "-a", "-s", "-F", needle, ...files], opts);
     let matches3;
     const all = await grep(roots);
     if (all.exitCode === 0 || all.exitCode === 1) {
@@ -16410,7 +16739,7 @@ async function runVersionProbe(probe2, cwd) {
   if (r.outcome !== "completed") {
     const onPath = await resolveBinary(probe2.command);
     if (!onPath) return { installed: false, version: "" };
-    const why = firstLine2(r.stderr) ?? firstLine2(r.stdout) ?? r.outcome;
+    const why = firstLine3(r.stderr) ?? firstLine3(r.stdout) ?? r.outcome;
     let error2 = `found at ${onPath}, but \`${[probe2.command, ...probe2.args].join(" ")}\` exited ${r.exitCode ?? "(no exit code)"}: ${why}`;
     if (process.platform === "win32" && !/\.(exe|cmd|bat|com)$/i.test(onPath)) {
       error2 += " \u2014 the first match has no .exe/.cmd/.bat extension; if it is a bash shim it runs only inside bash and cannot be started by this server: put the real executable on PATH";
@@ -16423,9 +16752,9 @@ ${r.stderr}`;
     const sdk = highestDotnetSdk(r.stdout);
     return sdk === null ? { installed: false, version: "", error: "dotnet is present but lists no SDK (runtime only)" } : { installed: true, version: sdk };
   }
-  return { installed: true, version: extractVersion(text2) ?? (firstLine2(text2) ?? "").slice(0, 80) };
+  return { installed: true, version: extractVersion(text2) ?? (firstLine3(text2) ?? "").slice(0, 80) };
 }
-function firstLine2(text2) {
+function firstLine3(text2) {
   return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 var PROBE_TIMEOUT_MS2;
@@ -16437,242 +16766,6 @@ var init_toolProbe = __esm({
     init_userBin();
     init_processRunner();
     PROBE_TIMEOUT_MS2 = 3e4;
-  }
-});
-
-// src/platform/guardianOutput.ts
-function isGuardianOutput(rel2) {
-  let p = rel2.split("\\").join("/");
-  while (p.startsWith("./")) p = p.slice(2);
-  return OUTPUT_FILES.includes(p) || OUTPUT_DIRS.some((dir) => p === dir || p.startsWith(`${dir}/`));
-}
-function semgrepGuardianOutputExcludes() {
-  return GUARDIAN_OUTPUT_PATHS.map((p) => `--exclude=${p}`);
-}
-var GUARDIAN_DIR, OUTPUT_DIRS, OUTPUT_FILES, GUARDIAN_OUTPUT_PATHS;
-var init_guardianOutput = __esm({
-  "src/platform/guardianOutput.ts"() {
-    "use strict";
-    GUARDIAN_DIR = ".guardian";
-    OUTPUT_DIRS = [".guardian/reports"];
-    OUTPUT_FILES = [
-      ".guardian/guardian.db",
-      ".guardian/guardian.db-wal",
-      ".guardian/guardian.db-shm",
-      ".guardian/guardian.db-journal",
-      ".guardian/dashboard.html",
-      ".guardian/last-grill.md",
-      ".guardian/.gitignore"
-    ];
-    GUARDIAN_OUTPUT_PATHS = [...OUTPUT_DIRS, ...OUTPUT_FILES];
-  }
-});
-
-// src/runners/git.ts
-var git_exports = {};
-__export(git_exports, {
-  SHALLOW_UNDETERMINED: () => SHALLOW_UNDETERMINED,
-  changedFiles: () => changedFiles,
-  countCommits: () => countCommits,
-  describeSubmodules: () => describeSubmodules,
-  git: () => git,
-  gitlinksAmong: () => gitlinksAmong,
-  historyState: () => historyState,
-  initialisedSubmodules: () => initialisedSubmodules,
-  materialiseCommit: () => materialiseCommit,
-  repoState: () => repoState,
-  resolveCommit: () => resolveCommit,
-  shallowBoundary: () => shallowBoundary,
-  showPrefix: () => showPrefix,
-  splitNul: () => splitNul,
-  trackedGuardianOutput: () => trackedGuardianOutput,
-  uncommittedFiles: () => uncommittedFiles
-});
-import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync10, mkdtempSync, rmSync as rmSync3 } from "node:fs";
-import { tmpdir } from "node:os";
-import { isAbsolute as isAbsolute7, join as join22, parse as parse6 } from "node:path";
-async function git(cwd, args, timeoutMs = GIT_TIMEOUT_MS2) {
-  const r = await execGit(cwd, args, { timeoutMs });
-  const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
-  if (r.failure?.code === "refused") return { exitCode: 126, stdout: "", stderr: r.stderr, ...notApplied };
-  if (r.status === null) {
-    const exitCode = r.failure?.code === "not-found" ? 127 : 124;
-    return { exitCode, stdout: "", stderr: r.failure?.message ?? "git could not be run", ...notApplied };
-  }
-  return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
-}
-function splitNul(text2) {
-  return text2.split("\0").filter((s) => s.length > 0);
-}
-async function repoState(cwd) {
-  const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
-  if (top.exitCode !== 0) {
-    if (/not a git repository/i.test(top.stderr) || top.exitCode === 127) return { kind: "not_git" };
-    return { kind: "error", message: firstLine3(top.stderr) || `git exited ${top.exitCode}` };
-  }
-  const toplevel = top.stdout.trim();
-  const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
-  if (head.exitCode === 0) return { kind: "has_commits", toplevel };
-  if (head.exitCode === 1) return { kind: "no_commits", toplevel };
-  return { kind: "error", message: firstLine3(head.stderr) || `git exited ${head.exitCode}` };
-}
-async function shallowBoundary(cwd) {
-  const where = await git(cwd, ["rev-parse", "--git-path", "shallow"], SHALLOW_QUERY_TIMEOUT_MS);
-  const rel2 = where.stdout.trim();
-  if (where.exitCode !== 0 || rel2 === "") return [SHALLOW_UNDETERMINED];
-  const path3 = isAbsolute7(rel2) ? rel2 : join22(cwd, rel2);
-  const kind = projectEntryKindIn(parse6(path3).root, path3);
-  if (kind === "absent") return null;
-  if (kind !== "file") return [SHALLOW_UNDETERMINED];
-  const shallow = await git(cwd, ["rev-parse", "--is-shallow-repository"], SHALLOW_QUERY_TIMEOUT_MS);
-  if (shallow.exitCode !== 0) return [SHALLOW_UNDETERMINED];
-  if (shallow.stdout.trim() !== "true") return null;
-  const read3 = readSmallText(path3, SHALLOW_FILE_MAX_BYTES);
-  if (read3.status !== "ok") return ["(unknown)"];
-  const shas = [];
-  for (const line of textLines(read3.text)) {
-    const sha = line.trim();
-    if (/^[0-9a-f]{40,64}$/.test(sha)) shas.push(sha);
-  }
-  return shas.length > 0 ? shas : ["(unknown)"];
-}
-async function initialisedSubmodules(cwd) {
-  const r = await git(cwd, ["ls-files", "-z", "--stage", "--", "."]);
-  if (r.exitCode !== 0) return [];
-  const out = /* @__PURE__ */ new Set();
-  for (const entry of splitNul(r.stdout)) {
-    const tab = entry.indexOf("	");
-    if (tab < 0 || !entry.startsWith("160000 ")) continue;
-    const path3 = entry.slice(tab + 1);
-    if (listProjectDir(cwd, join22(cwd, path3)).some(({ name }) => name !== ".git")) out.add(path3.split("\\").join("/"));
-  }
-  return [...out].sort();
-}
-async function gitlinksAmong(cwd, rev, paths) {
-  if (paths.length === 0) return [];
-  const r = await git(cwd, ["ls-tree", "-r", "-z", rev, "--", "."]);
-  if (r.exitCode !== 0) return [];
-  const wanted = new Set(paths.map((p) => p.split("\\").join("/")));
-  const out = [];
-  for (const entry of splitNul(r.stdout)) {
-    const tab = entry.indexOf("	");
-    if (tab < 0 || !entry.startsWith("160000 ")) continue;
-    const path3 = entry.slice(tab + 1);
-    if (wanted.has(path3)) out.push(path3);
-  }
-  return out.sort();
-}
-async function trackedGuardianOutput(cwd) {
-  const r = await git(cwd, ["ls-files", "-z", "--cached", "--", ...GUARDIAN_OUTPUT_PATHS.map((p) => `:(literal)${p}`)]);
-  if (r.exitCode !== 0) return [];
-  return [...new Set(splitNul(r.stdout).map((p) => p.split("\\").join("/")))].sort();
-}
-function describeSubmodules(paths) {
-  const shown = paths.slice(0, 5).join(", ");
-  return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""}`;
-}
-async function resolveCommit(cwd, ref) {
-  const r = await git(cwd, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
-  if (r.exitCode !== 0) return null;
-  const sha = r.stdout.trim();
-  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
-}
-async function changedFiles(cwd, base2, head) {
-  const r = await git(cwd, [
-    "diff",
-    "-z",
-    "--name-only",
-    "--relative",
-    "--diff-filter=ACMR",
-    "--no-renames",
-    `${base2}...${head}`,
-    "--"
-  ]);
-  if (r.exitCode !== 0) {
-    throw new Error(`git diff ${base2}...${head} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return splitNul(r.stdout);
-}
-async function countCommits(cwd, range) {
-  const r = await git(cwd, ["rev-list", "--count", range, "--"]);
-  const n = Number(r.stdout.trim());
-  if (r.exitCode !== 0 || !Number.isInteger(n)) {
-    throw new Error(`git rev-list --count ${range} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return n;
-}
-async function uncommittedFiles(cwd, hasCommits, excludeDirs) {
-  const excludes = excludeDirs.map((d) => `--exclude=${d}/`);
-  const untracked2 = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard", ...excludes]);
-  if (untracked2.exitCode !== 0) {
-    throw new Error(`git ls-files failed: ${firstLine3(untracked2.stderr) || `exit ${untracked2.exitCode}`}`);
-  }
-  const tracked = hasCommits ? await git(cwd, ["diff", "-z", "--name-only", "--relative", "--diff-filter=d", "--no-renames", "--ignore-submodules=dirty", "HEAD", "--"]) : await git(cwd, ["ls-files", "-z", "--cached"]);
-  if (tracked.exitCode !== 0) {
-    throw new Error(`git failed listing changed files: ${firstLine3(tracked.stderr) || `exit ${tracked.exitCode}`}`);
-  }
-  return [.../* @__PURE__ */ new Set([...splitNul(tracked.stdout), ...splitNul(untracked2.stdout)])];
-}
-async function historyState(cwd) {
-  const head = await resolveCommit(cwd, "HEAD");
-  if (head === null) return {};
-  const refs = await git(cwd, ["for-each-ref", "--format=%(objectname) %(refname)"]);
-  if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine3(refs.stderr)}`);
-  return { head, refs: createHash6("sha256").update(refs.stdout).digest("hex") };
-}
-async function showPrefix(cwd) {
-  const r = await git(cwd, ["rev-parse", "--show-prefix"]);
-  if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine3(r.stderr)}`);
-  return r.stdout.trim();
-}
-async function materialiseCommit(cwd, sha) {
-  const holder = mkdtempSync(join22(tmpdir(), "guardian-review-"));
-  const root = join22(holder, "head");
-  const noHooks = join22(holder, "no-hooks");
-  const add = await git(
-    cwd,
-    ["-c", `core.hooksPath=${noHooks}`, "worktree", "add", "--detach", "--no-checkout", "--quiet", root, sha],
-    CHECKOUT_TIMEOUT_MS
-  );
-  const r = add.exitCode === 0 ? await git(root, ["reset", "--hard", "--quiet", "--no-recurse-submodules"], CHECKOUT_TIMEOUT_MS) : add;
-  const notApplied = [.../* @__PURE__ */ new Set([...add.notApplied ?? [], ...r === add ? [] : r.notApplied ?? []])].sort();
-  const remove = async () => {
-    const problems = [];
-    const rm2 = await git(cwd, ["worktree", "remove", "--force", root]);
-    if (rm2.exitCode !== 0 && existsSync10(root)) problems.push(firstLine3(rm2.stderr) || `git worktree remove exited ${rm2.exitCode}`);
-    try {
-      rmSync3(holder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    } catch (e) {
-      problems.push(e instanceof Error ? e.message : String(e));
-    }
-    await git(cwd, ["worktree", "prune"]);
-    return problems.length > 0 ? `temporary checkout ${root} not fully removed: ${problems.join("; ")}` : null;
-  };
-  if (r.exitCode !== 0) {
-    await remove();
-    const step = r === add ? "git worktree add" : "git reset --hard (the checkout)";
-    throw new Error(`${step} ${sha.slice(0, 12)} failed: ${firstLine3(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  return { root, remove, notApplied };
-}
-function firstLine3(text2) {
-  return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
-}
-var GIT_TIMEOUT_MS2, CHECKOUT_TIMEOUT_MS, SHALLOW_UNDETERMINED, SHALLOW_QUERY_TIMEOUT_MS, SHALLOW_FILE_MAX_BYTES;
-var init_git = __esm({
-  "src/runners/git.ts"() {
-    "use strict";
-    init_configFile();
-    init_guardianOutput();
-    init_projectFs();
-    init_textLines();
-    init_gitSafety();
-    GIT_TIMEOUT_MS2 = 6e4;
-    CHECKOUT_TIMEOUT_MS = 10 * 6e4;
-    SHALLOW_UNDETERMINED = "(undetermined)";
-    SHALLOW_QUERY_TIMEOUT_MS = 1e4;
-    SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
   }
 });
 
@@ -17315,7 +17408,7 @@ var init_scanCoverage = __esm({
 });
 
 // src/runners/semgrepReport.ts
-import { isAbsolute as isAbsolute8, relative as relativePath, resolve as resolvePath } from "node:path";
+import { isAbsolute as isAbsolute9, relative as relativePath, resolve as resolvePath } from "node:path";
 function checkSemgrepReport(args) {
   const { raw, exitCode, outcome, targets, projectPath } = args;
   const relative38 = (list2) => list2.map((p) => ({ ...p, file: toRelativeIfPossible(p.file, projectPath) }));
@@ -17490,10 +17583,10 @@ function errorType(entry) {
 }
 function canBeTarget(file, projectPath) {
   if (!/\.ya?ml$/i.test(file)) return true;
-  if (!isAbsolute8(file)) return !file.split(/[\\/]/).includes("..");
+  if (!isAbsolute9(file)) return !file.split(/[\\/]/).includes("..");
   if (projectPath === void 0) return false;
   const rel2 = relativePath(resolvePath(projectPath), resolvePath(file));
-  return rel2.length > 0 && !rel2.split(/[\\/]/).includes("..") && !isAbsolute8(rel2);
+  return rel2.length > 0 && !rel2.split(/[\\/]/).includes("..") && !isAbsolute9(rel2);
 }
 function perFileError(entry, projectPath) {
   const type = errorType(entry);
@@ -20436,8 +20529,8 @@ function rowToFinding(row) {
   if (aliases.length > 0) finding4.vuln_aliases = aliases;
   return finding4;
 }
-function taxonomyColumn(values) {
-  return values === void 0 || values.length === 0 ? null : JSON.stringify(values);
+function taxonomyColumn(values2) {
+  return values2 === void 0 || values2.length === 0 ? null : JSON.stringify(values2);
 }
 function readTaxonomyColumn(stored, shape) {
   if (stored === null) return null;
@@ -20668,16 +20761,16 @@ var init_findingsRepo = __esm({
        */
       listByScanMatching(scanId, match, skip2) {
         const fileKeys = [...new Set(match.files.flatMap((f) => [f, f.replace(/\//g, "\\")]))];
-        const chunks = (values) => {
+        const chunks = (values2) => {
           const out = [];
-          for (let i = 0; i < values.length; i += 400) out.push(values.slice(i, i + 400));
+          for (let i = 0; i < values2.length; i += 400) out.push(values2.slice(i, i + 400));
           return out;
         };
         const inList = (chunk) => chunk.map(() => "?").join(", ");
         const byFingerprint = /* @__PURE__ */ new Map();
         const wanted = /* @__PURE__ */ new Set();
-        const run2 = (column, values) => {
-          for (const chunk of chunks(values)) {
+        const run2 = (column, values2) => {
+          for (const chunk of chunks(values2)) {
             if (skip2 === void 0) {
               const sql2 = `SELECT * FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
               for (const row of this.db.prepare(sql2).all(scanId, ...chunk)) {
@@ -21979,8 +22072,8 @@ function assert(_) {
 }
 function getEnumValues(entries2) {
   const numericValues = Object.values(entries2).filter((v) => typeof v === "number");
-  const values = Object.entries(entries2).filter(([k, _]) => numericValues.indexOf(+k) === -1).map(([_, v]) => v);
-  return values;
+  const values2 = Object.entries(entries2).filter(([k, _]) => numericValues.indexOf(+k) === -1).map(([_, v]) => v);
+  return values2;
 }
 function joinValues(array2, separator = "|") {
   return array2.map((val) => stringifyPrimitive(val)).join(separator);
@@ -24022,10 +24115,10 @@ var init_schemas = __esm({
         const opts = def.options;
         const map = /* @__PURE__ */ new Map();
         for (const o of opts) {
-          const values = o._zod.propValues[def.discriminator];
-          if (!values || values.size === 0)
+          const values2 = o._zod.propValues[def.discriminator];
+          if (!values2 || values2.size === 0)
             throw new Error(`Invalid discriminated union option at index "${def.options.indexOf(o)}"`);
-          for (const v of values) {
+          for (const v of values2) {
             if (map.has(v)) {
               throw new Error(`Duplicate discriminator value "${String(v)}"`);
             }
@@ -24093,9 +24186,9 @@ var init_schemas = __esm({
         }
         const proms = [];
         if (def.keyType._zod.values) {
-          const values = def.keyType._zod.values;
+          const values2 = def.keyType._zod.values;
           payload.value = {};
-          for (const key of values) {
+          for (const key of values2) {
             if (typeof key === "string" || typeof key === "number" || typeof key === "symbol") {
               const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
               if (result instanceof Promise) {
@@ -24115,7 +24208,7 @@ var init_schemas = __esm({
           }
           let unrecognized;
           for (const key in input) {
-            if (!values.has(key)) {
+            if (!values2.has(key)) {
               unrecognized = unrecognized ?? [];
               unrecognized.push(key);
             }
@@ -24173,9 +24266,9 @@ var init_schemas = __esm({
     });
     $ZodEnum = /* @__PURE__ */ $constructor("$ZodEnum", (inst, def) => {
       $ZodType.init(inst, def);
-      const values = getEnumValues(def.entries);
-      inst._zod.values = new Set(values);
-      inst._zod.pattern = new RegExp(`^(${values.filter((k) => propertyKeyTypes.has(typeof k)).map((o) => typeof o === "string" ? escapeRegex(o) : o.toString()).join("|")})$`);
+      const values2 = getEnumValues(def.entries);
+      inst._zod.values = new Set(values2);
+      inst._zod.pattern = new RegExp(`^(${values2.filter((k) => propertyKeyTypes.has(typeof k)).map((o) => typeof o === "string" ? escapeRegex(o) : o.toString()).join("|")})$`);
       inst._zod.parse = (payload, _ctx) => {
         const input = payload.value;
         if (inst._zod.values.has(input)) {
@@ -24183,7 +24276,7 @@ var init_schemas = __esm({
         }
         payload.issues.push({
           code: "invalid_value",
-          values,
+          values: values2,
           input,
           inst
         });
@@ -25493,12 +25586,12 @@ var init_to_json_schema = __esm({
               }
               case "enum": {
                 const json = _json;
-                const values = getEnumValues(def.entries);
-                if (values.every((v) => typeof v === "number"))
+                const values2 = getEnumValues(def.entries);
+                if (values2.every((v) => typeof v === "number"))
                   json.type = "number";
-                if (values.every((v) => typeof v === "string"))
+                if (values2.every((v) => typeof v === "string"))
                   json.type = "string";
-                json.enum = values;
+                json.enum = values2;
                 break;
               }
               case "literal": {
@@ -26649,9 +26742,9 @@ function mergeValues2(a, b) {
     return { valid: false };
   }
 }
-function createZodEnum(values, params) {
+function createZodEnum(values2, params) {
   return new ZodEnum({
-    values,
+    values: values2,
     typeName: ZodFirstPartyTypeKind.ZodEnum,
     ...processCreateParams(params)
   });
@@ -29402,14 +29495,14 @@ var init_types3 = __esm({
         }
         return enumValues;
       }
-      extract(values, newDef = this._def) {
-        return _ZodEnum.create(values, {
+      extract(values2, newDef = this._def) {
+        return _ZodEnum.create(values2, {
           ...this._def,
           ...newDef
         });
       }
-      exclude(values, newDef = this._def) {
-        return _ZodEnum.create(this.options.filter((opt) => !values.includes(opt)), {
+      exclude(values2, newDef = this._def) {
+        return _ZodEnum.create(this.options.filter((opt) => !values2.includes(opt)), {
           ...this._def,
           ...newDef
         });
@@ -29447,9 +29540,9 @@ var init_types3 = __esm({
         return this._def.values;
       }
     };
-    ZodNativeEnum.create = (values, params) => {
+    ZodNativeEnum.create = (values2, params) => {
       return new ZodNativeEnum({
-        values,
+        values: values2,
         typeName: ZodFirstPartyTypeKind.ZodNativeEnum,
         ...processCreateParams(params)
       });
@@ -30082,11 +30175,11 @@ function isZ4Schema(s) {
   return !!schema._zod;
 }
 function objectFromShape(shape) {
-  const values = Object.values(shape);
-  if (values.length === 0)
+  const values2 = Object.values(shape);
+  if (values2.length === 0)
     return object({});
-  const allV4 = values.every(isZ4Schema);
-  const allV3 = values.every((s) => !isZ4Schema(s));
+  const allV4 = values2.every(isZ4Schema);
+  const allV3 = values2.every((s) => !isZ4Schema(s));
   if (allV4)
     return object(shape);
   if (allV3)
@@ -30140,8 +30233,8 @@ function normalizeObjectSchema(schema) {
     const asV3 = schema;
     const asV4 = schema;
     if (!asV3._def && !asV4._zod) {
-      const values = Object.values(schema);
-      if (values.length > 0 && values.every((v) => typeof v === "object" && v !== null && (v._def !== void 0 || v._zod !== void 0 || typeof v.parse === "function"))) {
+      const values2 = Object.values(schema);
+      if (values2.length > 0 && values2.every((v) => typeof v === "object" && v !== null && (v._def !== void 0 || v._zod !== void 0 || typeof v.parse === "function"))) {
         return objectFromShape(schema);
       }
     }
@@ -31052,7 +31145,7 @@ function parseMapDef(def, refs) {
     ...refs,
     currentPath: [...refs.currentPath, "items", "items", "0"]
   }) || parseAnyDef(refs);
-  const values = parseDef(def.valueType._def, {
+  const values2 = parseDef(def.valueType._def, {
     ...refs,
     currentPath: [...refs.currentPath, "items", "items", "1"]
   }) || parseAnyDef(refs);
@@ -31061,7 +31154,7 @@ function parseMapDef(def, refs) {
     maxItems: 125,
     items: {
       type: "array",
-      items: [keys, values],
+      items: [keys, values2],
       minItems: 2,
       maxItems: 2
     }
@@ -31082,7 +31175,7 @@ function parseNativeEnumDef(def) {
     return typeof object3[object3[key]] !== "number";
   });
   const actualValues = actualKeys.map((key) => object3[key]);
-  const parsedTypes = Array.from(new Set(actualValues.map((values) => typeof values)));
+  const parsedTypes = Array.from(new Set(actualValues.map((values2) => typeof values2)));
   return {
     type: parsedTypes.length === 1 ? parsedTypes[0] === "string" ? "string" : "number" : ["string", "number"],
     enum: actualValues
@@ -32056,8 +32149,8 @@ function record2(keyType, valueType, params) {
     ...util_exports.normalizeParams(params)
   });
 }
-function _enum(values, params) {
-  const entries2 = Array.isArray(values) ? Object.fromEntries(values.map((v) => [v, v])) : values;
+function _enum(values2, params) {
+  const entries2 = Array.isArray(values2) ? Object.fromEntries(values2.map((v) => [v, v])) : values2;
   return new ZodEnum2({
     type: "enum",
     entries: entries2,
@@ -32512,9 +32605,9 @@ var init_schemas3 = __esm({
       inst.enum = def.entries;
       inst.options = Object.values(def.entries);
       const keys = new Set(Object.keys(def.entries));
-      inst.extract = (values, params) => {
+      inst.extract = (values2, params) => {
         const newEntries = {};
-        for (const value of values) {
+        for (const value of values2) {
           if (keys.has(value)) {
             newEntries[value] = def.entries[value];
           } else
@@ -32527,9 +32620,9 @@ var init_schemas3 = __esm({
           entries: newEntries
         });
       };
-      inst.exclude = (values, params) => {
+      inst.exclude = (values2, params) => {
         const newEntries = { ...def.entries };
-        for (const value of values) {
+        for (const value of values2) {
           if (keys.has(value)) {
             delete newEntries[value];
           } else
@@ -35040,7 +35133,7 @@ var init_refConfig = __esm({
 
 // src/platform/customRules.ts
 import { statSync as statSync6 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join29, relative as relative8, sep as sep7 } from "node:path";
+import { isAbsolute as isAbsolute10, join as join29, relative as relative8, sep as sep7 } from "node:path";
 function customRulesMetaKey(projectPath) {
   return `${CUSTOM_RULES_META_KEY}:${projectPath}`;
 }
@@ -35161,7 +35254,7 @@ function readList(ctx, key) {
 function isInside(root, path3) {
   const norm = (p) => process.platform === "win32" ? p.toLowerCase() : p;
   const rel2 = relative8(norm(root), norm(path3));
-  return rel2 === "" || rel2 !== ".." && !rel2.startsWith(`..${sep7}`) && !isAbsolute9(rel2);
+  return rel2 === "" || rel2 !== ".." && !rel2.startsWith(`..${sep7}`) && !isAbsolute10(rel2);
 }
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -35587,7 +35680,7 @@ var init_glob = __esm({
 // src/platform/scope.ts
 import { createHash as createHash9 } from "node:crypto";
 import { lstatSync as lstatSync9, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname13, isAbsolute as isAbsolute10, join as join32, relative as relative10, resolve as resolve15 } from "node:path";
+import { dirname as dirname13, isAbsolute as isAbsolute11, join as join32, relative as relative10, resolve as resolve15 } from "node:path";
 function suggestScopeForFile(filePath) {
   const file = resolve15(filePath);
   let root = dirname13(file);
@@ -35728,10 +35821,10 @@ function matchesSelfOrAncestor(re, path3) {
   return false;
 }
 function escapes(rel2) {
-  return isAbsolute10(rel2) || rel2.split(/[\\/]/)[0] === "..";
+  return isAbsolute11(rel2) || rel2.split(/[\\/]/)[0] === "..";
 }
 function toProjectRelative(projectPath, entry) {
-  const abs = isAbsolute10(entry) ? resolve15(entry) : resolve15(projectPath, entry.replace(/\\/g, "/"));
+  const abs = isAbsolute11(entry) ? resolve15(entry) : resolve15(projectPath, entry.replace(/\\/g, "/"));
   const rel2 = relative10(resolve15(projectPath), abs);
   if (escapes(rel2)) return null;
   return normaliseRelPath(rel2);
@@ -36933,7 +37026,7 @@ var init_scanToolFactory = __esm({
 
 // src/deps/dotnetRestore.ts
 import { unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename4, dirname as dirname14, extname as extname2, isAbsolute as isAbsolute11, join as join34, relative as relative12, resolve as resolve16 } from "node:path";
+import { basename as basename4, dirname as dirname14, extname as extname2, isAbsolute as isAbsolute12, join as join34, relative as relative12, resolve as resolve16 } from "node:path";
 function findDotnetTargets(projectPath) {
   const rootEntries = listProjectDir(projectPath, projectPath).filter((e) => e.kind === "file").map((e) => e.name).sort();
   const sln = rootEntries.find((n) => n.toLowerCase().endsWith(".sln")) ?? rootEntries.find((n) => n.toLowerCase().endsWith(".slnx"));
@@ -36957,7 +37050,7 @@ function findProjectFiles(projectPath) {
 }
 function resolveFromFile(file, written) {
   const normalised2 = written.trim().replace(/\\/g, "/");
-  return isAbsolute11(normalised2) ? resolve16(normalised2) : resolve16(dirname14(file), normalised2);
+  return isAbsolute12(normalised2) ? resolve16(normalised2) : resolve16(dirname14(file), normalised2);
 }
 function readText4(path3) {
   if (entryKindAnywhere(path3) === "remote") return "";
@@ -38716,8 +38809,8 @@ function redactRanges(text2, ranges) {
   }
   return out + text2.slice(pos);
 }
-function makeScrubber(values) {
-  const distinct = [...new Set(values)].filter((v) => v.length > 0);
+function makeScrubber(values2) {
+  const distinct = [...new Set(values2)].filter((v) => v.length > 0);
   const [only] = distinct;
   if (only === void 0) return (text2) => text2;
   return distinct.length === 1 ? makeValueScrubber(only) : makeTrieScrubber(distinct);
@@ -38755,14 +38848,14 @@ function prefixFunction(s) {
   }
   return border;
 }
-function makeTrieScrubber(values) {
+function makeTrieScrubber(values2) {
   const at = (a, i) => a[i] ?? 0;
   const edges = /* @__PURE__ */ new Map();
   const parent = [0];
   const unit = [0];
   const depth = [0];
   const longest = [0];
-  for (const v of values) {
+  for (const v of values2) {
     let node = 0;
     for (let i = 0; i < v.length; i++) {
       const c = v.charCodeAt(i);
@@ -39928,7 +40021,7 @@ async function verifyGitleaksFindings(input) {
     const pending = [];
     input.parser_inputs.forEach((task, e) => {
       const root = parseInputAsJson(task.input);
-      const values = input.secrets?.get(task) ?? null;
+      const values2 = input.secrets?.get(task) ?? null;
       const items = [];
       if (Array.isArray(root)) {
         root.forEach((raw, i) => {
@@ -39946,7 +40039,7 @@ async function verifyGitleaksFindings(input) {
             items.push({ finding: finding4, check: unsentCheck(rule, `not verified: ${input.unavailable}`) });
             return;
           }
-          const value = values?.[i] ?? null;
+          const value = values2?.[i] ?? null;
           if (value === null) {
             items.push({ finding: finding4, check: unsentCheck(rule, "not verified: gitleaks reported no value for it") });
             return;
@@ -39980,7 +40073,7 @@ async function verifyGitleaksFindings(input) {
 }
 function discardCaptured(captured) {
   if (captured === null || captured === void 0) return;
-  for (const values of captured.values()) values.fill(null);
+  for (const values2 of captured.values()) values2.fill(null);
   captured.clear();
 }
 function summarize(checked) {
@@ -42098,7 +42191,7 @@ var init_hadolint = __esm({
 });
 
 // src/tools/scanContainers.ts
-import { isAbsolute as isAbsolute12, join as join44, relative as relative16, resolve as resolve19, sep as sep11 } from "node:path";
+import { isAbsolute as isAbsolute13, join as join44, relative as relative16, resolve as resolve19, sep as sep11 } from "node:path";
 function findComposeFile(projectPath) {
   for (const name of COMPOSE_FILE_NAMES) {
     if (presentInProject(projectPath, name)) return join44(projectPath, name);
@@ -42155,7 +42248,7 @@ function invalidSigner(inp) {
 function isInside2(root, candidate) {
   const within = (base2, target) => {
     const rel2 = relative16(base2, target);
-    return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep11}`) && !isAbsolute12(rel2);
+    return rel2 !== "" && rel2 !== ".." && !rel2.startsWith(`..${sep11}`) && !isAbsolute13(rel2);
   };
   const abs = resolve19(root, candidate);
   if (!within(root, abs)) return false;
@@ -49754,8 +49847,8 @@ function detectExistingTools(io, dir, pyprojectText) {
   if (has("pytest.ini") || inPyproject("[tool.pytest")) tools.push("pytest");
   return tools;
 }
-function unique(values) {
-  return [...new Set(values)];
+function unique(values2) {
+  return [...new Set(values2)];
 }
 var MAX_MANIFEST_DEPTH, MAX_DIRS_VISITED, MANIFEST_MAX_BYTES2, HEADER_BYTES, YAML_SNIFF_BYTES, DETECTION_BUDGET_BYTES, DETECTION_BUDGET_FILES, MAX_UNREAD_LISTED, MANIFEST_FILES, JS_FRAMEWORK_MARKERS, PY_FRAMEWORK_MARKERS;
 var init_stackDetect = __esm({
@@ -52019,8 +52112,8 @@ function sample(files) {
   const shown = files.slice(0, 5).join(", ");
   return files.length > 5 ? `${shown}, \u2026 (${files.length - 5} more)` : shown;
 }
-function unique2(values) {
-  return [...new Set(values)].sort();
+function unique2(values2) {
+  return [...new Set(values2)].sort();
 }
 function dirOf4(path3) {
   const posix6 = path3.replace(/\\/g, "/");
@@ -52545,8 +52638,8 @@ function namesOf(group, names) {
   }
   return { vulnerability: group.name, aliases };
 }
-function joinImpacts(values) {
-  const distinct = [...new Set(values.flatMap((v) => v === void 0 || v.trim() === "" ? [] : [v.trim()]))];
+function joinImpacts(values2) {
+  const distinct = [...new Set(values2.flatMap((v) => v === void 0 || v.trim() === "" ? [] : [v.trim()]))];
   if (distinct.length === 0) return null;
   const shown = distinct.slice(0, MAX_IMPACTS).join("; ");
   const more = distinct.length - MAX_IMPACTS;
@@ -52605,7 +52698,7 @@ function mergeOne(same) {
   const justifications = new Set(same.map((s) => s.justification));
   const agreed = status === "not_affected" && justifications.size === 1 ? first : null;
   const impact = agreed === null ? null : joinImpacts(same.map((s) => s.impact_statement));
-  const one = (values) => new Set(values).size === 1 ? values[0] ?? null : null;
+  const one = (values2) => new Set(values2).size === 1 ? values2[0] ?? null : null;
   const aliases = [...new Map(same.flatMap((s) => s.aliases).map((a) => [vulnIdKey(a), a])).values()].filter((a) => vulnIdKey(a) !== vulnIdKey(first.vulnerability));
   const affected = same.find((s) => s.status === "affected");
   const notes = [
@@ -55931,7 +56024,7 @@ var init_triageFindings = __esm({
 
 // src/platform/hookInstallTarget.ts
 import { lstatSync as lstatSync15 } from "node:fs";
-import { dirname as dirname21, isAbsolute as isAbsolute13, join as join64, resolve as resolve21 } from "node:path";
+import { dirname as dirname21, isAbsolute as isAbsolute14, join as join64, resolve as resolve21 } from "node:path";
 function lstatOrNull3(p) {
   try {
     return lstatSync15(p);
@@ -55965,7 +56058,7 @@ function gitDirFromFile(projectPath) {
   }
   return {
     ok: false,
-    reason: `.git is a file naming ${isAbsolute13(named2) ? named2 : gitDir}, which is neither a worktree of that repository (its gitdir file does not point back here) nor a submodule of one enclosing this project \u2014 pre-commit would install hooks into another repository`
+    reason: `.git is a file naming ${isAbsolute14(named2) ? named2 : gitDir}, which is neither a worktree of that repository (its gitdir file does not point back here) nor a submodule of one enclosing this project \u2014 pre-commit would install hooks into another repository`
   };
 }
 function hookInstallTarget(projectPath) {
@@ -56166,7 +56259,7 @@ var init_semgrepValidate = __esm({
 
 // src/tools/registerCustomRules.ts
 import { statSync as statSync9 } from "node:fs";
-import { isAbsolute as isAbsolute14, join as join65, resolve as resolve22 } from "node:path";
+import { isAbsolute as isAbsolute15, join as join65, resolve as resolve22 } from "node:path";
 async function handler20(input, ctx) {
   const inp = input;
   let projectPath;
@@ -56280,7 +56373,7 @@ function collectExplicit(projectPath, paths) {
   const rejected = [];
   for (const raw of paths) {
     if (hasGlobMagic(raw)) {
-      if (isAbsolute14(raw)) {
+      if (isAbsolute15(raw)) {
         rejected.push({ path: raw, reason: "a glob must be relative to the project" });
         continue;
       }
@@ -57597,24 +57690,24 @@ var require_scope = __commonJS({
           return;
         return vs.get(keyOrRef);
       }
-      scopeRefs(scopeName, values = this._values) {
-        return this._reduceValues(values, (name) => {
+      scopeRefs(scopeName, values2 = this._values) {
+        return this._reduceValues(values2, (name) => {
           if (name.scopePath === void 0)
             throw new Error(`CodeGen: name "${name}" has no value`);
           return (0, code_1._)`${scopeName}${name.scopePath}`;
         });
       }
-      scopeCode(values = this._values, usedValues, getCode) {
-        return this._reduceValues(values, (name) => {
+      scopeCode(values2 = this._values, usedValues, getCode) {
+        return this._reduceValues(values2, (name) => {
           if (name.value === void 0)
             throw new Error(`CodeGen: name "${name}" has no value`);
           return name.value.code;
         }, usedValues, getCode);
       }
-      _reduceValues(values, valueCode, usedValues = {}, getCode) {
+      _reduceValues(values2, valueCode, usedValues = {}, getCode) {
         let code = code_1.nil;
-        for (const prefix in values) {
-          const vs = values[prefix];
+        for (const prefix in values2) {
+          const vs = values2[prefix];
           if (!vs)
             continue;
           const nameSet = usedValues[prefix] = usedValues[prefix] || /* @__PURE__ */ new Map();
@@ -65340,16 +65433,16 @@ var init_uriTemplate = __esm({
           return separator + pairs.join("&");
         }
         if (part.names.length > 1) {
-          const values2 = part.names.map((name) => variables[name]).filter((v) => v !== void 0);
-          if (values2.length === 0)
+          const values3 = part.names.map((name) => variables[name]).filter((v) => v !== void 0);
+          if (values3.length === 0)
             return "";
-          return values2.map((v) => Array.isArray(v) ? v[0] : v).join(",");
+          return values3.map((v) => Array.isArray(v) ? v[0] : v).join(",");
         }
         const value = variables[part.name];
         if (value === void 0)
           return "";
-        const values = Array.isArray(value) ? value : [value];
-        const encoded = values.map((v) => this.encodeValue(v, part.operator));
+        const values2 = Array.isArray(value) ? value : [value];
+        const encoded = values2.map((v) => this.encodeValue(v, part.operator));
         switch (part.operator) {
           case "":
             return encoded.join(",");
@@ -67405,7 +67498,7 @@ var init_reportExport = __esm({
 
 // src/sarif/importSarif.ts
 import { createHash as createHash11 } from "node:crypto";
-import { isAbsolute as isAbsolute15, relative as relative23, resolve as resolve23 } from "node:path";
+import { isAbsolute as isAbsolute16, relative as relative23, resolve as resolve23 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 function importSarif(text2, ctx) {
   const runs = parseLog(text2);
@@ -67689,7 +67782,7 @@ function decode(s) {
 }
 function insideRoot(p, root) {
   const rel2 = relative23(root, p);
-  if (rel2 === "" || rel2 === ".." || rel2.startsWith("..\\") || rel2.startsWith("../") || isAbsolute15(rel2)) return void 0;
+  if (rel2 === "" || rel2 === ".." || rel2.startsWith("..\\") || rel2.startsWith("../") || isAbsolute16(rel2)) return void 0;
   return rel2.replace(/\\/g, "/");
 }
 function relativeInProject(uri, baseId, rc) {
@@ -69711,7 +69804,7 @@ var init_wpscan = __esm({
 
 // src/wordpress/siteKeys.ts
 import { existsSync as existsSync20 } from "node:fs";
-import { isAbsolute as isAbsolute16, resolve as resolve25 } from "node:path";
+import { isAbsolute as isAbsolute17, resolve as resolve25 } from "node:path";
 function wpSiteKey(url2) {
   return url2.replace(/\/$/, "");
 }
@@ -69725,7 +69818,7 @@ function wpInstallKeys(canonical2, raw) {
   return unique3(keys);
 }
 function namesOneInstall(raw) {
-  return isAbsolute16(raw) || existsSync20(raw);
+  return isAbsolute17(raw) || existsSync20(raw);
 }
 function wpSiteKeys(url2) {
   const key = wpSiteKey(url2);
@@ -72334,8 +72427,8 @@ var init_dotnetDescribeSetup = __esm({
 });
 
 // src/intel/ssvc.ts
-function ssvcDecision(values) {
-  return TREE[values.exploitation][values.automatable][values.technical_impact][values.mission_wellbeing];
+function ssvcDecision(values2) {
+  return TREE[values2.exploitation][values2.automatable][values2.technical_impact][values2.mission_wellbeing];
 }
 function assessSsvc(points) {
   const order = ["exploitation", "automatable", "technical_impact", "mission_wellbeing"];
@@ -75041,7 +75134,7 @@ import {
   writeFileSync as writeFileSync14
 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { basename as basename9, dirname as dirname23, isAbsolute as isAbsolute17, join as join76, relative as relative29, resolve as resolve26 } from "node:path";
+import { basename as basename9, dirname as dirname23, isAbsolute as isAbsolute18, join as join76, relative as relative29, resolve as resolve26 } from "node:path";
 function extOf(name) {
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot).toLowerCase();
@@ -75203,7 +75296,7 @@ async function tryExtract(zipPath, destDir) {
 }
 function isPathWithinRoot(candidate, root) {
   const rel2 = relative29(root, candidate);
-  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute17(rel2);
+  return rel2 === "" || !rel2.startsWith("..") && !isAbsolute18(rel2);
 }
 function collectDir(root) {
   const files = [];
@@ -76984,7 +77077,7 @@ var init_specImport = __esm({
 });
 
 // src/tools/mapAttackSurface.ts
-import { isAbsolute as isAbsolute18, join as join81, resolve as resolve28 } from "node:path";
+import { isAbsolute as isAbsolute19, join as join81, resolve as resolve28 } from "node:path";
 async function handler40(input, ctx) {
   const inp = input;
   let projectPath;
@@ -77157,7 +77250,7 @@ async function handler40(input, ctx) {
 function readSources(parsed, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path3 of collectAllFiles(parsed)) {
-    const read3 = readProjectBytes(projectPath, isAbsolute18(path3) ? path3 : join81(projectPath, path3));
+    const read3 = readProjectBytes(projectPath, isAbsolute19(path3) ? path3 : join81(projectPath, path3));
     if (read3.status !== "ok") continue;
     const buffer = read3.bytes;
     const text2 = buffer.toString("utf8");
@@ -77288,12 +77381,12 @@ function importSpecs(projectPath, specPaths2) {
     });
   }
   if (resolvedSpecPaths !== void 0) {
-    const attempted = resolvedSpecPaths.slice(0, MAX_SPEC_FILES);
+    const attempted2 = resolvedSpecPaths.slice(0, MAX_SPEC_FILES);
     const accountedFor = /* @__PURE__ */ new Set([
       ...discovery.specs.map((s) => s.file),
       ...discovery.oversized
     ]);
-    for (const path3 of attempted) {
+    for (const path3 of attempted2) {
       if (accountedFor.has(path3)) continue;
       specFiles.push({
         file: path3,
@@ -77308,7 +77401,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path3) {
-  return resolve28(isAbsolute18(path3) ? path3 : join81(projectPath, path3));
+  return resolve28(isAbsolute19(path3) ? path3 : join81(projectPath, path3));
 }
 function resultsArrayOf(parsed) {
   const results = parsed.results;
@@ -78882,9 +78975,9 @@ var init_passes = __esm({
 });
 
 // src/dast/redact.ts
-function collectSecrets(...values) {
+function collectSecrets(...values2) {
   const out = /* @__PURE__ */ new Set();
-  for (const value of values) {
+  for (const value of values2) {
     if (value === null || value === void 0) continue;
     const trimmed = value.trim();
     if (trimmed === "") continue;
@@ -79946,7 +80039,7 @@ var init_testCommandEnv = __esm({
 
 // src/fixpr/apply.ts
 import { rmSync as rmSync11 } from "node:fs";
-import { isAbsolute as isAbsolute19, join as join86, relative as relative31, resolve as resolve29, sep as sep18 } from "node:path";
+import { isAbsolute as isAbsolute20, join as join86, relative as relative31, resolve as resolve29, sep as sep18 } from "node:path";
 async function applyGroup(opts) {
   const run2 = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -80091,7 +80184,7 @@ function editPipPin(worktreePath, step) {
   if (file.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
   const target = resolve29(worktreePath, file);
   const rel2 = relative31(worktreePath, target);
-  if (isAbsolute19(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep18}`) || isAbsolute19(rel2)) {
+  if (isAbsolute20(file) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep18}`) || isAbsolute20(rel2)) {
     return { ok: false, label, reason: `'${file}' is not a file inside the project` };
   }
   const read3 = readProjectBytes(worktreePath, file, PROJECT_FILE_MAX_BYTES);
@@ -81529,7 +81622,7 @@ var init_worktree = __esm({
 
 // src/tools/createFixPr.ts
 import { rmSync as rmSync15 } from "node:fs";
-import { isAbsolute as isAbsolute20, join as join90, relative as relative33 } from "node:path";
+import { isAbsolute as isAbsolute21, join as join90, relative as relative33 } from "node:path";
 async function handler43(input, ctx, callMeta) {
   const inp = input;
   let projectPath;
@@ -81714,7 +81807,7 @@ function inWorktree(root, prefix) {
   return join90(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
-  const rel2 = isAbsolute20(filePath) ? relative33(projectPath, filePath) : filePath;
+  const rel2 = isAbsolute21(filePath) ? relative33(projectPath, filePath) : filePath;
   return rel2.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
 }
 async function processGroup(opts) {
@@ -82881,7 +82974,7 @@ var init_jsonc = __esm({
 
 // src/agentaudit/configSources.ts
 import { homedir as homedir8 } from "node:os";
-import { dirname as dirname27, isAbsolute as isAbsolute21, join as join91, relative as relative34 } from "node:path";
+import { dirname as dirname27, isAbsolute as isAbsolute22, join as join91, relative as relative34 } from "node:path";
 function hostPathEnv() {
   return { os: detectOs(), home: homedir8(), appData: process.env["APPDATA"], projectPath: "" };
 }
@@ -82935,7 +83028,7 @@ function refusalMessage(reason, cap) {
 }
 function isWithin(root, path3) {
   const rel2 = relative34(root, path3);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute21(rel2);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute22(rel2);
 }
 function walkRoot(kind, projectPath, path3) {
   if (kind === "project") return projectPath;
@@ -83157,9 +83250,9 @@ function capText2(text2, maxBytes) {
   }
   return `${text2.slice(0, end)}${ELLIPSIS}`;
 }
-function capList(values, maxEntries = MAX_LIST_ENTRIES, entryBytes = MAX_LIST_ENTRY_BYTES) {
-  const out = values.slice(0, maxEntries).map((v) => capText2(v, entryBytes));
-  if (values.length > maxEntries) out.push(`${ELLIPSIS} and ${values.length - maxEntries} more`);
+function capList(values2, maxEntries = MAX_LIST_ENTRIES, entryBytes = MAX_LIST_ENTRY_BYTES) {
+  const out = values2.slice(0, maxEntries).map((v) => capText2(v, entryBytes));
+  if (values2.length > maxEntries) out.push(`${ELLIPSIS} and ${values2.length - maxEntries} more`);
   return out;
 }
 function capSegment(key) {
@@ -85753,8 +85846,8 @@ async function random(size) {
   const evenDistCutoff = Math.pow(2, 8) - Math.pow(2, 8) % mask.length;
   let result = "";
   while (result.length < size) {
-    const randomBytes5 = await getRandomValues(size - result.length);
-    for (const randomByte of randomBytes5) {
+    const randomBytes6 = await getRandomValues(size - result.length);
+    for (const randomByte of randomBytes6) {
       if (randomByte < evenDistCutoff) {
         result += mask[randomByte % mask.length];
       }
@@ -87471,7 +87564,7 @@ var init_streamableHttp = __esm({
 // src/mcpaudit/launch.ts
 import { spawn as spawn2 } from "node:child_process";
 import { stat as stat2 } from "node:fs/promises";
-import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute22, resolve as resolve33 } from "node:path";
+import { delimiter as delimiter2, extname as extname3, isAbsolute as isAbsolute23, resolve as resolve33 } from "node:path";
 function urlAt(text2, start) {
   const rest = text2.slice(start);
   const end = rest.search(URL_END);
@@ -87655,7 +87748,7 @@ async function resolveCommand2(command, env, cwd, deadline) {
   const withExts = (base2) => extname3(base2) !== "" ? [base2, ...exts.map((e) => base2 + e)] : exts.map((e) => base2 + e);
   let candidates2;
   const skipped2 = [];
-  if (/[\\/]/.test(command) || isAbsolute22(command)) {
+  if (/[\\/]/.test(command) || isAbsolute23(command)) {
     candidates2 = withExts(resolve33(cwd, command));
   } else {
     const dirs = (envValue3(env, "PATH") ?? "").split(delimiter2).filter((d) => d !== "");
@@ -88329,11 +88422,11 @@ async function handler45(input, ctx, callMeta) {
     throw e;
   }
 }
-function visibleList(values) {
-  return values.map(escapeInvisible);
+function visibleList(values2) {
+  return values2.map(escapeInvisible);
 }
-function reportList(values, entryBytes = MAX_LIST_ENTRY_BYTES) {
-  return capList(visibleList(values), MAX_LIST_ENTRIES, entryBytes);
+function reportList(values2, entryBytes = MAX_LIST_ENTRY_BYTES) {
+  return capList(visibleList(values2), MAX_LIST_ENTRIES, entryBytes);
 }
 function reportText(value, maxBytes = MAX_REPORT_STRING_BYTES) {
   return capText2(escapeInvisible(value), maxBytes);
@@ -89674,7 +89767,7 @@ var init_popular = __esm({
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync18, readdirSync as readdirSync17 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { dirname as dirname28, isAbsolute as isAbsolute23, join as join93, parse as parse10, relative as relative35, resolve as resolve34 } from "node:path";
+import { dirname as dirname28, isAbsolute as isAbsolute24, join as join93, parse as parse10, relative as relative35, resolve as resolve34 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -89686,7 +89779,7 @@ function isPublicRegistryUrl(ecosystem, url2) {
 }
 function isInside3(dir, path3) {
   const rel2 = relative35(dir, path3);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute23(rel2);
+  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute24(rel2);
 }
 function walkRoot2(path3, ctx, under) {
   const abs = resolve34(path3);
@@ -91256,11 +91349,11 @@ var init_types8 = __esm({
 });
 
 // src/llmscan/plan.ts
-import { isAbsolute as isAbsolute24, relative as relative36 } from "node:path";
+import { isAbsolute as isAbsolute25, relative as relative36 } from "node:path";
 function relativize(file, projectPath) {
-  const rel2 = isAbsolute24(file) ? relative36(projectPath, file) : file;
+  const rel2 = isAbsolute25(file) ? relative36(projectPath, file) : file;
   const posix6 = rel2.replace(/\\/g, "/");
-  if (posix6 === "" || posix6 === ".." || posix6.startsWith("../") || isAbsolute24(posix6) || /^[A-Za-z]:/.test(posix6)) return null;
+  if (posix6 === "" || posix6 === ".." || posix6.startsWith("../") || isAbsolute25(posix6) || /^[A-Za-z]:/.test(posix6)) return null;
   return posix6.replace(/^\.\//, "");
 }
 function entryPointId(route, projectPath) {
@@ -91378,10 +91471,10 @@ var init_plan2 = __esm({
 });
 
 // src/llmscan/briefs.ts
-import { randomBytes as randomBytes4 } from "node:crypto";
+import { randomBytes as randomBytes5 } from "node:crypto";
 import { join as join95 } from "node:path";
 function randomBoundary() {
-  return `BOUNDARY-${randomBytes4(12).toString("hex")}`;
+  return `BOUNDARY-${randomBytes5(12).toString("hex")}`;
 }
 function estimateTokens(text2) {
   return Math.ceil(text2.length / 4);
@@ -91552,29 +91645,29 @@ function renderVerifyData(task, ctx) {
 function renderBrief(task, ctx) {
   const template = loadTemplate(ctx.prompt_version ?? CURRENT_PROMPT_VERSION, TEMPLATE_NAMES[task.kind]);
   let excerptWithin;
-  let values;
+  let values2;
   if (task.kind === "verify") {
     const { excerptWithin: within, ...data } = renderVerifyData(task, ctx);
     excerptWithin = within;
-    values = { ...data, schema: VERIFY_SCHEMA };
+    values2 = { ...data, schema: VERIFY_SCHEMA };
   } else {
-    values = { entry_points: renderEntryPoints(task, ctx), scanner_findings: renderScannerFindings(ctx.scanner_findings), schema: HUNT_SCHEMA };
+    values2 = { entry_points: renderEntryPoints(task, ctx), scanner_findings: renderScannerFindings(ctx.scanner_findings), schema: HUNT_SCHEMA };
   }
   let boundary = ctx.boundary();
-  for (let tries = 1; Object.values(values).some((v) => v.includes(boundary)); tries += 1) {
+  for (let tries = 1; Object.values(values2).some((v) => v.includes(boundary)); tries += 1) {
     if (tries >= BOUNDARY_TRIES) throw new Error("could not draw a boundary marker absent from the quoted data");
     boundary = ctx.boundary();
   }
-  values["boundary"] = boundary;
-  const fill = () => template.replace(/\{(boundary|finding|excerpt|schema|entry_points|scanner_findings)\}/g, (whole, name) => values[name] ?? whole);
+  values2["boundary"] = boundary;
+  const fill = () => template.replace(/\{(boundary|finding|excerpt|schema|entry_points|scanner_findings)\}/g, (whole, name) => values2[name] ?? whole);
   const limit = ctx.max_tokens ?? MAX_BRIEF_TOKENS;
   let text2 = fill();
   if (estimateTokens(text2) > limit) {
-    for (const key of ["entry_points", "scanner_findings"]) if (values[key] !== void 0) values[key] = "(omitted: the brief size limit)";
+    for (const key of ["entry_points", "scanner_findings"]) if (values2[key] !== void 0) values2[key] = "(omitted: the brief size limit)";
     text2 = fill();
   }
   for (let cap = MAX_EXCERPT_CHARS >> 1; excerptWithin !== void 0 && estimateTokens(text2) > limit && cap >= 1; cap >>= 1) {
-    values["excerpt"] = excerptWithin(cap);
+    values2["excerpt"] = excerptWithin(cap);
     text2 = fill();
   }
   if (estimateTokens(text2) > limit) throw new Error("the brief exceeds the size limit even with its variable parts cut to the minimum");
@@ -91781,13 +91874,13 @@ var init_report2 = __esm({
 
 // src/llmscan/service.ts
 import { createHash as createHash17, randomUUID as randomUUID22 } from "node:crypto";
-import { posix as posix5, relative as relative37, isAbsolute as isAbsolute25 } from "node:path";
+import { posix as posix5, relative as relative37, isAbsolute as isAbsolute26 } from "node:path";
 function listed(items) {
   return { items: items.slice(0, MAX_LISTED2), total: items.length };
 }
 function relPosix(project, file) {
-  const rel2 = (isAbsolute25(file) ? relative37(project, file) : file).replace(/\\/g, "/");
-  return rel2 === "" || rel2.startsWith("../") || rel2 === ".." || isAbsolute25(rel2) ? null : rel2.replace(/^\.\//, "");
+  const rel2 = (isAbsolute26(file) ? relative37(project, file) : file).replace(/\\/g, "/");
+  return rel2 === "" || rel2.startsWith("../") || rel2 === ".." || isAbsolute26(rel2) ? null : rel2.replace(/^\.\//, "");
 }
 function fileHash(project, rel2) {
   const read3 = readProjectBytes(project, rel2);
@@ -93359,7 +93452,9 @@ async function runScans(opts) {
       for (const name of buildSequence(opts)) {
         steps.push(await runStep(name, buildInput(name, opts), ctx));
       }
-      return { findings: collectFindings(storage, opts.projectPath), steps, rulesSource, scanSettings };
+      const findings = collectFindings(storage, opts.projectPath);
+      await rememberSecretValues(scannedProject(opts.projectPath), findings);
+      return { findings, steps, rulesSource, scanSettings };
     } finally {
       try {
         db.close();
@@ -93492,6 +93587,7 @@ var init_runScans = __esm({
     init_storage();
     init_tools();
     init_refConfig();
+    init_secretValues();
     init_registerAll();
     SCAN_SEQUENCE = [
       "detect_stack",
@@ -97406,8 +97502,8 @@ var RULE_BASELINE_UPDATE = {
   reason: "dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the gate stops reporting them \u2014 the user decides. To accept one reviewed finding, suppress it inline with a reason (`nosemgrep: <rule> -- <reason>`, `# nosec`), or rebuild the baseline on the base commit"
 };
 var START_PROCESS = /* @__PURE__ */ new Set(["start-process", "saps", "start"]);
-function plainWords(values) {
-  return values.map((value) => ({ value, quoted: false }));
+function plainWords(values2) {
+  return values2.map((value) => ({ value, quoted: false }));
 }
 function startProcessArgv(words, at) {
   const sp = words.findIndex((w, i) => i <= at && START_PROCESS.has(commandName(w.value)));
