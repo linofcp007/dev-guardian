@@ -1705,6 +1705,10 @@ function resolveProjectPath(input) {
   if (isNetworkPath(raw)) throw new InvalidProjectPathError("network_path", raw);
   const candidate = resolve6(raw);
   if (isNetworkPath(candidate)) throw new InvalidProjectPathError("network_path", candidate);
+  if (process.platform === "win32") {
+    const walk5 = walkLinksUnder(parse3(candidate).root, candidate);
+    if (!walk5.ok && walk5.reason === "remote-link") throw new InvalidProjectPathError("network_path", candidate, walk5.at);
+  }
   if (!existsSync2(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
@@ -1739,6 +1743,7 @@ var REASON_HINT, InvalidProjectPathError;
 var init_projectPath = __esm({
   "src/platform/projectPath.ts"() {
     "use strict";
+    init_configFile();
     REASON_HINT = {
       not_found: "",
       not_a_directory: "",
@@ -1746,8 +1751,8 @@ var init_projectPath = __esm({
       network_path: " \u2014 a network (UNC) path: dev-guardian scans local directories only, because every file call on a share that does not answer blocks the whole server; scan a local copy of the project"
     };
     InvalidProjectPathError = class extends Error {
-      constructor(reason, path3) {
-        super(`Invalid project_path (${reason}): ${path3}${REASON_HINT[reason]}`);
+      constructor(reason, path3, via) {
+        super(`Invalid project_path (${reason}): ${path3}${via !== void 0 ? ` (through the link ${via})` : ""}${REASON_HINT[reason]}`);
         this.reason = reason;
         this.path = path3;
         this.name = "InvalidProjectPathError";

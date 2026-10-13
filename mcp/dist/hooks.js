@@ -9179,6 +9179,7 @@ function canonicalPath(p) {
 var init_projectPath = __esm({
   "src/platform/projectPath.ts"() {
     "use strict";
+    init_configFile();
   }
 });
 
