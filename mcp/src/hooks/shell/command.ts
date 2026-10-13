@@ -204,3 +204,8 @@ export function psParam(args: readonly string[], names: readonly string[]): stri
   }
   return undefined;
 }
+
+/** A command word's name: its last path segment, lower-cased, without `.exe`. */
+export function commandName(word: string): string {
+  return basename(word).toLowerCase().replace(/\.exe$/, '');
+}

@@ -616,6 +616,9 @@ function psParam(args, names) {
   }
   return void 0;
 }
+function commandName(word) {
+  return basename2(word).toLowerCase().replace(/\.exe$/, "");
+}
 var RUNNERS, RUNNER_VALUED, ASSIGNMENT;
 var init_command = __esm({
   "src/hooks/shell/command.ts"() {
@@ -1386,6 +1389,375 @@ var init_effects = __esm({
   }
 });
 
+// src/hooks/shell/interpreters.ts
+function isInterpreter(name) {
+  return PYTHON.test(name) || INTERPRETERS.has(name);
+}
+function firstNonFlag(words, from) {
+  let k = from;
+  while (k < words.length && (words[k]?.value ?? "").startsWith("-")) k += 1;
+  return k;
+}
+function interpreterName(word) {
+  return commandName(word).replace(/@[\w.^~<>=-]*$/, "");
+}
+function interpreterIndex(words, start) {
+  let i = start;
+  while (i < words.length) {
+    const name = interpreterName(words[i]?.value ?? "");
+    const sub = LAUNCHER_SUBCOMMANDS[name] === void 0 ? -1 : firstNonFlag(words, i + 1);
+    const launches = sub >= 0 && LAUNCHER_SUBCOMMANDS[name]?.has(words[sub]?.value ?? "") === true;
+    if (isInterpreter(name) && !launches) return i;
+    if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === "run") {
+      for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
+        if (isInterpreter(interpreterName(words[k]?.value ?? ""))) return k;
+      }
+      return -1;
+    }
+    if (launches) i = sub + 1;
+    else if (LAUNCHERS.has(name)) i += 1;
+    else return -1;
+    while (i < words.length) {
+      const w = words[i]?.value ?? "";
+      if (w !== "" && !/^(?:-|\/[A-Za-z])/.test(w)) break;
+      i += LAUNCHER_VALUED.has(w.toLowerCase()) ? 2 : 1;
+    }
+  }
+  return -1;
+}
+function nodeCode(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    const eq2 = /^--(?:eval|print)=([\s\S]*)$/.exec(a);
+    if (eq2 !== null) return [eq2[1] ?? ""];
+    if (/^-(?:e|p|pe|ep)$/.test(a) || a === "--eval" || a === "--print") return [args[i + 1] ?? ""];
+    if (NODE_VALUED.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (!a.startsWith("-")) return [];
+  }
+  return [];
+}
+function pythonCode(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a === "-" || !a.startsWith("-")) return [];
+    if (a.startsWith("--")) continue;
+    for (let k = 1; k < a.length; k += 1) {
+      const c = a.charAt(k);
+      if (c === "c") {
+        const rest = a.slice(k + 1);
+        return [rest !== "" ? rest : args[i + 1] ?? ""];
+      }
+      if (c === "m") return [];
+      if (c === "W" || c === "X") {
+        if (k === a.length - 1) i += 1;
+        break;
+      }
+    }
+  }
+  return [];
+}
+function phpCode(args) {
+  const code = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (/^-[rBRE]$/.test(a)) {
+      code.push(args[i + 1] ?? "");
+      i += 1;
+    } else if (/^-r./.test(a)) code.push(a.slice(2));
+    else if (a === "-f" || a === "-F" || !a.startsWith("-")) return code;
+    else if (/^-[dcz]$/.test(a)) i += 1;
+  }
+  return code;
+}
+function decodeUtf16Base64(text) {
+  if (!/^[A-Za-z0-9+/=]+$/.test(text)) return "";
+  return Buffer.from(text, "base64").toString("utf16le");
+}
+function powershellCommand(args, name) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    const m = /^[-/]([A-Za-z]+)$/.exec(a);
+    if (m === null) return name === "powershell" ? [args.slice(i).join(" ")] : [];
+    const p = (m[1] ?? "").toLowerCase();
+    if (p === "c" || p.length >= 3 && "command".startsWith(p)) {
+      const rest = args.slice(i + 1);
+      return rest.length === 0 || rest[0] === "-" ? [] : [rest.join(" ")];
+    }
+    if (p === "e" || p.length >= 2 && "encodedcommand".startsWith(p)) return [decodeUtf16Base64(args[i + 1] ?? "")];
+    if (p === "f" || p === "file") return [];
+    if (PS_HOST_VALUED.has(p)) i += 1;
+  }
+  return [];
+}
+function inlineCode(words, start) {
+  const at = interpreterIndex(words, start);
+  if (at < 0) return [];
+  const name = interpreterName(words[at]?.value ?? "");
+  const args = words.slice(at + 1).map((w) => w.value);
+  if (PYTHON.test(name)) return pythonCode(args);
+  switch (name) {
+    case "node":
+    case "nodejs":
+    case "bun":
+    case "tsx":
+    case "ts-node":
+      return nodeCode(args);
+    case "deno":
+      return args[0] === "eval" ? args.slice(1).filter((a) => !a.startsWith("-")).slice(0, 1) : [];
+    case "perl":
+      return perlLike(args, "eE", "IMm").code;
+    case "ruby":
+      return perlLike(args, "e", "IrCEFx").code;
+    case "php":
+      return phpCode(args);
+    case "pwsh":
+    case "powershell":
+      return powershellCommand(args, name);
+    default:
+      return [];
+  }
+}
+function isBareInterpreterStdin(words) {
+  const program = interpreterProgram(withoutRedirectWords(words), 0);
+  return program.kind === "dash" || program.kind === "none" && program.readsStdin;
+}
+function operandAt(words, i, readsStdin) {
+  const w = words[i];
+  if (w === void 0) return { kind: "none", readsStdin };
+  return w.value === "-" ? { kind: "dash" } : { kind: "file", index: i };
+}
+function clusterWords(word, inline, valued) {
+  for (let k = 1; k < word.length; k += 1) {
+    const c = word.charAt(k);
+    if (inline.includes(c)) return "inline";
+    if (valued.includes(c)) return k === word.length - 1 ? 2 : 1;
+  }
+  return 1;
+}
+function interpreterProgram(words, at) {
+  const name = interpreterName(words[at]?.value ?? "");
+  const python = PYTHON.test(name);
+  const nodeLike = ["node", "nodejs", "tsx", "ts-node"].includes(name);
+  if (!python && !nodeLike && !["perl", "ruby", "php", "deno", "bun"].includes(name)) return { kind: "unknown" };
+  let i = at + 1;
+  if (name === "deno" || name === "bun") {
+    const sub = words[i]?.value ?? "";
+    if (sub === "eval" || name === "bun" && /^(?:-e|-p|--eval|--print)$/.test(sub)) return { kind: "inline" };
+    if (sub === "run") i += 1;
+    else if (name === "deno" || sub !== "-") return { kind: "unknown" };
+  }
+  const readsStdin = !["deno", "bun", "tsx", "ts-node"].includes(name);
+  for (; i < words.length; i += 1) {
+    const v = words[i]?.value ?? "";
+    if (v === "--") return operandAt(words, i + 1, readsStdin);
+    if (v === "-" || !v.startsWith("-")) return operandAt(words, i, readsStdin);
+    if (python) {
+      if (v.startsWith("--")) {
+        if (v === "--check-hash-based-pycs") i += 1;
+        continue;
+      }
+      const used = clusterWords(v, "cm", "WXQ");
+      if (used === "inline") return { kind: "inline" };
+      i += used - 1;
+    } else if (nodeLike) {
+      if (/^-(?:e|p|pe|ep)$/.test(v) || /^--(?:eval|print)(?:=|$)/.test(v)) return { kind: "inline" };
+      if (!v.includes("=") && NODE_OPTION_VALUED.has(v)) i += 1;
+    } else if (name === "deno" || name === "bun") {
+      if (!v.includes("=") && (name === "deno" ? DENO_RUN_VALUED : BUN_RUN_VALUED).has(v)) i += 1;
+    } else if (name === "php") {
+      if (/^-[rBRE]/.test(v)) return { kind: "inline" };
+      if (v === "-f" || v === "-F") return operandAt(words, i + 1, readsStdin);
+      if (/^-[dcz]$/.test(v)) i += 1;
+    } else {
+      if (v.startsWith("--")) continue;
+      const used = clusterWords(v, name === "perl" ? "eE" : "e", name === "perl" ? "IMm" : "IrCEFx");
+      if (used === "inline") return { kind: "inline" };
+      i += used - 1;
+    }
+  }
+  return { kind: "none", readsStdin };
+}
+function codeLang(interpreter) {
+  if (PYTHON.test(interpreter)) return "python";
+  return ["node", "nodejs", "bun", "deno", "tsx", "ts-node"].includes(interpreter) ? "js" : "other";
+}
+function codeLiterals(code, lang) {
+  const quotes = lang === "js" ? ['"', "'", "`"] : ['"', "'"];
+  const out = [];
+  let i = 0;
+  while (i < code.length) {
+    const ch = code.charAt(i);
+    const atWordStart = i === 0 || /\s/.test(code.charAt(i - 1));
+    const comment = atWordStart && (ch === "#" && lang !== "js" || lang !== "python" && code.startsWith("// ", i));
+    if (comment) {
+      const nl = code.indexOf("\n", i);
+      i = nl < 0 ? code.length : nl + 1;
+      continue;
+    }
+    if (!quotes.includes(ch)) {
+      i += 1;
+      continue;
+    }
+    const close = lang === "python" && code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
+    let lit = "";
+    let j = i + close.length;
+    while (j < code.length) {
+      const c = code.charAt(j);
+      const next = code.charAt(j + 1);
+      if (c === "\\" && (next === "\\" || next === ch)) {
+        lit += next;
+        j += 2;
+        continue;
+      }
+      if (code.startsWith(close, j)) break;
+      lit += c;
+      j += 1;
+    }
+    out.push(lit);
+    i = j + close.length;
+  }
+  return out;
+}
+function literalPaths(literals) {
+  return asWindowsOpens(literals.map((l) => tail(l.trim()).replace(/\\+/g, "/")));
+}
+function tail(path) {
+  return path.length > 1024 ? path.slice(-1024) : path;
+}
+function asWindowsOpens(paths) {
+  const out = [...paths];
+  for (const p of paths) {
+    const named = windowsName(p);
+    if (named !== p) out.push(named);
+  }
+  return out;
+}
+var PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED;
+var init_interpreters = __esm({
+  "src/hooks/shell/interpreters.ts"() {
+    "use strict";
+    init_guardedPath();
+    init_command();
+    init_effects();
+    PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
+    INTERPRETERS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "perl", "ruby", "php", "pwsh", "powershell"]);
+    RUN_WRAPPERS = /* @__PURE__ */ new Set(["uv", "poetry", "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi"]);
+    LAUNCHERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "start"]);
+    LAUNCHER_SUBCOMMANDS = {
+      npm: /* @__PURE__ */ new Set(["exec", "x"]),
+      pnpm: /* @__PURE__ */ new Set(["dlx", "exec"]),
+      yarn: /* @__PURE__ */ new Set(["dlx", "exec"]),
+      bun: /* @__PURE__ */ new Set(["x"])
+    };
+    LAUNCHER_VALUED = /* @__PURE__ */ new Set(["-p", "--package", "-c", "--call", "/d"]);
+    NODE_VALUED = /* @__PURE__ */ new Set([
+      "-r",
+      "--require",
+      "--import",
+      "--loader",
+      "--experimental-loader",
+      "-C",
+      "--conditions",
+      "--input-type",
+      "--env-file",
+      "--title",
+      "--cwd",
+      "--config",
+      "--preload"
+    ]);
+    PS_HOST_VALUED = /* @__PURE__ */ new Set([
+      "ex",
+      "ep",
+      "executionpolicy",
+      "w",
+      "windowstyle",
+      "wd",
+      "workingdirectory",
+      "configurationname",
+      "o",
+      "of",
+      "outputformat",
+      "if",
+      "inputformat",
+      "v",
+      "version",
+      "psconsolefile",
+      "settings",
+      "settingsfile",
+      "custompipename",
+      "configurationfile"
+    ]);
+    NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
+      ...NODE_VALUED,
+      "--max-old-space-size",
+      "--max-semi-space-size",
+      "--stack-size",
+      "--max-http-header-size",
+      "--inspect-port",
+      "--debug-port",
+      "--openssl-config",
+      "--icu-data-dir",
+      "--redirect-warnings",
+      "--report-dir",
+      "--report-directory",
+      "--report-filename",
+      "--report-signal",
+      "--diagnostic-dir",
+      "--heapsnapshot-signal",
+      "--heapsnapshot-near-heap-limit",
+      "--dns-result-order",
+      "--unhandled-rejections",
+      "--disable-warning",
+      "--watch-path",
+      "--test-reporter",
+      "--test-reporter-destination",
+      "--test-name-pattern",
+      "--test-concurrency",
+      "--experimental-policy",
+      "--policy-integrity",
+      "--secure-heap",
+      "--secure-heap-min",
+      "--cpu-prof-dir",
+      "--cpu-prof-name",
+      "--cpu-prof-interval",
+      "--heap-prof-dir",
+      "--heap-prof-name",
+      "--heap-prof-interval",
+      "--trace-event-categories",
+      "--trace-event-file-pattern",
+      "--use-largepages",
+      "--tls-cipher-list",
+      "--tls-keylog",
+      "--localstorage-file",
+      "--env-file-if-exists",
+      "--experimental-sea-config"
+    ]);
+    DENO_RUN_VALUED = /* @__PURE__ */ new Set(["-c", "--config", "--import-map", "--lock", "--cert", "--location", "--seed", "--env-file", "--ext"]);
+    BUN_RUN_VALUED = /* @__PURE__ */ new Set([
+      "--cwd",
+      "-c",
+      "--config",
+      "--env-file",
+      "-r",
+      "--preload",
+      "--tsconfig-override",
+      "-d",
+      "--define",
+      "-l",
+      "--loader",
+      "--main-fields",
+      "--conditions",
+      "--filter",
+      "-F",
+      "--elide-lines",
+      "--shell"
+    ]);
+  }
+});
+
 // src/hooks/shell/split.ts
 function scanQuote(source, start) {
   const quote = source.charAt(start);
@@ -1967,9 +2339,6 @@ function base64Literals(text) {
   }
   return out;
 }
-function commandName(word) {
-  return basename2(word).toLowerCase().replace(/\.exe$/, "");
-}
 function globNamesConfig(path, tails = CONFIG_TAILS) {
   const t = tail(path);
   if (!GLOB.test(t)) return false;
@@ -2060,251 +2429,6 @@ function expandWords(words) {
     for (const value of expanded) out.push({ value, quoted: false });
   }
   return out ?? words;
-}
-function isInterpreter(name) {
-  return PYTHON.test(name) || INTERPRETERS.has(name);
-}
-function firstNonFlag(words, from) {
-  let k = from;
-  while (k < words.length && (words[k]?.value ?? "").startsWith("-")) k += 1;
-  return k;
-}
-function interpreterName(word) {
-  return commandName(word).replace(/@[\w.^~<>=-]*$/, "");
-}
-function interpreterIndex(words, start) {
-  let i = start;
-  while (i < words.length) {
-    const name = interpreterName(words[i]?.value ?? "");
-    const sub = LAUNCHER_SUBCOMMANDS[name] === void 0 ? -1 : firstNonFlag(words, i + 1);
-    const launches = sub >= 0 && LAUNCHER_SUBCOMMANDS[name]?.has(words[sub]?.value ?? "") === true;
-    if (isInterpreter(name) && !launches) return i;
-    if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === "run") {
-      for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
-        if (isInterpreter(interpreterName(words[k]?.value ?? ""))) return k;
-      }
-      return -1;
-    }
-    if (launches) i = sub + 1;
-    else if (LAUNCHERS.has(name)) i += 1;
-    else return -1;
-    while (i < words.length) {
-      const w = words[i]?.value ?? "";
-      if (w !== "" && !/^(?:-|\/[A-Za-z])/.test(w)) break;
-      i += LAUNCHER_VALUED.has(w.toLowerCase()) ? 2 : 1;
-    }
-  }
-  return -1;
-}
-function nodeCode(args) {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    const eq2 = /^--(?:eval|print)=([\s\S]*)$/.exec(a);
-    if (eq2 !== null) return [eq2[1] ?? ""];
-    if (/^-(?:e|p|pe|ep)$/.test(a) || a === "--eval" || a === "--print") return [args[i + 1] ?? ""];
-    if (NODE_VALUED.has(a)) {
-      i += 1;
-      continue;
-    }
-    if (!a.startsWith("-")) return [];
-  }
-  return [];
-}
-function pythonCode(args) {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (a === "-" || !a.startsWith("-")) return [];
-    if (a.startsWith("--")) continue;
-    for (let k = 1; k < a.length; k += 1) {
-      const c = a.charAt(k);
-      if (c === "c") {
-        const rest = a.slice(k + 1);
-        return [rest !== "" ? rest : args[i + 1] ?? ""];
-      }
-      if (c === "m") return [];
-      if (c === "W" || c === "X") {
-        if (k === a.length - 1) i += 1;
-        break;
-      }
-    }
-  }
-  return [];
-}
-function phpCode(args) {
-  const code = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (/^-[rBRE]$/.test(a)) {
-      code.push(args[i + 1] ?? "");
-      i += 1;
-    } else if (/^-r./.test(a)) code.push(a.slice(2));
-    else if (a === "-f" || a === "-F" || !a.startsWith("-")) return code;
-    else if (/^-[dcz]$/.test(a)) i += 1;
-  }
-  return code;
-}
-function decodeUtf16Base64(text) {
-  if (!/^[A-Za-z0-9+/=]+$/.test(text)) return "";
-  return Buffer.from(text, "base64").toString("utf16le");
-}
-function powershellCommand(args, name) {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    const m = /^[-/]([A-Za-z]+)$/.exec(a);
-    if (m === null) return name === "powershell" ? [args.slice(i).join(" ")] : [];
-    const p = (m[1] ?? "").toLowerCase();
-    if (p === "c" || p.length >= 3 && "command".startsWith(p)) {
-      const rest = args.slice(i + 1);
-      return rest.length === 0 || rest[0] === "-" ? [] : [rest.join(" ")];
-    }
-    if (p === "e" || p.length >= 2 && "encodedcommand".startsWith(p)) return [decodeUtf16Base64(args[i + 1] ?? "")];
-    if (p === "f" || p === "file") return [];
-    if (PS_HOST_VALUED.has(p)) i += 1;
-  }
-  return [];
-}
-function inlineCode(words, start) {
-  const at = interpreterIndex(words, start);
-  if (at < 0) return [];
-  const name = interpreterName(words[at]?.value ?? "");
-  const args = words.slice(at + 1).map((w) => w.value);
-  if (PYTHON.test(name)) return pythonCode(args);
-  switch (name) {
-    case "node":
-    case "nodejs":
-    case "bun":
-    case "tsx":
-    case "ts-node":
-      return nodeCode(args);
-    case "deno":
-      return args[0] === "eval" ? args.slice(1).filter((a) => !a.startsWith("-")).slice(0, 1) : [];
-    case "perl":
-      return perlLike(args, "eE", "IMm").code;
-    case "ruby":
-      return perlLike(args, "e", "IrCEFx").code;
-    case "php":
-      return phpCode(args);
-    case "pwsh":
-    case "powershell":
-      return powershellCommand(args, name);
-    default:
-      return [];
-  }
-}
-function isBareInterpreterStdin(words) {
-  const program = interpreterProgram(withoutRedirectWords(words), 0);
-  return program.kind === "dash" || program.kind === "none" && program.readsStdin;
-}
-function operandAt(words, i, readsStdin) {
-  const w = words[i];
-  if (w === void 0) return { kind: "none", readsStdin };
-  return w.value === "-" ? { kind: "dash" } : { kind: "file", index: i };
-}
-function clusterWords(word, inline, valued) {
-  for (let k = 1; k < word.length; k += 1) {
-    const c = word.charAt(k);
-    if (inline.includes(c)) return "inline";
-    if (valued.includes(c)) return k === word.length - 1 ? 2 : 1;
-  }
-  return 1;
-}
-function interpreterProgram(words, at) {
-  const name = interpreterName(words[at]?.value ?? "");
-  const python = PYTHON.test(name);
-  const nodeLike = ["node", "nodejs", "tsx", "ts-node"].includes(name);
-  if (!python && !nodeLike && !["perl", "ruby", "php", "deno", "bun"].includes(name)) return { kind: "unknown" };
-  let i = at + 1;
-  if (name === "deno" || name === "bun") {
-    const sub = words[i]?.value ?? "";
-    if (sub === "eval" || name === "bun" && /^(?:-e|-p|--eval|--print)$/.test(sub)) return { kind: "inline" };
-    if (sub === "run") i += 1;
-    else if (name === "deno" || sub !== "-") return { kind: "unknown" };
-  }
-  const readsStdin = !["deno", "bun", "tsx", "ts-node"].includes(name);
-  for (; i < words.length; i += 1) {
-    const v = words[i]?.value ?? "";
-    if (v === "--") return operandAt(words, i + 1, readsStdin);
-    if (v === "-" || !v.startsWith("-")) return operandAt(words, i, readsStdin);
-    if (python) {
-      if (v.startsWith("--")) {
-        if (v === "--check-hash-based-pycs") i += 1;
-        continue;
-      }
-      const used = clusterWords(v, "cm", "WXQ");
-      if (used === "inline") return { kind: "inline" };
-      i += used - 1;
-    } else if (nodeLike) {
-      if (/^-(?:e|p|pe|ep)$/.test(v) || /^--(?:eval|print)(?:=|$)/.test(v)) return { kind: "inline" };
-      if (!v.includes("=") && NODE_OPTION_VALUED.has(v)) i += 1;
-    } else if (name === "deno" || name === "bun") {
-      if (!v.includes("=") && (name === "deno" ? DENO_RUN_VALUED : BUN_RUN_VALUED).has(v)) i += 1;
-    } else if (name === "php") {
-      if (/^-[rBRE]/.test(v)) return { kind: "inline" };
-      if (v === "-f" || v === "-F") return operandAt(words, i + 1, readsStdin);
-      if (/^-[dcz]$/.test(v)) i += 1;
-    } else {
-      if (v.startsWith("--")) continue;
-      const used = clusterWords(v, name === "perl" ? "eE" : "e", name === "perl" ? "IMm" : "IrCEFx");
-      if (used === "inline") return { kind: "inline" };
-      i += used - 1;
-    }
-  }
-  return { kind: "none", readsStdin };
-}
-function codeLang(interpreter) {
-  if (PYTHON.test(interpreter)) return "python";
-  return ["node", "nodejs", "bun", "deno", "tsx", "ts-node"].includes(interpreter) ? "js" : "other";
-}
-function codeLiterals(code, lang) {
-  const quotes = lang === "js" ? ['"', "'", "`"] : ['"', "'"];
-  const out = [];
-  let i = 0;
-  while (i < code.length) {
-    const ch = code.charAt(i);
-    const atWordStart = i === 0 || /\s/.test(code.charAt(i - 1));
-    const comment = atWordStart && (ch === "#" && lang !== "js" || lang !== "python" && code.startsWith("// ", i));
-    if (comment) {
-      const nl = code.indexOf("\n", i);
-      i = nl < 0 ? code.length : nl + 1;
-      continue;
-    }
-    if (!quotes.includes(ch)) {
-      i += 1;
-      continue;
-    }
-    const close = lang === "python" && code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
-    let lit = "";
-    let j = i + close.length;
-    while (j < code.length) {
-      const c = code.charAt(j);
-      const next = code.charAt(j + 1);
-      if (c === "\\" && (next === "\\" || next === ch)) {
-        lit += next;
-        j += 2;
-        continue;
-      }
-      if (code.startsWith(close, j)) break;
-      lit += c;
-      j += 1;
-    }
-    out.push(lit);
-    i = j + close.length;
-  }
-  return out;
-}
-function literalPaths(literals) {
-  return asWindowsOpens(literals.map((l) => tail(l.trim()).replace(/\\+/g, "/")));
-}
-function tail(path) {
-  return path.length > 1024 ? path.slice(-1024) : path;
-}
-function asWindowsOpens(paths) {
-  const out = [...paths];
-  for (const p of paths) {
-    const named = windowsName(p);
-    if (named !== p) out.push(named);
-  }
-  return out;
 }
 function literalsNameHookConfig(literals, scope) {
   const paths = literalPaths(literals);
@@ -3793,17 +3917,17 @@ function assessReadings(readings, cut, now, deadline, where) {
     ...ask === void 0 ? {} : { ask }
   };
 }
-var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, FORK_NAME_CHAR, SUDO_RULE, LEVEL_RANK, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_BASE64_LITERALS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, MAX_CALL_ARGS, DOTNET_CALL, DOTNET_WRITER, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_ELSEWHERE, BLOCK_DEVICE, RULE_DISK_WRITE, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, RULE_BASELINE_UPDATE, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, ROOT_ITSELF, WSL_VALUED, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
     init_dataRegistry();
-    init_guardedPath();
     init_powershellText();
     init_arrays();
     init_cmd();
     init_command();
     init_effects();
+    init_interpreters();
     init_paths();
     init_split();
     init_command();
@@ -4073,119 +4197,6 @@ var init_bashGuard = __esm({
     ];
     MAX_BRACE_WORDS = 64;
     MAX_BRACE_WORD = 1024;
-    PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
-    INTERPRETERS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "perl", "ruby", "php", "pwsh", "powershell"]);
-    RUN_WRAPPERS = /* @__PURE__ */ new Set(["uv", "poetry", "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi"]);
-    LAUNCHERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "start"]);
-    LAUNCHER_SUBCOMMANDS = {
-      npm: /* @__PURE__ */ new Set(["exec", "x"]),
-      pnpm: /* @__PURE__ */ new Set(["dlx", "exec"]),
-      yarn: /* @__PURE__ */ new Set(["dlx", "exec"]),
-      bun: /* @__PURE__ */ new Set(["x"])
-    };
-    LAUNCHER_VALUED = /* @__PURE__ */ new Set(["-p", "--package", "-c", "--call", "/d"]);
-    NODE_VALUED = /* @__PURE__ */ new Set([
-      "-r",
-      "--require",
-      "--import",
-      "--loader",
-      "--experimental-loader",
-      "-C",
-      "--conditions",
-      "--input-type",
-      "--env-file",
-      "--title",
-      "--cwd",
-      "--config",
-      "--preload"
-    ]);
-    PS_HOST_VALUED = /* @__PURE__ */ new Set([
-      "ex",
-      "ep",
-      "executionpolicy",
-      "w",
-      "windowstyle",
-      "wd",
-      "workingdirectory",
-      "configurationname",
-      "o",
-      "of",
-      "outputformat",
-      "if",
-      "inputformat",
-      "v",
-      "version",
-      "psconsolefile",
-      "settings",
-      "settingsfile",
-      "custompipename",
-      "configurationfile"
-    ]);
-    NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
-      ...NODE_VALUED,
-      "--max-old-space-size",
-      "--max-semi-space-size",
-      "--stack-size",
-      "--max-http-header-size",
-      "--inspect-port",
-      "--debug-port",
-      "--openssl-config",
-      "--icu-data-dir",
-      "--redirect-warnings",
-      "--report-dir",
-      "--report-directory",
-      "--report-filename",
-      "--report-signal",
-      "--diagnostic-dir",
-      "--heapsnapshot-signal",
-      "--heapsnapshot-near-heap-limit",
-      "--dns-result-order",
-      "--unhandled-rejections",
-      "--disable-warning",
-      "--watch-path",
-      "--test-reporter",
-      "--test-reporter-destination",
-      "--test-name-pattern",
-      "--test-concurrency",
-      "--experimental-policy",
-      "--policy-integrity",
-      "--secure-heap",
-      "--secure-heap-min",
-      "--cpu-prof-dir",
-      "--cpu-prof-name",
-      "--cpu-prof-interval",
-      "--heap-prof-dir",
-      "--heap-prof-name",
-      "--heap-prof-interval",
-      "--trace-event-categories",
-      "--trace-event-file-pattern",
-      "--use-largepages",
-      "--tls-cipher-list",
-      "--tls-keylog",
-      "--localstorage-file",
-      "--env-file-if-exists",
-      "--experimental-sea-config"
-    ]);
-    DENO_RUN_VALUED = /* @__PURE__ */ new Set(["-c", "--config", "--import-map", "--lock", "--cert", "--location", "--seed", "--env-file", "--ext"]);
-    BUN_RUN_VALUED = /* @__PURE__ */ new Set([
-      "--cwd",
-      "-c",
-      "--config",
-      "--env-file",
-      "-r",
-      "--preload",
-      "--tsconfig-override",
-      "-d",
-      "--define",
-      "-l",
-      "--loader",
-      "--main-fields",
-      "--conditions",
-      "--filter",
-      "-F",
-      "--elide-lines",
-      "--shell"
-    ]);
     MAX_CALL_ARGS = 512;
     DOTNET_CALL = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(File|Directory)\s*\]\s*::\s*([A-Za-z]+)\s*\(/gi;
     DOTNET_WRITER = /\[\s*(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\s*\]\s*::\s*new\b|\bNew-Object\s+(?:-TypeName\s+)?(?:System\s*\.\s*)?IO\s*\.\s*(StreamWriter|FileStream)\b(?:\s+-ArgumentList\b|\s+-Args?\b)?/gi;

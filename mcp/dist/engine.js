@@ -2550,6 +2550,9 @@ function psParam(args, names) {
   }
   return void 0;
 }
+function commandName(word) {
+  return basename(word).toLowerCase().replace(/\.exe$/, "");
+}
 var RUNNERS, RUNNER_VALUED, ASSIGNMENT;
 var init_command = __esm({
   "src/hooks/shell/command.ts"() {
@@ -96090,6 +96093,367 @@ function withoutRedirectWords(words) {
   return out;
 }
 
+// src/hooks/shell/interpreters.ts
+init_command();
+var PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
+var INTERPRETERS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "perl", "ruby", "php", "pwsh", "powershell"]);
+var RUN_WRAPPERS = /* @__PURE__ */ new Set(["uv", "poetry", "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi"]);
+function isInterpreter(name) {
+  return PYTHON.test(name) || INTERPRETERS.has(name);
+}
+var LAUNCHERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "start"]);
+var LAUNCHER_SUBCOMMANDS = {
+  npm: /* @__PURE__ */ new Set(["exec", "x"]),
+  pnpm: /* @__PURE__ */ new Set(["dlx", "exec"]),
+  yarn: /* @__PURE__ */ new Set(["dlx", "exec"]),
+  bun: /* @__PURE__ */ new Set(["x"])
+};
+var LAUNCHER_VALUED = /* @__PURE__ */ new Set(["-p", "--package", "-c", "--call", "/d"]);
+function firstNonFlag(words, from) {
+  let k = from;
+  while (k < words.length && (words[k]?.value ?? "").startsWith("-")) k += 1;
+  return k;
+}
+function interpreterName(word) {
+  return commandName(word).replace(/@[\w.^~<>=-]*$/, "");
+}
+function interpreterIndex(words, start) {
+  let i = start;
+  while (i < words.length) {
+    const name = interpreterName(words[i]?.value ?? "");
+    const sub = LAUNCHER_SUBCOMMANDS[name] === void 0 ? -1 : firstNonFlag(words, i + 1);
+    const launches = sub >= 0 && LAUNCHER_SUBCOMMANDS[name]?.has(words[sub]?.value ?? "") === true;
+    if (isInterpreter(name) && !launches) return i;
+    if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === "run") {
+      for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
+        if (isInterpreter(interpreterName(words[k]?.value ?? ""))) return k;
+      }
+      return -1;
+    }
+    if (launches) i = sub + 1;
+    else if (LAUNCHERS.has(name)) i += 1;
+    else return -1;
+    while (i < words.length) {
+      const w = words[i]?.value ?? "";
+      if (w !== "" && !/^(?:-|\/[A-Za-z])/.test(w)) break;
+      i += LAUNCHER_VALUED.has(w.toLowerCase()) ? 2 : 1;
+    }
+  }
+  return -1;
+}
+var NODE_VALUED = /* @__PURE__ */ new Set([
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+  "-C",
+  "--conditions",
+  "--input-type",
+  "--env-file",
+  "--title",
+  "--cwd",
+  "--config",
+  "--preload"
+]);
+function nodeCode(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    const eq2 = /^--(?:eval|print)=([\s\S]*)$/.exec(a);
+    if (eq2 !== null) return [eq2[1] ?? ""];
+    if (/^-(?:e|p|pe|ep)$/.test(a) || a === "--eval" || a === "--print") return [args[i + 1] ?? ""];
+    if (NODE_VALUED.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (!a.startsWith("-")) return [];
+  }
+  return [];
+}
+function pythonCode(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a === "-" || !a.startsWith("-")) return [];
+    if (a.startsWith("--")) continue;
+    for (let k = 1; k < a.length; k += 1) {
+      const c = a.charAt(k);
+      if (c === "c") {
+        const rest = a.slice(k + 1);
+        return [rest !== "" ? rest : args[i + 1] ?? ""];
+      }
+      if (c === "m") return [];
+      if (c === "W" || c === "X") {
+        if (k === a.length - 1) i += 1;
+        break;
+      }
+    }
+  }
+  return [];
+}
+function phpCode(args) {
+  const code = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (/^-[rBRE]$/.test(a)) {
+      code.push(args[i + 1] ?? "");
+      i += 1;
+    } else if (/^-r./.test(a)) code.push(a.slice(2));
+    else if (a === "-f" || a === "-F" || !a.startsWith("-")) return code;
+    else if (/^-[dcz]$/.test(a)) i += 1;
+  }
+  return code;
+}
+function decodeUtf16Base64(text2) {
+  if (!/^[A-Za-z0-9+/=]+$/.test(text2)) return "";
+  return Buffer.from(text2, "base64").toString("utf16le");
+}
+var PS_HOST_VALUED = /* @__PURE__ */ new Set([
+  "ex",
+  "ep",
+  "executionpolicy",
+  "w",
+  "windowstyle",
+  "wd",
+  "workingdirectory",
+  "configurationname",
+  "o",
+  "of",
+  "outputformat",
+  "if",
+  "inputformat",
+  "v",
+  "version",
+  "psconsolefile",
+  "settings",
+  "settingsfile",
+  "custompipename",
+  "configurationfile"
+]);
+function powershellCommand(args, name) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    const m = /^[-/]([A-Za-z]+)$/.exec(a);
+    if (m === null) return name === "powershell" ? [args.slice(i).join(" ")] : [];
+    const p = (m[1] ?? "").toLowerCase();
+    if (p === "c" || p.length >= 3 && "command".startsWith(p)) {
+      const rest = args.slice(i + 1);
+      return rest.length === 0 || rest[0] === "-" ? [] : [rest.join(" ")];
+    }
+    if (p === "e" || p.length >= 2 && "encodedcommand".startsWith(p)) return [decodeUtf16Base64(args[i + 1] ?? "")];
+    if (p === "f" || p === "file") return [];
+    if (PS_HOST_VALUED.has(p)) i += 1;
+  }
+  return [];
+}
+function inlineCode(words, start) {
+  const at = interpreterIndex(words, start);
+  if (at < 0) return [];
+  const name = interpreterName(words[at]?.value ?? "");
+  const args = words.slice(at + 1).map((w) => w.value);
+  if (PYTHON.test(name)) return pythonCode(args);
+  switch (name) {
+    case "node":
+    case "nodejs":
+    case "bun":
+    case "tsx":
+    case "ts-node":
+      return nodeCode(args);
+    case "deno":
+      return args[0] === "eval" ? args.slice(1).filter((a) => !a.startsWith("-")).slice(0, 1) : [];
+    case "perl":
+      return perlLike(args, "eE", "IMm").code;
+    case "ruby":
+      return perlLike(args, "e", "IrCEFx").code;
+    case "php":
+      return phpCode(args);
+    case "pwsh":
+    case "powershell":
+      return powershellCommand(args, name);
+    default:
+      return [];
+  }
+}
+function isBareInterpreterStdin(words) {
+  const program = interpreterProgram(withoutRedirectWords(words), 0);
+  return program.kind === "dash" || program.kind === "none" && program.readsStdin;
+}
+var NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
+  ...NODE_VALUED,
+  "--max-old-space-size",
+  "--max-semi-space-size",
+  "--stack-size",
+  "--max-http-header-size",
+  "--inspect-port",
+  "--debug-port",
+  "--openssl-config",
+  "--icu-data-dir",
+  "--redirect-warnings",
+  "--report-dir",
+  "--report-directory",
+  "--report-filename",
+  "--report-signal",
+  "--diagnostic-dir",
+  "--heapsnapshot-signal",
+  "--heapsnapshot-near-heap-limit",
+  "--dns-result-order",
+  "--unhandled-rejections",
+  "--disable-warning",
+  "--watch-path",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-name-pattern",
+  "--test-concurrency",
+  "--experimental-policy",
+  "--policy-integrity",
+  "--secure-heap",
+  "--secure-heap-min",
+  "--cpu-prof-dir",
+  "--cpu-prof-name",
+  "--cpu-prof-interval",
+  "--heap-prof-dir",
+  "--heap-prof-name",
+  "--heap-prof-interval",
+  "--trace-event-categories",
+  "--trace-event-file-pattern",
+  "--use-largepages",
+  "--tls-cipher-list",
+  "--tls-keylog",
+  "--localstorage-file",
+  "--env-file-if-exists",
+  "--experimental-sea-config"
+]);
+var DENO_RUN_VALUED = /* @__PURE__ */ new Set(["-c", "--config", "--import-map", "--lock", "--cert", "--location", "--seed", "--env-file", "--ext"]);
+var BUN_RUN_VALUED = /* @__PURE__ */ new Set([
+  "--cwd",
+  "-c",
+  "--config",
+  "--env-file",
+  "-r",
+  "--preload",
+  "--tsconfig-override",
+  "-d",
+  "--define",
+  "-l",
+  "--loader",
+  "--main-fields",
+  "--conditions",
+  "--filter",
+  "-F",
+  "--elide-lines",
+  "--shell"
+]);
+function operandAt(words, i, readsStdin) {
+  const w = words[i];
+  if (w === void 0) return { kind: "none", readsStdin };
+  return w.value === "-" ? { kind: "dash" } : { kind: "file", index: i };
+}
+function clusterWords(word, inline2, valued) {
+  for (let k = 1; k < word.length; k += 1) {
+    const c = word.charAt(k);
+    if (inline2.includes(c)) return "inline";
+    if (valued.includes(c)) return k === word.length - 1 ? 2 : 1;
+  }
+  return 1;
+}
+function interpreterProgram(words, at) {
+  const name = interpreterName(words[at]?.value ?? "");
+  const python = PYTHON.test(name);
+  const nodeLike = ["node", "nodejs", "tsx", "ts-node"].includes(name);
+  if (!python && !nodeLike && !["perl", "ruby", "php", "deno", "bun"].includes(name)) return { kind: "unknown" };
+  let i = at + 1;
+  if (name === "deno" || name === "bun") {
+    const sub = words[i]?.value ?? "";
+    if (sub === "eval" || name === "bun" && /^(?:-e|-p|--eval|--print)$/.test(sub)) return { kind: "inline" };
+    if (sub === "run") i += 1;
+    else if (name === "deno" || sub !== "-") return { kind: "unknown" };
+  }
+  const readsStdin = !["deno", "bun", "tsx", "ts-node"].includes(name);
+  for (; i < words.length; i += 1) {
+    const v = words[i]?.value ?? "";
+    if (v === "--") return operandAt(words, i + 1, readsStdin);
+    if (v === "-" || !v.startsWith("-")) return operandAt(words, i, readsStdin);
+    if (python) {
+      if (v.startsWith("--")) {
+        if (v === "--check-hash-based-pycs") i += 1;
+        continue;
+      }
+      const used = clusterWords(v, "cm", "WXQ");
+      if (used === "inline") return { kind: "inline" };
+      i += used - 1;
+    } else if (nodeLike) {
+      if (/^-(?:e|p|pe|ep)$/.test(v) || /^--(?:eval|print)(?:=|$)/.test(v)) return { kind: "inline" };
+      if (!v.includes("=") && NODE_OPTION_VALUED.has(v)) i += 1;
+    } else if (name === "deno" || name === "bun") {
+      if (!v.includes("=") && (name === "deno" ? DENO_RUN_VALUED : BUN_RUN_VALUED).has(v)) i += 1;
+    } else if (name === "php") {
+      if (/^-[rBRE]/.test(v)) return { kind: "inline" };
+      if (v === "-f" || v === "-F") return operandAt(words, i + 1, readsStdin);
+      if (/^-[dcz]$/.test(v)) i += 1;
+    } else {
+      if (v.startsWith("--")) continue;
+      const used = clusterWords(v, name === "perl" ? "eE" : "e", name === "perl" ? "IMm" : "IrCEFx");
+      if (used === "inline") return { kind: "inline" };
+      i += used - 1;
+    }
+  }
+  return { kind: "none", readsStdin };
+}
+function codeLang(interpreter) {
+  if (PYTHON.test(interpreter)) return "python";
+  return ["node", "nodejs", "bun", "deno", "tsx", "ts-node"].includes(interpreter) ? "js" : "other";
+}
+function codeLiterals(code, lang) {
+  const quotes = lang === "js" ? ['"', "'", "`"] : ['"', "'"];
+  const out = [];
+  let i = 0;
+  while (i < code.length) {
+    const ch = code.charAt(i);
+    const atWordStart = i === 0 || /\s/.test(code.charAt(i - 1));
+    const comment = atWordStart && (ch === "#" && lang !== "js" || lang !== "python" && code.startsWith("// ", i));
+    if (comment) {
+      const nl = code.indexOf("\n", i);
+      i = nl < 0 ? code.length : nl + 1;
+      continue;
+    }
+    if (!quotes.includes(ch)) {
+      i += 1;
+      continue;
+    }
+    const close = lang === "python" && code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
+    let lit = "";
+    let j = i + close.length;
+    while (j < code.length) {
+      const c = code.charAt(j);
+      const next = code.charAt(j + 1);
+      if (c === "\\" && (next === "\\" || next === ch)) {
+        lit += next;
+        j += 2;
+        continue;
+      }
+      if (code.startsWith(close, j)) break;
+      lit += c;
+      j += 1;
+    }
+    out.push(lit);
+    i = j + close.length;
+  }
+  return out;
+}
+function literalPaths(literals) {
+  return asWindowsOpens(literals.map((l) => tail(l.trim()).replace(/\\+/g, "/")));
+}
+function tail(path3) {
+  return path3.length > 1024 ? path3.slice(-1024) : path3;
+}
+function asWindowsOpens(paths) {
+  const out = [...paths];
+  for (const p of paths) {
+    const named2 = windowsName(p);
+    if (named2 !== p) out.push(named2);
+  }
+  return out;
+}
+
 // src/hooks/bashGuard.ts
 init_split();
 init_command();
@@ -96589,9 +96953,6 @@ function base64Literals(text2) {
   }
   return out;
 }
-function commandName(word) {
-  return basename(word).toLowerCase().replace(/\.exe$/, "");
-}
 var GLOB = /[*?[]/;
 var USER_CONFIG_TAIL = [".config", "dev-guardian", "hooks.json"];
 var CONFIG_TAILS = [
@@ -96691,364 +97052,6 @@ function expandWords(words) {
     for (const value of expanded) out.push({ value, quoted: false });
   }
   return out ?? words;
-}
-var PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
-var INTERPRETERS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "perl", "ruby", "php", "pwsh", "powershell"]);
-var RUN_WRAPPERS = /* @__PURE__ */ new Set(["uv", "poetry", "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi"]);
-function isInterpreter(name) {
-  return PYTHON.test(name) || INTERPRETERS.has(name);
-}
-var LAUNCHERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "start"]);
-var LAUNCHER_SUBCOMMANDS = {
-  npm: /* @__PURE__ */ new Set(["exec", "x"]),
-  pnpm: /* @__PURE__ */ new Set(["dlx", "exec"]),
-  yarn: /* @__PURE__ */ new Set(["dlx", "exec"]),
-  bun: /* @__PURE__ */ new Set(["x"])
-};
-var LAUNCHER_VALUED = /* @__PURE__ */ new Set(["-p", "--package", "-c", "--call", "/d"]);
-function firstNonFlag(words, from) {
-  let k = from;
-  while (k < words.length && (words[k]?.value ?? "").startsWith("-")) k += 1;
-  return k;
-}
-function interpreterName(word) {
-  return commandName(word).replace(/@[\w.^~<>=-]*$/, "");
-}
-function interpreterIndex(words, start) {
-  let i = start;
-  while (i < words.length) {
-    const name = interpreterName(words[i]?.value ?? "");
-    const sub = LAUNCHER_SUBCOMMANDS[name] === void 0 ? -1 : firstNonFlag(words, i + 1);
-    const launches = sub >= 0 && LAUNCHER_SUBCOMMANDS[name]?.has(words[sub]?.value ?? "") === true;
-    if (isInterpreter(name) && !launches) return i;
-    if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === "run") {
-      for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
-        if (isInterpreter(interpreterName(words[k]?.value ?? ""))) return k;
-      }
-      return -1;
-    }
-    if (launches) i = sub + 1;
-    else if (LAUNCHERS.has(name)) i += 1;
-    else return -1;
-    while (i < words.length) {
-      const w = words[i]?.value ?? "";
-      if (w !== "" && !/^(?:-|\/[A-Za-z])/.test(w)) break;
-      i += LAUNCHER_VALUED.has(w.toLowerCase()) ? 2 : 1;
-    }
-  }
-  return -1;
-}
-var NODE_VALUED = /* @__PURE__ */ new Set([
-  "-r",
-  "--require",
-  "--import",
-  "--loader",
-  "--experimental-loader",
-  "-C",
-  "--conditions",
-  "--input-type",
-  "--env-file",
-  "--title",
-  "--cwd",
-  "--config",
-  "--preload"
-]);
-function nodeCode(args) {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    const eq2 = /^--(?:eval|print)=([\s\S]*)$/.exec(a);
-    if (eq2 !== null) return [eq2[1] ?? ""];
-    if (/^-(?:e|p|pe|ep)$/.test(a) || a === "--eval" || a === "--print") return [args[i + 1] ?? ""];
-    if (NODE_VALUED.has(a)) {
-      i += 1;
-      continue;
-    }
-    if (!a.startsWith("-")) return [];
-  }
-  return [];
-}
-function pythonCode(args) {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (a === "-" || !a.startsWith("-")) return [];
-    if (a.startsWith("--")) continue;
-    for (let k = 1; k < a.length; k += 1) {
-      const c = a.charAt(k);
-      if (c === "c") {
-        const rest = a.slice(k + 1);
-        return [rest !== "" ? rest : args[i + 1] ?? ""];
-      }
-      if (c === "m") return [];
-      if (c === "W" || c === "X") {
-        if (k === a.length - 1) i += 1;
-        break;
-      }
-    }
-  }
-  return [];
-}
-function phpCode(args) {
-  const code = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (/^-[rBRE]$/.test(a)) {
-      code.push(args[i + 1] ?? "");
-      i += 1;
-    } else if (/^-r./.test(a)) code.push(a.slice(2));
-    else if (a === "-f" || a === "-F" || !a.startsWith("-")) return code;
-    else if (/^-[dcz]$/.test(a)) i += 1;
-  }
-  return code;
-}
-function decodeUtf16Base64(text2) {
-  if (!/^[A-Za-z0-9+/=]+$/.test(text2)) return "";
-  return Buffer.from(text2, "base64").toString("utf16le");
-}
-var PS_HOST_VALUED = /* @__PURE__ */ new Set([
-  "ex",
-  "ep",
-  "executionpolicy",
-  "w",
-  "windowstyle",
-  "wd",
-  "workingdirectory",
-  "configurationname",
-  "o",
-  "of",
-  "outputformat",
-  "if",
-  "inputformat",
-  "v",
-  "version",
-  "psconsolefile",
-  "settings",
-  "settingsfile",
-  "custompipename",
-  "configurationfile"
-]);
-function powershellCommand(args, name) {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    const m = /^[-/]([A-Za-z]+)$/.exec(a);
-    if (m === null) return name === "powershell" ? [args.slice(i).join(" ")] : [];
-    const p = (m[1] ?? "").toLowerCase();
-    if (p === "c" || p.length >= 3 && "command".startsWith(p)) {
-      const rest = args.slice(i + 1);
-      return rest.length === 0 || rest[0] === "-" ? [] : [rest.join(" ")];
-    }
-    if (p === "e" || p.length >= 2 && "encodedcommand".startsWith(p)) return [decodeUtf16Base64(args[i + 1] ?? "")];
-    if (p === "f" || p === "file") return [];
-    if (PS_HOST_VALUED.has(p)) i += 1;
-  }
-  return [];
-}
-function inlineCode(words, start) {
-  const at = interpreterIndex(words, start);
-  if (at < 0) return [];
-  const name = interpreterName(words[at]?.value ?? "");
-  const args = words.slice(at + 1).map((w) => w.value);
-  if (PYTHON.test(name)) return pythonCode(args);
-  switch (name) {
-    case "node":
-    case "nodejs":
-    case "bun":
-    case "tsx":
-    case "ts-node":
-      return nodeCode(args);
-    case "deno":
-      return args[0] === "eval" ? args.slice(1).filter((a) => !a.startsWith("-")).slice(0, 1) : [];
-    case "perl":
-      return perlLike(args, "eE", "IMm").code;
-    case "ruby":
-      return perlLike(args, "e", "IrCEFx").code;
-    case "php":
-      return phpCode(args);
-    case "pwsh":
-    case "powershell":
-      return powershellCommand(args, name);
-    default:
-      return [];
-  }
-}
-function isBareInterpreterStdin(words) {
-  const program = interpreterProgram(withoutRedirectWords(words), 0);
-  return program.kind === "dash" || program.kind === "none" && program.readsStdin;
-}
-var NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
-  ...NODE_VALUED,
-  "--max-old-space-size",
-  "--max-semi-space-size",
-  "--stack-size",
-  "--max-http-header-size",
-  "--inspect-port",
-  "--debug-port",
-  "--openssl-config",
-  "--icu-data-dir",
-  "--redirect-warnings",
-  "--report-dir",
-  "--report-directory",
-  "--report-filename",
-  "--report-signal",
-  "--diagnostic-dir",
-  "--heapsnapshot-signal",
-  "--heapsnapshot-near-heap-limit",
-  "--dns-result-order",
-  "--unhandled-rejections",
-  "--disable-warning",
-  "--watch-path",
-  "--test-reporter",
-  "--test-reporter-destination",
-  "--test-name-pattern",
-  "--test-concurrency",
-  "--experimental-policy",
-  "--policy-integrity",
-  "--secure-heap",
-  "--secure-heap-min",
-  "--cpu-prof-dir",
-  "--cpu-prof-name",
-  "--cpu-prof-interval",
-  "--heap-prof-dir",
-  "--heap-prof-name",
-  "--heap-prof-interval",
-  "--trace-event-categories",
-  "--trace-event-file-pattern",
-  "--use-largepages",
-  "--tls-cipher-list",
-  "--tls-keylog",
-  "--localstorage-file",
-  "--env-file-if-exists",
-  "--experimental-sea-config"
-]);
-var DENO_RUN_VALUED = /* @__PURE__ */ new Set(["-c", "--config", "--import-map", "--lock", "--cert", "--location", "--seed", "--env-file", "--ext"]);
-var BUN_RUN_VALUED = /* @__PURE__ */ new Set([
-  "--cwd",
-  "-c",
-  "--config",
-  "--env-file",
-  "-r",
-  "--preload",
-  "--tsconfig-override",
-  "-d",
-  "--define",
-  "-l",
-  "--loader",
-  "--main-fields",
-  "--conditions",
-  "--filter",
-  "-F",
-  "--elide-lines",
-  "--shell"
-]);
-function operandAt(words, i, readsStdin) {
-  const w = words[i];
-  if (w === void 0) return { kind: "none", readsStdin };
-  return w.value === "-" ? { kind: "dash" } : { kind: "file", index: i };
-}
-function clusterWords(word, inline2, valued) {
-  for (let k = 1; k < word.length; k += 1) {
-    const c = word.charAt(k);
-    if (inline2.includes(c)) return "inline";
-    if (valued.includes(c)) return k === word.length - 1 ? 2 : 1;
-  }
-  return 1;
-}
-function interpreterProgram(words, at) {
-  const name = interpreterName(words[at]?.value ?? "");
-  const python = PYTHON.test(name);
-  const nodeLike = ["node", "nodejs", "tsx", "ts-node"].includes(name);
-  if (!python && !nodeLike && !["perl", "ruby", "php", "deno", "bun"].includes(name)) return { kind: "unknown" };
-  let i = at + 1;
-  if (name === "deno" || name === "bun") {
-    const sub = words[i]?.value ?? "";
-    if (sub === "eval" || name === "bun" && /^(?:-e|-p|--eval|--print)$/.test(sub)) return { kind: "inline" };
-    if (sub === "run") i += 1;
-    else if (name === "deno" || sub !== "-") return { kind: "unknown" };
-  }
-  const readsStdin = !["deno", "bun", "tsx", "ts-node"].includes(name);
-  for (; i < words.length; i += 1) {
-    const v = words[i]?.value ?? "";
-    if (v === "--") return operandAt(words, i + 1, readsStdin);
-    if (v === "-" || !v.startsWith("-")) return operandAt(words, i, readsStdin);
-    if (python) {
-      if (v.startsWith("--")) {
-        if (v === "--check-hash-based-pycs") i += 1;
-        continue;
-      }
-      const used = clusterWords(v, "cm", "WXQ");
-      if (used === "inline") return { kind: "inline" };
-      i += used - 1;
-    } else if (nodeLike) {
-      if (/^-(?:e|p|pe|ep)$/.test(v) || /^--(?:eval|print)(?:=|$)/.test(v)) return { kind: "inline" };
-      if (!v.includes("=") && NODE_OPTION_VALUED.has(v)) i += 1;
-    } else if (name === "deno" || name === "bun") {
-      if (!v.includes("=") && (name === "deno" ? DENO_RUN_VALUED : BUN_RUN_VALUED).has(v)) i += 1;
-    } else if (name === "php") {
-      if (/^-[rBRE]/.test(v)) return { kind: "inline" };
-      if (v === "-f" || v === "-F") return operandAt(words, i + 1, readsStdin);
-      if (/^-[dcz]$/.test(v)) i += 1;
-    } else {
-      if (v.startsWith("--")) continue;
-      const used = clusterWords(v, name === "perl" ? "eE" : "e", name === "perl" ? "IMm" : "IrCEFx");
-      if (used === "inline") return { kind: "inline" };
-      i += used - 1;
-    }
-  }
-  return { kind: "none", readsStdin };
-}
-function codeLang(interpreter) {
-  if (PYTHON.test(interpreter)) return "python";
-  return ["node", "nodejs", "bun", "deno", "tsx", "ts-node"].includes(interpreter) ? "js" : "other";
-}
-function codeLiterals(code, lang) {
-  const quotes = lang === "js" ? ['"', "'", "`"] : ['"', "'"];
-  const out = [];
-  let i = 0;
-  while (i < code.length) {
-    const ch = code.charAt(i);
-    const atWordStart = i === 0 || /\s/.test(code.charAt(i - 1));
-    const comment = atWordStart && (ch === "#" && lang !== "js" || lang !== "python" && code.startsWith("// ", i));
-    if (comment) {
-      const nl = code.indexOf("\n", i);
-      i = nl < 0 ? code.length : nl + 1;
-      continue;
-    }
-    if (!quotes.includes(ch)) {
-      i += 1;
-      continue;
-    }
-    const close = lang === "python" && code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
-    let lit = "";
-    let j = i + close.length;
-    while (j < code.length) {
-      const c = code.charAt(j);
-      const next = code.charAt(j + 1);
-      if (c === "\\" && (next === "\\" || next === ch)) {
-        lit += next;
-        j += 2;
-        continue;
-      }
-      if (code.startsWith(close, j)) break;
-      lit += c;
-      j += 1;
-    }
-    out.push(lit);
-    i = j + close.length;
-  }
-  return out;
-}
-function literalPaths(literals) {
-  return asWindowsOpens(literals.map((l) => tail(l.trim()).replace(/\\+/g, "/")));
-}
-function tail(path3) {
-  return path3.length > 1024 ? path3.slice(-1024) : path3;
-}
-function asWindowsOpens(paths) {
-  const out = [...paths];
-  for (const p of paths) {
-    const named2 = windowsName(p);
-    if (named2 !== p) out.push(named2);
-  }
-  return out;
 }
 function literalsNameHookConfig(literals, scope) {
   const paths = literalPaths(literals);

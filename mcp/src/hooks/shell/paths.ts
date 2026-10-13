@@ -53,7 +53,6 @@ export function dirOf(path: string): string {
 export const MAX_CWD = 320;
 
 export const CD_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
-
 export const CD_RETURNS = new Set(['popd', 'pop-location']);
 
 /**

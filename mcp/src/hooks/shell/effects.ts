@@ -295,13 +295,10 @@ interface Transfer {
 
 /** `cp`/`mv`/`install` options that take a value, none of them the destination. */
 const COPY_VALUED = new Set(['-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group']);
-
 /** PowerShell `Copy-Item`/`Move-Item` parameters, by full lower-case name: those naming paths… */
 const PS_PATH_PARAMS = ['path', 'literalpath', 'destination'];
-
 /** …the others that take a value, and the switches. */
 const PS_VALUE_PARAMS = ['filter', 'include', 'exclude', 'credential', 'fromsession', 'tosession'];
-
 const PS_SWITCHES = ['recurse', 'force', 'container', 'passthru', 'whatif', 'confirm'];
 
 /** A full PowerShell parameter name `spelled` names: itself, or a prefix of 3+ letters (`-Dest`, `-Rec`). */
