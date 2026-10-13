@@ -49,7 +49,6 @@
  * `src/` names Trivy outside this file.
  */
 
-import { execa } from 'execa';
 import { commandFor } from '../platform/binaryPath.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,6 +58,7 @@ import { extractVersion } from './toolProbe.js';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
 import type { Finding, RepoSuppression, ToolRun } from '../types.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
+import { captureOutput } from './spawn.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { honouredNote as configNote, REPO_CONFIG, withProjectConfig, type HonouredFile } from './repoConfig.js';
 import { assessManifestCoverage, trivyParser, type ManifestCoverageGap } from './scannerParsers/trivy.js';
@@ -270,23 +270,16 @@ let versionProbe: Promise<string | null> | null = null;
 
 /**
  * The installed Trivy's version (`Version: 0.69.3`), asked once per process —
- * through execa, not the scan runner: a quick query, never a scan — or null
- * when it cannot be read.
+ * through `captureOutput`, not the scan runner: a quick query, never a scan —
+ * or null when it cannot be read.
  */
 async function installedTrivyVersion(cwd: string): Promise<string | null> {
   versionProbe ??= (async () => {
     try {
       const env = { ...process.env, ...TRIVY_NO_PHONE_HOME_ENV };
       // By absolute path: `cwd` is the project, and a planted `trivy.cmd` there must not answer (binaryPath.ts).
-      const r = await execa(commandFor('trivy', env), ['--version'], {
-        cwd,
-        env,
-        reject: false,
-        timeout: 30_000,
-        encoding: 'utf8',
-      });
-      const out = typeof r.stdout === 'string' ? r.stdout : '';
-      return r.exitCode === 0 ? extractVersion(out) : null;
+      const r = await captureOutput(commandFor('trivy', env), ['--version'], { cwd, env, timeoutMs: 30_000 });
+      return r.exitCode === 0 ? extractVersion(r.stdout) : null;
     } catch {
       return null;
     }

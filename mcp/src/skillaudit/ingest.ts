@@ -21,8 +21,7 @@
  * ever sees reviewable text.
  */
 
-import { execa } from 'execa';
-import { commandFor } from '../platform/binaryPath.js';
+import { runProcess } from '../runners/processRunner.js';
 import {
   existsSync,
   lstatSync,
@@ -284,20 +283,25 @@ async function ingestZip(
   };
 }
 
+/** How long one extraction may take before its whole process tree is killed. */
+const EXTRACT_TIMEOUT_MS = 120_000;
+
+/**
+ * Extracts `zipPath` into `destDir` with the system's `tar` (bsdtar — Windows
+ * 10+, macOS, most Linux — reads zip with `tar -xf`), else `unzip`. Through
+ * the runner (review 8, finding 4): its timeout kills the whole tree and
+ * returns at the deadline — execa's own `timeout`, used here before, signalled
+ * only the direct child and then waited on any process still holding its pipes.
+ */
 async function tryExtract(zipPath: string, destDir: string): Promise<boolean> {
-  // bsdtar (Windows 10+, macOS, most Linux) understands zip via `tar -xf`.
-  try {
-    await execa(commandFor('tar'), ['-xf', zipPath, '-C', destDir], { timeout: 120000 });
-    return true;
-  } catch {
-    /* fall through */
+  for (const [command, args] of [
+    ['tar', ['-xf', zipPath, '-C', destDir]],
+    ['unzip', ['-o', '-q', zipPath, '-d', destDir]],
+  ] as const) {
+    const r = await runProcess({ command, args: [...args], cwd: destDir, timeoutMs: EXTRACT_TIMEOUT_MS });
+    if (r.outcome === 'completed') return true;
   }
-  try {
-    await execa(commandFor('unzip'), ['-o', '-q', zipPath, '-d', destDir], { timeout: 120000 });
-    return true;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 /**

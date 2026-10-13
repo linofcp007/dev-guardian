@@ -27,20 +27,6 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
   return { ...actual, scannerAvailable: vi.fn() };
 });
 
-// execa is stubbed too: git (the tree hash) answers with canned output, so
-// no test here depends on the host's git.
-vi.mock('execa', () => ({
-  execa: vi.fn(async (_cmd: string, args: string[]) => {
-    if (args.includes('symbolic-ref')) {
-      return { exitCode: 0, stdout: 'refs/remotes/origin/main', stderr: '' };
-    }
-    if (args.includes('diff') && args.includes('--name-only')) {
-      return { exitCode: 0, stdout: 'src/app.js\nsrc/util.ts', stderr: '' };
-    }
-    return { exitCode: 0, stdout: '', stderr: '' };
-  }),
-}));
-
 import { runProcess } from '../../src/runners/processRunner.js';
 import { runShellScript } from '../../src/runners/shellRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';

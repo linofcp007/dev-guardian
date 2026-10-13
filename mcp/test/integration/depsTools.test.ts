@@ -2,8 +2,9 @@
  * Integration tests for deps_audit and deps_update_plan.
  *
  * deps_audit goes through the scan-tool factory → we mock `runProcess` and
- * `scannerAvailable`. deps_update_plan is a custom handler that calls
- * `execa` directly → we mock the `execa` module.
+ * `scannerAvailable`. deps_update_plan runs its package managers through
+ * `runProcess` too → its mocks are written as the command and its arguments,
+ * through `pm()`.
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
@@ -37,13 +38,9 @@ vi.mock('../../src/tools/scanHelpers.js', async () => {
     );
   return { ...actual, scannerAvailable: vi.fn() };
 });
-vi.mock('execa', () => ({
-  execa: vi.fn(),
-}));
 
-import { runProcess } from '../../src/runners/processRunner.js';
+import { runProcess, type ProcessRunOptions, type ProcessRunResult } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
-import { execa } from 'execa';
 
 import type { PluginContext } from '../../src/context.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -60,6 +57,35 @@ import { okResult } from '../helpers/toolResult.js';
 function bare(cmd: unknown): string {
   const name = String(cmd).split(/[\\/]/).pop() ?? '';
   return name.replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+}
+
+/** What a mocked package manager answers: an exit code and output, or no exit code and why (`code`). */
+interface PmAnswer {
+  exitCode?: number;
+  stdout?: unknown;
+  stderr?: unknown;
+  code?: string;
+  shortMessage?: string;
+  failed?: boolean;
+}
+
+/**
+ * A package-manager mock written as the command and its arguments, as the
+ * runner's implementation: `deps_update_plan` runs every package manager
+ * through `runProcess` (review 8, finding 4) — before, through execa itself.
+ * An answer without an exit code is a command that never ran (`code: 'ENOENT'`:
+ * not on PATH).
+ */
+function pm(answer: (cmd: string, args: string[]) => PmAnswer | Promise<PmAnswer>): (opts: ProcessRunOptions) => Promise<ProcessRunResult> {
+  return async (opts) => {
+    const a = await answer(opts.command, opts.args ?? []);
+    const text = (v: unknown): string => (typeof v === 'string' ? v : '');
+    if (typeof a.exitCode !== 'number') {
+      const code = a.code === 'ENOENT' ? 'not_found' : (a.code ?? 'spawn_failed');
+      return { outcome: 'failed', exitCode: null, stdout: '', stderr: text(a.stderr), truncated: false, notRun: { code, message: a.shortMessage ?? code } };
+    }
+    return { outcome: a.exitCode === 0 ? 'completed' : 'failed', exitCode: a.exitCode, stdout: text(a.stdout), stderr: text(a.stderr), truncated: false };
+  };
 }
 
 afterAll(cleanupTempDirs);
@@ -125,13 +151,11 @@ function outputPathFor(args: string[] | undefined): string | undefined {
 beforeEach(() => {
   vi.mocked(runProcess).mockReset();
   vi.mocked(scannerAvailable).mockReset();
-  vi.mocked(execa).mockReset();
 });
 
 afterEach(() => {
   vi.mocked(runProcess).mockReset();
   vi.mocked(scannerAvailable).mockReset();
-  vi.mocked(execa).mockReset();
 });
 
 describe('scan_deps', () => {
@@ -1546,12 +1570,32 @@ describe('deps_audit', () => {
 });
 
 describe('deps_update_plan', () => {
+  // Review 8, finding 4: execa's own `timeout` signalled npm.cmd's cmd.exe
+  // and then waited on the node it started. The runner's kills the tree.
+  it('runs npm outdated through the runner, with its timeout and the project as cwd — and a timeout is a runner failure', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ dependencies: { lodash: '^4.17.0' } }), 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(runProcess).mockImplementation(async (opts) =>
+      bare(opts.command) === 'npm'
+        ? { outcome: 'timed_out', exitCode: null, stdout: '', stderr: '', truncated: false }
+        : { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false },
+    );
+    const r = okResult<{ runner_failures: Array<{ ecosystem: string; code: string; reason: string }> }>(
+      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
+    );
+    const npm = vi.mocked(runProcess).mock.calls.map(([o]) => o).find((o) => bare(o.command) === 'npm');
+    expect(npm).toMatchObject({ args: ['outdated', '--json'], cwd: project, timeoutMs: 60_000, extendEnv: false });
+    expect(npm?.gitHardening).toBeUndefined();
+    expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'npm', reason: expect.stringMatching(/timed out after 60000 ms/) })]);
+  });
+
   it('classifies an npm outdated entry as patch when only the patch digit moves', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
     const plugin = makePlugin(project);
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -1562,7 +1606,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const tool = getTool('deps_update_plan');
     const r = (await tool.handler({ project_path: project }, plugin)) as {
@@ -1604,7 +1648,7 @@ describe('deps_update_plan', () => {
       scan_id: 'seed',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -1615,7 +1659,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const tool = getTool('deps_update_plan');
     const r = (await tool.handler({ project_path: project }, plugin)) as {
@@ -1679,12 +1723,12 @@ describe('deps_update_plan', () => {
       .prepare("UPDATE scans SET started_at = ? WHERE id = 'newer'")
       .run(new Date(Date.now() + 60_000).toISOString());
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = (await getTool('deps_update_plan').handler({ project_path: project }, plugin)) as {
       ok: true;
@@ -1720,7 +1764,7 @@ describe('deps_update_plan', () => {
       scan_id: 'seed',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -1733,7 +1777,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const tool = getTool('deps_update_plan');
     const r = (await tool.handler({ project_path: project }, plugin)) as {
@@ -1833,7 +1877,7 @@ describe('deps_update_plan', () => {
     // fixture whose package.json declares "name": "x" — see
     // readNpmDirectDependencies's own module comment) — directness is read
     // from package.json's own `dependencies`, never from this field.
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -1844,7 +1888,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: Array<{ latest_version: string; cve_ids?: string[]; upgrade_command: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -1872,7 +1916,7 @@ describe('deps_update_plan', () => {
       fixed_version: '>=4.17.11',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -1883,7 +1927,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: Array<{ latest_version: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -1902,7 +1946,7 @@ describe('deps_update_plan', () => {
       fixed_version: '4.17.19',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -1913,7 +1957,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: Array<{ package_name: string; latest_version: string; upgrade_command: string; cve_ids?: string[] }>;
@@ -1943,7 +1987,7 @@ describe('deps_update_plan', () => {
       fixed_version: '1.2.6',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -1954,7 +1998,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: Array<{
@@ -2000,7 +2044,7 @@ describe('deps_update_plan', () => {
       fixed_version: '4.17.19',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -2011,7 +2055,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: Array<{ upgrade_command: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -2033,7 +2077,7 @@ describe('deps_update_plan', () => {
       fixed_version: '4.17.19',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -2044,7 +2088,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: Array<{ classification: string; latest_version: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: projectB }, plugin),
@@ -2067,8 +2111,8 @@ describe('deps_update_plan', () => {
       fixed_version: '2.2.9',
     });
 
-    const execaSpy = vi.mocked(execa);
-    execaSpy.mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    const pmSpy = vi.mocked(runProcess);
+    pmSpy.mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const r = okResult<{
       plan: Array<{ package_name: string; installed_version: string; latest_version: string; ecosystem: string; cve_ids?: string[] }>;
@@ -2085,7 +2129,7 @@ describe('deps_update_plan', () => {
     // requests has no active CVE, so it is left alone.
     expect(r.plan.some((s) => s.package_name === 'requests')).toBe(false);
     // Never calls pip or pip-audit against the host.
-    expect(execaSpy.mock.calls.some(([cmd]) => bare(cmd) === 'pip' || bare(cmd) === 'pip-audit')).toBe(false);
+    expect(pmSpy.mock.calls.some(([o]) => bare(o.command) === 'pip' || bare(o.command) === 'pip-audit')).toBe(false);
   });
 
   it('pip: plans from pyproject.toml PEP 621 dependencies when no requirements.txt exists', async () => {
@@ -2140,7 +2184,7 @@ describe('deps_update_plan', () => {
       fixed_version: '4.17.19',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -2149,7 +2193,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: Array<{ latest_version: string; installed_version: string; classification: string; cve_ids?: string[] }>;
@@ -2186,7 +2230,7 @@ describe('deps_update_plan', () => {
       fixed_version: '2.0.1',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -2197,7 +2241,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: Array<{ latest_version: string; installed_version: string; classification: string; cve_ids?: string[] }>;
@@ -2229,7 +2273,7 @@ describe('deps_update_plan', () => {
       fixed_version: '2.0.0',
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return {
           exitCode: 1,
@@ -2240,7 +2284,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: unknown[]; unplanned: Array<{ package_name: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -2263,7 +2307,7 @@ describe('deps_update_plan', () => {
       fixed_version: '4.17.19', // below the ACTUAL current 4.17.21
     });
 
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         // npm itself agrees nothing newer exists either.
         return {
@@ -2273,7 +2317,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: unknown[];
@@ -2316,12 +2360,12 @@ describe('deps_update_plan', () => {
     // `npm outdated --json` — since npm 7+ — lists ONLY direct deps, so
     // minimist never appears here at all, unlike the earlier (unrealistic)
     // mocked shape this suite used to rely on.
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'npm' && args[0] === 'outdated') {
         return { exitCode: 0, stdout: '', stderr: '' }; // nothing outdated among direct deps
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: Array<{ package_name: string; upgrade_command: string; follow_up_command?: string; classification: string }>;
@@ -2355,7 +2399,7 @@ describe('deps_update_plan', () => {
         fixed_version: '8.22.1',
       },
     ]);
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const r = okResult<{
       plan: Array<{ package_name: string; upgrade_command: string }>;
@@ -2394,7 +2438,7 @@ describe('deps_update_plan', () => {
       installed_version: '8.0.0',
       fixed_version: '8.22.1',
     });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const r = okResult<{
       plan: unknown[];
@@ -2441,10 +2485,10 @@ describe('deps_update_plan', () => {
       fixed_version: '1.2.6',
     });
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: unknown[];
@@ -2488,7 +2532,7 @@ describe('deps_update_plan', () => {
       installed_version: '0.0.8',
       fixed_version: '1.2.6',
     });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -2511,7 +2555,7 @@ describe('deps_update_plan', () => {
     // `npm outdated` reports NOTHING for leftpad at all (registry
     // unreachable, npm considers it current, whatever the reason) — the old
     // code's pass 2 silently `continue`d for any direct dependency.
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const r = okResult<{
       plan: unknown[];
@@ -2538,7 +2582,7 @@ describe('deps_update_plan', () => {
       installed_version: '',
       fixed_version: '2.0.0',
     });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const r = okResult<{
       plan: unknown[];
@@ -2716,7 +2760,7 @@ describe('deps_update_plan', () => {
     );
     const plugin = makePlugin(project);
     seedCve(plugin, project, { cve_id: 'CVE-D', package_name: 'django', installed_version: '4.2.0', fixed_version: '4.2.5' });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const r = okResult<{ plan: Array<{ package_name: string; latest_version: string }>; unplanned: unknown[] }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -2787,7 +2831,7 @@ describe('deps_update_plan', () => {
     writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
     const plugin = makePlugin(project);
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         return { exitCode: 0, stdout: '', stderr: '' };
@@ -2796,7 +2840,7 @@ describe('deps_update_plan', () => {
         return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     await getTool('deps_update_plan').handler({ project_path: project }, plugin);
     const restoreIdx = calls.findIndex((c) => c.startsWith('dotnet restore'));
@@ -2821,7 +2865,7 @@ describe('deps_update_plan', () => {
       fixed_version: '13.0.1',
     });
     let listCalled = false;
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         return {
           exitCode: 1,
@@ -2835,7 +2879,7 @@ describe('deps_update_plan', () => {
         return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: unknown[];
@@ -2862,7 +2906,7 @@ describe('deps_update_plan', () => {
     const project = tempProject();
     writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
     const plugin = makePlugin(project);
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         return {
           exitCode: 1,
@@ -2871,7 +2915,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ runner_failures: Array<{ code: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -2889,7 +2933,7 @@ describe('deps_update_plan', () => {
     const project = tempProject();
     writeFileSync(project + '/Test.csproj', '<Project></Project>', 'utf8');
     const plugin = makePlugin(project);
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'dotnet' && args[0] === 'restore') return { exitCode: 0, stdout: '', stderr: '' };
       if (bare(cmd) === 'dotnet' && args[0] === 'list') {
         return {
@@ -2912,7 +2956,7 @@ describe('deps_update_plan', () => {
         };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: Array<{ package_name: string; installed_version: string }>; runner_failures: unknown[] }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -2937,7 +2981,7 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(project);
     const restoreCalls: string[][] = [];
     const listCalls: string[][] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'dotnet' && args[0] === 'restore') {
         restoreCalls.push(args);
         return { exitCode: 0, stdout: '', stderr: '' };
@@ -2947,7 +2991,7 @@ describe('deps_update_plan', () => {
         return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     await getTool('deps_update_plan').handler({ project_path: project }, plugin);
     expect(restoreCalls).toHaveLength(2);
@@ -2980,11 +3024,11 @@ describe('deps_update_plan', () => {
     writeFileSync(join(project, 'src', 'a', 'b', 'c', 'App', 'packages.lock.json'), '{}', 'utf8');
     const plugin = makePlugin(project);
     const restoreCalls: string[][] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'dotnet' && args[0] === 'restore') restoreCalls.push(args);
       if (bare(cmd) === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     await getTool('deps_update_plan').handler({ project_path: project }, plugin);
     expect(restoreCalls).toHaveLength(1);
@@ -3001,10 +3045,10 @@ describe('deps_update_plan', () => {
       { cve_id: 'CVE-MONO', package_name: 'monolog/monolog', installed_version: '2.0.0', fixed_version: '2.1.0' },
       { cve_id: 'CVE-GHOST', package_name: 'ghost-lib', installed_version: '1.0.0', fixed_version: '1.0.1' },
     ]);
-    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string) => {
       if (bare(cmd) === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
@@ -3030,11 +3074,11 @@ describe('deps_update_plan', () => {
       installed_version: '8.0.0',
       fixed_version: '8.22.1',
     });
-    vi.mocked(execa).mockImplementation((async (cmd: string) => {
-      // execa with reject:false, command not on PATH: no exit code at all.
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string) => {
+      // A command not on PATH never runs: no exit code at all.
       if (bare(cmd) === 'composer') return { exitCode: undefined, failed: true, code: 'ENOENT', shortMessage: 'spawn composer ENOENT', stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       unplanned: Array<{ ecosystem: string; reason: string }>;
@@ -3063,7 +3107,7 @@ describe('deps_update_plan', () => {
     );
     const plugin = makePlugin(project);
     seedCve(plugin, project, { cve_id: 'CVE-STALE', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '{}', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '{}', stderr: '' })));
 
     const r = okResult<{ plan: unknown[]; unplanned: Array<{ package_name: string; ecosystem: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -3081,11 +3125,11 @@ describe('deps_update_plan', () => {
     writeFileSync(join(project, 'node_modules', 'minimist', 'package.json'), '{"name":"minimist","version":"1.2.5"}', 'utf8');
     const plugin = makePlugin(project);
     seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '1.2.5', fixed_version: '1.2.6' });
-    vi.mocked(execa).mockImplementation((async () => ({
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({
       exitCode: 1,
       stdout: JSON.stringify({ error: { code: 'ENOTFOUND', summary: 'request to https://registry.npmjs.org/minimist failed' } }),
       stderr: '',
-    })) as unknown as typeof execa);
+    })));
 
     const r = okResult<{
       plan: Array<{ package_name: string; installed_version: string; latest_version: string; classification: string; upgrade_command: string }>;
@@ -3121,7 +3165,7 @@ describe('deps_update_plan', () => {
     );
     const plugin = makePlugin(project);
     seedCve(plugin, project, { cve_id: 'CVE-OLD', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '{}', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '{}', stderr: '' })));
 
     const r = okResult<{ plan: unknown[]; unplanned: Array<{ package_name: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -3163,10 +3207,10 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(project);
     seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ mkdirp: { current: '0.5.1', latest: '3.0.1' } }), stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: Array<{ upgrade_command: string }>;
@@ -3205,10 +3249,10 @@ describe('deps_update_plan', () => {
       { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' },
     ]);
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: unknown[];
@@ -3250,10 +3294,10 @@ describe('deps_update_plan', () => {
       { cve_id: 'CVE-PSR', package_name: 'psr/log', installed_version: '3.0.0', fixed_version: '3.0.1' },
       { cve_id: 'CVE-DEV', package_name: 'guzzle/dev-only', installed_version: '1.0.0', fixed_version: '1.0.1' },
     ]);
-    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string) => {
       if (bare(cmd) === 'composer') return { exitCode: 0, stdout: JSON.stringify({ installed: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ unplanned: Array<{ package_name: string; ecosystem: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -3320,11 +3364,11 @@ describe('deps_update_plan', () => {
       { cve_id: 'CVE-STE', package_name: 'System.Text.Encodings.Web', installed_version: '4.5.0', fixed_version: '4.5.1' },
     ]);
     // Every runner works and lists nothing outdated; the .NET restore/list succeed.
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       if (bare(cmd) === 'cargo') return { exitCode: 0, stdout: JSON.stringify({ dependencies: [] }), stderr: '' };
       if (bare(cmd) === 'dotnet' && args[0] === 'list') return { exitCode: 0, stdout: JSON.stringify({ projects: [] }), stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ unplanned: Array<{ package_name: string; ecosystem: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
@@ -3400,10 +3444,10 @@ describe('deps_update_plan', () => {
       { cve_id: 'CVE-MK', package_name: 'mkdirp', installed_version: '0.5.1', fixed_version: '0.5.6' },
     ]);
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ mkdirp: { current: '0.5.1', latest: '3.0.1' } }), stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{
       plan: unknown[];
@@ -3433,10 +3477,10 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(member);
     seedCve(plugin, member, { cve_id: 'CVE-L', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' });
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: unknown[]; unplanned: Array<{ package_name: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: member }, plugin),
@@ -3455,10 +3499,10 @@ describe('deps_update_plan', () => {
     writeFileSync(join(repo, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
     const plugin = makePlugin(repo);
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
-    }) as unknown as typeof execa);
+    }));
 
     const r = okResult<{ plan: Array<{ upgrade_command: string }>; unsupported_ecosystems_present: string[] }>(
       await getTool('deps_update_plan').handler({ project_path: repo }, plugin),
@@ -3477,10 +3521,10 @@ describe('deps_update_plan', () => {
     const plugin = makePlugin(project);
     seedCve(plugin, project, { cve_id: 'CVE-L', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.17.21' });
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       return { exitCode: 1, stdout: JSON.stringify({ lodash: { current: '4.17.20', latest: '4.17.21' } }), stderr: '' };
-    }) as unknown as typeof execa);
+    }));
     const r = okResult<{ plan: Array<{ upgrade_command: string }>; unplanned: Array<{ reason: string }>; unsupported_ecosystems_present: string[] }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
@@ -3498,7 +3542,7 @@ describe('deps_update_plan', () => {
     }
     const plugin = makePlugin(origin);
     seedCve(plugin, origin, { cve_id: 'CVE-R', package_name: 'requests', installed_version: '2.31.0', fixed_version: '2.32.0' });
-    vi.mocked(execa).mockImplementation((async () => ({ exitCode: 0, stdout: '', stderr: '' })) as unknown as typeof execa);
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
 
     const bare = okResult<{ plan: unknown[] }>(await getTool('deps_update_plan').handler({ project_path: worktree }, plugin));
     expect(bare.plan).toEqual([]);
@@ -3525,11 +3569,11 @@ describe('deps_update_plan', () => {
       'utf8',
     );
     const plugin = makePlugin(project);
-    vi.mocked(execa).mockImplementation((async () => ({
+    vi.mocked(runProcess).mockImplementation(pm(async () => ({
       exitCode: 1,
       stdout: JSON.stringify({ lodash: { wanted: '4.17.20', latest: '4.18.1', dependent: 'x' } }),
       stderr: '',
-    })) as unknown as typeof execa);
+    })));
     const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; upgrade_command: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
@@ -3547,14 +3591,14 @@ describe('deps_update_plan', () => {
     writeFileSync(join(project, 'composer.lock'), JSON.stringify({ packages: [{ name: 'psr/log', version: '1.0.0' }] }), 'utf8');
     const plugin = makePlugin(project);
     const calls: string[] = [];
-    vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
       calls.push([bare(cmd), ...args].join(' '));
       if (bare(cmd) === 'composer' && args.includes('--locked')) {
         return { exitCode: 0, stdout: JSON.stringify({ locked: [{ name: 'psr/log', version: '1.0.0', latest: '3.0.2' }] }), stderr: '' };
       }
       if (bare(cmd) === 'composer') return { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' };
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
     const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; latest_version: string }>; runner_failures: unknown[] }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
@@ -3567,10 +3611,10 @@ describe('deps_update_plan', () => {
     const project = tempProject();
     writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
     const plugin = makePlugin(project);
-    vi.mocked(execa).mockImplementation((async (cmd: string) =>
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string) =>
       bare(cmd) === 'composer'
         ? { exitCode: 0, stdout: '[]', stderr: 'No dependencies installed. Try running composer install or update.' }
-        : { exitCode: 0, stdout: '', stderr: '' }) as unknown as typeof execa);
+        : { exitCode: 0, stdout: '', stderr: '' }));
     const r = okResult<{ runner_failures: Array<{ ecosystem: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
@@ -3581,10 +3625,10 @@ describe('deps_update_plan', () => {
     const project = tempProject();
     writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n", 'utf8');
     const plugin = makePlugin(project);
-    vi.mocked(execa).mockImplementation((async (cmd: string) => {
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string) => {
       if (bare(cmd) === 'bundle') return { exitCode: 1, stdout: 'rack (newest 3.1.8, installed 2.2.3)\n', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
-    }) as unknown as typeof execa);
+    }));
     const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
@@ -3683,7 +3727,7 @@ describe('deps_update_plan', () => {
       const plugin = makePlugin(project);
       seedCve(plugin, project, { cve_id: 'CVE-MM', package_name: 'minimist', installed_version: '0.0.8', fixed_version: '1.2.6' });
       const calls: string[] = [];
-      vi.mocked(execa).mockImplementation((async (cmd: string, args: string[]) => {
+      vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
         calls.push([bare(cmd), ...args].join(' '));
         if (bare(cmd) === 'pnpm' && args[0] === '--version') {
           return opts.pnpmVersion === undefined || opts.pnpmVersion === null
@@ -3691,7 +3735,7 @@ describe('deps_update_plan', () => {
             : { exitCode: 0, stdout: `${opts.pnpmVersion}\n`, stderr: '' };
         }
         return { exitCode: 1, stdout: '', stderr: '' };
-      }) as unknown as typeof execa);
+      }));
       const r = okResult<{ unplanned: Array<{ package_name: string; reason: string }> }>(
         await getTool('deps_update_plan').handler({ project_path: project }, plugin),
       );

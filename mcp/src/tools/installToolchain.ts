@@ -40,6 +40,7 @@ import { WSL_SHELL } from '../platform/shellProbe.js';
 import { ensureUserBinOnPath, userBinPlacement } from '../platform/userBin.js';
 import { runProcess } from '../runners/processRunner.js';
 import { runShellScript } from '../runners/shellRunner.js';
+import { captureOutput } from '../runners/spawn.js';
 import {
   TOOL_CATALOG,
   listDefaultTools,
@@ -472,8 +473,7 @@ async function isWslUsable(): Promise<boolean> {
   const wslPath = await resolveBinary('wsl');
   if (!wslPath) return false;
   try {
-    const { execa } = await import('execa');
-    const r = await execa(commandFor('wsl'), ['-l', '--quiet'], { timeout: 5_000, reject: false });
+    const r = await captureOutput(commandFor('wsl'), ['-l', '--quiet'], { timeoutMs: 5_000 });
     // `wsl -l --quiet` prints one distro name per line. UTF-16 BOM on
     // Windows means even with a distro, stdout starts with `\x00\x00\x00`
     // bytes — looking for non-whitespace is enough.
@@ -490,12 +490,8 @@ async function ensurePipxOnPath(ctx: PluginContext): Promise<void> {
   // best-effort polish, not a fatal step.
   const pipx = await resolveBinary('pipx');
   if (!pipx) return;
-  const { execa } = await import('execa');
-  await execa(commandFor('pipx'), ['ensurepath'], {
-    cwd: ctx.scriptsDir,
-    reject: false,
-    timeout: 10_000,
-  }).catch(() => {
+  // Through the runner: pipx's launcher starts a Python, and the timeout must reach it too.
+  await runProcess({ command: commandFor('pipx'), args: ['ensurepath'], cwd: ctx.scriptsDir, timeoutMs: 10_000 }).catch(() => {
     /* swallow */
   });
 }

@@ -140,7 +140,7 @@ export async function probeServer(entry: McpServerEntry, opts: ProbeOptions): Pr
   if (entry.command !== undefined) {
     kind = 'stdio';
     const env = stringEnv(entry.env, expand, warnings);
-    const resolved = await resolveCommand(expand(entry.command), probeEnvironment(env, null), opts.projectPath, deadlineAt);
+    const resolved = await resolveCommand(expand(entry.command), probeEnvironment(env), opts.projectPath, deadlineAt);
     if (!resolved.ok) return { status: 'failed', transport: kind, reason: resolved.reason, warnings };
     if (isAborted(opts.signal)) return { status: 'skipped', reason: 'cancelled before it was started', warnings };
     const launch: StdioLaunch = {

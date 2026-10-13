@@ -112,13 +112,11 @@
  */
 
 import { dirname, join, relative, sep } from 'node:path';
-import { execa } from 'execa';
 import { parseYamlBounded } from '../platform/boundedParse.js';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
-import { commandFor } from '../platform/binaryPath.js';
-import { applyGitSafety, gitSafetyFor } from '../platform/gitSafety.js';
+import { runProcess } from '../runners/processRunner.js';
 import { matchesAny } from '../platform/glob.js';
 import {
   listProjectDir,
@@ -1549,11 +1547,7 @@ function buildOverrideStep(input: {
   };
 }
 
-/** What an `execa(…, { reject: false })` result says about a runner that
- *  could not do its job: the command could not start at all (no exit code —
- *  not installed, not on PATH), or it exited with a code outside `okCodes`.
- *  `null` when the exit code is one the caller treats as success. */
-/** What a package-manager run answers: execa's result, or a refusal in the same shape. */
+/** What a package-manager run answers: its exit code and output, or why it did not run (`code`, `shortMessage`). */
 interface PmResult {
   exitCode?: number;
   stdout?: unknown;
@@ -1562,12 +1556,20 @@ interface PmResult {
   shortMessage?: unknown;
 }
 
+/** The most a package manager may print: `go list -m -u -json all` on a large module graph is megabytes. */
+const PM_OUTPUT_CAP_BYTES = 64 * 1024 * 1024;
+
 /**
  * A package manager run in `cwd` — `npm outdated`, `go list -m`, `bundle
- * outdated`, `dotnet restore` … — hardened for git (`platform/gitSafety.ts`):
- * each of them may run git itself (a git dependency, a VCS module, a
+ * outdated`, `dotnet restore` … — through the runner (`runners/processRunner.ts`):
+ * by its absolute path on the child's PATH, never the project directory it
+ * runs in (`platform/binaryPath.ts`); hardened for git (`platform/gitSafety.ts`)
+ * — each of them may run git itself (a git dependency, a VCS module, a
  * Bundler git source), and none of those gits may run a command the
- * project's own git configuration or hooks name. In create_fix_pr's
+ * project's own git configuration or hooks name; and with a timeout that
+ * kills the whole tree and returns at the deadline (review 8, finding 4:
+ * execa's own `timeout`, used here before, signalled `npm.cmd`'s `cmd.exe`
+ * and then waited on the `node` it had started). In create_fix_pr's
  * package-manager environment when inside one (`fixpr/childEnv.ts`), this
  * server's otherwise, or `env` when the caller names one. A repository whose
  * configuration cannot be read safely is not run: `code:
@@ -1579,14 +1581,20 @@ async function execPackageManager(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<PmResult> {
   const pm = packageManagerEnvOptions();
-  const base: NodeJS.ProcessEnv = opts.env ?? ('env' in pm ? pm.env : { ...process.env });
-  const safety = await gitSafetyFor([opts.cwd], { env: base });
-  if (safety.refused !== null) return { code: 'git_config_refused', shortMessage: safety.refused, stdout: '', stderr: '' };
-  // By its absolute path on the child's PATH, never the project directory it runs in (platform/binaryPath.ts).
-  const env = applyGitSafety(safety, base);
-  return execa(commandFor(command, env), args, { cwd: opts.cwd, reject: false, timeout: opts.timeout, env, extendEnv: false });
+  const env: NodeJS.ProcessEnv = opts.env ?? ('env' in pm ? pm.env : { ...process.env });
+  const r = await runProcess({ command, args, cwd: opts.cwd, env, extendEnv: false, timeoutMs: opts.timeout, stdoutCapBytes: PM_OUTPUT_CAP_BYTES });
+  if (r.notRun !== undefined) {
+    return { code: r.notRun.code === 'not_found' ? 'ENOENT' : r.notRun.code, shortMessage: r.notRun.message, stdout: '', stderr: r.stderr };
+  }
+  if (r.outcome === 'timed_out') return { shortMessage: `timed out after ${opts.timeout} ms`, stdout: r.stdout, stderr: r.stderr };
+  if (r.outcome === 'output_too_large') return { shortMessage: `printed more than ${PM_OUTPUT_CAP_BYTES} bytes`, stdout: '', stderr: r.stderr };
+  return { ...(r.exitCode !== null ? { exitCode: r.exitCode } : {}), stdout: r.stdout, stderr: r.stderr };
 }
 
+/** What a run says about a runner that could not do its job: the command
+ *  could not start at all (no exit code — not installed, not on PATH,
+ *  refused, timed out), or it exited with a code outside `okCodes`. `null`
+ *  when the exit code is one the caller treats as success. */
 function describeExecFailure(
   label: string,
   result: { exitCode?: number; stderr?: unknown; code?: unknown; shortMessage?: unknown },

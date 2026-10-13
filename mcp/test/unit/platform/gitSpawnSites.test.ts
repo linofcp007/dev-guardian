@@ -10,10 +10,11 @@
  * on its own. This test fails when:
  *
  *   - a raw spawn primitive (`execa`, `spawn`, `spawnSync`, `execFile`,
- *     `execFileSync`, `execSync`, `fork`) appears in a file, or in a number,
- *     `SITES` does not name — each one is classified with the reason its
- *     child is not a git process in a scanned project, or is hardened where
- *     it stands;
+ *     `execFileSync`, `execSync`, `fork`, and since 3.3.0 the shared ones —
+ *     `crossSpawn`, `spawnNoShell`, `captureOutput`, `startChild`, review 8
+ *     finding 4) is called in a file, or in a number, `SITES` does not name —
+ *     each one is classified with the reason its child is not a git process
+ *     in a scanned project, or is hardened where it stands;
  *   - git is named as the command of a raw spawn anywhere but the helper, in
  *     `mcp/src`, `cli/` or `hooks/`;
  *   - a `runProcess`-shaped spawn spells git as a literal instead of
@@ -36,6 +37,8 @@ const REPO = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '
 type Kind =
   /** The hardening itself. */
   | 'helper'
+  /** The shared spawn and tree kill (`runners/spawn.ts`, `runners/childProcess.ts`): each caller is classified here. */
+  | 'primitive'
   /** Hardened where it stands: `applyGitSafety` on the child's environment. */
   | 'hardened'
   /** Starts no git and reads no scanned project: a version probe, a process-table query, an installer. */
@@ -51,15 +54,22 @@ const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string
       'the configuration probe and the submodule listing (sync, and async through one spawn helper), ' +
       'and git itself with the overrides applied',
   },
+  'mcp/src/runners/spawn.ts': {
+    count: 2,
+    kind: 'primitive',
+    reason: 'cross-spawn without a shell (spawnNoShell), and captureOutput, the one-process probes classified below',
+  },
+  'mcp/src/runners/childProcess.ts': {
+    count: 1,
+    kind: 'primitive',
+    reason: 'startChild: the tree-owning child runProcess, the DAST app and the audited MCP server are started as',
+  },
   'mcp/src/runners/processRunner.ts': {
     count: 1,
     kind: 'hardened',
-    reason: 'runProcess: applyGitSafety on every child, for its cwd and gitRepos, unless gitHardening: false',
-  },
-  'mcp/src/tools/depsUpdatePlan.ts': {
-    count: 1,
-    kind: 'hardened',
-    reason: 'execPackageManager: npm/pnpm/composer/cargo/go/bundle/dotnet in the project, applyGitSafety for it',
+    reason:
+      'runProcess: applyGitSafety on every child, for its cwd and gitRepos, unless gitHardening: false — the scanners, ' +
+      "deps_update_plan's package managers and scan_skill's tar / unzip among them",
   },
   'mcp/src/runners/windowsTreeKill.ts': {
     count: 3,
@@ -69,16 +79,11 @@ const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string
   'mcp/src/runners/trivyRun.ts': { count: 1, kind: 'no-repository', reason: '`trivy --version`: reads no project' },
   'mcp/src/platform/shellProbe.ts': { count: 1, kind: 'no-repository', reason: "a shell's own version probe" },
   'mcp/src/mcpaudit/launch.ts': { count: 1, kind: 'no-repository', reason: '`node -e statSync`: is a command path a file' },
-  'mcp/src/skillaudit/ingest.ts': {
-    count: 2,
-    kind: 'no-repository',
-    reason: 'tar / unzip extract a skill archive into a temp directory; its git clone goes through execGit',
-  },
-  'mcp/src/tools/installToolchain.ts': { count: 2, kind: 'no-repository', reason: '`wsl -l`, `pipx ensurepath`: the installer, in no project' },
+  'mcp/src/tools/installToolchain.ts': { count: 1, kind: 'no-repository', reason: '`wsl -l`: the installer, in no project' },
   'mcp/src/ci/appRunner.ts': {
-    count: 2,
+    count: 1,
     kind: 'project-code',
-    reason: "the project's own application, started for the DAST gate — its code runs by design; taskkill stops that tree",
+    reason: "the project's own application, started for the DAST gate — its code runs by design",
   },
   'mcp/src/mcpaudit/stdioTransport.ts': {
     count: 1,
@@ -125,8 +130,9 @@ function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')).replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 }
 
-/** A call to a raw spawn primitive — not a method (`.spawn(`), not `thread::spawn(`. */
-const RAW_SPAWN = /(?<![.\w:])(?:execa|execaSync|spawn|spawnSync|execFile|execFileSync|execSync|fork)\(/g;
+/** A call to a raw spawn primitive — not a method (`.spawn(`), not `thread::spawn(`, not its declaration. */
+const RAW_SPAWN =
+  /(?<![.\w:]|function )(?:execa|execaSync|spawn|spawnSync|execFile|execFileSync|execSync|fork|crossSpawn|spawnNoShell|captureOutput|startChild)\(/g;
 /** A raw spawn whose command is git: `'git'`, or an expression that falls back to it (`opts.git ?? 'git'`). */
 const RAW_GIT_SPAWN = /(?<![.\w:])(?:execa|execaSync|spawn|spawnSync|execFile|execFileSync|execSync|fork)\(\s*(?:[^,()]*\?\?\s*)?['"`]git(?:\.exe)?['"`]/;
 /** A runProcess-shaped spawn spelling git as a literal. */
@@ -181,10 +187,11 @@ describe('every raw spawn is classified (platform/gitSafety.ts)', () => {
     const src = (rel: string): string => code(SOURCES.find((s) => s.rel === rel)?.text ?? '');
     const runner = src('mcp/src/runners/processRunner.ts');
     expect(runner).toMatch(/gitSafetyFor\(\[options\.cwd, \.\.\.\(options\.gitRepos \?\? \[\]\)\]/);
-    expect(runner).toMatch(/env = applyGitSafety\(safety, base\)/);
+    expect(runner).toMatch(/childEnv = applyGitSafety\(safety, childEnv\)/);
+    // The package managers go through the runner (review 8, finding 4), hardening on.
     const pm = src('mcp/src/tools/depsUpdatePlan.ts');
-    expect(pm).toMatch(/const env = applyGitSafety\(safety, base\);/);
-    expect(pm).toMatch(/return execa\(commandFor\(command, env\), args, \{[^}]*\benv, extendEnv: false/);
+    expect(pm).toMatch(/await runProcess\(\{ command, args, cwd: opts\.cwd, env, extendEnv: false, timeoutMs: opts\.timeout,/);
+    expect(pm).not.toMatch(/gitHardening/);
   });
 
   it('the hook and the CLI run git only through the helper they import from dist', () => {
@@ -214,6 +221,8 @@ describe('the patterns catch what they are for (positive controls)', () => {
     expect(count('spawnSync(opts.git ?? GIT_COMMAND, args)', RAW_SPAWN)).toBe(1);
     expect(count('child.spawn(x); thread::spawn(f); re.exec(s)', RAW_SPAWN)).toBe(0);
     expect(count('// execa(\'git\') in a comment\n/* spawn( */', RAW_SPAWN)).toBe(0);
+    expect(count("crossSpawn(file, args, o); captureOutput('ps', []); startChild(c, a, o)", RAW_SPAWN)).toBe(3);
+    expect(count('export function captureOutput(command: string) {}', RAW_SPAWN)).toBe(0);
   });
   it('RAW_GIT_SPAWN', () => {
     expect(RAW_GIT_SPAWN.test("execa('git', ['status'])")).toBe(true);
