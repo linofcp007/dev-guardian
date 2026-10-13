@@ -89870,6 +89870,7 @@ function processSubstitutionFetch(text2) {
   }
   return false;
 }
+var DRIVE_LETTERS = Array.from({ length: 26 }, (_, k) => String.fromCharCode(97 + k));
 var NODE_VALUED = /* @__PURE__ */ new Set([
   "-r",
   "--require",
@@ -89931,6 +89932,7 @@ var NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
   "--experimental-sea-config"
 ]);
 var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "su", "pwsh", "powershell"]);
+var MAX_DECODED = 64 * 1024;
 var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
 var MAX_STATEMENT_LENGTH = 16 * 1024;
 var MAX_COMMAND_LENGTH = 512 * 1024;

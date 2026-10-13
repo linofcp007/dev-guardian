@@ -665,9 +665,13 @@ describe('assessBashCommand — task-1: previously unflagged catastrophic comman
     });
   }
 
-  it('find ~ -delete warns rather than blocks', () => {
-    const a = assessBashCommand('find ~ -delete');
+  // Review 8, item 7: `find ~ -delete` deletes the whole home directory, as
+  // `rm -rf ~` does; a test that narrows what it finds makes it a cleanup.
+  it('find ~ -delete blocks like rm -rf ~; with a test that narrows it, it warns', () => {
+    expect(assessBashCommand('find ~ -delete').level).toBe('block');
+    const a = assessBashCommand("find ~ -name '*.pyc' -delete");
     expect(a.level).toBe('warn');
+    expect(a.rules).toEqual(['find-delete-home']);
   });
 
   it('git push origin +main warns (force-push shorthand)', () => {
@@ -3389,5 +3393,235 @@ describe("assessBashCommand — dev-guardian's registry of trusted databases (re
     ['Remove-Item $env:LOCALAPPDATA\\dev-guardian\\registry\\abc.json', 'powershell', 'C:/Users/u/AppData/Local/dev-guardian'],
   ] as const)('%s stays ok', (command, shell, dataDir) => {
     expect(judge(command, shell, dataDir)).toEqual({ command, level: 'ok', rules: [] });
+  });
+});
+
+// Review 8 (dev-guardian 3.3.0): spellings of the catastrophic deletes, and
+// scripts fed to a shell, that the guard read as ok — each with the ordinary
+// commands next to it that must stay as they were.
+describe('assessBashCommand — review 8: a recursive delete is judged by its target, not by -f (item 1)', () => {
+  const win = { homeDir: 'C:\\Users\\alice', platform: 'win32' as const };
+  it.each([
+    ['rm -r ~', {}],
+    ['rm -r ~/*', {}],
+    ['rm -rv ~', {}],
+    ['rm -R $HOME', {}],
+    ['rm --recursive /', {}],
+    ['rm -r /c/Users/alice', win],
+    ['rd /s C:\\', {}],
+    ["del /s 'C:\\*'", {}],
+  ] as const)('%s blocks', (command, opts) => {
+    const a = assessBashCommand(command, opts);
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'block', rules: ['rm-rf-root'] });
+  });
+
+  it.each(['Remove-Item ~ -Recurse', 'Remove-Item $HOME -Recurse', 'ri ~\\* -Recurse', 'rm -r C:\\Users\\alice'])(
+    'PowerShell: %s blocks',
+    (command) => {
+      expect(assessBashCommand(command, { ...win, shell: 'powershell' }).level).toBe('block');
+    },
+  );
+
+  it.each([
+    ['rm -r node_modules', 'bash'],
+    ['rm -r ./build dist', 'bash'],
+    ['Remove-Item .\\build -Recurse', 'powershell'],
+    ['del /s *.tmp', 'bash'],
+  ] as const)('%s only warns, as its forced form does', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'warn', rules: ['rm-rf-broad'] });
+  });
+
+  it.each([
+    ['rm -f ~/*', 'bash'],
+    ['rm notes.txt', 'bash'],
+    ['del /q report.txt', 'bash'],
+    ['Remove-Item C:\\x -Recurse:$false', 'powershell'],
+    ['Remove-Item -Force .\\x.txt', 'powershell'],
+    ['Remove-Item -Filter *.tmp -Path .\\build', 'powershell'],
+  ] as const)('%s stays ok: nothing recursive', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+});
+
+describe('assessBashCommand — review 8: `cmd //c`, the form Git Bash runs (item 2)', () => {
+  it.each([
+    "cmd //c 'rd /s /q C:\\Users'",
+    "cmd //C 'del /s /q /f C:\\*'",
+    'cmd.exe //c rd /s /q C:\\',
+    'cmd //c rd //s //q C:\\',
+    'cmd //k rd //s C:\\',
+  ])('%s blocks', (command) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain('rm-rf-root');
+  });
+
+  it('cmd //c copy onto the user-level hook configuration is a config write', () => {
+    expect(assessBashCommand("cmd //c 'copy evil.json %USERPROFILE%\\.config\\dev-guardian\\hooks.json'").rules).toContain(
+      'guard-config-shell-write',
+    );
+  });
+
+  it.each(['cmd //c echo hello', 'cmd //c dir', "cmd //c 'ver'", 'cmd //c rd //s //q .\\build'])('%s is not a catastrophe', (command) => {
+    expect(assessBashCommand(command).level).not.toBe('block');
+  });
+});
+
+describe('assessBashCommand — review 8: Windows folders, other homes and root globs in every spelling (item 3)', () => {
+  it.each([
+    'rm -rf /c/Windows',
+    'rm -rf /C/WINDOWS/System32',
+    'rm -rf C:/Windows',
+    'rm -rf c:/windows/',
+    'rm -rf /mnt/c/Windows',
+    "rm -rf '/mnt/c/Program Files'",
+    'rm -rf /c/users',
+    'rm -rf C:/PROGRA~1',
+    'rm -rf /c/ProgramData/*',
+    'rm -rf ~alice',
+    'rm -rf ~alice/*',
+    'rm -rf /[a-z]*',
+    'rm -rf /?*',
+    'rm -rf /*/',
+    'rm -rf /c/U*',
+    'rm -rf ?:/',
+  ])('%s blocks', (command) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level, rules: a.rules }).toEqual({ command, level: 'block', rules: ['rm-rf-root'] });
+  });
+
+  it.each(['rm -rf /tmp*', 'rm -rf /tmp/*', 'rm -rf /usr/local/*', 'rm -rf ~+', 'rm -rf /c/Users/alice/project', 'rm -rf C:/Windows/Temp/*'])(
+    '%s only warns',
+    (command) => {
+      expect(assessBashCommand(command, { homeDir: 'C:\\Users\\alice', platform: 'win32' }).level).toBe('warn');
+    },
+  );
+
+  it('the PowerShell tool has no ~name: `~\\project\\build` read the POSIX way is not another home', () => {
+    expect(assessBashCommand('Remove-Item ~\\project\\build -Recurse -Force', { shell: 'powershell' }).rules).toEqual(['rm-rf-broad']);
+  });
+});
+
+describe('assessBashCommand — review 8: brace expansion and globs in a directory (item 6)', () => {
+  it.each([
+    ['{rm,-rf,/}', 'rm-rf-root'],
+    ['{rm,} -rf /', 'rm-rf-root'],
+    ['rm -rf /{bin,etc,usr}', 'rm-rf-root'],
+    ['rm -rf /{a..z}', 'rm-rf-root'],
+    ['{chmod,-R,777,/}', 'chmod-777-root'],
+    ['tee ~/.config/dev-guardian/{hooks,x}.json', 'guard-config-shell-write'],
+    ['echo x > ~/.config/dev-guardia?/hooks.json', 'guard-config-shell-write'],
+    ['echo x > ~/.c*/dev-guardian/hooks.json', 'guard-config-shell-write'],
+    ['cp a.json .guard*/hooks.config.json', 'guard-config-shell-write'],
+    ['rm ~/.config/dev-guardia?/hooks.json', 'guard-config-remove'],
+  ])('%s is denied (%s)', (command, rule) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each([
+    'mkdir -p src/{a,b,c}',
+    'echo {1..100}',
+    'echo {a,b}{c,d}',
+    "find . -name '*.{js,ts}'",
+    'echo ${HOME}',
+    'git commit -m "{rm,-rf,/}"',
+    "echo '{rm,-rf,/}'",
+    'cp src/{a,b}.ts dest/',
+    'echo {1..100000}',
+    'rm -rf ./{dist,build}',
+  ])('%s is not denied', (command) => {
+    expect(assessBashCommand(command).level).not.toBe('block');
+  });
+
+  timeShape('a word of nested braces', (n) => assessBashCommand(`echo ${'{a,'.repeat(n)}${'}'.repeat(n)}`), 128, 500);
+  timeShape('a word of many brace pairs', (n) => assessBashCommand(`echo ${'{a,b}'.repeat(n)}`), 64, 500);
+});
+
+describe('assessBashCommand — review 8: find deletes the root in every spelling (item 7)', () => {
+  it.each([
+    'find -L / -delete',
+    'find -P / -delete',
+    'find -H -O3 / -delete',
+    'find -D tree / -delete',
+    'find / -exec rm -rf {} +',
+    'find / -type f -exec rm {} \\;',
+    'find / -execdir rm {} \\;',
+    'find /c -delete',
+    'find /c/Windows -delete',
+    'find ~ -delete',
+    'find $HOME -type f -delete',
+    'find . -exec rm -rf / \\;',
+  ])('%s blocks', (command) => {
+    expect({ command, level: assessBashCommand(command).level }).toEqual({ command, level: 'block' });
+  });
+
+  it.each([
+    ['find . -delete', 'find-delete-broad'],
+    ['find -delete', 'find-delete-broad'],
+    ["find ~ -name '*.pyc' -delete", 'find-delete-home'],
+  ])('%s warns (%s)', (command, rule) => {
+    expect(assessBashCommand(command).rules).toEqual([rule]);
+  });
+
+  it.each([
+    'find ./tmp -delete',
+    'find . -name "*.log" -mtime +7 -delete',
+    'find . -name x -exec rm {} +',
+    "find . -name '*.tmp' -print0 | xargs -0 rm -f",
+    'find / -name "*.log"',
+    'find . -type f -exec grep -l x {} +',
+    'find . -empty -delete',
+  ])('%s stays ok', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
+  });
+});
+
+describe('assessBashCommand — review 8: scripts fed to a shell by process substitution, -c -- and decoders (item 8)', () => {
+  it.each([
+    ["bash <(echo 'rm -rf /')", 'rm-rf-root'],
+    ['bash <(echo "echo x > ~/.config/dev-guardian/hooks.json")', 'guard-config-shell-write'],
+    ["source <(echo 'rm -rf ~')", 'rm-rf-root'],
+    [". <(printf '%s' 'rm -rf /')", 'rm-rf-root'],
+    ["bash -c -- 'rm -rf /'", 'rm-rf-root'],
+    ["bash -c -e 'rm -rf /'", 'rm-rf-root'],
+    ["bash -c -o pipefail 'rm -rf /'", 'rm-rf-root'],
+    ['echo cm0gLXJmIC8K | base64 -d | sh', 'rm-rf-root'],
+    ['echo cm0gLXJmIC8K | base64 --decode | bash', 'rm-rf-root'],
+    ['base64 -d <<< cm0gLXJmIC8K | sh', 'rm-rf-root'],
+    ['bash -c "$(echo cm0gLXJmIC8K | base64 -d)"', 'rm-rf-root'],
+    ['eval "$(echo cm0gLXJmIC8K | base64 -d)"', 'rm-rf-root'],
+    ["sh -c \"$(echo 'rm -rf /')\"", 'rm-rf-root'],
+    ["bash <<< 'rm -rf /'", 'rm-rf-root'],
+    ['bash <<< "$(echo cm0gLXJmIC8K | base64 -d)"', 'rm-rf-root'],
+  ])('%s is denied (%s)', (command, rule) => {
+    const a = assessBashCommand(command);
+    expect({ command, level: a.level }).toEqual({ command, level: 'block' });
+    expect(a.rules).toContain(rule);
+  });
+
+  it.each(['base64 -d payload.b64 | sh', 'echo H4sIAAAA | base64 -d | gunzip | sh', 'xxd -r -p x.hex | bash', 'cat p.b64 | base64 -d | python3'])(
+    '%s warns: what it runs cannot be read',
+    (command) => {
+      const a = assessBashCommand(command);
+      expect({ command, level: a.level }).toEqual({ command, level: 'warn' });
+      expect(a.rules).toContain('decoded-script');
+    },
+  );
+
+  it.each([
+    'echo ZWNobyBoaQo= | base64 -d | sh',
+    'echo aGVsbG8= | base64 -d',
+    'echo cm0gLXJmIC8K | base64 -d > out.txt',
+    'cat x.b64 | base64 -d > img.png',
+    'bash <(cat script.sh)',
+    'diff <(sort a) <(sort b)',
+    "grep x <<< 'rm -rf /'",
+    "bash <<< 'echo hi'",
+    'gunzip -c logs.gz | grep error',
+  ])('%s stays ok', (command) => {
+    expect(assessBashCommand(command).level).toBe('ok');
   });
 });

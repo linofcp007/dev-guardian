@@ -2713,7 +2713,7 @@ function resolveCommand(words, through) {
         if (!titled && arg.quoted) {
           titled = true;
           i2 += 1;
-        } else if (/^\/[A-Za-z]+$/.test(arg.value)) i2 += /^\/d$/i.test(arg.value) ? 2 : 1;
+        } else if (/^\/[A-Za-z]+$/.test(cmdSwitch(arg.value))) i2 += /^\/d$/i.test(cmdSwitch(arg.value)) ? 2 : 1;
         else break;
       }
       continue;
@@ -2754,26 +2754,55 @@ function stripQuotes(token) {
   while (b > a2 && q(token.charAt(b - 1))) b -= 1;
   return token.slice(a2, b);
 }
-function isCatastrophicTarget(raw) {
+function catastrophicKind(raw, tildeUsers = true) {
   const t = stripQuotes(raw);
-  if (t === "/" || /^\/\*+$/.test(t)) return true;
-  if (/^\\\*?$/.test(t)) return true;
-  if (/^~(?:[\\/]\*?)?$/.test(t)) return true;
-  if (/^\$\{?HOME\}?(?:[\\/]\*?)?$/i.test(t)) return true;
+  if (t === "/" || /^\/\*+$/.test(t)) return "root";
+  if (/^\\\*?$/.test(t)) return "root";
+  if (/^~(?:[\\/]\*?)?$/.test(t)) return "home";
+  if (tildeUsers && /^~[A-Za-z_][\w.-]*(?:[\\/]\*?)?$/.test(t)) return "home";
+  if (/^\$\{?HOME\}?(?:[\\/]\*?)?$/i.test(t)) return "home";
   if (/^(?:\$\{?USERPROFILE\}?|\$\{?HOMEDRIVE\}?\$\{?HOMEPATH\}?|\$\{?env:HOMEDRIVE\}?\$\{?env:HOMEPATH\}?)(?:[\\/]\*?)?$/i.test(t)) {
-    return true;
+    return "home";
   }
-  if (/^\/[a-z](?:\/\*?)?$/i.test(t)) return true;
-  if (/^\/mnt\/[a-z](?:\/\*?)?$/i.test(t)) return true;
-  if (/^[A-Za-z]:[\\/]\*?$/.test(t)) return true;
-  if (/^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:USERPROFILE|HOMEDRIVE|HOMEPATH|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)) {
-    return true;
+  if (/^\/[a-z](?:\/\*?)?$/i.test(t)) return "root";
+  if (/^\/mnt\/[a-z](?:\/\*?)?$/i.test(t)) return "root";
+  if (/^[A-Za-z]:[\\/]\*?$/.test(t)) return "root";
+  if (/^(?:%(?:USERPROFILE|HOMEDRIVE%%HOMEPATH|HOMEPATH)%|\$\{?env:(?:USERPROFILE|HOMEPATH)\}?)(?:[\\/]\*?)?$/i.test(t)) {
+    return "home";
   }
-  if (/^[A-Za-z]:[\\/]?(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]\*?)?$/i.test(t)) return true;
+  if (/^(?:%(?:HOMEDRIVE|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramFiles\(x86\)|ProgramData|ALLUSERSPROFILE|PUBLIC)%|\$\{?env:(?:HOMEDRIVE|SystemDrive|SystemRoot|windir|ProgramFiles|ProgramData|ALLUSERSPROFILE|PUBLIC)\}?)(?:[\\/]\*?)?$/i.test(t)) {
+    return "root";
+  }
+  if (WINDOWS_DIR.test(t)) return "root";
   if (/^\/(?:etc|usr|bin|sbin|var|lib|lib64|boot|sys|proc|root|home|opt|dev|Users|System)(?:\/\*?)?$/.test(t)) {
-    return true;
+    return "root";
   }
-  return false;
+  return globNamesCatastrophic(t) ? "root" : null;
+}
+function isCatastrophicTarget(raw, tildeUsers = true) {
+  return catastrophicKind(raw, tildeUsers) !== null;
+}
+function segmentMatches(seg, names) {
+  const pattern = seg.toLowerCase();
+  return names.some((n2) => wildcardMatch(pattern, n2.toLowerCase()));
+}
+function globNamesCatastrophic(t) {
+  if (t.length > 256 || !GLOB.test(t)) return false;
+  const path8 = t.replace(/\\/g, "/").replace(/\/+(?:\*)?$/, "");
+  const drive = /^([^/]*):(?:\/|$)/.exec(path8);
+  let segs;
+  if (drive !== null) {
+    if (!segmentMatches(drive[1] ?? "", DRIVE_LETTERS)) return false;
+    segs = path8.slice((drive[0] ?? "").length).split("/").filter((s) => s !== "");
+    return segs.length === 0 || segs.length === 1 && segmentMatches(segs[0] ?? "", WINDOWS_DIR_NAMES);
+  }
+  if (!path8.startsWith("/")) return false;
+  segs = path8.slice(1).split("/").filter((s) => s !== "");
+  const [a2 = "", b = "", c3 = ""] = segs;
+  if (segs.length === 1) return segmentMatches(a2, SYSTEM_DIRS) || segmentMatches(a2, DRIVE_LETTERS);
+  const letter = (s) => segmentMatches(s, DRIVE_LETTERS);
+  if (segs.length === 2) return letter(a2) && segmentMatches(b, WINDOWS_DIR_NAMES) || segmentMatches(a2, ["mnt"]) && letter(b);
+  return segs.length === 3 && segmentMatches(a2, ["mnt"]) && letter(b) && segmentMatches(c3, WINDOWS_DIR_NAMES);
 }
 function targetKey(raw, fold) {
   const t = stripQuotes(raw.trim()).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+\*?$/, "");
@@ -2788,7 +2817,7 @@ function homeDirFor(home, platform2) {
 function isHomeTarget(raw, home) {
   return home !== void 0 && targetKey(raw, home.fold) === home.key;
 }
-function assessRecursiveDelete(words, start, home) {
+function assessRecursiveDelete(words, start, home, tildeUsers = true) {
   const head = words[start];
   if (head === void 0) return null;
   const name = basename(head.value).toLowerCase();
@@ -2796,21 +2825,17 @@ function assessRecursiveDelete(words, start, home) {
   const slashStyle = !dashStyle && SLASH_DELETE_HEADS.has(name);
   if (!dashStyle && !slashStyle) return null;
   let recursive = false;
-  let force = false;
   let noPreserve = false;
   const targets = [];
   const rest = words.slice(start + 1);
   for (let k = 0; k < rest.length; k += 1) {
     const token = (rest[k]?.value ?? "").replace(/^[\u2013\u2014\u2015]/, "-");
     if (slashStyle && token.startsWith("/")) {
-      const lower = token.toLowerCase();
-      if (lower === "/s") recursive = true;
-      else if (lower === "/q") force = true;
+      if (cmdSwitch(token).toLowerCase() === "/s") recursive = true;
       continue;
     }
     if (token === "--no-preserve-root") noPreserve = true;
     else if (token === "--recursive") recursive = true;
-    else if (token === "--force") force = true;
     else if (token.startsWith("--")) continue;
     else if (token.startsWith("-") && token.length > 1) {
       const colon = token.indexOf(":");
@@ -2825,52 +2850,42 @@ function assessRecursiveDelete(words, start, home) {
       if (value !== void 0 && value !== "" && PS_PATH_PARAM.test(lower)) targets.push(value);
       const on6 = value === void 0 || !/^\$?(?:false|0)$/i.test(value);
       if (lower === "recurse" || lower === "rec") recursive ||= on6;
-      else if (lower === "force" || lower === "fo") force ||= on6;
-      else if (value === void 0 && flags.length <= 3) {
-        if (/r/i.test(flags)) recursive = true;
-        if (/f/i.test(flags)) force = true;
-      }
+      else if (!isSwitch && value === void 0 && flags.length <= 3 && /r/i.test(flags)) recursive = true;
     } else targets.push(token);
   }
-  if (!(recursive && force || noPreserve)) return null;
-  if (noPreserve || targets.some((t) => isCatastrophicTarget(t) || isHomeTarget(t, home))) {
-    return {
-      id: "rm-rf-root",
-      level: "block",
-      reason: "Recursive force-delete targeting the filesystem root or home directory"
-    };
-  }
-  return {
-    id: "rm-rf-broad",
-    level: "warn",
-    reason: "Recursive force-delete \u2014 confirm the target path is intended"
-  };
+  if (!(recursive || noPreserve)) return null;
+  if (noPreserve || targets.some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) return { ...RULE_RM_ROOT };
+  return { ...RULE_RM_BROAD };
 }
-function assessFind(words, start) {
+function assessFind(words, start, home, tildeUsers = true) {
   const head = words[start];
   if (head === void 0 || basename(head.value) !== "find") return null;
   const rest = words.slice(start + 1);
-  if (!rest.some((w) => w.value === "-delete")) return null;
+  const execs = findExecCommands(words, start);
+  const viaExec = execs.some((cmd) => FIND_DELETERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? "")));
+  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers)).find((r) => r?.level === "block");
+  if (inner !== void 0 && inner !== null) return inner;
+  if (!viaExec && !rest.some((w) => w.value === "-delete")) return null;
+  let k = 0;
+  while (k < rest.length) {
+    const v = rest[k]?.value ?? "";
+    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
+    else if (v === "-D") k += 2;
+    else break;
+  }
   const targets = [];
-  for (const word of rest) {
-    if (word.value.startsWith("-")) break;
-    targets.push(stripQuotes(word.value));
+  for (; k < rest.length; k += 1) {
+    const v = rest[k]?.value ?? "";
+    if (v.startsWith("-") || v === "(" || v === "!" || v === ")" || v === ",") break;
+    targets.push(stripQuotes(v));
   }
-  if (targets.length === 0) return null;
-  if (targets.some((t) => t === "/" || /^\/\*+$/.test(t))) {
-    return {
-      id: "find-delete-root",
-      level: "block",
-      reason: "find \u2026 -delete on the filesystem root deletes everything under it"
-    };
+  if (targets.length === 0) targets.push(".");
+  const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
+  if (targets.some((t) => catastrophicKind(t, tildeUsers) === "root")) return { ...RULE_FIND_ROOT };
+  if (targets.some((t) => catastrophicKind(t, tildeUsers) === "home" || isHomeTarget(t, home))) {
+    return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
-  if (targets.some((t) => t === "~" || t === "~/" || /^\$\{?HOME\}?\/?$/.test(t))) {
-    return {
-      id: "find-delete-home",
-      level: "warn",
-      reason: "find \u2026 -delete targets the home directory \u2014 confirm this is intended"
-    };
-  }
+  if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
   return null;
 }
 function isHookConfigPath(arg) {
@@ -2952,16 +2967,96 @@ function cwdAfter(name, args, cwd, dataDir) {
   const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) || dataDir !== void 0 && normalizedPath(next).startsWith(dataDir);
   return tracked ? next : "";
 }
-function configNamesIn(dir) {
-  if (USER_CONFIG_DIR.test(dir)) return ["hooks.json"];
-  if (/\.guardian\/?$/i.test(dir)) return ["hooks.config.json", "hooks-allowlist.json"];
-  return [];
+function globNamesConfig(path8, tails = CONFIG_TAILS) {
+  const t = tail(path8);
+  if (!GLOB.test(t)) return false;
+  const segs = t.split("/").filter((s) => s !== "");
+  return tails.some(
+    (names) => names.length <= segs.length && names.every((name, k) => wildcardMatch((segs[segs.length - names.length + k] ?? "").toLowerCase(), name))
+  );
 }
-function globNamesConfig(path8) {
-  const last = path8.slice(path8.lastIndexOf("/") + 1);
-  if (!GLOB.test(last)) return false;
-  const names = configNamesIn(dirOf(path8));
-  return names.some((n2) => wildcardMatch(last.toLowerCase(), n2));
+function braceAt(word) {
+  for (let i2 = word.indexOf("{"); i2 >= 0; i2 = word.indexOf("{", i2 + 1)) {
+    if (word.charAt(i2 - 1) === "$") continue;
+    let depth = 0;
+    const commas = [];
+    let close = -1;
+    for (let j = i2 + 1; j < word.length; j += 1) {
+      const c3 = word.charAt(j);
+      if (c3 === "{") depth += 1;
+      else if (c3 === "}") {
+        if (depth === 0) {
+          close = j;
+          break;
+        }
+        depth -= 1;
+      } else if (c3 === "," && depth === 0) commas.push(j);
+    }
+    if (close < 0) return void 0;
+    const pre = word.slice(0, i2);
+    const post = word.slice(close + 1);
+    if (commas.length > 0) {
+      const alts = [];
+      let from = i2 + 1;
+      for (const c3 of [...commas, close]) {
+        alts.push(word.slice(from, c3));
+        from = c3 + 1;
+      }
+      return { pre, alts, post };
+    }
+    const seq = /^(-?\d{1,6}|[A-Za-z])\.\.(-?\d{1,6}|[A-Za-z])$/.exec(word.slice(i2 + 1, close));
+    if (seq !== null) {
+      const [a2 = "", b = ""] = [seq[1], seq[2]];
+      const numeric = /\d/.test(a2) && /\d/.test(b);
+      if (!numeric && (/\d/.test(a2) || /\d/.test(b))) continue;
+      const lo = numeric ? Number(a2) : a2.charCodeAt(0);
+      const hi = numeric ? Number(b) : b.charCodeAt(0);
+      if (Math.abs(hi - lo) + 1 > MAX_BRACE_WORDS) return "too-many";
+      const step = lo <= hi ? 1 : -1;
+      const alts = [];
+      for (let v = lo; ; v += step) {
+        alts.push(numeric ? String(v) : String.fromCharCode(v));
+        if (v === hi) break;
+      }
+      return { pre, alts, post };
+    }
+  }
+  return void 0;
+}
+function expandBraces(word) {
+  if (word.length > MAX_BRACE_WORD || !word.includes("{") || !word.includes("}")) return void 0;
+  const out = [];
+  const stack = [word];
+  let expanded = false;
+  for (let steps = 0; stack.length > 0; steps += 1) {
+    if (steps > 8 * MAX_BRACE_WORDS) return void 0;
+    const w = stack.pop() ?? "";
+    const at = braceAt(w);
+    if (at === "too-many") return void 0;
+    if (at === void 0) {
+      if (w !== "") out.push(w);
+      if (out.length > MAX_BRACE_WORDS) return void 0;
+      continue;
+    }
+    expanded = true;
+    for (let k = at.alts.length - 1; k >= 0; k -= 1) stack.push(`${at.pre}${at.alts[k] ?? ""}${at.post}`);
+    if (stack.length > 8 * MAX_BRACE_WORDS) return void 0;
+  }
+  return expanded ? out : void 0;
+}
+function expandWords(words) {
+  if (!words.some((w) => !w.quoted && w.value.includes("{"))) return words;
+  let out;
+  for (const [k, w] of words.entries()) {
+    const expanded = w.quoted || w.redirectAt !== void 0 ? void 0 : expandBraces(w.value);
+    if (expanded === void 0) {
+      out?.push(w);
+      continue;
+    }
+    out ??= words.slice(0, k);
+    for (const value of expanded) out.push({ value, quoted: false });
+  }
+  return out ?? words;
 }
 function wildcardMatch(pattern, name) {
   const pat = pattern.replace(/\[[^\]]*\]/g, "?");
@@ -3166,7 +3261,8 @@ function cmdCommandWords(words) {
 function posixWord(word) {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
 }
-function cmdLineText(args) {
+function cmdLineText(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
   const at = args.findIndex((a2) => /^\/[ck]$/i.test(a2));
   if (at < 0) return void 0;
   const [first, ...more] = args.slice(at + 1);
@@ -3188,7 +3284,11 @@ function cmdTextAsPosix(line) {
   }
   return out;
 }
-function cmdLine(args) {
+function cmdSwitch(word) {
+  return /^\/\/[A-Za-z?]/.test(word) ? word.slice(1) : word;
+}
+function cmdLine(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
   const at = args.findIndex((a2) => /^\/[ck]$/i.test(a2));
   if (at < 0) return [];
   const first = args[at + 1];
@@ -3421,8 +3521,9 @@ function commandWriteDestinations(name, args) {
       return [];
   }
 }
-function effectsOf(name, args, cwd, depth = 0) {
-  if (name === "cmd") return cmdEffects(args, cwd, depth);
+function effectsOf(name, rawArgs, cwd, depth = 0) {
+  if (name === "cmd") return cmdEffects(rawArgs, cwd, depth);
+  const args = CMD_SWITCHED.has(name) ? rawArgs.map(cmdSwitch) : rawArgs;
   const at = (p) => resolveFrom(cwd, p);
   const e = noEffects();
   switch (name) {
@@ -3887,7 +3988,7 @@ function judgeEffects(effects, scope) {
     out.push({ ...RULE_SPECIAL });
   }
   if (e.writes.some((p) => isHookConfigPath(p) || globNamesConfig(p))) out.push({ ...RULE_WRITE });
-  const removesConfig = (p) => isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || USER_CONFIG_DIR.test(dirOf(p)) && globNamesConfig(p);
+  const removesConfig = (p) => isHookConfigPath(p) || USER_CONFIG_DIR.test(p) || globNamesConfig(p, [USER_CONFIG_TAIL]);
   if (e.removes.some(removesConfig)) out.push({ ...RULE_REMOVE });
   if (e.dirs.some(isHookConfigDir)) out.push({ ...RULE_DIR });
   const linksGuarded = (p) => isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
@@ -4090,12 +4191,26 @@ function nestedScripts(words, start) {
       ).filter((s) => s.trim().length > 0).map((text2) => ({ text: text2, powershell: true }));
     }
     if (!word.quoted && DASH_C.test(word.value) && sawShell) {
-      const script = words[i2 + 1];
-      return script === void 0 ? [] : [shellScript(script.value)];
+      const script = scriptAfterDashC(words, i2 + 1);
+      return script === void 0 ? [] : [shellScript(script)];
     }
     if (SHELLS.has(basename(word.value))) sawShell = true;
   }
   return [];
+}
+function scriptAfterDashC(words, from) {
+  for (let j = from; j < words.length; j += 1) {
+    const w = words[j];
+    if (w === void 0) return void 0;
+    if (!w.quoted && w.value === "--") return words[j + 1]?.value;
+    if (!w.quoted && /^[-+][oO]$/.test(w.value)) {
+      j += 1;
+      continue;
+    }
+    if (!w.quoted && /^[-+][A-Za-z]+$/.test(w.value)) continue;
+    return w.value;
+  }
+  return void 0;
 }
 function isBareShellStdin(words) {
   const head = words[0];
@@ -4110,18 +4225,97 @@ function fedScripts(statement, reads) {
   }
   if (statement.commands.length >= 2) {
     const last = statement.commands[statement.commands.length - 1];
-    const prev = statement.commands[statement.commands.length - 2];
-    if (last !== void 0 && prev !== void 0 && reads(last)) {
-      const prevHead = prev[0];
-      const prevName = prevHead === void 0 ? "" : basename(prevHead.value);
-      const args = prev.slice(1);
-      let fed = "";
-      if (prevName === "echo") fed = args.map((w) => w.value).join(" ").trim();
-      else if (prevName === "printf") fed = (args[args.length - 1]?.value ?? "").trim();
-      if (fed.length > 0) scripts.push({ text: fed, reader: last });
+    if (last !== void 0 && reads(last)) {
+      const fed = textOutputOf(statement.commands.slice(0, -1));
+      if (fed === "opaque") scripts.push({ text: "", reader: last, opaque: true });
+      else if (fed !== void 0 && fed.trim().length > 0) scripts.push({ text: fed.trim(), reader: last });
     }
   }
   return scripts;
+}
+function decoderOf(words) {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? "");
+  const args = withoutRedirections(words.slice(at + 1));
+  if (name === "base64" || name === "base32" || name === "basenc") {
+    if (!args.some((a2) => /^(?:--decode|-[A-Za-z]*[dD][A-Za-z]*)$/.test(a2))) return void 0;
+    return name === "base64" ? "base64" : "other";
+  }
+  if (name === "openssl") {
+    if (!args.includes("-d")) return void 0;
+    return args.some((a2) => a2 === "base64" || a2 === "-base64" || a2 === "-a") && !args.some((a2) => /^-(?:aes|des|chacha|bf|camellia|in$)/.test(a2)) ? "base64" : "other";
+  }
+  if (name === "xxd") return args.some((a2) => /^-[A-Za-z]*r/.test(a2)) ? "other" : void 0;
+  if (name === "gzip" || name === "bzip2" || name === "xz" || name === "zstd" || name === "lz4") {
+    return args.some((a2) => a2 === "--decompress" || /^-[A-Za-z]*d/.test(a2)) ? "other" : void 0;
+  }
+  return ["gunzip", "zcat", "bunzip2", "bzcat", "unxz", "xzcat", "unzstd", "zstdcat", "uudecode", "rev"].includes(name) ? "other" : void 0;
+}
+function decodeBase64(text2) {
+  const compact = text2.replace(/\s+/g, "");
+  if (compact.length === 0 || compact.length > MAX_DECODED || !/^[A-Za-z0-9+/=_-]+$/.test(compact)) return void 0;
+  return Buffer.from(compact.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+}
+function hereStringText(words) {
+  for (let i2 = 0; i2 < words.length; i2 += 1) {
+    const w = words[i2];
+    if (w === void 0 || !w.value.startsWith("<<<") || w.redirectAt?.[0] !== 0) continue;
+    const inline2 = w.value.slice(3);
+    return inline2.length > 0 ? inline2 : words[i2 + 1]?.value;
+  }
+  return void 0;
+}
+function textOutputOf(members) {
+  const last = members[members.length - 1];
+  if (last === void 0) return void 0;
+  const at = resolveCommand(last).index;
+  const name = commandName(last[at]?.value ?? "");
+  const args = withoutRedirections(last.slice(at + 1));
+  if (name === "echo") return args.filter((a2, k) => !(k === 0 && /^-[neE]+$/.test(a2))).join(" ");
+  if (name === "printf") return args[args.length - 1] ?? "";
+  const decoder = decoderOf(last);
+  if (decoder === void 0) return void 0;
+  if (decoder === "other") return "opaque";
+  const here = hereStringText(last);
+  const input = here ?? (members.length > 1 ? textOutputOf(members.slice(0, -1)) : void 0);
+  if (typeof input !== "string") return "opaque";
+  return decodeBase64(input) ?? "opaque";
+}
+function substitutionOutput(script) {
+  const s = script.trim();
+  const inner = s.startsWith("$(") && s.endsWith(")") ? s.slice(2, -1) : s.startsWith("`") && s.endsWith("`") ? s.slice(1, -1) : void 0;
+  if (inner === void 0 || inner.length > MAX_DECODED) return void 0;
+  const statements = splitShell(inner).statements;
+  const only = statements.length === 1 ? statements[0] : void 0;
+  return only === void 0 ? void 0 : textOutputOf(only.commands.map(expandWords));
+}
+function processSubstitutionScripts(statements) {
+  const out = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === void 0 || statement.end !== "(" || !statement.masked.endsWith("<")) continue;
+    const words = statement.commands[statement.commands.length - 1];
+    const lastWord = words?.[words.length - 1];
+    if (words === void 0 || lastWord === void 0 || lastWord.value !== "<" || lastWord.redirectAt?.[0] !== 0) continue;
+    const head = words.slice(0, -1);
+    const at = resolveCommand(head).index;
+    const name = commandName(head[at]?.value ?? "");
+    const shell = STDIN_SHELLS.has(name) && scriptOperand(head, at, name) === void 0 && !head.some((w) => !w.quoted && DASH_C.test(w.value));
+    if (!shell && name !== "source" && name !== ".") continue;
+    const texts = [];
+    let opaque = false;
+    for (let j = k + 1; j < statements.length; j += 1) {
+      const body = statements[j];
+      if (body === void 0) break;
+      const text2 = textOutputOf(body.commands.map(expandWords));
+      if (text2 === "opaque") opaque = true;
+      else if (text2 !== void 0) texts.push(text2);
+      if (body.end === ")") break;
+    }
+    if (opaque) out.push("opaque");
+    if (texts.length > 0) out.push(texts.join("\n"));
+  }
+  return out;
 }
 function readsStdinAsScript(words, at) {
   const name = commandName(words[at]?.value ?? "");
@@ -4502,7 +4696,7 @@ function commandRuns(statement, c3, heads, pipedIntoRunner) {
     if (file >= 0) out.push(rest[file + 1] ?? "");
     else out.push(...operands2);
   } else if (name === "cmd") {
-    const run2 = rest.findIndex((v) => /^\/[ck]$/i.test(v));
+    const run2 = rest.findIndex((v) => /^\/[ck]$/i.test(cmdSwitch(v)));
     if (run2 >= 0) out.push(rest[run2 + 1] ?? "");
   } else if (SCRIPT_SHELLS.has(name) || isInterpreter(name)) {
     const script = scriptOperand(words, at, name);
@@ -4791,14 +4985,21 @@ function collect2(command, depth, out, scope) {
   if (/<\(\s*(?:curl|wget)/i.test(commandText) && statements.some((_s, k) => interpreterRunsFetch(statements, k))) {
     out.push(RULE_PROCESS_FETCH);
   }
-  for (const statement of statements) {
+  if (commandText.includes("<(")) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  for (const written of statements) {
     if (scope.notes.now() > scope.notes.deadline) {
       scope.notes.budget = true;
       return;
     }
+    const commands = written.commands.map(expandWords);
+    const expanded = commands.some((c3, k) => c3 !== written.commands[k]);
+    const statement = expanded ? { ...written, commands } : written;
     const masked = capText(collapseBlanks(statement.masked), scope.notes);
+    const expandedText = expanded ? capText(collapseBlanks(commands.map((ws) => ws.map((w) => w.quoted ? MASK : w.value).join(" ")).join(" | ")), scope.notes) : void 0;
     for (const rule of BASH_RULES) {
-      if (rule.scope !== "command" && (rule.test ?? ((t) => rule.pattern.test(t)))(masked)) {
+      if (rule.scope === "command") continue;
+      const test = rule.test ?? ((t) => rule.pattern.test(t));
+      if (test(masked) || expandedText !== void 0 && test(expandedText)) {
         out.push({ id: rule.id, level: rule.level, reason: rule.reason });
       }
     }
@@ -4811,11 +5012,16 @@ function collect2(command, depth, out, scope) {
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const del = assessRecursiveDelete(words, resolved.index, scope.home);
+      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers);
       if (del !== null) out.push(del);
-      const find = assessFind(words, resolved.index);
+      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers);
       if (find !== null) out.push(find);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
+      const here = hereStringText(words);
+      if (here !== void 0 && isBareShellStdin(withoutRedirectWords(words.slice(resolved.index)))) {
+        const generated = substitutionOutput(here);
+        collectGenerated([generated ?? here], depth, out, scope);
+      }
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
       if (adoptsDatabase(words, resolved.index) || adoptsDatabaseThroughLauncher(words, resolved.index)) out.push({ ...RULE_DB_ADOPT });
@@ -4828,6 +5034,7 @@ function collect2(command, depth, out, scope) {
       if (depth < MAX_NESTING) {
         for (const { text: script, powershell, iex } of scripts) {
           if (isBareRemoteFetch(script)) out.push(RULE_FETCH_EXEC);
+          if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           collect2(script, depth + 1, out, { ...scope, cmdLine: false });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
@@ -4842,12 +5049,22 @@ function collect2(command, depth, out, scope) {
       }
     }
     const fed = fedScripts(statement, isBareShellStdin);
+    if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
     if (depth < MAX_NESTING) {
-      for (const { text: text2 } of fed) collect2(text2, depth + 1, out, { ...scope, cmdLine: false });
+      for (const { text: text2, opaque } of fed) if (opaque !== true) collect2(text2, depth + 1, out, { ...scope, cmdLine: false });
     } else if (fed.length > 0) scope.notes.depth = true;
-    for (const { text: text2, reader } of fedScripts(statement, isBareInterpreterStdin)) {
-      pushAll(out, judgeCode(text2, codeLang(commandName(reader[0]?.value ?? "")), scope));
+    for (const { text: text2, reader, opaque } of fedScripts(statement, isBareInterpreterStdin)) {
+      if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
+      else pushAll(out, judgeCode(text2, codeLang(commandName(reader[0]?.value ?? "")), scope));
     }
+  }
+}
+function collectGenerated(texts, depth, out, scope) {
+  for (const text2 of texts) {
+    if (text2 === void 0) continue;
+    if (text2 === "opaque") out.push({ ...RULE_DECODED_SCRIPT });
+    else if (depth >= MAX_NESTING) scope.notes.depth = true;
+    else collect2(text2, depth + 1, out, { ...scope, cmdLine: false });
   }
 }
 function safeHomedir() {
@@ -4888,7 +5105,8 @@ function assessBashCommand(command, opts = {}) {
   const where = {
     home,
     configDirName: configDirNameOf(opts.claudeConfigDir ?? process.env["CLAUDE_CONFIG_DIR"]),
-    dataDir: dataDir === "" ? void 0 : dataDir
+    dataDir: dataDir === "" ? void 0 : dataDir,
+    tildeUsers: opts.shell !== "powershell"
   };
   if (opts.shell !== "powershell") return assessReadings([text2], cut, now, deadline, where);
   return assessReadings([powershellAsPosix(text2), powershellOpaque(text2)], cut, now, deadline, where);
@@ -4939,7 +5157,7 @@ function assessReadings(readings, cut, now, deadline, where) {
     ...own === void 0 ? {} : { denyMessage: own }
   };
 }
-var BASH_RULES, SUDO_RULE, LEVEL_RANK, MASK, INTERPOLATION, NAME_POSITION, QUOTED_NAME, TOKEN_WORD, HEREDOC_WORD, COMPOUND_RESERVED, RUNNERS, RUNNER_VALUED, ASSIGNMENT, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_CWD, CD_COMMANDS, CD_RETURNS, GLOB, NEW_ITEM_VALUED, MAX_CMD_NESTING, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, REMOVERS, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, START_PROCESS, SHELLS, DASH_C, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
+var BASH_RULES, SUDO_RULE, LEVEL_RANK, MASK, INTERPOLATION, NAME_POSITION, QUOTED_NAME, TOKEN_WORD, HEREDOC_WORD, COMPOUND_RESERVED, RUNNERS, RUNNER_VALUED, ASSIGNMENT, SYSTEM_DIRS, WINDOWS_DIR, WINDOWS_DIR_NAMES, DRIVE_LETTERS, PS_PATH_PARAM, DASH_DELETE_HEADS, SLASH_DELETE_HEADS, RULE_RM_ROOT, RULE_RM_BROAD, FIND_FILTERS, FIND_DELETERS, RULE_FIND_ROOT, RULE_FIND_HOME, RULE_FIND_BROAD, HOOK_CONFIG_PATH, HOOK_CONFIG_DIR, USER_CONFIG_DIR, CLAUDE_SETTINGS_PATH, CONFIG_DIR_VARIABLE_SETTINGS, DATA_DIR_SPELLED, MAX_CWD, CD_COMMANDS, CD_RETURNS, GLOB, USER_CONFIG_TAIL, CONFIG_TAILS, MAX_BRACE_WORDS, MAX_BRACE_WORD, NEW_ITEM_VALUED, MAX_CMD_NESTING, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, REMOVERS, CMD_SWITCHED, PYTHON, INTERPRETERS, RUN_WRAPPERS, LAUNCHERS, LAUNCHER_SUBCOMMANDS, LAUNCHER_VALUED, NODE_VALUED, PS_HOST_VALUED, NODE_OPTION_VALUED, DENO_RUN_VALUED, BUN_RUN_VALUED, MAX_CALL_ARGS, DOTNET_CALL, RULE_HARD_LINK, CLAUDE_DIR, RULE_REGISTRY, RULE_SPECIAL, RULE_WRITE, RULE_REMOVE, RULE_DIR, RULE_INLINE, RULE_SETTINGS, RULE_PLUGIN_OFF, RULE_DB_ADOPT, CLI_NAME, CLI_HOSTS, CLI_HOST_SUBCOMMANDS, START_PROCESS, SHELLS, DASH_C, MAX_DECODED, RULE_DECODED_SCRIPT, DOWNLOADERS, PIPE_RUNNERS, STDIN_SHELLS, STDIN_PATHS, RULE_PIPE_TO_SHELL, RULE_FETCH_EXEC, RULE_IEX_DOWNLOAD, RULE_DOWNLOAD_RUN, RULE_POSIX_DOWNLOAD_RUN, RUN_WRAPPER_VALUED, POSITIONAL, RULE_PROCESS_FETCH, RULE_XARGS_REPLACED, PS_DOWNLOAD, PS_EXEC_TOKENS, VARIABLE_VALUED, VARIABLE_NAME_WINDOW, MAX_VARIABLE_NAMES, DOWNLOAD_FILE_CALL, SAVING_CMDLETS, SAVE_PARAM, CURL_SHORT_VALUED, WGET_SHORT_VALUED, URL_ARG, SCRIPT_SHELLS, OPENERS, RUNS_ARGUMENT, READERS, RUNNABLE_EXTENSIONS, PS_ARGUMENT_LIST, PS_FILE_PATH, MAY_DOWNLOAD, TRANSFERS, PATH_DIRS, GPG_VALUED, SIDECAR, NOT_FROM_ARCHIVE, MAX_NESTING, MAX_STATEMENT_LENGTH, MAX_COMMAND_LENGTH, DEFAULT_BUDGET_MS;
 var init_bashGuard = __esm({
   "src/hooks/bashGuard.ts"() {
     "use strict";
@@ -5164,9 +5382,78 @@ var init_bashGuard = __esm({
       watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) }
     };
     ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+    SYSTEM_DIRS = ["etc", "usr", "bin", "sbin", "var", "lib", "lib64", "boot", "sys", "proc", "root", "home", "opt", "dev", "Users", "System"];
+    WINDOWS_DIR = /^(?:[A-Za-z]:[\\/]?|\/(?:mnt\/)?[A-Za-z]\/)(?:Windows(?:[\\/]?(?:System32|SysWOW64))?|Users|Program Files(?: \(x86\))?|ProgramData|PROGRA~\d)(?:[\\/]\*?)?$/i;
+    WINDOWS_DIR_NAMES = ["windows", "users", "program files", "program files (x86)", "programdata"];
+    DRIVE_LETTERS = Array.from({ length: 26 }, (_, k) => String.fromCharCode(97 + k));
     PS_PATH_PARAM = /^(?:pa(?:t|th)?|l(?:i(?:t(?:e(?:r(?:a(?:l(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)?)?)?|lp|pspath)$/;
     DASH_DELETE_HEADS = /* @__PURE__ */ new Set(["rm", "ri", "remove-item"]);
     SLASH_DELETE_HEADS = /* @__PURE__ */ new Set(["rd", "rmdir", "del", "erase"]);
+    RULE_RM_ROOT = {
+      id: "rm-rf-root",
+      level: "block",
+      reason: "Recursive delete of the filesystem root, a drive root, a system directory or a home directory"
+    };
+    RULE_RM_BROAD = {
+      id: "rm-rf-broad",
+      level: "warn",
+      reason: "Recursive delete \u2014 confirm the target path is intended"
+    };
+    FIND_FILTERS = /* @__PURE__ */ new Set([
+      "-name",
+      "-iname",
+      "-path",
+      "-ipath",
+      "-wholename",
+      "-iwholename",
+      "-regex",
+      "-iregex",
+      "-lname",
+      "-ilname",
+      "-newer",
+      "-anewer",
+      "-cnewer",
+      "-newerxy",
+      "-mtime",
+      "-mmin",
+      "-atime",
+      "-amin",
+      "-ctime",
+      "-cmin",
+      "-used",
+      "-size",
+      "-empty",
+      "-perm",
+      "-user",
+      "-group",
+      "-uid",
+      "-gid",
+      "-nouser",
+      "-nogroup",
+      "-inum",
+      "-samefile",
+      "-links",
+      "-readable",
+      "-writable",
+      "-executable",
+      "-context"
+    ]);
+    FIND_DELETERS = /* @__PURE__ */ new Set(["rm", "unlink", "rmdir", "shred", "remove-item", "ri", "del", "erase", "rd"]);
+    RULE_FIND_ROOT = {
+      id: "find-delete-root",
+      level: "block",
+      reason: "find \u2026 -delete (or -exec rm) on the filesystem root, a drive root, a system directory or a home directory deletes everything under it"
+    };
+    RULE_FIND_HOME = {
+      id: "find-delete-home",
+      level: "warn",
+      reason: "find \u2026 -delete targets the home directory \u2014 confirm this is intended"
+    };
+    RULE_FIND_BROAD = {
+      id: "find-delete-broad",
+      level: "warn",
+      reason: "find . -delete with no test to narrow it deletes everything under the working directory \u2014 confirm this is intended"
+    };
     HOOK_CONFIG_PATH = /(?:\.guardian\/?hooks[^/]*\.json|\.config\/?dev-guardian\/?hooks\.json)$/i;
     HOOK_CONFIG_DIR = /(?:\.guardian|\.config\/?dev-guardian)\/?$/i;
     USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
@@ -5177,6 +5464,14 @@ var init_bashGuard = __esm({
     CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
     CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
     GLOB = /[*?[]/;
+    USER_CONFIG_TAIL = [".config", "dev-guardian", "hooks.json"];
+    CONFIG_TAILS = [
+      [".guardian", "hooks.config.json"],
+      [".guardian", "hooks-allowlist.json"],
+      USER_CONFIG_TAIL
+    ];
+    MAX_BRACE_WORDS = 64;
+    MAX_BRACE_WORD = 1024;
     NEW_ITEM_VALUED = [
       ["type", ["itemtype", "type"]],
       ["path", ["path", "literalpath", "pspath", "lp"]],
@@ -5234,6 +5529,7 @@ var init_bashGuard = __esm({
     ]);
     SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
     REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
+    CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
     PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
     INTERPRETERS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "perl", "ruby", "php", "pwsh", "powershell"]);
     RUN_WRAPPERS = /* @__PURE__ */ new Set(["uv", "poetry", "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi"]);
@@ -5406,6 +5702,12 @@ var init_bashGuard = __esm({
     START_PROCESS = /* @__PURE__ */ new Set(["start-process", "saps", "start"]);
     SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "su", "pwsh", "powershell"]);
     DASH_C = /^-[A-Za-z]*c$/;
+    MAX_DECODED = 64 * 1024;
+    RULE_DECODED_SCRIPT = {
+      id: "decoded-script",
+      level: "warn",
+      reason: "Runs decoded text as a script (base64 -d, xxd -r, gunzip, openssl \u2026 fed to a shell or an interpreter) \u2014 what it runs could not be assessed"
+    };
     DOWNLOADERS = /* @__PURE__ */ new Set(["curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod"]);
     PIPE_RUNNERS = /* @__PURE__ */ new Set(["sudo", "doas", "env", "command", "exec", "builtin", "nohup", "nice", "time", "timeout", "setsid", "stdbuf"]);
     STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
