@@ -105,7 +105,7 @@ import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerPar
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { nameRepoConfig } from '../runners/repoConfig.js';
-import { runSemgrep as spawnSemgrep } from '../runners/semgrepRun.js';
+import { runSemgrep as spawnSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
   mayHoldTaintRules,
@@ -207,6 +207,11 @@ registerToolModule(
     // re-scans a worktree and needs the original project's rules.
     rulePacks: (input, { rulesProjectPath, plugin, projectPath }) =>
       planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
+    // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds.
+    cacheState: async (_input, { plugin, projectPath }) => {
+      const flags = semgrepScanFlags(plugin.repoConfigFromRef?.root ?? projectPath);
+      return { semgrep_flags: flags.args.join(' ') };
+    },
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
     configWarnings: (_input, { rulesProjectPath, plugin }) => {
@@ -300,9 +305,12 @@ async function runSemgrep(args: Collect & {
     return;
   }
 
+  // `.guardian/scan.yml`'s timeouts, and `.guardian/` never a target (runners/semgrepRun.ts).
+  const flags = semgrepScanFlags(ctx.configRoot);
+  const notes = [...plan.notes, ...(flags.warning !== null ? [flags.warning] : [])];
   const semgrepBin = await scannerAvailable('semgrep');
   if (semgrepBin) {
-    const argv = [...plan.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
+    const argv = [...plan.args, ...flags.args, ...semgrepExcludeArgs(ctx.exclusions), '--json', '--quiet', '--output', outFile];
     if (autoFix) argv.push('--autofix');
     argv.push(ctx.projectPath);
     // UTF-8 mode comes with the helper: a non-ASCII file name otherwise makes
@@ -315,7 +323,7 @@ async function runSemgrep(args: Collect & {
       onLog: ctx.onLog,
     });
     recordSemgrepRun({
-      ctx, result, outFile, notes: plan.notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
+      ctx, result, outFile, notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx)), tools_run, missing_tools, parser_inputs,
     });
     return;
@@ -376,6 +384,7 @@ async function runSemgrep(args: Collect & {
       image,
       configs: [...dockerConfigs, ...packConfigs],
       metricsOff: localOnly,
+      extraArgs: flags.args,
       ...(packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}),
       git: await gitSafetyFor([ctx.projectPath]),
     }),
@@ -385,7 +394,7 @@ async function runSemgrep(args: Collect & {
     onLog: ctx.onLog,
   });
   recordSemgrepRun({
-    ctx, result, outFile, notes: plan.notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
+    ctx, result, outFile, notes, via: `docker (${image})`, configs: [...dockerConfigs, ...packConfigs], loadedFrom,
     packMissing: plan.packMissing, packsHostDir: plan.pluginPacksDir,
     // Which listing Semgrep uses inside the container cannot be checked from
     // here (git, or a walk of the mount): the submodules are named all the
@@ -725,8 +734,9 @@ async function runSemgrepOnScope(args: Collect & {
     missing_tools.push('semgrep');
     return;
   }
+  const flags = semgrepScanFlags(ctx.configRoot);
   const run = await semgrepOnFiles({
-    configArgs: [...plan.args, ...(autoFix ? ['--autofix'] : [])],
+    configArgs: [...plan.args, ...flags.args, ...(autoFix ? ['--autofix'] : [])],
     files,
     cwd: ctx.projectPath,
     reportDir,
@@ -745,7 +755,7 @@ async function runSemgrepOnScope(args: Collect & {
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry: ToolRun = { ...run.toolRun };
   const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
-  const scopeNotes = [...plan.notes, ...(engineNote !== null ? [engineNote] : [])];
+  const scopeNotes = [...plan.notes, ...(flags.warning !== null ? [flags.warning] : []), ...(engineNote !== null ? [engineNote] : [])];
   if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== undefined).join('; ');
   if (entry.status === 'failed' && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
     entry.plugin_pack_only = true;

@@ -311,6 +311,87 @@ export function indexFindings(items) {
     };
     return { find, has: (f) => find(f) !== undefined, add };
 }
+// ------------------------------------------------------------------ the CI gate's keys
+/**
+ * Part of every match key's hash ({@link gateMatchKeys}); a different recipe
+ * gets a new version, never a silently different key.
+ */
+const MATCH_KEY_VERSION = 1;
+/**
+ * {@link GateKeys} for every finding of `findings` (in input order) — the
+ * whole set the gate judges, since occurrences are counted within it.
+ */
+export function gateMatchKeys(findings, opts = {}) {
+    const renamed = opts.renamedFrom ?? new Map();
+    const out = findings.map(() => ({}));
+    // The identity as the baseline knew it: the stored recipe over the old path.
+    const moved = findings.flatMap((finding, index) => {
+        const path = locate(finding.file_path, undefined).key;
+        const from = renamed.get(path);
+        if (from === undefined || finding.content_key === undefined)
+            return [];
+        return [{ finding, index, tool: finding.tool.toLowerCase(), rule: finding.rule_id ?? '', path: from, contentKey: finding.content_key }];
+    });
+    for (const [index, identity] of identitiesOf(moved)) {
+        const slot = out[index];
+        if (slot !== undefined)
+            slot.renamedIdentity = identity;
+    }
+    // The match key: grouped by (tool, rule, path, content), occurrences
+    // counted per pass, one line of a secret's history counted once.
+    const groups = new Map();
+    findings.forEach((finding, index) => {
+        const content = matchContentKey(finding);
+        if (content === null)
+            return;
+        const current = locate(finding.file_path, undefined).key;
+        const path = renamed.get(current) ?? current;
+        const head = JSON.stringify([MATCH_KEY_VERSION, finding.tool.toLowerCase(), finding.rule_id ?? '', path, content]);
+        const pass = isGitleaksSecret(finding) ? (isHistoryLocator(finding) ? 'history' : 'files') : '';
+        const key = `${head}\n${pass}`;
+        const members = groups.get(key);
+        const member = { index, finding, pass, head };
+        if (members === undefined)
+            groups.set(key, [member]);
+        else
+            members.push(member);
+    });
+    for (const members of groups.values()) {
+        members.sort((a, b) => (a.finding.line_start ?? 0) - (b.finding.line_start ?? 0) ||
+            (a.finding.line_end ?? 0) - (b.finding.line_end ?? 0) ||
+            compareStrings(sha256(a.finding.snippet ?? ''), sha256(b.finding.snippet ?? '')) ||
+            compareStrings(a.finding.fingerprint, b.finding.fingerprint) ||
+            a.index - b.index);
+        let occurrence = -1;
+        let lastLine;
+        for (const m of members) {
+            // A secret found on the same line by two commits (a whitespace commit
+            // touching it) is one secret.
+            const sameSecret = m.pass === 'history' && m.finding.line_start !== undefined && m.finding.line_start === lastLine;
+            if (!sameSecret)
+                occurrence += 1;
+            lastLine = m.finding.line_start;
+            const slot = out[m.index];
+            if (slot !== undefined)
+                slot.matchKey = sha256(`${m.head}\n${occurrence}`);
+        }
+    }
+    return out;
+}
+/** The content a match key hashes (see {@link GateKeys.matchKey}), or null when there is none to key on. */
+function matchContentKey(f) {
+    const dependency = dependencyCoordinates(f);
+    if (dependency !== null)
+        return sha256(`dep\n${dependency.name.toLowerCase()}`);
+    // The commit out: a secret is the same secret whichever commit or pass saw it.
+    if (isGitleaksSecret(f))
+        return sha256(`secret\n${f.rule_id ?? ''}`);
+    return f.content_key ?? null;
+}
+/** A gitleaks finding (history or files pass) — a credential by definition. */
+function isGitleaksSecret(f) {
+    return f.tool.toLowerCase() === 'gitleaks';
+}
 // ------------------------------------------------------------------ internal
 /**
  * The path as it enters the identity (`key`: relative, POSIX, no `./`) and as

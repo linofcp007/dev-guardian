@@ -4,7 +4,7 @@
  *   - `check --file short.js --bash ls` printed "OK" and exited 0, ignoring
  *     `--file`; `--min bogus` silently became `medium`; `--jsn` was accepted.
  *     Conflicting or unknown arguments, and a bad `--min`, are a usage error
- *     now — exit 2, with a message.
+ *     now — exit 3 (2 until 3.3.0: 2 is scan's "incomplete"), with a message.
  *   - A UTF-16 file — what PowerShell 5.1's `>` and `Out-File` write by
  *     default — was read as UTF-8, and a key in it read "No secrets
  *     detected". It is decoded by its byte-order mark, or when its bytes are
@@ -55,10 +55,10 @@ describe('check — arguments (review M3)', () => {
     [['--bash', 'ls', '--min', 'high'], /--min applies to --file/],
     [['--file', 'short.js', '--powershell'], /--powershell applies to --bash/],
     [[], /provide --file <path> or --bash/],
-  ])('check %j is a usage error (exit 2)', (args, message) => {
+  ])('check %j is a usage error (exit 3)', (args, message) => {
     writeFileSync(join(dir, 'short.js'), 'console.log(1);\n');
     const r = check(...args);
-    expect(r.status).toBe(2);
+    expect(r.status).toBe(3);
     expect(r.stderr).toMatch(message);
     expect(r.stdout).not.toMatch(/OK|No secrets/);
   });

@@ -96,6 +96,7 @@ import type {
 import { registerToolModule, type ToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
 import { applySemgrepCoverageGaps, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
+import { semgrepScanFlags } from '../runners/semgrepRun.js';
 
 const SAMPLE_SIZE = 20;
 const WEBHOOK_PATTERN = /webhook|callback|hook/i;
@@ -281,7 +282,9 @@ async function handler(
   const reportDir = ensureReportDir(projectPath, treeHash, 'surface');
   const outFile = join(reportDir, 'surface.json');
 
-  const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir });
+  // `.guardian/scan.yml`'s timeouts (the CI gate's --rules-ref copy of it), `.guardian/` excluded.
+  const extraArgs = semgrepScanFlags(ctx.repoConfigFromRef?.root ?? projectPath).args;
+  const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir, extraArgs });
   if (invocation === null) {
     return degradedResult(
       [

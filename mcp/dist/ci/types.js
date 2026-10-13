@@ -11,4 +11,15 @@ export const CI_EXIT = {
     INCOMPLETE_SCAN: 2,
     USAGE_ERROR: 3,
 };
+export const GAP_KINDS = [
+    'missing_tool',
+    'no_lockfile',
+    'partial_parse',
+    'file_timeout',
+    'taint_timeout',
+    'path_too_long',
+    'scanner_failed',
+    'skipped',
+    'other',
+];
 //# sourceMappingURL=types.js.map

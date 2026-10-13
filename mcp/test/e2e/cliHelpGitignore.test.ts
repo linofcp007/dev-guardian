@@ -35,24 +35,36 @@ function help(): string {
   return r.stdout;
 }
 
+/** The lines `gitignoreGuard.ts` writes, as git reads them (3.3.0: the shared files re-included too — review 8, C6). */
+function writtenLines(): string[] {
+  const project = makeTempDir('cli-help-gitignore-');
+  mkdirSync(join(project, '.git')); // the guard only writes inside a repository
+  ensureGuardianIgnored(project);
+  return readFileSync(join(project, '.gitignore'), 'utf8')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.includes('.guardian') && !l.startsWith('#'));
+}
+
 describe('scan --help: the .gitignore advice matches what the server writes', () => {
   it('names the exact lines gitignoreGuard writes, and never a bare `.guardian/`', () => {
-    const project = makeTempDir('cli-help-gitignore-');
-    mkdirSync(join(project, '.git')); // the guard only writes inside a repository
-    ensureGuardianIgnored(project);
-    const written = readFileSync(join(project, '.gitignore'), 'utf8')
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.includes('.guardian') && !l.startsWith('#'));
-    expect(written).toEqual(['**/.guardian/*', '!**/.guardian/baseline.json']);
+    const written = writtenLines();
+    expect(written).toEqual([
+      '**/.guardian/*',
+      '!**/.guardian/baseline.json',
+      '!**/.guardian/budgets.yml',
+      '!**/.guardian/hooks.config.json',
+      '!**/.guardian/hooks-allowlist.json',
+      '!**/.guardian/scan.yml',
+    ]);
 
     const text = help();
     for (const line of written) expect(text).toContain(`\`${line}\``);
     expect(text).not.toMatch(/add `\.guardian\/`/);
+  });
 
-    // The same advice in the host rules every AI host is given
-    // (host-rules/*, generated from this one body).
-    for (const line of written) expect(RULES_BODY).toContain(`\`${line}\``);
+  it('the host rules every AI host is given name the same lines (host-rules/*, generated from this one body)', () => {
+    for (const line of writtenLines()) expect(RULES_BODY).toContain(`\`${line}\``);
     expect(RULES_BODY).not.toMatch(/add `\.guardian\/`/);
   });
 });

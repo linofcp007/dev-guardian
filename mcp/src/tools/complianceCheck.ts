@@ -50,7 +50,7 @@ import { join } from 'node:path';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { checkSemgrepReport } from '../runners/semgrepReport.js';
-import { runSemgrep } from '../runners/semgrepRun.js';
+import { runSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -177,6 +177,7 @@ async function runRgpdPackOnce(
       // Lists the rules that loaded (`time.rules`): the only way to tell a
       // project with nothing to read from a pack that loaded nothing.
       '--time',
+      ...semgrepScanFlags(ctx.configRoot).args,
       ...semgrepExcludeArgs(ctx.exclusions),
       '--json',
       '--quiet',

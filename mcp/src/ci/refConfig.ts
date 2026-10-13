@@ -35,6 +35,8 @@
  *   |                                             |                         | read it too (`guardianIgnoreFrom`)                  |
  *   | `.trivyignore`                              | Trivy (deps, IaC)       | `--ignorefile <copy>`                               |
  *   | `.bandit`                                   | Bandit (`scan_sast`)    | `--ini <copy>` (the neutral one when the ref has none) |
+ *   | `.guardian/scan.yml`                        | every Semgrep scan, and | its timeouts (`semgrepScanFlags(<copy>)`); the gate's |
+ *   |                                             | the gate                | `accept_timeouts` (`runScans.ts`)                    |
  *
  * A file the ref does not have is not read from the tree either: the scan runs
  * as the project would with none. One the ref has but that cannot be copied —
@@ -100,6 +102,7 @@ import { git, repoState, resolveCommit, showPrefix, splitNul } from '../runners/
 import { REPO_CONFIG, type RepoConfigRunner } from '../runners/repoConfig.js';
 import { PROJECT_TRIVYIGNORE } from '../runners/trivyRun.js';
 import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
+import { SCAN_SETTINGS_RELATIVE_PATH } from '../platform/scanSettings.js';
 import { BASELINE_RELATIVE_PATH } from './baseline.js';
 import type { ConfigDifference, ExclusionReset } from './types.js';
 
@@ -139,6 +142,9 @@ export const FROM_REF_FILES: readonly string[] = [
   GUARDIAN_IGNORE_FILE,
   PROJECT_TRIVYIGNORE,
   '.bandit',
+  // Semgrep's timeouts and the timeouts the gate accepts: a pull request must
+  // not accept the timeout its own change causes (platform/scanSettings.ts).
+  SCAN_SETTINGS_RELATIVE_PATH,
 ];
 
 /**
@@ -417,6 +423,7 @@ export async function configDifferences(
     if (specs.some((s) => !s.nested && s.file === file)) continue;
     specs.push({ file, nested: false, applied: 'ref', reader: file === MANIFEST_RELATIVE_PATH ? 'semgrep (rule files it records)' : 'semgrep' });
   }
+  specs.push({ file: SCAN_SETTINGS_RELATIVE_PATH, nested: false, applied: 'ref', reader: 'semgrep (timeouts), the gate (accept_timeouts)' });
   const changed = await changedAgainst(projectPath, at, [...new Set(specs.flatMap((s) => pathspecsOf(s.file, s.nested)))]);
   // A file the tree's scanners read by its path whether git ignores it or not
   // — gitleaks reads `<source>/.gitleaksignore` — is named when it is there

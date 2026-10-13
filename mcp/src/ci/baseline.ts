@@ -68,7 +68,7 @@
  * briefly, is still read.
  */
 
-import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { gateMatchKeys, indexFindings, type GateKeys } from '../fingerprint/findingIdentity.js';
 import { SEVERITIES, type Finding, type Severity } from '../types.js';
 import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion } from './types.js';
 
@@ -94,6 +94,7 @@ function isBaselineEntry(value: unknown): value is BaselineEntry {
   if (!isPlainObject(value)) return false;
   if (typeof value.fingerprint !== 'string') return false;
   if (value.identity !== undefined && typeof value.identity !== 'string') return false;
+  if (value.match_id !== undefined && typeof value.match_id !== 'string') return false;
   if (!isSeverity(value.severity)) return false;
   if (typeof value.title !== 'string') return false;
   if (value.file_path !== undefined && typeof value.file_path !== 'string') return false;
@@ -112,25 +113,47 @@ function isBaselineEntry(value: unknown): value is BaselineEntry {
  * own version is kept on the result.
  */
 export function parseBaseline(text: string | null): BaselineParseResult | null {
-  if (text === null) return null;
+  const read = readBaselineText(text);
+  return read.status === 'ok' ? read.parsed : null;
+}
+
+/**
+ * What the CI gate reads a baseline file's text as: `absent` (no file),
+ * `ok`, or `invalid` with why — a document that does not parse or has the
+ * wrong shape. The CLI exits 3 on `invalid`, naming the error (review 8,
+ * finding 9): read as "no baseline", merge-conflict markers in the file made
+ * every finding new, and the advice printed with it — run `baseline update`
+ * — rebuilt the file and reset every `added` date. A wrong ENTRY is still
+ * dropped and counted, never the document's failure (module doc).
+ */
+export type BaselineRead =
+  | { status: 'absent' }
+  | { status: 'ok'; parsed: BaselineParseResult }
+  | { status: 'invalid'; error: string };
+
+export function readBaselineText(text: string | null): BaselineRead {
+  if (text === null) return { status: 'absent' };
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch {
-    return null;
+  } catch (e) {
+    const conflict = /^(<{7}|={7}|>{7})( |$)/m.test(text) ? ' (it holds merge-conflict markers)' : '';
+    return { status: 'invalid', error: `not valid JSON${conflict}: ${e instanceof Error ? e.message : String(e)}` };
   }
-  if (!isPlainObject(parsed)) return null;
+  if (!isPlainObject(parsed)) return { status: 'invalid', error: 'the document is not a JSON object' };
 
   const { version, generated_at, entries } = parsed;
-  if (!isBaselineVersion(version)) return null;
-  if (typeof generated_at !== 'string') return null;
-  if (!Array.isArray(entries)) return null;
+  if (!isBaselineVersion(version)) {
+    return { status: 'invalid', error: `"version" is ${JSON.stringify(version)}; this build reads 1 and 2` };
+  }
+  if (typeof generated_at !== 'string') return { status: 'invalid', error: '"generated_at" is missing or not a string' };
+  if (!Array.isArray(entries)) return { status: 'invalid', error: '"entries" is missing or not an array' };
 
   const validEntries = entries.filter(isBaselineEntry);
   const dropped = entries.length - validEntries.length;
 
-  return { file: { version, generated_at, entries: validEntries }, dropped };
+  return { status: 'ok', parsed: { file: { version, generated_at, entries: validEntries }, dropped } };
 }
 
 /** Pretty-printed so the committed file is reviewable in a pull-request diff. */
@@ -167,15 +190,18 @@ export function buildBaseline(
   findings: readonly Finding[],
   previous: BaselineFile | null,
   now: string,
+  renamedFrom?: ReadonlyMap<string, string>,
 ): BaselineFile {
-  const previousIndex = indexFindings(previous?.entries ?? []);
+  const match = baselineMatcher(previous, findings, renamedFrom);
 
   const byKey = new Map<string, BaselineEntry>();
   const keyOfFingerprint = new Map<string, string>();
-  for (const finding of findings) {
-    const added = previousIndex.find(finding)?.added ?? now;
+  findings.forEach((finding, index) => {
+    const added = match.entryFor(finding, index)?.added ?? now;
+    const matchKey = match.keys[index]?.matchKey;
     const entry: BaselineEntry = {
       ...(finding.identity !== undefined ? { identity: finding.identity } : {}),
+      ...(matchKey !== undefined ? { match_id: matchKey } : {}),
       fingerprint: finding.fingerprint,
       severity: finding.severity,
       title: finding.title,
@@ -185,7 +211,7 @@ export function buildBaseline(
     const key = keyOfFingerprint.get(finding.fingerprint) ?? entryKey(entry);
     keyOfFingerprint.set(finding.fingerprint, key);
     byKey.set(key, entry);
-  }
+  });
 
   const entries = [...byKey.values()].sort(
     (a, b) => entryKey(a).localeCompare(entryKey(b)) || a.fingerprint.localeCompare(b.fingerprint),
@@ -212,8 +238,43 @@ function entryKey(entry: BaselineEntry): string {
 export function newFindings(
   findings: readonly Finding[],
   baseline: BaselineFile | null,
+  renamedFrom?: ReadonlyMap<string, string>,
 ): Finding[] {
   if (baseline === null) return [...findings];
-  const known = indexFindings(baseline.entries);
-  return findings.filter((finding) => !known.has(finding));
+  const match = baselineMatcher(baseline, findings, renamedFrom);
+  return findings.filter((finding, index) => match.entryFor(finding, index) === undefined);
+}
+
+/**
+ * The baseline entry a finding of `findings` is — matched on, in order: its
+ * identity (fingerprint as the fallback, `indexFindings`); the identity it had
+ * before its file was renamed; the baseline's `match_id` (see
+ * {@link BaselineEntry.match_id}). The keys are computed over the whole set,
+ * since occurrences are counted within it.
+ */
+function baselineMatcher(
+  baseline: BaselineFile | null,
+  findings: readonly Finding[],
+  renamedFrom: ReadonlyMap<string, string> | undefined,
+): { keys: GateKeys[]; entryFor: (finding: Finding, index: number) => BaselineEntry | undefined } {
+  const entries = baseline?.entries ?? [];
+  const known = indexFindings(entries);
+  const byMatchKey = new Map<string, BaselineEntry>();
+  for (const entry of entries) {
+    if (entry.match_id !== undefined && !byMatchKey.has(entry.match_id)) byMatchKey.set(entry.match_id, entry);
+  }
+  const keys = gateMatchKeys(findings, renamedFrom !== undefined ? { renamedFrom } : {});
+  return {
+    keys,
+    entryFor: (finding, index) => {
+      const direct = known.find(finding);
+      if (direct !== undefined) return direct;
+      const k = keys[index];
+      if (k?.renamedIdentity !== undefined) {
+        const moved = known.find({ fingerprint: finding.fingerprint, identity: k.renamedIdentity });
+        if (moved !== undefined) return moved;
+      }
+      return k?.matchKey !== undefined ? byMatchKey.get(k.matchKey) : undefined;
+    },
+  };
 }

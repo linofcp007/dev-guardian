@@ -112,7 +112,7 @@ describe('ensureGuardianIgnored — a hostile .gitignore', () => {
     writeFileSync(join(dir, '.gitignore'), 'node_modules/\r\n.guardian/\r\n', 'utf8');
     expect(ensureGuardianIgnored(dir)).toEqual({ updated: true, reason: 'upgraded' });
     expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(
-      'node_modules/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n',
+      'node_modules/\r\n# dev-guardian outputs\r\n**/.guardian/*\r\n!**/.guardian/baseline.json\r\n!**/.guardian/budgets.yml\r\n!**/.guardian/hooks.config.json\r\n!**/.guardian/hooks-allowlist.json\r\n!**/.guardian/scan.yml\r\n',
     );
     expect(readdirSync(dir).sort()).toEqual(['.git', '.gitignore']);
   });

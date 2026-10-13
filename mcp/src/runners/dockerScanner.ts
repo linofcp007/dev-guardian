@@ -52,6 +52,8 @@ export interface SemgrepDockerOptions {
    * not by ours. `scan_sast`'s `local_only` mode sets both together.
    */
   metricsOff?: boolean;
+  /** Flags passed after the configs (the per-file timeouts, `--exclude=.guardian` — runners/semgrepRun.ts). */
+  extraArgs?: readonly string[];
   /**
    * Further host directories to bind into the container, READ-ONLY — the
    * plugin's pack directory, for scan_sast. A config inside one is named by
@@ -96,6 +98,7 @@ export function buildSemgrepDockerArgs(opts: SemgrepDockerOptions): string[] {
   for (const config of opts.configs ?? ['auto']) args.push(`--config=${config}`);
   if (opts.hasCsproj) args.push('--config=p/csharp');
   if (opts.metricsOff) args.push('--metrics=off');
+  args.push(...(opts.extraArgs ?? []));
   args.push('--json', '--quiet', '--output', containerOut);
   if (opts.autoFix) args.push('--autofix');
   args.push(CONTAINER_PROJECT_ROOT);

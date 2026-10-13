@@ -73,14 +73,14 @@ function runCli(args: string[]) {
 describe('mcp-config — --project with no value', () => {
   it('exits 2 with a clean usage error, never an uncaught TypeError stack trace', () => {
     const r = runCli(['mcp-config', 'cursor', '--project']);
-    expect(r.status).toBe(2);
+    expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/--project requires a value/);
     expect(r.stderr).not.toMatch(/TypeError|ERR_INVALID_ARG_TYPE|at Object|at async/);
   });
 
   it('--scope with no value also exits 2 cleanly', () => {
     const r = runCli(['mcp-config', 'cursor', '--scope']);
-    expect(r.status).toBe(2);
+    expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/--scope requires a value/);
     expect(r.stderr).not.toMatch(/TypeError|at Object|at async/);
   });
@@ -160,12 +160,12 @@ describe('mcp-config all --write — global-only hosts require explicit --global
 });
 
 describe('check --help documents exit code 2', () => {
-  it('the usage screen names exit code 2 in the check section', () => {
+  it('the usage screen names exit code 3 in the check section', () => {
     const r = runCli(['check', '--help']);
     expect(r.status).toBe(0);
-    // The check section documents its own exit codes, including 2 (usage
+    // The check section documents its own exit codes, including 3 (usage
     // error / file not found) alongside the existing 0/1 documentation.
     const checkSection = r.stdout.slice(r.stdout.indexOf('check — run the guardrail detectors'));
-    expect(checkSection).toMatch(/2 = /);
+    expect(checkSection).toMatch(/3 = /);
   });
 });

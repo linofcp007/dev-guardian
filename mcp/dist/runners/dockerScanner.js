@@ -54,6 +54,7 @@ export function buildSemgrepDockerArgs(opts) {
         args.push('--config=p/csharp');
     if (opts.metricsOff)
         args.push('--metrics=off');
+    args.push(...(opts.extraArgs ?? []));
     args.push('--json', '--quiet', '--output', containerOut);
     if (opts.autoFix)
         args.push('--autofix');

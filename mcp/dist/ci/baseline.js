@@ -67,7 +67,7 @@
  * reader). A `version: 2` file, which development builds of this change wrote
  * briefly, is still read.
  */
-import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { gateMatchKeys, indexFindings } from '../fingerprint/findingIdentity.js';
 import { SEVERITIES } from '../types.js';
 /** Where the committed baseline lives, relative to the project root. */
 export const BASELINE_RELATIVE_PATH = '.guardian/baseline.json';
@@ -88,6 +88,8 @@ function isBaselineEntry(value) {
     if (typeof value.fingerprint !== 'string')
         return false;
     if (value.identity !== undefined && typeof value.identity !== 'string')
+        return false;
+    if (value.match_id !== undefined && typeof value.match_id !== 'string')
         return false;
     if (!isSeverity(value.severity))
         return false;
@@ -110,27 +112,33 @@ function isBaselineEntry(value) {
  * own version is kept on the result.
  */
 export function parseBaseline(text) {
+    const read = readBaselineText(text);
+    return read.status === 'ok' ? read.parsed : null;
+}
+export function readBaselineText(text) {
     if (text === null)
-        return null;
+        return { status: 'absent' };
     let parsed;
     try {
         parsed = JSON.parse(text);
     }
-    catch {
-        return null;
+    catch (e) {
+        const conflict = /^(<{7}|={7}|>{7})( |$)/m.test(text) ? ' (it holds merge-conflict markers)' : '';
+        return { status: 'invalid', error: `not valid JSON${conflict}: ${e instanceof Error ? e.message : String(e)}` };
     }
     if (!isPlainObject(parsed))
-        return null;
+        return { status: 'invalid', error: 'the document is not a JSON object' };
     const { version, generated_at, entries } = parsed;
-    if (!isBaselineVersion(version))
-        return null;
+    if (!isBaselineVersion(version)) {
+        return { status: 'invalid', error: `"version" is ${JSON.stringify(version)}; this build reads 1 and 2` };
+    }
     if (typeof generated_at !== 'string')
-        return null;
+        return { status: 'invalid', error: '"generated_at" is missing or not a string' };
     if (!Array.isArray(entries))
-        return null;
+        return { status: 'invalid', error: '"entries" is missing or not an array' };
     const validEntries = entries.filter(isBaselineEntry);
     const dropped = entries.length - validEntries.length;
-    return { file: { version, generated_at, entries: validEntries }, dropped };
+    return { status: 'ok', parsed: { file: { version, generated_at, entries: validEntries }, dropped } };
 }
 /** Pretty-printed so the committed file is reviewable in a pull-request diff. */
 export function serialiseBaseline(file) {
@@ -161,14 +169,16 @@ export function serialiseBaseline(file) {
  * sits either. A file whose order moved on every regeneration would produce
  * a diff nobody could review, which is the same as not reviewing it.
  */
-export function buildBaseline(findings, previous, now) {
-    const previousIndex = indexFindings(previous?.entries ?? []);
+export function buildBaseline(findings, previous, now, renamedFrom) {
+    const match = baselineMatcher(previous, findings, renamedFrom);
     const byKey = new Map();
     const keyOfFingerprint = new Map();
-    for (const finding of findings) {
-        const added = previousIndex.find(finding)?.added ?? now;
+    findings.forEach((finding, index) => {
+        const added = match.entryFor(finding, index)?.added ?? now;
+        const matchKey = match.keys[index]?.matchKey;
         const entry = {
             ...(finding.identity !== undefined ? { identity: finding.identity } : {}),
+            ...(matchKey !== undefined ? { match_id: matchKey } : {}),
             fingerprint: finding.fingerprint,
             severity: finding.severity,
             title: finding.title,
@@ -178,7 +188,7 @@ export function buildBaseline(findings, previous, now) {
         const key = keyOfFingerprint.get(finding.fingerprint) ?? entryKey(entry);
         keyOfFingerprint.set(finding.fingerprint, key);
         byKey.set(key, entry);
-    }
+    });
     const entries = [...byKey.values()].sort((a, b) => entryKey(a).localeCompare(entryKey(b)) || a.fingerprint.localeCompare(b.fingerprint));
     return { version: BASELINE_VERSION, generated_at: now, entries };
 }
@@ -196,10 +206,42 @@ function entryKey(entry) {
  * baseline (file absent, see module doc) means nothing is known yet, so
  * everything is new.
  */
-export function newFindings(findings, baseline) {
+export function newFindings(findings, baseline, renamedFrom) {
     if (baseline === null)
         return [...findings];
-    const known = indexFindings(baseline.entries);
-    return findings.filter((finding) => !known.has(finding));
+    const match = baselineMatcher(baseline, findings, renamedFrom);
+    return findings.filter((finding, index) => match.entryFor(finding, index) === undefined);
+}
+/**
+ * The baseline entry a finding of `findings` is — matched on, in order: its
+ * identity (fingerprint as the fallback, `indexFindings`); the identity it had
+ * before its file was renamed; the baseline's `match_id` (see
+ * {@link BaselineEntry.match_id}). The keys are computed over the whole set,
+ * since occurrences are counted within it.
+ */
+function baselineMatcher(baseline, findings, renamedFrom) {
+    const entries = baseline?.entries ?? [];
+    const known = indexFindings(entries);
+    const byMatchKey = new Map();
+    for (const entry of entries) {
+        if (entry.match_id !== undefined && !byMatchKey.has(entry.match_id))
+            byMatchKey.set(entry.match_id, entry);
+    }
+    const keys = gateMatchKeys(findings, renamedFrom !== undefined ? { renamedFrom } : {});
+    return {
+        keys,
+        entryFor: (finding, index) => {
+            const direct = known.find(finding);
+            if (direct !== undefined)
+                return direct;
+            const k = keys[index];
+            if (k?.renamedIdentity !== undefined) {
+                const moved = known.find({ fingerprint: finding.fingerprint, identity: k.renamedIdentity });
+                if (moved !== undefined)
+                    return moved;
+            }
+            return k?.matchKey !== undefined ? byMatchKey.get(k.matchKey) : undefined;
+        },
+    };
 }
 //# sourceMappingURL=baseline.js.map

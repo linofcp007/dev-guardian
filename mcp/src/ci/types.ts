@@ -25,6 +25,19 @@ export interface BaselineEntry {
    * none; those match by `fingerprint`.
    */
   identity?: string;
+  /**
+   * The CI gate's tolerant key (`fingerprint/findingIdentity.ts#gateMatchKeys`):
+   * a dependency finding without its installed version, a secret without the
+   * commit that saw it, the path the file had when the entry was written.
+   * Additive like `identity` — written since 3.3.0; every older reader
+   * ignores it, and an entry without it matches by identity, as before.
+   *
+   * Never named with `key`, `token`, `secret` or the like: gitleaks'
+   * `generic-api-key` rule reads `"<keyword>": "<64 hex>"` as a credential,
+   * and the committed baseline would become a secret finding of its own
+   * (measured, gitleaks 8.30.1, with this field first spelled `match_key`).
+   */
+  match_id?: string;
   fingerprint: string;
   severity: Severity;
   title: string;
@@ -87,6 +100,47 @@ export interface ScanStepResult {
 export interface PartialParseRef {
   file: string;
   type: string;
+}
+
+/**
+ * What kind of gap a coverage gap is — part of the CI verdict's JSON
+ * (`coverage_gap_details[].kind`), which dev-spec-driven's finish gate reads
+ * to choose its own advice: only a `missing_tool` is "install something".
+ */
+export type GapKind =
+  | 'missing_tool'
+  | 'no_lockfile'
+  | 'partial_parse'
+  | 'file_timeout'
+  | 'taint_timeout'
+  | 'path_too_long'
+  | 'scanner_failed'
+  | 'skipped'
+  | 'other';
+
+export const GAP_KINDS: readonly GapKind[] = [
+  'missing_tool',
+  'no_lockfile',
+  'partial_parse',
+  'file_timeout',
+  'taint_timeout',
+  'path_too_long',
+  'scanner_failed',
+  'skipped',
+  'other',
+];
+
+/** One gap as data (`gate.ts`, "Every gap, as data"). */
+export interface CoverageGapDetail {
+  /** The scanner (`semgrep`, `trivy:npm`), the step that did not run, or `baseline`. */
+  tool: string;
+  kind: GapKind;
+  /** The gap's line, as `coverage_gaps` / `accepted_gaps` / `coverage_notes` print it. */
+  detail: string;
+  /** One short English sentence: what clears it — runnable where it names a command. */
+  remedy: string;
+  /** Whether it forces exit 2 (an accepted gap and a note do not). */
+  gating: boolean;
 }
 
 /**

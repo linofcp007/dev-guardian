@@ -376,6 +376,127 @@ export function indexFindings<T extends MatchableFinding>(items: readonly T[]): 
   return { find, has: (f) => find(f) !== undefined, add };
 }
 
+// ------------------------------------------------------------------ the CI gate's keys
+
+/**
+ * Part of every match key's hash ({@link gateMatchKeys}); a different recipe
+ * gets a new version, never a silently different key.
+ */
+const MATCH_KEY_VERSION = 1;
+
+/** A finding the CI gate keys: identity's subject, with its stored content key. */
+export type GateKeySubject = IdentitySubject & { fingerprint: string; content_key?: string };
+
+/** What the CI gate matches one finding to a baseline entry by, besides its identity and fingerprint. */
+export interface GateKeys {
+  /**
+   * The finding's identity as the baseline knew it, when its file was
+   * renamed since: the same recipe over the path the baseline recorded.
+   * Absent when the file was not renamed, or the finding has no content key.
+   */
+  renamedIdentity?: string;
+  /**
+   * The baseline's `match_id` (`ci/baseline.ts`): the identity's recipe, made
+   * tolerant of three changes that made the CI gate call a baselined finding
+   * new (review 8, findings 4, 5 and 6):
+   *
+   *   - a dependency finding keyed WITHOUT its installed version — `(CVE,
+   *     package, manifest path)`, like {@link resolutionKey}: a partial upgrade
+   *     (lodash 4.17.15 → 4.17.19, fixing some CVEs) used to turn the CVEs it
+   *     did not fix into new findings, and block the developer who improved
+   *     security;
+   *   - a gitleaks secret keyed the same way in history and in the working
+   *     tree — `(rule, path, occurrence)`, the commit only in the message:
+   *     an unrelated uncommitted edit to the file, a squash merge (a new
+   *     commit) or a whitespace commit touching the line each made a
+   *     baselined secret new. The occurrence is counted per pass (history,
+   *     files), a secret found twice on one line of history once;
+   *   - the path as the baseline recorded it, when the file was renamed
+   *     since (`renamedFrom`, from `git diff -M`: `ci/renames.ts`).
+   *
+   * Absent when the finding has no content key (a row from before
+   * identities) and is not a dependency finding.
+   */
+  matchKey?: string;
+}
+
+/**
+ * {@link GateKeys} for every finding of `findings` (in input order) — the
+ * whole set the gate judges, since occurrences are counted within it.
+ */
+export function gateMatchKeys(
+  findings: readonly GateKeySubject[],
+  opts: { renamedFrom?: ReadonlyMap<string, string> } = {},
+): GateKeys[] {
+  const renamed = opts.renamedFrom ?? new Map<string, string>();
+  const out: GateKeys[] = findings.map(() => ({}));
+
+  // The identity as the baseline knew it: the stored recipe over the old path.
+  const moved = findings.flatMap((finding, index) => {
+    const path = locate(finding.file_path, undefined).key;
+    const from = renamed.get(path);
+    if (from === undefined || finding.content_key === undefined) return [];
+    return [{ finding, index, tool: finding.tool.toLowerCase(), rule: finding.rule_id ?? '', path: from, contentKey: finding.content_key }];
+  });
+  for (const [index, identity] of identitiesOf(moved)) {
+    const slot = out[index];
+    if (slot !== undefined) slot.renamedIdentity = identity;
+  }
+
+  // The match key: grouped by (tool, rule, path, content), occurrences
+  // counted per pass, one line of a secret's history counted once.
+  const groups = new Map<string, Array<{ index: number; finding: GateKeySubject; pass: string; head: string }>>();
+  findings.forEach((finding, index) => {
+    const content = matchContentKey(finding);
+    if (content === null) return;
+    const current = locate(finding.file_path, undefined).key;
+    const path = renamed.get(current) ?? current;
+    const head = JSON.stringify([MATCH_KEY_VERSION, finding.tool.toLowerCase(), finding.rule_id ?? '', path, content]);
+    const pass = isGitleaksSecret(finding) ? (isHistoryLocator(finding) ? 'history' : 'files') : '';
+    const key = `${head}\n${pass}`;
+    const members = groups.get(key);
+    const member = { index, finding, pass, head };
+    if (members === undefined) groups.set(key, [member]);
+    else members.push(member);
+  });
+  for (const members of groups.values()) {
+    members.sort(
+      (a, b) =>
+        (a.finding.line_start ?? 0) - (b.finding.line_start ?? 0) ||
+        (a.finding.line_end ?? 0) - (b.finding.line_end ?? 0) ||
+        compareStrings(sha256(a.finding.snippet ?? ''), sha256(b.finding.snippet ?? '')) ||
+        compareStrings(a.finding.fingerprint, b.finding.fingerprint) ||
+        a.index - b.index,
+    );
+    let occurrence = -1;
+    let lastLine: number | undefined;
+    for (const m of members) {
+      // A secret found on the same line by two commits (a whitespace commit
+      // touching it) is one secret.
+      const sameSecret = m.pass === 'history' && m.finding.line_start !== undefined && m.finding.line_start === lastLine;
+      if (!sameSecret) occurrence += 1;
+      lastLine = m.finding.line_start;
+      const slot = out[m.index];
+      if (slot !== undefined) slot.matchKey = sha256(`${m.head}\n${occurrence}`);
+    }
+  }
+  return out;
+}
+
+/** The content a match key hashes (see {@link GateKeys.matchKey}), or null when there is none to key on. */
+function matchContentKey(f: GateKeySubject): string | null {
+  const dependency = dependencyCoordinates(f);
+  if (dependency !== null) return sha256(`dep\n${dependency.name.toLowerCase()}`);
+  // The commit out: a secret is the same secret whichever commit or pass saw it.
+  if (isGitleaksSecret(f)) return sha256(`secret\n${f.rule_id ?? ''}`);
+  return f.content_key ?? null;
+}
+
+/** A gitleaks finding (history or files pass) — a credential by definition. */
+function isGitleaksSecret(f: IdentitySubject): boolean {
+  return f.tool.toLowerCase() === 'gitleaks';
+}
+
 // ------------------------------------------------------------------ internal
 
 /**

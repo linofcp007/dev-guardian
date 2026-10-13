@@ -168,6 +168,7 @@ const {
   describeReadRefusal,
   describeWriteRefusal,
   detectOs,
+  ensureGuardianDirIgnored,
   execGitSync,
   hardenCommandSearch,
   InvalidProjectPathError,
@@ -200,6 +201,11 @@ const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
 // `node cli/dev-guardian.mjs`, a path that exists only inside the
 // dev-guardian repo itself.
 const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
+// How every command this CLI tells a reader to run is spelled: a plugin
+// install puts no `dev-guardian` on PATH, so a bare `dev-guardian baseline
+// update` was "command not found" (review 8, C7). Forward slashes read the
+// same in cmd, PowerShell and every POSIX shell.
+const CLI_COMMAND = `node "${CLI_JS.split(sep).join('/')}"`;
 const HOST_RULES_DIR = resolve(ROOT, 'host-rules');
 const VALID_HOSTS = new Set([...ALL_HOSTS, 'all']);
 
@@ -250,6 +256,10 @@ process.on('warning', (warning) => {
 function usage() {
   process.stdout.write(`dev-guardian — CLI (no MCP connection needed)
 
+A plugin install puts no \`dev-guardian\` on PATH. Run this CLI as:
+  ${CLI_COMMAND} <command> [options]
+(\`node cli/dev-guardian.mjs\` below is that, from the plugin's own directory.)
+
 Usage:
   node cli/dev-guardian.mjs mcp-config <host|all> [options]
   node cli/dev-guardian.mjs check (--file <path> | --bash "<command>" [--powershell]) [--min high|medium] [--json]
@@ -276,7 +286,7 @@ mcp-config — wire the MCP server into an AI host
   (<!-- dev-guardian:begin --> … <!-- dev-guardian:end -->) — your own content
   around it is never touched or replaced.
   Exit codes: 0 preview/write completed, 1 missing or unknown host,
-              2 usage error (e.g. --project with no value)
+              3 usage error (e.g. --project with no value)
 
 check — run the guardrail detectors (same engine as the hooks)
   --file <path>        Scan a file for hard-coded secrets (UTF-8, or UTF-16
@@ -288,15 +298,24 @@ check — run the guardrail detectors (same engine as the hooks)
   --json               Machine-readable output
   One of --file and --bash, never both.
   Exit code: 0 = clean/ok, 1 = secret found / command is risky or catastrophic,
-             2 = usage error (neither or both of --file/--bash, an unknown
+             3 = usage error (neither or both of --file/--bash, an unknown
              argument, a bad --min) or the --file path does not exist /
-             could not be read
+             could not be read. (2 before 3.3.0; every command's usage
+             error is 3 now — 2 is scan's "incomplete".)
 
 scan — headless CI: run the scan pipeline, gate against the baseline, report
   --project <path>      Target project directory (default: current directory)
   --fail-on <severity>  info|low|medium|high|critical (default: high)
   --format human|json   Report format on stdout (default: human)
-  --sarif <path>        Also write a SARIF 2.1.0 report to this path
+  --compact             With --format json: new_findings holds only the blocking
+                         findings, beside new_findings_count and
+                         new_findings_by_severity — the same keys, small enough
+                         to hand to a tool call. Without --format json: exit 3.
+  --sarif <path>        Also write a SARIF 2.1.0 report to this path, its URIs
+                         relative to the repository root (a --project below it
+                         is put in front). Written after the verdict is printed;
+                         a write that fails is an error on stderr, and exit 3
+                         only when the gate itself passed.
   --base-url <url>      Include scan_dast against this target. Also the
                          health-check URL when --start-command is given —
                          they are the same origin, so one flag names both.
@@ -311,6 +330,10 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          database and a .NET project is still restored from
                          its NuGet feeds (SECURITY.md, network egress).
                          Semgrep's own version check is off on every run.
+                         It needs Semgrep rules of the project's own: with none,
+                         Semgrep is skipped and the scan exits 2 (commit a
+                         .semgrep.yml — the init_project MCP tool installs
+                         dev-guardian's base ruleset as one — or drop the flag).
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan
@@ -332,7 +355,9 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          Semgrep, or any file not named, still exits 2. With
                          --base-url, DAST never probed routes in those spans.
                          CLI ARGV ONLY, like --start-command: a repository
-                         file declaring it is refused.
+                         file declaring it is refused. A per-file Timeout is
+                         accepted by the project's committed .guardian/scan.yml
+                         (semgrep.accept_timeouts) instead — see docs/ci.md.
   --baseline-ref <ref>  Read .guardian/baseline.json from the commit <ref> names
                          (git, never the working tree). For a pull request: its
                          base (the ci-init pipelines pass it), so the pull request
@@ -357,14 +382,23 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          (exit 3) in a checkout with changes, for one of those
                          files git does not track, or through a link. The report
                          names what it reset.
-  Never writes .guardian/baseline.json — see \`baseline update\`.
-  Leaves .guardian/reports/ in the scanned project either way (security_scan_full
-  and map_attack_surface write there, same as interactively) — add the two lines
-  \`**/.guardian/*\` and \`!**/.guardian/baseline.json\` to .gitignore by hand
-  (never a bare \`.guardian/\`: git cannot re-include a file below an ignored
-  directory, so the baseline CI needs could never be committed; \`**/\` covers
-  a sub-project's .guardian/ too). The MCP server writes
-  them every time it starts against a project; this CLI never starts that server.
+  Never writes .guardian/baseline.json — see \`baseline update\`. A baseline
+  that is there but unreadable (a merge conflict) is exit 3, never "no baseline".
+  .guardian/scan.yml (committed; read from the --rules-ref ref when given) sets
+  Semgrep's per-file --timeout (default 30 s) and --timeout-threshold (default
+  0) and lists the per-file timeouts the gate accepts; an invalid one is exit 3.
+  Taint-analysis (fixpoint) timeouts are reported as notes and never gate.
+  Leaves .guardian/reports/ in the scanned project (security_scan_full and
+  map_attack_surface write there, same as interactively; the last 3 runs of
+  each kind are kept). It writes .guardian/.gitignore when there is none,
+  which keeps everything below .guardian/ out of git but the shared files —
+  itself included, so git status stays clean. The MCP server instead writes
+  these lines to the project's .gitignore every time it starts:
+  \`**/.guardian/*\`, \`!**/.guardian/baseline.json\`, \`!**/.guardian/budgets.yml\`,
+  \`!**/.guardian/hooks.config.json\`, \`!**/.guardian/hooks-allowlist.json\` and
+  \`!**/.guardian/scan.yml\` (never a bare \`.guardian/\`: git cannot re-include a
+  file below an ignored directory, so the baseline CI needs could never be
+  committed; \`**/\` covers a sub-project's .guardian/ too).
   --sarif records coverage as a single pass/fail bit (SARIF's own
   invocation.executionSuccessful) — enough to tell an incomplete run from a clean
   one without cross-referencing anything else, but not WHICH scanner was missing
@@ -377,13 +411,17 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
 
 baseline update — regenerate .guardian/baseline.json from the current scan
   Same pipeline flags as scan: --project, --base-url, --authorized-target,
-  --local-only, --start-command (same argv-only rule, --base-url requirement, and
-  teardown). No --fail-on/--format/--sarif — this command does not gate or
-  render a report, it writes a file.
+  --local-only, --accept-partial-parse, --start-command (same argv-only rules,
+  --base-url requirement, and teardown). No --fail-on/--format/--sarif — this
+  command does not gate or render a report, it writes a file.
   The ONLY dev-guardian command that writes the baseline; scan never does.
-  Exit codes: 0 written with full coverage, 2 written but an expected
-              scanner did not run (baseline may under-represent findings),
-              3 usage or configuration error.
+  It accepts EVERY current finding, new ones included: run it on the base
+  commit, before a change — never to accept one finding (suppress that one
+  where its scanner reads suppressions, with a reason). A human's decision.
+  Exit codes: 0 written with full coverage (accepted gaps and notes aside),
+              2 written but an expected scanner did not run (baseline may
+              under-represent findings), 3 usage or configuration error
+              (an unreadable existing baseline included: it is not rebuilt).
 
 ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project being scanned
   --project <path>     Target project directory (default: current directory)
@@ -564,10 +602,11 @@ function cmdMcpConfig(argv) {
   if (parsed.error) {
     // This command's own usage-error convention (see `usage()`'s `check`
     // section, which documents the same code for the same kind of mistake) —
-    // exit 2, never the uncaught TypeError this replaces.
+    // exit 3 (USAGE_ERROR_EXIT, as for every command since 3.3.0 — 2 is
+    // scan's "incomplete"), never the uncaught TypeError this replaces.
     process.stderr.write(`error: ${parsed.error}\n\n`);
     usage();
-    process.exit(2);
+    process.exit(USAGE_ERROR_EXIT);
   }
   const args = parsed.value;
   if (args.deprecatedForceUsed) {
@@ -709,7 +748,7 @@ function cmdCheck(argv) {
   if (parsed.error !== undefined) {
     process.stderr.write(`check: ${parsed.error}\n\n`);
     usage();
-    process.exit(2);
+    process.exit(USAGE_ERROR_EXIT);
   }
   const opts = parsed.value;
 
@@ -729,7 +768,7 @@ function cmdCheck(argv) {
     const filePath = resolve(opts.file);
     if (!existsSync(filePath)) {
       process.stderr.write(`No such file: ${filePath}\n`);
-      process.exit(2);
+      process.exit(USAGE_ERROR_EXIT);
     }
     let text = '';
     try {
@@ -739,7 +778,7 @@ function cmdCheck(argv) {
       text = decodeText(readFileSync(filePath));
     } catch (e) {
       process.stderr.write(`Cannot read ${filePath}: ${e instanceof Error ? e.message : String(e)}\n`);
-      process.exit(2);
+      process.exit(USAGE_ERROR_EXIT);
     }
     const allowlist = loadAllowlist(process.cwd());
     const hits = scanForSecrets(text, { minConfidence: opts.min, allowlist });
@@ -763,7 +802,7 @@ function cmdCheck(argv) {
 
   process.stderr.write('check: provide --file <path> or --bash "<command>"\n\n');
   usage();
-  process.exit(2);
+  process.exit(USAGE_ERROR_EXIT);
 }
 
 // --- scan / baseline update (headless CI) ---------------------------------
@@ -816,6 +855,30 @@ function readBaselineOrExit(projectPath, relPath) {
   if (r.status === 'ok') return r.text;
   if (r.status === 'absent') return null;
   return usageError(`${relPath} was not read: ${describeReadRefusal(r.reason)}`);
+}
+
+/**
+ * A baseline's text, parsed — `null` for no baseline — or a usage error
+ * (exit 3) naming why a baseline that IS there cannot be read (review 8,
+ * finding 9): read as "no baseline", merge-conflict markers in it made every
+ * finding new, and the advice that came with it — run `baseline update` —
+ * rebuilt the file and reset every `added` date. `where` names the file
+ * (`.guardian/baseline.json`, or `… at <ref>`).
+ */
+function parseBaselineOrExit(ci, text, where) {
+  const read = ci.readBaselineText(text);
+  if (read.status === 'ok') return read.parsed;
+  if (read.status === 'absent') return null;
+  return usageError(
+    `${where} is not a usable baseline: ${read.error}. It was not read as "no baseline" — fix the file ` +
+      '(resolve the merge conflict, or restore it with `git checkout -- .guardian/baseline.json`) and run again.',
+  );
+}
+
+/** A `.guardian/scan.yml` that is there but not valid is a configuration error (exit 3), never half-applied. */
+function refuseInvalidScanSettings(loaded, where) {
+  if (loaded.kind !== 'invalid') return;
+  usageError(`${where} is not valid: ${loaded.error} — fix it (docs/ci.md, "Scan settings") and run again`);
 }
 
 /**
@@ -1000,6 +1063,7 @@ function parseScanArgs(argv) {
     baselineRef: undefined,
     rulesRef: undefined,
     resetExclusionsFrom: undefined,
+    compact: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -1025,23 +1089,12 @@ function parseScanArgs(argv) {
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
-      // Repeatable; each value a project-relative file (see
-      // `checkAcceptedPartialParse`). requireNonEmpty: an unset CI variable
-      // must not silently accept nothing and read as if it had.
-      let value;
-      if (a === '--accept-partial-parse') {
-        const r = takeOperand(argv, i, a, true);
-        if (r.error) return r;
-        value = r.value;
-        i = r.nextIndex;
-      } else {
-        value = a.slice('--accept-partial-parse='.length);
-        if (isMissingOperand(value, true)) return { error: '--accept-partial-parse requires a value' };
-      }
-      const problem = checkAcceptedPartialParse(value);
-      if (problem) return { error: problem };
-      out.acceptPartialParse.push(value);
-    } else if (a === '--fail-on') {
+      const r = takeAcceptPartialParse(argv, i, a);
+      if (r.error) return r;
+      out.acceptPartialParse.push(r.value);
+      i = r.nextIndex;
+    } else if (a === '--compact') out.compact = true;
+    else if (a === '--fail-on') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.failOn = r.value;
@@ -1098,6 +1151,33 @@ function refFlag(a) {
   return null;
 }
 
+/**
+ * One `--accept-partial-parse` value, in either spelling: `{ value,
+ * nextIndex }` or `{ error }`. Repeatable; each value a project-relative file
+ * (see `checkAcceptedPartialParse`). requireNonEmpty: an unset CI variable
+ * must not silently accept nothing and read as if it had. Shared by `scan`
+ * and `baseline update`: a baseline written from a scan whose gap the caller
+ * accepted is complete in the same sense (review 8, finding 13 — `baseline
+ * update` refused the flag, so on a project that needs it, it always exited
+ * 2 while `scan` passed).
+ */
+function takeAcceptPartialParse(argv, i, a) {
+  let value;
+  let nextIndex = i;
+  if (a === '--accept-partial-parse') {
+    const r = takeOperand(argv, i, a, true);
+    if (r.error) return r;
+    value = r.value;
+    nextIndex = r.nextIndex;
+  } else {
+    value = a.slice('--accept-partial-parse='.length);
+    if (isMissingOperand(value, true)) return { error: '--accept-partial-parse requires a value' };
+  }
+  const problem = checkAcceptedPartialParse(value);
+  if (problem) return { error: problem };
+  return { value, nextIndex };
+}
+
 function parseBaselineUpdateArgs(argv) {
   const out = {
     project: process.cwd(),
@@ -1105,6 +1185,7 @@ function parseBaselineUpdateArgs(argv) {
     authorizedTarget: false,
     localOnly: false,
     startCommand: undefined,
+    acceptPartialParse: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -1114,7 +1195,12 @@ function parseBaselineUpdateArgs(argv) {
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--base-url') {
+    else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
+      const r = takeAcceptPartialParse(argv, i, a);
+      if (r.error) return r;
+      out.acceptPartialParse.push(r.value);
+      i = r.nextIndex;
+    } else if (a === '--base-url') {
       const r = takeOperand(argv, i, a);
       if (r.error) return r;
       out.baseUrl = r.value;
@@ -1286,7 +1372,6 @@ async function cmdScan(argv) {
 
   const ci = await loadCiModules();
   const {
-    parseBaseline,
     evaluateGate,
     renderHuman,
     renderJson,
@@ -1298,6 +1383,11 @@ async function cmdScan(argv) {
     resolveCiRef,
     readBaselineAtRef,
     resetExclusionsFromRef,
+    renamesSince,
+    showPrefix,
+    resolveVersion,
+    loadScanSettings,
+    SCAN_SETTINGS_RELATIVE_PATH,
   } = ci;
 
   if (!SEVERITIES.includes(opts.failOn)) {
@@ -1306,6 +1396,9 @@ async function cmdScan(argv) {
   if (opts.format !== 'human' && opts.format !== 'json') {
     return usageError(`--format must be 'human' or 'json' (got '${opts.format}')`);
   }
+  if (opts.compact && opts.format !== 'json') {
+    return usageError('--compact applies to --format json (it cuts new_findings to the blocking ones)');
+  }
 
   const projectPath = resolveProjectOrExit(opts.project);
   enforceStartCommandRules(projectPath, opts);
@@ -1313,6 +1406,9 @@ async function cmdScan(argv) {
   // says (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
   if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
+  // `.guardian/scan.yml`, before the scan: the tree's (a --rules-ref run reads
+  // the ref's, checked once the scan copied it).
+  if (opts.rulesRef === undefined) refuseInvalidScanSettings(loadScanSettings(projectPath), SCAN_SETTINGS_RELATIVE_PATH);
 
   // --baseline-ref / --rules-ref (docs/ci.md): resolved, and the baseline
   // read, before anything starts or scans — a ref that names no commit, or a
@@ -1336,6 +1432,32 @@ async function cmdScan(argv) {
   } catch (e) {
     return usageError(e instanceof Error ? e.message : String(e));
   }
+
+  // The baseline, read and judged BEFORE the scan: one that is there but not
+  // readable is exit 3 now, not after minutes of scanning (review 8, finding 9).
+  let baselineText;
+  let baselineSource;
+  let baselineWhere = BASELINE_RELATIVE_PATH;
+  if (baselineRef !== null && baselineAtRef !== null) {
+    baselineText = baselineAtRef.text;
+    baselineWhere = `${BASELINE_RELATIVE_PATH} at ${baselineRef.ref}`;
+    baselineSource = {
+      from: 'ref',
+      path: BASELINE_RELATIVE_PATH,
+      ref: baselineRef.ref,
+      commit: baselineRef.commit,
+      present: baselineAtRef.text !== null,
+      tree_differs: baselineAtRef.treeDiffers,
+    };
+  } else {
+    baselineText = readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH);
+    baselineSource = { from: 'tree', path: BASELINE_RELATIVE_PATH };
+  }
+  const parsedBaseline = parseBaselineOrExit(ci, baselineText, baselineWhere);
+
+  // The scan writes `.guardian/reports/`: its own `.gitignore` keeps them out
+  // of git (gitignoreGuard.ts#ensureGuardianDirIgnored).
+  ensureGuardianDirIgnored(projectPath);
 
   // `app` (when --start-command was given) must be stopped as soon as
   // runScans() is done with it, success or failure — runScans() (via
@@ -1387,24 +1509,15 @@ async function cmdScan(argv) {
   if (pipelineError) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
+  // The ref's `.guardian/scan.yml` (--rules-ref), as the scan read it.
+  refuseInvalidScanSettings(
+    result.scanSettings,
+    rulesRef !== null ? `${SCAN_SETTINGS_RELATIVE_PATH} at ${rulesRef.ref}` : SCAN_SETTINGS_RELATIVE_PATH,
+  );
 
-  let baselineText;
-  let baselineSource;
-  if (baselineRef !== null && baselineAtRef !== null) {
-    baselineText = baselineAtRef.text;
-    baselineSource = {
-      from: 'ref',
-      path: BASELINE_RELATIVE_PATH,
-      ref: baselineRef.ref,
-      commit: baselineRef.commit,
-      present: baselineAtRef.text !== null,
-      tree_differs: baselineAtRef.treeDiffers,
-    };
-  } else {
-    baselineText = readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH);
-    baselineSource = { from: 'tree', path: BASELINE_RELATIVE_PATH };
-  }
-  const parsedBaseline = parseBaseline(baselineText);
+  // Files renamed since the baseline was recorded match their old entries
+  // (review 8, finding 6; mcp/src/ci/renames.ts).
+  const renamedFrom = await renamesSince(projectPath, baselineRef !== null ? baselineRef.commit : null);
 
   const verdict = evaluateGate({
     findings: result.findings,
@@ -1414,23 +1527,47 @@ async function cmdScan(argv) {
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
     // argv only — see `findAcceptPartialParseInRepoConfig`.
     acceptedPartialParses: opts.acceptPartialParse,
+    // The committed `.guardian/scan.yml` (the --rules-ref ref's when given).
+    acceptedTimeouts: result.scanSettings.settings.semgrep.acceptTimeouts,
     baselineSource,
     rulesSource: result.rulesSource,
     exclusionsReset,
+    renamedFrom,
   });
+
+  // The verdict reaches stdout FIRST, whatever happens to --sarif below: a
+  // SARIF write that failed used to end the run with exit 3 before the gate's
+  // verdict was printed at all (review 8, finding 19).
+  const text =
+    opts.format === 'json'
+      ? renderJson(verdict, { toolVersion: resolveVersion(), compact: opts.compact })
+      : renderHuman(verdict, { command: CLI_COMMAND });
+  process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
+  process.exitCode = verdict.exitCode;
 
   // --sarif is independent of --format: a pipeline commonly wants a human
   // headline in its own log AND a SARIF file for code-scanning upload in
   // the same run, so this always fires when the flag is given, regardless
-  // of --format.
+  // of --format. URIs are relative to the REPOSITORY root (review 8,
+  // finding 18): the project's own place in it goes in front of each.
   if (opts.sarif) {
-    const sarifPath = resolve(opts.sarif);
-    mkdirSync(dirname(sarifPath), { recursive: true });
-    writeFileSync(sarifPath, renderSarif(verdict, projectPath));
+    let repoPrefix = '';
+    try {
+      repoPrefix = await showPrefix(projectPath);
+    } catch {
+      /* not a git work tree: the project is the root */
+    }
+    try {
+      const sarifPath = resolve(opts.sarif);
+      mkdirSync(dirname(sarifPath), { recursive: true });
+      writeFileSync(sarifPath, renderSarif(verdict, projectPath, { repoPrefix }));
+    } catch (e) {
+      process.stderr.write(`error: --sarif ${opts.sarif} was not written: ${e instanceof Error ? e.message : String(e)}\n`);
+      // A gate verdict (1, 2) stays the exit code; a pass is not one without
+      // the report the pipeline asked for.
+      if (verdict.exitCode === 0) process.exitCode = USAGE_ERROR_EXIT;
+    }
   }
-
-  const text = opts.format === 'json' ? renderJson(verdict) : renderHuman(verdict);
-  process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
 
   // Faithfully returned, never re-derived: evaluateGate already decided
   // whether this is a pass, a gate failure, or an incomplete scan.
@@ -1448,8 +1585,8 @@ async function cmdScan(argv) {
   // returning lets Node exit on its own once the event loop drains AND the
   // write flushes; nothing here holds the loop open past that; `runScans`
   // has already closed its ephemeral database and removed its temp
-  // directory in its own `finally` blocks by this point.
-  process.exitCode = verdict.exitCode;
+  // directory in its own `finally` blocks by this point. (`exitCode` was set
+  // with the verdict above, before --sarif.)
   return;
 }
 
@@ -1466,7 +1603,6 @@ async function cmdBaseline(argv) {
 
   const ci = await loadCiModules();
   const {
-    parseBaseline,
     buildBaseline,
     serialiseBaseline,
     evaluateGate,
@@ -1474,10 +1610,27 @@ async function cmdBaseline(argv) {
     runScans,
     startApp,
     BASELINE_RELATIVE_PATH,
+    renamesSince,
+    loadScanSettings,
+    SCAN_SETTINGS_RELATIVE_PATH,
   } = ci;
 
   const projectPath = resolveProjectOrExit(opts.project);
   enforceStartCommandRules(projectPath, opts);
+  // --accept-partial-parse stays argv-only here too (see `findAcceptPartialParseInRepoConfig`).
+  const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
+  if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
+  refuseInvalidScanSettings(loadScanSettings(projectPath), SCAN_SETTINGS_RELATIVE_PATH);
+  // The previous baseline keeps every entry's `added` date — so one that is
+  // there but unreadable stops here (exit 3) rather than being rebuilt from
+  // nothing (review 8, finding 9).
+  const parsedBaseline = parseBaselineOrExit(
+    ci,
+    readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH),
+    BASELINE_RELATIVE_PATH,
+  );
+  const previousFile = parsedBaseline ? parsedBaseline.file : null;
+  ensureGuardianDirIgnored(projectPath);
 
   // Same reasoning, and the same required shape, as cmdScan's own — see the
   // comments there (including `armInterruptTeardown`). `baseline update`
@@ -1521,11 +1674,9 @@ async function cmdBaseline(argv) {
     return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
   }
 
-  const baselineText = readBaselineOrExit(projectPath, BASELINE_RELATIVE_PATH);
-  const parsedBaseline = parseBaseline(baselineText);
-  const previousFile = parsedBaseline ? parsedBaseline.file : null;
-
-  const updated = buildBaseline(result.findings, previousFile, new Date().toISOString());
+  // An entry's date survives its file being renamed (mcp/src/ci/renames.ts).
+  const renamedFrom = await renamesSince(projectPath, null);
+  const updated = buildBaseline(result.findings, previousFile, new Date().toISOString(), renamedFrom);
 
   // The only command that writes .guardian/baseline.json — `scan` never
   // does (see the module doc). NOT "the only write path in this whole CLI"
@@ -1560,6 +1711,9 @@ async function cmdBaseline(argv) {
     failOn: 'critical',
     steps: result.steps,
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
+    acceptedPartialParses: opts.acceptPartialParse,
+    acceptedTimeouts: result.scanSettings.settings.semgrep.acceptTimeouts,
+    renamedFrom,
   });
 
   // The write always happens first and is always reported as a completed
@@ -1575,7 +1729,13 @@ async function cmdBaseline(argv) {
   const entryWord = updated.entries.length === 1 ? 'entry' : 'entries';
   process.stdout.write(
     `baseline updated: ${updated.entries.length} ${entryWord} -> ${baselinePath}\n` +
-      `coverage: ${verdict.coverage}\n`,
+      `coverage: ${verdict.coverage}\n` +
+      // What this command just did, said every time (contract with dev-spec-driven
+      // 1.30): every current finding is now "known", the newest included.
+      'Every finding of this scan is in the baseline now, new ones included: commit .guardian/baseline.json. ' +
+      'Run this on the base commit, before a change is made — never to accept one finding; for that, ' +
+      'suppress it where its scanner reads suppressions (`nosemgrep: <rule> -- <reason>`, `# nosec`), ' +
+      'reviewed like code.\n',
   );
   if (verdict.coverageGaps.length > 0) {
     process.stdout.write(
@@ -1584,7 +1744,19 @@ async function cmdBaseline(argv) {
         "and whoever's change triggers that run will look responsible for debt this baseline " +
         'never actually captured. Gaps:\n',
     );
-    for (const gap of verdict.coverageGaps) process.stdout.write(`  - ${untrustedText(gap)}\n`);
+    verdict.coverageGaps.forEach((gap, i) => {
+      process.stdout.write(`  - ${untrustedText(gap)}\n`);
+      const remedy = verdict.coverageGapDetails[i]?.remedy;
+      if (remedy !== undefined) process.stdout.write(`    fix: ${untrustedText(remedy)}\n`);
+    });
+  }
+  if (verdict.acceptedGaps.length > 0) {
+    process.stdout.write('accepted (not gating):\n');
+    for (const gap of verdict.acceptedGaps) process.stdout.write(`  - ${untrustedText(gap)}\n`);
+  }
+  if (verdict.coverageNotes.length > 0) {
+    process.stdout.write('notes (not gating):\n');
+    for (const note of verdict.coverageNotes) process.stdout.write(`  - ${untrustedText(note)}\n`);
   }
 
   // Never CI_EXIT.GATE_FAILED: this command has no gate. Full coverage is a
@@ -1609,7 +1781,10 @@ async function cmdBaseline(argv) {
   // baseline-updated line, and the WARNING paragraph, which can list one
   // line per coverage gap) are not bounded to a size guaranteed to fit
   // inside a single synchronous flush.
-  process.exitCode = exitCodeForCoverage(verdict.coverage);
+  //
+  // `gatingCoverage`: an accepted gap or a non-gating note (a taint timeout)
+  // is no reason for 2 here either — the same rule `scan` follows.
+  process.exitCode = exitCodeForCoverage(verdict.gatingCoverage);
   return;
 }
 
@@ -2322,8 +2497,8 @@ function cmdCiInit(argv) {
     );
   }
   process.stdout.write(
-    'If .guardian/baseline.json does not exist yet in this project, run `dev-guardian baseline update` ' +
-      "once locally and commit it before relying on this pipeline's gate.\n",
+    `If .guardian/baseline.json does not exist yet in this project, run \`${CLI_COMMAND} baseline update --project .\` ` +
+      "once locally, on the base branch, and commit it before relying on this pipeline's gate.\n",
   );
 }
 
@@ -2678,7 +2853,9 @@ async function cmdImportSarif(argv) {
   }
 
   if (!result.ok) {
-    process.stderr.write(`error: ${result.error.code}: ${result.error.message}\n`);
+    // The tool speaks MCP arguments; a CLI user types flags (review 8, finding 19).
+    const message = result.error.message.replace(/\ballow_outside_project: true\b/g, '--allow-outside-project');
+    process.stderr.write(`error: ${result.error.code}: ${message}\n`);
     process.exitCode = IMPORT_SARIF_REFUSALS.has(result.error.code) ? 1 : USAGE_ERROR_EXIT;
     return;
   }
@@ -3097,7 +3274,7 @@ function main() {
   const cmd = argv[0];
   if (!cmd || HELP_FLAGS.has(cmd)) {
     usage();
-    process.exit(cmd ? 0 : 1);
+    process.exit(cmd ? 0 : USAGE_ERROR_EXIT);
   }
   // `scan --help` is the first thing anyone types. Answer it rather than
   // rejecting it as an unknown flag.
@@ -3128,7 +3305,7 @@ function main() {
 
   process.stderr.write(`Unknown command: ${cmd}\n\n`);
   usage();
-  process.exit(1);
+  process.exit(USAGE_ERROR_EXIT);
 }
 
 /**

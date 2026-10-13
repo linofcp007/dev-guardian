@@ -124,7 +124,7 @@ import { checkSemgrepReport, describeNoRuleLoaded, describePartialParse, describ
 import { localRuleIdNormalizer, noRuleLoaded } from '../runners/semgrepRuleIds.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import type { ProcessRunResult } from '../runners/processRunner.js';
-import { runSemgrep } from '../runners/semgrepRun.js';
+import { runSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import {
   AllowDirty,
@@ -696,6 +696,8 @@ async function invokeBugHunt(input: BugHuntInput, ctx: InvokeContext): Promise<S
   const outFile = join(reportDir, 'bugs.json');
   const runWithPacks = (packs: readonly string[]): Promise<ProcessRunResult> => {
     const args = packs.map((pack) => `--config=${pack}`);
+    // `.guardian/scan.yml`'s timeouts, `.guardian/` excluded (runners/semgrepRun.ts).
+    args.push(...semgrepScanFlags(ctx.configRoot).args);
     // `.guardianignore` — see `platform/guardianIgnore.ts`.
     args.push(...semgrepExcludeArgs(ctx.exclusions));
     args.push('--json', '--quiet', '--output', outFile);
@@ -970,7 +972,11 @@ async function invokeBugHuntOnScope(args: {
   const runOn = (use: readonly string[]) =>
     semgrepOnFiles({
       rules: { configs: use, ctx: { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath } },
-      configArgs: [...use.map((pack) => `--config=${pack}`), ...(input.auto_fix === true ? ['--autofix'] : [])],
+      configArgs: [
+        ...use.map((pack) => `--config=${pack}`),
+        ...semgrepScanFlags(ctx.configRoot).args,
+        ...(input.auto_fix === true ? ['--autofix'] : []),
+      ],
       files,
       cwd: ctx.projectPath,
       reportDir,

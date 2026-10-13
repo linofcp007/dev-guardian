@@ -37,6 +37,7 @@ import { InvalidProjectPathError, resolveProjectPath } from '../platform/project
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { changedFiles, git, gitlinksAmong, materialiseCommit, repoState, resolveCommit, showPrefix, splitNul, } from '../runners/git.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
+import { semgrepScanFlags } from '../runners/semgrepRun.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { judgeTrivyFs, PROJECT_TRIVYIGNORE, runTrivy as spawnTrivy, TRIVY_MANIFEST_WALK_GAP, withHonoured, } from '../runners/trivyRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
@@ -268,7 +269,8 @@ async function runSemgrep(ctx, input, out, args) {
         return;
     }
     const run = await semgrepOnFiles({
-        configArgs: plan.args,
+        // `.guardian/scan.yml`'s timeouts, `.guardian/` excluded (runners/semgrepRun.ts).
+        configArgs: [...plan.args, ...semgrepScanFlags(args.scanRoot).args],
         files: args.present,
         cwd: args.scanRoot,
         reportDir: args.reportDir,

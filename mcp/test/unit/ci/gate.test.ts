@@ -553,25 +553,39 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
     }
   });
 
-  // Review of the LLM pack, round 2 (I-C): a taint fixpoint timeout is a file
-  // Semgrep did not fully analyse — the same class as a per-file Timeout. The
-  // gate must treat it exactly as it treats a Timeout: exit 2, never
-  // accepted by --accept-partial-parse, coverage partial.
-  it('a Fixpoint timeout is gated exactly as a per-file Timeout: exit 2, never accepted, the type named', () => {
-    const gateOf = (type: string, accept: string[]) =>
-      evaluateGate(input({
-        steps: [partialStep([WP], { partial_parses: { semgrep: [{ file: WP, type }] } })],
-        acceptedPartialParses: accept,
-      }));
-    for (const accept of [[], [WP]]) {
-      const timeout = gateOf('Timeout', accept);
-      const fixpoint = gateOf('Fixpoint timeout', accept);
-      expect(fixpoint.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
-      expect(fixpoint.coverage).toBe('partial');
-      expect(fixpoint.acceptedGaps).toEqual([]);
-      expect({ ...fixpoint, coverageGaps: fixpoint.coverageGaps.map((g) => g.replace('Fixpoint timeout', 'Timeout')) }).toEqual(timeout);
-    }
-    expect(gateOf('Fixpoint timeout', [WP]).coverageGaps[0]).toMatch(/not accepted: Fixpoint timeout on wp\/rest-controller\.php/);
+  // Review 8, finding 3: a taint fixpoint timeout (Semgrep gave up the
+  // dataflow analysis of some functions; no setting tunes it) gated exactly
+  // like a per-file Timeout, and a medium-sized codebase never reached exit
+  // 0 — dev-spec-driven's own tree had them in 210 functions. It is a NOTE
+  // now: reported (human, JSON), never a coverage gap, never the exit code;
+  // coverage still reads partial, as for an accepted gap.
+  it('a Fixpoint timeout is a note, not a gap: exit 0, coverage partial, named in coverageNotes and the details', () => {
+    const v = evaluateGate(input({
+      steps: [partialStep([WP], { partial_parses: { semgrep: [{ file: WP, type: 'Fixpoint timeout' }] } })],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.coverage).toBe('partial');
+    expect(v.gatingCoverage).toBe('full');
+    expect(v.coverageGaps).toEqual([]);
+    expect(v.acceptedGaps).toEqual([]);
+    expect(v.coverageNotes).toHaveLength(1);
+    expect(v.coverageNotes[0]).toMatch(/taint analysis incomplete .* wp\/rest-controller\.php .*\(not gating\)/);
+    expect(v.coverageGapDetails).toEqual([
+      expect.objectContaining({ tool: 'semgrep', kind: 'taint_timeout', gating: false, detail: v.coverageNotes[0] }),
+    ]);
+  });
+
+  it('a Fixpoint timeout beside an unaccepted parse gap: the parse gap gates, the timeout is still a note', () => {
+    const v = evaluateGate(input({
+      steps: [partialStep([WP, 'b.js'], {
+        partial_parses: { semgrep: [{ file: WP, type: 'PartialParsing' }, { file: 'b.js', type: 'Fixpoint timeout' }] },
+      })],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps).toHaveLength(1);
+    expect(v.coverageGaps[0]).toMatch(/not accepted: wp\/rest-controller\.php /);
+    expect(v.coverageNotes).toHaveLength(1);
+    expect(v.coverageGapDetails.map((d) => [d.kind, d.gating])).toEqual([['partial_parse', true], ['taint_timeout', false]]);
   });
 
   it("the DAST step's partial-surface gap is accepted with the surface's files", () => {

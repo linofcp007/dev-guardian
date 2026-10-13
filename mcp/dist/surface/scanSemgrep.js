@@ -31,7 +31,7 @@ export async function invokeSemgrep(options) {
         // UTF-8 mode, like every other Semgrep call site: otherwise the locale
         // codec reads the rule pack and writes `--output` (runners/semgrepRun.ts).
         const run = await runSemgrep({
-            args: ['--config', rulesPath, '--json', '--output', outFile, '--quiet', projectPath],
+            args: ['--config', rulesPath, ...(options.extraArgs ?? []), '--json', '--output', outFile, '--quiet', projectPath],
             cwd: projectPath,
             env: process.env,
         });
@@ -66,6 +66,7 @@ export async function invokeSemgrep(options) {
             outFileHost: outFile,
             image,
             configs: [containerRules],
+            ...(options.extraArgs !== undefined ? { extraArgs: options.extraArgs } : {}),
             git: await gitSafetyFor([projectPath]),
         }),
         cwd: projectPath,

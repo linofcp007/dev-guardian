@@ -22,7 +22,7 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { runSemgrep } from '../runners/semgrepRun.js';
+import { runSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
@@ -113,6 +113,7 @@ registerToolModule(
             const args = [
               '--config=p/php',
               '--config=p/wordpress',
+              ...semgrepScanFlags(ctx.configRoot).args,
               '--json',
               '--quiet',
               '--output',

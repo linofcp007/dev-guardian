@@ -511,7 +511,7 @@ describe('renderHuman', () => {
     expect(text).toMatch(/^dev-guardian CI: PASS \(exit code 0\)$/m);
     expect(text).toMatch(/^coverage: partial$/m);
     expect(text).not.toMatch(/coverage gaps/i);
-    expect(text).toMatch(/^accepted \(--accept-partial-parse\):$/m);
+    expect(text).toMatch(/^accepted \(not gating\):$/m);
     expect(text).toMatch(/^ {2}- security_scan_full: semgrep only partly parsed wp\/rest-controller\.php — accepted/m);
     expect(text).toMatch(/--accept-partial-parse x\.php: no step reported it partly parsed/);
   });
@@ -697,7 +697,9 @@ describe('where the baseline and the rules came from (--baseline-ref, --rules-re
     };
     const text = renderHuman(evaluateGate(input({ findings: [finding()], baselineSource })));
     expect(text).toMatch(/^baseline: none at origin\/main \(3a5adedb7f87\), so every finding is new$/m);
-    expect(text).toMatch(/no usable baseline at origin\/main — run `dev-guardian baseline update` on that branch/);
+    expect(text).toMatch(
+      /no usable baseline at origin\/main, so every finding counts as new — run `node cli\/dev-guardian\.mjs baseline update --project \.` on that branch/,
+    );
     expect(text).not.toMatch(/no baseline found/);
   });
 
