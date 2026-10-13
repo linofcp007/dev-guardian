@@ -18,6 +18,7 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 
 - **Node.js ≥ 22.13.** La base de datos es el `node:sqlite` integrado en Node, sin ningún flag. Con un Node más antiguo el servidor termina con `dev-guardian requires Node.js >= 22.13 (node:sqlite)`.
 - **git.**
+- **Claude Code 2.1.139 o posterior, para los hooks de protección.** `hooks/hooks.json` los ejecuta en forma exec (`"command": "node"`, el dispatcher en `"args"`). Un Claude Code más antiguo no pasa los `"args"`, así que ningún hook arranca — y un hook que nunca arranca no puede avisarte. Las herramientas MCP y la CLI no dependen de ello.
 - **Los escáneres que quieras usar**, instalados aparte. `check_toolchain` indica cuáles están presentes (y marca el Trivy comprometido 0.69.4–0.69.6); `install_toolchain` o `/guardian-init` instalan el resto. Un escáner que falta se informa como hueco de cobertura, nunca como resultado limpio.
 - **Opcional: Docker.** Sin un `semgrep` nativo, `scan_sast` y `map_attack_surface` recurren a la imagen `semgrep/semgrep`.
 - **Windows:** todos los escaneos se ejecutan de forma nativa, sin shell. Solo hace falta un bash para el informe de estado inicial de `init_project` y para el recurso a WSL de `install_toolchain` cuando no hay winget, scoop ni choco. dev-guardian busca primero Git Bash, luego WSL y luego cualquier `bash` en el `PATH`.
