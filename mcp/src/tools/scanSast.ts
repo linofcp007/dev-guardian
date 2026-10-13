@@ -168,7 +168,6 @@ import {
   makeScanTool,
   type InvokeContext,
   type ScannerInvocation,
-  type ScanToolBaseInput,
 } from './scanToolFactory.js';
 
 /** The largest .NET solution, project or `.props` file read; a real one is well under this. */
@@ -178,7 +177,7 @@ const MAX_DOTNET_PROJECT_FILE_BYTES = 4 * 1024 * 1024;
 const DOTNET_BUILD_TIMEOUT_MS = 10 * 60_000;
 
 registerToolModule(
-  makeScanTool<ScanToolBaseInput & { local_only?: boolean }>({
+  makeScanTool({
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description:

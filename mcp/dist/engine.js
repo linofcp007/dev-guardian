@@ -34444,27 +34444,32 @@ __export(tools_exports, {
   DATABASE_BUSY_MESSAGE: () => DATABASE_BUSY_MESSAGE,
   TOOLS: () => TOOLS,
   attachAllTools: () => attachAllTools,
+  defineTool: () => defineTool,
   listedTools: () => listedTools,
   registerToolModule: () => registerToolModule,
   strictInputSchema: () => strictInputSchema,
   toCallToolResult: () => toCallToolResult,
   toolListing: () => toolListing
 });
+function defineTool(spec) {
+  const { handler: handler51, ...rest } = spec;
+  return { ...rest, handler: (input, ctx, callMeta) => handler51(input, ctx, callMeta) };
+}
 function listedTools(tools = TOOLS) {
   return tools.filter((t) => t.listed !== false);
 }
 function toolListing(tools = TOOLS) {
   return listedTools(tools).map((t) => {
-    const inputSchema34 = toJsonSchemaCompat(strictInputSchema(t), {
+    const inputSchema53 = toJsonSchemaCompat(strictInputSchema(t), {
       strictUnions: true,
       pipeStrategy: "input"
     });
-    delete inputSchema34["$schema"];
+    delete inputSchema53["$schema"];
     return {
       name: t.name,
       ...t.title ? { title: t.title } : {},
       description: t.description,
-      inputSchema: inputSchema34,
+      inputSchema: inputSchema53,
       ...t.annotations !== void 0 ? { annotations: t.annotations } : {}
     };
   });
@@ -40085,7 +40090,7 @@ function keptByScan(ctx) {
     return ctx.scope === null || ctx.scope.member(p);
   };
 }
-var scanSecrets, tool;
+var inputSchema, scanSecrets, tool;
 var init_scanSecrets = __esm({
   "src/tools/scanSecrets.ts"() {
     "use strict";
@@ -40100,6 +40105,17 @@ var init_scanSecrets = __esm({
     init_tools();
     init_scanHelpers();
     init_scanToolFactory();
+    inputSchema = {
+      project_path: ProjectPath,
+      log_opts: external_exports.string().max(400).optional().describe(
+        "Narrow the history pass: --all, <ref>..<ref> or --since=<date>. Not with scope."
+      ),
+      force: Force,
+      scope: ScanScopeInput,
+      verify_live: external_exports.boolean().optional().default(false).describe(
+        "Ask each secret's own provider whether it is live: sends the secrets out, so ask the user first."
+      )
+    };
     scanSecrets = makeScanTool({
       name: "scan_secrets",
       title: "Secret scan (gitleaks)",
@@ -40115,17 +40131,7 @@ var init_scanSecrets = __esm({
       category: "security",
       supportsAutoFix: false,
       supportsScope: true,
-      inputSchema: {
-        project_path: ProjectPath,
-        log_opts: external_exports.string().max(400).optional().describe(
-          "Narrow the history pass: --all, <ref>..<ref> or --since=<date>. Not with scope."
-        ),
-        force: Force,
-        scope: ScanScopeInput,
-        verify_live: external_exports.boolean().optional().default(false).describe(
-          "Ask each secret's own provider whether it is live: sends the secrets out, so ask the user first."
-        )
-      },
+      inputSchema,
       invoke: async (input, ctx) => {
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "secrets");
         const logOpts = input.log_opts !== void 0 ? await resolveLogOpts(ctx.projectPath, input.log_opts) : void 0;
@@ -40177,11 +40183,12 @@ var init_scanSecrets = __esm({
         };
       }
     });
-    tool = {
+    tool = defineTool({
       ...scanSecrets,
-      handler: async (input, plugin, callMeta) => {
-        const raw = input.log_opts;
-        const scope = input.scope;
+      inputSchema,
+      handler: async (inp, plugin, callMeta) => {
+        const raw = inp.log_opts;
+        const scope = inp.scope;
         if (scope !== void 0 && scope !== null && typeof raw === "string" && raw.trim().length > 0) {
           return {
             ok: false,
@@ -40192,14 +40199,14 @@ var init_scanSecrets = __esm({
           };
         }
         if (typeof raw !== "string" || raw.trim().length === 0) {
-          const { log_opts: _drop, ...rest } = input;
+          const { log_opts: _drop, ...rest } = inp;
           return scanSecrets.handler(rest, plugin, callMeta);
         }
         let projectPath;
         try {
-          projectPath = resolveProjectPath(input.project_path).path;
+          projectPath = resolveProjectPath(inp.project_path).path;
         } catch (e) {
-          if (e instanceof InvalidProjectPathError) return scanSecrets.handler(input, plugin, callMeta);
+          if (e instanceof InvalidProjectPathError) return scanSecrets.handler(inp, plugin, callMeta);
           throw e;
         }
         const state = await repoState(projectPath);
@@ -40222,9 +40229,9 @@ var init_scanSecrets = __esm({
             error: { code: e.kind === "unresolved_ref" ? "target_not_found" : "unsupported_target", message: e.message }
           };
         }
-        return scanSecrets.handler({ ...input, log_opts: resolved }, plugin, callMeta);
+        return scanSecrets.handler({ ...inp, log_opts: resolved }, plugin, callMeta);
       }
-    };
+    });
     registerToolModule(tool);
   }
 });
@@ -42181,7 +42188,7 @@ function isInside2(root, candidate) {
   if (!within(root, abs)) return false;
   return projectPathKind(root, abs) !== "outside";
 }
-var COMPOSE_FILE_NAMES, composeParser, cosignParser, IMAGE_REF, signerValue, scanContainers, tool2, SIGNER_FIELDS;
+var COMPOSE_FILE_NAMES, composeParser, cosignParser, IMAGE_REF, signerValue, inputSchema2, scanContainers, tool2, SIGNER_FIELDS;
 var init_scanContainers = __esm({
   "src/tools/scanContainers.ts"() {
     "use strict";
@@ -42217,6 +42224,25 @@ var init_scanContainers = __esm({
     };
     IMAGE_REF = new RegExp(`^(?!-)[^\\s"%${UNSAFE_CHAR_CLASS}]+$`);
     signerValue = () => external_exports.string().min(1).max(1024);
+    inputSchema2 = {
+      project_path: ProjectPath,
+      severity_min: SeverityMin,
+      dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
+      image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace, control character, " or %, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
+      signer_identity: signerValue().optional().describe(
+        "The identity `image` must be signed by (a workflow URL or an e-mail). Needs signer_issuer."
+      ),
+      signer_identity_regexp: signerValue().optional().describe(
+        "signer_identity as an RE2 regular expression."
+      ),
+      signer_issuer: signerValue().optional().describe(
+        "The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com."
+      ),
+      signer_issuer_regexp: signerValue().optional().describe(
+        "signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer."
+      ),
+      force: Force
+    };
     scanContainers = makeScanTool({
       name: "scan_containers",
       title: "Container scan (Dockerfile, image, compose)",
@@ -42224,33 +42250,14 @@ var init_scanContainers = __esm({
       scan_type: "containers",
       category: "security",
       supportsAutoFix: false,
-      inputSchema: {
-        project_path: ProjectPath,
-        severity_min: SeverityMin,
-        dockerfile_path: external_exports.string().optional().describe("Path to a Dockerfile to scan with `trivy config`."),
-        image: external_exports.string().regex(IMAGE_REF, 'image must be an image reference: no whitespace, control character, " or %, not starting with "-"').optional().describe("Container image reference to scan with `trivy image`."),
-        signer_identity: signerValue().optional().describe(
-          "The identity `image` must be signed by (a workflow URL or an e-mail). Needs signer_issuer."
-        ),
-        signer_identity_regexp: signerValue().optional().describe(
-          "signer_identity as an RE2 regular expression."
-        ),
-        signer_issuer: signerValue().optional().describe(
-          "The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com."
-        ),
-        signer_issuer_regexp: signerValue().optional().describe(
-          "signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer."
-        ),
-        force: Force
-      },
-      invoke: async (input, ctx) => {
+      inputSchema: inputSchema2,
+      invoke: async (inp, ctx) => {
         const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "containers");
         const tools_run = [];
         const missing_tools = [];
         const warnings = [];
         const parser_inputs = [];
         let anyOutcome = "completed";
-        const inp = input;
         let imageSignature;
         const invalid2 = invalidInput(ctx.projectPath, inp);
         if (invalid2) throw new Error(invalid2);
@@ -42417,10 +42424,10 @@ var init_scanContainers = __esm({
         };
       }
     });
-    tool2 = {
+    tool2 = defineTool({
       ...scanContainers,
-      handler: async (input, plugin, callMeta) => {
-        const inp = input;
+      inputSchema: inputSchema2,
+      handler: async (inp, plugin, callMeta) => {
         let projectPath = null;
         try {
           projectPath = resolveProjectPath(inp.project_path).path;
@@ -42429,9 +42436,9 @@ var init_scanContainers = __esm({
         }
         const invalid2 = projectPath !== null ? invalidInput(projectPath, inp) : null;
         if (invalid2) return { ok: false, error: { code: "unsupported_target", message: invalid2 } };
-        return scanContainers.handler(input, plugin, callMeta);
+        return scanContainers.handler(inp, plugin, callMeta);
       }
-    };
+    });
     registerToolModule(tool2);
     SIGNER_FIELDS = ["signer_identity", "signer_identity_regexp", "signer_issuer", "signer_issuer_regexp"];
   }
@@ -44151,7 +44158,7 @@ async function defaultBaseRef(cwd) {
 function refused(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var MANIFEST_RE, reviewPr, isPython2, isManifest, MAX_PREEXISTING_NAMED, tool3;
+var MANIFEST_RE, inputSchema3, reviewPr, isPython2, isManifest, MAX_PREEXISTING_NAMED, tool3;
 var init_reviewPr = __esm({
   "src/tools/reviewPr.ts"() {
     "use strict";
@@ -44177,6 +44184,16 @@ var init_reviewPr = __esm({
     init_scanHelpers();
     init_scanToolFactory();
     MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|composer\.(json|lock)|Gemfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|.*\.csproj|packages\.lock\.json|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile)$/;
+    inputSchema3 = {
+      project_path: ProjectPath,
+      base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
+      head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
+      local_only: external_exports.boolean().optional().describe(
+        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy may still go out."
+      ),
+      severity_min: SeverityMin,
+      force: Force
+    };
     reviewPr = makeScanTool({
       name: "review_pr",
       title: "Pre-PR diff review",
@@ -44185,16 +44202,7 @@ var init_reviewPr = __esm({
       category: "security",
       supportsAutoFix: false,
       rulePacks: (input, { projectPath, plugin }) => planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
-      inputSchema: {
-        project_path: ProjectPath,
-        base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
-        head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
-        local_only: external_exports.boolean().optional().describe(
-          "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy may still go out."
-        ),
-        severity_min: SeverityMin,
-        force: Force
-      },
+      inputSchema: inputSchema3,
       invoke: async (input, ctx) => {
         const base2 = await resolveCommit(ctx.projectPath, input.base_ref ?? "");
         const head = await resolveCommit(ctx.projectPath, input.head_ref ?? "HEAD");
@@ -44287,15 +44295,15 @@ var init_reviewPr = __esm({
     isPython2 = (f) => f.toLowerCase().endsWith(".py");
     isManifest = (f) => MANIFEST_RE.test(basename8(f));
     MAX_PREEXISTING_NAMED = 5;
-    tool3 = {
+    tool3 = defineTool({
       ...reviewPr,
-      handler: async (input, plugin, callMeta) => {
-        const inp = input;
+      inputSchema: inputSchema3,
+      handler: async (inp, plugin, callMeta) => {
         let projectPath;
         try {
           projectPath = resolveProjectPath(inp.project_path).path;
         } catch (e) {
-          if (e instanceof InvalidProjectPathError) return reviewPr.handler(input, plugin, callMeta);
+          if (e instanceof InvalidProjectPathError) return reviewPr.handler(inp, plugin, callMeta);
           throw e;
         }
         const state = await repoState(projectPath);
@@ -44324,10 +44332,10 @@ var init_reviewPr = __esm({
         if (baseSha === null) return refused("target_not_found", `base_ref "${baseLabel}" does not name a commit.`);
         const headSha = await resolveCommit(projectPath, headLabel);
         if (headSha === null) return refused("target_not_found", `head_ref "${headLabel}" does not name a commit.`);
-        const result = await reviewPr.handler({ ...input, base_ref: baseSha, head_ref: headSha }, plugin, callMeta);
+        const result = await reviewPr.handler({ ...inp, base_ref: baseSha, head_ref: headSha }, plugin, callMeta);
         return result.ok ? { ...result, base_ref: baseLabel, head_ref: headLabel } : result;
       }
-    };
+    });
     registerToolModule(tool3);
   }
 });
@@ -47743,8 +47751,7 @@ var init_openSet = __esm({
 
 // src/tools/depsUpdatePlan.ts
 import { dirname as dirname20, join as join53, relative as relative20, sep as sep13 } from "node:path";
-async function handler(input, ctx, callMeta) {
-  const inp = input;
+async function handler(inp, ctx, callMeta) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -48906,7 +48913,7 @@ function summarize2(plan) {
 function failDomain2(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema, tool4, LOCKFILES_READ, OUTDATED_COMMAND, PNPM_WORKSPACE_SETTINGS_SINCE, PM_OUTPUT_CAP_BYTES;
+var inputSchema4, tool4, LOCKFILES_READ, OUTDATED_COMMAND, PNPM_WORKSPACE_SETTINGS_SINCE, PM_OUTPUT_CAP_BYTES;
 var init_depsUpdatePlan = __esm({
   "src/tools/depsUpdatePlan.ts"() {
     "use strict";
@@ -48925,17 +48932,17 @@ var init_depsUpdatePlan = __esm({
     init_types2();
     init_projectPath();
     init_tools();
-    inputSchema = {
+    inputSchema4 = {
       project_path: ProjectPath,
       prefer: external_exports.enum(["security", "patch", "minor", "major"]).optional().describe("Sort entries so this classification appears first. Default: security.")
     };
-    tool4 = {
+    tool4 = defineTool({
       name: "deps_update_plan",
       title: "Dependency upgrade plan",
       description: "Ordered upgrades from each stack's own outdated command (npm, composer, cargo, go, rubygems; dotnet after a locked restore, which runs MSBuild) and pip's own pins. Each entry: security (an active CVE in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest available), patch, minor or major, with its upgrade_command; pnpm and yarn get overrides to apply by hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.",
-      inputSchema,
+      inputSchema: inputSchema4,
       handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta)
-    };
+    });
     registerToolModule(tool4);
     LOCKFILES_READ = "package-lock.json / pnpm-lock.yaml / yarn.lock, composer.lock, Cargo.lock, go.sum, Gemfile.lock, packages.lock.json";
     OUTDATED_COMMAND = {
@@ -49353,8 +49360,7 @@ var init_syft = __esm({
 import { existsSync as existsSync14, readFileSync as readFileSync6, statSync as statSync8 } from "node:fs";
 import { join as join56 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
-async function handler2(input, ctx) {
-  const inp = input;
+async function handler2(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -49449,7 +49455,7 @@ async function handler2(input, ctx) {
 function failDomain3(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var DEFAULT_INLINE_KB, MAX_INLINE_KB, inputSchema2, tool5;
+var DEFAULT_INLINE_KB, MAX_INLINE_KB, inputSchema5, tool5;
 var init_generateSbom = __esm({
   "src/tools/generateSbom.ts"() {
     "use strict";
@@ -49464,19 +49470,19 @@ var init_generateSbom = __esm({
     init_tools();
     DEFAULT_INLINE_KB = 64;
     MAX_INLINE_KB = 1024;
-    inputSchema2 = {
+    inputSchema5 = {
       project_path: ProjectPath,
       format: external_exports.enum(["cyclonedx-json", "spdx-json"]).optional().describe("SBOM output format. Default: cyclonedx-json."),
       inline_max_kb: external_exports.number().int().min(0).max(MAX_INLINE_KB).optional().describe(`Inline the SBOM when it is at most this many KB (0 never; at most ${MAX_INLINE_KB}). Default ${DEFAULT_INLINE_KB}.`)
     };
-    tool5 = {
+    tool5 = defineTool({
       name: "generate_sbom",
       title: "Generate an SBOM (Syft or Trivy)",
       description: `Produce a CycloneDX or SPDX JSON SBOM with Syft (Trivy as fallback), always written to .guardian/reports/sbom-<scan>/ (\`file_path\`). The response inlines it when it is at most inline_max_kb (default ${DEFAULT_INLINE_KB} KB); \`inlined\` says whether it did.`,
-      inputSchema: inputSchema2,
+      inputSchema: inputSchema5,
       handler: async (input, ctx) => handler2(input, ctx),
       contentOnlyKeys: ["inline"]
-    };
+    });
     registerToolModule(tool5);
   }
 });
@@ -49828,8 +49834,7 @@ var init_stackDetect = __esm({
 
 // src/tools/detectStack.ts
 import { join as join58 } from "node:path";
-async function handler3(input, ctx) {
-  const inp = input;
+async function handler3(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -49902,7 +49907,7 @@ function anyDeepMatching(root, suffix, maxDepth) {
   }
   return walk5(root, 0);
 }
-var tool6;
+var inputSchema6, tool6;
 var init_detectStack = __esm({
   "src/tools/detectStack.ts"() {
     "use strict";
@@ -49911,13 +49916,14 @@ var init_detectStack = __esm({
     init_stackDetect();
     init_schemas4();
     init_tools();
-    tool6 = {
+    inputSchema6 = { project_path: ProjectPath };
+    tool6 = defineTool({
       name: "detect_stack",
       title: "Detect the project stack",
       description: "Detect languages, package managers, frameworks, existing tools, IaC and CI, in-process. Manifests are read up to 3 directories deep (each also in `projects`); PHP and WordPress are detected without a composer.json. The snapshot is stored for the stack-aware tools.",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema6,
       handler: async (input, ctx) => handler3(input, ctx)
-    };
+    });
     registerToolModule(tool6);
   }
 });
@@ -50210,8 +50216,7 @@ var init_shellRunner = __esm({
 import { existsSync as existsSync16 } from "node:fs";
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { join as join60 } from "node:path";
-async function handler4(input, ctx) {
-  const inp = input;
+async function handler4(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -50364,7 +50369,7 @@ async function computeSecretsStatusLine(projectPath) {
 function failDomain5(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var GITLEAKS, GITLEAKS_PARANOID, RENOVATE, RENOVATE_PARANOID, SEMGREP, PRECOMMIT, PROFILE_FILES, tool7;
+var GITLEAKS, GITLEAKS_PARANOID, RENOVATE, RENOVATE_PARANOID, SEMGREP, PRECOMMIT, PROFILE_FILES, inputSchema7, tool7;
 var init_initProject = __esm({
   "src/tools/initProject.ts"() {
     "use strict";
@@ -50419,29 +50424,29 @@ var init_initProject = __esm({
       // pre-commit are unchanged: their content is not profile-dependent.
       paranoid: [GITLEAKS_PARANOID, RENOVATE_PARANOID, SEMGREP, PRECOMMIT]
     };
-    tool7 = {
+    inputSchema7 = {
+      project_path: ProjectPath,
+      profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional().describe(
+        "minimal (gitleaks, Renovate), standard (+ Semgrep, pre-commit) or paranoid (stricter). Default standard."
+      ),
+      apply: external_exports.boolean().optional().describe("When false, return only the proposed file list without writing. Default: true."),
+      refresh: external_exports.boolean().optional().describe(
+        "Compare installed configs with the current ones; writes only with apply, never over your edits."
+      )
+    };
+    tool7 = defineTool({
       name: "init_project",
       title: "Bootstrap the project's dev-guardian configs",
       description: "Install the gitleaks, Renovate, Semgrep and pre-commit configs (profile minimal, standard or paranoid) and report a first secrets, vulnerability and SAST status. refresh compares your copies with the current ones: apply false only reports; apply true updates the files you never edited and writes <name>.new beside the others \u2014 an edited file is never overwritten.",
-      inputSchema: {
-        project_path: ProjectPath,
-        profile: external_exports.enum(["minimal", "standard", "paranoid"]).optional().describe(
-          "minimal (gitleaks, Renovate), standard (+ Semgrep, pre-commit) or paranoid (stricter). Default standard."
-        ),
-        apply: external_exports.boolean().optional().describe("When false, return only the proposed file list without writing. Default: true."),
-        refresh: external_exports.boolean().optional().describe(
-          "Compare installed configs with the current ones; writes only with apply, never over your edits."
-        )
-      },
+      inputSchema: inputSchema7,
       handler: async (input, ctx) => handler4(input, ctx)
-    };
+    });
     registerToolModule(tool7);
   }
 });
 
 // src/tools/observabilitySetup.ts
-async function handler5(input, ctx) {
-  const inp = input;
+async function handler5(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -50551,7 +50556,7 @@ function buildProposals(stack) {
 function failDomain6(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var tool8, NODE_LOGGER_TS, NODE_METRICS_TS, PY_LOGGER_PY, PHP_LOGGER_PHP, GENERIC_ADVISORY_MD, GO_LOGGER_GO, GO_METRICS_GO, RUST_OBSERV_RS, JAVA_LOGBACK_XML, RUBY_OBSERV_RB, DOTNET_LOGGING_CS, DOTNET_METRICS_CS;
+var inputSchema8, tool8, NODE_LOGGER_TS, NODE_METRICS_TS, PY_LOGGER_PY, PHP_LOGGER_PHP, GENERIC_ADVISORY_MD, GO_LOGGER_GO, GO_METRICS_GO, RUST_OBSERV_RS, JAVA_LOGBACK_XML, RUBY_OBSERV_RB, DOTNET_LOGGING_CS, DOTNET_METRICS_CS;
 var init_observabilitySetup = __esm({
   "src/tools/observabilitySetup.ts"() {
     "use strict";
@@ -50560,16 +50565,17 @@ var init_observabilitySetup = __esm({
     init_projectFs();
     init_schemas4();
     init_tools();
-    tool8 = {
+    inputSchema8 = {
+      project_path: ProjectPath,
+      apply: external_exports.boolean().optional().describe("When true, write the proposed files to disk. Default: false (dry-run).")
+    };
+    tool8 = defineTool({
       name: "observability_setup",
       title: "Configure logging + metrics scaffolding",
       description: "Propose stack-appropriate observability files (Pino logger / structlog / Monolog, plus a Prometheus-compatible metrics module). When apply=true (default false), writes the files; otherwise returns proposals only.",
-      inputSchema: {
-        project_path: ProjectPath,
-        apply: external_exports.boolean().optional().describe("When true, write the proposed files to disk. Default: false (dry-run).")
-      },
+      inputSchema: inputSchema8,
       handler: async (input, ctx) => handler5(input, ctx)
-    };
+    });
     registerToolModule(tool8);
     NODE_LOGGER_TS = `// Structured logger built on Pino.
 // Install: \`npm i pino pino-pretty\`
@@ -50805,8 +50811,7 @@ public static class Metrics
 import { existsSync as existsSync17, readFileSync as readFileSync7, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join61, relative as relative22 } from "node:path";
 import { randomUUID as randomUUID5 } from "node:crypto";
-async function handler6(input, ctx) {
-  const inp = input;
+async function handler6(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -51033,7 +51038,7 @@ function summariseK6(root) {
 function failDomain7(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema3, tool9;
+var inputSchema9, tool9;
 var init_perfCheck = __esm({
   "src/tools/perfCheck.ts"() {
     "use strict";
@@ -51046,19 +51051,19 @@ var init_perfCheck = __esm({
     init_scanHelpers();
     init_scannerParsers();
     init_tools();
-    inputSchema3 = {
+    inputSchema9 = {
       project_path: ProjectPath,
       target_url: httpUrlField().optional().describe("URL to probe with Lighthouse. Mutually exclusive with k6_script_path."),
       k6_script_path: external_exports.string().optional().describe("Path to a k6 script to execute. Mutually exclusive with target_url."),
       lighthouse_categories: external_exports.array(external_exports.enum(["performance", "accessibility", "best-practices", "seo", "pwa"])).optional().describe("Categories to include. Default: all five.")
     };
-    tool9 = {
+    tool9 = defineTool({
       name: "perf_check",
       title: "Performance check (Lighthouse or k6)",
       description: "Run Lighthouse against target_url, or k6 against k6_script_path: Core Web Vitals, or request counts and p95/p99, and the raw report's path. Lighthouse runs are checked against .guardian/budgets.yml: an exceeded budget is a finding, and `budgets.status` never reads an unmeasured metric as within budget. Sends real load to the URL.",
-      inputSchema: inputSchema3,
+      inputSchema: inputSchema9,
       handler: async (input, ctx) => handler6(input, ctx)
-    };
+    });
     registerToolModule(tool9);
   }
 });
@@ -51092,8 +51097,7 @@ var init_sourceToolArg = __esm({
 });
 
 // src/tools/setBaseline.ts
-async function handler7(input, ctx) {
-  const inp = input;
+async function handler7(inp, ctx) {
   if (inp.scan_id && inp.source_tool !== void 0) return failDomain8("unsupported_target", SOURCE_TOOL_WITH_SCAN_ID);
   let targetScanId;
   if (inp.scan_id) {
@@ -51155,7 +51159,7 @@ async function handler7(input, ctx) {
 function failDomain8(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema4, tool10;
+var inputSchema10, tool10;
 var init_setBaseline = __esm({
   "src/tools/setBaseline.ts"() {
     "use strict";
@@ -51168,20 +51172,20 @@ var init_setBaseline = __esm({
     init_sourceToolArg();
     init_types2();
     init_tools();
-    inputSchema4 = {
+    inputSchema10 = {
       project_path: ProjectPath,
       scan_id: external_exports.string().uuid().optional().describe("Scan to mark as the baseline. Defaults to project_path's newest usable scan."),
       scan_type: external_exports.enum(SCAN_TYPES).optional().describe("Without scan_id: baseline the newest scan of this type."),
       source_tool: SourceToolInput,
       note: external_exports.string().max(500).optional().describe("Free-form note attached to the baseline row.")
     };
-    tool10 = {
+    tool10 = defineTool({
       name: "set_baseline",
       title: "Set the regression baseline",
       description: "Mark a scan as its project's baseline for its type \u2014 by default the newest usable one (of scan_type), never an SBOM, stack, diff-review, scoped or unmeasured scan. diff_scans compares against it (from: baseline, and mode regression). For sarif_import, source_tool picks the tool. To accept one reviewed finding, suppress it instead.",
-      inputSchema: inputSchema4,
+      inputSchema: inputSchema10,
       handler: async (input, ctx) => handler7(input, ctx)
-    };
+    });
     registerToolModule(tool10);
   }
 });
@@ -52668,8 +52672,7 @@ var init_statements = __esm({
 });
 
 // src/tools/suppressFinding.ts
-async function handler8(input, ctx) {
-  const inp = input;
+async function handler8(inp, ctx) {
   if (!inp.finding_fingerprint || !inp.reason) {
     return failDomain9(
       "unknown_finding",
@@ -52822,7 +52825,7 @@ function vexArgumentProblem(inp) {
 function failDomain9(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema5, tool11, MAX_NAMED_COPIES2, MAX_LISTED_COPIES;
+var inputSchema11, tool11, MAX_NAMED_COPIES2, MAX_LISTED_COPIES;
 var init_suppressFinding = __esm({
   "src/tools/suppressFinding.ts"() {
     "use strict";
@@ -52836,7 +52839,7 @@ var init_suppressFinding = __esm({
     init_scope2();
     init_statements();
     init_tools();
-    inputSchema5 = {
+    inputSchema11 = {
       project_path: ProjectPath,
       finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("SHA-256 fingerprint of the finding to suppress (from a previous scan response)."),
       reason: external_exports.string().min(1).max(1e3).describe("Why this finding is being suppressed. Required."),
@@ -52847,13 +52850,13 @@ var init_suppressFinding = __esm({
       justification: external_exports.enum(OPENVEX_JUSTIFICATIONS).optional().describe("OpenVEX justification for vex_status not_affected. Required with it."),
       impact_statement: external_exports.string().min(1).max(1e3).optional().describe("Optional free-text VEX impact statement, with vex_status.")
     };
-    tool11 = {
+    tool11 = defineTool({
       name: "suppress_finding",
       title: "Suppress a finding",
       description: "Mark a finding (by the fingerprint a scan showed) as a false positive; it stays hidden after the code moves. A fingerprint no scan of this project reported is `unknown_finding`. expires_at snoozes. For a finding with its own CVE, GHSA or PYSEC id and a package version, vex_status: not_affected with a justification also makes a VEX statement (export_vex); the reply names other open copies of the vulnerability.",
-      inputSchema: inputSchema5,
+      inputSchema: inputSchema11,
       handler: async (input, ctx) => handler8(input, ctx)
-    };
+    });
     registerToolModule(tool11);
     MAX_NAMED_COPIES2 = 5;
     MAX_LISTED_COPIES = 50;
@@ -52861,8 +52864,7 @@ var init_suppressFinding = __esm({
 });
 
 // src/tools/diffScans.ts
-async function handler9(input, ctx) {
-  const inp = input;
+async function handler9(inp, ctx) {
   const skipHits = [];
   const toScan = resolveTo(inp, ctx, skipHits);
   if (!toScan.ok) return toScan.err;
@@ -53030,7 +53032,7 @@ function describeSkipped(skipped2) {
 function failDomain10(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var ITEMS_PER_BUCKET, FromEnum, ToEnum, inputSchema6, tool12;
+var ITEMS_PER_BUCKET, FromEnum, ToEnum, inputSchema12, tool12;
 var init_diffScans = __esm({
   "src/tools/diffScans.ts"() {
     "use strict";
@@ -53046,7 +53048,7 @@ var init_diffScans = __esm({
     ITEMS_PER_BUCKET = 50;
     FromEnum = external_exports.enum(["baseline", "previous"]);
     ToEnum = external_exports.enum(["latest"]);
-    inputSchema6 = {
+    inputSchema12 = {
       project_path: ProjectPath,
       scan_type: external_exports.enum(SCAN_TYPES).optional().describe("With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type."),
       source_tool: SourceToolInput,
@@ -53059,13 +53061,13 @@ var init_diffScans = __esm({
         "The newer side when to_scan_id is not given: latest (default)."
       )
     };
-    tool12 = {
+    tool12 = defineTool({
       name: "diff_scans",
       title: "Diff scans (regression / resolution detection)",
       description: "Compare findings between two scans of one project (same scan_type). Returns new (in to but not in from), resolved (in from but not in to), unchanged (in both) and not_remeasured (in from, of a type to did not measure \u2014 e.g. a failed child of a security_scan_full run; never counted as resolved): true counts in `summary`, at most 50 findings per list, `truncated` naming the lists that were cut. Findings are matched by their line-independent identity, so code moving above a finding does not make it new; scans from before identities existed match by fingerprint. Default: from=previous, to=latest \u2014 the newest usable scan of project_path (default: the server's working directory), never an SBOM/stack/diff-review run or one whose scanners did not run; skipped scans are counted in `skipped`. from=baseline uses the project's baseline of the same scan type. A finding under an active suppression is listed apart (`summary.suppressed`, `suppressed_findings`), never as new, resolved or unchanged. An explicit scan id of another project (from: or of another scan type), or of a scan that did not complete (running, failed, cancelled), is refused with unknown_scan_id, never diffed. For scan_type sarif_import (import_sarif) source_tool names the tool whose imports are compared; imports of two tools are never diffed.",
-      inputSchema: inputSchema6,
+      inputSchema: inputSchema12,
       handler: async (input, ctx) => handler9(input, ctx)
-    };
+    });
     registerToolModule(tool12);
   }
 });
@@ -53201,8 +53203,7 @@ var init_fold = __esm({
 
 // src/tools/auditExecutive.ts
 import { randomUUID as randomUUID6 } from "node:crypto";
-async function handler10(input, ctx, callMeta) {
-  const inp = input;
+async function handler10(inp, ctx, callMeta) {
   const localOnly = inp.local_only === true;
   let projectPath;
   try {
@@ -53427,7 +53428,7 @@ function findPreviousAudit(ctx, projectPath, thisAuditId) {
 function failDomain11(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var BASE_SUB_TOOLS, WP_EXTRA_SUB_TOOLS, DOTNET_EXTRA_SUB_TOOLS, tool13, NO_LOCAL_ONLY_MODE;
+var BASE_SUB_TOOLS, WP_EXTRA_SUB_TOOLS, DOTNET_EXTRA_SUB_TOOLS, inputSchema13, tool13, NO_LOCAL_ONLY_MODE;
 var init_auditExecutive = __esm({
   "src/tools/auditExecutive.ts"() {
     "use strict";
@@ -53442,19 +53443,20 @@ var init_auditExecutive = __esm({
     BASE_SUB_TOOLS = ["security_scan_full", "quality_check", "deps_audit", "compliance_check"];
     WP_EXTRA_SUB_TOOLS = ["scan_wordpress"];
     DOTNET_EXTRA_SUB_TOOLS = ["scan_dotnet_secrets", "dotnet_target_framework_check"];
-    tool13 = {
+    inputSchema13 = {
+      project_path: ProjectPath,
+      severity_min: SeverityMin,
+      local_only: external_exports.boolean().optional().describe(
+        "Semgrep on disk only, no scan_wordpress; the rest still goes out (`local_only_gaps`)."
+      )
+    };
+    tool13 = defineTool({
       name: "audit_executive",
       title: "Executive audit (security, quality, deps, compliance)",
       description: "Run security_scan_full, quality_check, deps_audit and compliance_check concurrently, plus the WordPress or .NET scans the latest detect_stack calls for: one report \u2014 severity counts, top 10 findings, worst child coverage, change since the last audit. Egress: the Semgrep registry (with metrics), Trivy's database, npm, PyPI, NuGet feeds; Trivy's and Semgrep's version checks are off. Runs code: pip-audit's virtualenv, a .NET restore (MSBuild), the project's ESLint. local_only keeps Semgrep local (`local_only_gaps`: what still went out).",
-      inputSchema: {
-        project_path: ProjectPath,
-        severity_min: SeverityMin,
-        local_only: external_exports.boolean().optional().describe(
-          "Semgrep on disk only, no scan_wordpress; the rest still goes out (`local_only_gaps`)."
-        )
-      },
+      inputSchema: inputSchema13,
       handler: async (input, ctx, callMeta) => handler10(input, ctx, callMeta)
-    };
+    });
     registerToolModule(tool13);
     NO_LOCAL_ONLY_MODE = {
       scan_wordpress: "it has no local-only mode: its Semgrep packs (p/php, p/wordpress) come from the Semgrep registry, with usage metrics. Run it without local_only to cover WordPress."
@@ -54333,8 +54335,7 @@ var init_checkToolchain = __esm({
 
 // src/tools/installToolchain.ts
 import { join as join62 } from "node:path";
-async function handler12(input, ctx) {
-  const inp = input;
+async function handler12(inp, ctx) {
   const dryRun = inp.dry_run === true;
   const elevation = inp.elevation_allowed === true;
   const os = detectOs();
@@ -54599,7 +54600,7 @@ async function runCheckToolchain(ctx) {
   const r = await check2.handler({}, ctx);
   return r;
 }
-var inputSchema7, tool15;
+var inputSchema14, tool15;
 var init_installToolchain = __esm({
   "src/tools/installToolchain.ts"() {
     "use strict";
@@ -54615,7 +54616,7 @@ var init_installToolchain = __esm({
     init_installCatalog();
     init_tools();
     init_scanHelpers();
-    inputSchema7 = {
+    inputSchema14 = {
       tools: external_exports.array(external_exports.string()).optional().describe(
         "Install only these catalogued scanners. Default: the standard set for the stack."
       ),
@@ -54624,21 +54625,20 @@ var init_installToolchain = __esm({
         "Allow steps that need sudo or admin (else listed in `requires_elevation`)."
       )
     };
-    tool15 = {
+    tool15 = defineTool({
       name: "install_toolchain",
       title: "Install missing scanners",
       description: "Install missing scanners \u2014 the standard set, or `tools` \u2014 with the install scripts (Linux, macOS) or winget, scoop, choco or WSL (Windows). Syft, Trivy and gitleaks come at a pinned version (a release checked against its sha256 goes to ~/.local/bin); `binary_path` and `path_note` say where each went. This changes the system: run dry_run first, which only lists the commands.",
-      inputSchema: inputSchema7,
+      inputSchema: inputSchema14,
       handler: async (input, ctx) => handler12(input, ctx)
-    };
+    });
     registerToolModule(tool15);
   }
 });
 
 // src/tools/licenseCompatibility.ts
 import { join as join63 } from "node:path";
-async function handler13(input, ctx) {
-  const inp = input;
+async function handler13(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -54952,7 +54952,7 @@ function groupByLicense(rows) {
 function failDomain12(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var tool16, PERMISSIVE, AGPL, VIRAL, WEAK_COPYLEFT, COMMERCIAL, KNOWN_LICENSES, GNU_VERSIONS;
+var inputSchema15, tool16, PERMISSIVE, AGPL, VIRAL, WEAK_COPYLEFT, COMMERCIAL, KNOWN_LICENSES, GNU_VERSIONS;
 var init_licenseCompatibility = __esm({
   "src/tools/licenseCompatibility.ts"() {
     "use strict";
@@ -54960,13 +54960,14 @@ var init_licenseCompatibility = __esm({
     init_projectPath();
     init_schemas4();
     init_tools();
-    tool16 = {
+    inputSchema15 = { project_path: ProjectPath };
+    tool16 = defineTool({
       name: "license_compatibility",
       title: "Licence compatibility",
       description: "Check the project's licence (package.json, pyproject.toml, composer.json, .csproj or LICENSE) against its dependencies' licences from this project's latest compliance_check. No declared licence, or a proprietary label, counts as proprietary and still flags copyleft; an unrecognised or compound SPDX expression on either side is `undetermined`, never compatible. Reads history only.",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema15,
       handler: async (input, ctx) => handler13(input, ctx)
-    };
+    });
     registerToolModule(tool16);
     PERMISSIVE = /* @__PURE__ */ new Set([
       "MIT",
@@ -55408,8 +55409,7 @@ var init_rank = __esm({
 });
 
 // src/tools/riskScore.ts
-async function handler14(input, ctx) {
-  const inp = input;
+async function handler14(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -55505,7 +55505,7 @@ function summariseCveIntel(cves, intel, findings) {
     } : {}
   };
 }
-var tool17;
+var inputSchema16, tool17;
 var init_riskScore = __esm({
   "src/tools/riskScore.ts"() {
     "use strict";
@@ -55517,21 +55517,21 @@ var init_riskScore = __esm({
     init_schemas4();
     init_types2();
     init_tools();
-    tool17 = {
+    inputSchema16 = { project_path: ProjectPath };
+    tool17 = defineTool({
       name: "risk_score",
       title: "Risk score (0-100)",
       description: "A 0-100 risk score and band for one project from its recorded scans, open findings (newest usable scan of each type, suppressions out), CVEs (weighted up for CISA KEV or a high EPSS) and baseline, with the breakdown, the next action and `coverage` (`coverage_caveat` when incomplete). `suppressed_count`: what suppressions took out \u2014 a mass suppression is never a clean project. `future_dated_note`: future-dated scans ignored.",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema16,
       handler: async (input, ctx) => handler14(input, ctx)
-    };
+    });
     registerToolModule(tool17);
   }
 });
 
 // src/tools/sbomDiff.ts
 import { existsSync as existsSync18, readFileSync as readFileSync8 } from "node:fs";
-async function handler15(input, ctx) {
-  const inp = input;
+async function handler15(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -55687,7 +55687,7 @@ function extractFromSbomJson(raw) {
 function failDomain13(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var RESPONSE_CAP, inputSchema8, tool18;
+var RESPONSE_CAP, inputSchema17, tool18;
 var init_sbomDiff = __esm({
   "src/tools/sbomDiff.ts"() {
     "use strict";
@@ -55696,7 +55696,7 @@ var init_sbomDiff = __esm({
     init_schemas4();
     init_tools();
     RESPONSE_CAP = 50;
-    inputSchema8 = {
+    inputSchema17 = {
       project_path: ProjectPath,
       from_scan_id: external_exports.string().uuid().optional().describe("The older SBOM scan. Default: the second-newest."),
       to_scan_id: external_exports.string().uuid().optional().describe("The newer SBOM scan. Default: the newest."),
@@ -55707,20 +55707,19 @@ var init_sbomDiff = __esm({
         "Ignored; kept for old callers."
       )
     };
-    tool18 = {
+    tool18 = defineTool({
       name: "sbom_diff",
       title: "Compare two SBOMs",
       description: "Compare two generate_sbom scans of project_path (default: its two latest): components added, removed and changed, keyed by ecosystem and name with every version kept. Refuses to compare a full list with a capped summary; the response arrays are capped, `summary` has the true totals.",
-      inputSchema: inputSchema8,
+      inputSchema: inputSchema17,
       handler: async (input, ctx) => handler15(input, ctx)
-    };
+    });
     registerToolModule(tool18);
   }
 });
 
 // src/tools/regressionAlert.ts
-async function handler16(input, ctx) {
-  const inp = input;
+async function handler16(inp, ctx) {
   const threshold = inp.threshold ?? 5;
   let projectPath;
   try {
@@ -55825,7 +55824,7 @@ async function handler16(input, ctx) {
 function weightedScore(findings) {
   return findings.reduce((acc, f) => acc + (SEVERITY_WEIGHT[f.severity] ?? 0), 0);
 }
-var SEVERITY_WEIGHT, inputSchema9, tool19;
+var SEVERITY_WEIGHT, inputSchema18, tool19;
 var init_regressionAlert = __esm({
   "src/tools/regressionAlert.ts"() {
     "use strict";
@@ -55846,7 +55845,7 @@ var init_regressionAlert = __esm({
       high: 5,
       critical: 10
     };
-    inputSchema9 = {
+    inputSchema18 = {
       project_path: ProjectPath,
       scan_type: external_exports.enum(SCAN_TYPES).optional().describe("Compare scans of this type. Default: the type of the newest finding-producing scan."),
       source_tool: SourceToolInput,
@@ -55854,20 +55853,19 @@ var init_regressionAlert = __esm({
         "Score-delta threshold above which `regressed=true`. Default 5. A single new critical alone surpasses this; 5 new lows do not."
       )
     };
-    tool19 = {
+    tool19 = defineTool({
       name: "regression_alert",
       title: "Regression alert",
       description: "Compare one project's latest scan against its baseline of the same scan type (or its previous scan of that type) and flag when the severity-weighted change exceeds a threshold. project_path defaults to the server's working directory; scan_type defaults to the newest finding-producing scan. Never compares scans of different types or projects. A finding under an active suppression is neither new nor resolved and never moves the score: it is counted apart in `suppressed_by_severity` \u2014 a mass suppression shows there, never as an improvement. One whose scanner did not run this time is `not_remeasured_by_severity` (the scanners in `not_measured`), never resolved. For scan_type sarif_import (import_sarif) source_tool names the tool whose latest import is scored against that tool's baseline. Returns enough context for the model to recommend follow-up actions.",
-      inputSchema: inputSchema9,
+      inputSchema: inputSchema18,
       handler: async (input, ctx) => handler16(input, ctx)
-    };
+    });
     registerToolModule(tool19);
   }
 });
 
 // src/tools/suggestFix.ts
-async function handler17(input, ctx) {
-  const inp = input;
+async function handler17(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -55940,7 +55938,7 @@ async function handler17(input, ctx) {
 function failDomain14(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var ROTATION_GUIDANCE, inputSchema10, tool20;
+var ROTATION_GUIDANCE, inputSchema19, tool20;
 var init_suggestFix = __esm({
   "src/tools/suggestFix.ts"() {
     "use strict";
@@ -55951,25 +55949,24 @@ var init_suggestFix = __esm({
     init_schemas4();
     init_tools();
     ROTATION_GUIDANCE = "This finding flags a credential (a password, key or token), not a code-shape bug \u2014 suggest_fix withholds surrounding source for it so the value is never echoed back into this response. Do not ask for or paste the secret value into further tooling. Rotate/revoke it at its source (the provider dashboard or secret manager), remove it from the file, and replace it with a reference to a secret store or an environment variable placeholder.";
-    inputSchema10 = {
+    inputSchema19 = {
       project_path: ProjectPath,
       finding_fingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/).describe("Fingerprint of the finding to gather context for."),
       context_lines: external_exports.number().int().min(0).max(200).optional().describe("How many lines of source context to include around the finding. Default 20.")
     };
-    tool20 = {
+    tool20 = defineTool({
       name: "suggest_fix",
       title: "Gather fix context",
       description: "Gather a finding's context \u2014 the source around it, rule metadata, earlier suppressions of the same rule \u2014 from project_path's newest scan that reported it, so you can write the patch. Calls no LLM.",
-      inputSchema: inputSchema10,
+      inputSchema: inputSchema19,
       handler: async (input, ctx) => handler17(input, ctx)
-    };
+    });
     registerToolModule(tool20);
   }
 });
 
 // src/tools/triageFindings.ts
-async function handler18(input, ctx) {
-  const inp = input;
+async function handler18(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -56040,7 +56037,7 @@ function toBucket(f, reason) {
     suggested_suppression_reason: `prioritize_findings triage: ${reason}`
   };
 }
-var ITEMS_PER_BUCKET2, TEST_PATTERNS, GENERATED_PATTERNS, FIXTURE_PATTERNS, tool21;
+var ITEMS_PER_BUCKET2, TEST_PATTERNS, GENERATED_PATTERNS, FIXTURE_PATTERNS, inputSchema20, tool21;
 var init_triageFindings = __esm({
   "src/tools/triageFindings.ts"() {
     "use strict";
@@ -56073,13 +56070,14 @@ var init_triageFindings = __esm({
       /(^|\/)stubs?\//i,
       /(^|\/)examples?\//i
     ];
-    tool21 = {
+    inputSchema20 = { project_path: ProjectPath };
+    tool21 = defineTool({
       name: "triage_findings",
       title: "Heuristic triage of findings",
       description: "Bucket one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) into likely_false_positive / probably_safe / keep using path-based heuristics (test files, generated code, fixtures). True counts in `summary`, at most 50 entries per bucket, `truncated` naming the buckets that were cut. No LLM call \u2014 the model that invoked the tool decides whether to call suppress_finding on the suggestions.",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema20,
       handler: async (input, ctx) => handler18(input, ctx)
-    };
+    });
     registerToolModule(tool21);
   }
 });
@@ -56171,8 +56169,7 @@ var init_hookInstallTarget = __esm({
 });
 
 // src/tools/precommitInstall.ts
-async function handler19(input, _ctx) {
-  const inp = input;
+async function handler19(inp, _ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -56246,7 +56243,7 @@ async function handler19(input, _ctx) {
 function failDomain15(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var tool22;
+var inputSchema21, tool22;
 var init_precommitInstall = __esm({
   "src/tools/precommitInstall.ts"() {
     "use strict";
@@ -56257,13 +56254,14 @@ var init_precommitInstall = __esm({
     init_schemas4();
     init_scanHelpers();
     init_tools();
-    tool22 = {
+    inputSchema21 = { project_path: ProjectPath };
+    tool22 = defineTool({
       name: "precommit_install",
       title: "Install pre-commit hooks",
       description: "Run `pre-commit install` in the project to wire its .pre-commit-config.yaml into git hooks. Requires pre-commit on PATH (install via install_toolchain).",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema21,
       handler: async (input, ctx) => handler19(input, ctx)
-    };
+    });
     registerToolModule(tool22);
   }
 });
@@ -56322,8 +56320,7 @@ var init_semgrepValidate = __esm({
 // src/tools/registerCustomRules.ts
 import { statSync as statSync9 } from "node:fs";
 import { isAbsolute as isAbsolute14, join as join65, resolve as resolve22 } from "node:path";
-async function handler20(input, ctx) {
-  const inp = input;
+async function handler20(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -56471,7 +56468,7 @@ function collectDiscovered(projectPath) {
 function failDomain16(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema11, tool23;
+var inputSchema22, tool23;
 var init_registerCustomRules = __esm({
   "src/tools/registerCustomRules.ts"() {
     "use strict";
@@ -56484,20 +56481,20 @@ var init_registerCustomRules = __esm({
     init_schemas4();
     init_tools();
     init_scanHelpers();
-    inputSchema11 = {
+    inputSchema22 = {
       project_path: ProjectPath,
       paths: external_exports.array(external_exports.string()).optional().describe(
         "Rule files, directories or globs. Default: .semgrep/, semgrep/ and rules/."
       ),
       clear: external_exports.boolean().optional().describe("Remove this project's registered rules.")
     };
-    tool23 = {
+    tool23 = defineTool({
       name: "register_custom_rules",
       title: "Register custom Semgrep rules",
       description: "Register Semgrep rule files for this project (paths, or found in .semgrep/, semgrep/, rules/); scan_sast and bug_hunt then run them. Each must be a valid rules file and, when Semgrep is installed, pass semgrep --validate; anything else is returned in `rejected` with the reason, never registered. A registered file that later disappears or breaks is skipped, not fatal. clear removes the registration.",
-      inputSchema: inputSchema11,
+      inputSchema: inputSchema22,
       handler: async (input, ctx) => handler20(input, ctx)
-    };
+    });
     registerToolModule(tool23);
   }
 });
@@ -66375,12 +66372,12 @@ var init_mcp = __esm({
         }
         return registeredPrompt;
       }
-      _createRegisteredTool(name, title, description, inputSchema34, outputSchema, annotations, execution, _meta, handler51) {
+      _createRegisteredTool(name, title, description, inputSchema53, outputSchema, annotations, execution, _meta, handler51) {
         validateAndWarnToolName(name);
         const registeredTool = {
           title,
           description,
-          inputSchema: getZodSchemaObject(inputSchema34),
+          inputSchema: getZodSchemaObject(inputSchema53),
           outputSchema: getZodSchemaObject(outputSchema),
           annotations,
           execution,
@@ -66431,7 +66428,7 @@ var init_mcp = __esm({
           throw new Error(`Tool ${name} is already registered`);
         }
         let description;
-        let inputSchema34;
+        let inputSchema53;
         let outputSchema;
         let annotations;
         if (typeof rest[0] === "string") {
@@ -66440,7 +66437,7 @@ var init_mcp = __esm({
         if (rest.length > 1) {
           const firstArg = rest[0];
           if (isZodRawShapeCompat(firstArg)) {
-            inputSchema34 = rest.shift();
+            inputSchema53 = rest.shift();
             if (rest.length > 1 && typeof rest[0] === "object" && rest[0] !== null && !isZodRawShapeCompat(rest[0])) {
               annotations = rest.shift();
             }
@@ -66452,7 +66449,7 @@ var init_mcp = __esm({
           }
         }
         const callback = rest[0];
-        return this._createRegisteredTool(name, void 0, description, inputSchema34, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
+        return this._createRegisteredTool(name, void 0, description, inputSchema53, outputSchema, annotations, { taskSupport: "forbidden" }, void 0, callback);
       }
       /**
        * Registers a tool with a config object and callback.
@@ -66461,8 +66458,8 @@ var init_mcp = __esm({
         if (this._registeredTools[name]) {
           throw new Error(`Tool ${name} is already registered`);
         }
-        const { title, description, inputSchema: inputSchema34, outputSchema, annotations, _meta } = config2;
-        return this._createRegisteredTool(name, title, description, inputSchema34, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
+        const { title, description, inputSchema: inputSchema53, outputSchema, annotations, _meta } = config2;
+        return this._createRegisteredTool(name, title, description, inputSchema53, outputSchema, annotations, { taskSupport: "forbidden" }, _meta, cb);
       }
       prompt(name, ...rest) {
         if (this._registeredPrompts[name]) {
@@ -66685,8 +66682,7 @@ var init_resources = __esm({
 
 // src/tools/healthStatus.ts
 import { existsSync as existsSync19, statSync as statSync10 } from "node:fs";
-async function handler21(input, ctx) {
-  const inp = input;
+async function handler21(inp, ctx) {
   let projectPath;
   if (inp.project_path === void 0 || inp.project_path.length === 0) {
     projectPath = serverProjectPath();
@@ -66755,7 +66751,7 @@ function activeSuppressions(ctx, projectPath) {
   }
   return { active: own + global3, this_project: own, all_projects: global3 };
 }
-var startedAt, SERVER_VERSION, tool24;
+var startedAt, SERVER_VERSION, inputSchema23, tool24;
 var init_healthStatus = __esm({
   "src/tools/healthStatus.ts"() {
     "use strict";
@@ -66769,13 +66765,14 @@ var init_healthStatus = __esm({
     init_tools();
     startedAt = Date.now();
     SERVER_VERSION = resolveVersion();
-    tool24 = {
+    inputSchema23 = { project_path: ProjectPath };
+    tool24 = defineTool({
       name: "health_status",
       title: "Server health",
       description: "Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. `storage_warning` (null when fine): the project's .guardian/guardian.db is not used (a copy, or not registered) and history goes to a per-user fallback \u2014 tell the user to run the `db adopt` command it names in their own terminal; never run it yourself. `suppressions` {active, this_project, all_projects}: all_projects ones hide findings in every project. `storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, which every count ignores.",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema23,
       handler: async (input, ctx) => handler21(input, ctx)
-    };
+    });
     registerToolModule(tool24);
   }
 });
@@ -67174,8 +67171,7 @@ var init_owaspCoverage = __esm({
 
 // src/tools/reportExport.ts
 import { join as join66 } from "node:path";
-async function handler22(input, ctx) {
-  const inp = input;
+async function handler22(inp, ctx) {
   const format = inp.format ?? "markdown";
   const lang = inp.lang ?? "en";
   let projectPath;
@@ -67504,7 +67500,7 @@ function slugify(s) {
 function failDomain17(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema12, tool25, locationOf, MD_INLINE_MAX, mdCode, SCAN_TITLE;
+var inputSchema24, tool25, locationOf, MD_INLINE_MAX, mdCode, SCAN_TITLE;
 var init_reportExport = __esm({
   "src/tools/reportExport.ts"() {
     "use strict";
@@ -67523,7 +67519,7 @@ var init_reportExport = __esm({
     init_sourceToolArg();
     init_types2();
     init_tools();
-    inputSchema12 = {
+    inputSchema24 = {
       project_path: ProjectPath,
       scan_id: external_exports.string().uuid().optional().describe("Scan to export. Default: project_path's newest usable scan."),
       source_tool: SourceToolInput.describe(
@@ -67539,13 +67535,13 @@ var init_reportExport = __esm({
       subtitle: external_exports.string().optional().describe("Optional subtitle under the title (content_markdown mode)."),
       lang: external_exports.enum(["en", "pt", "es"]).optional().describe("Language for the HTML shell chrome (report title + footer). Default: en.")
     };
-    tool25 = {
+    tool25 = defineTool({
       name: "report_export",
       title: "Export a report (HTML, SARIF, Markdown, JSON)",
       description: "Write a scan report as markdown (default), html (self-contained, light/dark), sarif (SARIF 2.1.0, CWE and OWASP Top 10:2025 tags) or json, saying which OWASP categories the scan tested; content_markdown renders a narrative instead. An explicit scan_id must be one of project_path's (another project's is refused, with retry_with naming its project) and not still running. source_tool: that tool's newest SARIF import.",
-      inputSchema: inputSchema12,
+      inputSchema: inputSchema24,
       handler: async (input, ctx) => handler22(input, ctx)
-    };
+    });
     registerToolModule(tool25);
     locationOf = (f) => f.file_path ? `${f.file_path}${f.line_start ? `:${f.line_start}` : ""}` : "";
     MD_INLINE_MAX = 2e3;
@@ -67971,8 +67967,7 @@ import { basename as basename9, relative as relative24, resolve as resolve24, se
 function handler23(input, ctx) {
   return Promise.resolve(run(input, ctx));
 }
-function run(input, ctx) {
-  const inp = input;
+function run(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -68071,7 +68066,7 @@ function refusalText(reason) {
 function fail(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var LOG_MAX_BYTES, TOP_FINDINGS, inputSchema13, tool26;
+var LOG_MAX_BYTES, TOP_FINDINGS, inputSchema25, tool26;
 var init_importSarif2 = __esm({
   "src/tools/importSarif.ts"() {
     "use strict";
@@ -68087,19 +68082,19 @@ var init_importSarif2 = __esm({
     init_counts();
     LOG_MAX_BYTES = 50 * 1024 * 1024;
     TOP_FINDINGS = 10;
-    inputSchema13 = {
+    inputSchema25 = {
       project_path: ProjectPath,
       sarif_path: external_exports.string().min(1).describe("The SARIF 2.1.0 log to import: absolute, or relative to project_path."),
       allow_outside_project: external_exports.boolean().optional().describe("Read a log outside project_path. Default false."),
       max_results: external_exports.number().int().min(1).max(2e5).optional().describe("Results imported before stopping (the scan is then partial). Default 50000.")
     };
-    tool26 = {
+    tool26 = defineTool({
       name: "import_sarif",
       title: "Import a SARIF log",
       description: "Import another tool's SARIF 2.1.0 log (CodeQL, Snyk, \u2026) into the history: one sarif_import scan per run, named by its tool, whose findings then work in set_baseline, diff_scans, suppress_finding, prioritize_findings and report_export (source_tool picks the tool). Results that are not findings, or were suppressed at the source, are counted, not imported. Nothing the log names is opened or run. The log: a file of at most 50 MiB under project_path, unless allow_outside_project.",
-      inputSchema: inputSchema13,
+      inputSchema: inputSchema25,
       handler: async (input, ctx) => handler23(input, ctx)
-    };
+    });
     registerToolModule(tool26);
   }
 });
@@ -68161,8 +68156,7 @@ var init_nistCsf2 = __esm({
 });
 
 // src/tools/complianceEvidence.ts
-async function handler24(input, ctx) {
-  const inp = input;
+async function handler24(inp, ctx) {
   const framework = inp.framework ?? "generic";
   let projectPath;
   try {
@@ -68490,7 +68484,7 @@ function build(args) {
   );
   return out.join("\n");
 }
-var FRAMEWORKS, inputSchema14, tool27, FRAMEWORK_LABEL;
+var FRAMEWORKS, inputSchema26, tool27, FRAMEWORK_LABEL;
 var init_complianceEvidence = __esm({
   "src/tools/complianceEvidence.ts"() {
     "use strict";
@@ -68505,19 +68499,19 @@ var init_complianceEvidence = __esm({
     init_types2();
     init_tools();
     FRAMEWORKS = ["gdpr", "soc2", "iso27001", "owasp-top10-2025", "nist-csf-2.0", "generic"];
-    inputSchema14 = {
+    inputSchema26 = {
       project_path: ProjectPath,
       framework: external_exports.enum(FRAMEWORKS).optional().describe(
         "gdpr, soc2, iso27001, generic (default), or owasp-top10-2025 / nist-csf-2.0 (per category)."
       )
     };
-    tool27 = {
+    tool27 = defineTool({
       name: "compliance_evidence",
       title: "Compliance evidence pack (Markdown)",
       description: "A Markdown evidence document from one project's recorded state: latest compliance scan, licences, CVE counts, baseline, suppressions, policy documents. framework gdpr, soc2, iso27001 or generic shapes the labels; owasp-top10-2025 and nist-csf-2.0 give per-category evidence, a category being covered only when, for every source language, a scanner that ran has rules for it. Reads history only.",
-      inputSchema: inputSchema14,
+      inputSchema: inputSchema26,
       handler: async (input, ctx) => handler24(input, ctx)
-    };
+    });
     registerToolModule(tool27);
     FRAMEWORK_LABEL = {
       gdpr: "GDPR",
@@ -68550,8 +68544,7 @@ var init_argFile = __esm({
 });
 
 // src/tools/createGithubIssues.ts
-async function handler25(input, ctx) {
-  const inp = input;
+async function handler25(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -68802,7 +68795,7 @@ async function createIssue(cwd, title, body, labels) {
 function failDomain18(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema15, tool28, ISSUE_LIST_LIMIT;
+var inputSchema27, tool28, ISSUE_LIST_LIMIT;
 var init_createGithubIssues = __esm({
   "src/tools/createGithubIssues.ts"() {
     "use strict";
@@ -68817,7 +68810,7 @@ var init_createGithubIssues = __esm({
     init_breakdown();
     init_types2();
     init_tools();
-    inputSchema15 = {
+    inputSchema27 = {
       project_path: ProjectPath,
       severity_min: external_exports.enum(["info", "low", "medium", "high", "critical"]).optional().describe(
         "Lowest severity filed. Default high; the rest are counted in `filtered`."
@@ -68832,13 +68825,13 @@ var init_createGithubIssues = __esm({
         "true: list the issues without filing them. Default false."
       )
     };
-    tool28 = {
+    tool28 = defineTool({
       name: "create_github_issues",
       title: "File GitHub issues for top findings",
       description: "Open one GitHub issue per top open finding of project_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its fingerprint is in the title). severity_min (default high) and max_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry_run: preview first.",
-      inputSchema: inputSchema15,
+      inputSchema: inputSchema27,
       handler: async (input, ctx) => handler25(input, ctx)
-    };
+    });
     registerToolModule(tool28);
     ISSUE_LIST_LIMIT = 1e3;
   }
@@ -68994,12 +68987,11 @@ var init_scanWordpress = __esm({
           force: Force,
           standard: external_exports.enum(WP_STANDARDS).optional().describe("PHPCS standard to apply. Default: WordPress.")
         },
-        invoke: async (input, ctx) => {
+        invoke: async (inp, ctx) => {
           const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "wordpress");
           const tools_run = [];
           const missing_tools = [];
           const parser_inputs = [];
-          const inp = input;
           const standard = inp.standard ?? "WordPress";
           const looksWp = presentInProject(ctx.projectPath, "wp-config.php") || presentInProject(ctx.projectPath, "wp-config-sample.php") || presentInProject(ctx.projectPath, "style.css") || // theme root
           presentInProject(ctx.projectPath, "readme.txt");
@@ -69157,8 +69149,7 @@ var init_scanWordpress = __esm({
 
 // src/tools/wpAudit.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
-async function handler26(input, ctx) {
-  const inp = input;
+async function handler26(inp, ctx) {
   if (!inp.wp_install_path) {
     return failDomain19("not_a_wordpress_install", "wp_install_path is required.");
   }
@@ -69445,7 +69436,7 @@ function normaliseStatus(raw) {
 function failDomain19(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var RETRY_DELAYS_MS, DEFAULT_RISKY_LOGINS, THEMES_NOT_CHECKED, inputSchema16, tool29, str3;
+var RETRY_DELAYS_MS, DEFAULT_RISKY_LOGINS, THEMES_NOT_CHECKED, inputSchema28, tool29, str3;
 var init_wpAudit = __esm({
   "src/tools/wpAudit.ts"() {
     "use strict";
@@ -69459,7 +69450,7 @@ var init_wpAudit = __esm({
     RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
     DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
     THEMES_NOT_CHECKED = "not checked (WP-CLI has no theme checksums)";
-    inputSchema16 = {
+    inputSchema28 = {
       wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php."),
       include_users: external_exports.boolean().optional().describe(
         "List the administrator accounts (wp user list --role=administrator: login and e-mail), flagging risky login names. Default: true."
@@ -69469,13 +69460,13 @@ var init_wpAudit = __esm({
         'Administrator logins to flag as risky, compared case-insensitively. Replaces the default list: ["admin", "administrator", "root", "wpadmin"].'
       )
     };
-    tool29 = {
+    tool29 = defineTool({
       name: "wp_audit",
       title: "Live WordPress install audit",
       description: "Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none for themes: reported not checked), admin user list, dangerous config flags, plugins with auto_update on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.",
-      inputSchema: inputSchema16,
+      inputSchema: inputSchema28,
       handler: async (input, ctx) => handler26(input, ctx)
-    };
+    });
     registerToolModule(tool29);
     str3 = (v) => typeof v === "string" ? v : void 0;
   }
@@ -70205,8 +70196,7 @@ var init_vulnFeed = __esm({
 import { existsSync as existsSync21, mkdirSync as mkdirSync11, readdirSync as readdirSync14, readFileSync as readFileSync9, rmSync as rmSync10, writeFileSync as writeFileSync14 } from "node:fs";
 import { createHash as createHash12, randomUUID as randomUUID10 } from "node:crypto";
 import { dirname as dirname22, join as join70 } from "node:path";
-async function handler27(input, ctx) {
-  const inp = input;
+async function handler27(inp, ctx) {
   if (!inp.target_url && !inp.wp_install_path) {
     return failDomain20(
       "unknown_scan_id",
@@ -70486,7 +70476,7 @@ ${r.stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
 function failDomain20(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema17, tool30, URL_REPORT_DIR, MISSING_DB, WHY_LINE;
+var inputSchema29, tool30, URL_REPORT_DIR, MISSING_DB, WHY_LINE;
 var init_wpVulnCheck = __esm({
   "src/tools/wpVulnCheck.ts"() {
     "use strict";
@@ -70502,20 +70492,20 @@ var init_wpVulnCheck = __esm({
     init_siteKeys();
     init_vulnFeed();
     init_tools();
-    inputSchema17 = {
+    inputSchema29 = {
       wp_install_path: external_exports.string().optional().describe(
         "Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine."
       ),
       target_url: httpUrlField().optional().describe("Live URL of the WordPress site to scan. Preferred when both inputs are present."),
       api_token: external_exports.string().regex(API_TOKEN, "api_token must be a WPScan API token: letters and digits").optional().describe("WPScan API token. Falls back to WPSCAN_API_TOKEN env var.")
     };
-    tool30 = {
+    tool30 = defineTool({
       name: "wp_vuln_check",
       title: "WordPress vuln-DB lookup (WPScan)",
       description: "Run WPScan against a target URL (or against the URL inferred from a local install_path) and return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.",
-      inputSchema: inputSchema17,
+      inputSchema: inputSchema29,
       handler: async (input, ctx) => handler27(input, ctx)
-    };
+    });
     registerToolModule(tool30);
     URL_REPORT_DIR = /^wpvuln-\d{13}-[0-9a-f]{8}$/;
     MISSING_DB = /update required|database file is missing/i;
@@ -71124,8 +71114,7 @@ var init_wpVulnCheckSource = __esm({
 
 // src/tools/wpCronAudit.ts
 import { randomUUID as randomUUID11 } from "node:crypto";
-async function handler28(input, ctx) {
-  const inp = input;
+async function handler28(inp, ctx) {
   let installPath;
   try {
     installPath = resolveProjectPath(inp.wp_install_path).path;
@@ -71242,7 +71231,7 @@ function matchesInactivePlugin(hook, inactivePlugins) {
 function failDomain21(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema18, KNOWN_PREFIXES, BASE64_RE, tool31;
+var inputSchema30, KNOWN_PREFIXES, BASE64_RE, tool31;
 var init_wpCronAudit = __esm({
   "src/tools/wpCronAudit.ts"() {
     "use strict";
@@ -71252,7 +71241,7 @@ var init_wpCronAudit = __esm({
     init_processRunner();
     init_scanHelpers();
     init_tools();
-    inputSchema18 = {
+    inputSchema30 = {
       wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php.")
     };
     KNOWN_PREFIXES = [
@@ -71276,20 +71265,19 @@ var init_wpCronAudit = __esm({
       "wp_version_check"
     ];
     BASE64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
-    tool31 = {
+    tool31 = defineTool({
       name: "wp_cron_audit",
       title: "WordPress cron audit (suspicious scheduled events)",
       description: "List WP scheduled cron events and flag suspicious ones: unknown hook namespaces, base64-looking args, events from inactive plugins. Persistent backdoors on compromised WP sites almost always live here.",
-      inputSchema: inputSchema18,
+      inputSchema: inputSchema30,
       handler: async (input, ctx) => handler28(input, ctx)
-    };
+    });
     registerToolModule(tool31);
   }
 });
 
 // src/tools/wpRecommendHardening.ts
-async function handler29(input, ctx) {
-  const inp = input;
+async function handler29(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -71443,7 +71431,7 @@ function toMarkdown(items, scanId) {
 function findLatestWpAudit(ctx, projectPath) {
   return findLatestUsable(ctx.storage, projectPath, ["wp_audit"], { skipCoverageNone: false }).scan;
 }
-var tool32;
+var inputSchema31, tool32;
 var init_wpRecommendHardening = __esm({
   "src/tools/wpRecommendHardening.ts"() {
     "use strict";
@@ -71451,21 +71439,21 @@ var init_wpRecommendHardening = __esm({
     init_projectPath();
     init_schemas4();
     init_tools();
-    tool32 = {
+    inputSchema31 = { project_path: ProjectPath };
+    tool32 = defineTool({
       name: "wp_recommend_hardening",
       title: "WordPress hardening checklist",
       description: "Generate a prioritised hardening checklist (Markdown) from one install's latest wp_audit (project_path = the install root, default: the server's working directory). Pure read \u2014 inspects scans.meta of that wp_audit, applies heuristics, returns recommendations.",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema31,
       handler: async (input, ctx) => handler29(input, ctx)
-    };
+    });
     registerToolModule(tool32);
   }
 });
 
 // src/tools/wpPluginCheck.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
-async function handler30(input, ctx) {
-  const inp = input;
+async function handler30(inp, ctx) {
   if (!inp.slug) return failDomain22("unknown_scan_id", "slug is required.");
   if (!WP_PLUGIN_SLUG.test(inp.slug)) {
     return failDomain22("invalid_input", 'slug must be a plugin slug: letters, digits, "_" and "-" (e.g. "contact-form-7").');
@@ -71618,7 +71606,7 @@ function cveSources(ctx, installKeys, targetUrl) {
 function failDomain22(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema19, tool33;
+var inputSchema32, tool33;
 var init_wpPluginCheck = __esm({
   "src/tools/wpPluginCheck.ts"() {
     "use strict";
@@ -71633,7 +71621,7 @@ var init_wpPluginCheck = __esm({
     init_scanCoverage();
     init_siteKeys();
     init_tools();
-    inputSchema19 = {
+    inputSchema32 = {
       slug: external_exports.string().regex(WP_PLUGIN_SLUG, 'slug must be a plugin slug: letters, digits, "_" and "-"').describe('Plugin slug as known by wp.org (e.g. "contact-form-7").'),
       wp_install_path: external_exports.string().optional().describe(
         "Path to the WordPress install. On this machine, WP-CLI (`wp plugin list`) reads the installed version and active state from it; it also keys the CVE lookup when project_path is omitted. Absolute, or existing on this machine."
@@ -71645,21 +71633,20 @@ var init_wpPluginCheck = __esm({
         "The WordPress project whose recorded CVEs are searched. Default: wp_install_path when given, else the server's working directory."
       )
     };
-    tool33 = {
+    tool33 = defineTool({
       name: "wp_plugin_check",
       title: "WordPress plugin check (1 plugin)",
       description: `What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp_vuln_check (live) and newest wp_vuln_check (source). It makes no network call \u2014 no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) or wp_vuln_check {mode: "source"} (plugin sources) first. With a local wp_install_path, WP-CLI reports the installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.`,
-      inputSchema: inputSchema19,
+      inputSchema: inputSchema32,
       handler: async (input, ctx) => handler30(input, ctx)
-    };
+    });
     registerToolModule(tool33);
   }
 });
 
 // src/tools/wpRestAudit.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
-async function handler31(input, ctx) {
-  const inp = input;
+async function handler31(inp, ctx) {
   const url2 = inp.target_url.replace(/\/$/, "");
   const timeoutMs = inp.timeout_ms ?? 15e3;
   const endpoints = [
@@ -71739,31 +71726,30 @@ async function probe(fullUrl, _label, expectListing, timeoutMs) {
     clearTimeout(timeout);
   }
 }
-var inputSchema20, tool34;
+var inputSchema33, tool34;
 var init_wpRestAudit = __esm({
   "src/tools/wpRestAudit.ts"() {
     "use strict";
     init_zod();
     init_schemas4();
     init_tools();
-    inputSchema20 = {
+    inputSchema33 = {
       target_url: httpUrlField().describe("Base URL of the WordPress site (e.g. https://example.com)."),
       timeout_ms: external_exports.number().int().min(1e3).max(6e4).optional().describe("Per-request timeout in milliseconds, 1000-60000. Default: 15000.")
     };
-    tool34 = {
+    tool34 = defineTool({
       name: "wp_rest_audit",
       title: "WordPress REST API exposure audit",
       description: "Probe (read-only HTTP GET) the live WP REST API for endpoints that commonly leak data: users enumeration, draft posts, comments, xmlrpc.php. No POSTs, no auth. Returns one row per endpoint with `exposed: yes/no`.",
-      inputSchema: inputSchema20,
+      inputSchema: inputSchema33,
       handler: async (input, ctx) => handler31(input, ctx)
-    };
+    });
     registerToolModule(tool34);
   }
 });
 
 // src/tools/bulkAuditWordpressSites.ts
-async function handler32(input, ctx) {
-  const inp = input;
+async function handler32(inp, ctx) {
   const limit = Math.max(1, Math.min(inp.concurrency ?? 4, 10));
   const wpAudit = TOOLS.find((t) => t.name === "wp_audit");
   if (!wpAudit) {
@@ -71819,30 +71805,29 @@ function summarise(path3, result) {
   if (r.wp_version !== void 0) summary2.wp_version = r.wp_version;
   return summary2;
 }
-var inputSchema21, tool35;
+var inputSchema34, tool35;
 var init_bulkAuditWordpressSites = __esm({
   "src/tools/bulkAuditWordpressSites.ts"() {
     "use strict";
     init_zod();
     init_tools();
-    inputSchema21 = {
+    inputSchema34 = {
       wp_install_paths: external_exports.array(external_exports.string().min(1)).min(1).max(50).describe("Up to 50 WP install paths to audit in parallel."),
       concurrency: external_exports.number().int().min(1).max(10).optional().describe("Max sites audited at once. Default 4.")
     };
-    tool35 = {
+    tool35 = defineTool({
       name: "bulk_audit_wordpress_sites",
       title: "Bulk wp_audit across many sites",
       description: "Run wp_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp_version, audit scan_id, and a flagged_count (checksum_mismatches.core + plugins; theme files are not checked: WP-CLI has no theme checksums).",
-      inputSchema: inputSchema21,
+      inputSchema: inputSchema34,
       handler: async (input, ctx) => handler32(input, ctx)
-    };
+    });
     registerToolModule(tool35);
   }
 });
 
 // src/tools/wpDescribeSetup.ts
-async function handler33(input, ctx) {
-  const inp = input;
+async function handler33(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -71923,7 +71908,7 @@ function countChecksumIssues(meta) {
   const cm = meta?.checksum_mismatches ?? {};
   return (cm.core?.length ?? 0) + Object.values(cm.plugins ?? {}).reduce((a, b) => a + (b?.length ?? 0), 0) + Object.values(cm.themes ?? {}).reduce((a, b) => a + (b?.length ?? 0), 0);
 }
-var tool36, META_REPORT, FINDING_SCAN;
+var inputSchema35, tool36, META_REPORT, FINDING_SCAN;
 var init_wpDescribeSetup = __esm({
   "src/tools/wpDescribeSetup.ts"() {
     "use strict";
@@ -71933,16 +71918,17 @@ var init_wpDescribeSetup = __esm({
     init_schemas4();
     init_siteKeys();
     init_tools();
-    tool36 = {
+    inputSchema35 = {
+      project_path: ProjectPath,
+      target_url: httpUrlField().optional().describe("The live site URL wp_vuln_check (live or rest mode) was run against, to include those rows.")
+    };
+    tool36 = defineTool({
       name: "wp_describe_setup",
       title: "WordPress posture summary",
       description: `Aggregate read of one WordPress project's accumulated state (project_path = the install root, default: the server's working directory; target_url = the live site, for the scans keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest wp_audit {mode: "cron"} (flagged events), latest wp_vuln_check {mode: "rest"} (needs target_url), open WP-related findings, and active CVEs on wp packages. No scanner spawn.`,
-      inputSchema: {
-        project_path: ProjectPath,
-        target_url: httpUrlField().optional().describe("The live site URL wp_vuln_check (live or rest mode) was run against, to include those rows.")
-      },
+      inputSchema: inputSchema35,
       handler: async (input, ctx) => handler33(input, ctx)
-    };
+    });
     registerToolModule(tool36);
     META_REPORT = { skipCoverageNone: false };
     FINDING_SCAN = {};
@@ -71952,8 +71938,7 @@ var init_wpDescribeSetup = __esm({
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
 import { join as join72, relative as relative26 } from "node:path";
-async function handler34(input, ctx) {
-  const inp = input;
+async function handler34(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -72064,7 +72049,7 @@ function collectConfigFiles(root, maxDepth) {
   walk5(root, 0);
   return out;
 }
-var PATTERNS, TARGET_FILES, SKIP_DIRS3, inputSchema22, tool37, MAX_FILE_BYTES2;
+var PATTERNS, TARGET_FILES, SKIP_DIRS3, inputSchema36, tool37, MAX_FILE_BYTES2;
 var init_scanDotnetSecrets = __esm({
   "src/tools/scanDotnetSecrets.ts"() {
     "use strict";
@@ -72160,16 +72145,16 @@ var init_scanDotnetSecrets = __esm({
       "packages",
       ".vs"
     ]);
-    inputSchema22 = {
+    inputSchema36 = {
       project_path: ProjectPath
     };
-    tool37 = {
+    tool37 = defineTool({
       name: "scan_dotnet_secrets",
       title: ".NET-specific secret scan",
       description: "Scan .NET config files (appsettings*.json, *.config, nuget.config, launchSettings.json) for MS-specific patterns that gitleaks generic rules miss: SQL Server conn strings, Azure Storage / Service Bus keys, NuGet feed plaintext credentials, JWT signing keys.",
-      inputSchema: inputSchema22,
+      inputSchema: inputSchema36,
       handler: async (input, ctx) => handler34(input, ctx)
-    };
+    });
     registerToolModule(tool37);
     MAX_FILE_BYTES2 = 2e6;
   }
@@ -72178,8 +72163,7 @@ var init_scanDotnetSecrets = __esm({
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
 import { join as join73, relative as relative27 } from "node:path";
-async function handler35(input, ctx) {
-  const inp = input;
+async function handler35(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -72273,7 +72257,7 @@ function collectCsprojFiles(root, maxDepth) {
 function failDomain23(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var SUPPORT, inputSchema23, tool38, SKIP_DIRS4;
+var SUPPORT, inputSchema37, tool38, SKIP_DIRS4;
 var init_dotnetTargetFrameworkCheck = __esm({
   "src/tools/dotnetTargetFrameworkCheck.ts"() {
     "use strict";
@@ -72298,14 +72282,14 @@ var init_dotnetTargetFrameworkCheck = __esm({
       "net46": { tfm: "net46", status: "eol", hint: ".NET Framework 4.6 \u2014 out of support April 2022." },
       "net45": { tfm: "net45", status: "eol", hint: ".NET Framework 4.5 \u2014 out of support." }
     };
-    inputSchema23 = { project_path: ProjectPath };
-    tool38 = {
+    inputSchema37 = { project_path: ProjectPath };
+    tool38 = defineTool({
       name: "dotnet_target_framework_check",
       title: ".NET target framework EOL check",
       description: "Parse every *.csproj / *.fsproj `<TargetFramework>` and report support status (LTS, STS, EOL, legacy Framework) plus a hint for each. Pure XML grep \u2014 no .NET SDK required.",
-      inputSchema: inputSchema23,
+      inputSchema: inputSchema37,
       handler: async (input, ctx) => handler35(input, ctx)
-    };
+    });
     registerToolModule(tool38);
     SKIP_DIRS4 = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
   }
@@ -72314,8 +72298,7 @@ var init_dotnetTargetFrameworkCheck = __esm({
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID16 } from "node:crypto";
 import { join as join74, relative as relative28 } from "node:path";
-async function handler36(input, ctx) {
-  const inp = input;
+async function handler36(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -72410,7 +72393,7 @@ function findMigrationsDirs(root) {
   walk5(root, 0);
   return out;
 }
-var RULES, inputSchema24, tool39;
+var RULES, inputSchema38, tool39;
 var init_dotnetEfcoreAudit = __esm({
   "src/tools/dotnetEfcoreAudit.ts"() {
     "use strict";
@@ -72452,21 +72435,20 @@ var init_dotnetEfcoreAudit = __esm({
         test: (l) => /migrationBuilder\.Sql\s*\(/.test(l) && /(password|secret|api[_-]?key|token)/i.test(l)
       }
     ];
-    inputSchema24 = { project_path: ProjectPath };
-    tool39 = {
+    inputSchema38 = { project_path: ProjectPath };
+    tool39 = defineTool({
       name: "dotnet_efcore_audit",
       title: "EF Core migrations audit",
       description: "Scan EF Core migrations for dangerous patterns (DropTable, DropColumn, AlterColumn nullable=false without defaultValue, raw SQL with credentials). Pure source scan \u2014 no SDK required.",
-      inputSchema: inputSchema24,
+      inputSchema: inputSchema38,
       handler: async (input, ctx) => handler36(input, ctx)
-    };
+    });
     registerToolModule(tool39);
   }
 });
 
 // src/tools/dotnetDescribeSetup.ts
-async function handler37(input, ctx) {
-  const inp = input;
+async function handler37(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -72514,7 +72496,7 @@ async function handler37(input, ctx) {
 function findLatest2(ctx, projectPath, type, skipCoverageNone) {
   return findLatestUsable(ctx.storage, projectPath, [type], { skipCoverageNone }).scan;
 }
-var tool40;
+var inputSchema39, tool40;
 var init_dotnetDescribeSetup = __esm({
   "src/tools/dotnetDescribeSetup.ts"() {
     "use strict";
@@ -72522,13 +72504,14 @@ var init_dotnetDescribeSetup = __esm({
     init_projectPath();
     init_schemas4();
     init_tools();
-    tool40 = {
+    inputSchema39 = { project_path: ProjectPath };
+    tool40 = defineTool({
       name: "dotnet_describe_setup",
       title: ".NET posture summary",
       description: "Aggregate read of one project's accumulated .NET state (project_path, default: the server's working directory): latest dotnet_check checks target_framework (EOL frameworks), secrets and efcore, deps_audit if a NuGet lockfile exists. Plus open .NET-relevant findings. No scanner spawn.",
-      inputSchema: { project_path: ProjectPath },
+      inputSchema: inputSchema39,
       handler: async (input, ctx) => handler37(input, ctx)
-    };
+    });
     registerToolModule(tool40);
   }
 });
@@ -72873,8 +72856,7 @@ var init_pypiPins = __esm({
 });
 
 // src/tools/prioritizeFindings.ts
-async function handler38(input, ctx) {
-  const inp = input;
+async function handler38(inp, ctx) {
   const limit = inp.limit ?? 50;
   let projectPath;
   try {
@@ -73013,7 +72995,7 @@ function scoreRange(top) {
   if (first === void 0 || last === void 0) return null;
   return { max: first.priority_score, min: last.priority_score };
 }
-var KEV_BOOST, EPSS_BOOST_MAX, SEVERITY_WEIGHT2, CATEGORY_WEIGHT, inputSchema25, tool41;
+var KEV_BOOST, EPSS_BOOST_MAX, SEVERITY_WEIGHT2, CATEGORY_WEIGHT, inputSchema40, tool41;
 var init_prioritizeFindings = __esm({
   "src/tools/prioritizeFindings.ts"() {
     "use strict";
@@ -73046,20 +73028,20 @@ var init_prioritizeFindings = __esm({
       quality: 30,
       performance: 25
     };
-    inputSchema25 = {
+    inputSchema40 = {
       project_path: ProjectPath,
       limit: external_exports.number().int().min(1).max(500).optional().describe("Cap on returned items. Default 50."),
       mission_wellbeing: external_exports.enum(MISSION_WELLBEING_VALUES).optional().describe(
         "SSVC Mission & Well-being for this system (CISA: mission prevalence x public well-being impact). Default medium, reported as assumed."
       )
     };
-    tool41 = {
+    tool41 = defineTool({
       name: "prioritize_findings",
       title: "Prioritise open findings (heuristic)",
       description: "Rank one project's open findings (project_path, default: the server's working directory; the newest usable scan of every finding-producing type, suppressions removed) by a weighted heuristic: severity + category + fix_available + age, boosted when a finding is linked to a CVE that is CISA KEV-listed or has a high FIRST EPSS score (cached 24h; offline or unmeasured CVEs get no boost, never a fabricated one). Every CVE finding also gets a CISA SSVC deployer decision (Act / Attend / Track* / Track) from Exploitation (KEV; EPSS as a PoC proxy), Automatable (a route reaches a file importing the package, from the latest map_attack_surface), Technical Impact (from severity) and mission_wellbeing; a point with no data takes the more severe value and is listed in ssvc.assumed. SSVC does not change the score. `cve_intel.uncorrelated` counts findings from a CVE-capable scanner (e.g. npm-audit v2) that carry no extractable CVE id. Returns top-N with explanation. No LLM call.",
-      inputSchema: inputSchema25,
+      inputSchema: inputSchema40,
       handler: async (input, ctx) => handler38(input, ctx)
-    };
+    });
     registerToolModule(tool41);
   }
 });
@@ -75666,8 +75648,7 @@ var init_ingest = __esm({
 import { createHash as createHash13, randomUUID as randomUUID17 } from "node:crypto";
 import { writeFileSync as writeFileSync16 } from "node:fs";
 import { join as join78 } from "node:path";
-async function handler39(input, ctx, callMeta) {
-  const inp = input;
+async function handler39(inp, ctx, callMeta) {
   let basePath;
   try {
     basePath = resolveProjectPath(void 0).path;
@@ -75807,7 +75788,7 @@ function hashFiles(parts) {
   for (const p of [...parts].sort()) h.update(p).update("\n");
   return h.digest("hex").slice(0, 32);
 }
-var inputSchema26, RECOMMENDATION_TEXT, RECOMMENDATION_RANK, tool42;
+var inputSchema41, RECOMMENDATION_TEXT, RECOMMENDATION_RANK, tool42;
 var init_scanSkill = __esm({
   "src/tools/scanSkill.ts"() {
     "use strict";
@@ -75822,7 +75803,7 @@ var init_scanSkill = __esm({
     init_schemas4();
     init_tools();
     init_counts();
-    inputSchema26 = {
+    inputSchema41 = {
       target: external_exports.string().min(1).optional().describe(
         "A directory, file, .zip or git/HTTP(S) URL. Default: the current project."
       ),
@@ -75845,13 +75826,13 @@ var init_scanSkill = __esm({
       CAUTION: 2,
       DO_NOT_INSTALL: 3
     };
-    tool42 = {
+    tool42 = defineTool({
       name: "scan_skill",
       title: "Vet an AI skill, MCP server or plugin before install",
       description: "Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, .zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, tool poisoning, dangerous code, taint flows \u2014 the commands in instruction files and hook / plugin / MCP configs scored like scripts \u2014 and OSV CVEs of its dependencies. Returns a 0-100 risk score and SAFE, REVIEW, CAUTION or DO_NOT_INSTALL.",
-      inputSchema: inputSchema26,
+      inputSchema: inputSchema41,
       handler: (input, ctx, callMeta) => handler39(input, ctx, callMeta)
-    };
+    });
     registerToolModule(tool42);
   }
 });
@@ -77185,8 +77166,7 @@ var init_specImport = __esm({
 
 // src/tools/mapAttackSurface.ts
 import { isAbsolute as isAbsolute18, join as join82, resolve as resolve28 } from "node:path";
-async function handler40(input, ctx) {
-  const inp = input;
+async function handler40(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -77697,7 +77677,7 @@ function degradedResult(toolsRun, missingTools, note, ctx, projectPath) {
     note
   };
 }
-var SAMPLE_SIZE, WEBHOOK_PATTERN, SURFACE_CACHE_TTL_MS, COVERED_LANGUAGES, IncludeEnvVars, SpecPaths, tool43, NOT_APPLICABLE_REASON, EMPTY_SEMGREP_REPORT, RECOVERY_STEP, REDACTION_REMEDY, NO_STACK_NOTE;
+var SAMPLE_SIZE, WEBHOOK_PATTERN, SURFACE_CACHE_TTL_MS, COVERED_LANGUAGES, IncludeEnvVars, SpecPaths, inputSchema42, tool43, NOT_APPLICABLE_REASON, EMPTY_SEMGREP_REPORT, RECOVERY_STEP, REDACTION_REMEDY, NO_STACK_NOTE;
 var init_mapAttackSurface = __esm({
   "src/tools/mapAttackSurface.ts"() {
     "use strict";
@@ -77743,7 +77723,13 @@ var init_mapAttackSurface = __esm({
     SpecPaths = external_exports.array(external_exports.string().min(1)).min(1).optional().describe(
       "OpenAPI / Swagger documents to read instead of discovering them."
     );
-    tool43 = {
+    inputSchema42 = {
+      project_path: ProjectPath,
+      force: Force,
+      include_env_vars: IncludeEnvVars,
+      spec_paths: SpecPaths
+    };
+    tool43 = defineTool({
       name: "map_attack_surface",
       title: "Map the attack surface",
       // No "auth hint" in this description on purpose, for code-extracted routes:
@@ -77759,14 +77745,9 @@ var init_mapAttackSurface = __esm({
       // general feature. Advertising a mostly-constant field as a feature is how
       // an agent ends up reasoning from it.
       description: "Statically extract the reachable surface \u2014 HTTP routes (method, path, params), environment variables read, container ports \u2014 across the supported stacks, and diff OpenAPI 3 / Swagger 2 documents against the routes: shadow endpoints and dead documentation. Stores a snapshot (guardian://surface/latest has the full route list) and returns a summary with samples. scan_dast and validate_finding need it.",
-      inputSchema: {
-        project_path: ProjectPath,
-        force: Force,
-        include_env_vars: IncludeEnvVars,
-        spec_paths: SpecPaths
-      },
+      inputSchema: inputSchema42,
       handler: async (input, ctx) => handler40(input, ctx)
-    };
+    });
     registerToolModule(tool43);
     NOT_APPLICABLE_REASON = "not applicable: no file in a language the routes rules cover (JS/TS, Python, PHP, Go, Rust, Ruby, Java, C#) \u2014 nothing to map";
     EMPTY_SEMGREP_REPORT = { results: [], errors: [], paths: { scanned: [] } };
@@ -79214,8 +79195,7 @@ function fail2(code, message2, retryWith) {
     error: { code, message: message2, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
   };
 }
-async function handler41(input, ctx, callMeta) {
-  const inp = input;
+async function handler41(inp, ctx, callMeta) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -79579,7 +79559,7 @@ function outcomeCounts(results) {
   for (const result of results) out[result.outcome] += 1;
   return out;
 }
-var DAST_ENGINE, UNANSWERED_COVERAGE_THRESHOLD, inputSchema27, tool44;
+var DAST_ENGINE, UNANSWERED_COVERAGE_THRESHOLD, inputSchema43, tool44;
 var init_scanDast = __esm({
   "src/tools/scanDast.ts"() {
     "use strict";
@@ -79605,7 +79585,7 @@ var init_scanDast = __esm({
     init_counts();
     DAST_ENGINE = "guardian-dast";
     UNANSWERED_COVERAGE_THRESHOLD = 0.1;
-    inputSchema27 = {
+    inputSchema43 = {
       project_path: ProjectPath,
       base_url: external_exports.string().min(1).describe(
         "Origin of the running application, e.g. http://localhost:3000."
@@ -79637,7 +79617,7 @@ var init_scanDast = __esm({
         `Ceiling on the whole probing phase, in ms. Default ${DEFAULT_WALL_CLOCK_MS}.`
       )
     };
-    tool44 = {
+    tool44 = defineTool({
       name: "scan_dast",
       title: "Probe a running app against its route inventory",
       // The description is the only discovery surface an agent has, so it states
@@ -79646,9 +79626,9 @@ var init_scanDast = __esm({
       // must already be running, and not knowing a prior map_attack_surface run
       // is required.
       description: "Send real HTTP requests to an already-running application along the latest map_attack_surface inventory (none: no_surface_snapshot): reachability, anonymous access to auth-required routes, authorization differences, CORS, headers, information disclosure, methods, open redirects; nuclei and a rate-limit burst are opt-in. Loopback only unless the user attests authorized_target; read-only methods unless allow_write_methods. No injection payloads: a clean result is no proof of injection safety.",
-      inputSchema: inputSchema27,
+      inputSchema: inputSchema43,
       handler: (input, ctx, callMeta) => handler41(input, ctx, callMeta)
-    };
+    });
     registerToolModule(tool44);
   }
 });
@@ -79840,8 +79820,7 @@ function fail3(code, message2, retryWith) {
     error: { code, message: message2, ...retryWith === void 0 ? {} : { retry_with: retryWith } }
   };
 }
-async function handler42(input, ctx) {
-  const inp = input;
+async function handler42(inp, ctx) {
   if (inp.fingerprint !== void 0 && inp.finding_fingerprint !== void 0 && inp.fingerprint !== inp.finding_fingerprint) {
     return fail3(
       "unsupported_target",
@@ -79954,7 +79933,7 @@ function collectAnonymousExposures(ctx, projectPath) {
   }
   return { scan: scan2, files, scansSearched };
 }
-var ANONYMOUS_EXPOSURE, Fingerprint, FindingFingerprint, Providers, tool45, NO_OPEN_FINDINGS_NOTE;
+var ANONYMOUS_EXPOSURE, Fingerprint, FindingFingerprint, Providers, inputSchema44, tool45, NO_OPEN_FINDINGS_NOTE;
 var init_validateFinding = __esm({
   "src/tools/validateFinding.ts"() {
     "use strict";
@@ -79984,7 +79963,13 @@ var init_validateFinding = __esm({
     Providers = external_exports.array(external_exports.enum(IMPLEMENTED_PROVIDERS)).min(1).optional().describe(
       "static (the finding's file) and/or dependency (a CVE's package). Default: both."
     );
-    tool45 = {
+    inputSchema44 = {
+      project_path: ProjectPath,
+      fingerprint: Fingerprint,
+      finding_fingerprint: FindingFingerprint,
+      providers: Providers
+    };
+    tool45 = defineTool({
       name: "validate_finding",
       title: "Qualify findings by reachability",
       // An agent's only discovery surface. It must carry the preconditions and
@@ -79996,14 +79981,9 @@ var init_validateFinding = __esm({
       // by tightening wording only: every limit below survived, each one tested
       // in validateFinding.test.ts.
       description: "Per open finding: does a file an HTTP route reaches import its file (static) or, for a dependency CVE, its package (dependency)? reachable, unreachable or unknown, with evidence. Needs map_attack_surface. Report only: it never suppresses a finding or changes a severity. The unit is the file; Ruby, Java, C# and PHP never get unreachable; nothing detects a dynamic import, so where one is used unreachable can be wrong and this tool cannot tell you when.",
-      inputSchema: {
-        project_path: ProjectPath,
-        fingerprint: Fingerprint,
-        finding_fingerprint: FindingFingerprint,
-        providers: Providers
-      },
+      inputSchema: inputSchema44,
       handler: async (input, ctx) => handler42(input, ctx)
-    };
+    });
     registerToolModule(tool45);
     NO_OPEN_FINDINGS_NOTE = "No open findings to validate, so nothing was computed and nothing was persisted. This is NOT a statement that the project is clean \u2014 it means no usable scan of this project's finding-producing types left an unsuppressed finding open. Run security_scan_full (or scan_sast) first, then re-run validate_finding.";
   }
@@ -81738,8 +81718,7 @@ var init_worktree = __esm({
 // src/tools/createFixPr.ts
 import { rmSync as rmSync16 } from "node:fs";
 import { isAbsolute as isAbsolute20, join as join91, relative as relative33 } from "node:path";
-async function handler43(input, ctx, callMeta) {
-  const inp = input;
+async function handler43(inp, ctx, callMeta) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -82308,7 +82287,7 @@ function errorMessage4(e) {
 function failDomain24(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var DEFAULT_SOURCES, DEFAULT_SEVERITY_MIN, DEFAULT_MAX_PRS, PR_STATUS_OUTCOME, KEEPS_BRANCH, tool46;
+var DEFAULT_SOURCES, DEFAULT_SEVERITY_MIN, DEFAULT_MAX_PRS, PR_STATUS_OUTCOME, KEEPS_BRANCH, inputSchema45, tool46;
 var init_createFixPr = __esm({
   "src/tools/createFixPr.ts"() {
     "use strict";
@@ -82357,33 +82336,34 @@ var init_createFixPr = __esm({
       "push_failed",
       "create_failed"
     ]);
-    tool46 = {
+    inputSchema45 = {
+      project_path: ProjectPath,
+      // .describe() override, not the shared SeverityMin as-is (M8): that
+      // schema's own description says "Default: include all", correct for
+      // every OTHER tool that uses it (no zod .default(), so the description
+      // is the only place the default is stated) but wrong for this tool,
+      // whose actual default is 'high' (DEFAULT_SEVERITY_MIN below). Reusing
+      // the shared schema is still right — .describe() returns a new instance
+      // rather than mutating the shared one, so every other caller keeps
+      // seeing "include all".
+      severity_min: SeverityMin.describe(
+        "Lowest severity to fix. Default high."
+      ),
+      sources: external_exports.array(external_exports.enum(["deps", "semgrep"])).optional().describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
+      max_prs: external_exports.number().int().min(1).max(10).optional().describe(
+        "Pull requests per run, highest severity first; the rest in `deferred`. Default 3."
+      ),
+      apply: external_exports.boolean().optional().describe(
+        "true: commit, push, open the PRs. Default false: a dry run (still runs the test command)."
+      )
+    };
+    tool46 = defineTool({
       name: "create_fix_pr",
       title: "Apply scanner fixes as pull requests",
       description: "Apply scanner-made fixes \u2014 deps_update_plan upgrades, the rules' own Semgrep autofixes \u2014 in a disposable worktree, verify them by re-running the scan and a test differential, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the project's own test command \u2014 the project's code, run as you. The repo's .npmrc/.yarnrc and like configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository refuses the fix. `filtered` explains the rest.",
-      inputSchema: {
-        project_path: ProjectPath,
-        // .describe() override, not the shared SeverityMin as-is (M8): that
-        // schema's own description says "Default: include all", correct for
-        // every OTHER tool that uses it (no zod .default(), so the description
-        // is the only place the default is stated) but wrong for this tool,
-        // whose actual default is 'high' (DEFAULT_SEVERITY_MIN below). Reusing
-        // the shared schema is still right — .describe() returns a new instance
-        // rather than mutating the shared one, so every other caller keeps
-        // seeing "include all".
-        severity_min: SeverityMin.describe(
-          "Lowest severity to fix. Default high."
-        ),
-        sources: external_exports.array(external_exports.enum(["deps", "semgrep"])).optional().describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
-        max_prs: external_exports.number().int().min(1).max(10).optional().describe(
-          "Pull requests per run, highest severity first; the rest in `deferred`. Default 3."
-        ),
-        apply: external_exports.boolean().optional().describe(
-          "true: commit, push, open the PRs. Default false: a dry run (still runs the test command)."
-        )
-      },
+      inputSchema: inputSchema45,
       handler: async (input, ctx, callMeta) => handler43(input, ctx, callMeta)
-    };
+    });
     registerToolModule(tool46);
   }
 });
@@ -83246,8 +83226,7 @@ var init_configSources = __esm({
 
 // src/tools/auditAgentConfig.ts
 import { randomUUID as randomUUID19 } from "node:crypto";
-async function handler44(input, ctx) {
-  const inp = input;
+async function handler44(inp, ctx) {
   let projectPath;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;
@@ -83313,7 +83292,7 @@ async function handler44(input, ctx) {
     warnings: result.warnings
   };
 }
-var inputSchema28, tool47;
+var inputSchema46, tool47;
 var init_auditAgentConfig = __esm({
   "src/tools/auditAgentConfig.ts"() {
     "use strict";
@@ -83326,20 +83305,20 @@ var init_auditAgentConfig = __esm({
     init_scanCoverage();
     init_tools();
     init_counts();
-    inputSchema28 = {
+    inputSchema46 = {
       project_path: external_exports.string().min(1).optional().describe("The project to audit. Default: the server's working directory."),
       include_user_config: external_exports.boolean().optional().default(false).describe(
         "Also read the user-level configs every project shares. Default false."
       ),
       severity_min: SeverityMin
     };
-    tool47 = {
+    tool47 = defineTool({
       name: "audit_agent_config",
       title: "Audit the agent workspace configuration",
       description: "Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, plugin.json; user-level ones with include_user_config): unpinned npx/uvx servers, plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach the network, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. Reads only; audit_mcp_tools inspects what servers serve.",
-      inputSchema: inputSchema28,
+      inputSchema: inputSchema46,
       handler: (input, ctx) => handler44(input, ctx)
-    };
+    });
     registerToolModule(tool47);
   }
 });
@@ -88498,8 +88477,7 @@ function auditBudgetMs() {
   const raw = Number(process.env["GUARDIAN_MCP_AUDIT_BUDGET_MS"]);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AUDIT_BUDGET_MS;
 }
-async function handler45(input, ctx, callMeta) {
-  const inp = input;
+async function handler45(inp, ctx, callMeta) {
   const names = Array.isArray(inp.servers) ? [...new Set(inp.servers.filter((s) => typeof s === "string" && s !== ""))] : [];
   if (names.length === 0 || names.some((n) => /[*?]/.test(n))) {
     return {
@@ -88799,7 +88777,7 @@ async function runAudit(ctx, run2, callMeta) {
     warnings
   };
 }
-var DEFAULT_TIMEOUT_MS8, DEFAULT_AUDIT_BUDGET_MS, inputSchema29, tool48;
+var DEFAULT_TIMEOUT_MS8, DEFAULT_AUDIT_BUDGET_MS, inputSchema47, tool48;
 var init_auditMcpTools = __esm({
   "src/tools/auditMcpTools.ts"() {
     "use strict";
@@ -88819,7 +88797,7 @@ var init_auditMcpTools = __esm({
     init_counts();
     DEFAULT_TIMEOUT_MS8 = 2e4;
     DEFAULT_AUDIT_BUDGET_MS = 10 * 60 * 1e3;
-    inputSchema29 = {
+    inputSchema47 = {
       project_path: external_exports.string().min(1).optional().describe("The project whose MCP configs declare them. Default: the server's working directory."),
       servers: external_exports.array(external_exports.string().min(1).regex(/^[^*?]+$/, "exact server names only: no wildcards")).min(1).max(50).describe(
         'Config entry names to start and audit (e.g. ["github"]), or `<source>::<name>`. No wildcard.'
@@ -88832,15 +88810,15 @@ var init_auditMcpTools = __esm({
       ),
       timeout_ms: external_exports.number().int().min(1e3).max(3e5).optional().default(DEFAULT_TIMEOUT_MS8).describe("Per-server time budget, in ms.")
     };
-    tool48 = {
+    tool48 = defineTool({
       name: "audit_mcp_tools",
       title: "Audit what MCP servers serve (poisoning, rug pulls)",
       // Worded so this description does not trip the checks it lists: measured,
       // a literal tag block or file name here was a finding on dev-guardian itself.
       description: "Start the MCP servers named in `servers` and check what they serve \u2014 tools, prompts, resources \u2014 for instructions aimed at the model, hidden Unicode, requests to read secrets or send data out, cross-server shadowing and oversized descriptions; a definition changed since the last audit is a high rug pull. This runs third-party code: only the servers the user named, with a minimal environment, never tools/call; remote ones only with allow_remote. A failed server lowers coverage, never a clean pass.",
-      inputSchema: inputSchema29,
+      inputSchema: inputSchema47,
       handler: (input, ctx, callMeta) => handler45(input, ctx, callMeta)
-    };
+    });
     registerToolModule(tool48);
   }
 });
@@ -90980,8 +90958,7 @@ var init_vet = __esm({
 // src/tools/vetPackages.ts
 import { existsSync as existsSync24, statSync as statSync13 } from "node:fs";
 import { resolve as resolve35 } from "node:path";
-async function handler46(input, _ctx, callMeta) {
-  const inp = input;
+async function handler46(inp, _ctx, callMeta) {
   const ecosystem = ECOSYSTEM_ALIASES[inp.ecosystem];
   if (ecosystem === void 0) {
     return { ok: false, error: { code: "unsupported_target", message: `unsupported ecosystem '${inp.ecosystem}'` } };
@@ -91020,7 +90997,7 @@ async function handler46(input, _ctx, callMeta) {
     network: offline ? "disabled (GUARDIAN_OFFLINE=1)" : `online, ${TOOL_BUDGET_MS / 1e3} s budget`
   };
 }
-var ECOSYSTEM_ALIASES, tool49;
+var ECOSYSTEM_ALIASES, inputSchema48, tool49;
 var init_vetPackages = __esm({
   "src/tools/vetPackages.ts"() {
     "use strict";
@@ -91045,19 +91022,20 @@ var init_vetPackages = __esm({
       nuget: "nuget",
       dotnet: "nuget"
     };
-    tool49 = {
+    inputSchema48 = {
+      ecosystem: external_exports.enum(Object.keys(ECOSYSTEM_ALIASES)).describe("npm (also pnpm/yarn/bun), pypi (pip/uv/poetry), packagist (composer) or nuget (dotnet)."),
+      packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(50).describe('Package specs: "name" or "name@version".'),
+      project_path: ProjectPath.describe(
+        "The project whose registry configuration applies. Default: the server's working directory."
+      )
+    };
+    tool49 = defineTool({
       name: "vet_packages",
       title: "Vet packages before installing",
       description: "Check packages before installing them, against the registry and OSV: the name exists (unpublished: likely hallucinated), the version is not malicious, known vulnerabilities, publish age (under 72 h warns), npm install scripts, typosquatting. Verdict per package: block, warn, unknown or ok \u2014 unknown means a check could not run, never ok. Accepts name or name@version. Read-only.",
-      inputSchema: {
-        ecosystem: external_exports.enum(Object.keys(ECOSYSTEM_ALIASES)).describe("npm (also pnpm/yarn/bun), pypi (pip/uv/poetry), packagist (composer) or nuget (dotnet)."),
-        packages: external_exports.array(external_exports.string().min(1).max(214)).min(1).max(50).describe('Package specs: "name" or "name@version".'),
-        project_path: ProjectPath.describe(
-          "The project whose registry configuration applies. Default: the server's working directory."
-        )
-      },
+      inputSchema: inputSchema48,
       handler: async (input, ctx, callMeta) => handler46(input, ctx, callMeta)
-    };
+    });
     registerToolModule(tool49);
   }
 });
@@ -91193,8 +91171,7 @@ var init_render = __esm({
 import { randomUUID as randomUUID21 } from "node:crypto";
 import { existsSync as existsSync25, readFileSync as readFileSync11, writeFileSync as writeFileSync19 } from "node:fs";
 import { basename as basename13, join as join95, posix as posix4, win32 as win322 } from "node:path";
-async function handler47(input, ctx) {
-  const inp = input;
+async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
   let projectPath;
   try {
@@ -91404,7 +91381,7 @@ function sbomTrust(sbom, deps) {
 function isAbsolutePath2(name) {
   return posix4.isAbsolute(name) || win322.isAbsolute(name);
 }
-var SAMPLE_SIZE2, DEFAULT_AUTHOR, inputSchema30, tool50, NO_STATEMENTS, EMPTY_CONTEXT;
+var SAMPLE_SIZE2, DEFAULT_AUTHOR, inputSchema49, tool50, NO_STATEMENTS, EMPTY_CONTEXT;
 var init_exportVex = __esm({
   "src/tools/exportVex.ts"() {
     "use strict";
@@ -91424,18 +91401,18 @@ var init_exportVex = __esm({
     init_scanHelpers();
     SAMPLE_SIZE2 = 20;
     DEFAULT_AUTHOR = "Unknown Author";
-    inputSchema30 = {
+    inputSchema49 = {
       project_path: ProjectPath,
       format: external_exports.enum(["openvex", "cyclonedx"]).optional().describe("openvex (default) or cyclonedx (CycloneDX 1.6)."),
       author: external_exports.string().min(1).max(200).optional().describe(`Who makes the statements. Default "${DEFAULT_AUTHOR}".`)
     };
-    tool50 = {
+    tool50 = defineTool({
       name: "export_vex",
       title: "Export VEX (OpenVEX or CycloneDX)",
       description: "Write a VEX document for the latest dependency scan, one statement per vulnerability and package version (by purl): not_affected only from suppress_finding with vex_status; affected when validate_finding finds the version imported by a route-reachable file; else under_investigation, with the reason; never fixed. Writes .guardian/reports/vex-*/; `unknowns` lists what it could not know; nothing is written when no vulnerability was measured. No network.",
-      inputSchema: inputSchema30,
+      inputSchema: inputSchema49,
       handler: async (input, ctx) => handler47(input, ctx)
-    };
+    });
     registerToolModule(tool50);
     NO_STATEMENTS = { total: 0, not_affected: 0, affected: 0, under_investigation: 0 };
     EMPTY_CONTEXT = { suppressions: [], now: 0, dependency: null, sbom: null };
@@ -92536,7 +92513,7 @@ async function handler48(input, ctx) {
     confirm: inp.confirm === true
   });
 }
-var inputSchema31, parser, tool51;
+var inputSchema50, parser, tool51;
 var init_llmScanStart = __esm({
   "src/tools/llmScanStart.ts"() {
     "use strict";
@@ -92546,7 +92523,7 @@ var init_llmScanStart = __esm({
     init_projectPath();
     init_schemas4();
     init_tools();
-    inputSchema31 = {
+    inputSchema50 = {
       project_path: ProjectPath,
       modes: external_exports.array(external_exports.enum(["verify", "hunt"])).min(1).max(2).optional().describe("verify checks scanner findings; hunt looks for what they miss. Default [verify]."),
       scan_id: external_exports.string().uuid().optional().describe("Verify the findings of this scan. Default: the project open set."),
@@ -92557,12 +92534,12 @@ var init_llmScanStart = __esm({
       confirm: external_exports.boolean().optional().describe("Accept an estimate above the limit."),
       plan_id: external_exports.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning (with confirm: true, confirm it).")
     };
-    parser = external_exports.object(inputSchema31).strict();
+    parser = external_exports.object(inputSchema50).strict();
     tool51 = {
       name: "llm_scan_start",
       title: "Plan an LLM-assisted scan",
       description: "Plan a scan where your model verifies the scanners' findings and hunts what they miss; the server calls no model. modes: verify (a task per finding with a file and line), hunt (needs map_attack_surface). Returns plan_id, the task count, what was left out and a token estimate; above max_estimated_tokens nothing is handed out until confirm: true, which the user must agree to. Then repeat llm_scan_task, the brief in a fresh subagent, llm_scan_submit. llm_scan_start {plan_id} returns the report.",
-      inputSchema: inputSchema31,
+      inputSchema: inputSchema50,
       handler: async (input, ctx) => handler48(input, ctx)
     };
     registerToolModule(tool51);
@@ -92699,7 +92676,7 @@ async function handler49(input, ctx, meta) {
   }
   return leaseNext(ctx.storage, parsed.data.plan_id);
 }
-var inputSchema32, parser2, tool52;
+var inputSchema51, parser2, tool52;
 var init_llmScanTask = __esm({
   "src/tools/llmScanTask.ts"() {
     "use strict";
@@ -92707,16 +92684,16 @@ var init_llmScanTask = __esm({
     init_service();
     init_sampling();
     init_tools();
-    inputSchema32 = {
+    inputSchema51 = {
       plan_id: external_exports.string().min(1).max(100).describe("The plan from llm_scan_start."),
       execute: external_exports.enum(["host", "sampling"]).optional().describe("host (default): hand the task out. sampling: run it through the client's MCP sampling.")
     };
-    parser2 = external_exports.object(inputSchema32).strict();
+    parser2 = external_exports.object(inputSchema51).strict();
     tool52 = {
       name: "llm_scan_task",
       title: "Lease the next LLM scan task",
       description: "Lease the next task of a plan: task_id, kind, lease_token, brief (give it to a fresh subagent, one per task) and response_schema; or {done: true, report}, or {waiting: true}. Then llm_scan_submit the answer. needs_confirm: llm_scan_start {plan_id, confirm: true} first; limit_reached: coverage is partial, the undelivered tasks named. A task whose file changed is closed stale.",
-      inputSchema: inputSchema32,
+      inputSchema: inputSchema51,
       // The brief is the bulk of the response and the model reads the text once.
       contentOnlyKeys: ["brief"],
       handler: async (input, ctx, meta) => handler49(input, ctx, meta)
@@ -92734,26 +92711,26 @@ async function handler50(input, ctx) {
   const { plan_id, task_id, lease_token, independence, payload } = parsed.data;
   return submitAnswer(ctx.storage, { plan_id, task_id, lease_token, independence, payload });
 }
-var inputSchema33, parser3, tool53;
+var inputSchema52, parser3, tool53;
 var init_llmScanSubmit = __esm({
   "src/tools/llmScanSubmit.ts"() {
     "use strict";
     init_zod();
     init_service();
     init_tools();
-    inputSchema33 = {
+    inputSchema52 = {
       plan_id: external_exports.string().min(1).max(100).describe("The plan the task belongs to."),
       task_id: external_exports.string().min(1).max(40).describe("The task, as llm_scan_task returned it."),
       lease_token: external_exports.string().min(1).max(100).describe("The lease_token llm_scan_task returned with the task."),
       independence: external_exports.enum(["subagent", "same_context"]).describe("subagent: a fresh context ran the brief; same_context: you did (never demotes or confirms)."),
       payload: external_exports.unknown().describe("The answer, matching the task response_schema. At most 64 KiB serialized.")
     };
-    parser3 = external_exports.object(inputSchema33).strict();
+    parser3 = external_exports.object(inputSchema52).strict();
     tool53 = {
       name: "llm_scan_submit",
       title: "Submit an LLM scan task's answer",
       description: "Submit the JSON answer to a leased task: plan_id, task_id, lease_token, independence and payload (at most 64 KiB, matching response_schema). An invalid answer is refused with the reasons; the task stays yours for two more tries. Every file:line it cites is checked on disk. Errors: already_closed, bad_lease, too_large, plan_abandoned. Then llm_scan_task for the next.",
-      inputSchema: inputSchema33,
+      inputSchema: inputSchema52,
       handler: async (input, ctx) => handler50(input, ctx)
     };
     registerToolModule(tool53);

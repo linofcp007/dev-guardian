@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { ToolResult } from '../types.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput, TOOLS } from './index.js';
 
 const inputSchema = {
   wp_install_paths: z
@@ -36,7 +36,7 @@ interface SiteSummary {
   error?: { code: string; message: string };
 }
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'bulk_audit_wordpress_sites',
   title: 'Bulk wp_audit across many sites',
   description:
@@ -45,15 +45,14 @@ const tool: ToolModule = {
     'files are not checked: WP-CLI has no theme checksums).',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { wp_install_paths: string[]; concurrency?: number };
   const limit = Math.max(1, Math.min(inp.concurrency ?? 4, 10));
 
   const wpAudit = TOOLS.find((t) => t.name === 'wp_audit');

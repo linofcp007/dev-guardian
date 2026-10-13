@@ -15,25 +15,26 @@ import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { scannerAvailable } from './scanHelpers.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'precommit_install',
   title: 'Install pre-commit hooks',
   description:
     'Run `pre-commit install` in the project to wire its .pre-commit-config.yaml into git hooks. ' +
     'Requires pre-commit on PATH (install via install_toolchain).',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   _ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

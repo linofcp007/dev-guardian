@@ -26,7 +26,7 @@ import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ScanResult, ToolResult } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 /** Largest log read: 50 MiB (US-1.AC-13). */
@@ -52,7 +52,7 @@ const inputSchema = {
     .describe('Results imported before stopping (the scan is then partial). Default 50000.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'import_sarif',
   title: 'Import a SARIF log',
   description:
@@ -63,23 +63,17 @@ const tool: ToolModule = {
     'The log: a file of at most 50 MiB under project_path, unless allow_outside_project.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 type Result = ToolResult<Record<string, unknown>>;
 
-function handler(input: Record<string, unknown>, ctx: PluginContext): Promise<Result> {
+function handler(input: ToolInput<typeof inputSchema>, ctx: PluginContext): Promise<Result> {
   return Promise.resolve(run(input, ctx));
 }
 
-function run(input: Record<string, unknown>, ctx: PluginContext): Result {
-  const inp = input as {
-    project_path?: string;
-    sarif_path: string;
-    allow_outside_project?: boolean;
-    max_results?: number;
-  };
+function run(inp: ToolInput<typeof inputSchema>, ctx: PluginContext): Result {
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

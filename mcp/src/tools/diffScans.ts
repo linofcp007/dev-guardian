@@ -54,7 +54,7 @@ import { sameImportSlot, sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type DomainError, type Finding, type ScanType, type ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 /** Items returned per bucket; the counts in `summary` are never capped. */
 export const ITEMS_PER_BUCKET = 50;
@@ -88,7 +88,7 @@ const inputSchema = {
   ),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'diff_scans',
   title: 'Diff scans (regression / resolution detection)',
   description:
@@ -108,23 +108,14 @@ const tool: ToolModule = {
     "(import_sarif) source_tool names the tool whose imports are compared; imports of two tools are never diffed.",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    scan_type?: ScanType;
-    source_tool?: string;
-    from_scan_id?: string;
-    from?: 'baseline' | 'previous';
-    to_scan_id?: string;
-    to?: 'latest';
-  };
 
   const skipHits: SkipHit[] = [];
 

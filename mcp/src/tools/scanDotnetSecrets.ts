@@ -26,7 +26,7 @@ import {
 } from '../runners/scannerParsers/index.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { computeCoverage } from './scanCoverage.js';
 
 interface PatternRule {
@@ -128,7 +128,7 @@ const inputSchema = {
   project_path: ProjectPath,
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'scan_dotnet_secrets',
   title: '.NET-specific secret scan',
   description:
@@ -137,15 +137,14 @@ const tool: ToolModule = {
     'Storage / Service Bus keys, NuGet feed plaintext credentials, JWT signing keys.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

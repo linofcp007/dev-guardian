@@ -35,12 +35,11 @@ import {
   type Finding,
   type FindingsCountBySeverity,
   type ScanCoverage,
-  type Severity,
   type ToolResult,
   type ToolRun,
 } from '../types.js';
 import { listedCall } from './fold.js';
-import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput, TOOLS } from './index.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
@@ -69,7 +68,18 @@ interface SubScanSummary {
   warnings?: string[];
 }
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  severity_min: SeverityMin,
+  local_only: z
+    .boolean()
+    .optional()
+    .describe(
+      'Semgrep on disk only, no scan_wordpress; the rest still goes out (`local_only_gaps`).',
+    ),
+};
+
+const tool = defineTool({
   name: 'audit_executive',
   title: 'Executive audit (security, quality, deps, compliance)',
   description:
@@ -79,27 +89,17 @@ const tool: ToolModule = {
     "metrics), Trivy's database, npm, PyPI, NuGet feeds; Trivy's and Semgrep's version checks are off. " +
     "Runs code: pip-audit's virtualenv, a .NET restore (MSBuild), the project's ESLint. local_only keeps " +
     'Semgrep local (`local_only_gaps`: what still went out).',
-  inputSchema: {
-    project_path: ProjectPath,
-    severity_min: SeverityMin,
-    local_only: z
-      .boolean()
-      .optional()
-      .describe(
-        'Semgrep on disk only, no scan_wordpress; the rest still goes out (`local_only_gaps`).',
-      ),
-  },
+  inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; severity_min?: Severity; local_only?: boolean };
   const localOnly = inp.local_only === true;
 
   let projectPath: string;

@@ -39,13 +39,11 @@ import {
   OPENVEX_JUSTIFICATIONS,
   type DomainError,
   type Finding,
-  type OpenVexJustification,
   type ToolResult,
-  type VexSuppressionStatus,
 } from '../types.js';
 import { vexSourceScan } from '../vex/scope.js';
 import { isVexCopyIn, vexStatementKeys } from '../vex/statements.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -81,7 +79,7 @@ const inputSchema = {
     .describe('Optional free-text VEX impact statement, with vex_status.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'suppress_finding',
   title: 'Suppress a finding',
   description:
@@ -92,23 +90,14 @@ const tool: ToolModule = {
     'the vulnerability.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    finding_fingerprint: string;
-    reason: string;
-    expires_at?: string;
-    vex_status?: VexSuppressionStatus;
-    justification?: OpenVexJustification;
-    impact_statement?: string;
-  };
 
   if (!inp.finding_fingerprint || !inp.reason) {
     return failDomain(

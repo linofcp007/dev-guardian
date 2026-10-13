@@ -29,26 +29,27 @@ import type {
   StackSnapshot,
   ToolResult,
 } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'detect_stack',
   title: 'Detect the project stack',
   description:
     'Detect languages, package managers, frameworks, existing tools, IaC and CI, in-process. Manifests ' +
     'are read up to 3 directories deep (each also in `projects`); PHP and WordPress are detected without ' +
     'a composer.json. The snapshot is stored for the stack-aware tools.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

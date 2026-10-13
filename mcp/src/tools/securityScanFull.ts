@@ -67,7 +67,7 @@ interface ChildOutcome {
 }
 
 registerToolModule(
-  makeScanTool<SecurityFullInput>({
+  makeScanTool({
     name: 'security_scan_full',
     title: 'Full security scan',
     description:

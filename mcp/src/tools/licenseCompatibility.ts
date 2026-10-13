@@ -17,7 +17,7 @@ import type { PluginContext } from '../context.js';
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 interface LicenseEntry {
   license: string;
@@ -51,7 +51,9 @@ interface UndeterminedRow {
   reason: string;
 }
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'license_compatibility',
   title: 'Licence compatibility',
   description:
@@ -59,17 +61,16 @@ const tool: ToolModule = {
     "against its dependencies' licences from this project's latest compliance_check. No declared licence, " +
     'or a proprietary label, counts as proprietary and still flags copyleft; an unrecognised or compound ' +
     'SPDX expression on either side is `undetermined`, never compatible. Reads history only.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

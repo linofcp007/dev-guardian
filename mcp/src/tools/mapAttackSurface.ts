@@ -93,7 +93,7 @@ import type {
   ToolResult,
   ToolRun,
 } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
 import { applySemgrepCoverageGaps, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { semgrepScanFlags } from '../runners/semgrepRun.js';
@@ -139,7 +139,14 @@ const SpecPaths = z
     'OpenAPI / Swagger documents to read instead of discovering them.',
   );
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  force: Force,
+  include_env_vars: IncludeEnvVars,
+  spec_paths: SpecPaths,
+};
+
+const tool = defineTool({
   name: 'map_attack_surface',
   title: 'Map the attack surface',
   // No "auth hint" in this description on purpose, for code-extracted routes:
@@ -160,27 +167,16 @@ const tool: ToolModule = {
     'against the routes: shadow endpoints and dead documentation. Stores a snapshot ' +
     '(guardian://surface/latest has the full route list) and returns a summary with samples. scan_dast ' +
     'and validate_finding need it.',
-  inputSchema: {
-    project_path: ProjectPath,
-    force: Force,
-    include_env_vars: IncludeEnvVars,
-    spec_paths: SpecPaths,
-  },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    force?: boolean;
-    include_env_vars?: boolean;
-    spec_paths?: string[];
-  };
 
   let projectPath: string;
   try {

@@ -79,7 +79,7 @@ import type {
   ToolResult,
 } from '../types.js';
 import { ensureReportDir, scannerAvailable } from './scanHelpers.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 type Profile = 'minimal' | 'standard' | 'paranoid';
 
@@ -127,7 +127,28 @@ const PROFILE_FILES: Record<Profile, FileProposal[]> = {
   paranoid: [GITLEAKS_PARANOID, RENOVATE_PARANOID, SEMGREP, PRECOMMIT],
 };
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  profile: z
+    .enum(['minimal', 'standard', 'paranoid'])
+    .optional()
+    .describe(
+      'minimal (gitleaks, Renovate), standard (+ Semgrep, pre-commit) or paranoid (stricter). Default ' +
+        'standard.',
+    ),
+  apply: z
+    .boolean()
+    .optional()
+    .describe('When false, return only the proposed file list without writing. Default: true.'),
+  refresh: z
+    .boolean()
+    .optional()
+    .describe(
+      'Compare installed configs with the current ones; writes only with apply, never over your edits.',
+    ),
+};
+
+const tool = defineTool({
   name: 'init_project',
   title: "Bootstrap the project's dev-guardian configs",
   description:
@@ -135,41 +156,16 @@ const tool: ToolModule = {
     'paranoid) and report a first secrets, vulnerability and SAST status. refresh compares your copies ' +
     'with the current ones: apply false only reports; apply true updates the files you never edited and ' +
     'writes <name>.new beside the others — an edited file is never overwritten.',
-  inputSchema: {
-    project_path: ProjectPath,
-    profile: z
-      .enum(['minimal', 'standard', 'paranoid'])
-      .optional()
-      .describe(
-        'minimal (gitleaks, Renovate), standard (+ Semgrep, pre-commit) or paranoid (stricter). Default ' +
-          'standard.',
-      ),
-    apply: z
-      .boolean()
-      .optional()
-      .describe('When false, return only the proposed file list without writing. Default: true.'),
-    refresh: z
-      .boolean()
-      .optional()
-      .describe(
-        'Compare installed configs with the current ones; writes only with apply, never over your edits.',
-      ),
-  },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    profile?: Profile;
-    apply?: boolean;
-    refresh?: boolean;
-  };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

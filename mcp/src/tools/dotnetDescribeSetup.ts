@@ -19,9 +19,11 @@ import { findLatestUsable, openSetForProject } from '../history/openSet.js';
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { ScanRecord, ScanType, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'dotnet_describe_setup',
   title: '.NET posture summary',
   description:
@@ -29,17 +31,16 @@ const tool: ToolModule = {
     'working directory): latest dotnet_check checks target_framework (EOL frameworks), secrets and ' +
     'efcore, deps_audit if a NuGet lockfile exists. Plus open ' +
     '.NET-relevant findings. No scanner spawn.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

@@ -27,7 +27,7 @@ import { serverProjectPath } from '../resources/paging.js';
 import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
-import { listedTools, registerToolModule, type ToolModule } from './index.js';
+import { defineTool, listedTools, registerToolModule, type ToolInput } from './index.js';
 
 const startedAt = Date.now();
 
@@ -37,7 +37,9 @@ const startedAt = Date.now();
 // once, reuse many times" shape as those two.
 const SERVER_VERSION = resolveVersion();
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'health_status',
   title: 'Server health',
   description:
@@ -48,17 +50,16 @@ const tool: ToolModule = {
     'all_projects}: all_projects ones hide findings in every project. ' +
     '`storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, which every count ' +
     'ignores.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   // A diagnostic must answer even when the server runs somewhere no scan
   // would (a home directory): only an EXPLICIT path is validated.
   let projectPath: string;

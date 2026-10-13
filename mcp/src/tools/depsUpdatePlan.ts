@@ -149,7 +149,7 @@ import { findLatestUsable } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
-import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput } from './index.js';
 
 type Classification = 'security' | 'patch' | 'minor' | 'major';
 
@@ -282,7 +282,7 @@ const inputSchema = {
     .describe('Sort entries so this classification appears first. Default: security.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'deps_update_plan',
   title: 'Dependency upgrade plan',
   description:
@@ -293,16 +293,15 @@ const tool: ToolModule = {
     'hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.',
   inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; prefer?: Classification };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

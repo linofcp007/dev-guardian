@@ -59,7 +59,7 @@ import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { wpInstallPathProblem, wpSiteKey } from '../wordpress/siteKeys.js';
 import { defaultWordfenceCacheDir } from '../wordpress/vulnFeed.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   wp_install_path: z
@@ -78,7 +78,7 @@ const inputSchema = {
     .describe('WPScan API token. Falls back to WPSCAN_API_TOKEN env var.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'wp_vuln_check',
   title: 'WordPress vuln-DB lookup (WPScan)',
   description:
@@ -88,19 +88,14 @@ const tool: ToolModule = {
     'database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    wp_install_path?: string;
-    target_url?: string;
-    api_token?: string;
-  };
 
   if (!inp.target_url && !inp.wp_install_path) {
     return failDomain(

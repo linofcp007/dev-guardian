@@ -57,7 +57,7 @@ import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPat
 import { validateRuleFiles } from '../runners/semgrepValidate.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { scannerAvailable } from './scanHelpers.js';
 
 const inputSchema = {
@@ -74,7 +74,7 @@ const inputSchema = {
     .describe("Remove this project's registered rules."),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'register_custom_rules',
   title: 'Register custom Semgrep rules',
   description:
@@ -85,7 +85,7 @@ const tool: ToolModule = {
     'the registration.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
@@ -95,10 +95,9 @@ interface Rejected {
 }
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; paths?: string[]; clear?: boolean };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

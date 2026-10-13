@@ -32,7 +32,7 @@ import { describeOpenSet, isDemoting, openSetForProject } from '../history/openS
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { Finding, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 /** Entries returned per bucket; `summary` counts are never capped. */
 const ITEMS_PER_BUCKET = 50;
@@ -61,7 +61,9 @@ const FIXTURE_PATTERNS = [
   /(^|\/)examples?\//i,
 ];
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'triage_findings',
   title: 'Heuristic triage of findings',
   description:
@@ -71,9 +73,9 @@ const tool: ToolModule = {
     'generated code, fixtures). True counts in `summary`, at most 50 entries per bucket, ' +
     '`truncated` naming the buckets that were cut. No LLM call — the model that invoked the tool ' +
     'decides whether to call suppress_finding on the suggestions.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
@@ -88,10 +90,9 @@ interface Bucket {
 }
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

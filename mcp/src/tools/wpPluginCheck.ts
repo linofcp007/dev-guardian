@@ -63,7 +63,7 @@ import { scannerAvailable } from './scanHelpers.js';
 import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, type ToolResult, type ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { latestUnderKeys, wpInstallKeys, wpInstallPathProblem, wpSiteKeys } from '../wordpress/siteKeys.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   slug: z
@@ -88,7 +88,7 @@ const inputSchema = {
   ),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'wp_plugin_check',
   title: 'WordPress plugin check (1 plugin)',
   description:
@@ -101,15 +101,14 @@ const tool: ToolModule = {
     'site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { slug: string; wp_install_path?: string; target_url?: string; project_path?: string };
   if (!inp.slug) return failDomain('unknown_scan_id', 'slug is required.');
   if (!WP_PLUGIN_SLUG.test(inp.slug)) {
     return failDomain('invalid_input', 'slug must be a plugin slug: letters, digits, "_" and "-" (e.g. "contact-form-7").');

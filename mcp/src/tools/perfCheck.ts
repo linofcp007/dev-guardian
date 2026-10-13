@@ -48,7 +48,7 @@ import {
   getProp,
   getString,
 } from '../runners/scannerParsers/index.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -65,7 +65,7 @@ const inputSchema = {
     .describe('Categories to include. Default: all five.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'perf_check',
   title: 'Performance check (Lighthouse or k6)',
   description:
@@ -75,20 +75,14 @@ const tool: ToolModule = {
     'budget. Sends real load to the URL.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    target_url?: string;
-    k6_script_path?: string;
-    lighthouse_categories?: string[];
-  };
 
   let projectPath: string;
   try {

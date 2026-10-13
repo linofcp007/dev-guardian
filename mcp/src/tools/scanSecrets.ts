@@ -42,16 +42,13 @@ import { LogOptsError, resolveLogOpts, runGitleaksScan, type SecretScanScope } f
 import { Force, ProjectPath } from '../schemas.js';
 import { discardCaptured, isVerifiableRule, OFFLINE_REASON, verifyGitleaksFindings } from '../secrets/verify/index.js';
 import type { Finding, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule } from './index.js';
 import { ensureReportDir } from './scanHelpers.js';
 import {
   makeScanTool,
   type InvokeContext,
   type ScannerInvocation,
-  type ScanToolBaseInput,
 } from './scanToolFactory.js';
-
-type ScanSecretsInput = ScanToolBaseInput & { log_opts?: string; verify_live?: boolean };
 
 /** `GUARDIAN_OFFLINE=1`: verify_live sends nothing (and captures nothing). */
 function networkDisabled(): boolean {
@@ -72,7 +69,27 @@ function keptByScan(ctx: InvokeContext): (f: Finding) => boolean {
   };
 }
 
-const scanSecrets = makeScanTool<ScanSecretsInput>({
+const inputSchema = {
+  project_path: ProjectPath,
+  log_opts: z
+    .string()
+    .max(400)
+    .optional()
+    .describe(
+      'Narrow the history pass: --all, <ref>..<ref> or --since=<date>. Not with scope.',
+    ),
+  force: Force,
+  scope: ScanScopeInput,
+  verify_live: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Ask each secret's own provider whether it is live: sends the secrets out, so ask the user first.",
+    ),
+};
+
+const scanSecrets = makeScanTool({
   name: 'scan_secrets',
   title: 'Secret scan (gitleaks)',
   description:
@@ -92,25 +109,7 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
   category: 'security',
   supportsAutoFix: false,
   supportsScope: true,
-  inputSchema: {
-    project_path: ProjectPath,
-    log_opts: z
-      .string()
-      .max(400)
-      .optional()
-      .describe(
-        'Narrow the history pass: --all, <ref>..<ref> or --since=<date>. Not with scope.',
-      ),
-    force: Force,
-    scope: ScanScopeInput,
-    verify_live: z
-      .boolean()
-      .optional()
-      .default(false)
-      .describe(
-        "Ask each secret's own provider whether it is live: sends the secrets out, so ask the user first.",
-      ),
-  },
+  inputSchema,
   invoke: async (input, ctx): Promise<ScannerInvocation> => {
     const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'secrets');
     // Validated by the handler below; re-checked so no other caller of
@@ -171,11 +170,12 @@ const scanSecrets = makeScanTool<ScanSecretsInput>({
   },
 });
 
-const tool: ToolModule = {
+const tool = defineTool({
   ...scanSecrets,
-  handler: async (input, plugin, callMeta): Promise<ToolResult<Record<string, unknown>>> => {
-    const raw = (input as { log_opts?: unknown }).log_opts;
-    const scope = (input as { scope?: unknown }).scope;
+  inputSchema,
+  handler: async (inp, plugin, callMeta): Promise<ToolResult<Record<string, unknown>>> => {
+    const raw = inp.log_opts;
+    const scope = inp.scope;
     if (scope !== undefined && scope !== null && typeof raw === 'string' && raw.trim().length > 0) {
       return {
         ok: false,
@@ -188,15 +188,15 @@ const tool: ToolModule = {
       };
     }
     if (typeof raw !== 'string' || raw.trim().length === 0) {
-      const { log_opts: _drop, ...rest } = input;
+      const { log_opts: _drop, ...rest } = inp;
       return scanSecrets.handler(rest, plugin, callMeta);
     }
     let projectPath: string;
     try {
-      projectPath = resolveProjectPath((input as { project_path?: string }).project_path).path;
+      projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
       // The pipeline reports an invalid project_path itself.
-      if (e instanceof InvalidProjectPathError) return scanSecrets.handler(input, plugin, callMeta);
+      if (e instanceof InvalidProjectPathError) return scanSecrets.handler(inp, plugin, callMeta);
       throw e;
     }
     const state = await repoState(projectPath);
@@ -219,8 +219,8 @@ const tool: ToolModule = {
         error: { code: e.kind === 'unresolved_ref' ? 'target_not_found' : 'unsupported_target', message: e.message },
       };
     }
-    return scanSecrets.handler({ ...input, log_opts: resolved }, plugin, callMeta);
+    return scanSecrets.handler({ ...inp, log_opts: resolved }, plugin, callMeta);
   },
-};
+});
 
 registerToolModule(tool);

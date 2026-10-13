@@ -36,7 +36,16 @@ Enforced by the compiler where possible, by review where not:
   entries left when the check began (the tool modules' and `schemas.ts`',
   whose surface was being reworked) — an entry that is imported again, or
   gone, must leave it too (review 8, finding 15: 438 such exports, 9 of them
-  dead code).
+  dead code; `schemas.ts`' eight went in review 10).
+- **A tool's input is typed by its schema, never cast.** A tool module is
+  `defineTool({ inputSchema, handler })` (`tools/index.ts`): the handler
+  takes `ToolInput<typeof inputSchema>` — the schema's parse, defaults
+  applied. A scan tool's `makeScanTool` callbacks (`invoke`, `rulePacks`,
+  `cacheState`, …) are typed the same way from its `inputSchema`. The one
+  cast from the registry's `Record<string, unknown>` is inside those two
+  helpers: the SDK and a fold hand a handler the strict parse of exactly that
+  schema (dg-maint finding 12 found 51 hand-written `input as {…}` casts).
+  The LLM scan's three tools are not converted yet.
 - Note what `tsc` does **not** catch: interpolating a non-string into a
   template (`` `--config=${someArray}` ``) types as `string` at any
   strictness. That needs `@typescript-eslint/restrict-template-expressions`,

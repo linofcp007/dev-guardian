@@ -40,7 +40,7 @@ import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { computeCoverage } from './scanCoverage.js';
 import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const RETRY_DELAYS_MS = [1000, 3000, 9000] as const;
 const DEFAULT_RISKY_LOGINS = ['admin', 'administrator', 'root', 'wpadmin'];
@@ -95,7 +95,7 @@ interface AuditMeta {
   warnings: string[];
 }
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'wp_audit',
   title: 'Live WordPress install audit',
   description:
@@ -104,20 +104,14 @@ const tool: ToolModule = {
     'on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    wp_install_path: string;
-    include_users?: boolean;
-    include_options?: boolean;
-    risky_login_names?: string[];
-  };
   if (!inp.wp_install_path) {
     return failDomain('not_a_wordpress_install', 'wp_install_path is required.');
   }

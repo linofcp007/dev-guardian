@@ -54,7 +54,7 @@ import {
   type Severity,
   type ToolResult,
 } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -90,7 +90,7 @@ const inputSchema = {
     .describe('Language for the HTML shell chrome (report title + footer). Default: en.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'report_export',
   title: 'Export a report (HTML, SARIF, Markdown, JSON)',
   description:
@@ -101,24 +101,14 @@ const tool: ToolModule = {
     'SARIF import.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    scan_id?: string;
-    source_tool?: string;
-    format?: 'html' | 'sarif' | 'markdown' | 'json';
-    content_markdown?: string;
-    title?: string;
-    subtitle?: string;
-    lang?: Lang;
-  };
   const format = inp.format ?? 'markdown';
   const lang: Lang = inp.lang ?? 'en';
   let projectPath: string;

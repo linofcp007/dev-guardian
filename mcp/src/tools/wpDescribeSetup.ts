@@ -36,9 +36,16 @@ import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPat
 import { httpUrlField, ProjectPath } from '../schemas.js';
 import type { ScanRecord, ScanType, ToolResult } from '../types.js';
 import { latestUnderKeys, wpInstallKeys, wpSiteKey, wpSiteKeys } from '../wordpress/siteKeys.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  target_url: httpUrlField()
+    .optional()
+    .describe('The live site URL wp_vuln_check (live or rest mode) was run against, to include those rows.'),
+};
+
+const tool = defineTool({
   name: 'wp_describe_setup',
   title: 'WordPress posture summary',
   description:
@@ -47,22 +54,16 @@ const tool: ToolModule = {
     'keyed by URL): latest wp_audit (versions, checksum mismatches, admins, config flags), latest ' +
     'wp_audit {mode: "cron"} (flagged events), latest wp_vuln_check {mode: "rest"} (needs target_url), open WP-related ' +
     'findings, and active CVEs on wp packages. No scanner spawn.',
-  inputSchema: {
-    project_path: ProjectPath,
-    target_url: httpUrlField()
-      .optional()
-      .describe('The live site URL wp_vuln_check (live or rest mode) was run against, to include those rows.'),
-  },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; target_url?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

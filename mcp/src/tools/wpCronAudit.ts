@@ -20,7 +20,7 @@ import { resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
 import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   wp_install_path: z
@@ -63,7 +63,7 @@ const KNOWN_PREFIXES = [
 
 const BASE64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'wp_cron_audit',
   title: 'WordPress cron audit (suspicious scheduled events)',
   description:
@@ -72,15 +72,14 @@ const tool: ToolModule = {
     'sites almost always live here.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { wp_install_path: string };
   let installPath: string;
   try {
     installPath = resolveProjectPath(inp.wp_install_path).path;

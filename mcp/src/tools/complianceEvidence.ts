@@ -38,7 +38,7 @@ import { COVERAGE_RULE, languagesLine, testedByText, unmappedSentence, untestedH
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, type Finding, type ScanRecord, type ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const FRAMEWORKS = ['gdpr', 'soc2', 'iso27001', 'owasp-top10-2025', 'nist-csf-2.0', 'generic'] as const;
 type Framework = (typeof FRAMEWORKS)[number];
@@ -54,7 +54,7 @@ const inputSchema = {
     ),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'compliance_evidence',
   title: 'Compliance evidence pack (Markdown)',
   description:
@@ -65,15 +65,14 @@ const tool: ToolModule = {
     'only.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; framework?: Framework };
   const framework = inp.framework ?? 'generic';
   let projectPath: string;
   try {

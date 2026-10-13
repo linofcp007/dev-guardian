@@ -60,7 +60,7 @@ import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary, type DastCrossReference } from '../validate/summary.js';
 import { IMPLEMENTED_PROVIDERS, type FindingValidation } from '../validate/types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 /** The one `scan_dast` check whose finding is evidence of live, anonymous
  *  reachability — see `dast/analyze.ts`'s `checkAnonymousExposure`. */
@@ -96,7 +96,14 @@ const Providers = z
     "static (the finding's file) and/or dependency (a CVE's package). Default: both.",
   );
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  fingerprint: Fingerprint,
+  finding_fingerprint: FindingFingerprint,
+  providers: Providers,
+};
+
+const tool = defineTool({
   name: 'validate_finding',
   title: 'Qualify findings by reachability',
   // An agent's only discovery surface. It must carry the preconditions and
@@ -113,14 +120,9 @@ const tool: ToolModule = {
     'map_attack_surface. Report only: it never suppresses a finding or changes a severity. The unit is ' +
     'the file; Ruby, Java, C# and PHP never get unreachable; nothing detects a dynamic import, so where ' +
     'one is used unreachable can be wrong and this tool cannot tell you when.',
-  inputSchema: {
-    project_path: ProjectPath,
-    fingerprint: Fingerprint,
-    finding_fingerprint: FindingFingerprint,
-    providers: Providers,
-  },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
@@ -149,17 +151,11 @@ const NO_OPEN_FINDINGS_NOTE =
   'scan_sast) first, then re-run validate_finding.';
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
   // `summary.providers_run` reports what actually ran, in the fixed order of
   // IMPLEMENTED_PROVIDERS — never the argument echoed back.
-  const inp = input as {
-    project_path?: string;
-    fingerprint?: string;
-    finding_fingerprint?: string;
-    providers?: string[];
-  };
   if (
     inp.fingerprint !== undefined &&
     inp.finding_fingerprint !== undefined &&

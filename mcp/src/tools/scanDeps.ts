@@ -39,13 +39,10 @@ import {
   makeScanTool,
   type ResponseView,
   type ScannerInvocation,
-  type ScanToolBaseInput,
 } from './scanToolFactory.js';
 
-type ScanDepsInput = ScanToolBaseInput & { packages?: string[] };
-
 registerToolModule(
-  makeScanTool<ScanDepsInput>({
+  makeScanTool({
     name: 'scan_deps',
     title: 'Dependency CVE and licence scan (Trivy)',
     description:

@@ -168,7 +168,7 @@ import { deleteScans } from '../storage/maintenance.js';
 import type { DomainError, Finding, Severity, ToolResult } from '../types.js';
 import { bugHuntLocalConfigs } from './bugHunt.js';
 import { isGitRepo } from './gitState.js';
-import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput, TOOLS } from './index.js';
 
 const DEFAULT_SOURCES: readonly FixSource[] = ['deps', 'semgrep'];
 const DEFAULT_SEVERITY_MIN: Severity = 'high';
@@ -261,7 +261,41 @@ interface GroupResult {
   git_config_not_applied?: string[];
 }
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  // .describe() override, not the shared SeverityMin as-is (M8): that
+  // schema's own description says "Default: include all", correct for
+  // every OTHER tool that uses it (no zod .default(), so the description
+  // is the only place the default is stated) but wrong for this tool,
+  // whose actual default is 'high' (DEFAULT_SEVERITY_MIN below). Reusing
+  // the shared schema is still right — .describe() returns a new instance
+  // rather than mutating the shared one, so every other caller keeps
+  // seeing "include all".
+  severity_min: SeverityMin.describe(
+    'Lowest severity to fix. Default high.',
+  ),
+  sources: z
+    .array(z.enum(['deps', 'semgrep']))
+    .optional()
+    .describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
+  max_prs: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe(
+      'Pull requests per run, highest severity first; the rest in `deferred`. Default 3.',
+    ),
+  apply: z
+    .boolean()
+    .optional()
+    .describe(
+      'true: commit, push, open the PRs. Default false: a dry run (still runs the test command).',
+    ),
+};
+
+const tool = defineTool({
   name: 'create_fix_pr',
   title: 'Apply scanner fixes as pull requests',
   description:
@@ -271,56 +305,17 @@ const tool: ToolModule = {
     "project's own test command — the project's code, run as you. The repo's .npmrc/.yarnrc and like " +
     'configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository ' +
     'refuses the fix. `filtered` explains the rest.',
-  inputSchema: {
-    project_path: ProjectPath,
-    // .describe() override, not the shared SeverityMin as-is (M8): that
-    // schema's own description says "Default: include all", correct for
-    // every OTHER tool that uses it (no zod .default(), so the description
-    // is the only place the default is stated) but wrong for this tool,
-    // whose actual default is 'high' (DEFAULT_SEVERITY_MIN below). Reusing
-    // the shared schema is still right — .describe() returns a new instance
-    // rather than mutating the shared one, so every other caller keeps
-    // seeing "include all".
-    severity_min: SeverityMin.describe(
-      'Lowest severity to fix. Default high.',
-    ),
-    sources: z
-      .array(z.enum(['deps', 'semgrep']))
-      .optional()
-      .describe("Which fix sources to consider. Default: both ('deps' and 'semgrep')."),
-    max_prs: z
-      .number()
-      .int()
-      .min(1)
-      .max(10)
-      .optional()
-      .describe(
-        'Pull requests per run, highest severity first; the rest in `deferred`. Default 3.',
-      ),
-    apply: z
-      .boolean()
-      .optional()
-      .describe(
-        'true: commit, push, open the PRs. Default false: a dry run (still runs the test command).',
-      ),
-  },
+  inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    severity_min?: Severity;
-    sources?: FixSource[];
-    max_prs?: number;
-    apply?: boolean;
-  };
 
   let projectPath: string;
   try {

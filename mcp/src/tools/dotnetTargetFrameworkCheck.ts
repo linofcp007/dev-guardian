@@ -23,7 +23,7 @@ import type { PluginContext } from '../context.js';
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 interface FrameworkSupport {
   tfm: string;
@@ -51,7 +51,7 @@ const SUPPORT: Record<string, FrameworkSupport> = {
 
 const inputSchema = { project_path: ProjectPath };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'dotnet_target_framework_check',
   title: '.NET target framework EOL check',
   description:
@@ -59,15 +59,14 @@ const tool: ToolModule = {
     'Framework) plus a hint for each. Pure XML grep — no .NET SDK required.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

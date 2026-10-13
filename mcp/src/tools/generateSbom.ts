@@ -34,7 +34,7 @@ import {
   ensureReportDir,
   scannerAvailable,
 } from './scanHelpers.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 type SbomFormat = 'cyclonedx-json' | 'spdx-json';
 
@@ -58,7 +58,7 @@ const inputSchema = {
     .describe(`Inline the SBOM when it is at most this many KB (0 never; at most ${MAX_INLINE_KB}). Default ${DEFAULT_INLINE_KB}.`),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'generate_sbom',
   title: 'Generate an SBOM (Syft or Trivy)',
   description:
@@ -68,19 +68,14 @@ const tool: ToolModule = {
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
   contentOnlyKeys: ['inline'],
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: import('../context.js').PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    format?: SbomFormat;
-    inline_max_kb?: number;
-  };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

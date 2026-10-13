@@ -40,9 +40,11 @@ import type { CveIntelResult } from '../intel/types.js';
 import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { CVE_SOURCE_SCAN_TYPES, isDepsAuditScan, type Cve, type Finding, type ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'risk_score',
   title: 'Risk score (0-100)',
   description:
@@ -51,17 +53,16 @@ const tool: ToolModule = {
     'with the breakdown, the next action and `coverage` (`coverage_caveat` when incomplete). ' +
     '`suppressed_count`: what suppressions took out — a mass suppression is never a clean project. ' +
     '`future_dated_note`: future-dated scans ignored.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
   let projectPath: string;
   try {
     projectPath = resolveProjectPath(inp.project_path).path;

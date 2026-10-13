@@ -63,7 +63,7 @@ import {
   type ToolResult,
   type ToolRun,
 } from '../types.js';
-import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput } from './index.js';
 import { assessCoverage } from './scanCoverage.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
 import { countBySeverity } from '../severity/counts.js';
@@ -165,7 +165,7 @@ const inputSchema = {
     ),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'scan_dast',
   title: 'Probe a running app against its route inventory',
   // The description is the only discovery surface an agent has, so it states
@@ -182,7 +182,7 @@ const tool: ToolModule = {
     'injection safety.',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
@@ -225,11 +225,10 @@ function fail(
 }
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as Inputs;
 
   // ---- 1. Project path -------------------------------------------------
   let projectPath: string;
