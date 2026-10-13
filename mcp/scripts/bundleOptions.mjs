@@ -6,23 +6,44 @@
  *
  * - `dist/engine.js` — `src/engine.ts`: the MCP server and everything the CLI
  *   uses, one self-contained bundle (review 8, finding 2).
- * - `dist/hooks.js` — `src/hooksEntry.ts`: the detectors the hook dispatcher
- *   loads, one bundle of its own, kept small because the hook runs on every
- *   tool call (review 8, finding 3).
+ * - `dist/hooks.js` — `src/hooksEntry.ts`: what every hook event needs, and
+ *   the loaders of the four parts ({@link HOOK_PARTS}) — `dist/hooksBash.js`,
+ *   `hooksVet.js`, `hooksWrite.js`, `hooksSession.js` — each a self-contained
+ *   bundle of what one kind of event runs (3.4.0), so a write no longer parses
+ *   the 144 KB shell guard, nor any event the `node:crypto` and
+ *   `node:child_process` only SessionStart needs. The entry's `import()` of a
+ *   part is left to the runtime ({@link HOOK_PART_IMPORT}); code two parts
+ *   share is in each. Not esbuild's code splitting: a chunk per module made
+ *   every event open a dozen files, slower on Windows than the one bundle.
+ *   The parts sit beside the bundles, at the depth every `import.meta.url`
+ *   probe in `src/` expects of one.
  * - `dist/server.js` — {@link SERVER_JS}: two lines that start the server in
  *   `engine.js`, at the path `plugin.json` and every host configuration name.
  *
- * One esbuild build, two entry points, no code splitting: each bundle is
- * self-contained, made with the same options. Every `node:` builtin stays
- * external; every npm package is inlined.
+ * Two esbuild builds, the engine first: the hooks bundle carries the engine's
+ * size and SHA-256 ({@link ENGINE_DIGEST}), so SessionStart can say that a
+ * damaged or missing `engine.js` leaves the MCP tools and the CLI unable to
+ * run, without loading it. Every `node:` builtin stays external; every npm
+ * package is inlined.
  */
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
+import { build } from 'esbuild';
 
-/** Every bundle: `dist/<out>.js` from `src/<in>.ts`. */
+/** Every bundle's entry: `dist/<out>.js` from `src/<in>.ts`. */
 export const BUNDLES = [
   { in: 'engine', out: 'engine' },
   { in: 'hooksEntry', out: 'hooks' },
 ];
+
+/** The hooks bundle's parts: `dist/<part>.js` from `src/<part>.ts`, each loaded by `src/hooksEntry.ts`. */
+export const HOOK_PARTS = ['hooksBash', 'hooksVet', 'hooksWrite', 'hooksSession'];
+
+/** How `src/hooksEntry.ts` imports a part: left to the runtime, which finds it beside `dist/hooks.js`. */
+export const HOOK_PART_IMPORT = new RegExp(`^\\./(?:${HOOK_PARTS.join('|')})\\.js$`);
+
+/** The identifier the hooks bundle reads the engine's digest from (`src/hooks/distCheck.ts`). */
+export const ENGINE_DIGEST = '__GUARDIAN_ENGINE_DIGEST__';
 
 /**
  * `dist/server.js`, written as it is by the build: the MCP server, started
@@ -38,12 +59,13 @@ export const SERVER_JS = [
 ].join('\n');
 
 /**
+ * The options both builds share.
+ *
  * @param {string} root the `mcp/` directory
  * @returns {import('esbuild').BuildOptions}
  */
-export function bundleOptions(root) {
+function common(root) {
   return {
-    entryPoints: BUNDLES.map((b) => ({ in: resolve(root, 'src', `${b.in}.ts`), out: b.out })),
     outdir: resolve(root, 'dist'),
     // The paths esbuild writes into the bundle's comments are relative to
     // this; `npm run build` runs from `mcp/`, and so must anything that
@@ -63,4 +85,69 @@ export function bundleOptions(root) {
     },
     legalComments: 'none',
   };
+}
+
+/**
+ * `dist/engine.js`: one file, no splitting.
+ *
+ * @param {string} root the `mcp/` directory
+ * @returns {import('esbuild').BuildOptions}
+ */
+export function engineOptions(root) {
+  return { ...common(root), entryPoints: [{ in: resolve(root, 'src', 'engine.ts'), out: 'engine' }] };
+}
+
+/**
+ * `dist/hooks.js` and its parts, with the engine's digest defined.
+ *
+ * @param {string} root the `mcp/` directory
+ * @param {{ bytes: number, sha256: string }} engineDigest
+ * @returns {import('esbuild').BuildOptions}
+ */
+export function hooksOptions(root, engineDigest) {
+  const entry = resolve(root, 'src', 'hooksEntry.ts');
+  return {
+    ...common(root),
+    entryPoints: [{ in: entry, out: 'hooks' }, ...HOOK_PARTS.map((part) => ({ in: resolve(root, 'src', `${part}.ts`), out: part }))],
+    define: { [ENGINE_DIGEST]: JSON.stringify(engineDigest) },
+    plugins: [
+      {
+        name: 'hook-parts',
+        setup(b) {
+          // The entry's `import('./hooksBash.js')` stays as written: the part is a bundle of its own.
+          b.onResolve({ filter: HOOK_PART_IMPORT }, (args) => (resolve(args.importer) === entry ? { path: args.path, external: true } : undefined));
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * The size and SHA-256 of a bundle's text, as it is written to disk.
+ *
+ * @param {string} text
+ * @returns {{ bytes: number, sha256: string }}
+ */
+export function digestOf(text) {
+  const bytes = Buffer.from(text, 'utf8');
+  return { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+}
+
+/**
+ * Builds `dist/`'s bundles: the engine, then the hooks with its digest. Nothing
+ * is written — the outputs come back in memory, for `bundle.mjs` to write and
+ * for the drift test to compare.
+ *
+ * @param {string} root the `mcp/` directory
+ * @param {{ logLevel?: import('esbuild').LogLevel }} [opts]
+ * @returns {Promise<{ outputs: Map<string, string>, metafiles: { engine: import('esbuild').Metafile, hooks: import('esbuild').Metafile } }>}
+ */
+export async function buildDist(root, opts = {}) {
+  const logLevel = opts.logLevel ?? 'silent';
+  const engine = await build({ ...engineOptions(root), write: false, metafile: true, logLevel });
+  const engineFile = engine.outputFiles.find((f) => resolve(f.path) === resolve(root, 'dist', 'engine.js'));
+  if (engineFile === undefined) throw new Error('the engine build wrote no dist/engine.js');
+  const hooks = await build({ ...hooksOptions(root, digestOf(engineFile.text)), write: false, metafile: true, logLevel });
+  const outputs = new Map([...engine.outputFiles, ...hooks.outputFiles].map((f) => [resolve(f.path), f.text]));
+  return { outputs, metafiles: { engine: engine.metafile, hooks: hooks.metafile } };
 }

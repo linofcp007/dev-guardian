@@ -32,7 +32,14 @@ quality, deps, observability, performance and compliance. Two halves:
   because a shell command can still write that file. Detection lives in
   `mcp/src/hooks/{secretScan,bashGuard}.ts` (pure, unit-tested) and is shared
   with the `dev-guardian check` CLI subcommand; the dispatcher loads it from
-  its own bundle, `mcp/dist/hooks.js` (`src/hooksEntry.ts`). Every file a hook reads from
+  its own bundle, `mcp/dist/hooks.js` (`src/hooksEntry.ts`), and that bundle's
+  per-event parts (`hooksBash.js`, `hooksVet.js`, `hooksWrite.js`,
+  `hooksSession.js` — build-and-test.md). The shell guard's reading of a
+  command lives in `mcp/src/hooks/shell/` — the tokenizer (`split.ts`), the
+  command word (`command.ts`), cmd.exe's line (`cmd.ts`), paths as the command
+  moves (`paths.ts`), what it does to the filesystem (`effects.ts`), the
+  program text it hands an interpreter (`interpreters.ts`) — and
+  `bashGuard.ts` judges it. Every file a hook reads from
   the project or the user's home goes through `mcp/src/hooks/configFile.ts`:
   open (non-blocking), `fstat` the DESCRIPTOR, read at most cap + 1 bytes —
   only a regular file of at most 64 KiB (1 MiB for registry configuration).

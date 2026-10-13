@@ -29,7 +29,7 @@
  *     (`GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`).
  */
 
-import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import module from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -407,9 +407,18 @@ function loadAllowlist(root, unread) {
   return [];
 }
 
+/**
+ * The plugin's version, from its own `plugin.json`, read directly: through the
+ * configuration reader — which lives in the hooks bundle — a damaged bundle
+ * made SessionStart say `v0.0.0` (review of 3.3.0).
+ */
 function pluginVersion() {
-  const pj = readJsonFile(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'));
-  return pj?.version ?? '0.0.0';
+  try {
+    const pj = JSON.parse(readFileSync(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8'));
+    return typeof pj?.version === 'string' ? pj.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function relativeTime(ms) {
@@ -424,32 +433,46 @@ function relativeTime(ms) {
 }
 
 /**
- * `execGitSync` from `mcp/src/platform/gitSafety.ts`: git hardened against
- * the project's own git configuration (review 3.0, W2E-git). SessionStart's
- * `git status` in a project opened for the first time — an archive, a
- * download — used to run that project's `core.fsmonitor` and
- * `post-index-change` hook. Until it is loaded, and if it cannot be, no git
- * runs at all: the briefing loses its branch line, never its safety.
+ * `git` in `cwd` through `execGit` from `mcp/src/platform/gitSafety.ts`: git
+ * hardened against the project's own git configuration (review 3.0, W2E-git).
+ * SessionStart's `git status` in a project opened for the first time — an
+ * archive, a download — used to run that project's `core.fsmonitor` and
+ * `post-index-change` hook. Its stdout, trimmed, or `''` when git did not
+ * succeed. If the hardening cannot be loaded, no git runs at all: the
+ * briefing loses its branch line, never its safety. Asynchronous (3.4.0), so
+ * that its processes — the configuration read and the submodule listing side
+ * by side, then the command — run while the guards' modules load.
  */
-let execGitSync = null;
-
-async function loadGitSafety() {
+async function git(cwd, args) {
   try {
     const mod = await detector('loadGitSafety');
-    if (typeof mod.execGitSync === 'function') execGitSync = mod.execGitSync;
+    if (typeof mod.execGit !== 'function') return '';
+    const r = await mod.execGit(cwd, args, { timeoutMs: 2000 });
+    return r.failure === null && r.status === 0 ? r.stdout.trim() : '';
   } catch (err) {
     debug(`git hardening unavailable — git not run: ${err instanceof Error ? err.message : String(err)}`);
+    return '';
   }
 }
 
-function git(cwd, args) {
-  if (execGitSync === null) return '';
-  try {
-    const r = execGitSync(cwd, args, { timeoutMs: 2000 });
-    return r.failure === null && r.status === 0 ? r.stdout.trim() : '';
-  } catch {
-    return '';
+/**
+ * Whether git can find a repository for `dir`: a `.git` at it or above it
+ * (`lstat` only — a `.git` linked to a share is never opened), or the
+ * environment naming one (`GIT_DIR`, `GIT_WORK_TREE`). Where there is none,
+ * `git status` fails anyway: SessionStart starts no git process for nothing
+ * (3.4.0 — three of them, about 190 ms on Windows, in every folder that is not
+ * a repository).
+ */
+function inGitRepository(dir) {
+  if (process.env.GIT_DIR || process.env.GIT_WORK_TREE) return true;
+  let at = resolve(dir);
+  for (let i = 0; i < 256; i += 1) {
+    if (presentNoFollow(join(at, '.git'))) return true;
+    const parent = dirname(at);
+    if (parent === at) return false;
+    at = parent;
   }
+  return true;
 }
 
 /** Text inserted by a Write/Edit/MultiEdit/NotebookEdit tool call. */
@@ -598,15 +621,20 @@ function projectRootOf(cwd) {
   // each — made every unmarked project below it take its configuration from
   // there. Compared as the filesystem spells them (8.3 names: %TEMP% is
   // often `C:\Users\ADMINI~1\…`).
-  const home = guardedPath(resolve(homedir()));
-  const temp = guardedPath(resolve(tmpdir()));
+  // Resolved only for a directory that has a marker (3.4.0): each is a
+  // `realpath` and an 8.3 lookup, and a walk from a deep cwd with no marker
+  // above it paid them at every level.
+  let home;
+  let temp;
   const excluded = (dir) => {
+    home ??= guardedPath(resolve(homedir()));
+    temp ??= guardedPath(resolve(tmpdir()));
     const d = guardedPath(dir);
     return samePath(d, home) || isBelow(d, home) || samePath(d, temp);
   };
   let dir = resolve(cwd);
   for (let i = 0; i < 256; i += 1) {
-    if (!excluded(dir) && (presentNoFollow(join(dir, '.guardian')) || presentNoFollow(join(dir, '.git')))) return dir;
+    if ((presentNoFollow(join(dir, '.guardian')) || presentNoFollow(join(dir, '.git'))) && !excluded(dir)) return dir;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -645,15 +673,18 @@ const GUARD_MODULES = [
 async function unloadableGuardsNotice() {
   const broken = [];
   let reason = '';
-  for (const g of GUARD_MODULES) {
-    try {
+  const loaded = await Promise.allSettled(
+    GUARD_MODULES.map(async (g) => {
       const mod = await detector(g.loader);
       if (typeof mod[g.export] !== 'function') throw new Error(`${g.export} missing`);
-    } catch (err) {
-      broken.push(g.name);
-      reason = reason || (err instanceof Error ? (err.code ?? err.message) : String(err));
-    }
-  }
+    }),
+  );
+  loaded.forEach((r, k) => {
+    if (r.status === 'fulfilled') return;
+    broken.push(GUARD_MODULES[k].name);
+    const err = r.reason;
+    reason = reason || (err instanceof Error ? (err.code ?? err.message) : String(err));
+  });
   if (broken.length === 0) return null;
   const list = broken.length === 1 ? broken[0] : `${broken.slice(0, -1).join(', ')} and ${broken[broken.length - 1]}`;
   return (
@@ -689,12 +720,47 @@ function ignoredSettingsNotice(cfg) {
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
+/**
+ * SessionStart's check of the engine bundle, `mcp/dist/engine.js` — what the
+ * MCP server and the CLI run, and the hooks do not (review of 3.3.0: with it
+ * missing or cut short, the briefing still said "active"). Its size and
+ * SHA-256 against the build's (`mcp/src/hooks/distCheck.ts`), the engine never
+ * loaded; with the hooks bundle itself damaged, only a missing engine is told.
+ * `null` when it is whole.
+ */
+async function engineNotice() {
+  let damage;
+  try {
+    damage = (await detector('loadDistCheck')).engineDamage(join(PLUGIN_ROOT, 'mcp', 'dist'));
+  } catch {
+    damage = existsSync(join(PLUGIN_ROOT, 'mcp', 'dist', 'engine.js')) ? null : 'missing';
+  }
+  if (!damage) return null;
+  return (
+    `⚠️ dev-guardian: its engine, mcp/dist/engine.js, is ${damage} — the MCP tools and the dev-guardian CLI cannot ` +
+    'run (the guardrail hooks do not use it). Ask the user to reinstall or rebuild the plugin.'
+  );
+}
+
 async function handleSessionStart(root, cfg) {
+  // git runs in processes of its own: started first, its three — the
+  // configuration read and the submodule listing side by side, then `status`
+  // — overlap the modules loading below (3.4.0). One git call for the branch
+  // and the count (review 8, item 16): the porcelain v2 header names the
+  // branch, and every other line is a change. `--ignore-submodules=dirty`: the
+  // count does not go into a submodule's work tree, where that submodule's own
+  // drivers would run (they are also neutralised by gitSafety); a submodule
+  // whose commit moved still counts. Not in a folder git finds no repository
+  // for, nor when the project turned the briefing off.
+  const status =
+    cfg.sessionStart && inGitRepository(root)
+      ? git(root, ['status', '--porcelain=v2', '--branch', '--ignore-submodules=dirty'])
+      : Promise.resolve('');
   // What the model must hear even when the project turned the briefing off:
   // settings it asked for that were ignored, and guards that are not running.
-  const off = await unloadableGuardsNotice();
+  const [off, engine] = await Promise.all([unloadableGuardsNotice(), engineNotice()]);
   const guardsOff = off !== null;
-  const notice = [ignoredSettingsNotice(cfg), off].filter(Boolean).join('\n') || null;
+  const notice = [ignoredSettingsNotice(cfg), off, engine].filter(Boolean).join('\n') || null;
   if (!cfg.sessionStart) {
     // The briefing is advisory and a project may turn it off — but not the
     // notice that the same project asked to loosen the guardrails.
@@ -709,15 +775,13 @@ async function handleSessionStart(root, cfg) {
   // way it once held the config read. Walked first, with lstat + readlink only.
   const reachable = walkLinksUnder(root, dbPath).ok;
   const initialized = reachable ? existsSync(guardianDir) : true;
-  await loadGitSafety();
-  // One git call for the branch and the count (review 8, item 16): the
-  // porcelain v2 header names the branch, and every other line is a change.
-  // `--ignore-submodules=dirty`: the count does not go into a submodule's
-  // work tree, where that submodule's own drivers would run (they are also
-  // neutralised by gitSafety); a submodule whose commit moved still counts.
-  const { branch, changed } = branchAndChanges(git(root, ['status', '--porcelain=v2', '--branch', '--ignore-submodules=dirty']));
+  const { branch, changed } = branchAndChanges(await status);
 
-  const state = guardsOff ? 'running with guards OFF (see below)' : 'active';
+  const state = guardsOff
+    ? 'running with guards OFF (see below)'
+    : engine !== null
+      ? 'guardrails active — its MCP tools and CLI cannot run (see below)'
+      : 'active';
   const head = `🛡️ dev-guardian ${state} (v${pluginVersion()})` + (branch ? ` · branch \`${branch}\`` : '');
   lines.push(head);
   if (changed > 0) lines.push(`${changed} uncommitted change(s) in the working tree.`);

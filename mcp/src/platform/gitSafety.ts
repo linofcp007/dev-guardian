@@ -707,10 +707,17 @@ function nextSubmodules(walk: Walk, dir: string, depth: number, links: Gitlinks)
 
 async function walkAsync(walk: Walk, root: string, dir: string, depth: number): Promise<void> {
   walk.visited.add(dir);
-  const probe = await probeAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
+  // The submodule listing runs nothing a repository configures (`gitlinkArgs`:
+  // the index only, fsmonitor off, in the probe's own hardened environment),
+  // so it starts beside the configuration read rather than after it: one git
+  // process's time less on every first call for a directory (3.4.0 — about
+  // 60 ms on Windows). It is used only when the read is a listing, as before.
+  const [probe, links] = await Promise.all([
+    probeAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs),
+    gitlinksAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs),
+  ]);
   walk.read.push(depth === 0 ? { dir, probe } : { dir, probe, submodule: relativeLabel(root, dir) });
   if (probe.kind !== 'listing') return;
-  const links = await gitlinksAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
   for (const sub of nextSubmodules(walk, dir, depth, links)) await walkAsync(walk, root, sub, depth + 1);
 }
 

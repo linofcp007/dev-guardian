@@ -32,10 +32,11 @@ performance and compliance:
   points belong in `hooks/`, `commands/`, `cli/` or `mcpServers`.
 - **Commit the compiled `mcp/dist/`, rebuilt in the same commit** as the `src/` change: the repository is the
   distribution (`distSync.test.ts` fails on a stale `dist/`).
-- **`mcp/dist/` is two bundles and nothing per-file**: `engine.js` (server + CLI), `hooks.js` (the hooks' detectors),
-  the two-line `server.js` and the copied assets — no tsc output, no source maps (`distSync.test.ts`). The CLI imports
-  Node builtins and `mcp/dist/engine.js` only, the dispatcher `mcp/dist/hooks.js` only; `git add` a new file an
-  install needs (`pluginInstall.test.ts`).
+- **`mcp/dist/` is two bundles and nothing per-file**: `engine.js` (server + CLI), `hooks.js` (the hooks' detectors,
+  with its four per-event parts `hooksBash.js`, `hooksVet.js`, `hooksWrite.js`, `hooksSession.js`), the two-line
+  `server.js` and the copied assets — no tsc output, no source maps (`distSync.test.ts`). The CLI imports Node builtins
+  and `mcp/dist/engine.js` only, the dispatcher `mcp/dist/hooks.js` only (which loads its parts); `git add` a new
+  file an install needs (`pluginInstall.test.ts`).
 - **Generated files are never edited by hand**: `host-rules/*` and the in-repo rules copies (from
   `mcp/src/hostsetup/rulesTemplate.ts`), `docs/tools.md`, `docs/rule-packs.md`. `npm run build` writes them; drift
   tests fail otherwise.

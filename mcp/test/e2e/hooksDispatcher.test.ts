@@ -15,7 +15,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1160,7 +1160,9 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const damaged = join(base, 'damaged');
       install(damaged);
       const bundle = join(damaged, 'mcp', 'dist', 'hooks.js');
-      writeFileSync(bundle, readFileSync(bundle, 'utf8').slice(0, 4096));
+      // Cut in half: since 3.4.0 the entry alone is about 10 KB, its detectors in parts.
+      const whole = readFileSync(bundle, 'utf8');
+      writeFileSync(bundle, whole.slice(0, Math.floor(whole.length / 2)));
       for (const plugin of [missing, damaged]) {
         const r = runHook(
           { hook_event_name: 'SessionStart', cwd: projectDir },
@@ -1189,6 +1191,55 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         { cwd: projectDir, homeDir, hook: join(plug, 'hooks', 'guardian-hook.mjs') },
       );
       expect(JSON.stringify(ok.stdout)).not.toMatch(/could not be loaded/);
+    }, 120_000);
+
+    const sessionContext = (plugin: string): string =>
+      (
+        runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir, hook: join(plugin, 'hooks', 'guardian-hook.mjs') })
+          .stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined
+      )?.hookSpecificOutput?.additionalContext ?? '';
+    const version = (JSON.parse(readFileSync(join(REPO_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string }).version;
+
+    // 3.4.0: the bundle is split by event — a damaged part takes down the
+    // guards it holds, and SessionStart names those.
+    it('a part cut short takes only its own guards down, and SessionStart names them', () => {
+      const plugin = join(base, 'part');
+      install(plugin);
+      const file = join(plugin, 'mcp', 'dist', 'hooksBash.js');
+      writeFileSync(file, readFileSync(file, 'utf8').slice(0, 4096));
+      const context = sessionContext(plugin);
+      expect(context).toMatch(/the shell guard could not be loaded/);
+      expect(context).not.toMatch(/secret scan|settings guard/);
+      const post = runHook(
+        { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: join(projectDir, 'a.ts'), content: `const k = "${FAKE_AWS_KEY}";` }, cwd: projectDir },
+        { cwd: projectDir, homeDir, hook: join(plugin, 'hooks', 'guardian-hook.mjs') },
+      );
+      expect(JSON.stringify(post.stdout)).toMatch(/AWS access key/);
+    }, 120_000);
+
+    // Review of 3.3.0: with the bundle damaged SessionStart said `v0.0.0`, and
+    // with the engine missing it said "active".
+    it('SessionStart names the version without the bundle, and a missing or damaged engine', () => {
+      const noHooks = join(base, 'no-hooks');
+      install(noHooks);
+      rmSync(join(noHooks, 'mcp', 'dist', 'hooks.js'));
+      expect(sessionContext(noHooks)).toContain(`(v${version})`);
+
+      const noEngine = join(base, 'no-engine');
+      install(noEngine);
+      rmSync(join(noEngine, 'mcp', 'dist', 'engine.js'));
+      const missing = sessionContext(noEngine);
+      expect(missing).toMatch(/MCP tools and CLI cannot run/);
+      expect(missing).toMatch(/mcp\/dist\/engine\.js, is missing/);
+
+      const cut = join(base, 'cut-engine');
+      install(cut);
+      const engine = join(cut, 'mcp', 'dist', 'engine.js');
+      writeFileSync(engine, readFileSync(engine, 'utf8').slice(0, 100_000));
+      expect(sessionContext(cut)).toMatch(/mcp\/dist\/engine\.js, is damaged \(\d+ bytes, where the build wrote \d+\)/);
+
+      // Neither is said of a whole install.
+      expect(sessionContext(plug)).not.toMatch(/engine\.js|cannot run/);
     }, 120_000);
   });
 
@@ -1913,6 +1964,19 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       const ctx = start();
       expect(ctx).toMatch(/branch `trunk`/);
       expect(ctx).toMatch(/2 uncommitted change\(s\)/);
+    });
+
+    // 3.4.0: in a folder git finds no repository for, `git status` fails
+    // anyway — three processes (about 190 ms on Windows) for nothing.
+    it.runIf(spawnSync('git', ['--version']).status === 0)('no git process runs in a folder that is no repository', () => {
+      const trace = join(homeDir, 'git-trace.txt');
+      const ctx = out(hook({ hook_event_name: 'SessionStart', cwd: projectDir }, { GIT_TRACE: trace })).additionalContext ?? '';
+      expect(ctx).toMatch(/dev-guardian active/);
+      expect(existsSync(trace)).toBe(false);
+      // Positive control: in a repository, git runs and traces.
+      spawnSync('git', ['init', '-q', '-b', 'trunk', projectDir]);
+      expect(out(hook({ hook_event_name: 'SessionStart', cwd: projectDir }, { GIT_TRACE: trace })).additionalContext).toMatch(/branch `trunk`/);
+      expect(existsSync(trace)).toBe(true);
     });
   });
 

@@ -1332,10 +1332,12 @@ function nextSubmodules(walk5, dir, depth, links) {
 }
 async function walkAsync(walk5, root, dir, depth) {
   walk5.visited.add(dir);
-  const probe2 = await probeAsync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs);
+  const [probe2, links] = await Promise.all([
+    probeAsync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs),
+    gitlinksAsync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs)
+  ]);
   walk5.read.push(depth === 0 ? { dir, probe: probe2 } : { dir, probe: probe2, submodule: relativeLabel(root, dir) });
   if (probe2.kind !== "listing") return;
-  const links = await gitlinksAsync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs);
   for (const sub of nextSubmodules(walk5, dir, depth, links)) await walkAsync(walk5, root, sub, depth + 1);
 }
 function walkSync(walk5, root, dir, depth) {

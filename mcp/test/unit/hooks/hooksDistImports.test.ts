@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
-import type { BuildOptions } from 'esbuild';
+import type { BuildOptions, Metafile } from 'esbuild';
 import { describe, expect, it, vi } from 'vitest';
 import { MCP_ROOT } from '../../helpers/tsxNode.js';
 
@@ -43,8 +43,9 @@ const USED: Readonly<Record<string, readonly string[]>> = {
   loadSecretScan: ['scanForSecrets'],
   loadSettingsGuard: ['isClaudeSettingsPath', 'newlyLoosened', 'applyEdit'],
   loadDataRegistry: ['writesRegistry'],
-  loadGitSafety: ['execGitSync'],
+  loadGitSafety: ['execGit'],
   loadDbRegistry: ['databaseRegistration'],
+  loadDistCheck: ['engineDamage'],
 };
 
 /** Every loader the dispatcher names: `detector('loadX')` calls and the `GUARD_MODULES` table. */
@@ -60,7 +61,7 @@ describe('the hooks bundle has what the dispatcher loads', () => {
   it('the dispatcher loads every detector through the bundle, by the loaders it exports', () => {
     expect(dispatcherLoaders()).toEqual(Object.keys(USED).sort());
     const text = readFileSync(DISPATCHER, 'utf8');
-    // One file from the build, and no per-file dist path.
+    // One file from the build — its parts it loads itself — and no per-file dist path.
     expect(text).toContain("join(PLUGIN_ROOT, 'mcp', 'dist', 'hooks.js')");
     expect(text).not.toMatch(/'dist', '(?:hooks|pkgvet|platform|storage)', /);
   });
@@ -80,20 +81,49 @@ describe('the hooks bundle has what the dispatcher loads', () => {
     expect(missing).toEqual([]);
   });
 
+  /** The hooks build, in memory, with its metafile. */
+  const hooksBuild = async (): Promise<Metafile> => {
+    const { hooksOptions } = (await import(pathToFileURL(join(MCP_ROOT, 'scripts', 'bundleOptions.mjs')).href)) as {
+      hooksOptions: (root: string, digest: { bytes: number; sha256: string }) => BuildOptions;
+    };
+    const result = await build({ ...hooksOptions(MCP_ROOT, { bytes: 0, sha256: '' }), write: false, metafile: true, logLevel: 'silent' });
+    return result.metafile;
+  };
+
   it('its inputs are this repository’s sources — no npm package, no storage layer', async () => {
-    const options = (
-      (await import(pathToFileURL(join(MCP_ROOT, 'scripts', 'bundleOptions.mjs')).href)) as { bundleOptions: (root: string) => BuildOptions }
-    ).bundleOptions(MCP_ROOT);
-    const entries = options.entryPoints as Array<{ in: string; out: string }>;
-    const hooks = entries.filter((e) => e.out === 'hooks');
-    expect(hooks).toHaveLength(1);
-    const result = await build({ ...options, entryPoints: hooks, write: false, metafile: true, logLevel: 'silent' });
-    const inputs = Object.keys(result.metafile.inputs);
+    const meta = await hooksBuild();
+    const inputs = Object.keys(meta.inputs);
     expect(inputs).toContain('src/hooks/userDataDir.ts');
     expect(inputs).toContain('src/hooks/bashGuard.ts');
-    expect(inputs.filter((p) => !p.startsWith('src/')), 'a package the hooks bundle inlines').toEqual([]);
+    // `<define:…>`: the engine's digest the build defines (`bundleOptions.mjs`, ENGINE_DIGEST).
+    expect(inputs.filter((p) => !p.startsWith('src/') && p !== '<define:__GUARDIAN_ENGINE_DIGEST__>'), 'a package the hooks bundle inlines').toEqual([]);
     expect(inputs.filter((p) => /^src\/storage\/(?:db|index)\.ts$/.test(p)), 'the storage layer').toEqual([]);
-    const imports = Object.values(result.metafile.outputs).flatMap((o) => o.imports.map((i) => i.path));
+    const imports = Object.values(meta.outputs).flatMap((o) => o.imports.map((i) => i.path));
     expect(imports).not.toContain('node:sqlite');
+  });
+
+  // 3.4.0: the bundle is split by event so that an event reads only what it
+  // runs — 3.3.0's one file made a write parse the whole 368 KB, the shell
+  // guard and `node:crypto` / `node:child_process` included (PostToolUse 66 →
+  // 76 ms).
+  it('each event loads only its own part: a write never the shell guard, no event but SessionStart crypto or child_process', async () => {
+    const meta = await hooksBuild();
+    const output = (entry: string): { sources: string[]; builtins: string[] } => {
+      const o = Object.values(meta.outputs).find((x) => x.entryPoint === `src/${entry}.ts`);
+      expect(o, entry).toBeDefined();
+      return { sources: Object.keys(o?.inputs ?? {}), builtins: (o?.imports ?? []).map((i) => i.path).filter((p) => p.startsWith('node:')) };
+    };
+    const common = output('hooksEntry');
+    const write = output('hooksWrite');
+    const bash = output('hooksBash');
+    expect(common.sources).toEqual(expect.arrayContaining(['src/hooks/configFile.ts', 'src/hooks/guardedPath.ts']));
+    expect(write.sources).toContain('src/hooks/secretScan.ts');
+    expect([...common.sources, ...write.sources].filter((s) => /bashGuard|pkgvet\//.test(s)), 'a write loads the shell guard or the vetting').toEqual([]);
+    expect(bash.sources).toContain('src/hooks/bashGuard.ts');
+    expect([...common.sources, ...bash.sources].filter((s) => /secretScan|pkgvet\/hookDecision/.test(s)), 'a Bash call loads the secret scan or the vetting').toEqual([]);
+    const builtins = [...common.builtins, ...write.builtins, ...bash.builtins];
+    expect(builtins.filter((b) => b === 'node:crypto' || b === 'node:child_process')).toEqual([]);
+    // SessionStart's part is where they are.
+    expect(output('hooksSession').builtins).toEqual(expect.arrayContaining(['node:crypto', 'node:child_process']));
   });
 });

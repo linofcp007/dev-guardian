@@ -116,16 +116,17 @@ describe('a plugin install — the tracked files, no node_modules', () => {
     expect(statuses, `exit ${String(r.status)}\n${r.stderr}`).toContain(r.status);
   }
 
-  it('what ships in mcp/dist: the two bundles, the server’s entry and the assets — no per-file output, no source map', () => {
+  it('what ships in mcp/dist: the two bundles (the hooks one in parts), the server’s entry and the assets — no per-file output, no source map', () => {
     const dist = join(install, 'mcp', 'dist');
     const shipped = execGitSync(REPO_ROOT, ['ls-files', '-z', '--', 'mcp/dist'], { timeoutMs: 60_000 })
       .stdout.split('\0')
       .filter((f) => f !== '')
       .map((f) => f.slice('mcp/dist/'.length));
-    expect(shipped.filter((f) => f.endsWith('.js')).sort()).toEqual(['engine.js', 'hooks.js', 'server.js']);
+    const bundles = ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksSession.js', 'hooksVet.js', 'hooksWrite.js', 'server.js'];
+    expect(shipped.filter((f) => f.endsWith('.js')).sort()).toEqual(bundles);
     expect(shipped.filter((f) => f.endsWith('.map'))).toEqual([]);
-    expect(shipped.filter((f) => !/^(?:engine|hooks|server)\.js$|^storage\/migrations\/\d{3}_\w+\.sql$|^hostsetup\/legacyRulesTemplates\//.test(f))).toEqual([]);
-    expect(existsSync(join(dist, 'engine.js')) && existsSync(join(dist, 'hooks.js'))).toBe(true);
+    expect(shipped.filter((f) => !bundles.includes(f) && !/^storage\/migrations\/\d{3}_\w+\.sql$|^hostsetup\/legacyRulesTemplates\//.test(f))).toEqual([]);
+    expect(bundles.every((b) => existsSync(join(dist, b)))).toBe(true);
   });
 
   it('positive control: the copy is an install — none of mcp/package.json’s dependencies resolves from it', () => {

@@ -64,7 +64,9 @@ Enforced by the compiler where possible, by review where not:
   exported from `src/cli.ts`: re-exported when it is light, through one of its
   lazy `load*Modules()` when it reaches the storage layer or the scan
   pipeline. The hook dispatcher loads `mcp/dist/hooks.js` (`src/hooksEntry.ts`)
-  and nothing else from the build: a detector it needs is a new `load*` there. `test/e2e/pluginInstall.test.ts` runs the CLI's
+  and nothing else from the build — that entry loads its per-event parts: a
+  detector it needs is a new `load*` there, its module re-exported by the
+  part of the event that runs it (`src/hooksBash.ts`, …). `test/e2e/pluginInstall.test.ts` runs the CLI's
   subcommands, the hooks and the server from a copy of the files git tracks —
   so `git add` a new file the install needs (a build output too) before it
   passes, as it must be committed to ship.

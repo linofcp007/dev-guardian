@@ -12,7 +12,7 @@ Node.js ≥ 22.13. All work happens from `mcp/`:
 cd mcp
 npm ci               # reproducible install — no native modules, storage is node:sqlite
 npm run lint         # tsc over src/ and test/ (tsconfig.test.json)
-npm run build        # type-check src/, esbuild bundles (dist/engine.js, dist/hooks.js, dist/server.js),
+npm run build        # type-check src/, esbuild bundles (dist/engine.js, dist/hooks.js + its parts, dist/server.js),
                      # copy SQL migrations, regenerate host rules, docs/tools.md and docs/rule-packs.md
 npm test             # vitest run (full suite) — the gate before a commit
 npm run test:fast    # the unit tests minus the slowest files — the inner loop

@@ -196,10 +196,12 @@ describe('every raw spawn is classified (platform/gitSafety.ts)', () => {
 
   it('the hook and the CLI run git only through the helper they import from dist', () => {
     const hook = SOURCES.find((s) => s.rel === 'hooks/guardian-hook.mjs')?.text ?? '';
-    // The hook loads it from its bundle, dist/hooks.js (src/hooksEntry.ts), since 3.3.0.
+    // The hook loads it from its bundle, dist/hooks.js (src/hooksEntry.ts), since 3.3.0 — from
+    // the bundle's SessionStart part, dist/hooksSession.js, since 3.4.0.
     expect(hook).toMatch(/await detector\('loadGitSafety'\)/);
     const hooksEntry = SOURCES.find((s) => s.rel === 'mcp/src/hooksEntry.ts')?.text ?? '';
-    expect(hooksEntry).toMatch(/^export const loadGitSafety = \(\) => import\('\.\/platform\/gitSafety\.js'\);$/m);
+    expect(hooksEntry).toMatch(/^export const loadGitSafety = async \(\) => \(await import\('\.\/hooksSession\.js'\)\)\.gitSafety;$/m);
+    expect(readFileSync(join(REPO, 'mcp', 'src', 'hooksSession.ts'), 'utf8')).toMatch(/^export \* as gitSafety from '\.\/platform\/gitSafety\.js';$/m);
     // The CLI imports it from its bundle, dist/engine.js, which re-exports the helper (src/cli.ts) —
     // an awaited dynamic import since 3.3.0, so Node's compile cache is on before the bundle loads.
     const cli = SOURCES.find((s) => s.rel === 'cli/dev-guardian.mjs')?.text ?? '';

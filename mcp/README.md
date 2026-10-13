@@ -44,7 +44,7 @@ mcp/
 │   └── docs/            generator and tests for docs/tools.md and docs/rule-packs.md
 ├── scripts/             build steps: copy-assets, generateHostRules, bundle; smoke.mjs;
 │                        generatePopularPackages.mjs (refreshes configs/popular-packages/)
-└── dist/                the build, committed: engine.js (server + CLI), hooks.js, server.js, SQL migrations
+└── dist/                the build, committed: engine.js (server + CLI), hooks.js (+ 4 parts), server.js, SQL migrations
 ```
 
 ## Build, run, test
