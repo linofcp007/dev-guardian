@@ -136,18 +136,12 @@ const SpecPaths = z
   .min(1)
   .optional()
   .describe(
-    'Explicit OpenAPI/Swagger document paths. Replaces automatic discovery entirely when ' +
-      'supplied — must be non-empty; omit the field to use automatic discovery instead. ' +
-      'Relative paths resolve against project_path, not the current working ' +
-      'directory. Bypasses the tree-hash cache (always computes a fresh snapshot) and is ' +
-      'never persisted as the project\'s cached surface, so a later plain call cannot ' +
-      'inherit these paths. Any named path that cannot be read is reported in spec_files, ' +
-      'not silently dropped.',
+    'OpenAPI / Swagger documents to read instead of discovering them.',
   );
 
 const tool: ToolModule = {
   name: 'map_attack_surface',
-  title: 'Map the application attack surface',
+  title: 'Map the attack surface',
   // No "auth hint" in this description on purpose, for code-extracted routes:
   // `auth_hint` exists on every RouteRecord, but no Semgrep rule populates it
   // for a route extracted from source, so it is always 'unknown' there (see
@@ -161,16 +155,11 @@ const tool: ToolModule = {
   // general feature. Advertising a mostly-constant field as a feature is how
   // an agent ends up reasoning from it.
   description:
-    'Statically extract the externally reachable surface of the project — HTTP routes ' +
-    '(method, path, params), referenced environment variables, and declared ' +
-    'container ports — across all supported stacks. Also discovers OpenAPI 3.x / ' +
-    'Swagger 2.0 documents (or reads exactly the paths given as spec_paths) and diffs ' +
-    'them against the code-extracted routes, reporting shadow endpoints (routes the code ' +
-    'registers that no spec documents) and dead documentation (spec paths no code ' +
-    'implements). Persists a snapshot readable via guardian://surface/latest. Returns a ' +
-    'summary plus a 20-route code sample and a spec sample; read the resource for the ' +
-    'full route list and the full spec diff. Follow up with scan_dast to actively probe an ' +
-    'already-running instance of the application against this inventory.',
+    'Statically extract the reachable surface — HTTP routes (method, path, params), environment variables ' +
+    'read, container ports — across the supported stacks, and diff OpenAPI 3 / Swagger 2 documents ' +
+    'against the routes: shadow endpoints and dead documentation. Stores a snapshot ' +
+    '(guardian://surface/latest has the full route list) and returns a summary with samples. scan_dast ' +
+    'and validate_finding need it.',
   inputSchema: {
     project_path: ProjectPath,
     force: Force,

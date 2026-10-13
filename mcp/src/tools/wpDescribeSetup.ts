@@ -155,9 +155,9 @@ async function handler(
     recommended_next:
       !wpAudit ? 'Run `wp_audit` first to capture baseline state.'
       : !wpVuln && !wpVulnSource
-        ? 'Run `wp_vuln_check` (live URL) or `wp_vuln_check_source` (no live URL needed) to map CVEs to your installed plugins/themes.'
-      : !wpCron ? 'Run `wp_cron_audit` to detect persistent backdoors.'
-      : open.length > 0 ? 'Open findings exist. Try `triage_findings` + `wp_recommend_hardening`.'
+        ? 'Run `wp_vuln_check` (a live URL, or `mode: "source"` with no live URL) to map CVEs to your installed plugins and themes.'
+      : !wpCron ? 'Run `wp_audit` with `mode: "cron"` to detect persistent backdoors.'
+      : open.length > 0 ? 'Open findings exist. Try `prioritize_findings` (`view: "triage"`) + `wp_report` (`kind: "hardening"`).'
       : 'Posture looks clean. Consider `audit_executive` for a full cross-stack pass.',
   };
 }

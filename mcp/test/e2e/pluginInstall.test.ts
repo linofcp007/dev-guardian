@@ -295,7 +295,7 @@ describe('a plugin install — the tracked files, no node_modules', () => {
 
   describe('the MCP server', () => {
     it(
-      'dist/server.js answers initialize and lists its tools',
+      'dist/server.js answers initialize with its instructions, lists the folded tools, and a hidden alias answers',
       async () => {
         const child = spawn(process.execPath, [join(install, 'mcp', 'dist', 'server.js')], {
           cwd: project,
@@ -306,7 +306,14 @@ describe('a plugin install — the tracked files, no node_modules', () => {
         child.stderr.setEncoding('utf8').on('data', (c: string) => (stderr += c));
         interface Reply {
           id?: number;
-          result?: { serverInfo?: { name?: string }; tools?: unknown[] };
+          result?: {
+            serverInfo?: { name?: string };
+            instructions?: string;
+            tools?: Array<{ name: string }>;
+            content?: Array<{ type: string; text?: string }>;
+            isError?: boolean;
+          };
+          error?: { message?: string };
         }
         const replies = new Map<number, Reply>();
         let buffered = '';
@@ -326,6 +333,12 @@ describe('a plugin install — the tracked files, no node_modules', () => {
                 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
               }
               if (message.id === 2) {
+                // A hidden alias (the triage view of prioritize_findings), called by its own name.
+                child.stdin.write(
+                  `${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'triage_findings', arguments: { project_path: project } } })}\n`,
+                );
+              }
+              if (message.id === 3) {
                 clearTimeout(timer);
                 done();
               }
@@ -349,7 +362,16 @@ describe('a plugin install — the tracked files, no node_modules', () => {
         }
         expect(stderr).not.toMatch(UNRESOLVED);
         expect(replies.get(1)?.result?.serverInfo?.name).toBe('dev-guardian');
-        expect(replies.get(2)?.result?.tools?.length).toBeGreaterThan(50);
+        expect(replies.get(1)?.result?.instructions).toMatch(/dev-guardian/i);
+        const listed = (replies.get(2)?.result?.tools ?? []).map((t) => t.name);
+        expect(listed.length).toBeGreaterThan(40);
+        // The folds' custom tools/list: the fold is listed, its member alias is not.
+        expect(listed).toContain('prioritize_findings');
+        expect(listed).not.toContain('triage_findings');
+        // …and the alias still answers from the bundle: a tool result, never "unknown tool".
+        const alias = replies.get(3);
+        expect(alias?.error, JSON.stringify(alias)).toBeUndefined();
+        expect(alias?.result?.content?.length).toBeGreaterThan(0);
       },
       timeoutAbove(FAST_TIMEOUT_MS),
     );

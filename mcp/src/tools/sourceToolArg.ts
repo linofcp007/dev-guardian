@@ -14,8 +14,7 @@ export const SourceToolInput = z
   .max(100)
   .optional()
   .describe(
-    "With scan_type 'sarif_import': the source tool whose imports are read (the driver name an import recorded). " +
-      'Required when the project holds imports from more than one tool.',
+    'sarif_import only: the importing tool. Required when several were imported.',
   );
 
 export type SourceToolChoice = { ok: true; sourceTool?: string } | { ok: false; message: string };

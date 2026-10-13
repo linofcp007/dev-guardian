@@ -223,7 +223,7 @@ async function handler(
     ...(gaps.byTo.length > 0 ? { not_measured: gaps.byTo } : {}),
     ...(gaps.byFrom.length > 0 ? { reference_not_measured: gaps.byFrom } : {}),
     hint: regressed
-      ? 'Severity-weighted change exceeded the threshold. Consider triage_findings + audit_executive, or revert recent changes.'
+      ? 'Severity-weighted change exceeded the threshold. Consider prioritize_findings (view: "triage") + audit_executive, or revert recent changes.'
       : measuredNote !== null
         ? `No significant regression among the findings that were measured. ${measuredNote}`
         : 'No significant regression.',

@@ -21,7 +21,9 @@
  *   5. Keep `.guardian/` out of git in the target project's `.gitignore`
  *      (every `.guardian` directory's contents, at any depth, with its
  *      `baseline.json` re-included — gitignoreGuard.ts).
- *   6. Build the McpServer, attach the registered TOOLS and RESOURCES.
+ *   6. Build the McpServer, with the `instructions` it sends at initialize
+ *      (tools/instructions.ts), and attach the registered TOOLS and
+ *      RESOURCES.
  *   7. Connect the stdio transport. Block until the host closes it. A client
  *      that closes our stdout (EPIPE on the next write) is a disconnect, not
  *      a crash: exit 0.
@@ -50,7 +52,8 @@ import { openDatabase, Storage } from './storage/index.js';
 import { SESSION_BUSY_TIMEOUT_MS } from './storage/db.js';
 import { canonicalizeProjectPathsAtStartup, reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
 import { attachAllResources } from './resources/index.js';
-import { attachAllTools, TOOLS } from './tools/index.js';
+import { attachAllTools, listedTools, TOOLS } from './tools/index.js';
+import { SERVER_INSTRUCTIONS } from './tools/instructions.js';
 import { RESOURCES } from './resources/index.js';
 
 // Registers every tool + resource (the public MCP surface). See registerAll.ts.
@@ -121,7 +124,7 @@ async function main(): Promise<void> {
   }
 
   // Build the MCP server.
-  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
 
   const progressNotifier: ProgressNotifier = {
     send: (payload: ProgressPayload) => {
@@ -145,7 +148,10 @@ async function main(): Promise<void> {
 
   attachAllTools(mcp, ctx);
   attachAllResources(mcp, ctx);
-  logErr(`registered ${TOOLS.length} tool(s), ${RESOURCES.length} resource(s)`);
+  logErr(
+    `registered ${listedTools().length} tool(s) (+${TOOLS.length - listedTools().length} hidden alias(es)), ` +
+      `${RESOURCES.length} resource(s)`,
+  );
 
   const background = { cancel: (): void => {} };
   installShutdownHooks(mcp, storage, background);

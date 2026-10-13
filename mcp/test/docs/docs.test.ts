@@ -26,16 +26,21 @@ import { join, relative, resolve } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import type { ResourceModule } from '../../src/resources/index.js';
-import type { ToolModule } from '../../src/tools/index.js';
+import type { FoldRecord } from '../../src/tools/fold.js';
+import { listedTools, type ToolModule } from '../../src/tools/index.js';
 import { noClauseKind, PACK_CONSUMERS, packTotals, renderRulePacksDoc, renderToolsDoc, type PackInput } from './renderDocs.js';
 import { DOCS_DIR, loadPacks, loadRegistry, REPO_ROOT } from './sources.js';
 
+/** The listed tools — what a host sees, and what the docs count and name. */
 let tools: readonly ToolModule[];
+let registered: readonly ToolModule[];
+let folds: readonly FoldRecord[];
 let resources: readonly ResourceModule[];
 let packs: PackInput[];
 
 beforeAll(async () => {
-  ({ tools, resources } = await loadRegistry());
+  ({ tools: registered, resources, folds } = await loadRegistry());
+  tools = listedTools(registered);
   packs = loadPacks();
 });
 
@@ -47,7 +52,7 @@ const REGENERATE = 'run `npm run build` in mcp/ to regenerate it — never edit 
 
 describe('generated reference pages', () => {
   it('docs/tools.md is what the registry renders to', () => {
-    expect(read('docs/tools.md'), REGENERATE).toBe(renderToolsDoc(tools, resources));
+    expect(read('docs/tools.md'), REGENERATE).toBe(renderToolsDoc(registered, resources, folds));
   });
 
   it('docs/rule-packs.md is what the pack files render to', () => {

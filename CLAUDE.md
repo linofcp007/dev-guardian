@@ -15,7 +15,7 @@ performance and compliance:
 
 - **Plugin front-end** — `skills/` (13 skills: a `SKILL.md`, plus `references/` read on demand) and `commands/`
   (10 slash commands), declared in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).
-- **MCP server** — `mcp/` (TypeScript on `node:sqlite`; Node ≥ 22.13, never `--experimental-sqlite`): 63 tools
+- **MCP server** — `mcp/` (TypeScript on `node:sqlite`; Node ≥ 22.13, never `--experimental-sqlite`): 52 tools
   and 18 resources, registered by `mcp/src/registerAll.ts`, built to `mcp/dist/engine.js` (`dist/server.js` starts it).
 - **Guardrail hooks** — `hooks/hooks.json` (auto-discovered) and the `hooks/guardian-hook.mjs` dispatcher:
   dependency-free, fail-open; detection in `mcp/src/hooks/`, bundled to `mcp/dist/hooks.js`. User-facing detail:
@@ -46,7 +46,8 @@ performance and compliance:
 - **Counts are tested**: every tool, resource, skill and command count in the READMEs, this file, `mcp/README.md`
   and `docs/` equals the code (`mcp/test/docs/docs.test.ts`) — fix the number in the same commit.
 - **The prose has budgets**: skill descriptions ≤ 300 characters, the listing ≤ 4 000, `SKILL.md` ≤ 12 KB,
-  `host-rules/AGENTS.md` ≤ 8 000 bytes — see [`docs/maintainers/prose.md`](docs/maintainers/prose.md).
+  `host-rules/AGENTS.md` ≤ 8 000 bytes, `tools/list` + instructions ≤ 72 000, a tool description ≤ 600 — see
+  [`docs/maintainers/prose.md`](docs/maintainers/prose.md).
 - **Three READMEs** — `README.md`, `README.pt-PT.md` (European Portuguese), `README.es.md` — changed together.
 - When working here, use the dev-guardian MCP tools rather than Semgrep / Trivy / gitleaks directly.
 

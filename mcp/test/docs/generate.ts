@@ -20,6 +20,6 @@ function write(path: string, content: string): void {
   console.log(`generated ${path}`);
 }
 
-const { tools, resources } = await loadRegistry();
-write(resolve(DOCS_DIR, 'tools.md'), renderToolsDoc(tools, resources));
+const { tools, resources, folds } = await loadRegistry();
+write(resolve(DOCS_DIR, 'tools.md'), renderToolsDoc(tools, resources, folds));
 write(resolve(DOCS_DIR, 'rule-packs.md'), renderRulePacksDoc(loadPacks()));

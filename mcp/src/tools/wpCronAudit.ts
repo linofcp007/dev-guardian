@@ -95,7 +95,7 @@ async function handler(
   if (!wpBin) {
     return failDomain(
       'missing_scanner',
-      'WP-CLI (`wp`) is required for wp_cron_audit. Run install_toolchain with tools=["wp-cli"].',
+      'WP-CLI (`wp`) is required for wp_audit {mode: "cron"}. Run install_toolchain with tools=["wp-cli"].',
     );
   }
 

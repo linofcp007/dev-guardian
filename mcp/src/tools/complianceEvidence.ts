@@ -50,8 +50,7 @@ const inputSchema = {
     .enum(FRAMEWORKS)
     .optional()
     .describe(
-      'Which framework to label the evidence under. owasp-top10-2025 and nist-csf-2.0 give per-category ' +
-        'evidence from the open findings and the scanners that ran. Default: generic.',
+      'gdpr, soc2, iso27001, generic (default), or owasp-top10-2025 / nist-csf-2.0 (per category).',
     ),
 };
 
@@ -59,13 +58,11 @@ const tool: ToolModule = {
   name: 'compliance_evidence',
   title: 'Compliance evidence pack (Markdown)',
   description:
-    "Generate a Markdown evidence document from one project's accumulated state (project_path, " +
-    "default: the server's working directory): latest compliance scan, license summary, CVE " +
-    'counts, baseline status, suppressions, policy docs found. Tag with a framework ' +
-    '(gdpr/soc2/iso27001/generic) to shape the section labels, or owasp-top10-2025 / nist-csf-2.0 for ' +
-    'per-category evidence: a category counts as covered only when, for every source language of the ' +
-    'project, a scanner that ran ok has enough rules for it; partial categories are listed apart ' +
-    '(NIST CSF via dev-guardian\'s own OWASP mapping). Read-only.',
+    "A Markdown evidence document from one project's recorded state: latest compliance scan, licences, " +
+    'CVE counts, baseline, suppressions, policy documents. framework gdpr, soc2, iso27001 or generic ' +
+    'shapes the labels; owasp-top10-2025 and nist-csf-2.0 give per-category evidence, a category being ' +
+    'covered only when, for every source language, a scanner that ran has rules for it. Reads history ' +
+    'only.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };

@@ -63,15 +63,12 @@ const inputSchema = {
 
 const tool: ToolModule = {
   name: 'perf_check',
-  title: 'Performance probe (Lighthouse or k6)',
+  title: 'Performance check (Lighthouse or k6)',
   description:
-    'Run Lighthouse against target_url, or k6 against k6_script_path. Returns parsed metrics ' +
-    '(Core Web Vitals for Lighthouse; request count + p95/p99 + thresholds for k6) and the ' +
-    'absolute path to the raw JSON report. A Lighthouse run also reads .guardian/budgets.yml, when ' +
-    'present, and reports any exceeded perf budget (LCP/INP/CLS/TBT/bundle size) as a Finding in ' +
-    '`findings`. `budgets.status` says none/ok/not_measured/invalid — an invalid file, or a budget whose ' +
-    'metric Lighthouse did not measure, is never reported as "within budget". A page Lighthouse could not ' +
-    'load (runtimeError, non-zero exit) is a failed check.',
+    'Run Lighthouse against target_url, or k6 against k6_script_path: Core Web Vitals, or request counts ' +
+    "and p95/p99, and the raw report's path. Lighthouse runs are checked against .guardian/budgets.yml: " +
+    'an exceeded budget is a finding, and `budgets.status` never reads an unmeasured metric as within ' +
+    'budget. Sends real load to the URL.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };

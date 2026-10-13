@@ -33,8 +33,8 @@ afterAll(cleanupTempDirs);
 
 /** tool -> the response fields (or refusals) its description must name. */
 const DOCUMENTED: Record<string, readonly string[]> = {
-  regression_alert: ['suppressed_by_severity', 'not_remeasured_by_severity'],
-  diff_scans: ['summary.suppressed', 'suppressed_findings', 'unknown_scan_id'],
+  // Both modes: diff (default) and regression (the hidden alias regression_alert).
+  diff_scans: ['summary.suppressed', 'suppressed_findings', 'unknown_scan_id', 'suppressed_by_severity', 'not_remeasured_by_severity'],
   health_status: ['storage_warning', 'db adopt', 'suppressions', 'all_projects', 'future_dated_scans_ignored', 'future_dated_note'],
   risk_score: ['suppressed_count', 'future_dated_note'],
   report_export: ['retry_with', 'still running'],
@@ -97,8 +97,8 @@ describe('the history tools return what their descriptions promise (seeded datab
     return r;
   }
 
-  it('regression_alert: suppressed_by_severity counts the suppressed critical apart', async () => {
-    const r = await call('regression_alert', { project_path: project, scan_type: 'sast' });
+  it('diff_scans {mode: regression}: suppressed_by_severity counts the suppressed critical apart', async () => {
+    const r = await call('diff_scans', { mode: 'regression', project_path: project, scan_type: 'sast' });
     expect(r['suppressed_by_severity']).toMatchObject({ critical: 1 });
     expect(r['not_remeasured_by_severity']).toBeDefined();
     expect(r['regressed']).toBe(false);
@@ -112,8 +112,11 @@ describe('the history tools return what their descriptions promise (seeded datab
 
   it('diff_scans: another project\'s scan id is refused with unknown_scan_id', async () => {
     const other = projectDir('field-docs-other-');
+    // A uuid, as the schema requires of to_scan_id (the fold validates as tools/call does).
+    const otherId = '00000000-0000-4000-8000-0000000000aa';
     seedScan(s, { id: 'other', type: 'sast', project: other });
-    const r = (await tool('diff_scans').handler({ project_path: project, to_scan_id: 'other' }, s.plugin)) as unknown as {
+    seedScan(s, { id: otherId, type: 'sast', project: other });
+    const r = (await tool('diff_scans').handler({ project_path: project, to_scan_id: otherId }, s.plugin)) as unknown as {
       ok: boolean;
       error?: { code: string };
     };

@@ -62,25 +62,22 @@ const inputSchema = {
     .string()
     .uuid()
     .optional()
-    .describe("Scan to export. Defaults to project_path's newest usable finding-producing scan."),
+    .describe("Scan to export. Default: project_path's newest usable scan."),
   source_tool: SourceToolInput.describe(
-    "Without scan_id: export the newest SARIF import of this source tool (an import's driver name) instead of the newest scan.",
+    "Without scan_id: export this tool's newest SARIF import.",
   ),
   format: z
     .enum(['html', 'sarif', 'markdown', 'json'])
     .optional()
     .default('markdown')
     .describe(
-      'Output format. markdown (default, handover doc), html (branded Pro Digital Key shell with a ' +
-        'dark/light toggle, self-contained, opens offline), sarif (SARIF 2.1.0 for CI/IDE code ' +
-        'scanning), or json (raw findings).',
+      'markdown (default), html (self-contained, light/dark), sarif (SARIF 2.1.0) or json.',
     ),
   content_markdown: z
     .string()
     .optional()
     .describe(
-      'Stakeholder-narrative Markdown. When set, it is wrapped in the branded HTML shell ' +
-        '(dark/light) instead of rendering a scan — scan_id is ignored. Used by /guardian-report.',
+      'A Markdown narrative to render instead of a scan (scan_id is then ignored).',
     ),
   title: z
     .string()
@@ -95,18 +92,13 @@ const inputSchema = {
 
 const tool: ToolModule = {
   name: 'report_export',
-  title: 'Export a report (branded HTML / SARIF / Markdown / JSON)',
+  title: 'Export a report (HTML, SARIF, Markdown, JSON)',
   description:
-    'Write a report in one of four formats: markdown (default — handover doc), html (branded Pro ' +
-    'Digital Key shell with a dark/light toggle, self-contained, opens offline in any browser), ' +
-    'sarif (SARIF 2.1.0 for GitHub/GitLab code scanning), or json (raw findings). Pass ' +
-    'content_markdown to render a stakeholder narrative as Markdown (or branded HTML with ' +
-    'format=html). A scan report gives each finding its CWE / OWASP Top 10:2025 category (SARIF: ' +
-    'external/cwe and owasp-2025 tags) and states which OWASP categories the scan actually tested, per ' +
-    'source language of the project. An explicit scan_id must be a scan of project_path (another ' +
-    "project's is refused, with retry_with naming its project) and not still running. " +
-    "source_tool exports that tool's newest SARIF import (import_sarif). " +
-    'Local file only — no external services, no web fonts.',
+    'Write a scan report as markdown (default), html (self-contained, light/dark), sarif (SARIF 2.1.0, CWE and ' +
+    'OWASP Top 10:2025 tags) or json, saying which OWASP categories the scan tested; content_markdown ' +
+    "renders a narrative instead. An explicit scan_id must be one of project_path's (another project's is " +
+    "refused, with retry_with naming its project) and not still running. source_tool: that tool's newest " +
+    'SARIF import.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 };

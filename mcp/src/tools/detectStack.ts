@@ -33,14 +33,11 @@ import { registerToolModule, type ToolModule } from './index.js';
 
 const tool: ToolModule = {
   name: 'detect_stack',
-  title: 'Detect project stack',
+  title: 'Detect the project stack',
   description:
-    'Detect the project stack in-process (no shell involved): languages, package managers, ' +
-    'frameworks, existing tools, IaC (has_iac), CI. Nested manifests are read up to 3 directories ' +
-    'deep (excluding node_modules/vendor/.git/dist/build); each is also reported individually in ' +
-    '`projects`, keyed by its path. PHP and WordPress (incl. WooCommerce, Kadence) are detected even ' +
-    'with no composer.json: by *.php files, wp-config.php, wp-content/, or a theme/plugin header. ' +
-    'The snapshot is also persisted to .guardian/guardian.db for stack-aware downstream tools.',
+    'Detect languages, package managers, frameworks, existing tools, IaC and CI, in-process. Manifests ' +
+    'are read up to 3 directories deep (each also in `projects`); PHP and WordPress are detected without ' +
+    'a composer.json. The snapshot is stored for the stack-aware tools.',
   inputSchema: { project_path: ProjectPath },
   handler: async (input, ctx) => handler(input, ctx),
 };

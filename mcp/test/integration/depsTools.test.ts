@@ -3389,7 +3389,7 @@ describe('deps_update_plan', () => {
 
   it('fix round 5 (2): the description says only npm/pip target the minimum fixed version', () => {
     const description = getTool('deps_update_plan').description;
-    expect(description).toContain('npm/pip target the MINIMUM fixed version, other stacks the latest available');
+    expect(description).toContain('npm/pip target the minimum fixed version, other stacks the latest available');
     expect(description).not.toMatch(/security \(minimum CVE-fixed version/);
     expect(description.length).toBeLessThanOrEqual(1500);
   });

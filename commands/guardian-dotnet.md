@@ -12,11 +12,11 @@ Before step 2, tell the user: `scan_sast`, `deps_audit` and `deps_update_plan` r
 1. `detect_stack { project_path: "<project>" }` — .NET present, frameworks (ASP.NET Core, EF Core), nested projects.
 2. `scan_sast { project_path: "<project>" }` — Semgrep (the registry ruleset plus the project's own rules) and, for a root `.csproj` / `.fsproj` / `.sln`, `dotnet build --no-restore` with the SDK security analyzers (plus Security Code Scan when the project references it), read from their SARIF.
 3. `bug_hunt { project_path: "<project>" }` — includes the local C# bug pack (`bugfix-cs.yml`).
-4. `scan_dotnet_secrets { project_path: "<project>" }` — SQL Server connection strings, Azure Storage / Service Bus keys, NuGet feed credentials and JWT signing keys in `appsettings*.json`, `*.config`, `nuget.config`, `launchSettings.json`.
-5. `dotnet_target_framework_check { project_path: "<project>" }` — projects on end-of-life .NET.
-6. `dotnet_efcore_audit { project_path: "<project>" }` — dangerous migrations: `DropTable`, `DropColumn`, non-nullable `AlterColumn` without a default, raw SQL with credentials.
+4. `dotnet_check { project_path: "<project>", check: "secrets" }` — SQL Server connection strings, Azure Storage / Service Bus keys, NuGet feed credentials and JWT signing keys in `appsettings*.json`, `*.config`, `nuget.config`, `launchSettings.json`.
+5. `dotnet_check { project_path: "<project>", check: "target_framework" }` — projects on end-of-life .NET.
+6. `dotnet_check { project_path: "<project>", check: "efcore" }` — dangerous migrations: `DropTable`, `DropColumn`, non-nullable `AlterColumn` without a default, raw SQL with credentials.
 7. `deps_audit { project_path: "<project>" }` — Trivy plus `dotnet list package --vulnerable --include-transitive`; then `deps_update_plan { project_path: "<project>", prefer: "security" }` for the ordered upgrades (`runner_failures` names a lock file out of sync versus an unreachable feed).
-8. `dotnet_describe_setup { project_path: "<project>" }` — one summary of everything the steps above stored for this project.
+8. `dotnet_check { project_path: "<project>", check: "setup" }` — one summary of everything the steps above stored for this project.
 
 Worst first: security, then correctness, then maintenance. When the .NET SDK is missing, say which steps were skipped and offer `install_toolchain { tools: ["dotnet-sdk"], dry_run: true }`.
 
