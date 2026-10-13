@@ -34192,11 +34192,11 @@ function parseUnionDef(def, refs) {
   return asAnyOf(def, refs);
 }
 var asAnyOf = (def, refs) => {
-  const anyOf2 = (def.options instanceof Map ? Array.from(def.options.values()) : def.options).map((x, i2) => parseDef(x._def, {
+  const anyOf = (def.options instanceof Map ? Array.from(def.options.values()) : def.options).map((x, i2) => parseDef(x._def, {
     ...refs,
     currentPath: [...refs.currentPath, "anyOf", `${i2}`]
   })).filter((x) => !!x && (!refs.strictUnions || typeof x === "object" && Object.keys(x).length > 0));
-  return anyOf2.length ? { anyOf: anyOf2 } : void 0;
+  return anyOf.length ? { anyOf } : void 0;
 };
 
 // node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
@@ -74686,8 +74686,8 @@ function splitMarkdown(content, opts = {}) {
     if (opener) {
       state = { kind: "pre", close: opener.close, endsAtBlank: opener.endsAtBlank };
       blocks += 1;
-      const after2 = decodeEntities(line.slice(opener.end).replace(HTML_CODE_TAG, ""));
-      if (after2.trim() !== "") block.add({ line: lineNo, text: after2, kind: "pre", block: blocks - 1 });
+      const after = decodeEntities(line.slice(opener.end).replace(HTML_CODE_TAG, ""));
+      if (after.trim() !== "") block.add({ line: lineNo, text: after, kind: "pre", block: blocks - 1 });
       prose.push(decodeEntities(line.replace(HTML_CODE_TAG, "")));
       previousBlank = false;
       continue;
@@ -75639,8 +75639,8 @@ function directsBackAtQuotes(lines, isBlockLine) {
   }
   return false;
 }
-function followingParagraph(lines, after2, isBlockLine) {
-  let i2 = after2 + 1;
+function followingParagraph(lines, after, isBlockLine) {
+  let i2 = after + 1;
   while (i2 < lines.length && (FENCE_OPEN.test(lines[i2] ?? "") || /^[ \t>]*<\/(pre|code)\s*>/i.test(lines[i2] ?? ""))) i2 += 1;
   while (i2 < lines.length && (lines[i2] ?? "").trim() === "") i2 += 1;
   const paragraph = [];
@@ -75730,9 +75730,9 @@ function quotedSpans(text2) {
       }
     } else if (ch === "'" || ch === "\u2018" || ch === "\u2019") {
       const before = text2[i2 - 1];
-      const after2 = text2[i2 + 1];
-      if (single === -1 && ch !== "\u2019" && !word(before) && after2 !== void 0 && !/\s/.test(after2)) single = i2;
-      else if (single !== -1 && ch !== "\u2018" && !word(after2) && before !== void 0 && !/\s/.test(before)) {
+      const after = text2[i2 + 1];
+      if (single === -1 && ch !== "\u2019" && !word(before) && after !== void 0 && !/\s/.test(after)) single = i2;
+      else if (single !== -1 && ch !== "\u2018" && !word(after) && before !== void 0 && !/\s/.test(before)) {
         spans.push([single, i2]);
         single = -1;
       }
@@ -82276,11 +82276,11 @@ function scannerNotVerified(target, scan2) {
 
 // src/fixpr/verify.ts
 var OUTPUT_HEAD_LINES = 20;
-function judgeScan(targets, before, after2) {
+function judgeScan(targets, before, after) {
   const beforeByFingerprint = new Map(before.findings.map((finding4) => [finding4.fingerprint, finding4]));
-  const afterFingerprints = new Set(after2.findings.map((finding4) => finding4.fingerprint));
+  const afterFingerprints = new Set(after.findings.map((finding4) => finding4.fingerprint));
   const afterKeys = /* @__PURE__ */ new Set();
-  for (const finding4 of after2.findings) {
+  for (const finding4 of after.findings) {
     const key = resolutionKey(finding4);
     if (key !== null) afterKeys.add(key);
   }
@@ -82293,7 +82293,7 @@ function judgeScan(targets, before, after2) {
     if (present5) still_present.push(target);
     else resolved.push(target);
   }
-  const newFindings = newByRuleAndFile(before.findings, after2.findings);
+  const newFindings = newByRuleAndFile(before.findings, after.findings);
   const new_findings = newFindings.map((finding4) => ({
     fingerprint: finding4.fingerprint,
     severity: finding4.severity,
@@ -82306,11 +82306,11 @@ function judgeScan(targets, before, after2) {
     new_findings
   };
 }
-function newByRuleAndFile(before, after2) {
+function newByRuleAndFile(before, after) {
   const beforeKeys = new Set(before.map(ruleFileKey));
   const seenNew = /* @__PURE__ */ new Set();
   const result = [];
-  for (const finding4 of after2) {
+  for (const finding4 of after) {
     const key = ruleFileKey(finding4);
     if (beforeKeys.has(key)) continue;
     if (seenNew.has(key)) continue;
@@ -83415,8 +83415,8 @@ function isWordChar(c3) {
 }
 function isBoundary(text2, at) {
   const before = at > 0 && isWordChar(text2.charCodeAt(at - 1));
-  const after2 = at < text2.length && isWordChar(text2.charCodeAt(at));
-  return before !== after2;
+  const after = at < text2.length && isWordChar(text2.charCodeAt(at));
+  return before !== after;
 }
 function runEnds(text2, inClass) {
   const ends = new Int32Array(text2.length + 1);
@@ -89746,283 +89746,6 @@ function countBySeverity7(findings) {
 import { existsSync as existsSync23, statSync as statSync14 } from "node:fs";
 import { resolve as resolve34 } from "node:path";
 
-// src/hooks/bashGuard.ts
-var BASH_RULES = [
-  // ── Catastrophic: block by default ───────────────────────────────────────
-  {
-    id: "no-preserve-root",
-    level: "block",
-    reason: "Uses --no-preserve-root, defeating the root-deletion safeguard",
-    pattern: /--no-preserve-root/i
-  },
-  {
-    id: "remote-pipe-to-shell",
-    level: "block",
-    reason: "Pipes a downloaded script directly into a shell (curl|wget \u2026 | sh/bash)",
-    // `sudo -E bash`, `sudo -H -E bash` etc. — flags between `sudo` and the
-    // shell name — used to fall through this pattern, which only allowed
-    // `sudo` directly followed by the shell.
-    // A flag never contains `|`: `-\S+` spanned pipes and made `| sudo -x|sudo
-    // -x|…` quadratic (fix round 3).
-    pattern: /\b(?:curl|wget)\b[^\n]*?\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i,
-    test: after(/\b(?:curl|wget)\b/i, /\|\s*(?:sudo\s+(?:-[^\s|]+\s+)*)?(?:ba|z|da)?sh\b/i)
-  },
-  {
-    id: "powershell-iex-download",
-    level: "block",
-    reason: "Downloads and executes remote code via Invoke-Expression",
-    // `irm`/`iwr` are PowerShell's own built-in aliases for
-    // Invoke-RestMethod/Invoke-WebRequest — as common in the wild as the
-    // full names, and the piped-download shape is identical either way.
-    pattern: /(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)[^\n]*\|\s*(?:iex|invoke-expression)/i,
-    test: after(/(?:iwr|irm|invoke-webrequest|invoke-restmethod|wget|curl)/i, /\|\s*(?:iex|invoke-expression)/i)
-  },
-  {
-    id: "powershell-iex-nested",
-    level: "block",
-    reason: "Downloads and executes remote code via Invoke-Expression",
-    // `iex (irm …)` / `Invoke-Expression (Invoke-RestMethod …)` is the same
-    // hazard as the piped form above, spelled with the download as a nested
-    // call instead of a pipe. `(` is a statement boundary everywhere else in
-    // this file (subshells, command substitution), so this must be
-    // scope:'command' to see across it — narrow enough (iex/Invoke-Expression
-    // immediately opening a paren around a download cmdlet) that it does not
-    // reopen the cross-separator false positives scope:'command' otherwise
-    // reintroduces the download and the pipe are never split across `&&`/`;`
-    // for the same reason the fork-bomb signature needs scope:'command'.
-    pattern: /\b(?:iex|invoke-expression)\s*\(\s*(?:irm|iwr|invoke-restmethod|invoke-webrequest)\b/i,
-    scope: "command"
-  },
-  {
-    id: "powershell-disk-format",
-    level: "block",
-    reason: "Formats or clears an entire disk/volume",
-    pattern: /\b(?:Format-Volume|Clear-Disk)\b/i
-  },
-  {
-    id: "process-substitution-remote-fetch",
-    level: "block",
-    reason: "Executes a downloaded script via process substitution (bash <(curl \u2026))",
-    // `bash <(curl …)` hands bash a fake file whose content is curl's stdout
-    // — the same hazard as `curl … | sh`, spelled with process substitution
-    // instead of a pipe. `<(` is not a statement separator anywhere else in
-    // this file, so scope:'command' (which sees the un-split text) is enough
-    // here and no tokenizer change is needed — unlike `sh -c "$(curl …)"`,
-    // where the whole thing sits inside quotes and is handled separately, by
-    // `isBareRemoteFetch` on the extracted `-c` script text. `source <(curl
-    // …)` and `. <(wget …)` run the download in the current shell — the same
-    // hazard (review I1); `.` counts only where a command starts.
-    pattern: /(?:\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s))[^\n]*<\(\s*(?:curl|wget)\b/im,
-    scope: "command",
-    test: processSubstitutionFetch
-  },
-  {
-    id: "disk-overwrite",
-    level: "block",
-    reason: "Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/\u2026)",
-    // The `\b` used to sit in front of the whole group, and a leading `\b`
-    // before `>` demands a word character immediately to its left — so the
-    // redirect alternative matched `cat x>/dev/sda` and never the
-    // `cat x > /dev/sda` anybody actually writes. Each alternative anchors
-    // itself now.
-    //
-    // `dd … of=` is deliberately narrower than the rest: it only blocks a
-    // handful of real block-device name families (`sd`/`hd`/`vd`/`xvd`/
-    // `nvme`/`mmcblk`/`disk`/`md`/`dm-`, plus the Windows `\\.\PhysicalDriveN`
-    // spelling) — `dd … of=/dev/null`, `of=/dev/stdout`, `of=/dev/zero` and
-    // an ordinary regular-file target are all common, harmless uses of dd
-    // that this used to block outright by matching any `/dev/` path.
-    // `mkfs`/`wipefs`/`shred` keep matching any `/dev/…` target: unlike dd,
-    // there is no ordinary reason to run any of them against something that
-    // is not a device, so narrowing them has no false positive to fix.
-    // `mkfs`'s target used to have to sit immediately after the command
-    // (`mkfs\s+\/dev\/`), so `mkfs -t ext4 /dev/sdb` — flags between the
-    // command and its target — never matched; `[^\n]*` between them (already
-    // safe here: this rule runs per masked *statement*, so it cannot cross a
-    // `&&`/`;`/newline) fixes that the same way the rest of this alternation
-    // already tolerates flags before its target.
-    pattern: /(?:\bdd\b[^\n]*\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)|\bmkfs(?:\.\w+)?\b[^\n]*\/dev\/|\bwipefs\b[^\n]*\/dev\/|\bshred\b[^\n]*\/dev\/|>\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-))/i,
-    test: anyOf(
-      after(/\bdd\b/i, /\bof=(?:\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)[\w-]*|\\\\\.\\PhysicalDrive\d*)/i),
-      after(/\bmkfs(?:\.\w+)?\b/i, /\/dev\//i),
-      after(/\bwipefs\b/i, /\/dev\//i),
-      after(/\bshred\b/i, /\/dev\//i),
-      (t) => />\s*\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|md|dm-)/i.test(t)
-    )
-  },
-  {
-    id: "fork-bomb",
-    level: "block",
-    reason: "Shell fork bomb",
-    // Scoped to the whole command: `(`, `)`, `|`, `&` and `;` are the very
-    // characters splitShell() separates on, so this signature only exists
-    // before segmentation. Quoted spans are still masked, so
-    // `echo ':(){ :|:& };:'` stays inert. Any function name, not only `:`
-    // (review 8, item 9: `f(){ f|f& };f` was ok); the backreference is the
-    // specification, `forkBomb` the linear reading of it.
-    pattern: /(?<![\w:.-])([\w:.-]{1,64})\s*\(\s*\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}\s*;\s*\1(?![\w:.-])/,
-    scope: "command",
-    test: forkBomb
-  },
-  {
-    id: "chmod-777-root",
-    level: "block",
-    reason: "Recursively makes the filesystem root world-writable",
-    // `chmod 777 -R /` is the same hazard as `chmod -R 777 /` with the flag
-    // and the mode swapped — both orders are real, so both are matched.
-    pattern: /\bchmod\b[^\n]*(?:-[a-z]*R[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-[a-z]*R[a-z]*\s+\/(?:\s|$))/i,
-    // `-[a-z]*R[a-z]*` backtracked quadratically over a run of R's; a lookahead
-    // for the R and one greedy run cannot.
-    test: after(
-      /\bchmod\b/i,
-      /(?:-(?=[a-z]*R)[a-z]*\s+0?777\s+\/(?:\s|$)|0?777\s+-(?=[a-z]*R)[a-z]*\s+\/(?:\s|$))/i
-    )
-  },
-  // ── Risky: warn only ─────────────────────────────────────────────────────
-  {
-    id: "git-force-push",
-    level: "warn",
-    reason: "Force-push can overwrite remote history",
-    // `+main`/`+master` is git's own shorthand for a forced update of that
-    // ref (a `+` prefix on a push refspec), and `--mirror` force-overwrites
-    // every ref on the remote — same hazard as `--force`, different spelling.
-    pattern: /\bgit\s+push\b[^\n]*?(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i,
-    test: after(/\bgit\s+push\b/i, /(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S|--mirror\b)/i)
-  },
-  {
-    id: "git-hard-reset",
-    level: "warn",
-    reason: "git reset --hard discards uncommitted work",
-    pattern: /\bgit\s+reset\b[^\n]*--hard\b/i,
-    test: after(/\bgit\s+reset\b/i, /--hard\b/i)
-  },
-  {
-    id: "git-clean-force",
-    level: "warn",
-    reason: "git clean -fd permanently removes untracked files",
-    pattern: /\bgit\s+clean\b[^\n]*-[a-z]*f/i,
-    test: after(/\bgit\s+clean\b/i, /-[a-z]*f/i)
-  },
-  {
-    id: "chmod-777",
-    level: "warn",
-    reason: "chmod 777 grants world-write \u2014 overly permissive",
-    pattern: /\bchmod\b[^\n]*\b0?777\b/i,
-    test: after(/\bchmod\b/i, /\b0?777\b/i)
-  },
-  {
-    id: "history-wipe",
-    level: "warn",
-    reason: "Clears shell history",
-    pattern: /\bhistory\s+-c\b|>\s*~?\/?\.(?:bash|zsh)_history\b/i
-  }
-];
-function after(keyword, tail) {
-  const kw = new RegExp(keyword.source, keyword.flags.replace(/[gy]/g, ""));
-  const tl = new RegExp(tail.source, `${tail.flags.replace(/[gy]/g, "")}g`);
-  return (text2) => {
-    const m = kw.exec(text2);
-    if (m === null) return false;
-    tl.lastIndex = m.index + m[0].length;
-    return tl.test(text2);
-  };
-}
-function anyOf(...tests) {
-  return (text2) => tests.some((t) => t(text2));
-}
-function processSubstitutionFetch(text2) {
-  for (const line of text2.split("\n")) {
-    const shell = /\b(?:sh|bash|zsh|dash|ksh|ash|mksh|source)\b|(?:^|[;&|(){}])[ \t]*\.(?=\s)/i.exec(line);
-    if (shell === null) continue;
-    const shellEnd = shell.index + shell[0].length;
-    for (const fetch2 of line.matchAll(/<\(\s*(?:curl|wget)\b/gi)) {
-      if (fetch2.index >= shellEnd) return true;
-    }
-  }
-  return false;
-}
-var FORK_NAME_CHAR = /[\w:.-]/;
-function forkBomb(text2) {
-  for (const m of text2.matchAll(/\(\s*\)\s*\{\s*/g)) {
-    let end = m.index;
-    for (let k = 0; end > 0 && k < 64 && /\s/.test(text2.charAt(end - 1)); k += 1) end -= 1;
-    let start = end;
-    while (start > 0 && end - start < 64 && FORK_NAME_CHAR.test(text2.charAt(start - 1))) start -= 1;
-    if (start === end || start > 0 && FORK_NAME_CHAR.test(text2.charAt(start - 1))) continue;
-    const name = text2.slice(start, end).replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
-    const body = new RegExp(`${name}\\s*\\|\\s*${name}\\s*&\\s*\\}\\s*;\\s*${name}(?![\\w:.-])`, "y");
-    body.lastIndex = m.index + m[0].length;
-    if (body.test(text2)) return true;
-  }
-  return false;
-}
-var DRIVE_LETTERS = Array.from({ length: 26 }, (_, k) => String.fromCharCode(97 + k));
-var NODE_VALUED = /* @__PURE__ */ new Set([
-  "-r",
-  "--require",
-  "--import",
-  "--loader",
-  "--experimental-loader",
-  "-C",
-  "--conditions",
-  "--input-type",
-  "--env-file",
-  "--title",
-  "--cwd",
-  "--config",
-  "--preload"
-]);
-var NODE_OPTION_VALUED = /* @__PURE__ */ new Set([
-  ...NODE_VALUED,
-  "--max-old-space-size",
-  "--max-semi-space-size",
-  "--stack-size",
-  "--max-http-header-size",
-  "--inspect-port",
-  "--debug-port",
-  "--openssl-config",
-  "--icu-data-dir",
-  "--redirect-warnings",
-  "--report-dir",
-  "--report-directory",
-  "--report-filename",
-  "--report-signal",
-  "--diagnostic-dir",
-  "--heapsnapshot-signal",
-  "--heapsnapshot-near-heap-limit",
-  "--dns-result-order",
-  "--unhandled-rejections",
-  "--disable-warning",
-  "--watch-path",
-  "--test-reporter",
-  "--test-reporter-destination",
-  "--test-name-pattern",
-  "--test-concurrency",
-  "--experimental-policy",
-  "--policy-integrity",
-  "--secure-heap",
-  "--secure-heap-min",
-  "--cpu-prof-dir",
-  "--cpu-prof-name",
-  "--cpu-prof-interval",
-  "--heap-prof-dir",
-  "--heap-prof-name",
-  "--heap-prof-interval",
-  "--trace-event-categories",
-  "--trace-event-file-pattern",
-  "--use-largepages",
-  "--tls-cipher-list",
-  "--tls-keylog",
-  "--localstorage-file",
-  "--env-file-if-exists",
-  "--experimental-sea-config"
-]);
-var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "su", "pwsh", "powershell"]);
-var MAX_DECODED = 64 * 1024;
-var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
-var MAX_STATEMENT_LENGTH = 16 * 1024;
-var MAX_COMMAND_LENGTH = 512 * 1024;
-
 // src/pkgvet/parseCommand.ts
 var NAME_RE = {
   npm: /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._~-]*$/,
@@ -93698,14 +93421,14 @@ function leaseNext(storage, planId, only = {}) {
       attempts_left: Math.max(0, MAX_INVALID_SUBMISSIONS - task.attempts)
     };
   }
-  const after2 = repo.listTasks(plan.id);
-  if (after2.every((t) => t.status === "closed")) return done();
+  const after = repo.listTasks(plan.id);
+  if (after.every((t) => t.status === "closed")) return done();
   return {
     ok: true,
     done: false,
     waiting: true,
     message: "Every task still to do is leased to someone. Answer yours, or ask again once a lease expires.",
-    leased: after2.filter((t) => t.status === "leased").map((t) => ({ task_id: t.task_id, lease_expires_at: t.lease_expires_at })).slice(0, MAX_LISTED2)
+    leased: after.filter((t) => t.status === "leased").map((t) => ({ task_id: t.task_id, lease_expires_at: t.lease_expires_at })).slice(0, MAX_LISTED2)
   };
 }
 function stopDelivery(storage, plan, candidates2, reason, now) {

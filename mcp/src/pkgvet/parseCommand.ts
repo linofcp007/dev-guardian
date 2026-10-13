@@ -21,11 +21,12 @@
  *     looked up.
  *   - Whatever remains must be a syntactically valid name for its registry.
  *
- * Pure functions. No I/O. Imports only `hooks/bashGuard.js`, which is itself
- * dependency-free — the hook loads this file from `mcp/dist`.
+ * Pure functions. No I/O. Imports only the shell guard's tokenizer
+ * (`hooks/shell/`), which is dependency-free — the hook loads this file from `mcp/dist`.
  */
 
-import { commandWordIndex, splitShell, type ShellWord } from '../hooks/bashGuard.js';
+import { commandWordIndex } from '../hooks/shell/command.js';
+import { splitShell, type ShellWord } from '../hooks/shell/split.js';
 import { powershellAsPosix } from '../hooks/powershellText.js';
 
 export { powershellAsPosix };
