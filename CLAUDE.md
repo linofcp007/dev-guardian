@@ -56,7 +56,9 @@ performance and compliance:
 npm ci                # first time only — no native modules
 npm run lint          # tsc over src/ AND test/ (one pass)
 npm run build         # type-check, esbuild bundles -> dist, copy-assets, host-rules, docs
-npm test              # vitest (full suite)
+npm test              # vitest (full suite) — the gate before a commit
+npm run test:fast     # unit tests minus the slowest files — the inner loop
+npm run test:docker   # Linux containers: Node 22.13 floor (coverage enforced) + LTS — before a release
 npm run ablate -- <pack>   # rule-pack ablation harness (not a vitest test)
 ```
 
