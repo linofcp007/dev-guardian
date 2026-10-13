@@ -34142,6 +34142,121 @@ var init_responseBounds = __esm({
   }
 });
 
+// src/tools/annotations.ts
+var readOnly2, records, TOOL_ANNOTATIONS;
+var init_annotations = __esm({
+  "src/tools/annotations.ts"() {
+    "use strict";
+    readOnly2 = (openWorld) => ({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: openWorld
+    });
+    records = (openWorld) => ({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: openWorld
+    });
+    TOOL_ANNOTATIONS = {
+      // ---- reads only
+      check_toolchain: readOnly2(false),
+      health_status: readOnly2(false),
+      diff_scans: readOnly2(false),
+      regression_alert: readOnly2(false),
+      triage_findings: readOnly2(false),
+      suggest_fix: readOnly2(false),
+      license_compatibility: readOnly2(false),
+      compliance_evidence: readOnly2(false),
+      dotnet_describe_setup: readOnly2(false),
+      wp_describe_setup: readOnly2(false),
+      wp_recommend_hardening: readOnly2(false),
+      // EPSS / CISA KEV for the CVEs it ranks.
+      prioritize_findings: readOnly2(true),
+      risk_score: readOnly2(true),
+      // The package registries' latest versions.
+      deps_update_plan: readOnly2(true),
+      // The registry's metadata and OSV for each package named.
+      vet_packages: readOnly2(true),
+      // ---- scans and reports: record their result, overwrite nothing
+      detect_stack: records(false),
+      map_attack_surface: records(false),
+      quality_check: records(false),
+      compliance_check: records(false),
+      generate_sbom: records(false),
+      sbom_diff: records(false),
+      dotnet_target_framework_check: records(false),
+      wp_cron_audit: records(false),
+      wp_plugin_check: records(false),
+      audit_agent_config: records(false),
+      register_custom_rules: records(false),
+      export_vex: records(false),
+      report_export: records(false),
+      observability_setup: records(false),
+      // writes new files only: an existing one is skipped
+      precommit_install: records(false),
+      set_baseline: records(false),
+      scan_deps: records(true),
+      // Trivy's vulnerability database
+      scan_iac: records(true),
+      scan_containers: records(true),
+      // registry images, Trivy's database, Sigstore
+      scan_secrets: records(true),
+      // `verify_live` asks each provider whether a key is live
+      scan_dotnet_secrets: records(true),
+      // a .NET build restores from NuGet feeds
+      dotnet_efcore_audit: records(true),
+      scan_skill: records(true),
+      // OSV
+      scan_wordpress: records(true),
+      // Semgrep's registry PHP rules
+      wp_vuln_check: records(true),
+      // WordPress.org / WPScan
+      wp_vuln_check_source: records(true),
+      wp_audit: records(true),
+      // `wp core verify-checksums` asks api.wordpress.org
+      bulk_audit_wordpress_sites: records(true),
+      wp_rest_audit: records(true),
+      // requests to the site's REST routes
+      deps_audit: records(true),
+      // Trivy's database and the native auditors' advisories
+      review_pr: records(true),
+      // Semgrep's registry rules
+      audit_executive: records(true),
+      audit_mcp_tools: records(true),
+      // starts the configured servers (remote ones with allow_remote)
+      validate_finding: records(true),
+      // EPSS / CISA KEV
+      suppress_finding: records(true),
+      // warns from EPSS / CISA KEV before hiding a CVE
+      // ---- can rewrite project source: `auto_fix` applies Semgrep's autofixes
+      scan_sast: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      bug_hunt: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      security_scan_full: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      // ---- writes the user does not undo with one call
+      // Installs (and may upgrade) system packages, by default — `dry_run` previews.
+      install_toolchain: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+      // `refresh` rewrites the configuration files it manages.
+      init_project: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      // Sends attack payloads to the application under test.
+      scan_dast: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      // Load tests and Lighthouse runs against a URL.
+      perf_check: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      // Pushes branches and opens pull requests on GitHub (in a disposable worktree, never the user's tree).
+      create_fix_pr: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      // Files issues on GitHub unless `dry_run`.
+      create_github_issues: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      // Adds a scan to the history per call.
+      import_sarif: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      // The LLM scan's plan and its leases (the model's own sampling goes to the client, not out).
+      llm_scan_start: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      llm_scan_task: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      llm_scan_submit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+    };
+  }
+});
+
 // src/tools/index.ts
 var tools_exports = {};
 __export(tools_exports, {
@@ -34155,6 +34270,10 @@ function registerToolModule(tool54) {
   if (TOOLS.some((t) => t.name === tool54.name)) {
     throw new Error(`Tool '${tool54.name}' is already registered`);
   }
+  if (tool54.annotations === void 0) {
+    const hints2 = TOOL_ANNOTATIONS[tool54.name];
+    if (hints2 !== void 0) tool54.annotations = { ...hints2 };
+  }
   TOOLS.push(tool54);
 }
 function attachAllTools(server, ctx) {
@@ -34164,7 +34283,8 @@ function attachAllTools(server, ctx) {
       {
         ...tool54.title ? { title: tool54.title } : {},
         description: tool54.description,
-        inputSchema: strictInputSchema(tool54)
+        inputSchema: strictInputSchema(tool54),
+        ...tool54.annotations !== void 0 ? { annotations: tool54.annotations } : {}
       },
       async (input, extra) => {
         const callMeta = {};
@@ -34221,6 +34341,7 @@ var init_tools = __esm({
     init_zod();
     init_untrustedText();
     init_responseBounds();
+    init_annotations();
     TOOLS = [];
   }
 });
@@ -41044,7 +41165,7 @@ function discardCaptured(captured) {
 function summarize(checked) {
   const count2 = (v) => checked.filter((c3) => c3.check.verdict === v).length;
   const sent = checked.filter((c3) => c3.check.sent);
-  const records = [];
+  const records2 = [];
   for (const { finding: finding4, check: check2 } of checked) {
     if (check2.verdict === "skipped") continue;
     const record8 = {
@@ -41057,7 +41178,7 @@ function summarize(checked) {
     };
     if (finding4.file_path !== void 0) record8.file_path = finding4.file_path;
     if (finding4.line_start !== void 0) record8.line_start = finding4.line_start;
-    records.push(record8);
+    records2.push(record8);
   }
   const summary2 = {
     verified: sent.length,
@@ -41071,9 +41192,9 @@ function summarize(checked) {
     limit: DEFAULT_MAX_SECRETS,
     hosts_contacted: [...new Set(sent.flatMap((c3) => c3.check.host === null ? [] : [c3.check.host]))].sort(),
     verifiable_rules: PROVIDERS.flatMap((p) => p.rules),
-    findings: records.slice(0, MAX_RECORDS)
+    findings: records2.slice(0, MAX_RECORDS)
   };
-  if (records.length > MAX_RECORDS) summary2.findings_not_listed = records.length - MAX_RECORDS;
+  if (records2.length > MAX_RECORDS) summary2.findings_not_listed = records2.length - MAX_RECORDS;
   return summary2;
 }
 function warningsFor(s, unavailable) {
@@ -52396,12 +52517,12 @@ var init_moduleEdges = __esm({
 });
 
 // src/validate/importGraph.ts
-function buildImportGraph(records) {
+function buildImportGraph(records2) {
   const edges = /* @__PURE__ */ new Map();
   const files = /* @__PURE__ */ new Set();
   let edgeCount2 = 0;
   let truncated = false;
-  for (const record8 of records) {
+  for (const record8 of records2) {
     files.add(record8.file);
     files.add(record8.module_file);
     const existing = edges.get(record8.file);
@@ -83222,9 +83343,9 @@ function buildBurstEvidence(finding4, origin, burst, planned, observed) {
   if (first === void 0) record8.note = "The burst produced no results at all.";
   return record8;
 }
-function writeEvidenceFiles(dir, records, redact2) {
+function writeEvidenceFiles(dir, records2, redact2) {
   const outcome = { written: /* @__PURE__ */ new Set(), capped: 0, failed: 0 };
-  for (const [index, record8] of records.entries()) {
+  for (const [index, record8] of records2.entries()) {
     if (index >= MAX_EVIDENCE_FILES) {
       outcome.capped += 1;
       continue;
@@ -84161,10 +84282,10 @@ async function handler41(input, ctx, callMeta) {
   const ordered = [...findings].sort(
     (a2, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a2.severity] || a2.fingerprint.localeCompare(b.fingerprint)
   );
-  const records = ordered.map(
+  const records2 = ordered.map(
     (f) => burst.evidence.get(f.fingerprint) ?? buildEvidence(f, target.origin, results)
   );
-  const written = writeEvidenceFiles(evidenceDir, records, redact2);
+  const written = writeEvidenceFiles(evidenceDir, records2, redact2);
   if (written.capped > 0) {
     warnings.push(
       `${written.capped} finding(s) have no evidence file: the per-scan evidence cap was reached. The findings themselves are complete; only their raw request/response pairs were dropped.`

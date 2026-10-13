@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
+import { TOOL_ANNOTATIONS } from './annotations.js';
 /**
  * Mutable global registry. Modules append themselves at import time via
  * `registerToolModule`, which lets us keep additions localized to each
@@ -17,6 +18,11 @@ export const TOOLS = [];
 export function registerToolModule(tool) {
     if (TOOLS.some((t) => t.name === tool.name)) {
         throw new Error(`Tool '${tool.name}' is already registered`);
+    }
+    if (tool.annotations === undefined) {
+        const hints = TOOL_ANNOTATIONS[tool.name];
+        if (hints !== undefined)
+            tool.annotations = { ...hints };
     }
     TOOLS.push(tool);
 }
@@ -42,6 +48,7 @@ export function attachAllTools(server, ctx) {
             ...(tool.title ? { title: tool.title } : {}),
             description: tool.description,
             inputSchema: strictInputSchema(tool),
+            ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
         }, async (input, extra) => {
             const callMeta = {};
             const typedExtra = extra;

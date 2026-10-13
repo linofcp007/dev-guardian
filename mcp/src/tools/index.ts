@@ -7,12 +7,14 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z, type ZodRawShape } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { SamplingFn } from '../llmscan/types.js';
 import type { ToolResult } from '../types.js';
 import { untrustedValue } from '../platform/untrustedText.js';
 import { boundResponsePayload } from './responseBounds.js';
+import { TOOL_ANNOTATIONS } from './annotations.js';
 
 /**
  * The shape registered with the SDK. `inputSchema` is a raw zod shape (an
@@ -67,6 +69,12 @@ export interface ToolModule {
   description: string;
   /** Optional human title shown by some hosts. */
   title?: string;
+  /**
+   * The behaviour hints `tools/list` carries (read-only, destructive,
+   * idempotent, open-world). Filled in at registration from the table in
+   * `./annotations.ts` when the module does not declare its own.
+   */
+  annotations?: ToolAnnotations;
   inputSchema: ZodRawShape;
   /**
    * Handler returns a typed `ToolResult`. The registry wrapper turns it
@@ -102,6 +110,10 @@ export function registerToolModule(tool: ToolModule): void {
   if (TOOLS.some((t) => t.name === tool.name)) {
     throw new Error(`Tool '${tool.name}' is already registered`);
   }
+  if (tool.annotations === undefined) {
+    const hints = TOOL_ANNOTATIONS[tool.name];
+    if (hints !== undefined) tool.annotations = { ...hints };
+  }
   TOOLS.push(tool);
 }
 
@@ -129,6 +141,7 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
         ...(tool.title ? { title: tool.title } : {}),
         description: tool.description,
         inputSchema: strictInputSchema(tool),
+        ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
       },
       async (input, extra) => {
         const callMeta: ToolCallMeta = {};
