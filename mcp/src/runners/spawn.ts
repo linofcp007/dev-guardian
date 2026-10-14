@@ -48,6 +48,7 @@ import { basename } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import crossSpawn from 'cross-spawn';
 import { findOnPath, isBareName } from '../platform/binaryPath.js';
+import { npmCmdShimTarget } from './npmCmdShim.js';
 
 export interface SpawnNoShellOptions {
   cwd?: string;
@@ -89,8 +90,14 @@ export class BatchArgumentRefused extends Error implements NodeJS.ErrnoException
 function cmdUnsafePart(command: string, args: readonly string[]): string | null {
   const parts = [command, ...args];
   for (const [index, part] of parts.entries()) {
+    const where = index === 0 ? 'a command path' : `an argument (#${index})`;
     const hit = CMD_UNSAFE.find(([char]) => part.includes(char));
-    if (hit !== undefined) return `${index === 0 ? 'a command path' : `an argument (#${index})`} holding ${hit[1]}`;
+    if (hit !== undefined) return `${where} holding ${hit[1]}`;
+    // cross-spawn doubles only the LAST of an argument's trailing backslashes
+    // before the quote it closes it with, so two or more left that quote
+    // escaped: `C:\site\\` swallowed the next argument into it (review 11,
+    // finding 15a). One is doubled right.
+    if (index > 0 && /\\\\$/.test(part)) return `${where} ending in two or more backslashes`;
   }
   return null;
 }
@@ -99,6 +106,11 @@ function cmdUnsafePart(command: string, args: readonly string[]): string | null 
  * `command` with `args`, no shell, no console window. Throws
  * {@link BatchArgumentRefused} — and starts nothing — when Windows would run
  * it through `cmd.exe` with an argument `cmd.exe` cannot be handed safely.
+ *
+ * An npm cmd-shim (`lighthouse.cmd`) is not run through `cmd.exe` at all:
+ * Node is started on the script it names, the arguments handed through
+ * `CreateProcess` as they are (`runners/npmCmdShim.ts`, review 11, finding
+ * 15b) — so a percent-escaped URL reaches Lighthouse.
  */
 export function spawnNoShell(command: string, args: readonly string[], options: SpawnNoShellOptions): ChildProcess {
   const spawnOptions: SpawnOptions = {
@@ -114,6 +126,8 @@ export function spawnNoShell(command: string, args: readonly string[], options: 
   // `windowsVerbatimArguments` exactly when it built a `cmd.exe` line.
   const parsed = crossSpawn._parse(command, args, spawnOptions);
   if (parsed.options.windowsVerbatimArguments === true) {
+    const shim = parsed.file !== undefined ? npmCmdShimTarget(parsed.file, options.env) : null;
+    if (shim !== null) return spawn(shim.program, [...shim.args, ...args], spawnOptions);
     const unsafe = cmdUnsafePart(command, args);
     if (unsafe !== null) throw new BatchArgumentRefused(command, unsafe);
   }
