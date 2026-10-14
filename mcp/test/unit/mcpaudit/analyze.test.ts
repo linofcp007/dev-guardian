@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { expectLinear } from '../../helpers/timing.js';
 import {
   analyzeServerListing,
   analyzeServerListingAsync,
@@ -436,18 +437,19 @@ describe('fix round 3, M2: every string is read, and a cut is said', () => {
 });
 
 describe('fix round 3, I3: shadowing costs one pass per field, not one regex per other tool', () => {
-  it('analyses 1000 tools against 1000 other tool names in well under the old 9 s', () => {
-    const tools = Array.from({ length: 1000 }, (_, i) => ({
+  // One regex per other tool made it n x n: a shape, never "under 2.5 s" (review 11, D).
+  it('n tools against n other tool names: linear in n', () => {
+    const toolsOf = (n: number) => Array.from({ length: n }, (_, i) => ({
       name: `local_${i}`,
       description: `Does thing number ${i}; see the docs for the parameters and limits of this operation.`,
       inputSchema: { type: 'object', properties: { value: { type: 'string', description: `Value ${i}` } } },
     }));
-    const others: OtherServer[] = [
-      { serverKey: 'o', serverName: 'other', toolNames: Array.from({ length: 1000 }, (_, i) => `remote_tool_${i}`) },
+    const othersOf = (n: number): OtherServer[] => [
+      { serverKey: 'o', serverName: 'other', toolNames: Array.from({ length: n }, (_, i) => `remote_tool_${i}`) },
     ];
-    const t0 = Date.now();
-    analyzeServerListing(listing(tools), others);
-    expect(Date.now() - t0).toBeLessThan(2500);
+    expectLinear('analyzeServerListing: n tools, n other names', (n) => {
+      analyzeServerListing(listing(toolsOf(n)), othersOf(n));
+    }, 100);
   });
 });
 

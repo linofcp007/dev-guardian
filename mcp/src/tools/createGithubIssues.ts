@@ -331,7 +331,16 @@ export const ISSUE_LIST_LIMIT = 1000;
  * that comes back AT the limit may have been cut — the issue for this very
  * finding could be the one past it — so it fails closed: nothing is filed,
  * rather than a duplicate public issue.
+ *
+ * The search holds no quote: GitHub's tokenizer reads `[guardian:<tag>]` as
+ * the word `guardian`, so `guardian in:title` finds every such issue (and a
+ * few others, which the tag pattern below drops). The old phrase,
+ * `"[guardian:" in:title`, held a `"`, which `runners/spawn.ts` never hands
+ * `cmd.exe` — so through a `gh.cmd` the tool could not run at all (review 11,
+ * finding 15b).
  */
+export const ISSUE_SEARCH = 'guardian in:title';
+
 async function listExistingTags(
   cwd: string,
 ): Promise<{ ok: true; tags: Set<string> } | { ok: false; error: string }> {
@@ -340,7 +349,7 @@ async function listExistingTags(
     args: [
       'issue', 'list',
       '--state', 'all',
-      '--search', '"[guardian:" in:title',
+      '--search', ISSUE_SEARCH,
       '--limit', String(ISSUE_LIST_LIMIT),
       '--json', 'number,title,state',
     ],

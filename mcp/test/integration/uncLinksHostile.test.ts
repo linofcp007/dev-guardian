@@ -29,12 +29,13 @@ import { ingestTarget } from '../../src/skillaudit/ingest.js';
 import { collectPorts } from '../../src/surface/collectors/ports.js';
 import { inventoryWordPressSource } from '../../src/wordpress/sourceInventory.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
 const UNC = '\\\\192.0.2.1\\share\\x';
-/** Far below the 157 s a followed link took, far above a loaded machine's lstat walk. */
-const BOUND_MS = 10_000;
+/** Far below the 157 s a followed link took (a wait, not a cost: `hangBound`), far above a loaded machine's lstat walk. */
+const BOUND_MS = hangBound(10_000);
 
 const CAN_LINK = ((): boolean => {
   if (process.platform !== 'win32') return false;

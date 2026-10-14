@@ -287,11 +287,6 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: 'the audit report into the directory ensureReportDir verified or created',
   },
-  'src/tools/vetPackages.ts': {
-    apis: { statSync: 1, existsSync: 1 },
-    kind: 'user',
-    reason: 'is-it-a-directory of the project_dir argument itself',
-  },
   'src/tools/wpVulnCheck.ts': {
     apis: { readdirSync: 1, readFileSync: 1, writeFileSync: 1, existsSync: 2 },
     kind: 'own',
@@ -326,6 +321,11 @@ const ALLOWED: Record<string, Allowed> = {
     apis: { statSync: 1, accessSync: 1 },
     kind: 'host',
     reason: 'candidates on the PATH entries a bare command name is looked up in — absolute, local entries only, never the current directory',
+  },
+  'src/runners/npmCmdShim.ts': {
+    apis: { statSync: 1 },
+    kind: 'host',
+    reason: 'is-it-a-file of the script an npm cmd-shim found on PATH names, and of node.exe beside it (the shim itself is read through one descriptor)',
   },
   'src/platform/scope.ts': {
     apis: { realpathSync: 1 },

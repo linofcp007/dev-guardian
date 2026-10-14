@@ -107,6 +107,21 @@ describe('finding 5: a secret keyed the same in history and in the working tree'
     ]);
     expect(newFindings(two, baseline)).toHaveLength(1);
   });
+
+  // Review 11, finding 2: a match_id match took nothing, so a second secret
+  // ABOVE the baselined one — occurrence 0 by line — matched the baselined
+  // entry by match_id while the baselined secret matched it exactly.
+  it('one to one: a second secret above the baselined one is new, even keyed by line alone', () => {
+    const above = assignIdentities([
+      secret({ fingerprint: 'h1', snippet: `rule=aws-access-token;commit=${C1}` }),
+      secret({ fingerprint: 'h5', snippet: `rule=aws-access-token;commit=${C2}`, line_start: 1, line_end: 1 }),
+    ]);
+    expect(newFindings(above, baseline).map((f) => f.fingerprint)).toEqual(['h5']);
+    // And `baseline update` does not hand the old entry's date to the new one.
+    const rebuilt = buildBaseline(above, baseline, '2026-02-02');
+    const dates = rebuilt.entries.map((e) => e.added).sort();
+    expect(dates).toEqual(['2026-01-01', '2026-02-02']);
+  });
 });
 
 const code = (path: string, fp: string): Finding =>

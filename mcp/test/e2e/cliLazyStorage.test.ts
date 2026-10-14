@@ -260,14 +260,23 @@ describe('cli/dev-guardian.mjs — a missing or damaged engine bundle', () => {
     rmSync(sandbox, { recursive: true, force: true });
   });
 
-  /** A copy of the CLI beside an engine bundle that is `missing` or `cut` short. */
-  function install(name: string, engine: 'missing' | 'cut'): string {
+  /**
+   * A copy of the CLI beside an engine bundle that is `missing`, `cut` short,
+   * from another build (`skew`: it loads, and lacks exports), one whose load
+   * never settles (`hang`), or never settles while it keeps the process busy
+   * (`busy`).
+   */
+  function install(name: string, engine: 'missing' | 'cut' | 'skew' | 'hang' | 'busy'): string {
     const root = join(sandbox, name);
     mkdirSync(join(root, 'cli'), { recursive: true });
     mkdirSync(join(root, 'mcp', 'dist'), { recursive: true });
     cpSync(REAL_CLI, join(root, 'cli', 'dev-guardian.mjs'));
     cpSync(join(REAL_DIST, '..', 'package.json'), join(root, 'mcp', 'package.json'));
-    if (engine === 'cut') writeFileSync(join(root, 'mcp', 'dist', 'engine.js'), readFileSync(join(REAL_DIST, 'engine.js'), 'utf8').slice(0, 200_000));
+    const bundle = join(root, 'mcp', 'dist', 'engine.js');
+    if (engine === 'cut') writeFileSync(bundle, readFileSync(join(REAL_DIST, 'engine.js'), 'utf8').slice(0, 200_000));
+    if (engine === 'skew') writeFileSync(bundle, 'export const ALL_HOSTS = [];\nexport function resolveVersion() { return "0.0.0"; }\n');
+    if (engine === 'hang') writeFileSync(bundle, 'await new Promise(() => {});\n');
+    if (engine === 'busy') writeFileSync(bundle, 'setInterval(() => {}, 1000);\nawait new Promise(() => {});\n');
     return join(root, 'cli', 'dev-guardian.mjs');
   }
 
@@ -281,5 +290,47 @@ describe('cli/dev-guardian.mjs — a missing or damaged engine bundle', () => {
     const r = spawnSyncCapped(process.execPath, [cli, ...args], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' }, timeout: TIMEOUT_MS, cwd: sandbox });
     expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 3, stdout: '' });
     expect(r.stderr).toMatch(/^dev-guardian: its engine, mcp\/dist\/engine\.js, could not be loaded \(.+\) — the plugin install is incomplete or damaged\. Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build\.\n$/);
+  });
+
+  // Review 11, finding 14: an engine from another build loaded and lacked
+  // exports — a TypeError and exit 1 on every command, --help included; an
+  // import that never settled was Node's exit 13.
+  const REPAIR = / — the plugin install is incomplete or damaged\. Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build\.\n$/;
+
+  it.each([['--help'], ['check', '--bash', 'ls'], ['scan', '--project', '.']] as const)(
+    'an engine from another build (it lacks exports), %j: exit 3, the names it lacks',
+    (...args) => {
+      const cli = install(`skew-${args[0]}`, 'skew');
+      const r = spawnSyncCapped(process.execPath, [cli, ...args], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' }, timeout: TIMEOUT_MS, cwd: sandbox });
+      expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 3, stdout: '' });
+      expect(r.stderr).toMatch(/^dev-guardian: its engine, mcp\/dist\/engine\.js, is not the one this CLI needs: it lacks assessBashCommand, canonicalPath, /);
+      expect(r.stderr).not.toMatch(/ALL_HOSTS|resolveVersion/);
+      expect(r.stderr).toMatch(REPAIR);
+    },
+  );
+
+  it('an engine whose load never settles: exit 3 (Node said 13), one line', () => {
+    const cli = install('hang', 'hang');
+    const r = spawnSyncCapped(process.execPath, [cli, '--help'], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' }, timeout: TIMEOUT_MS, cwd: sandbox });
+    expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 3, stdout: '' });
+    expect(r.stderr).toMatch(/dev-guardian: its engine, mcp\/dist\/engine\.js, never finished loading \(Node was about to exit 13\)/);
+  });
+
+  it('an engine that never settles and keeps the process busy: exit 3 at the deadline', () => {
+    const cli = install('busy', 'busy');
+    const env = { ...process.env, NO_COLOR: '1', GUARDIAN_ENGINE_LOAD_DEADLINE_MS: '1500' };
+    const r = spawnSyncCapped(process.execPath, [cli, '--help'], { encoding: 'utf8', env, timeout: TIMEOUT_MS, cwd: sandbox });
+    expect({ status: r.status, stdout: r.stdout }).toEqual({ status: 3, stdout: '' });
+    expect(r.stderr).toMatch(/^dev-guardian: its engine, mcp\/dist\/engine\.js, did not finish loading in 1\.5 s/);
+    expect(r.stderr).toMatch(REPAIR);
+  });
+
+  it('ENGINE_EXPORTS is exactly what the CLI destructures from the engine', () => {
+    const source = readFileSync(REAL_CLI, 'utf8');
+    const listed = [...(/const ENGINE_EXPORTS = \[([^\]]*)\]/.exec(source)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    const block = /const \{([^}]*)\} = engine;/.exec(source)?.[1] ?? '';
+    const used = block.split(',').map((s) => s.trim().split(':')[0]?.trim() ?? '').filter((s) => s !== '');
+    expect(used.length).toBeGreaterThan(10);
+    expect([...listed].sort()).toEqual([...used].sort());
   });
 });

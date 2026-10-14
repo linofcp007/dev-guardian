@@ -26,7 +26,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { JSON_MAX_NODES, parseJsonBounded } from '../../../src/platform/boundedJson.js';
 import { parseYamlBounded, YAML_CONFIG_MAX_NODES } from '../../../src/platform/boundedParse.js';
 import { describeReadRefusal, ReadBudget } from '../../../src/platform/projectFs.js';
@@ -57,9 +57,14 @@ describe('parseJsonBounded — refused by structure, before JSON.parse runs', ()
 
   it('[{},{},…] past the node bound is too complex — quickly, and without parsing', () => {
     const text = `[${'{},'.repeat(JSON_MAX_NODES)}{}]`;
-    const t0 = Date.now();
-    expect(parseJsonBounded(text)).toEqual({ ok: false, reason: 'too-complex' });
-    expect(Date.now() - t0).toBeLessThan(5_000);
+    // Refused by counting, not by parsing: what the old "under 5 s" stood for (review 11, D).
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      expect(parseJsonBounded(text)).toEqual({ ok: false, reason: 'too-complex' });
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it('[1,1,…] is counted too: one array of numbers is not one node', () => {
@@ -109,9 +114,15 @@ describe("Trivy's coverage — a lock too large to be parsed keeps the gap", () 
     writeFileSync(join(dir, 'package.json'), '{"name":"x"}');
     // 300 KiB: over the 256 KiB a lock that locks nothing could ever be, far under the 64 MiB read cap.
     writeFileSync(join(dir, 'package-lock.json'), `{"packages":{"":{}},"x":[${'{},'.repeat(100_000)}{}]}`);
-    const t0 = Date.now();
-    const cov = assessManifestCoverage(dir, '{"Results":[]}');
-    expect(Date.now() - t0).toBeLessThan(5_000);
+    // Never parsed (what the old "under 5 s" stood for, review 11, D): no JSON.parse of the 300 KiB.
+    const parse = vi.spyOn(JSON, 'parse');
+    let cov: ReturnType<typeof assessManifestCoverage>;
+    try {
+      cov = assessManifestCoverage(dir, '{"Results":[]}');
+      expect(parse.mock.calls.filter(([text]) => typeof text === 'string' && text.length > 256 * 1024)).toEqual([]);
+    } finally {
+      parse.mockRestore();
+    }
     expect(cov.gaps.flatMap((g) => g.files)).toEqual(['package.json']);
   });
 
@@ -138,9 +149,9 @@ describe('detect_stack — one byte budget for the whole detection, its overflow
     // Ten files just under the 8 MiB manifest cap: 80 MiB, past the 64 MiB budget.
     const body = Buffer.alloc(8 * 1024 * 1024 - 16, 0x23);
     for (let i = 0; i < 10; i++) writeFileSync(join(dir, `requirements-${i}.txt`), body);
-    const t0 = Date.now();
+    // The budget is the behaviour asserted below (named, never read whole) —
+    // not a number of milliseconds (review 11, D).
     const s = detectStack(dir);
-    expect(Date.now() - t0).toBeLessThan(20_000);
     expect(s.languages).toContain('python');
     const budget = (s.unread_files ?? []).filter((u) => /read budget/.test(u.reason));
     expect(budget.length).toBeGreaterThanOrEqual(2);

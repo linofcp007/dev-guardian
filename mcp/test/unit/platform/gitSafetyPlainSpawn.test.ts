@@ -17,11 +17,13 @@
  * as in `test/unit/runners/gitExec.test.ts`.
  */
 
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
 import { afterAll, describe, expect, it } from 'vitest';
-import { spawnGitPlain } from '../../../src/platform/gitSafety.js';
+import { execGitSync, spawnGitPlain } from '../../../src/platform/gitSafety.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -43,6 +45,33 @@ async function until(check: () => boolean, ms: number): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 100));
   }
   return check();
+}
+
+const HAS_GIT = spawnSync('git', ['--version'], { windowsHide: true }).status === 0;
+
+/** The pids of the processes whose command line holds `text` (not this one). */
+function processesNaming(text: string): number[] {
+  const out =
+    process.platform === 'win32'
+      ? execFileSync(
+          'powershell',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${text}*' -and $_.Name -notlike 'powershell*' } | ForEach-Object { $_.ProcessId }`,
+          ],
+          { windowsHide: true, encoding: 'utf8' },
+        )
+      : execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
+          .split('\n')
+          .filter((line) => line.includes(text) && !line.includes('ps -eo'))
+          .map((line) => line.trim().split(/\s+/)[0] ?? '')
+          .join('\n');
+  return out
+    .split(/\r?\n/)
+    .map((s) => Number(s.trim()))
+    .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
 }
 
 /**
@@ -95,6 +124,18 @@ describe("the hook bundle's async git (no npm package) stops git's tree", () => 
     expect(r.stderr.toString()).toBe('err');
   });
 
+  // Review 11, finding 15d: Node refuses to start a `.cmd` without a shell
+  // (EINVAL, thrown synchronously) — the promise rejected, against the
+  // contract the hook's callers rely on.
+  it.runIf(process.platform === 'win32')('a git that is a .cmd resolves to a failure, never a rejection', async () => {
+    const dir = makeTempDir('git-plain-cmd-');
+    const cmd = join(dir, 'git.cmd');
+    writeFileSync(cmd, '@echo off\r\ngit %*\r\n');
+    const r = await spawnGitPlain(cmd, ['status'], { env: process.env, timeoutMs: 10_000, maxBuffer: 1024 });
+    expect(r.status).toBeNull();
+    expect(r.error?.code).toBe('EINVAL');
+  });
+
   it('more stdout than the cap stops it, as too large; a missing git is ENOENT', async () => {
     const big = await spawnGitPlain(execPath, ['-e', "process.stdout.write('x'.repeat(4096)); setTimeout(() => {}, 30000)"], {
       env: process.env,
@@ -109,4 +150,40 @@ describe("the hook bundle's async git (no npm package) stops git's tree", () => 
     });
     expect(missing.error?.code).toBe('ENOENT');
   }, 60_000);
+});
+
+// Review 11, finding 15c: `spawnSync` killed git alone at its timeout, and an
+// `ls-remote` or a clone over HTTPS left `git-remote-http` running.
+describe.runIf(HAS_GIT)('the synchronous git stops what git started too', () => {
+  it("at the timeout, git's remote helper is stopped with it (a server that never answers)", async () => {
+    // The kernel completes the connection from the listen backlog while
+    // `spawnSync` holds this thread: git sends its request and waits.
+    const server = createServer(() => {});
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    try {
+      const r = execGitSync(makeTempDir('git-sync-'), ['ls-remote', `http://127.0.0.1:${port}/x.git`], { timeoutMs: 3_000 });
+      expect(r.failure?.code).toBe('timeout');
+      expect(await until(() => processesNaming(`127.0.0.1:${port}`).length === 0, hangBound(5_000))).toBe(true);
+    } finally {
+      for (const pid of processesNaming(`127.0.0.1:${port}`)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          /* gone */
+        }
+      }
+      server.close();
+    }
+  }, 90_000);
+
+  it.runIf(process.platform === 'win32')('a .cmd git is a failure, never a throw', () => {
+    const dir = makeTempDir('git-sync-cmd-');
+    const cmd = join(dir, 'git.cmd');
+    writeFileSync(cmd, '@echo off\r\ngit %*\r\n');
+    const r = execGitSync(dir, ['status'], { git: cmd, timeoutMs: 10_000 });
+    expect(r.status).toBeNull();
+    expect(r.failure).not.toBeNull();
+  });
 });

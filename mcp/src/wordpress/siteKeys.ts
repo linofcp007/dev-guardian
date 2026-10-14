@@ -31,6 +31,7 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { findLatestUsable, type FindUsableOptions } from '../history/openSet.js';
+import { networkPathProblem } from '../platform/projectPath.js';
 import { pathArgProblem } from '../platform/toolArgs.js';
 import type { Storage } from '../storage/index.js';
 import type { ScanRecord, ScanType } from '../types.js';
@@ -42,12 +43,16 @@ export function wpSiteKey(url: string): string {
 
 /**
  * Whether `raw` can name one install: absolute, or existing on this machine,
- * and a path at all (no `"`, no control character). Null when it can;
- * otherwise the message a tool refuses it with.
+ * and a path at all (no `"`, no control character) that is not a network
+ * path (review 11, finding 8: `wp_vuln_check` and `wp_plugin_check` called
+ * `existsSync` on it, an SMB authentication to the host a UNC path names).
+ * Null when it can; otherwise the message a tool refuses it with.
  */
 export function wpInstallPathProblem(raw: string): string | null {
   const unsafe = pathArgProblem('wp_install_path', raw);
   if (unsafe !== null) return `${unsafe}: pass the path of the install.`;
+  const network = networkPathProblem('wp_install_path', raw);
+  if (network !== null) return `${network}. Pass the path of a local install, or target_url for a remote site.`;
   if (namesOneInstall(raw)) return null;
   return (
     `wp_install_path ${JSON.stringify(raw)} is relative and does not exist on this machine, so it names no ` +

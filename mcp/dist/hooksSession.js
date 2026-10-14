@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3917498, sha256: "4d92bb5e9cf47d6766b00b6bb29b5cf7adcac870182a3cc701713d7b97325ed8" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3939665, sha256: "1dc4e50153b6e5b0d79a626dd9a774d21b8609fe0ec46d17a8888eb5cdc9d8cc" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -754,14 +754,21 @@ function execGitSync(dir, args, opts = {}) {
   if (safety.refused !== null) return refusedResult(safety, "");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], {
+  const started = Date.now();
+  const options = {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer,
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32"
+  };
+  const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], options);
+  const code = r.error?.code;
+  if ((code === "ETIMEDOUT" || code === "ENOBUFS") && typeof r.pid === "number" && r.pid > 0) {
+    stopSyncTree(r.pid, Date.now() - started);
+  }
   return {
     status: r.error === void 0 ? r.status : null,
     stdout: typeof r.stdout === "string" ? r.stdout : "",
@@ -769,6 +776,24 @@ function execGitSync(dir, args, opts = {}) {
     failure: r.error === void 0 ? null : execFailure(r.error, timeoutMs, maxBuffer),
     notApplied: safety.notApplied
   };
+}
+var SYNC_SWEEP_TIMEOUT_MS = 15e3;
+function stopSyncTree(pid, elapsedMs) {
+  try {
+    if (process.platform !== "win32") {
+      process.kill(-pid, "SIGKILL");
+      return;
+    }
+    const root = envValue2(process.env, "SystemRoot") ?? "C:\\Windows";
+    const taskkill = join4(root, "System32", "taskkill.exe");
+    const script = `$since = (Get-Date).AddMilliseconds(-${Math.ceil(elapsedMs) + 1e3}); Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Where-Object { $_.CreationDate -ge $since } | ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
+    spawnSync(join4(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], {
+      windowsHide: true,
+      stdio: "ignore",
+      timeout: SYNC_SWEEP_TIMEOUT_MS
+    });
+  } catch {
+  }
 }
 function refusedResult(safety, empty) {
   const message = `dev-guardian did not run git: ${safety.refused ?? ""}`;
@@ -796,6 +821,7 @@ function spawnGitPlain(command, args, opts) {
     let errBytes = 0;
     let error;
     let abandon;
+    let timer;
     const finish = (status) => {
       if (settled) return;
       settled = true;
@@ -803,24 +829,26 @@ function spawnGitPlain(command, args, opts) {
       clearTimeout(abandon);
       resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...error !== void 0 ? { error } : {} });
     };
+    let child;
+    try {
+      child = spawnPiped(command, args, opts.env);
+    } catch (e) {
+      error = e instanceof Error ? e : Object.assign(new Error(String(e)), { code: "EINVAL" });
+      finish(null);
+      return;
+    }
+    const started = child;
     const fail = (code, message) => {
       if (error === void 0) error = Object.assign(new Error(message), { code });
       if (abandon !== void 0) return;
-      stopPlainTree(child);
+      stopPlainTree(started);
       abandon = setTimeout(() => {
-        child.stdout.destroy();
-        child.stderr.destroy();
+        started.stdout.destroy();
+        started.stderr.destroy();
         finish(null);
       }, PLAIN_ABANDON_MS);
     };
-    const child = spawn(command, args, {
-      env: opts.env,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      // POSIX: a process group of its own, so that a stop reaches what git started.
-      detached: process.platform !== "win32"
-    });
-    const timer = setTimeout(() => fail("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
+    timer = setTimeout(() => fail("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
     child.stdout.on("data", (chunk) => {
       outBytes += chunk.length;
       if (outBytes > opts.maxBuffer) fail("ENOBUFS", "stdout maxBuffer exceeded");
@@ -835,6 +863,15 @@ function spawnGitPlain(command, args, opts) {
       finish(null);
     });
     child.on("close", (code) => finish(error !== void 0 ? null : code));
+  });
+}
+function spawnPiped(command, args, env) {
+  return spawn(command, args, {
+    env,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    // POSIX: a process group of its own, so that a stop reaches what git started.
+    detached: process.platform !== "win32"
   });
 }
 function stopPlainTree(child) {

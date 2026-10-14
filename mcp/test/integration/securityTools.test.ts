@@ -175,6 +175,47 @@ describe('scan_sast (Semgrep)', () => {
     expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('skipped');
   });
 
+  // Review 11, finding 10: SEMGREP_SEND_METRICS=off makes Semgrep refuse
+  // --config=auto (exit 2, no report), and the reason read only "semgrep wrote
+  // no JSON report (exit 2)" — the cause was dropped with stderr.
+  it("a run that wrote no report carries Semgrep's [ERROR] line, and names SEMGREP_SEND_METRICS=off", async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/semgrep');
+    const stderr =
+      '[00.07][ERROR]: Cannot create auto config when metrics are off. Please allow metrics or run with a specific config.\n';
+    vi.mocked(runProcess).mockImplementation(async () => ({ ...fakeRunSuccess({ exitCode: 2 }), stderr }));
+    const tool = getTool('scan_sast');
+    const run = async (): Promise<string> => {
+      const r = (await tool.handler({ project_path: project, force: true }, plugin)) as {
+        ok: true;
+        tools_run: { name: string; status: string; reason?: string }[];
+      };
+      const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
+      expect(semgrep?.status).toBe('failed');
+      return semgrep?.reason ?? '';
+    };
+
+    vi.stubEnv('SEMGREP_SEND_METRICS', 'off');
+    try {
+      const reason = await run();
+      expect(reason).toMatch(/semgrep wrote no JSON report \(exit 2\)/);
+      expect(reason).toMatch(/semgrep said: Cannot create auto config when metrics are off/);
+      expect(reason).toMatch(/SEMGREP_SEND_METRICS=off is set in the environment.*local-only/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    // Without the variable, the error line still comes through, and nothing blames the environment.
+    vi.stubEnv('SEMGREP_SEND_METRICS', '');
+    try {
+      const reason = await run();
+      expect(reason).toMatch(/semgrep said: Cannot create auto config/);
+      expect(reason).not.toMatch(/SEMGREP_SEND_METRICS/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('falls back to Docker when semgrep is absent but a daemon is available', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);

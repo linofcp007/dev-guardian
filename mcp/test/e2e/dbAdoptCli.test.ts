@@ -30,6 +30,7 @@ import { expectedSchema, openDatabase, resolveFallbackDbPath } from '../../src/s
 import { PROJECT_KEYED_TABLES } from '../../src/storage/dbProvenance.js';
 import { listMigrations } from '../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir, rmDir } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
@@ -222,7 +223,7 @@ describe('dev-guardian db adopt', () => {
     const started = performance.now();
     const shown = runCli(['db', 'adopt', '--project', dir, '--rehome']);
     // The network path is listed, never looked up.
-    expect(performance.now() - started).toBeLessThan(20_000);
+    expect(performance.now() - started).toBeLessThan(hangBound(20_000));
     expect(shown.status).toBe(0);
     expect(shown.stdout).toContain(`this project is ${canonicalPath(dir)}`);
     expect(shown.stdout).toMatch(new RegExp(`${escape(link)}\\n\\s+2 row\\(s\\): leads to this project: --rehome moves`));

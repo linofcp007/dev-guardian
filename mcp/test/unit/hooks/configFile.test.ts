@@ -372,7 +372,7 @@ describe('readSmallJsonFile — what it opened, not what the path said', () => {
         const r = await readInChild(cfg, 3000, 45_000);
         expect(r.timedOut).toBe(false);
         expect(r.code).toBe(0);
-        expect(r.readMs).toBeLessThan(20_000);
+        expect(r.readMs).toBeLessThan(hangBound(20_000));
         const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
         expect(total).toBe(3000);
         const unexpected = Object.keys(r.counts).filter(

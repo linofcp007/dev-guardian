@@ -70,7 +70,7 @@
 
 import { gateMatchKeys, indexFindings, type GateKeys } from '../fingerprint/findingIdentity.js';
 import { SEVERITIES, type Finding, type Severity } from '../types.js';
-import { secretValueOf, secretValuesRead } from './secretValues.js';
+import { secretIntroducedAt, secretValueOf, secretValuesRead } from './secretValues.js';
 import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion } from './types.js';
 
 /** Where the committed baseline lives, relative to the project root. */
@@ -252,8 +252,17 @@ export function newFindings(
  * before its file was renamed; the baseline's `match_id` (see
  * {@link BaselineEntry.match_id}). The keys are computed over the whole set,
  * since occurrences are counted within it — and, when the scan read the
- * secrets' values (`ci/secretValues.ts`), a slot holding a secret replaced
- * in place is keyed by nothing (review 10, finding 5).
+ * secrets' values (`ci/secretValues.ts`), a secret is keyed by its value's
+ * place among its file's values (review 10 finding 5, review 11 finding 2).
+ *
+ * **One to one** (review 11, finding 2). The exact matches are made first,
+ * for every finding, and each entry they reach is taken — by the finding's
+ * slot, its `match_id` (the same secret in every commit and pass that saw it
+ * is one slot). Only then may a finding with no exact match claim an entry by
+ * `match_id`, and only one no other slot took. Before, a `match_id` match
+ * took nothing: a new secret placed above a baselined one took its
+ * occurrence, matched its entry by `match_id`, and passed — while the
+ * baselined secret, unchanged in history, matched the same entry exactly.
  */
 function baselineMatcher(
   baseline: BaselineFile | null,
@@ -262,25 +271,41 @@ function baselineMatcher(
 ): { keys: GateKeys[]; entryFor: (finding: Finding, index: number) => BaselineEntry | undefined } {
   const entries = baseline?.entries ?? [];
   const known = indexFindings(entries);
-  const byMatchKey = new Map<string, BaselineEntry>();
+  const byMatchKey = new Map<string, BaselineEntry[]>();
   for (const entry of entries) {
-    if (entry.match_id !== undefined && !byMatchKey.has(entry.match_id)) byMatchKey.set(entry.match_id, entry);
+    if (entry.match_id === undefined) continue;
+    const same = byMatchKey.get(entry.match_id);
+    if (same === undefined) byMatchKey.set(entry.match_id, [entry]);
+    else same.push(entry);
   }
+  const read = secretValuesRead(findings);
   const keys = gateMatchKeys(findings, {
     ...(renamedFrom !== undefined ? { renamedFrom } : {}),
-    ...(secretValuesRead(findings) ? { secretValue: secretValueOf } : {}),
+    ...(read ? { secretValue: secretValueOf, introducedAt: secretIntroducedAt } : {}),
   });
-  return {
-    keys,
-    entryFor: (finding, index) => {
-      const direct = known.find(finding);
-      if (direct !== undefined) return direct;
-      const k = keys[index];
-      if (k?.renamedIdentity !== undefined) {
-        const moved = known.find({ fingerprint: finding.fingerprint, identity: k.renamedIdentity });
-        if (moved !== undefined) return moved;
-      }
-      return k?.matchKey !== undefined ? byMatchKey.get(k.matchKey) : undefined;
-    },
-  };
+
+  // Who took each entry: a slot's match_id, or `#<index>` for a finding with none.
+  const takenBy = new Map<BaselineEntry, string>();
+  const slotOf = (index: number): string => keys[index]?.matchKey ?? `#${index}`;
+  const exact = findings.map((finding, index) => {
+    const direct = known.find(finding);
+    if (direct !== undefined) return direct;
+    const renamedIdentity = keys[index]?.renamedIdentity;
+    return renamedIdentity !== undefined ? known.find({ fingerprint: finding.fingerprint, identity: renamedIdentity }) : undefined;
+  });
+  exact.forEach((entry, index) => {
+    if (entry !== undefined && !takenBy.has(entry)) takenBy.set(entry, slotOf(index));
+  });
+  const matched = exact.map((entry, index) => {
+    if (entry !== undefined) return entry;
+    const key = keys[index]?.matchKey;
+    if (key === undefined) return undefined;
+    const claimable = (byMatchKey.get(key) ?? []).find((e) => {
+      const owner = takenBy.get(e);
+      return owner === undefined || owner === key;
+    });
+    if (claimable !== undefined && !takenBy.has(claimable)) takenBy.set(claimable, key);
+    return claimable;
+  });
+  return { keys, entryFor: (_finding, index) => matched[index] };
 }

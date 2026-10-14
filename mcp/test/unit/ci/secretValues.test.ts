@@ -15,7 +15,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildBaseline, newFindings } from '../../../src/ci/baseline.js';
-import { rememberSecretValues, secretValueOf, secretValuesRead } from '../../../src/ci/secretValues.js';
+import { rememberSecretValues, secretFromLine, secretValueOf, secretValuesRead } from '../../../src/ci/secretValues.js';
 import { assignIdentities } from '../../../src/fingerprint/findingIdentity.js';
 import { resolveProjectPath } from '../../../src/platform/projectPath.js';
 import type { Finding } from '../../../src/types.js';
@@ -132,5 +132,58 @@ describe('review 10, finding 5: a secret replaced in place is new', () => {
     expect(value).not.toContain(OLD);
     expect(readFileSync(join(dir, ...FILE.split('/')), 'utf8')).toContain(OLD);
     expect(secretValuesRead(assignIdentities([leak('x', base)]))).toBe(false);
+  });
+});
+
+/**
+ * Review 11, finding 2: the value is the secret gitleaks matched, cut from the
+ * line where its report says (`secretFromLine`) — so a comment appended to the
+ * line, or the same value on another line, is the same value. gitleaks counts
+ * columns from the newline before a line: exact on the first line of what it
+ * scanned as one piece, one late on every other.
+ */
+describe('secretFromLine: the secret, cut where the redacted report says', () => {
+  const entropy = (s: string): number => {
+    const counts = new Map<string, number>();
+    for (const ch of s) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    let e = 0;
+    for (const n of counts.values()) e -= (n / s.length) * Math.log2(n / s.length);
+    return Math.fround(e);
+  };
+  // Its last character occurs twice in it, so the cut one byte to its left
+  // (the quote in that character's place) has another entropy.
+  const TWICE = `AKIA${'QWERTYUIOPASDFGA'}`;
+  const LINE = `const KEY = "${TWICE}"; // note`;
+  const at = LINE.indexOf(TWICE);
+
+  it('exact and one column late: the entropy picks the cut', () => {
+    const exact = { startColumn: at + 1, endColumn: at + TWICE.length, match: 'REDACTED', entropy: entropy(TWICE) };
+    const late = { ...exact, startColumn: at + 2, endColumn: at + TWICE.length + 1 };
+    expect(secretFromLine(LINE, exact)).toBe(TWICE);
+    expect(secretFromLine(LINE, late)).toBe(TWICE);
+    expect(secretFromLine(`${LINE} // and more`, late)).toBe(TWICE);
+  });
+
+  it('a redacted match with its context: the context must be on the line', () => {
+    const line = `api_key = "${NEW}"`;
+    const m = { startColumn: 1, endColumn: line.length, match: 'api_key = "REDACTED"', entropy: entropy(NEW) };
+    expect(secretFromLine(line, m)).toBe(NEW);
+    expect(secretFromLine(line.replace('api_key', 'api_kez'), m)).toBeNull();
+  });
+
+  it('both cuts read as a secret: the fragment decides, and unknown is no cut', () => {
+    // A last character that occurs once: the one-left cut (quote first) has the same entropy.
+    const key = 'AKIA' + 'BCDEFGHIJKLMNOPQ';
+    const line = `k = "${key}";`;
+    const start = line.indexOf(key);
+    const m = { startColumn: start + 1, endColumn: start + key.length, match: 'REDACTED', entropy: entropy(key) };
+    expect(secretFromLine(line, m, true)).toBe(key);
+    expect(secretFromLine(line, m, false)).toBe(`"${key.slice(0, -1)}`);
+    expect(secretFromLine(line, m)).toBeNull();
+  });
+
+  it('a wrong entropy, or a column off the line, is no cut', () => {
+    expect(secretFromLine(LINE, { startColumn: at + 1, endColumn: at + TWICE.length, match: "REDACTED", entropy: 0.5 })).toBeNull();
+    expect(secretFromLine(LINE, { startColumn: 500, endColumn: 519, match: 'REDACTED' })).toBeNull();
   });
 });

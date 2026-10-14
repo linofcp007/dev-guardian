@@ -55,7 +55,7 @@
  * half is `platform/boundedJson.ts`, free of any package import.
  */
 
-import { Composer, isAlias, isCollection, isPair, Parser, type CST, type Document } from 'yaml';
+import { Composer, isAlias, isCollection, isMap, isPair, isScalar, isSeq, Parser, type CST, type Document } from 'yaml';
 import { exceedsCount, type BoundedParse } from './boundedJson.js';
 
 export { describeTooComplex, JSON_MAX_NODES, parseJsonBounded, type BoundedParse } from './boundedJson.js';
@@ -287,10 +287,52 @@ export function yamlDocumentValue(doc: Document.Parsed): unknown {
   return doc.toJS({ maxAliasCount: -1 }) as unknown;
 }
 
+/**
+ * The first key a mapping of `doc` holds twice, or null — in one pass over
+ * the composed document, a set per mapping: linear, where `yaml`'s own
+ * `uniqueKeys` compares each key with every earlier one (the module doc).
+ * A key is compared by its scalar value (`a` and `"a"` are one key); an
+ * alias is not followed (what it names is checked where it is written).
+ */
+function duplicateYamlKey(doc: Document.Parsed): string | null {
+  const stack: unknown[] = [doc.contents];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (isMap(node)) {
+      const seen = new Set<string>();
+      for (const pair of node.items) {
+        const key = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
+        if (seen.has(key)) return key;
+        seen.add(key);
+        stack.push(pair.value);
+      }
+    } else if (isSeq(node)) {
+      for (const item of node.items) stack.push(item);
+    }
+  }
+  return null;
+}
+
+/** What {@link parseYamlBounded} checks beyond the gates. */
+interface YamlParseOptions {
+  /**
+   * A key a mapping holds twice is `invalid`, naming it — for a file whose
+   * every key is a setting (`.guardian/scan.yml`), where "the last one wins"
+   * made a reviewer read one value and the scan apply the other (review 11,
+   * finding 15e). Off by default: Semgrep and Docker Compose refuse such
+   * files themselves.
+   */
+  uniqueKeys?: boolean;
+}
+
 /** `yaml`'s value of `text`, when it passes every gate (see the module doc). */
-export function parseYamlBounded(text: string, limits: YamlLimits = YAML_CONFIG_LIMITS): BoundedParse {
+export function parseYamlBounded(text: string, limits: YamlLimits = YAML_CONFIG_LIMITS, opts: YamlParseOptions = {}): BoundedParse {
   const parsed = parseYamlDocumentBounded(text, limits);
   if (!parsed.ok) return parsed.detail === undefined ? { ok: false, reason: parsed.reason } : { ok: false, reason: parsed.reason, detail: parsed.detail };
+  if (opts.uniqueKeys === true) {
+    const twice = duplicateYamlKey(parsed.doc);
+    if (twice !== null) return { ok: false, reason: 'invalid', detail: `the key ${JSON.stringify(twice)} appears twice in one mapping` };
+  }
   try {
     return { ok: true, value: yamlDocumentValue(parsed.doc) };
   } catch (e) {

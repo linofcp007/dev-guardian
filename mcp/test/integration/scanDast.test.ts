@@ -47,6 +47,7 @@ import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import type { AttackSurfaceSnapshot, RouteRecord, SpecDiff } from '../../src/types.js';
 import '../../src/tools/scanDast.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -473,7 +474,7 @@ describe('scan_dast envelope reporting', () => {
     const elapsed = Date.now() - started;
 
     // It returned at all, rather than hanging for 8 x 20s.
-    expect(elapsed).toBeLessThan(10_000);
+    expect(elapsed).toBeLessThan(hangBound(10_000));
 
     expect(r.summary.timed_out).toBe(true);
     expect(r.summary.wall_clock_ms).toBe(400);

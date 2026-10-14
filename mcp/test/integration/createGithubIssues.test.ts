@@ -26,6 +26,7 @@ vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { ISSUE_SEARCH } from '../../src/tools/createGithubIssues.js';
 import { okResult } from '../helpers/toolResult.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
 import { freshPlugin, projectDir, seedScan } from '../helpers/historySeed.js';
@@ -153,7 +154,13 @@ describe('create_github_issues', () => {
     expect(list).toContain('--state');
     expect(list[list.indexOf('--state') + 1]).toBe('all');
     expect(list).toContain('--search');
-    expect(list[list.indexOf('--search') + 1]).toBe('"[guardian:" in:title');
+    expect(list[list.indexOf('--search') + 1]).toBe(ISSUE_SEARCH);
+    // Through a gh.cmd every argument goes through cmd.exe, which is never
+    // handed a quote or a percent sign (runners/spawn.ts): the old
+    // '"[guardian:" in:title' made the tool unable to run there at all
+    // (review 11, finding 15b).
+    expect(ISSUE_SEARCH).toBe('guardian in:title');
+    for (const arg of list) expect(arg, arg).not.toMatch(/["%]/);
   });
 
   it('files nothing when the listing may have been cut at its limit — it could hide an existing issue', async () => {
