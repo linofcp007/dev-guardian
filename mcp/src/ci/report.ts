@@ -229,12 +229,15 @@ function describeFinding(f: Finding): string {
 
 /**
  * The JSON verdict. Its keys are a contract: dev-spec-driven's finish gate
- * parses `exit_code`, `coverage`, `coverage_gaps` (a string array, kept so),
- * `new_findings`, `blocking_findings` (`file_path`, `line_start`, `severity`,
- * `rule_id`, `title`), `baseline_absent` and `accepted_gaps`, and since 3.3.0
- * reads `tool_version`, `coverage_gap_details` and `baseline_status` when
- * they are there (`test/unit/ci/verdictContract.test.ts` freezes them).
- * Keys are only ever added.
+ * (1.29 and later) parses `exit_code`, `coverage_gaps` (a string array, kept
+ * so), `new_findings` and `blocking_findings` (`file_path`, `line_start`,
+ * `severity`, `rule_id`, `title`, `tool`), and since 1.30 reads
+ * `tool_version`, `baseline_absent` / `baseline_status`,
+ * `new_findings_count` and the gating `coverage_gap_details` (`tool`, `kind`,
+ * `remedy`) when they are there. dev-spec-driven 1.30.x reads neither
+ * `coverage` nor `accepted_gaps`; both are documented keys (docs/ci.md) and
+ * `test/unit/ci/verdictContract.test.ts` freezes them with the rest. Keys are
+ * only ever added.
  */
 export interface JsonVerdict {
   /** The dev-guardian version that judged — dev-spec warns below the one it needs. */

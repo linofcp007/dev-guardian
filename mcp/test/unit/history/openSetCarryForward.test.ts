@@ -28,6 +28,7 @@ import { TOOLS } from '../../../src/tools/index.js';
 import type { ToolRun } from '../../../src/types.js';
 import { cleanupTempDirs } from '../../helpers/tempDir.js';
 import { freshPlugin, projectDir, seedOrchestratedRun, seedScan, type SeedFinding } from '../../helpers/historySeed.js';
+import { costOf, expectLinear, PERF_STRICT } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 beforeAll(async () => {
@@ -317,23 +318,45 @@ describe('open set, round 2: a rule that did not load keeps its older findings',
 /**
  * The carry must stay linear in the history it walks. Each shape below is a
  * gap that persists in every newer scan, the adversarial case for a walk
- * back through history; the budget is far above what the linear walk needs
- * (tens of ms on these shapes, measured) and far below what the first,
- * quadratic version took (reviewer's measurement: 4.2 s for 200 x 300; 14 s,
- * 15.5 s and 10 s on the 250 x 1000 shapes, measured before this change).
+ * back through history. The first, quadratic version took 4.2 s for 200 x 300
+ * (reviewer's measurement) and 14 s, 15.5 s and 10 s on the 250 x 1000
+ * shapes; the linear walk takes tens of ms on them, measured.
+ *
+ * What is asserted is that shape, not a number of milliseconds
+ * (docs/maintainers/build-and-test.md, timing tests): the open set of a
+ * history `factor` times as long costs well under factor^1.5 times the
+ * shorter one's — linear reads ~factor, the quadratic walk ~factor² — both
+ * histories built the same way and measured interleaved (`expectLinear`). The
+ * absolute 2 s budget this replaced failed under load (2.9 s and 2.5 s in the
+ * 3.4.0 suite runs); it runs only with `GUARDIAN_PERF_STRICT=1`, a quiet
+ * machine.
  */
-describe('open set, round 2: the carry stays cheap', () => {
-  const BUDGET_MS = 2000;
-  const scanId = (r: number): string => `row${String(r).padStart(4, '0')}`;
+const BUDGET_MS = 2000;
 
-  function timed(s: ReturnType<typeof freshPlugin>, p: string): { set: ReturnType<typeof openSetForProject>; ms: number } {
-    const t0 = performance.now();
-    const set = openSetForProject(s.storage, p);
-    return { set, ms: performance.now() - t0 };
-  }
+type History = { s: ReturnType<typeof freshPlugin>; p: string };
+
+/** `openSetForProject` on the `large` history costs about `large.rows / small.rows` times what it costs on the `small` one. */
+function expectCarryLinear(label: string, small: { rows: number; history: History }, large: { rows: number; history: History }): void {
+  const byRows = new Map([
+    [small.rows, small.history],
+    [large.rows, large.history],
+  ]);
+  const run = (rows: number): void => {
+    const h = byRows.get(rows);
+    if (h === undefined) throw new Error(`no history of ${String(rows)} scans`);
+    openSetForProject(h.s.storage, h.p);
+  };
+  expectLinear(label, run, small.rows, { factor: large.rows / small.rows });
+  if (PERF_STRICT) expect(costOf(() => run(large.rows))).toBeLessThan(BUDGET_MS);
+}
+
+describe('open set, round 2: the carry stays linear in the history', () => {
+  const scanId = (r: number): string => `row${String(r).padStart(4, '0')}`;
+  /** The shorter history each shape is compared with: 25 scans. */
+  const SMALL = 25;
 
   /** Row 0 is the last full scan and holds a.php's 10 findings; every later row partly parses a.php. */
-  function onePartlyParsedFile(rows: number, perRow: number) {
+  function onePartlyParsedFile(rows: number, perRow: number): History {
     const s = freshPlugin();
     const p = projectDir('carry-r2-perf-a-');
     for (let r = 0; r < rows; r++) {
@@ -354,22 +377,11 @@ describe('open set, round 2: the carry stays cheap', () => {
     return { s, p };
   }
 
-  it.each([
-    [200, 300],
-    [250, 1000],
-  ])('one file partly parsed in every newer scan (%i scans x %i findings)', (rows, perRow) => {
-    const { s, p } = onePartlyParsedFile(rows, perRow);
-    const { set, ms } = timed(s, p);
-    expect(set.findings).toHaveLength(perRow);
-    // Row 0 is 249 scans back: past the first version's 200-scan walk limit.
-    expect(set.findings.filter((f) => f.not_remeasured === true).map((f) => f.scan_id)).toEqual(Array(10).fill(scanId(0)));
-    expect(ms).toBeLessThan(BUDGET_MS);
-  }, 180_000);
-
-  it('Semgrep failing beside an ok Bandit in every newer scan (250 x 1000): only Semgrep rows are read', () => {
+  /** Row 0 holds 500 Semgrep and 500 Bandit findings; every later row: Semgrep failed, Bandit ok with its 1000. */
+  function semgrepFailingBesideBandit(rows: number): History {
     const s = freshPlugin();
     const p = projectDir('carry-r2-perf-c-');
-    for (let r = 0; r < 250; r++) {
+    for (let r = 0; r < rows; r++) {
       const findings: SeedFinding[] = [];
       for (let i = 0; i < 1000; i++) {
         const sem = r === 0 && i < 500;
@@ -383,16 +395,14 @@ describe('open set, round 2: the carry stays cheap', () => {
         findings,
       });
     }
-    const { set, ms } = timed(s, p);
-    expect(set.findings).toHaveLength(1500);
-    expect(set.findings.filter((f) => f.not_remeasured === true)).toHaveLength(500);
-    expect(ms).toBeLessThan(BUDGET_MS);
-  }, 180_000);
+    return { s, p };
+  }
 
-  it('Bandit failing in every newer scan while keeping its findings (250 x 1000): older copies are dropped on their keys', () => {
+  /** Every row holds the same 1000 Bandit identities; every row after the first: Bandit failed. */
+  function banditFailingKeepingFindings(rows: number): History {
     const s = freshPlugin();
     const p = projectDir('carry-r2-perf-f-');
-    for (let r = 0; r < 250; r++) {
+    for (let r = 0; r < rows; r++) {
       const findings: SeedFinding[] = [];
       for (let i = 0; i < 1000; i++) {
         findings.push({ fp: `${r}-${i}`.padEnd(64, 'w'), identity: `id-b${i}`, tool: 'bandit', rule_id: `B${i % 50}`, file: `src/f${i}.py`, line: i + 1 });
@@ -405,11 +415,48 @@ describe('open set, round 2: the carry stays cheap', () => {
         findings,
       });
     }
-    const { set, ms } = timed(s, p);
+    return { s, p };
+  }
+
+  it.each([
+    [200, 300],
+    [250, 1000],
+  ])('one file partly parsed in every newer scan (%i scans x %i findings)', (rows, perRow) => {
+    const large = onePartlyParsedFile(rows, perRow);
+    const set = openSetForProject(large.s.storage, large.p);
+    expect(set.findings).toHaveLength(perRow);
+    // Row 0 is 249 scans back: past the first version's 200-scan walk limit.
+    expect(set.findings.filter((f) => f.not_remeasured === true).map((f) => f.scan_id)).toEqual(Array(10).fill(scanId(0)));
+    expectCarryLinear(
+      `one file partly parsed (x ${String(perRow)} findings)`,
+      { rows: SMALL, history: onePartlyParsedFile(SMALL, perRow) },
+      { rows, history: large },
+    );
+  }, 180_000);
+
+  it('Semgrep failing beside an ok Bandit in every newer scan (250 x 1000): only Semgrep rows are read', () => {
+    const large = semgrepFailingBesideBandit(250);
+    const set = openSetForProject(large.s.storage, large.p);
+    expect(set.findings).toHaveLength(1500);
+    expect(set.findings.filter((f) => f.not_remeasured === true)).toHaveLength(500);
+    expectCarryLinear(
+      'Semgrep failing beside an ok Bandit',
+      { rows: SMALL, history: semgrepFailingBesideBandit(SMALL) },
+      { rows: 250, history: large },
+    );
+  }, 180_000);
+
+  it('Bandit failing in every newer scan while keeping its findings (250 x 1000): older copies are dropped on their keys', () => {
+    const large = banditFailingKeepingFindings(250);
+    const set = openSetForProject(large.s.storage, large.p);
     // The newest scan holds every identity: nothing older adds one.
     expect(set.findings).toHaveLength(1000);
     expect(set.findings.every((f) => f.scan_id === scanId(249) && f.not_remeasured === undefined)).toBe(true);
-    expect(ms).toBeLessThan(BUDGET_MS);
+    expectCarryLinear(
+      'Bandit failing while keeping its findings',
+      { rows: SMALL, history: banditFailingKeepingFindings(SMALL) },
+      { rows: 250, history: large },
+    );
   }, 180_000);
 
   it('a finding the newest scan no longer reports, under a gap older than it, is still carried from the scan that had it', () => {
@@ -437,8 +484,9 @@ describe('open set, round 2: the carry stays cheap', () => {
  * a holder's scope read through the scans that looked at its image.
  */
 describe('open set, round 3: scans each over their own image stay linear', () => {
-  const BUDGET_MS = 2000;
   const CVES = 20;
+  /** The shorter history each shape is compared with: 250 scans, an eighth of 2000. */
+  const SMALL = 250;
   const cves = (scan: number): SeedFinding[] =>
     Array.from({ length: CVES }, (_, i) => ({
       fp: `${scan}-${i}`.padEnd(64, 'i'),
@@ -448,33 +496,27 @@ describe('open set, round 3: scans each over their own image stay linear', () =>
       subcategory: 'cve',
       file: `reg/app:${scan} (alpine 3.19)`,
     }));
-  const timed = (s: ReturnType<typeof freshPlugin>, p: string) => {
-    const t0 = performance.now();
-    const set = openSetForProject(s.storage, p);
-    return { set, ms: performance.now() - t0 };
-  };
 
-  it('2000 scans, each image its own, the same 20 CVEs: 20 findings, from the newest scan, within budget', () => {
+  /** `scans` scans, each over its own image, each with the same 20 CVEs. */
+  function eachItsOwnImage(scans: number): History {
     const s = freshPlugin();
     const p = projectDir('carry-r3-images-');
-    for (let n = 0; n < 2000; n++) {
+    for (let n = 0; n < scans; n++) {
       seedScan(s, {
         id: `img${String(n).padStart(4, '0')}`, type: 'containers', project: p,
         tools_run: [{ name: 'trivy-image', status: 'ok', target: `reg/app:${n}` }],
         findings: cves(n),
       });
     }
-    const { set, ms } = timed(s, p);
-    expect(set.findings).toHaveLength(CVES);
-    expect(set.findings.every((f) => f.scan_id === 'img1999' && f.not_remeasured === undefined)).toBe(true);
-    expect(ms).toBeLessThan(BUDGET_MS);
-  }, 300_000);
+    return { s, p };
+  }
 
-  it('older half each over its own image, newest half Dockerfile-only (2000 scans): the newest image scan\'s CVEs carried, within budget', () => {
+  /** The older half each over its own image, the newer half Dockerfile-only. */
+  function imagesThenDockerfileOnly(scans: number): History {
     const s = freshPlugin();
     const p = projectDir('carry-r3-mixed-');
-    for (let n = 0; n < 2000; n++) {
-      const image = n < 1000;
+    for (let n = 0; n < scans; n++) {
+      const image = n < scans / 2;
       seedScan(s, {
         id: `mix${String(n).padStart(4, '0')}`, type: 'containers', project: p,
         tools_run: image
@@ -483,10 +525,27 @@ describe('open set, round 3: scans each over their own image stay linear', () =>
         findings: image ? cves(n) : [],
       });
     }
-    const { set, ms } = timed(s, p);
+    return { s, p };
+  }
+
+  it('2000 scans, each image its own, the same 20 CVEs: 20 findings, from the newest scan, linear in the scans', () => {
+    const large = eachItsOwnImage(2000);
+    const set = openSetForProject(large.s.storage, large.p);
+    expect(set.findings).toHaveLength(CVES);
+    expect(set.findings.every((f) => f.scan_id === 'img1999' && f.not_remeasured === undefined)).toBe(true);
+    expectCarryLinear('scans each over their own image', { rows: SMALL, history: eachItsOwnImage(SMALL) }, { rows: 2000, history: large });
+  }, 300_000);
+
+  it('older half each over its own image, newest half Dockerfile-only (2000 scans): the newest image scan\'s CVEs carried, linear in the scans', () => {
+    const large = imagesThenDockerfileOnly(2000);
+    const set = openSetForProject(large.s.storage, large.p);
     expect(set.findings).toHaveLength(CVES);
     expect(set.findings.every((f) => f.scan_id === 'mix0999' && f.not_remeasured === true)).toBe(true);
     expect(set.sources.find((x) => x.scan_id === 'mix0999')?.carried_for).toEqual(['trivy-image (reg/app:999)']);
-    expect(ms).toBeLessThan(BUDGET_MS);
+    expectCarryLinear(
+      'images, then Dockerfile-only scans',
+      { rows: SMALL, history: imagesThenDockerfileOnly(SMALL) },
+      { rows: 2000, history: large },
+    );
   }, 300_000);
 });

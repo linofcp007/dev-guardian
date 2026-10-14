@@ -56,8 +56,8 @@
  *                                                 in a job of their own
  *                             Needs network + git: resolves the release tag to its
  *                             commit SHA and pins that, not just the tag.
- *                             Exit codes: 0 done, 1 missing/unknown target or
- *                             refused overwrite, 3 usage error
+ *                             Exit codes: 0 done, 1 refused overwrite, 3 usage
+ *                             error (a missing/unknown target too)
  *   status                  One-screen terminal summary of the latest scan
  *                           for this project (read-only — no scan runs).
  *                           Reports; does not gate: exits 0 even on a
@@ -375,8 +375,9 @@ mcp-config — wire the MCP server into an AI host
   Rules files are managed as a delimited block inside the target file
   (<!-- dev-guardian:begin --> … <!-- dev-guardian:end -->) — your own content
   around it is never touched or replaced.
-  Exit codes: 0 preview/write completed, 1 missing or unknown host,
-              3 usage error (e.g. --project with no value)
+  Exit codes: 0 preview/write completed, 1 MCP server not built
+              (mcp/dist/server.js missing), 3 usage error (a missing or
+              unknown host, --project with no value)
 
 check — run the guardrail detectors (same engine as the hooks)
   --file <path>        Scan a file for hard-coded secrets (UTF-8, or UTF-16
@@ -572,10 +573,10 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
   NEVER generates a pipeline for dev-guardian's own repository — only for
   the project passed via --project (default: current directory), and
   never through a symlink that escapes it either way (read or write).
-  Exit codes: 0 preview/write completed, 1 missing/unknown target or an
-              existing pipeline file refused without --force, 3 usage or
-              configuration error, or a --force refused on a symlink (same
-              convention as scan/baseline update).
+  Exit codes: 0 preview/write completed, 1 an existing pipeline file
+              refused without --force, 3 usage or configuration error (a
+              missing/unknown target too), or a --force refused on a
+              symlink (same convention as scan/baseline update).
 
 status — one-screen terminal summary of the latest scan for this project
   --project <path>      Target project directory (default: current directory)
