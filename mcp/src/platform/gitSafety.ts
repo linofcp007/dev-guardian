@@ -62,7 +62,7 @@
  * in `src/`, `cli/` or `hooks/` bypasses it.
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { dirname, join, relative, resolve } from 'node:path';
 import { findOnPath } from './binaryPath.js';
 import { entryKindAnywhere } from './projectFs.js';
@@ -1109,7 +1109,7 @@ export interface CollectOptions {
 export type GitSpawner = (command: string, args: readonly string[], opts: CollectOptions) => Promise<Collected>;
 
 /**
- * The spawner in use: {@link collect} until `runners/gitExec.ts` installs the
+ * The spawner in use: {@link spawnGitPlain} until `runners/gitExec.ts` installs the
  * one that stops git's whole TREE (`runners/childProcess.ts`). A stalled
  * `git clone` over HTTPS is two processes — git and `git remote-https` — and
  * killing git alone left the helper holding the pipes: `scan_skill` on a URL
@@ -1118,9 +1118,10 @@ export type GitSpawner = (command: string, args: readonly string[], opts: Collec
  * loads this module for `execGitSync` and may hold no npm package
  * (`hooksDistImports.test.ts`), which the shared tree kill brings
  * (`cross-spawn`, `signal-exit`). Every module that runs git for the engine
- * reaches `runners/git.ts`, which installs it.
+ * reaches `runners/git.ts`, which installs it; the hooks keep the plain one,
+ * which stops git's tree with what Node and the OS have.
  */
-let gitSpawner: GitSpawner = collect;
+let gitSpawner: GitSpawner = spawnGitPlain;
 
 /** Install how async git runs (`runners/gitExec.ts`); returns the one it replaced. */
 export function useGitSpawner(spawner: GitSpawner): GitSpawner {
@@ -1129,8 +1130,24 @@ export function useGitSpawner(spawner: GitSpawner): GitSpawner {
   return previous;
 }
 
-/** spawn, collect both streams, kill on timeout or oversize; never rejects. Git itself only — see {@link gitSpawner}. */
-function collect(command: string, args: readonly string[], opts: CollectOptions): Promise<Collected> {
+/** After a stop, how long the plain spawner waits for git's pipes before it no longer reads them. */
+const PLAIN_ABANDON_MS = 2_000;
+
+/**
+ * spawn, collect both streams; never rejects. The spawner the hook bundle's
+ * async git runs on (SessionStart's `git status` and configuration probe),
+ * which may hold no npm package for the shared tree kill — see
+ * {@link gitSpawner}. On a timeout or an oversized output it stops git's whole
+ * TREE with what Node and the OS have: on POSIX git leads a process group of
+ * its own (`detached`) and the group is killed; on Windows `taskkill /T /F`
+ * (System32's, by its full path) stops git with its descendants, and git is
+ * killed once that is done. It answers at most {@link PLAIN_ABANDON_MS} after
+ * the stop, whatever still holds the pipes: it killed git alone and waited for
+ * them, so a helper git had started held the answer — and the SessionStart
+ * briefing — for as long as the helper lived
+ * (`test/unit/platform/gitSafetyPlainSpawn.test.ts`).
+ */
+export function spawnGitPlain(command: string, args: readonly string[], opts: CollectOptions): Promise<Collected> {
   return new Promise((resolveRun) => {
     let settled = false;
     const out: Buffer[] = [];
@@ -1138,17 +1155,31 @@ function collect(command: string, args: readonly string[], opts: CollectOptions)
     let outBytes = 0;
     let errBytes = 0;
     let error: NodeJS.ErrnoException | undefined;
+    let abandon: NodeJS.Timeout | undefined;
     const finish = (status: number | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(abandon);
       resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...(error !== undefined ? { error } : {}) });
     };
     const fail = (code: string, message: string): void => {
       if (error === undefined) error = Object.assign(new Error(message), { code });
-      child.kill('SIGKILL');
+      if (abandon !== undefined) return;
+      stopPlainTree(child);
+      abandon = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(null);
+      }, PLAIN_ABANDON_MS);
     };
-    const child = spawn(command, args, { env: opts.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      env: opts.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // POSIX: a process group of its own, so that a stop reaches what git started.
+      detached: process.platform !== 'win32',
+    });
     const timer = setTimeout(() => fail('ETIMEDOUT', `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
       outBytes += chunk.length;
@@ -1163,8 +1194,37 @@ function collect(command: string, args: readonly string[], opts: CollectOptions)
       error ??= e;
       finish(null);
     });
-    child.on('close', (code) => finish(code));
+    // A stopped git has no status of its own (taskkill's exit code is not git's).
+    child.on('close', (code) => finish(error !== undefined ? null : code));
   });
+}
+
+/**
+ * Stops `child` and what it started — see {@link spawnGitPlain}. Best effort:
+ * git is killed in every case, the tree with it where the OS allows.
+ */
+function stopPlainTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    // Before git itself: `/T` finds the descendants through their parent.
+    const root = envValue(process.env, 'SystemRoot') ?? 'C:/Windows';
+    const killer = spawn(join(root, 'System32', 'taskkill.exe'), ['/T', '/F', '/PID', String(pid)], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    const last = (): void => {
+      child.kill('SIGKILL');
+    };
+    killer.on('exit', last);
+    killer.on('error', last);
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
 }
 
 function setVar(env: NodeJS.ProcessEnv, name: string, value: string, platform: NodeJS.Platform): void {

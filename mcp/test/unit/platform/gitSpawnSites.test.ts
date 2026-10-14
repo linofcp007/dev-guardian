@@ -48,11 +48,12 @@ type Kind =
 
 const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string }>> = {
   'mcp/src/platform/gitSafety.ts': {
-    count: 4,
+    count: 5,
     kind: 'helper',
     reason:
       'the configuration probe and the submodule listing (sync, and async through one spawn helper), ' +
-      'and git itself with the overrides applied',
+      'git itself with the overrides applied, and System32 taskkill /T by its full path — how the plain ' +
+      "spawner (the hook bundle's async git, which may hold no npm package) stops git's tree on Windows",
   },
   'mcp/src/runners/spawn.ts': {
     count: 2,

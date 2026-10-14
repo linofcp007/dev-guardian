@@ -82,4 +82,11 @@ package, so it never imports `runners/childProcess.ts`. Its async runs
 (`execGit`, `execGitBuffer`, the probes) go through an installable spawner;
 `runners/gitExec.ts` installs the one on the shared tree kill, and
 `runners/git.ts` (and every module calling `execGit` itself) imports it — a
-new direct caller of `execGit` imports `runners/gitExec.js` too.
+new direct caller of `execGit` imports `runners/gitExec.js` too. The hooks
+(SessionStart's `git status` and probes) keep the default, `spawnGitPlain`,
+which stops git's tree with Node and the OS alone — git leads its own process
+group on POSIX and the group is killed; on Windows System32's `taskkill /T /F`
+runs before git is killed — and answers at most 2 s after a stop, whatever
+still holds the pipes (`gitSafetyPlainSpawn.test.ts`). Before 3.4.0's merge it
+killed git alone and waited for the pipes, so a helper git had started held
+the SessionStart briefing for as long as it lived.

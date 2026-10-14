@@ -1576,7 +1576,7 @@ function useGitSpawner(spawner) {
   gitSpawner = spawner;
   return previous;
 }
-function collect(command, args, opts) {
+function spawnGitPlain(command, args, opts) {
   return new Promise((resolveRun) => {
     let settled = false;
     const out = [];
@@ -1584,17 +1584,31 @@ function collect(command, args, opts) {
     let outBytes = 0;
     let errBytes = 0;
     let error2;
+    let abandon;
     const finish = (status) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(abandon);
       resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...error2 !== void 0 ? { error: error2 } : {} });
     };
     const fail6 = (code, message2) => {
       if (error2 === void 0) error2 = Object.assign(new Error(message2), { code });
-      child.kill("SIGKILL");
+      if (abandon !== void 0) return;
+      stopPlainTree(child);
+      abandon = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(null);
+      }, PLAIN_ABANDON_MS);
     };
-    const child = spawn(command, args, { env: opts.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      env: opts.env,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      // POSIX: a process group of its own, so that a stop reaches what git started.
+      detached: process.platform !== "win32"
+    });
     const timer = setTimeout(() => fail6("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
     child.stdout.on("data", (chunk) => {
       outBytes += chunk.length;
@@ -1609,8 +1623,30 @@ function collect(command, args, opts) {
       error2 ??= e;
       finish(null);
     });
-    child.on("close", (code) => finish(code));
+    child.on("close", (code) => finish(error2 !== void 0 ? null : code));
   });
+}
+function stopPlainTree(child) {
+  const pid = child.pid;
+  if (pid === void 0) return;
+  if (process.platform === "win32") {
+    const root = envValue2(process.env, "SystemRoot") ?? "C:/Windows";
+    const killer = spawn(join6(root, "System32", "taskkill.exe"), ["/T", "/F", "/PID", String(pid)], {
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    const last = () => {
+      child.kill("SIGKILL");
+    };
+    killer.on("exit", last);
+    killer.on("error", last);
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
 }
 function setVar(env, name, value, platform) {
   for (const other of Object.keys(env)) if (other !== name && sameName(other, name, platform)) delete env[other];
@@ -1626,7 +1662,7 @@ function sameName(a, b, platform) {
 function firstLine(text2) {
   return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
-var GIT_COMMAND, PROBE_TIMEOUT_MS, PROBE_MAX_BYTES, MAX_REPOSITORY_KEYS, STATIC_VARS, COMMAND_KEYS_REGEX, PROBE_KEY, TRUSTED_SCOPES, STRICT_UTF8, FILTER_KEY, CREDENTIAL_HELPER, STATIC_KEYS, HTTP_KEY, GIT_CANNOT_READ, MAX_SUBMODULES, MAX_SUBMODULE_DEPTH, GITLINK_LISTING_MAX_BYTES, gitlinkCache, PROBE_REUSE_MS, PROBE_CACHE_MAX, probeCache, DEFAULT_MAX_BUFFER, DEFAULT_TIMEOUT_MS, gitSpawner;
+var GIT_COMMAND, PROBE_TIMEOUT_MS, PROBE_MAX_BYTES, MAX_REPOSITORY_KEYS, STATIC_VARS, COMMAND_KEYS_REGEX, PROBE_KEY, TRUSTED_SCOPES, STRICT_UTF8, FILTER_KEY, CREDENTIAL_HELPER, STATIC_KEYS, HTTP_KEY, GIT_CANNOT_READ, MAX_SUBMODULES, MAX_SUBMODULE_DEPTH, GITLINK_LISTING_MAX_BYTES, gitlinkCache, PROBE_REUSE_MS, PROBE_CACHE_MAX, probeCache, DEFAULT_MAX_BUFFER, DEFAULT_TIMEOUT_MS, gitSpawner, PLAIN_ABANDON_MS;
 var init_gitSafety = __esm({
   "src/platform/gitSafety.ts"() {
     "use strict";
@@ -1669,7 +1705,8 @@ var init_gitSafety = __esm({
     probeCache = /* @__PURE__ */ new Map();
     DEFAULT_MAX_BUFFER = 1e8;
     DEFAULT_TIMEOUT_MS = 6e4;
-    gitSpawner = collect;
+    gitSpawner = spawnGitPlain;
+    PLAIN_ABANDON_MS = 2e3;
   }
 });
 
@@ -48714,7 +48751,7 @@ function listNodeModulesPackages(projectPath) {
     }
     out.push({ name, version: version2, topLevel });
   };
-  const collect3 = (dir, topLevel) => {
+  const collect2 = (dir, topLevel) => {
     for (const { name } of listProjectDir(projectPath, dir)) {
       if (name.startsWith(".")) continue;
       if (!isDir(join53(dir, name))) continue;
@@ -48727,9 +48764,9 @@ function listNodeModulesPackages(projectPath) {
       push(dir, name, topLevel);
     }
   };
-  collect3(nodeModulesDir, true);
+  collect2(nodeModulesDir, true);
   for (const storeEntry of listProjectDir(projectPath, join53(nodeModulesDir, ".pnpm"))) {
-    collect3(join53(nodeModulesDir, ".pnpm", storeEntry.name, "node_modules"), false);
+    collect2(join53(nodeModulesDir, ".pnpm", storeEntry.name, "node_modules"), false);
   }
   return out;
 }
@@ -99120,7 +99157,7 @@ function wslScript(words, start) {
   return void 0;
 }
 var MAX_NESTING = 3;
-function collect2(command, depth, out, scope) {
+function collect(command, depth, out, scope) {
   const cmd = command.trim();
   if (cmd.length === 0) return;
   if (scope.notes.now() > scope.notes.deadline) {
@@ -99203,13 +99240,13 @@ function collect2(command, depth, out, scope) {
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect2(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect2(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
         }
         if (line !== void 0) {
           noteScript(scope, line, false);
-          collect2(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
+          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
         }
       }
       moveCwd(scope, words, resolved.index);
@@ -99221,7 +99258,7 @@ function collect2(command, depth, out, scope) {
         if (opaque === true) continue;
         const powershell = /^(?:pwsh|powershell)$/.test(commandName(reader[0]?.value ?? ""));
         noteScript(scope, text2, powershell);
-        collect2(text2, depth + 1, out, { ...scope, cmdLine: false, powershell });
+        collect(text2, depth + 1, out, { ...scope, cmdLine: false, powershell });
       }
     } else if (fed.length > 0) scope.notes.depth = true;
     for (const { text: text2, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
@@ -99237,7 +99274,7 @@ function collectGenerated(texts, depth, out, scope) {
     else if (depth >= MAX_NESTING) scope.notes.depth = true;
     else {
       noteScript(scope, text2, false);
-      collect2(text2, depth + 1, out, { ...scope, cmdLine: false, powershell: false });
+      collect(text2, depth + 1, out, { ...scope, cmdLine: false, powershell: false });
     }
   }
 }
@@ -99329,7 +99366,7 @@ function assessReadings(readings, cut, now, deadline, where) {
     if (n > 0 && (cmd === readings[n - 1] || matched.some((m) => m.level === "block"))) continue;
     notes.loosens = void 0;
     try {
-      collect2(cmd, 0, matched, { raw: cmd, cwd: "", notes, ...where });
+      collect(cmd, 0, matched, { raw: cmd, cwd: "", notes, ...where });
     } catch {
       notes.failed = true;
     }

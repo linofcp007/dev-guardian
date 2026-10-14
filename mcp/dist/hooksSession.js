@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3896380, sha256: "5d7eb6ef4578a7ea79739f9f3023c85f7cb48cd33e2c26c78f4d1b7ffdc29c63" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3897421, sha256: "6c3eac9dd36cdd02a86736b223d4421bab8b51bd40fe51aef7392fe52aac2f76" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -29,6 +29,7 @@ __export(gitSafety_exports, {
   noHooksPath: () => noHooksPath,
   parseConfigListing: () => parseConfigListing,
   safetyFromListing: () => safetyFromListing,
+  spawnGitPlain: () => spawnGitPlain,
   staticGitSafety: () => staticGitSafety,
   useGitSpawner: () => useGitSpawner,
   withoutHooksPath: () => withoutHooksPath
@@ -776,13 +777,14 @@ function execFailure(error, timeoutMs, maxBuffer) {
   if (error.code === "ENOBUFS") return { code: "too-large", message: `git printed more than ${maxBuffer} bytes` };
   return { code: "spawn", message: `git failed to run (${error.code ?? error.message})` };
 }
-var gitSpawner = collect;
+var gitSpawner = spawnGitPlain;
 function useGitSpawner(spawner) {
   const previous = gitSpawner;
   gitSpawner = spawner;
   return previous;
 }
-function collect(command, args, opts) {
+var PLAIN_ABANDON_MS = 2e3;
+function spawnGitPlain(command, args, opts) {
   return new Promise((resolveRun) => {
     let settled = false;
     const out = [];
@@ -790,17 +792,31 @@ function collect(command, args, opts) {
     let outBytes = 0;
     let errBytes = 0;
     let error;
+    let abandon;
     const finish = (status) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(abandon);
       resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...error !== void 0 ? { error } : {} });
     };
     const fail = (code, message) => {
       if (error === void 0) error = Object.assign(new Error(message), { code });
-      child.kill("SIGKILL");
+      if (abandon !== void 0) return;
+      stopPlainTree(child);
+      abandon = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(null);
+      }, PLAIN_ABANDON_MS);
     };
-    const child = spawn(command, args, { env: opts.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      env: opts.env,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      // POSIX: a process group of its own, so that a stop reaches what git started.
+      detached: process.platform !== "win32"
+    });
     const timer = setTimeout(() => fail("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
     child.stdout.on("data", (chunk) => {
       outBytes += chunk.length;
@@ -815,8 +831,30 @@ function collect(command, args, opts) {
       error ??= e;
       finish(null);
     });
-    child.on("close", (code) => finish(code));
+    child.on("close", (code) => finish(error !== void 0 ? null : code));
   });
+}
+function stopPlainTree(child) {
+  const pid = child.pid;
+  if (pid === void 0) return;
+  if (process.platform === "win32") {
+    const root = envValue2(process.env, "SystemRoot") ?? "C:/Windows";
+    const killer = spawn(join4(root, "System32", "taskkill.exe"), ["/T", "/F", "/PID", String(pid)], {
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    const last = () => {
+      child.kill("SIGKILL");
+    };
+    killer.on("exit", last);
+    killer.on("error", last);
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
 }
 function setVar(env, name, value, platform) {
   for (const other of Object.keys(env)) if (other !== name && sameName(other, name, platform)) delete env[other];
