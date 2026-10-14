@@ -14920,10 +14920,16 @@ function isFile(path3) {
 function splitArgs(captured) {
   return (captured ?? "").trim().split(/[ \t]+/).filter((a) => a.length > 0);
 }
+function setsOnlyNpmVariables(text2) {
+  for (const m of text2.matchAll(/^\s*@?SET\s+"?([^=\s"]+)=/gim)) {
+    if (!NPM_SHIM_VARIABLES.has((m[1] ?? "").toLowerCase())) return false;
+  }
+  return true;
+}
 function npmCmdShimTarget(file, env) {
   if (!/\.cmd$/i.test(file)) return null;
   const text2 = readShim(file);
-  if (text2 === null) return null;
+  if (text2 === null || !setsOnlyNpmVariables(text2)) return null;
   let preArgs;
   let script;
   const current = CURRENT_RUN.exec(text2);
@@ -14945,7 +14951,7 @@ function npmCmdShimTarget(file, env) {
   if (program === null) return null;
   return { program, args: [...preArgs, target] };
 }
-var MAX_SHIM_BYTES, PLAIN_ARGS, CURRENT_RUN, CURRENT_PROGRAM, OLDER_RUN, OLDER_FALLBACK;
+var MAX_SHIM_BYTES, PLAIN_ARGS, CURRENT_RUN, CURRENT_PROGRAM, OLDER_RUN, OLDER_FALLBACK, NPM_SHIM_VARIABLES;
 var init_npmCmdShim = __esm({
   "src/runners/npmCmdShim.ts"() {
     "use strict";
@@ -14956,6 +14962,7 @@ var init_npmCmdShim = __esm({
     CURRENT_PROGRAM = [/^\s*IF EXIST "%dp0%\\node\.exe" \($/im, /^\s*SET "_prog=%dp0%\\node\.exe"\s*$/im, /^\s*SET "_prog=node"\s*$/im];
     OLDER_RUN = new RegExp(String.raw`^\s*"%~dp0\\node\.exe"${PLAIN_ARGS}[ \t]+"%~dp0\\([^"%\r\n]+)"[ \t]+%\*[ \t]*$`, "m");
     OLDER_FALLBACK = new RegExp(String.raw`^\s*node${PLAIN_ARGS}[ \t]+"%~dp0\\([^"%\r\n]+)"[ \t]+%\*[ \t]*$`, "m");
+    NPM_SHIM_VARIABLES = /* @__PURE__ */ new Set(["dp0", "_prog", "pathext"]);
   }
 });
 

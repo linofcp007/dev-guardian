@@ -215,9 +215,31 @@ try {
 //   - one that loads but lacks what this CLI uses — `cli/` and `mcp/dist/`
 //     from two builds — the names it lacks: it was a TypeError and exit 1 on
 //     every command, `--help` included;
-//   - one that never settles: Node exits 13 when nothing else is pending
-//     (an unsettled top-level await) — rewritten to 3 by the `exit` listener
-//     below — and the deadline catches one that keeps the process busy.
+//   - one that never settles: when nothing else is pending, `beforeExit`
+//     says so before Node would exit 13 with its unsettled-top-level-await
+//     warning, and the deadline catches one that keeps the process busy;
+//   - one that exits while it loads (`process.exit(0)` in it): the `exit`
+//     listener makes that 3.
+// One message each, never two (review 12, finding 14). What the engine prints
+// while it loads goes to stderr: it must not corrupt `--format json`. And
+// `--help` still prints the usage (the hosts it cannot name aside), then the
+// message, exit 3.
+const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
+const ROOT = resolve(HERE, '..'); // <plugin>
+const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
+// Item 6a: the absolute path this project's own CLI substitutes into every
+// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
+// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
+// file installed into ANOTHER project told the agent to run
+// `node cli/dev-guardian.mjs`, a path that exists only inside the
+// dev-guardian repo itself.
+const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
+// How every command this CLI tells a reader to run is spelled: a plugin
+// install puts no `dev-guardian` on PATH, so a bare `dev-guardian baseline
+// update` was "command not found" (review 8, C7). Forward slashes read the
+// same in cmd, PowerShell and every POSIX shell.
+const CLI_COMMAND = `node "${CLI_JS.split(sep).join('/')}"`;
+
 /** The engine's exports this file destructures below — the same names (cliEngineExports.test.ts holds them equal). */
 const ENGINE_EXPORTS = [
   'ALL_HOSTS',
@@ -250,8 +272,16 @@ const ENGINE_EXPORTS = [
 const engineDamaged = (why) =>
   `dev-guardian: its engine, mcp/dist/engine.js, ${why} — the plugin install is incomplete or damaged. ` +
   'Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build.\n';
+/** Whether this run asked only for the usage (`--help`, `-h`, `help`, or nothing). */
+const asksOnlyForHelp = (() => {
+  const first = process.argv[2];
+  return first === undefined || first === '--help' || first === '-h' || first === 'help';
+})();
 /** @param {string} why @returns {Promise<never>} */
 const engineExit = async (why) => {
+  engineLoading = false;
+  restoreStdout();
+  if (asksOnlyForHelp) usage(null);
   await new Promise((done) => process.stderr.write(engineDamaged(why), () => done(undefined)));
   return process.exit(3);
 };
@@ -264,14 +294,31 @@ const ENGINE_LOAD_DEADLINE_MS = (() => {
   return Number.isInteger(set) && set >= 1000 ? set : 60_000;
 })();
 let engineLoading = true;
+// Whatever the engine prints while it loads goes to stderr (see above).
+const stdoutWrite = process.stdout.write;
+process.stdout.write = /** @type {typeof process.stdout.write} */ (
+  /** @type {unknown} */ ((/** @type {unknown[]} */ ...args) => Reflect.apply(process.stderr.write, process.stderr, args))
+);
+function restoreStdout() {
+  process.stdout.write = stdoutWrite;
+}
 /** @param {number} code */
 const exitWhileLoading = (code) => {
   if (!engineLoading) return;
+  engineLoading = false;
+  restoreStdout();
   // Synchronous: an `exit` listener's asynchronous write is never flushed.
-  writeSync(2, engineDamaged(`never finished loading (Node was about to exit ${code})`));
+  writeSync(2, engineDamaged(`exited while it was loading (exit ${code})`));
   process.exitCode = 3;
 };
 process.on('exit', exitWhileLoading);
+// Nothing left to wait for, the import still pending: said here, before Node's
+// own unsettled-top-level-await warning and exit 13.
+const drainedWhileLoading = () => {
+  if (!engineLoading) return;
+  void engineExit('never finished loading (it waits on something that never comes)');
+};
+process.once('beforeExit', drainedWhileLoading);
 const engineDeadline = setTimeout(() => {
   void engineExit(`did not finish loading in ${ENGINE_LOAD_DEADLINE_MS / 1000} s`);
 }, ENGINE_LOAD_DEADLINE_MS);
@@ -282,8 +329,10 @@ const engine = await import('../mcp/dist/engine.js').catch(async (/** @type {unk
   return engineExit(`could not be loaded (${why})`);
 });
 engineLoading = false;
+restoreStdout();
 clearTimeout(engineDeadline);
 process.off('exit', exitWhileLoading);
+process.off('beforeExit', drainedWhileLoading);
 {
   // What this file takes from the engine, below: each must be there.
   const engineExports = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (engine));
@@ -344,21 +393,6 @@ const {
 // there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
 hardenCommandSearch();
 
-const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
-const ROOT = resolve(HERE, '..'); // <plugin>
-const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
-// Item 6a: the absolute path this project's own CLI substitutes into every
-// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
-// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
-// file installed into ANOTHER project told the agent to run
-// `node cli/dev-guardian.mjs`, a path that exists only inside the
-// dev-guardian repo itself.
-const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
-// How every command this CLI tells a reader to run is spelled: a plugin
-// install puts no `dev-guardian` on PATH, so a bare `dev-guardian baseline
-// update` was "command not found" (review 8, C7). Forward slashes read the
-// same in cmd, PowerShell and every POSIX shell.
-const CLI_COMMAND = `node "${CLI_JS.split(sep).join('/')}"`;
 const HOST_RULES_DIR = resolve(ROOT, 'host-rules');
 /** @type {ReadonlySet<string>} */
 const VALID_HOSTS = new Set([...ALL_HOSTS, 'all']);
@@ -412,7 +446,13 @@ process.on('warning', (warning) => {
   process.stderr.write(`${warning.stack ?? `${warning.name}: ${warning.message}`}\n`);
 });
 
-function usage() {
+/**
+ * The usage, on stdout. `hosts`: what `mcp-config` takes — null when the engine
+ * that knows them did not load (the usage still prints; review 12, finding 14).
+ *
+ * @param {readonly string[] | null} [hosts]
+ */
+function usage(hosts = ALL_HOSTS) {
   process.stdout.write(`dev-guardian — CLI (no MCP connection needed)
 
 A plugin install puts no \`dev-guardian\` on PATH. Run this CLI as:
@@ -432,7 +472,7 @@ Usage:
   node cli/dev-guardian.mjs --version
 
 mcp-config — wire the MCP server into an AI host
-  Hosts: ${[...ALL_HOSTS].join(', ')}, all
+  Hosts: ${hosts === null ? '(not listed: the engine did not load)' : [...hosts].join(', ')}, all
   --write              Write/merge into the project (+ drop the rules file)
   --scope project|global   MCP scope (default project)
   --global             Shorthand for --scope global. Also required to include a

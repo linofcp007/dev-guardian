@@ -75,6 +75,22 @@ function splitArgs(captured: string | undefined): string[] {
   return (captured ?? '').trim().split(/[ \t]+/).filter((a) => a.length > 0);
 }
 
+/** The variables npm's own templates set: anything else is another tool's shim. */
+const NPM_SHIM_VARIABLES: ReadonlySet<string> = new Set(['dp0', '_prog', 'pathext']);
+
+/**
+ * Whether a shim sets only what npm's templates set. pnpm's, built on the same
+ * template, also sets `NODE_PATH` (the store its package resolves from): run
+ * as `node <script>` it lost that, and its package failed to load (review 12,
+ * finding 14) — such a shim is still a batch file, judged as one.
+ */
+function setsOnlyNpmVariables(text: string): boolean {
+  for (const m of text.matchAll(/^\s*@?SET\s+"?([^=\s"]+)=/gim)) {
+    if (!NPM_SHIM_VARIABLES.has((m[1] ?? '').toLowerCase())) return false;
+  }
+  return true;
+}
+
 /**
  * What the npm cmd-shim `file` runs, or null when `file` is not one (see the
  * module comment) or what it names is not there. Never throws.
@@ -82,7 +98,7 @@ function splitArgs(captured: string | undefined): string[] {
 export function npmCmdShimTarget(file: string, env: NodeJS.ProcessEnv): ShimTarget | null {
   if (!/\.cmd$/i.test(file)) return null;
   const text = readShim(file);
-  if (text === null) return null;
+  if (text === null || !setsOnlyNpmVariables(text)) return null;
   let preArgs: string[];
   let script: string;
   const current = CURRENT_RUN.exec(text);
