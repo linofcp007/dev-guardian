@@ -3824,7 +3824,7 @@ var MAX_DEADLINE_MS = 12e3;
 function vetDeadlineMs(env) {
   const raw = env["GUARDIAN_PKG_VET_DEADLINE_MS"]?.trim();
   if (raw === void 0 || !/^\d+$/.test(raw)) return DEFAULT_DEADLINE_MS;
-  return Math.min(Number(raw), MAX_DEADLINE_MS);
+  return Math.min(Math.max(Number(raw), HOOK_BUDGET_MS), MAX_DEADLINE_MS);
 }
 function label(r) {
   return r.version !== void 0 ? `${r.name}@${r.version}` : r.name;

@@ -1732,16 +1732,16 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root, toolName) {
     if (!guard.isClaudeSettingsPath(abs, configDir)) return undefined;
     const walkRoot = walkRootFor(abs, cwd, root);
     const before = isNetworkPath(abs) && walkRoot === undefined ? undefined : readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRoot);
+    /** @type {[string | undefined, string]} what is compared: the file before and after, or the edit's own strings */
+    let judged;
     if (typeof change.content === 'string') {
-      added = guard.newlyLoosened(before, change.content);
+      judged = [before, change.content];
     } else if (typeof change.opaque === 'string') {
-      added = guard.newlyLoosened(before, change.opaque);
-      if (added.length === 0) {
-        ask =
-          `dev-guardian: ${toolName} changes Claude Code's settings (${normalizePath(rawPath)}) in a way the guard cannot ` +
-          'work out — a regular expression, a move, or arguments it does not know — and a change there can switch the ' +
-          'guardrail hooks off. Confirm it only if you expected this change.';
-      }
+      judged = [before, change.opaque];
+      ask =
+        `dev-guardian: ${toolName} changes Claude Code's settings (${normalizePath(rawPath)}) in a way the guard cannot ` +
+        'work out — a regular expression, a move, or arguments it does not know — and a change there can switch the ' +
+        'guardrail hooks off. Confirm it only if you expected this change.';
     } else {
       const edits = (change.edits ?? []).filter(
         /**
@@ -1755,13 +1755,15 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root, toolName) {
         if (after === undefined) break;
         after = guard.applyEdit(after, e.old_string, e.new_string, e.replace_all === true);
       }
-      added =
-        after !== undefined
-          ? guard.newlyLoosened(before, after)
-          : guard.newlyLoosened(
-              edits.map((e) => e.old_string).join('\n'),
-              edits.map((e) => e.new_string).join('\n'),
-            );
+      judged = after !== undefined ? [before, after] : [edits.map((e) => e.old_string).join('\n'), edits.map((e) => e.new_string).join('\n')];
+    }
+    added = guard.newlyLoosened(...judged);
+    // `env` PATH, HOME, USERPROFILE: which `node` the hooks start, which home they read (review of 3.4.0, finding 4).
+    const asked = typeof guard.newlyAsked === 'function' ? guard.newlyAsked(...judged) : [];
+    if (ask === undefined && asked.length > 0) {
+      ask =
+        `dev-guardian: this change to Claude Code's settings sets ${asked.join(', ').slice(0, 300)} — which decides the program the ` +
+        'guardrail hooks start or the home they read their configuration from. Confirm it only if you expected this change.';
     }
   } catch (err) {
     debug(`settings guard skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);

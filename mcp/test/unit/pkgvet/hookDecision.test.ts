@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { decideInstallCommand, MAX_DEADLINE_MS, vetDeadlineMs, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
+import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
 import { hangBound } from '../../helpers/timing.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
@@ -989,10 +990,17 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
     expect(MAX_DEADLINE_MS).toBeLessThanOrEqual(12_000);
   });
 
+  // Review of 3.4.0, finding 4: `GUARDIAN_PKG_VET_DEADLINE_MS=1` left no time to
+  // look a package up, and the deny of a malicious one became a note.
+  it('GUARDIAN_PKG_VET_DEADLINE_MS is never below the network budget', () => {
+    for (const raw of ['0', '1', '2999']) expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: raw })).toBe(HOOK_BUDGET_MS);
+    expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: '3001' })).toBe(3001);
+  });
+
   it('GUARDIAN_PKG_VET_DEADLINE_MS sets the deadline', async () => {
     const d = await decideInstallCommand(
       `npm i ${NAMES.join(' ')}`,
-      opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '0', GUARDIAN_PKG_VET_DEADLINE_MS: '0' } }),
+      opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '0', GUARDIAN_PKG_VET_DEADLINE_MS: '3000' }, startedAt: Date.now() - 3500 }),
     );
     expect(d?.context).toMatch(/time budget/);
   });

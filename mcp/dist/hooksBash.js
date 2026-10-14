@@ -2301,7 +2301,7 @@ function configDirNameOf(dir) {
   return last === "" ? void 0 : last.toLowerCase();
 }
 function namesLooseningKey(text) {
-  return /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET\b/i.test(text) || /enabledPlugins/i.test(text) && /dev-guardian/i.test(text);
+  return /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET(?:_DEADLINE_MS)?\b|\bNODE_OPTIONS\b/i.test(text) || /enabledPlugins/i.test(text) && /dev-guardian/i.test(text);
 }
 function loosens(scope) {
   if (scope.notes.loosens === void 0) {

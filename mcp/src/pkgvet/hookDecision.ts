@@ -89,15 +89,18 @@ export const MAX_DEADLINE_MS = 12_000;
 
 /**
  * The one deadline on a hook call's vetting (review I4), in ms from the start
- * of the call: `GUARDIAN_PKG_VET_DEADLINE_MS` (0-12000), else 8000. Local
+ * of the call: `GUARDIAN_PKG_VET_DEADLINE_MS` (3000-12000), else 8000. Local
  * work — reading registry configuration, walking a workspace — used to run
  * unbounded before the 3 s network budget: 17 packages in a 3000-directory
- * monorepo took 16.5 s, and Claude Code kills a hook at 15 s.
+ * monorepo took 16.5 s, and Claude Code kills a hook at 15 s. Never below the
+ * network budget ({@link HOOK_BUDGET_MS}): `1` left no time to look a package
+ * up, and the deny of a malicious one became a "not verified" note (review of
+ * 3.4.0, finding 4).
  */
 export function vetDeadlineMs(env: Readonly<Record<string, string | undefined>>): number {
   const raw = env['GUARDIAN_PKG_VET_DEADLINE_MS']?.trim();
   if (raw === undefined || !/^\d+$/.test(raw)) return DEFAULT_DEADLINE_MS;
-  return Math.min(Number(raw), MAX_DEADLINE_MS);
+  return Math.min(Math.max(Number(raw), HOOK_BUDGET_MS), MAX_DEADLINE_MS);
 }
 
 export interface HookDecision {

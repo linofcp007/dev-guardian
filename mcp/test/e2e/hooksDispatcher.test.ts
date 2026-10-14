@@ -909,7 +909,8 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
 
     it('other env vars, other hooks and "disableAllHooks": false are allowed', () => {
       const file = existing({ env: { FOO: '1' } });
-      expect(hook('Edit', { file_path: file, old_string: '"FOO": "1"', new_string: '"FOO": "1", "NODE_OPTIONS": "--max-old-space-size=4096"' }).stdout).toBeUndefined();
+      // NODE_OPTIONS is no longer one of them, whatever its value (review of 3.4.0, finding 4): it runs code in every hook.
+      expect(hook('Edit', { file_path: file, old_string: '"FOO": "1"', new_string: '"FOO": "1", "DEBUG": "app:*"' }).stdout).toBeUndefined();
       expect(
         hook('Write', {
           file_path: settingsPath(),
@@ -955,6 +956,33 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(
         hook('Write', { file_path: settingsPath('settings.local.json'), content: '{"enabledPlugins":{"dev-guardian@corp":true}}' }).stdout,
       ).toBeUndefined();
+    });
+
+    // Review of 3.4.0, finding 4: NODE_OPTIONS ran code in every hook before it
+    // started (`process.exit(0)` made the dispatcher silent on `rm -rf /`), a
+    // tiny vetting deadline turned a malicious package's deny into a note, and
+    // the value forms and file shapes another parser may read as the switch passed.
+    it.each([
+      ['env NODE_OPTIONS', { env: { NODE_OPTIONS: '--import=data:text/javascript,process.exit(0)' } }],
+      ['env GUARDIAN_PKG_VET_DEADLINE_MS', { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '1' } }],
+      ['disableAllHooks: "true"', { disableAllHooks: 'true' }],
+      ['disableAllHooks: 1', { disableAllHooks: 1 }],
+      ['enabledPlugins "false"', { enabledPlugins: { 'dev-guardian@m': 'false' } }],
+    ])('a Write of settings.local.json with %s is denied', (_what, content) => {
+      expect(decision(hook('Write', { file_path: settingsPath('settings.local.json'), content: JSON.stringify(content) }))).toBe('deny');
+    });
+
+    it('JSONC with an escaped key is read as the key it spells', () => {
+      const content = '// local\n{ "disable\\u0041llHooks": true, }';
+      expect(decision(hook('Write', { file_path: settingsPath('settings.local.json'), content }))).toBe('deny');
+    });
+
+    it('env PATH is asked about; the same PATH again is not', () => {
+      const r = hook('Write', { file_path: settingsPath('settings.local.json'), content: JSON.stringify({ env: { PATH: '/tmp/fake-node' } }) });
+      expect(decision(r)).toBe('ask');
+      expect(reason(r)).toMatch(/env PATH=\/tmp\/fake-node/);
+      const file = existing({ env: { PATH: '/tmp/fake-node' } }, 'settings.local.json');
+      expect(hook('Edit', { file_path: file, old_string: '"env"', new_string: '"model": "m", "env"' }).stdout).toBeUndefined();
     });
   });
 

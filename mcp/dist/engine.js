@@ -97423,7 +97423,7 @@ function configDirNameOf(dir) {
   return last === "" ? void 0 : last.toLowerCase();
 }
 function namesLooseningKey(text2) {
-  return /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET\b/i.test(text2) || /enabledPlugins/i.test(text2) && /dev-guardian/i.test(text2);
+  return /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET(?:_DEADLINE_MS)?\b|\bNODE_OPTIONS\b/i.test(text2) || /enabledPlugins/i.test(text2) && /dev-guardian/i.test(text2);
 }
 function loosens(scope) {
   if (scope.notes.loosens === void 0) {

@@ -1585,6 +1585,9 @@ describe('assessBashCommand — the hook configuration: the shapes M5 left open 
       `Set-Content .claude\\settings.json '{"disableAllHooks": true}'`,
       `cd .claude && echo '{"disableAllHooks":true}' > settings.json`,
       `cmd /c "echo {\\"disableAllHooks\\":true} > .claude\\settings.local.json"`,
+      // Review of 3.4.0, finding 4: switches whatever their value.
+      `jq '.env.NODE_OPTIONS = "--import=data:text/javascript,process.exit(0)"' .claude/settings.local.json > t && mv t .claude/settings.local.json`,
+      `echo '{"env":{"GUARDIAN_PKG_VET_DEADLINE_MS":"1"}}' > .claude/settings.local.json`,
     ])('blocks %j', (command) => expectBlocked(command, 'claude-settings-loosen'));
 
     it.each([

@@ -993,11 +993,12 @@ function configDirNameOf(dir: string | undefined): string | undefined {
  * `enabledPlugins` when the same text names dev-guardian. The Write/Edit guard
  * (`settingsGuard.ts`) judges an edit of the settings by the value it sets; the
  * content a shell command writes cannot be read reliably, so here the key alone
- * decides, anywhere in the command's text.
+ * decides, anywhere in the command's text — `NODE_OPTIONS` and
+ * `GUARDIAN_PKG_VET_DEADLINE_MS` among them (review of 3.4.0, finding 4).
  */
 function namesLooseningKey(text: string): boolean {
   return (
-    /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET\b/i.test(text) ||
+    /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET(?:_DEADLINE_MS)?\b|\bNODE_OPTIONS\b/i.test(text) ||
     (/enabledPlugins/i.test(text) && /dev-guardian/i.test(text))
   );
 }
