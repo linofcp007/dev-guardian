@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { filesChangedSince, scanSettingsCommit } from '../../../src/ci/changedSince.js';
+import { filesChangedFrom, filesChangedSince, scanSettingsCommit } from '../../../src/ci/changedSince.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -145,5 +145,40 @@ describe('scanSettingsCommit — what a run without a ref compares an accepted f
 
   it('not a git repository: nothing to compare with', async () => {
     expect(await scanSettingsCommit(makeTempDir('changed-since-nogit-'))).toEqual({ none: true });
+  });
+});
+
+// Review 12, finding 11: the files the CI gate's full-content secrets pass reads whole.
+describe('filesChangedFrom — the files a pull request changed', () => {
+  it('added, modified, renamed in a commit or modified uncommitted; never deleted, untracked or unchanged; a skip-worktree flag hides no commit', async () => {
+    const { dir, git } = repo();
+    mkdirSync(join(dir, 'app', 'pages'), { recursive: true });
+    for (const f of ['same.js', 'committed.js', 'dirty.js', 'gone.js', 'old-name.js', 'flagged.js']) writeFileSync(join(dir, 'app', f), `${f}\n${BODY}`);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD');
+
+    appendFileSync(join(dir, 'app', 'committed.js'), '// pr\n');
+    appendFileSync(join(dir, 'app', 'flagged.js'), '// pr\n');
+    writeFileSync(join(dir, 'app', 'pages', '[id].js'), BODY);
+    git('mv', 'app/old-name.js', 'app/new-name.js');
+    git('rm', '-q', 'app/gone.js');
+    git('add', '-A');
+    git('commit', '-qm', 'pr');
+    git('update-index', '--skip-worktree', 'app/flagged.js');
+    appendFileSync(join(dir, 'app', 'dirty.js'), '// uncommitted\n');
+    writeFileSync(join(dir, 'app', 'untracked.js'), BODY);
+
+    const r = await filesChangedFrom(join(dir, 'app'), base);
+    if ('error' in r) throw new Error(r.error);
+    expect(r.files).toEqual(['committed.js', 'dirty.js', 'flagged.js', 'new-name.js', 'pages/[id].js']);
+  });
+
+  it('a commit git does not know: an error, never "nothing changed"', async () => {
+    const { dir, git } = repo();
+    writeFileSync(join(dir, 'a.js'), BODY);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    expect(await filesChangedFrom(dir, 'f'.repeat(40))).toEqual({ error: expect.stringMatching(/\S/) });
   });
 });

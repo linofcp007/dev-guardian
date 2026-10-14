@@ -15,7 +15,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildBaseline, newFindings } from '../../../src/ci/baseline.js';
-import { rememberSecretValues, secretFromLine, secretValueOf, secretValuesRead } from '../../../src/ci/secretValues.js';
+import { hunkStartsByPath, rememberSecretValues, secretFromLine, secretValueOf, secretValuesRead } from '../../../src/ci/secretValues.js';
 import { assignIdentities } from '../../../src/fingerprint/findingIdentity.js';
 import { resolveProjectPath } from '../../../src/platform/projectPath.js';
 import type { Finding } from '../../../src/types.js';
@@ -185,5 +185,51 @@ describe('secretFromLine: the secret, cut where the redacted report says', () =>
   it('a wrong entropy, or a column off the line, is no cut', () => {
     expect(secretFromLine(LINE, { startColumn: at + 1, endColumn: at + TWICE.length, match: "REDACTED", entropy: 0.5 })).toBeNull();
     expect(secretFromLine(LINE, { startColumn: 500, endColumn: 519, match: 'REDACTED' })).toBeNull();
+  });
+});
+
+describe('hunkStartsByPath: where each hunk of a commit begins, per file it adds to', () => {
+  it('a rename with an edit is its new path, with the edited line a hunk start — not a new file whose only start is 1', () => {
+    const patch = [
+      'diff --git a/config.js b/settings.js',
+      'similarity index 80%',
+      'rename from config.js',
+      'rename to settings.js',
+      'index 1111111..2222222 100644',
+      '--- a/config.js',
+      '+++ b/settings.js',
+      '@@ -2 +2 @@ const X = 1;',
+      '-const A = 1;',
+      '+const A = 1; // c',
+      '@@ -5,0 +6,2 @@',
+      '+a',
+      '+b',
+      'diff --git a/gone.js b/gone.js',
+      'deleted file mode 100644',
+      '--- a/gone.js',
+      '+++ /dev/null',
+      '@@ -1,2 +0,0 @@',
+      '-x',
+      '-y',
+      'diff --git a/with space.js b/with space.js',
+      '--- a/with space.js\t',
+      '+++ b/with space.js\t',
+      '@@ -3,2 +3,0 @@',
+      '-p',
+      '-q',
+      '@@ -9 +7,3 @@',
+      '+r',
+    ].join('\n');
+    const starts = hunkStartsByPath(patch);
+    expect([...(starts.get('settings.js') ?? [])]).toEqual([2, 6]);
+    expect(starts.has('config.js')).toBe(false);
+    expect(starts.has('gone.js')).toBe(false);
+    // A hunk that only removes adds no line: no start.
+    expect([...(starts.get('with space.js') ?? [])]).toEqual([7]);
+  });
+
+  it('CRLF output reads the same', () => {
+    const starts = hunkStartsByPath(['diff --git a/a.js b/a.js', '--- a/a.js', '+++ b/a.js', '@@ -1 +1 @@', '+k', ''].join('\r\n'));
+    expect([...(starts.get('a.js') ?? [])]).toEqual([1]);
   });
 });

@@ -35,7 +35,7 @@
  * value on another line, is the same value (each made the gate exit 1 when
  * the whole line was the value). A finding the report does not locate — no
  * report, a multi-line match (a private key), an ambiguous cut — falls back
- * to its whole lines, whitespace removed (the 3.4.0 rule): stricter, never a
+ * to its whole lines, whitespace removed (review 10's rule): stricter, never a
  * silent match. Every value is HMAC'd under {@link RUN_KEY}: comparable
  * within this process, useless outside it. Nothing is stored; the values
  * live in `WeakMap`s beside the finding objects the gate is handed.
@@ -226,6 +226,33 @@ function readReportMatches(reportDirs: readonly string[], prefix: string): Map<s
   return out;
 }
 
+/**
+ * The first added line of each hunk of a `-U0` patch, per file it adds to
+ * (the `+++ b/<path>` side; a rename is its new path). A path git had to
+ * quote (a tab, a newline, a quote in it) is skipped: its hunks are unknown.
+ */
+export function hunkStartsByPath(patch: string): Map<string, Set<number>> {
+  const out = new Map<string, Set<number>>();
+  let current: Set<number> | null = null;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++ ')) {
+      // git appends a tab to a name holding a space (for patch(1)).
+      const name = line.slice(4).replace(/\t$/, '').replace(/\r$/, '');
+      current = null;
+      if (name.startsWith('b/')) {
+        const path = name.slice(2);
+        current = out.get(path) ?? new Set<number>();
+        out.set(path, current);
+      }
+      continue;
+    }
+    if (line.startsWith('diff ')) current = null;
+    const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (m !== null && current !== null && m[2] !== '0') current.add(Number(m[1]));
+  }
+  return out;
+}
+
 /** The committer time (ms) of each commit git knows, of `commits`. */
 async function commitTimes(projectPath: string, commits: readonly string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
@@ -299,23 +326,30 @@ export async function rememberSecretValues(
   // The lines that began a piece gitleaks scanned: in history, the first added
   // line of each hunk of `git log -p -U0` (what gitleaks reads); in a file,
   // its first line. Where StartColumn is exact (see `secretFromLine`).
-  const hunks = new Map<string, Promise<Set<number> | null>>();
-  const hunkStarts = (commit: string, path: string): Promise<Set<number> | null> => {
-    const key = `${commit}\n${path}`;
-    let starts = hunks.get(key);
-    if (starts === undefined) {
-      if (hunks.size >= MAX_BLOBS) return Promise.resolve(null);
-      starts = git(projectPath, ['show', '--format=', '--no-color', '--no-ext-diff', '-U0', commit, '--', path]).then((r) => {
-        if (r.exitCode !== 0) return null;
-        const out = new Set<number>();
-        for (const m of r.stdout.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
-          if (m[2] !== '0') out.add(Number(m[1]));
-        }
-        return out;
-      });
-      hunks.set(key, starts);
+  // One `git show -M` of the whole commit, no pathspec: a pathspec turns a
+  // rename into a whole new file, every line its own first — so a renamed
+  // file with an edit on a baselined secret's line was cut one column off and
+  // read as a new secret (review 12, finding 12).
+  const hunks = new Map<string, Promise<Map<string, Set<number>> | null>>();
+  const hunkStarts = async (commit: string, path: string): Promise<Set<number> | null> => {
+    let byPath = hunks.get(commit);
+    if (byPath === undefined) {
+      if (hunks.size >= MAX_BLOBS) return null;
+      byPath = git(projectPath, [
+        '-c',
+        'core.quotePath=false',
+        'show',
+        '--format=',
+        '--no-color',
+        '--no-ext-diff',
+        '-M',
+        '-U0',
+        '--relative',
+        commit,
+      ]).then((r) => (r.exitCode === 0 ? hunkStartsByPath(r.stdout) : null));
+      hunks.set(commit, byPath);
     }
-    return starts;
+    return (await byPath)?.get(path) ?? null;
   };
 
   const commits = [...new Set(leaks.map((f) => commitOf(f.snippet)).filter((c): c is string => c !== null))];

@@ -1798,6 +1798,10 @@ async function cmdScan(argv) {
       authorizedTarget: opts.authorizedTarget ? true : undefined,
       localOnly: opts.localOnly ? true : undefined,
       ...(rulesRef !== null ? { rulesRef } : {}),
+      // Under a ref, the files changed since it are scanned for secrets whole
+      // (a private key's BEGIN / END lines fall outside gitleaks' -U0 hunks;
+      // review 12, finding 11).
+      ...(baselineRef !== null ? { changedSince: baselineRef } : rulesRef !== null ? { changedSince: rulesRef } : {}),
     });
   } catch (e) {
     pipelineFailure = { error: e };

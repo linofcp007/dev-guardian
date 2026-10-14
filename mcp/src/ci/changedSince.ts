@@ -26,6 +26,9 @@
  *
  * Never throws: when git cannot answer, `error` says why and the caller
  * accepts no timeout — "could not compare" is never "unchanged".
+ *
+ * {@link filesChangedFrom} lists the files a pull request changed, for the
+ * gate's full-content secrets pass.
  */
 
 import { join } from 'node:path';
@@ -74,6 +77,31 @@ export async function filesChangedSince(
     });
   }
   return { changed };
+}
+
+/**
+ * Every regular file of the project that is not, at HEAD or in the working
+ * tree, what it was at `commit` — added, modified, renamed or retyped since —
+ * as paths relative to the project: the CI gate's full-content secrets pass
+ * reads them whole (`ci/runScans.ts`, review 12 finding 11). HEAD is compared
+ * tree to tree too, so an index flag (`skip-worktree`) hides no committed
+ * change. A link, a directory or a file gone from disk is left out: there is
+ * no file to read. `error` when git cannot answer.
+ */
+export async function filesChangedFrom(
+  projectPath: string,
+  commit: string,
+): Promise<{ files: string[] } | { error: string }> {
+  const listed = new Set<string>();
+  for (const sides of [[commit, 'HEAD'], [commit]]) {
+    const r = await git(projectPath, ['diff', '-z', '--name-only', '--relative', '--no-renames', '--diff-filter=ACMRT', ...sides, '--']);
+    if (r.exitCode !== 0) return { error: firstLine(r.stderr) || `git diff exited ${r.exitCode}` };
+    for (const path of splitNul(r.stdout)) listed.add(path);
+  }
+  const files = [...listed]
+    .filter((path) => projectPathKind(projectPath, path) === 'file' && projectEntryKind(join(projectPath, path)) === 'file')
+    .sort();
+  return { files };
 }
 
 /**
