@@ -29,6 +29,7 @@
  */
 export function isClaudeSettingsPath(path: string, configDir?: string): boolean {
   if (/(?:^|[\\/])\.claude[\\/]settings(?:\.local)?\.json$/i.test(path)) return true;
+  if (MANAGED_SETTINGS.test(path)) return true;
   if (configDir === undefined || configDir.trim() === '') return false;
   const fold = process.platform === 'win32';
   const m = (fold ? /^(.*)[\\/](settings(?:\.local)?\.json)$/i : /^(.*)\/(settings(?:\.local)?\.json)$/).exec(path);
@@ -39,6 +40,16 @@ export function isClaudeSettingsPath(path: string, configDir?: string): boolean 
   };
   return norm(m[1] ?? '') === norm(configDir);
 }
+
+/**
+ * Claude Code's managed settings, which win over every other file: Windows'
+ * `C:\Program Files\ClaudeCode\managed-settings.json` (and
+ * `C:\ProgramData\ClaudeCode\…`), macOS' `/Library/Application
+ * Support/ClaudeCode/…` and Linux's `/etc/claude-code/…` (review 12, finding
+ * 7: a write of one with `disableAllHooks` passed every guard, and the machine
+ * it was found on runs elevated).
+ */
+const MANAGED_SETTINGS = /(?:^|[\\/])(?:ClaudeCode|claude-code)[\\/]managed-settings\.json$/i;
 
 /** The env switches the dispatcher reads, and the values that turn a hook off. */
 const ENV_SWITCHES: ReadonlyArray<{ name: string; off: ReadonlyArray<string> }> = [
@@ -55,7 +66,26 @@ const ENV_SWITCHES: ReadonlyArray<{ name: string; off: ReadonlyArray<string> }> 
  * take (`1` turned the deny of a malicious package into a note). A new value
  * is a new switch.
  */
-const ENV_ANY_VALUE = ['NODE_OPTIONS', 'GUARDIAN_PKG_VET_DEADLINE_MS'];
+const ENV_ANY_VALUE = ['NODE_OPTIONS', 'GUARDIAN_PKG_VET_DEADLINE_MS', 'GUARDIAN_OFFLINE'];
+
+/**
+ * Variables that switch the vetting off at one value (review 12, finding 3):
+ * `NODE_TLS_REJECT_UNAUTHORIZED=0` accepts any certificate on the registry's
+ * connection. (`GUARDIAN_OFFLINE`, which turns the network off, is
+ * {@link ENV_ANY_VALUE}'s.)
+ */
+const ENV_OFF_AT: ReadonlyArray<{ name: string; off: ReadonlyArray<string> }> = [{ name: 'NODE_TLS_REJECT_UNAUTHORIZED', off: ['0'] }];
+
+/**
+ * Any other variable Node or dev-guardian reads, and a proxy (review 12,
+ * finding 3: `NODE_USE_ENV_PROXY=1` with `HTTPS_PROXY` at a dead proxy turned
+ * the deny of a malicious package into a "not verified" note;
+ * `NODE_EXTRA_CA_CERTS` trusts another certificate): a new one is the user's
+ * to confirm. `NODE_ENV`, which no hook reads, is not asked about; nor is a
+ * known switch set to a value that switches nothing off.
+ */
+const ENV_ASKED_PREFIX = /^(?:NODE_|GUARDIAN_)|^(?:HTTPS?|ALL|NO)_PROXY$/;
+const ENV_NOT_ASKED = new Set(['NODE_ENV']);
 
 /**
  * Variables that decide which program a hook runs or which home it reads its
@@ -73,8 +103,25 @@ class LenientObject {
 }
 type Lenient = null | boolean | number | string | Lenient[] | LenientObject;
 
-/** The deepest nesting {@link readLenient} reads; a settings file is a few levels deep. */
+/** The deepest nesting {@link readLenient} reads itself; deeper valid JSON is read by `JSON.parse` ({@link fromParsed}). */
 const MAX_LENIENT_DEPTH = 64;
+
+/** Thrown by {@link readLenient} at {@link MAX_LENIENT_DEPTH}: the text may still be valid JSON. */
+class TooDeep extends Error {}
+
+/**
+ * A value `JSON.parse` read, as the lenient reading spells it — two levels of
+ * it, which is all {@link fromObject} reads (`disableAllHooks`, the `env` and
+ * `enabledPlugins` entries); anything deeper is an empty object or list,
+ * truthy as the real one is. Never recursive past that, whatever the depth.
+ */
+function fromParsed(value: unknown, levels = 2): Lenient {
+  if (Array.isArray(value)) return levels > 0 ? value.map((v) => fromParsed(v, levels - 1)) : [];
+  if (value !== null && typeof value === 'object') {
+    return new LenientObject(levels > 0 ? Object.entries(value).map(([k, v]) => [k, fromParsed(v, levels - 1)] as const) : []);
+  }
+  return value as Lenient;
+}
 
 /**
  * `text` read as JSON the lenient way a settings reader may: `//` and `/* *\/`
@@ -111,7 +158,7 @@ function readLenient(text: string): Lenient | undefined {
     return String(value);
   };
   const value = (depth: number): Lenient => {
-    if (depth > MAX_LENIENT_DEPTH) throw new Error('too deep');
+    if (depth > MAX_LENIENT_DEPTH) throw new TooDeep('too deep');
     skip();
     const c = text.charAt(i);
     if (c === '"') return string();
@@ -155,8 +202,16 @@ function readLenient(text: string): Lenient | undefined {
     const v = value(0);
     skip();
     return i === n ? v : undefined;
-  } catch {
-    return undefined;
+  } catch (err) {
+    // Valid JSON nested past what this reads (review 12, finding 2: 70 levels
+    // went to the patterns, whose plugin pattern was quadratic — 19 s, past the
+    // hook's 15 s): JSON.parse reads it, the last of a repeated key kept.
+    if (!(err instanceof TooDeep)) return undefined;
+    try {
+      return fromParsed(JSON.parse(text));
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -181,10 +236,12 @@ function judgeEnv(key: string, value: Lenient, found: Found): void {
   const name = key.toUpperCase();
   const text = scalar(value);
   if (text === undefined) return;
-  const sw = ENV_SWITCHES.find((s) => s.name === name);
+  const sw = [...ENV_SWITCHES, ...ENV_OFF_AT].find((s) => s.name === name);
   if (sw !== undefined && sw.off.includes(text)) found.off.push(`env ${sw.name}=${text}`);
-  if (ENV_ANY_VALUE.includes(name)) found.off.push(`env ${name}=${text}`);
-  if (ENV_ASKED.includes(name)) found.ask.push(`env ${name}=${text}`);
+  else if (ENV_ANY_VALUE.includes(name)) found.off.push(`env ${name}=${text}`);
+  else if (ENV_ASKED.includes(name) || (ENV_ASKED_PREFIX.test(name) && !ENV_NOT_ASKED.has(name) && !ENV_SWITCHES.some((s) => s.name === name))) {
+    found.ask.push(`env ${name}=${text}`);
+  }
 }
 
 /**
@@ -224,7 +281,8 @@ const TEXT_PATTERNS: ReadonlyArray<{ label: string; re: RegExp }> = [
 ];
 
 /** A variable set to any value, by pattern: its name, and its value as a JSON literal. */
-const ENV_VALUE = /"(NODE_OPTIONS|GUARDIAN_PKG_VET_DEADLINE_MS|PATH|HOME|USERPROFILE)"\s*:\s*("(?:[^"\\\n]|\\.)*"|-?\d[\d.eE+-]*|true|false|null)/gi;
+const ENV_VALUE =
+  /"((?:NODE|GUARDIAN)_[A-Za-z0-9_]+|PATH|HOME|USERPROFILE|(?:HTTPS?|ALL|NO)_PROXY)"\s*:\s*("(?:[^"\\\n]|\\.)*"|-?\d[\d.eE+-]*|true|false|null)/gi;
 
 /**
  * An `enabledPlugins` entry turning dev-guardian off, by pattern: a quoted key
@@ -232,12 +290,14 @@ const ENV_VALUE = /"(NODE_OPTIONS|GUARDIAN_PKG_VET_DEADLINE_MS|PATH|HOME|USERPRO
  * Claude Code settings file only `enabledPlugins` has such keys, and an edit
  * fragment may not show the `enabledPlugins` around it.
  */
-const PLUGIN_OFF = /"([^"\n]*dev-guardian[^"\n]*)"\s*:\s*(?!true\b)(?:false\b|null\b|-?\d|")/gi;
+const PLUGIN_OFF = /"((?:[^"\\\n]|\\.)*)"\s*:\s*(?!true\b)(?:false\b|null\b|-?\d|")/g;
 
 function fromText(raw: string): Found {
   const text = raw.includes('\\u') ? raw.replace(/\\u([0-9A-Fa-f]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))) : raw;
   const found: Found = { off: TEXT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.label), ask: [] };
-  for (const m of text.matchAll(PLUGIN_OFF)) found.off.push(`enabledPlugins ${m[1] ?? ''}=false`);
+  // Every quoted key, then its name tested: `"[^"]*dev-guardian[^"]*"` was
+  // quadratic on a string repeating dev-guardian (review 12, finding 2).
+  for (const m of text.matchAll(PLUGIN_OFF)) if (OUR_PLUGIN.test(m[1] ?? '')) found.off.push(`enabledPlugins ${m[1] ?? ''}=false`);
   for (const m of text.matchAll(ENV_VALUE)) {
     let value: unknown;
     try {
@@ -247,7 +307,7 @@ function fromText(raw: string): Found {
     }
     // In a fragment, `"path": …` is anything's path: only the upper-case name is the variable.
     const name = m[1] ?? '';
-    if (ENV_ANY_VALUE.includes(name.toUpperCase()) || name === name.toUpperCase()) judgeEnv(name, value as Lenient, found);
+    if (/^(?:NODE|GUARDIAN)_/i.test(name) || name === name.toUpperCase()) judgeEnv(name, value as Lenient, found);
   }
   return found;
 }
@@ -256,7 +316,9 @@ function fromText(raw: string): Found {
 function settingsFound(content: string): Found {
   const text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
   const read = readLenient(text);
-  return read instanceof LenientObject ? fromObject(read) : fromText(text);
+  const found = read instanceof LenientObject ? fromObject(read) : fromText(text);
+  // A switch both a pattern and a variable reading find, or a repeated key, is one label.
+  return { off: [...new Set(found.off)], ask: [...new Set(found.ask)] };
 }
 
 /**
@@ -278,12 +340,34 @@ export function newlyLoosened(before: string | undefined, after: string): string
 
 /**
  * The settings `after` sets, and `before` did not, that are the user's to
- * confirm rather than refused: `env` `PATH`, `HOME` or `USERPROFILE`
- * ({@link ENV_ASKED}).
+ * confirm rather than refused: `env` `PATH`, `HOME`, `USERPROFILE`, a proxy
+ * and any other `NODE_*` or `GUARDIAN_*` ({@link ENV_ASKED}).
  */
 export function newlyAsked(before: string | undefined, after: string): string[] {
   const had = new Set(before === undefined ? [] : settingsFound(before).ask);
   return settingsFound(after).ask.filter((label) => !had.has(label));
+}
+
+/**
+ * What a change of a settings file adds, read once per side: the switches
+ * (`off`, {@link newlyLoosened}) and the settings to ask about (`ask`,
+ * {@link newlyAsked}). `late` when reading took past `deadline` (epoch ms):
+ * the caller asks rather than lets a hook run out its time (review 12,
+ * finding 2: the dispatcher read each side twice, and one input took 19 s).
+ */
+export function settingsVerdict(
+  before: string | undefined,
+  after: string,
+  opts: { deadline?: number; now?: () => number } = {},
+): { off: string[]; ask: string[]; late?: true } {
+  const now = opts.now ?? Date.now;
+  const had = before === undefined ? { off: [], ask: [] } : settingsFound(before);
+  const late = (): boolean => opts.deadline !== undefined && now() > opts.deadline;
+  if (late()) return { off: [], ask: [], late: true };
+  const has = settingsFound(after);
+  const off = has.off.filter((label) => !had.off.includes(label));
+  const ask = has.ask.filter((label) => !had.ask.includes(label));
+  return late() ? { off, ask, late: true } : { off, ask };
 }
 
 /**

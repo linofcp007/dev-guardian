@@ -411,10 +411,12 @@ __export(settingsGuard_exports, {
   hookLooseningSettings: () => hookLooseningSettings,
   isClaudeSettingsPath: () => isClaudeSettingsPath,
   newlyAsked: () => newlyAsked,
-  newlyLoosened: () => newlyLoosened
+  newlyLoosened: () => newlyLoosened,
+  settingsVerdict: () => settingsVerdict
 });
 function isClaudeSettingsPath(path, configDir) {
   if (/(?:^|[\\/])\.claude[\\/]settings(?:\.local)?\.json$/i.test(path)) return true;
+  if (MANAGED_SETTINGS.test(path)) return true;
   if (configDir === void 0 || configDir.trim() === "") return false;
   const fold = process.platform === "win32";
   const m = (fold ? /^(.*)[\\/](settings(?:\.local)?\.json)$/i : /^(.*)\/(settings(?:\.local)?\.json)$/).exec(path);
@@ -425,12 +427,16 @@ function isClaudeSettingsPath(path, configDir) {
   };
   return norm(m[1] ?? "") === norm(configDir);
 }
+var MANAGED_SETTINGS = /(?:^|[\\/])(?:ClaudeCode|claude-code)[\\/]managed-settings\.json$/i;
 var ENV_SWITCHES = [
   { name: "GUARDIAN_HOOKS", off: ["off"] },
   { name: "GUARDIAN_HOOKS_BASH_BLOCK", off: ["0", "false"] },
   { name: "GUARDIAN_PKG_VET", off: ["0"] }
 ];
-var ENV_ANY_VALUE = ["NODE_OPTIONS", "GUARDIAN_PKG_VET_DEADLINE_MS"];
+var ENV_ANY_VALUE = ["NODE_OPTIONS", "GUARDIAN_PKG_VET_DEADLINE_MS", "GUARDIAN_OFFLINE"];
+var ENV_OFF_AT = [{ name: "NODE_TLS_REJECT_UNAUTHORIZED", off: ["0"] }];
+var ENV_ASKED_PREFIX = /^(?:NODE_|GUARDIAN_)|^(?:HTTPS?|ALL|NO)_PROXY$/;
+var ENV_NOT_ASKED = /* @__PURE__ */ new Set(["NODE_ENV"]);
 var ENV_ASKED = ["PATH", "HOME", "USERPROFILE"];
 var OUR_PLUGIN = /dev-guardian/i;
 var LenientObject = class {
@@ -440,6 +446,15 @@ var LenientObject = class {
   entries;
 };
 var MAX_LENIENT_DEPTH = 64;
+var TooDeep = class extends Error {
+};
+function fromParsed(value, levels = 2) {
+  if (Array.isArray(value)) return levels > 0 ? value.map((v) => fromParsed(v, levels - 1)) : [];
+  if (value !== null && typeof value === "object") {
+    return new LenientObject(levels > 0 ? Object.entries(value).map(([k, v]) => [k, fromParsed(v, levels - 1)]) : []);
+  }
+  return value;
+}
 function readLenient(text) {
   let i = 0;
   const n = text.length;
@@ -467,7 +482,7 @@ function readLenient(text) {
     return String(value2);
   };
   const value = (depth) => {
-    if (depth > MAX_LENIENT_DEPTH) throw new Error("too deep");
+    if (depth > MAX_LENIENT_DEPTH) throw new TooDeep("too deep");
     skip();
     const c = text.charAt(i);
     if (c === '"') return string();
@@ -511,8 +526,13 @@ function readLenient(text) {
     const v = value(0);
     skip();
     return i === n ? v : void 0;
-  } catch {
-    return void 0;
+  } catch (err) {
+    if (!(err instanceof TooDeep)) return void 0;
+    try {
+      return fromParsed(JSON.parse(text));
+    } catch {
+      return void 0;
+    }
   }
 }
 function truthy(v) {
@@ -525,10 +545,12 @@ function judgeEnv(key, value, found) {
   const name = key.toUpperCase();
   const text = scalar(value);
   if (text === void 0) return;
-  const sw = ENV_SWITCHES.find((s) => s.name === name);
+  const sw = [...ENV_SWITCHES, ...ENV_OFF_AT].find((s) => s.name === name);
   if (sw !== void 0 && sw.off.includes(text)) found.off.push(`env ${sw.name}=${text}`);
-  if (ENV_ANY_VALUE.includes(name)) found.off.push(`env ${name}=${text}`);
-  if (ENV_ASKED.includes(name)) found.ask.push(`env ${name}=${text}`);
+  else if (ENV_ANY_VALUE.includes(name)) found.off.push(`env ${name}=${text}`);
+  else if (ENV_ASKED.includes(name) || ENV_ASKED_PREFIX.test(name) && !ENV_NOT_ASKED.has(name) && !ENV_SWITCHES.some((s) => s.name === name)) {
+    found.ask.push(`env ${name}=${text}`);
+  }
 }
 function fromObject(settings) {
   const found = { off: [], ask: [] };
@@ -551,12 +573,12 @@ var TEXT_PATTERNS = [
   { label: "env GUARDIAN_HOOKS_BASH_BLOCK=false", re: /"GUARDIAN_HOOKS_BASH_BLOCK"\s*:\s*(?:"false"|false\b)/i },
   { label: "env GUARDIAN_PKG_VET=0", re: /"GUARDIAN_PKG_VET"\s*:\s*(?:"0"|0\b)/i }
 ];
-var ENV_VALUE = /"(NODE_OPTIONS|GUARDIAN_PKG_VET_DEADLINE_MS|PATH|HOME|USERPROFILE)"\s*:\s*("(?:[^"\\\n]|\\.)*"|-?\d[\d.eE+-]*|true|false|null)/gi;
-var PLUGIN_OFF = /"([^"\n]*dev-guardian[^"\n]*)"\s*:\s*(?!true\b)(?:false\b|null\b|-?\d|")/gi;
+var ENV_VALUE = /"((?:NODE|GUARDIAN)_[A-Za-z0-9_]+|PATH|HOME|USERPROFILE|(?:HTTPS?|ALL|NO)_PROXY)"\s*:\s*("(?:[^"\\\n]|\\.)*"|-?\d[\d.eE+-]*|true|false|null)/gi;
+var PLUGIN_OFF = /"((?:[^"\\\n]|\\.)*)"\s*:\s*(?!true\b)(?:false\b|null\b|-?\d|")/g;
 function fromText(raw) {
   const text = raw.includes("\\u") ? raw.replace(/\\u([0-9A-Fa-f]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))) : raw;
   const found = { off: TEXT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.label), ask: [] };
-  for (const m of text.matchAll(PLUGIN_OFF)) found.off.push(`enabledPlugins ${m[1] ?? ""}=false`);
+  for (const m of text.matchAll(PLUGIN_OFF)) if (OUR_PLUGIN.test(m[1] ?? "")) found.off.push(`enabledPlugins ${m[1] ?? ""}=false`);
   for (const m of text.matchAll(ENV_VALUE)) {
     let value;
     try {
@@ -565,14 +587,15 @@ function fromText(raw) {
       continue;
     }
     const name = m[1] ?? "";
-    if (ENV_ANY_VALUE.includes(name.toUpperCase()) || name === name.toUpperCase()) judgeEnv(name, value, found);
+    if (/^(?:NODE|GUARDIAN)_/i.test(name) || name === name.toUpperCase()) judgeEnv(name, value, found);
   }
   return found;
 }
 function settingsFound(content) {
   const text = content.charCodeAt(0) === 65279 ? content.slice(1) : content;
   const read = readLenient(text);
-  return read instanceof LenientObject ? fromObject(read) : fromText(text);
+  const found = read instanceof LenientObject ? fromObject(read) : fromText(text);
+  return { off: [...new Set(found.off)], ask: [...new Set(found.ask)] };
 }
 function hookLooseningSettings(content) {
   return settingsFound(content).off;
@@ -584,6 +607,16 @@ function newlyLoosened(before, after) {
 function newlyAsked(before, after) {
   const had = new Set(before === void 0 ? [] : settingsFound(before).ask);
   return settingsFound(after).ask.filter((label) => !had.has(label));
+}
+function settingsVerdict(before, after, opts = {}) {
+  const now = opts.now ?? Date.now;
+  const had = before === void 0 ? { off: [], ask: [] } : settingsFound(before);
+  const late = () => opts.deadline !== void 0 && now() > opts.deadline;
+  if (late()) return { off: [], ask: [], late: true };
+  const has = settingsFound(after);
+  const off = has.off.filter((label) => !had.off.includes(label));
+  const ask = has.ask.filter((label) => !had.ask.includes(label));
+  return late() ? { off, ask, late: true } : { off, ask };
 }
 function applyEdit(content, oldString, newString, replaceAll = false) {
   if (oldString === "") return void 0;

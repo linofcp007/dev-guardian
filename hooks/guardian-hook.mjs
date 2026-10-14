@@ -133,8 +133,10 @@ const HOOK_STARTED = Date.now();
  *   settings: Array<{ path: string, change: SettingsChange | null }>,
  *   unread?: string,
  *   fileTool?: boolean,
+ *   maybe?: { paths: string[], change: SettingsChange, removes: boolean },
  * }} WriteDescription
- *   `unread`: why part of an MCP tool's arguments was not read; `fileTool`: its name names a file.
+ *   `unread`: why part of an MCP tool's arguments was not read; `fileTool`: its name names a file;
+ *   `maybe`: a non-file tool's strings that may name a guarded file — asked about, never denied.
  * @typedef {Record<string, unknown>} ToolInput
  */
 
@@ -601,10 +603,11 @@ function loadConfig(root, unread) {
   if (envBlock === '0' || envBlock === 'false') merged.bash.block = false;
   else if (envBlock === '1' || envBlock === 'true') merged.bash.block = true;
 
-  // An `ignorePaths` entry every path holds — `""`, or `"/"`, which begins
-  // every project-relative path — silences every secret warning, and the
+  // An `ignorePaths` entry (nearly) every path holds — `""`, `"/"`, which
+  // begins every project-relative path, or `"."`, in every name with an
+  // extension (review 12, finding 17) — silences the secret warnings, and the
   // model heard nothing of it (review of 3.4.0, plausible): SessionStart says so.
-  const everything = merged.ignorePaths.filter((f) => f === '' || f === '/');
+  const everything = merged.ignorePaths.filter((f) => f === '' || f === '/' || f === '.');
   if (everything.length > 0) {
     const from = user.ignorePaths !== undefined ? '~/.config/dev-guardian/hooks.json' : '.guardian/hooks.config.json';
     merged.ignoresEverything = `in ${from}, "ignorePaths" holds ${everything.map((f) => JSON.stringify(f)).join(' and ')}`;
@@ -826,15 +829,29 @@ function isGuardianOwnConfigFile(filePath, cwd, root) {
 }
 
 /**
+ * Claude Code's managed settings on this platform — they win over every other
+ * settings file (review 12, finding 7).
+ */
+function managedSettingsFiles() {
+  if (process.platform === 'win32') {
+    const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files';
+    const programData = process.env.ProgramData ?? 'C:\\ProgramData';
+    return [join(programFiles, 'ClaudeCode', 'managed-settings.json'), join(programData, 'ClaudeCode', 'managed-settings.json')];
+  }
+  if (process.platform === 'darwin') return ['/Library/Application Support/ClaudeCode/managed-settings.json'];
+  return ['/etc/claude-code/managed-settings.json'];
+}
+
+/**
  * Claude Code's settings files a Write could be a hard link to: the project's,
- * the user's (`~/.claude`), and `CLAUDE_CONFIG_DIR`'s.
+ * the user's (`~/.claude`), `CLAUDE_CONFIG_DIR`'s and the managed ones.
  *
  * @param {string} root
  */
 function claudeSettingsFiles(root) {
   const dirs = [join(resolve(root), '.claude'), join(homedir(), '.claude')];
   if (process.env.CLAUDE_CONFIG_DIR) dirs.push(resolve(process.env.CLAUDE_CONFIG_DIR));
-  return dirs.flatMap((d) => [join(d, 'settings.json'), join(d, 'settings.local.json')]);
+  return [...dirs.flatMap((d) => [join(d, 'settings.json'), join(d, 'settings.local.json')]), ...managedSettingsFiles()];
 }
 
 /**
@@ -1042,8 +1059,8 @@ function ignoredSettingsNotice(cfg) {
   }
   if (cfg.ignoresEverything !== undefined) {
     lines.push(
-      `⚠️ dev-guardian: ${cfg.ignoresEverything}, which every path matches — no secret written to a file is warned ` +
-        'about in this session.',
+      `⚠️ dev-guardian: ${cfg.ignoresEverything}, which every path (or nearly every one) matches — a secret written ` +
+        'to such a file is not warned about in this session.',
     );
   }
   return lines.length > 0 ? lines.join('\n') : null;
@@ -1389,11 +1406,13 @@ function describeWrite(toolName, input) {
             ? { content }
             : null
           : { edits: toolName === 'Edit' ? [input] : Array.isArray(edits) ? edits.filter(isPlainObject) : [] };
-      return { path, text: extractInsertedText(toolName, input), config: [path], registry: [path], settings: change ? [{ path, change }] : [] };
+      // `~/…` and Git Bash's `/c/…` name the same file (review 12, finding 17).
+      const paths = spellings(path);
+      return { path, text: extractInsertedText(toolName, input), config: paths, registry: paths, settings: change ? paths.map((p) => ({ path: p, change })) : [] };
     }
     case 'NotebookEdit': {
       const path = str(input['notebook_path']);
-      return path === undefined ? null : { path, text: extractInsertedText(toolName, input), config: [], registry: [path], settings: [] };
+      return path === undefined ? null : { path, text: extractInsertedText(toolName, input), config: [], registry: spellings(path), settings: [] };
     }
     default:
       return toolName.startsWith('mcp__') ? describeMcpWrite(toolName, input) : null;
@@ -1528,39 +1547,66 @@ function mcpStrings(input) {
 }
 
 /**
- * A path as written and, when it starts with `~` (`~/…`, `~\…`), as the home
- * directory's: MCP servers expand it (the filesystem server and
- * desktop-commander do), and the `~/.config/dev-guardian/hooks.json` they
- * write passed the configuration and registry guards (review of 3.4.0,
- * finding 3). Both are judged.
+ * A path as written and in the other spellings that name the same file: with
+ * a leading `~` (`~/…`, `~\…`) as the home directory's — MCP servers expand it
+ * (the filesystem server and desktop-commander do), and the
+ * `~/.config/dev-guardian/hooks.json` they wrote passed the configuration and
+ * registry guards (review of 3.4.0, finding 3) — and, on Windows, Git Bash's
+ * `/c/…` (`/cygdrive/c/…`) as `C:/…` (review 12, finding 17: Write and Edit
+ * expanded neither). Each is judged.
  *
  * @param {string} path
  * @returns {string[]}
  */
-function withHome(path) {
+function spellings(path) {
+  const out = [path];
   const m = /^~(?:[\\/]+|$)/.exec(path);
-  if (m === null) return [path];
-  const rest = path.slice(m[0].length).replace(/\\/g, '/');
-  try {
-    return [path, rest === '' ? homedir() : join(homedir(), rest)];
-  } catch {
-    return [path]; // no home directory (no passwd entry): only as written
+  if (m !== null) {
+    const rest = path.slice(m[0].length).replace(/\\/g, '/');
+    try {
+      out.push(rest === '' ? homedir() : join(homedir(), rest));
+    } catch {
+      /* no home directory (no passwd entry): only as written */
+    }
   }
+  if (process.platform === 'win32') {
+    const slashed = path.replace(/\\/g, '/');
+    const msys = /^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/.exec(slashed);
+    if (msys !== null) out.push(`${(msys[1] ?? '').toUpperCase()}:${slashed.slice(msys[0].length) || '/'}`);
+  }
+  return out;
 }
+
+/** The deepest an MCP call's arguments are looked through for a matching flag ({@link matchesOtherwise}). */
+const MATCH_FLAG_DEPTH = 4;
 
 /**
  * Whether an edit's old text is matched as something other than itself — a
- * regular expression, or ignoring case — so applying it as plain text could
- * give another result.
+ * regular expression, a glob, or ignoring case — so applying it as plain text
+ * could give another result: a flag anywhere in the call, nested
+ * (`options: {useRegex: true}`) or as a string (`isRegex: "true"`, `flags:
+ * "i"`, `mode: "regex"`) (review 12, finding 15: only a top-level `true`
+ * counted).
  *
- * @param {Record<string, unknown>} args
+ * @param {unknown} args
+ * @param {number} [depth]
+ * @returns {boolean}
  */
-function matchesOtherwise(args) {
+function matchesOtherwise(args, depth = 0) {
+  if (depth > MATCH_FLAG_DEPTH) return false;
+  if (Array.isArray(args)) return args.some((v) => matchesOtherwise(v, depth + 1));
+  if (!isPlainObject(args)) return false;
+  /** @param {unknown} v */
+  const on = (v) => v === true || v === 1 || (typeof v === 'string' && !/^(?:|false|0|no|off|none|literal|plain|exact|text|string)$/i.test(v.trim()));
+  /** @param {unknown} v */
+  const off = (v) => v === false || v === 0 || (typeof v === 'string' && /^(?:false|0|no|off)$/i.test(v.trim()));
   return Object.entries(args).some(
     ([k, v]) =>
-      (/regex|regexp|pattern|wildcard/i.test(k) && v === true) ||
-      (/^(?:case_?sensitive|matchCase|match_case)$/i.test(k) && v === false) ||
-      (/^(?:ignore_?case|case_?insensitive)$/i.test(k) && v === true),
+      (/regex|regexp|regular_?expression|pattern_?type|wildcard|glob/i.test(k) && on(v)) ||
+      (/^(?:flags?|mode|match_?mode|search_?mode|syntax|match_?type)$/i.test(k) && on(v)) ||
+      (/^(?:case_?sensitive|matchCase|match_case)$/i.test(k) && off(v)) ||
+      (/^(?:ignore_?case|case_?insensitive)$/i.test(k) && on(v)) ||
+      (typeof v === 'object' && v !== null && matchesOtherwise(v, depth + 1)),
   );
 }
 
@@ -1574,7 +1620,7 @@ function matchesOtherwise(args) {
  * writes; the source of anything but a copy a path it takes away; and, for a
  * tool whose name names a file ({@link MCP_FILE_NOUN}), any other short,
  * single-line string is judged as a path it may write too. Every path is
- * judged as written and with a leading `~` expanded ({@link withHome}). The
+ * judged as written and with a leading `~` expanded ({@link spellings}). The
  * text is the known content key, or the edits, or else every string that is
  * not a path. A change whose result cannot be worked out — a regex replace, a
  * move, strings no known key names — is `opaque`, and a write of Claude Code's
@@ -1608,6 +1654,9 @@ function describeMcpWrite(toolName, input) {
   const others = [];
   /** @type {string[]} */
   const loose = [];
+  /** A non-file tool's other strings that may name a guarded file: asked about, never denied (review 12, finding 6). */
+  /** @type {string[]} */
+  const maybe = [];
   const read = mcpStrings(input);
   let unread = read.cut;
   let fromFile = false;
@@ -1617,17 +1666,22 @@ function describeMcpWrite(toolName, input) {
       loose.push(value);
     } else if (MCP_SOURCE_KEYS.has(key)) {
       fromFile = true;
-      if (path !== undefined && !copies) sources.push(...withHome(path));
+      if (path !== undefined && !copies) sources.push(...spellings(path));
     } else if (MCP_DEST_KEYS.has(key) || MCP_PATH_KEY.test(key)) {
-      if (path !== undefined) for (const p of withHome(path)) dests.push({ path: p, parent });
+      if (path !== undefined) for (const p of spellings(path)) dests.push({ path: p, parent });
     } else {
       loose.push(value);
-      if (path === undefined || !fileTool) continue;
-      if (others.length < MCP_LOOSE_PATHS) others.push(...withHome(path));
+      if (path === undefined) continue;
+      if (!fileTool) {
+        // Only a string that can name a guarded file — a `.json` or the registry — is looked up.
+        if (maybe.length < MCP_LOOSE_PATHS && (/\.json$/i.test(path) || /registry/i.test(path))) maybe.push(...spellings(path));
+        continue;
+      }
+      if (others.length < MCP_LOOSE_PATHS) others.push(...spellings(path));
       else unread ??= `more than ${String(MCP_LOOSE_PATHS)} strings that may be paths`;
     }
   }
-  if (dests.length === 0 && sources.length === 0 && others.length === 0) {
+  if (dests.length === 0 && sources.length === 0 && others.length === 0 && maybe.length === 0) {
     return unread === undefined ? null : { path: '', text: loose.join('\n'), config: [], registry: [], settings: [], unread, fileTool };
   }
   /** @type {string | undefined} */
@@ -1680,6 +1734,7 @@ function describeMcpWrite(toolName, input) {
     // Removing a registry entry only un-trusts a database; writing one is the user's decision.
     registry: removes ? [] : written,
     settings: removes ? [] : [...dests.map((d) => ({ path: d.path, change: changeOf(d.parent) })), ...others.map((path) => ({ path, change }))],
+    ...(maybe.length === 0 ? {} : { maybe: { paths: maybe, change, removes } }),
     ...(unread === undefined ? {} : { unread }),
     fileTool,
   };
@@ -1784,14 +1839,26 @@ function walkRootFor(abs, cwd, root) {
  * steps (review of 3.4.0, finding 7). Any failure lets the call through
  * (fail-open).
  *
+ * Each side is read once (`settingsVerdict`), under {@link SETTINGS_BUDGET_MS}:
+ * a reading that runs past it asks rather than lets the hook run out its 15 s
+ * — and the call through unjudged (review 12, finding 2). An edit that cannot
+ * be applied to the file as it is — its old text not there, a regex or a
+ * case-folding flag anywhere in the call (`options: {useRegex: true}`,
+ * `flags: "i"`) — asks too (finding 15).
+ *
+ * `maybe`: the path is only a non-file MCP tool's argument that names the
+ * settings (review 12, finding 6) — what would be denied is asked instead,
+ * so a GitHub issue titled `.claude/settings.json` is never refused.
+ *
  * @param {string} rawPath
  * @param {SettingsChange | null} change
  * @param {string} cwd
  * @param {string} root
  * @param {string} toolName
+ * @param {boolean} [maybe]
  * @returns {Promise<string | undefined>} the reason to ask the user, when the result cannot be worked out
  */
-async function claudeSettingsWriteGuard(rawPath, change, cwd, root, toolName) {
+async function claudeSettingsWriteGuard(rawPath, change, cwd, root, toolName, maybe = false) {
   if (!rawPath || !change) return undefined;
   // The file the write reaches (review M1: `settings.json::$DATA` IS
   // settings.json on Windows; round 3, item 5: a hard link to it is it too).
@@ -1811,6 +1878,7 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root, toolName) {
     if (!guard.isClaudeSettingsPath(abs, configDir)) return undefined;
     const walkRoot = walkRootFor(abs, cwd, root);
     const before = isNetworkPath(abs) && walkRoot === undefined ? undefined : readSmallTextFile(abs, SETTINGS_MAX_BYTES, walkRoot);
+    const where = normalizePath(rawPath);
     /** @type {[string | undefined, string]} what is compared: the file before and after, or the edit's own strings */
     let judged;
     if (typeof change.content === 'string') {
@@ -1818,7 +1886,7 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root, toolName) {
     } else if (typeof change.opaque === 'string') {
       judged = [before, change.opaque];
       ask =
-        `dev-guardian: ${toolName} changes Claude Code's settings (${normalizePath(rawPath)}) in a way the guard cannot ` +
+        `dev-guardian: ${toolName} changes Claude Code's settings (${where}) in a way the guard cannot ` +
         'work out — a regular expression, a move, or arguments it does not know — and a change there can switch the ' +
         'guardrail hooks off. Confirm it only if you expected this change.';
     } else {
@@ -1834,28 +1902,56 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root, toolName) {
         if (after === undefined) break;
         after = guard.applyEdit(after, e.old_string, e.new_string, e.replace_all === true);
       }
-      judged = after !== undefined ? [before, after] : [edits.map((e) => e.old_string).join('\n'), edits.map((e) => e.new_string).join('\n')];
+      if (after !== undefined) judged = [before, after];
+      else {
+        judged = [edits.map((e) => e.old_string).join('\n'), edits.map((e) => e.new_string).join('\n')];
+        // Asked when the file is there (or could not be read) and the edit does
+        // not apply to it as plain text — a tool may match otherwise. On a file
+        // that is not there, any edit fails.
+        const there = before !== undefined || isNetworkPath(abs) || presentNoFollow(abs);
+        if (there) ask =
+          `dev-guardian: ${toolName}'s edit of Claude Code's settings (${where}) cannot be applied to the file as it ` +
+          'is, so what it leaves there is not known — and a change there can switch the guardrail hooks off. Confirm it ' +
+          'only if you expected this change.';
+      }
     }
-    added = guard.newlyLoosened(...judged);
-    // `env` PATH, HOME, USERPROFILE: which `node` the hooks start, which home they read (review of 3.4.0, finding 4).
-    const asked = typeof guard.newlyAsked === 'function' ? guard.newlyAsked(...judged) : [];
-    if (ask === undefined && asked.length > 0) {
+    const verdict =
+      typeof guard.settingsVerdict === 'function'
+        ? guard.settingsVerdict(...judged, { deadline: Date.now() + SETTINGS_BUDGET_MS })
+        : { off: guard.newlyLoosened(...judged), ask: [] };
+    added = verdict.off;
+    if (verdict.late === true && added.length === 0) {
+      ask ??=
+        `dev-guardian: this change to Claude Code's settings (${where}) took too long to read in full, so whether it ` +
+        'switches the guardrail hooks off is not known. Confirm it only if you expected this change.';
+    }
+    // `env` PATH, HOME, a proxy, NODE_* / GUARDIAN_*: which `node` the hooks start, where they look (findings 4 and 3).
+    if (ask === undefined && verdict.ask.length > 0) {
       ask =
-        `dev-guardian: this change to Claude Code's settings sets ${asked.join(', ').slice(0, 300)} — which decides the program the ` +
-        'guardrail hooks start or the home they read their configuration from. Confirm it only if you expected this change.';
+        `dev-guardian: this change to Claude Code's settings sets ${verdict.ask.join(', ').slice(0, 300)} — which decides the ` +
+        'program the guardrail hooks start, the home they read their configuration from or how they reach the network. ' +
+        'Confirm it only if you expected this change.';
     }
   } catch (err) {
     debug(`settings guard skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
   if (added.length === 0) return ask;
-  emit('PreToolUse', {
-    permissionDecision: 'deny',
-    permissionDecisionReason:
-      `dev-guardian: this change to Claude Code's settings would switch the guardrail hooks off (${added.join(', ')}). ` +
-      'Ask the user to make it themselves — an assistant is not allowed to turn its own guardrails off.',
-  });
+  const reason =
+    `dev-guardian: this change to Claude Code's settings would switch the guardrail hooks off (${added.join(', ')}). ` +
+    'Ask the user to make it themselves — an assistant is not allowed to turn its own guardrails off.';
+  if (maybe) {
+    return (
+      `dev-guardian: ${toolName}'s argument ${normalizePath(rawPath)} names Claude Code's settings, and the call's text ` +
+      `would switch the guardrail hooks off there (${added.join(', ')}). If it writes that file, the user must make the ` +
+      'change themselves; confirm it only if it does not.'
+    );
+  }
+  emit('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: reason });
 }
+
+/** How long reading a settings change may take before the user is asked instead (`settingsVerdict`). */
+const SETTINGS_BUDGET_MS = 4000;
 
 /**
  * The question for an MCP write tool's call whose arguments were not all read
@@ -1952,16 +2048,54 @@ async function handlePreToolUseWrite(write, toolName, cwd, root, cfg, allowlist)
   /** @type {string | undefined} */
   let ask;
   for (const { path, change } of write.settings) ask ??= await claudeSettingsWriteGuard(path, change, cwd, root, toolName); // likewise
-  if (write.registry.length > 0) {
-    await loadRegistryGuard();
-    for (const p of write.registry) guardianRegistryWriteGuard(p, cwd); // likewise
-  }
+  const maybe = write.maybe;
+  if (write.registry.length > 0 || maybe !== undefined) await loadRegistryGuard();
+  for (const p of write.registry) guardianRegistryWriteGuard(p, cwd); // likewise
   const secret = await secretBlockReason(write, cwd, root, cfg, allowlist);
   if (secret !== undefined) emit('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: secret });
+  // A non-file tool's argument that names a guarded file (review 12, finding 6:
+  // `save {location, data}`, `write {p, c}`, `write {args: [path, content]}`
+  // were judged before the non-file rule and silent after it): the user decides.
+  if (maybe !== undefined) ask ??= await maybeGuardedAsk(maybe, toolName, cwd, root);
   if (ask !== undefined) emit('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: ask });
   const unread = unreadAnswer(write, toolName);
   if (unread !== undefined) emit('PreToolUse', unread);
   noop();
+}
+
+/**
+ * The question for a non-file MCP tool whose argument names a guarded file
+ * ({@link WriteDescription.maybe}) — the hook configuration, the registry, or
+ * Claude Code's settings with a change that would be asked about or denied —
+ * else `undefined`. Never a deny: a GitHub issue titled
+ * `.guardian/hooks.config.json` writes no file.
+ *
+ * @param {NonNullable<WriteDescription['maybe']>} maybe
+ * @param {string} toolName
+ * @param {string} cwd
+ * @param {string} root
+ * @returns {Promise<string | undefined>}
+ */
+async function maybeGuardedAsk(maybe, toolName, cwd, root) {
+  /** @param {string} p @param {string} what */
+  const named = (p, what) =>
+    `dev-guardian: ${toolName}'s argument ${normalizePath(p)} names ${what}, which an assistant may not change. ` +
+    'Confirm it only if this call does not write that file.';
+  for (const p of maybe.paths) {
+    if (isGuardianOwnConfigFile(p, cwd, root)) return named(p, "the guardrail hooks' own configuration");
+    let registry = false;
+    try {
+      registry = !maybe.removes && writesRegistry(resolve(cwd, p));
+    } catch {
+      /* fail-open */
+    }
+    if (registry) return named(p, "dev-guardian's registry of trusted databases");
+    if (!maybe.removes) {
+      const settings = await claudeSettingsWriteGuard(p, maybe.change, cwd, root, toolName, true);
+      if (settings !== undefined) return settings;
+    }
+  }
+  return undefined;
 }
 
 // ─────────────────────────────────── main ──────────────────────────────────

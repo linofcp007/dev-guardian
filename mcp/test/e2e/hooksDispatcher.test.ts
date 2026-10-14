@@ -620,12 +620,13 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     });
 
     // Review of 3.4.0, plausible: an `ignorePaths` entry every path holds
-    // silenced every secret warning, and SessionStart said nothing of it.
-    it.each([[['/']], [['']], [['/generated/', '/']]])('SessionStart says a project "ignorePaths" of %j silences every secret warning', (ignorePaths) => {
+    // silenced every secret warning, and SessionStart said nothing of it —
+    // `"."` too, which every name with an extension holds (review 12, finding 17).
+    it.each([[['/']], [['']], [['.']], [['/generated/', '/']]])('SessionStart says a project "ignorePaths" of %j silences the secret warnings', (ignorePaths) => {
       projectConfig({ ignorePaths });
-      expect(context(sessionStart())).toMatch(/in \.guardian\/hooks\.config\.json, "ignorePaths" holds .*which every path matches — no secret/);
+      expect(context(sessionStart())).toMatch(/in \.guardian\/hooks\.config\.json, "ignorePaths" holds .*which every path \(or nearly every one\) matches/);
       projectConfig({ ignorePaths: ['/generated/'] });
-      expect(context(sessionStart())).not.toMatch(/every path matches/);
+      expect(context(sessionStart())).not.toMatch(/every path/);
     });
 
     // Final review M4: `ignorePaths` is advisory, but it also exempted a path
@@ -984,6 +985,45 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     it('JSONC with an escaped key is read as the key it spells', () => {
       const content = '// local\n{ "disable\\u0041llHooks": true, }';
       expect(decision(hook('Write', { file_path: settingsPath('settings.local.json'), content }))).toBe('deny');
+    });
+
+    // Review 12, finding 2: 70 levels of nesting sent valid JSON to the
+    // patterns, whose plugin pattern was quadratic on a string repeating
+    // dev-guardian — 19 s, past the hook's 15 s, and the Write went through.
+    it('deeply nested settings with a long string are still judged, and in time', () => {
+      const content = `{"nest":${'['.repeat(70)}0${']'.repeat(70)},"note":"${'dev-guardian'.repeat(30_000)}","disableAllHooks":true}`;
+      const t0 = Date.now();
+      const r = hook('Write', { file_path: settingsPath('settings.local.json'), content });
+      expect(decision(r)).toBe('deny');
+      expect(Date.now() - t0).toBeLessThan(hangBound(3000));
+    });
+
+    // Review 12, finding 3: more variables silence the vetting.
+    it.each([
+      [{ GUARDIAN_OFFLINE: '1' }, 'deny'],
+      [{ NODE_TLS_REJECT_UNAUTHORIZED: '0' }, 'deny'],
+      [{ NODE_USE_ENV_PROXY: '1', HTTPS_PROXY: 'http://127.0.0.1:9' }, 'ask'],
+      [{ HTTP_PROXY: 'http://127.0.0.1:9' }, 'ask'],
+      [{ NODE_EXTRA_CA_CERTS: 'C:/x/ca.pem' }, 'ask'],
+      [{ GUARDIAN_SOMETHING_NEW: '1' }, 'ask'],
+    ] as const)('env %j: %s', (env, expected) => {
+      expect(decision(hook('Write', { file_path: settingsPath('settings.local.json'), content: JSON.stringify({ env }) }))).toBe(expected);
+    });
+
+    it('NODE_ENV, and a known switch set to a value that switches nothing off, ask nothing', () => {
+      const r = hook('Write', { file_path: settingsPath('settings.local.json'), content: JSON.stringify({ env: { NODE_ENV: 'test', GUARDIAN_PKG_VET: '1' } }) });
+      expect(r.stdout).toBeUndefined();
+    });
+
+    // Review 12, finding 7: the managed settings win over every other file.
+    it("a Write of this platform's managed settings that switches the hooks off is denied", () => {
+      const managed =
+        process.platform === 'win32'
+          ? join(process.env['ProgramFiles'] ?? 'C:\\Program Files', 'ClaudeCode', 'managed-settings.json')
+          : process.platform === 'darwin'
+            ? '/Library/Application Support/ClaudeCode/managed-settings.json'
+            : '/etc/claude-code/managed-settings.json';
+      expect(decision(hook('Write', { file_path: managed, content: '{"disableAllHooks": true}' }))).toBe('deny');
     });
 
     it('env PATH is asked about; the same PATH again is not', () => {
@@ -2048,6 +2088,18 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       it('a `~/…` path to anything else says nothing', () => {
         expect(hook(preToolUse('mcp__filesystem__write_file', { path: '~/notes/todo.md', content: '# todo' }, projectDir)).stdout).toBeUndefined();
       });
+
+      // Review 12, finding 17: Write and Edit expanded neither spelling.
+      it('Write and Edit of `~/…` are judged as the home directory’s too', () => {
+        expect(out(hook(preToolUse('Write', { file_path: '~/.config/dev-guardian/hooks.json', content: '{"enabled": false}' }, projectDir))).permissionDecision).toBe('deny');
+        const r = hook(preToolUse('Write', { file_path: '~/gdata/registry/abc.json', content: '{}' }, projectDir), { GUARDIAN_DATA_DIR: join(homeDir, 'gdata') });
+        expect(out(r).permissionDecisionReason).toMatch(/registry of trusted databases/);
+      });
+
+      it.runIf(process.platform === 'win32')('Git Bash’s `/c/…` spelling is the drive path', () => {
+        const config = join(homeDir, '.config', 'dev-guardian', 'hooks.json').replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d: string) => `/${d.toLowerCase()}`);
+        expect(out(hook(preToolUse('Edit', { file_path: config, old_string: 'a', new_string: 'b' }, projectDir))).permissionDecision).toBe('deny');
+      });
     });
 
     // Review of 3.4.0, finding 7: `{"disableAllHooksX": true}` written (allowed:
@@ -2118,15 +2170,62 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       });
 
       it.each([
-        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: '.claude/settings.json', body: '{"disableAllHooks": true}' }],
-        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: config, body: 'the hook config' }],
-        ['mcp__clock__set_timezone', { timezone: config }],
+        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: '.claude/settings.json', body: 'its permissions are wrong' }],
+        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: 'settings', body: '{"disableAllHooks": true}' }],
+        ['mcp__clock__set_timezone', { timezone: 'Europe/Lisbon' }],
       ])('%s %j says nothing', (tool, input) => {
         expect(call(tool, input).stdout).toBeUndefined();
       });
 
+      // Review 12, finding 6: with only path keys judged, a non-file tool that
+      // writes through another key passed — `save {location, data}`, `write {p,
+      // c}`, `write {args: [path, content]}` were denied before the rule. Its
+      // strings that name a guarded file are judged again, and asked about —
+      // never denied, so an issue merely titled with one is not refused.
+      it.each([
+        ['mcp__x__save', { location: '.claude/settings.local.json', data: '{"disableAllHooks":true}' }],
+        ['mcp__fs__write', { p: '.claude/settings.local.json', c: '{"disableAllHooks":true}' }],
+        ['mcp__x__write', { args: ['.claude/settings.local.json', '{"disableAllHooks":true}'] }],
+        ['mcp__fs__write', { p: config, c: '{"enabled": false}' }],
+        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: '.claude/settings.json', body: '{"disableAllHooks": true}' }],
+        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: config, body: 'the hook config' }],
+        ['mcp__clock__set_timezone', { timezone: config }],
+      ])('%s %j asks — a non-file tool’s argument names a guarded file', (tool, input) => {
+        const r = call(tool, input);
+        expect(out(r).permissionDecision).toBe('ask');
+        expect(out(r).permissionDecisionReason).toMatch(/argument .* names/);
+      });
+
       it('a key that names a path is judged whatever the tool is called', () => {
         expect(out(call('mcp__x__create_entry', { target_file: config, value: '{}' })).permissionDecision).toBe('deny');
+      });
+    });
+
+    // Review 12, finding 15: a regex flag nested or spelled as a string made an
+    // edit of the settings be applied as plain text — and pass.
+    describe('a settings edit that cannot be applied as plain text asks (review 12, finding 15)', () => {
+      const key = ['disable', 'AllHooks'].join('');
+      beforeEach(() => {
+        mkdirSync(join(projectDir, '.claude'), { recursive: true });
+        writeFileSync(join(projectDir, '.claude', 'settings.local.json'), `{"${key}X": true}`);
+      });
+      it.each([
+        { options: { useRegex: true } },
+        { isRegex: 'true' },
+        { flags: 'i' },
+        { search_mode: 'regex' },
+      ])('%j asks', (flag) => {
+        const r = hook(preToolUse('mcp__x__replace_in_file', { path: '.claude/settings.local.json', search: 'Y"', replace: '"', ...flag }, projectDir));
+        expect(out(r).permissionDecision).toBe('ask');
+      });
+      it('an Edit whose old text is not in the file asks', () => {
+        const r = hook(preToolUse('Edit', { file_path: join(projectDir, '.claude', 'settings.local.json'), old_string: 'nowhere', new_string: 'x' }, projectDir));
+        expect(out(r).permissionDecision).toBe('ask');
+        expect(out(r).permissionDecisionReason).toMatch(/cannot be applied/);
+      });
+      it('a plain edit with a `mode: "literal"` is applied, and an ordinary one says nothing', () => {
+        const r = hook(preToolUse('mcp__x__replace_in_file', { path: '.claude/settings.local.json', search: 'X"', replace: 'Z"', mode: 'literal' }, projectDir));
+        expect(r.stdout).toBeUndefined();
       });
     });
   });

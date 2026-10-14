@@ -12,6 +12,7 @@ import {
   isClaudeSettingsPath,
   newlyAsked,
   newlyLoosened,
+  settingsVerdict,
 } from '../../../src/hooks/settingsGuard.js';
 import { expectLinear } from '../../helpers/timing.js';
 
@@ -228,5 +229,63 @@ describe('applyEdit', () => {
 
   it('keeps `$` sequences in the replacement literal', () => {
     expect(applyEdit('a', 'a', "$& $' $1")).toBe("$& $' $1");
+  });
+});
+
+// Review 12, findings 2, 3 and 7.
+describe('review 12: deep settings, more env switches, managed settings', () => {
+  const key = ['disable', 'AllHooks'].join('');
+  const deep = (depth: number, reps: number, extra = `"${key}":true`): string =>
+    `{"nest":${'['.repeat(depth)}0${']'.repeat(depth)},"note":"${'dev-guardian'.repeat(reps)}",${extra}}`;
+
+  it('valid JSON nested past what the lenient reader reads is read by JSON.parse, not the patterns (finding 2)', () => {
+    expect(hookLooseningSettings(deep(70, 10))).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(deep(70, 10, '"env":{"NODE_OPTIONS":"--require=./x.js"}'))).toEqual(['env NODE_OPTIONS=--require=./x.js']);
+    expect(hookLooseningSettings(deep(70, 10, '"enabledPlugins":{"dev-guardian@m":false}'))).toEqual(['enabledPlugins dev-guardian@m=false']);
+    expect(hookLooseningSettings(deep(70, 10, '"permissions":{}'))).toEqual([]);
+  });
+
+  it('valid JSON nested 70 deep with a long dev-guardian string: eight times as long costs well under 22.6 times as much', () => {
+    expectLinear('deep settings with a long string', (n) => hookLooseningSettings(deep(70, Math.ceil(n / 12))), 2_000);
+  }, 120_000);
+
+  it('a fragment with a long string repeating dev-guardian: the plugin pattern stays linear', () => {
+    expectLinear('a fragment repeating dev-guardian', (n) => hookLooseningSettings(`"note": "${'dev-guardian'.repeat(Math.ceil(n / 12))}", "x": 1`), 2_000);
+    expect(hookLooseningSettings(`"note": "${'dev-guardian'.repeat(100)}", "dev-guardian@m": false`)).toEqual(['enabledPlugins dev-guardian@m=false']);
+  }, 120_000);
+
+  it('settingsVerdict reads each side once, and says when it ran past its deadline', () => {
+    expect(settingsVerdict('{}', `{"${key}": true, "env": {"PATH": "/x"}}`)).toEqual({ off: ['disableAllHooks: true'], ask: ['env PATH=/x'] });
+    let t = 0;
+    const now = (): number => (t += 1000);
+    expect(settingsVerdict('{}', '{}', { deadline: 1500, now })).toMatchObject({ late: true });
+  });
+
+  it.each([
+    ['GUARDIAN_OFFLINE', '1', 'off'],
+    ['NODE_TLS_REJECT_UNAUTHORIZED', '0', 'off'],
+    ['NODE_USE_ENV_PROXY', '1', 'ask'],
+    ['HTTPS_PROXY', 'http://127.0.0.1:9', 'ask'],
+    ['http_proxy', 'http://127.0.0.1:9', 'ask'],
+    ['NODE_EXTRA_CA_CERTS', '/x/ca.pem', 'ask'],
+    ['GUARDIAN_ANYTHING', 'x', 'ask'],
+    ['NODE_TLS_REJECT_UNAUTHORIZED', '1', 'ask'],
+    ['NODE_ENV', 'test', 'none'],
+    ['GUARDIAN_HOOKS', 'on', 'none'],
+    ['GUARDIAN_PKG_VET', '1', 'none'],
+  ] as const)('env %s=%s: %s (finding 3)', (name, value, expected) => {
+    const v = settingsVerdict(undefined, JSON.stringify({ env: { [name]: value } }));
+    expect({ off: v.off.length > 0, ask: v.ask.length > 0 }).toEqual({ off: expected === 'off', ask: expected === 'ask' });
+  });
+
+  it.each([
+    ['C:\\Program Files\\ClaudeCode\\managed-settings.json', true],
+    ['C:/ProgramData/ClaudeCode/managed-settings.json', true],
+    ['/Library/Application Support/ClaudeCode/managed-settings.json', true],
+    ['/etc/claude-code/managed-settings.json', true],
+    ['/etc/claude-code/other.json', false],
+    ['docs/managed-settings.json', false],
+  ] as const)('%s is Claude Code settings: %s (finding 7)', (path, expected) => {
+    expect(isClaudeSettingsPath(path)).toBe(expected);
   });
 });
