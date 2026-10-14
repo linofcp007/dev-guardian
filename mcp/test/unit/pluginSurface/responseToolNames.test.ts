@@ -3,8 +3,8 @@
  * "hidden alias names in responses").
  *
  * A Claude Code model can call only listed tools; a hidden alias
- * (`scan_dotnet_secrets`, `wp_rest_audit`, …) answers `tools/call` but is not
- * in `tools/list`. `docReferences.test.ts` holds the skills, commands and
+ * (`scan_dotnet_secrets`, `wp_rest_audit`, `llm_scan_submit`, …) answers
+ * `tools/call` but is not in `tools/list`. `docReferences.test.ts` holds the skills, commands and
  * READMEs to that; this file holds the code's own strings: every string or
  * template literal of `src/` that is PROSE — anything more than the bare name
  * — names a fold call (`wp_vuln_check { mode: "rest" }`, `tools/fold.ts#listedCall`),
@@ -69,11 +69,15 @@ describe('response strings in src/', () => {
     expect(listedCall('wp_rest_audit')).toBe('wp_vuln_check { mode: "rest" }');
     expect(listedCall('wp_vuln_check')).toBe('wp_vuln_check');
     expect(listedCall('security_scan_full')).toBe('security_scan_full');
+    // The LLM scan's steps (fold `llm_scan`, 3.4.0): its aliases name no step in prose either.
+    expect(listedCall('llm_scan_start')).toBe('llm_scan { step: "start" }');
+    expect(listedCall('llm_scan_task')).toBe('llm_scan { step: "task" }');
+    expect(listedCall('llm_scan_submit')).toBe('llm_scan { step: "submit" }');
   });
 
   it('no prose literal names a hidden alias', () => {
     const hidden = TOOLS.filter((t) => t.listed === false).map((t) => t.name);
-    expect(hidden.length).toBeGreaterThan(0);
+    expect(hidden).toEqual(expect.arrayContaining(['scan_dotnet_secrets', 'wp_rest_audit', 'llm_scan_start', 'llm_scan_task', 'llm_scan_submit']));
     const word = new RegExp(`(?<![\\w-])(${hidden.join('|')})(?![\\w-])`);
     const offenders: string[] = [];
     for (const file of sources(join(MCP, 'src'))) {

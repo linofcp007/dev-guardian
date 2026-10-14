@@ -36583,6 +36583,7 @@ var init_gitState = __esm({
   "src/tools/gitState.ts"() {
     "use strict";
     init_gitSafety();
+    init_gitExec();
   }
 });
 
@@ -92705,13 +92706,13 @@ var init_llmScanStart = __esm({
       plan_id: external_exports.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning (with confirm: true, confirm it).")
     };
     parser = external_exports.object(inputSchema50).strict();
-    tool51 = {
+    tool51 = defineTool({
       name: "llm_scan_start",
       title: "Plan an LLM-assisted scan",
-      description: "Plan a scan where your model verifies the scanners' findings and hunts what they miss; the server calls no model. modes: verify (a task per finding with a file and line), hunt (needs map_attack_surface). Returns plan_id, the task count, what was left out and a token estimate; above max_estimated_tokens nothing is handed out until confirm: true, which the user must agree to. Then repeat llm_scan_task, the brief in a fresh subagent, llm_scan_submit. llm_scan_start {plan_id} returns the report.",
+      description: `Plan a scan where your model verifies the scanners' findings and hunts what they miss; the server calls no model. modes: verify (a task per finding with a file and line), hunt (needs map_attack_surface). Returns plan_id, the task count, what was left out and a token estimate; above max_estimated_tokens nothing is handed out until confirm: true, which the user must agree to. Then repeat llm_scan {step: "task"}, the brief in a fresh subagent, llm_scan {step: "submit"}. llm_scan {step: "start", plan_id} returns the report.`,
       inputSchema: inputSchema50,
       handler: async (input, ctx) => handler48(input, ctx)
-    };
+    });
     registerToolModule(tool51);
   }
 });
@@ -92914,19 +92915,19 @@ var init_llmScanTask = __esm({
     init_sampling();
     init_tools();
     inputSchema51 = {
-      plan_id: external_exports.string().min(1).max(100).describe("The plan from llm_scan_start."),
+      plan_id: external_exports.string().min(1).max(100).describe('The plan from llm_scan {step: "start"}.'),
       execute: external_exports.enum(["host", "sampling"]).optional().describe("host (default): hand the task out. sampling: run it through the client's MCP sampling.")
     };
     parser2 = external_exports.object(inputSchema51).strict();
-    tool52 = {
+    tool52 = defineTool({
       name: "llm_scan_task",
       title: "Lease the next LLM scan task",
-      description: "Lease the next task of a plan: task_id, kind, lease_token, brief (give it to a fresh subagent, one per task) and response_schema; or {done: true, report}, or {waiting: true}. Then llm_scan_submit the answer. needs_confirm: llm_scan_start {plan_id, confirm: true} first; limit_reached: coverage is partial, the undelivered tasks named. A task whose file changed is closed stale.",
+      description: 'Lease the next task of a plan: task_id, kind, lease_token, brief (give it to a fresh subagent, one per task) and response_schema; or {done: true, report}, or {waiting: true}. Then llm_scan {step: "submit"} the answer. needs_confirm: llm_scan {step: "start", plan_id, confirm: true} first; limit_reached: coverage is partial, the undelivered tasks named. A task whose file changed is closed stale.',
       inputSchema: inputSchema51,
       // The brief is the bulk of the response and the model reads the text once.
       contentOnlyKeys: ["brief"],
       handler: async (input, ctx, meta) => handler49(input, ctx, meta)
-    };
+    });
     registerToolModule(tool52);
   }
 });
@@ -92949,8 +92950,8 @@ var init_llmScanSubmit = __esm({
     init_tools();
     inputSchema52 = {
       plan_id: external_exports.string().min(1).max(100).describe("The plan the task belongs to."),
-      task_id: external_exports.string().min(1).max(40).describe("The task, as llm_scan_task returned it."),
-      lease_token: external_exports.string().min(1).max(100).describe("The lease_token llm_scan_task returned with the task."),
+      task_id: external_exports.string().min(1).max(40).describe('The task, as llm_scan {step: "task"} returned it.'),
+      lease_token: external_exports.string().min(1).max(100).describe('The lease_token llm_scan {step: "task"} returned with the task.'),
       independence: external_exports.enum(["subagent", "same_context"]).describe("subagent: a fresh context ran the brief; same_context: you did (never demotes or confirms)."),
       // Required: a call without it is refused here as invalid_input, before the
       // task is touched. `z.unknown()` alone accepted a missing payload, and the
@@ -92959,13 +92960,13 @@ var init_llmScanSubmit = __esm({
       payload: external_exports.unknown().refine((value) => value !== void 0, { message: "Required" }).describe("The answer, matching the task response_schema. At most 64 KiB serialized.")
     };
     parser3 = external_exports.object(inputSchema52).strict();
-    tool53 = {
+    tool53 = defineTool({
       name: "llm_scan_submit",
       title: "Submit an LLM scan task's answer",
-      description: "Submit the JSON answer to a leased task: plan_id, task_id, lease_token, independence and payload (at most 64 KiB, matching response_schema). An invalid answer is refused with the reasons; the task stays yours for two more tries. Every file:line it cites is checked on disk. Errors: already_closed, bad_lease, too_large, plan_abandoned. Then llm_scan_task for the next.",
+      description: 'Submit the JSON answer to a leased task: plan_id, task_id, lease_token, independence and payload (at most 64 KiB, matching response_schema). An invalid answer is refused with the reasons; the task stays yours for two more tries. Every file:line it cites is checked on disk. Errors: already_closed, bad_lease, too_large, plan_abandoned. Then llm_scan {step: "task"} for the next.',
       inputSchema: inputSchema52,
       handler: async (input, ctx) => handler50(input, ctx)
-    };
+    });
     registerToolModule(tool53);
   }
 });

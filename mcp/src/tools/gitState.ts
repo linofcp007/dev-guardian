@@ -22,6 +22,8 @@
  */
 
 import { execGit } from '../platform/gitSafety.js';
+// git on the shared tree kill (`runners/gitExec.ts`): explicit here, not by grace of another import.
+import '../runners/gitExec.js';
 
 export type WorkingTreeState =
   | { state: 'clean' }
