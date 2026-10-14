@@ -3061,9 +3061,50 @@ var init_untrustedText = __esm({
   }
 });
 
+// src/platform/version.ts
+import { readFileSync as readFileSync2 } from "node:fs";
+import { dirname as dirname4, resolve as resolve8 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function readVersion(path3) {
+  try {
+    const parsed = JSON.parse(readFileSync2(path3, "utf8"));
+    return parsed.version;
+  } catch {
+    return void 0;
+  }
+}
+function resolveVersion() {
+  const here = dirname4(fileURLToPath2(import.meta.url));
+  const candidates2 = [
+    // .claude-plugin/plugin.json — the real release version — tried at both
+    // depths before falling back to mcp/package.json at either depth, same
+    // preference order the pre-lift server.ts-local version used.
+    resolve8(here, "..", "..", ".claude-plugin", "plugin.json"),
+    // bundled (dist/engine.js)
+    resolve8(here, "..", "..", "..", ".claude-plugin", "plugin.json"),
+    // unbundled (this module's own file)
+    resolve8(here, "..", "package.json"),
+    // bundled / tsx dev — mcp/package.json (standalone npm use)
+    resolve8(here, "..", "..", "package.json")
+    // unbundled — mcp/package.json
+  ];
+  for (const candidate of candidates2) {
+    const version2 = readVersion(candidate);
+    if (version2) return version2;
+  }
+  return FALLBACK_VERSION;
+}
+var FALLBACK_VERSION;
+var init_version = __esm({
+  "src/platform/version.ts"() {
+    "use strict";
+    FALLBACK_VERSION = "0.0.0";
+  }
+});
+
 // src/platform/pathSpelling.ts
 import { lstatSync as lstatSync4, statSync as statSync3 } from "node:fs";
-import { isAbsolute as isAbsolute4, join as join9, parse as parse4, resolve as resolve8, sep as sep2 } from "node:path";
+import { isAbsolute as isAbsolute4, join as join9, parse as parse4, resolve as resolve9, sep as sep2 } from "node:path";
 function isNetworkOrDevicePath(path3) {
   return /^[\\/]{2}/.test(path3) || path3.startsWith("\\??\\");
 }
@@ -3079,7 +3120,7 @@ function spellingOnlyCanonical(path3) {
   }
   const canonical2 = canonicalPath(path3);
   if (canonical2 === path3) return null;
-  const resolved = resolve8(path3);
+  const resolved = resolve9(path3);
   const root = parse4(resolved).root;
   let current = root;
   for (const part of resolved.slice(root.length).split(sep2).filter((s) => s !== "")) {
@@ -3111,10 +3152,10 @@ var init_pathSpelling = __esm({
 
 // src/platform/scriptsDir.ts
 import { existsSync as existsSync3 } from "node:fs";
-import { dirname as dirname4, join as join10 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { dirname as dirname5, join as join10 } from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 function resolveScriptsDir() {
-  const here = dirname4(fileURLToPath2(import.meta.url));
+  const here = dirname5(fileURLToPath3(import.meta.url));
   const bundled = join10(here, "..", "..", "scripts");
   if (existsSync3(join10(bundled, ...MARKER_SCRIPT))) return bundled;
   const unbundled = join10(here, "..", "..", "..", "scripts");
@@ -3634,7 +3675,7 @@ var init_findingFingerprint = __esm({
 // src/fingerprint/findingIdentity.ts
 import { createHash as createHash3 } from "node:crypto";
 import { realpathSync as realpathSync3 } from "node:fs";
-import { isAbsolute as isAbsolute6, relative as relative5, resolve as resolve9, sep as sep3 } from "node:path";
+import { isAbsolute as isAbsolute6, relative as relative5, resolve as resolve10, sep as sep3 } from "node:path";
 function assignIdentities(findings, opts = {}) {
   const located = findings.map((finding4, index) => ({
     finding: finding4,
@@ -3907,9 +3948,9 @@ function splitCoordinate(coordinate, allowBareName) {
 }
 function realOrResolved(p) {
   try {
-    return realpathSync3.native(resolve9(p));
+    return realpathSync3.native(resolve10(p));
   } catch {
-    return resolve9(p);
+    return resolve10(p);
   }
 }
 function compareStrings(a, b) {
@@ -11434,10 +11475,10 @@ var init_boundedParse = __esm({
 
 // src/platform/configsDir.ts
 import { existsSync as existsSync5, readdirSync as readdirSync4 } from "node:fs";
-import { dirname as dirname5, join as join14 } from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { dirname as dirname6, join as join14 } from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 function resolveConfigsDir() {
-  const here = dirname5(fileURLToPath3(import.meta.url));
+  const here = dirname6(fileURLToPath4(import.meta.url));
   const bundled = join14(here, "..", "..", "configs");
   if (existsSync5(join14(bundled, ...MARKER_RULES))) return bundled;
   const unbundled = join14(here, "..", "..", "..", "configs");
@@ -12255,11 +12296,11 @@ __export(runner_exports, {
   runMigrations: () => runMigrations,
   splitStatements: () => splitStatements
 });
-import { existsSync as existsSync6, readdirSync as readdirSync6, readFileSync as readFileSync2 } from "node:fs";
-import { dirname as dirname6, join as join15 } from "node:path";
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { existsSync as existsSync6, readdirSync as readdirSync6, readFileSync as readFileSync3 } from "node:fs";
+import { dirname as dirname7, join as join15 } from "node:path";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 function resolveMigrationsDir() {
-  const here = dirname6(fileURLToPath4(import.meta.url));
+  const here = dirname7(fileURLToPath5(import.meta.url));
   const candidates2 = [here, join15(here, "storage", "migrations"), join15(here, "migrations")];
   for (const dir of candidates2) {
     try {
@@ -12341,7 +12382,7 @@ function backfillFromHighWaterMark(db, migrations) {
   })();
 }
 function applyMigration(db, migration) {
-  const statements = splitStatements(readFileSync2(migration.filePath, "utf8"), migration.filePath);
+  const statements = splitStatements(readFileSync3(migration.filePath, "utf8"), migration.filePath);
   db.transaction(() => {
     if (isRecorded(db, migration.version)) return;
     for (const statement of statements) runIdempotent(db, statement);
@@ -12365,7 +12406,7 @@ function objectExists(db, type, name) {
 }
 function objectsOf(migration) {
   const out = { tables: [], indexes: [], columns: [] };
-  for (const statement of splitStatements(readFileSync2(migration.filePath, "utf8"), migration.filePath)) {
+  for (const statement of splitStatements(readFileSync3(migration.filePath, "utf8"), migration.filePath)) {
     const table = CREATE_TABLE.exec(statement)?.[1];
     if (table !== void 0) {
       out.tables.push(table);
@@ -12781,7 +12822,7 @@ __export(db_exports, {
 import { createHash as createHash4, randomBytes as randomBytes3 } from "node:crypto";
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, rmSync as rmSync2, statSync as statSync5, writeFileSync as writeFileSync3 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
-import { dirname as dirname7, join as join16, resolve as resolve10 } from "node:path";
+import { dirname as dirname8, join as join16, resolve as resolve11 } from "node:path";
 function loadSqlite() {
   sqliteModule ??= createRequire2(import.meta.url)("node:sqlite");
   return sqliteModule;
@@ -12857,7 +12898,7 @@ function asCorruptionError(error2, dbPath) {
 }
 function openDatabase(options) {
   if (options.inMemory) return openInMemory();
-  const projectPath = resolve10(options.projectPath);
+  const projectPath = resolve11(options.projectPath);
   const preferredPath = join16(projectPath, ".guardian", "guardian.db");
   const existingOnly = options.existingOnly === true;
   let refusal;
@@ -12979,11 +13020,11 @@ function foreignReason(projectPath, dbPath, foreign) {
   }
 }
 function adoptCommand(projectPath) {
-  const cli = join16(dirname7(resolveScriptsDir()), "cli", "dev-guardian.mjs");
+  const cli = join16(dirname8(resolveScriptsDir()), "cli", "dev-guardian.mjs");
   return `node "${cli}" db adopt --project "${projectPath}"`;
 }
 function inspectProjectDatabase(projectPath) {
-  const project = resolve10(projectPath);
+  const project = resolve11(projectPath);
   const dbPath = join16(project, ".guardian", "guardian.db");
   const canonicalProject = safeCanonical(project);
   const report = {
@@ -13160,7 +13201,7 @@ function safeCanonical(path3) {
   try {
     return canonicalPath(path3);
   } catch {
-    return resolve10(path3);
+    return resolve11(path3);
   }
 }
 function openInMemory() {
@@ -13170,7 +13211,7 @@ function openInMemory() {
   return { db, path: ":memory:" };
 }
 function openWritable(dbPath, afterPragmas) {
-  const dir = dirname7(dbPath);
+  const dir = dirname8(dbPath);
   ensureDir(dir);
   probeDirectoryWritable(dir);
   const db = new GuardianDatabase(dbPath);
@@ -13246,7 +13287,7 @@ function isNotWritableError(error2) {
   return sqlite2 === 8 || sqlite2 === 14;
 }
 function resolveFallbackDbPath(projectPath) {
-  return join16(userDataDir(), shortHash(resolve10(projectPath)), "guardian.db");
+  return join16(userDataDir(), shortHash(resolve11(projectPath)), "guardian.db");
 }
 function openDatabaseAtPath(path3) {
   return openPrepared(path3);
@@ -13762,9 +13803,9 @@ var init_textLines = __esm({
 // src/treeHash/computeTreeHash.ts
 import { createHash as createHash5 } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
-import { join as join17, relative as relative6, resolve as resolve11, sep as sep4 } from "node:path";
+import { join as join17, relative as relative6, resolve as resolve12, sep as sep4 } from "node:path";
 async function computeTreeHash(projectPath, options = {}) {
-  const root = resolve11(projectPath);
+  const root = resolve12(projectPath);
   const files = options.forceFilesystemWalk ? await walkFiles(root) : await tryGitListFiles(root) ?? await walkFiles(root);
   files.sort();
   const hash = createHash5("sha256");
@@ -14490,7 +14531,7 @@ var init_scannerParsers = __esm({
 });
 
 // src/runners/scannerParsers/trivy.ts
-import { dirname as dirname8, join as join19, relative as relative7, sep as sep5 } from "node:path";
+import { dirname as dirname9, join as join19, relative as relative7, sep as sep5 } from "node:path";
 function mapVulnerability(raw, target, ctx) {
   const cveId = getString(raw, "VulnerabilityID");
   const pkg = getString(raw, "PkgName");
@@ -14654,7 +14695,7 @@ function npmManifestDeclaresNothing(r, path3) {
   const manifest = readJsonFile(r, path3, MANIFEST_JSON_PARSE_MAX);
   if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
   const fields = manifest;
-  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(r, dirname8(path3));
+  return NPM_DECLARING_FIELDS.every((k) => isEmptyField(fields[k])) && npmLockFilesLockNothing(r, dirname9(path3));
 }
 function npmManifestDeclaresOnlyDev(r, path3) {
   const manifest = readJsonFile(r, path3, MANIFEST_JSON_PARSE_MAX);
@@ -15161,7 +15202,7 @@ var init_pkgManagerDetect = __esm({
 // src/platform/userBin.ts
 import { existsSync as existsSync8 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { delimiter, join as join20, resolve as resolve12 } from "node:path";
+import { delimiter, join as join20, resolve as resolve13 } from "node:path";
 function userBinDir(home) {
   let h = home;
   if (h === void 0) {
@@ -15175,7 +15216,7 @@ function userBinDir(home) {
 }
 function normalised(entry, win) {
   const unquoted = entry.trim().replace(/^"(.*)"$/, "$1");
-  const out = resolve12(unquoted).replace(/[\\/]+$/, "");
+  const out = resolve13(unquoted).replace(/[\\/]+$/, "");
   return win ? out.toLowerCase() : out;
 }
 function pathHasDir(dir, pathValue, platform = process.platform) {
@@ -16070,7 +16111,7 @@ var init_spawn = __esm({
 
 // src/runners/windowsTreeKill.ts
 import { existsSync as existsSync9 } from "node:fs";
-import { dirname as dirname9, join as join21 } from "node:path";
+import { dirname as dirname10, join as join21 } from "node:path";
 function parseMsysPs(output) {
   const out = [];
   for (const line of output.split(/\r?\n/)) {
@@ -16140,7 +16181,7 @@ async function findOwnMsysProcesses(command, token) {
   if (bin === null) return none;
   const self = { pid: process.pid, ppid: process.ppid };
   try {
-    const opts = { timeoutMs: MSYS_PROBE_TIMEOUT_MS, cwd: dirname9(bin) };
+    const opts = { timeoutMs: MSYS_PROBE_TIMEOUT_MS, cwd: dirname10(bin) };
     const ps = await captureOutput(join21(bin, "ps.exe"), [], opts);
     if (ps.exitCode !== 0) return none;
     const snapshot = parseMsysPs(ps.stdout);
@@ -16905,7 +16946,7 @@ var init_repoConfig = __esm({
 });
 
 // src/runners/trivyRun.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { join as join24 } from "node:path";
 function projectTrivyIgnore(projectPath) {
   return projectEntryKindIn(projectPath, PROJECT_TRIVYIGNORE) === "file" ? join24(projectPath, PROJECT_TRIVYIGNORE) : null;
@@ -17040,7 +17081,7 @@ async function runTrivy(inv) {
   }
   let raw;
   try {
-    raw = readFileSync3(output, "utf8");
+    raw = readFileSync4(output, "utf8");
   } catch {
     const unlisted_because = "Trivy wrote no report";
     return { ...run2, honoured, suppressed: { file: PROJECT_TRIVYIGNORE, count: null, ids: [], findings: [], unlisted_because } };
@@ -17584,7 +17625,7 @@ var init_semgrepReport = __esm({
 
 // src/platform/guardianIgnore.ts
 import { createHash as createHash7 } from "node:crypto";
-import { dirname as dirname10, join as join25, resolve as resolve13, sep as sep6 } from "node:path";
+import { dirname as dirname11, join as join25, resolve as resolve14, sep as sep6 } from "node:path";
 function compileIgnore(text2) {
   const rules2 = [];
   for (const rawLine of text2.split(/\r?\n/)) {
@@ -17769,9 +17810,9 @@ function projectPathTest(projectPath) {
   };
 }
 function insideGitWorkTree(projectPath) {
-  for (let dir = resolve13(projectPath); ; dir = dirname10(dir)) {
+  for (let dir = resolve14(projectPath); ; dir = dirname11(dir)) {
     if (projectEntryKind(join25(dir, ".git")) !== "absent") return true;
-    if (dirname10(dir) === dir) return false;
+    if (dirname11(dir) === dir) return false;
   }
 }
 async function gitListFiles(root) {
@@ -19383,51 +19424,6 @@ var init_gate = __esm({
       bandit: "pipx install bandit",
       zizmor: "pipx install zizmor"
     };
-  }
-});
-
-// src/platform/version.ts
-var version_exports = {};
-__export(version_exports, {
-  resolveVersion: () => resolveVersion
-});
-import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname11, resolve as resolve14 } from "node:path";
-import { fileURLToPath as fileURLToPath5 } from "node:url";
-function readVersion(path3) {
-  try {
-    const parsed = JSON.parse(readFileSync4(path3, "utf8"));
-    return parsed.version;
-  } catch {
-    return void 0;
-  }
-}
-function resolveVersion() {
-  const here = dirname11(fileURLToPath5(import.meta.url));
-  const candidates2 = [
-    // .claude-plugin/plugin.json — the real release version — tried at both
-    // depths before falling back to mcp/package.json at either depth, same
-    // preference order the pre-lift server.ts-local version used.
-    resolve14(here, "..", "..", ".claude-plugin", "plugin.json"),
-    // bundled (dist/engine.js)
-    resolve14(here, "..", "..", "..", ".claude-plugin", "plugin.json"),
-    // unbundled (this module's own file)
-    resolve14(here, "..", "package.json"),
-    // bundled / tsx dev — mcp/package.json (standalone npm use)
-    resolve14(here, "..", "..", "package.json")
-    // unbundled — mcp/package.json
-  ];
-  for (const candidate of candidates2) {
-    const version2 = readVersion(candidate);
-    if (version2) return version2;
-  }
-  return FALLBACK_VERSION;
-}
-var FALLBACK_VERSION;
-var init_version = __esm({
-  "src/platform/version.ts"() {
-    "use strict";
-    FALLBACK_VERSION = "0.0.0";
   }
 });
 
@@ -99020,13 +99016,14 @@ function decodeText(bytes) {
 
 // src/cli.ts
 init_untrustedText();
+init_version();
 init_projectFs();
 function requireNodeSqlite(db) {
   if (db.nodeSqliteAvailable()) return;
   throw Object.assign(new Error(db.NODE_SQLITE_REQUIRED), { code: "ERR_UNKNOWN_BUILTIN_MODULE" });
 }
 async function loadCiModules() {
-  const [db, ciTypes, baseline, gate2, report, runScansMod, appRunner, types, refConfig, renames, git2, version2, scanSettings] = await Promise.all([
+  const [db, ciTypes, baseline, gate2, report, runScansMod, appRunner, types, refConfig, renames, git2, scanSettings] = await Promise.all([
     Promise.resolve().then(() => (init_db(), db_exports)),
     Promise.resolve().then(() => (init_types(), types_exports)),
     Promise.resolve().then(() => (init_baseline(), baseline_exports)),
@@ -99038,7 +99035,6 @@ async function loadCiModules() {
     Promise.resolve().then(() => (init_refConfig(), refConfig_exports)),
     Promise.resolve().then(() => (init_renames(), renames_exports)),
     Promise.resolve().then(() => (init_git(), git_exports)),
-    Promise.resolve().then(() => (init_version(), version_exports)),
     Promise.resolve().then(() => (init_scanSettings(), scanSettings_exports))
   ]);
   requireNodeSqlite(db);
@@ -99062,7 +99058,6 @@ async function loadCiModules() {
     resetExclusionsFromRef: refConfig.resetExclusionsFromRef,
     renamesSince: renames.renamesSince,
     showPrefix: git2.showPrefix,
-    resolveVersion: version2.resolveVersion,
     SCAN_SETTINGS_RELATIVE_PATH: scanSettings.SCAN_SETTINGS_RELATIVE_PATH,
     loadScanSettings: scanSettings.loadScanSettings
   };
@@ -99127,6 +99122,7 @@ export {
   previewMcpConfig,
   readProjectText,
   resolveProjectPath,
+  resolveVersion,
   scanForSecrets,
   setupHost,
   startServer,

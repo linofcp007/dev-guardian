@@ -158,6 +158,12 @@ describe('cli/dev-guardian.mjs — on a Node without node:sqlite', () => {
     expect(r.stdout).toMatch(/dev-guardian/);
   });
 
+  it('--version still works', () => {
+    const r = run(['--version']);
+    expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: '' });
+    expect(r.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
+  });
+
   it('check --bash still works', () => {
     const r = run(['check', '--bash', 'echo hi']);
     expect(r.status).toBe(0);
@@ -187,6 +193,16 @@ describe('cli/dev-guardian.mjs — on a Node without node:sqlite', () => {
   }
 });
 
+// Review of 3.3.0: `--version` was an unknown command (exit 3). It prints the
+// release plugin.json names — the version a scan verdict's `tool_version` says.
+describe('cli/dev-guardian.mjs --version', () => {
+  it.each([['--version'], ['-V']])('%s prints the plugin’s version, exit 0', (flag) => {
+    const { version } = JSON.parse(readFileSync(join(REPO_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string };
+    const r = spawnSyncCapped(process.execPath, [REAL_CLI, flag], { encoding: 'utf8', timeout: TIMEOUT_MS });
+    expect({ status: r.status, stdout: r.stdout, stderr: r.stderr }).toEqual({ status: 0, stdout: `${version}\n`, stderr: '' });
+  });
+});
+
 // Review 8, finding 17: the CLI compiled its 4 MB bundle from scratch on
 // every run. With Node's compile cache on before the bundle loads, a run with
 // no NODE_COMPILE_CACHE of its own writes the cache under the OS temp
@@ -200,7 +216,12 @@ describe('cli/dev-guardian.mjs — Node compile cache', () => {
       delete env['NODE_DISABLE_COMPILE_CACHE'];
       const r = spawnSyncCapped(process.execPath, [REAL_CLI, '--help'], { encoding: 'utf8', env, timeout: TIMEOUT_MS });
       expect(r.status).toBe(0);
-      const cache = join(tmp, 'node-compile-cache');
+      // Node's own default on Windows (the account's own %TEMP%); a directory
+      // of this account's own elsewhere (hooksDispatcher.test.ts holds its mode).
+      const cache =
+        process.platform === 'win32'
+          ? join(tmp, 'node-compile-cache')
+          : join(tmp, `dev-guardian-node-compile-cache-${String(process.getuid?.() ?? -1)}`);
       expect(existsSync(cache)).toBe(true);
       expect(readdirSync(cache, { recursive: true }).length).toBeGreaterThan(0);
     } finally {

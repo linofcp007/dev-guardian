@@ -232,7 +232,7 @@ node dev-guardian.mjs ci-init <github|gitlab|bitbucket> [--project <path>] [--br
 | `gitlab` | `.gitlab-ci.yml` |
 | `bitbucket` | `bitbucket-pipelines.yml` |
 
-Without `--write` the pipeline is printed. `--write` creates the file atomically and refuses to replace an existing one unless `--force` is given; it never writes through a symlink that leaves the project. `--branch` (default `main`) is the GitHub push trigger. Exit codes: 0 done, 1 unknown target or an existing file refused, 3 usage or configuration error.
+Without `--write` the pipeline is printed. `--write` creates the file atomically and refuses to replace an existing one unless `--force` is given; it never writes through a symlink that leaves the project. `--branch` (default `main`) is the GitHub push trigger. Exit codes: 0 done, 1 an existing file refused, 3 an unknown target or another usage or configuration error.
 
 What the generated pipeline does:
 

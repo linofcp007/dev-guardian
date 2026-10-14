@@ -42,7 +42,7 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | `--scope project\|global`, `--global` | which config to write. `all --write` skips the two global-only hosts (Windsurf, Claude Desktop) unless `--global` is given, so it never touches a global config by surprise; naming either host directly writes its global config. |
 | `--update-mcp` | refresh an entry or rules block that is already there but out of date (`--force` is a deprecated alias) |
 
-Exit codes: 0 done, 1 missing or unknown host, 2 usage error.
+Exit codes: 0 done, 1 the MCP server is not built (`mcp/dist/server.js` missing), 3 a missing or unknown host or another usage error.
 
 ### How rules files are merged
 

@@ -917,6 +917,34 @@ describe('dev-guardian scan — against a real, clean fixture', () => {
   });
 });
 
+// Review of 3.3.0: with a SARIF path that cannot be written, a passing scan
+// printed `"exit_code": 0` and then exited 3. The verdict printed and the exit
+// agree now — and the verdict is still printed (review 8, finding 19).
+describe('dev-guardian scan --format json — a --sarif that cannot be written', () => {
+  let fixture: string;
+  let result: SpawnSyncReturns<string>;
+
+  beforeAll(async () => {
+    fixture = await makeScannableFixture('guardian-ci-cli-sarif-fail-');
+    // A path below a regular file: no directory can be made there.
+    result = runCli(['scan', '--project', fixture, '--format', 'json', '--sarif', join(fixture, 'index.js', 'results.sarif')], SCAN_TIMEOUT_MS);
+  }, SCAN_TIMEOUT_MS);
+
+  afterAll(() => {
+    if (fixture) rmDir(fixture);
+  });
+
+  it('prints the verdict with the exit code the run ends with, and says the SARIF was not written', () => {
+    const verdict = JSON.parse(result.stdout) as { exit_code: number };
+    expect(verdict.exit_code).toBe(result.status);
+    expect(result.stderr).toMatch(/^error: --sarif .*results\.sarif was not written: /m);
+  });
+
+  it.skipIf(!TOOLCHAIN_AVAILABLE)('a clean scan is not a pass without its SARIF: 3, in the JSON too', () => {
+    expect(result.status, result.stderr).toBe(3);
+  });
+});
+
 /* ------------------------------------------------------------------ */
 /* dev-guardian baseline update                                        */
 /* ------------------------------------------------------------------ */

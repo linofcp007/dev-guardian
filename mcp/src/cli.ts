@@ -40,6 +40,7 @@ export { scanForSecrets } from './hooks/secretScan.js';
 export { assessBashCommand } from './hooks/bashGuard.js';
 export { decodeText } from './hooks/textEncoding.js';
 export { untrustedText } from './platform/untrustedText.js';
+export { resolveVersion } from './platform/version.js';
 export {
   describeReadRefusal,
   describeWriteRefusal,
@@ -57,7 +58,7 @@ function requireNodeSqlite(db: typeof DbModule): void {
 
 /** `scan` and `baseline update`: the scan pipeline, the gate and its reports. */
 export async function loadCiModules() {
-  const [db, ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig, renames, git, version, scanSettings] = await Promise.all([
+  const [db, ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig, renames, git, scanSettings] = await Promise.all([
     import('./storage/db.js'),
     import('./ci/types.js'),
     import('./ci/baseline.js'),
@@ -69,7 +70,6 @@ export async function loadCiModules() {
     import('./ci/refConfig.js'),
     import('./ci/renames.js'),
     import('./runners/git.js'),
-    import('./platform/version.js'),
     import('./platform/scanSettings.js'),
   ]);
   requireNodeSqlite(db);
@@ -93,7 +93,6 @@ export async function loadCiModules() {
     resetExclusionsFromRef: refConfig.resetExclusionsFromRef,
     renamesSince: renames.renamesSince,
     showPrefix: git.showPrefix,
-    resolveVersion: version.resolveVersion,
     SCAN_SETTINGS_RELATIVE_PATH: scanSettings.SCAN_SETTINGS_RELATIVE_PATH,
     loadScanSettings: scanSettings.loadScanSettings,
   };
