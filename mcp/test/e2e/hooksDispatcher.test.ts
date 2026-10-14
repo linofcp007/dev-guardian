@@ -2084,13 +2084,28 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
     }, 120_000);
   });
 
+  // A coverage run (the v8 provider) sets NODE_DISABLE_COMPILE_CACHE=1 for its
+  // workers and every process they spawn, and Node reads the variable set to
+  // anything, '' included, as "no cache": the hook these tests start then
+  // writes none, the floor container's coverage run failed on that alone, and
+  // the tests that expect no cache passed for the wrong reason. They are about
+  // where the cache goes, so the hook they start runs without the variable.
+  const withCompileCache = (): void => {
+    vi.stubEnv('NODE_DISABLE_COMPILE_CACHE', undefined);
+  };
+
   // Node's compile cache creates its directory with every missing parent: with
   // a TMPDIR that does not exist, a cache enabled anyway created it (dg-core 17).
   it('the compile cache never creates a temp directory that is not there', () => {
-    const missing = join(projectDir, 'no-such-tmp', 'nested');
-    const r = hook(preToolUse('Bash', { command: 'git status' }, projectDir), { TMPDIR: missing, TEMP: missing, TMP: missing });
-    expect(r.status).toBe(0);
-    expect(readdirSync(projectDir)).not.toContain('no-such-tmp');
+    withCompileCache();
+    try {
+      const missing = join(projectDir, 'no-such-tmp', 'nested');
+      const r = hook(preToolUse('Bash', { command: 'git status' }, projectDir), { TMPDIR: missing, TEMP: missing, TMP: missing });
+      expect(r.status).toBe(0);
+      expect(readdirSync(projectDir)).not.toContain('no-such-tmp');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   // Review of 3.3.0: Node's default cache, `<tmp>/node-compile-cache/<version>-<uid>`,
@@ -2099,6 +2114,11 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
   // on Node 22.13 and 24). Since 3.4.0 the cache is a directory of this
   // account's own, 0700, used only when nobody else can write it.
   describe('the compile cache lives where only this account can write (review of 3.3.0)', () => {
+    beforeEach(withCompileCache);
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     const block = (file: string): string => {
       const text = readFileSync(file, 'utf8');
       return text.slice(text.indexOf('// compile-cache:begin'), text.indexOf('// compile-cache:end'));

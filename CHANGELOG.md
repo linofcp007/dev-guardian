@@ -261,6 +261,9 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
   `GUARDIAN_PERF_STRICT=1`. The dev-spec-driven mirror fixture is at 1.30.1 (its lists unchanged since
   1.28.0), and the verdict contract's comments say what dev-spec-driven 1.30.x reads: neither `coverage` nor
   `accepted_gaps`.
+- The compile-cache tests start their hook without `NODE_DISABLE_COMPILE_CACHE`: a coverage run (v8) sets it
+  for every process its workers spawn, and Node reads it, even empty, as "no cache" — the floor container's
+  run failed on that alone, and the tests expecting no cache passed for that reason.
 
 ## [3.3.0] - 2026-10-13
 
