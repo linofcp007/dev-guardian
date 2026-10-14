@@ -16,6 +16,7 @@ import { startChild, stopTree } from '../../../src/runners/childProcess.js';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import { captureOutput, readText } from '../../../src/runners/spawn.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -49,7 +50,7 @@ describe('captureOutput — a one-process command, answered by its deadline', ()
     expect(r.timedOut).toBe(true);
     expect(r.exitCode).toBeNull();
     // The grandchild lives 20 s: an answer well before that was not a wait for it.
-    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(Date.now() - started).toBeLessThan(hangBound(15_000));
   }, 30_000);
 
   it('a command on no PATH entry is an answer, not a throw — and never one found in the working directory', async () => {
@@ -187,6 +188,97 @@ describe.runIf(process.platform === 'win32')('a batch file is handed only what c
     expect(captured.spawnError).toMatch(/cmd\.exe/);
     expect(existsSync(ran)).toBe(false);
     expect(existsSync(join(dir, 'pwned.txt'))).toBe(false);
+  });
+
+  // Review 11, finding 15a: cross-spawn doubles only the LAST trailing
+  // backslash, so `C:\site\\` left its closing quote escaped and swallowed the
+  // next argument.
+  it('an argument ending in two or more backslashes is refused (cross-spawn alone splits the next one into it)', async () => {
+    const dir = makeTempDir('child-bat-bs-');
+    const { shim } = echoShim(dir, 'tool.cmd');
+    const args = ['C:\\site\\\\', 'p --injected=1'];
+    const control = crossSpawn(shim, args, { cwd: dir, windowsHide: true });
+    let out = '';
+    control.stdout?.on('data', (c: Buffer) => (out += c.toString()));
+    await new Promise((resolve) => control.once('close', resolve));
+    expect(JSON.parse(out.trim()), 'the control must show the split for the refusal to mean anything').not.toEqual(args);
+
+    const r = await runProcess({ command: shim, args, cwd: dir, gitHardening: false, timeoutMs: 30_000 });
+    expect(r.notRun?.code).toBe('batch_argument_refused');
+    expect(r.notRun?.message).toMatch(/two or more backslashes/);
+    // One trailing backslash is doubled right, and passes.
+    const one = await runProcess({ command: shim, args: ['C:\\site\\', 'next'], cwd: dir, gitHardening: false, timeoutMs: 30_000 });
+    expect(one.outcome, one.stderr).toBe('completed');
+    expect(JSON.parse(one.stdout.trim())).toEqual(['C:\\site\\', 'next']);
+  });
+});
+
+/**
+ * Review 11, finding 15b: the refusal above broke legitimate runs through an
+ * npm cmd-shim — `perf_check` on any percent-escaped URL through
+ * `lighthouse.cmd`. Such a shim only starts Node on one script, so it is run
+ * as that (`runners/npmCmdShim.ts`): no cmd.exe, every argument literal.
+ */
+describe.runIf(process.platform === 'win32')('an npm cmd-shim runs as node <script>, never through cmd.exe', () => {
+  const CURRENT = (script: string): string =>
+    [
+      '@ECHO off',
+      'GOTO start',
+      ':find_dp0',
+      'SET dp0=%~dp0',
+      'EXIT /b',
+      ':start',
+      'SETLOCAL',
+      'CALL :find_dp0',
+      '',
+      'IF EXIST "%dp0%\\node.exe" (',
+      '  SET "_prog=%dp0%\\node.exe"',
+      ') ELSE (',
+      '  SET "_prog=node"',
+      '  SET PATHEXT=%PATHEXT:;.JS;=;%',
+      ')',
+      '',
+      `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${script}" %*`,
+      '',
+    ].join('\r\n');
+  const OLDER = (script: string): string =>
+    [
+      '@IF EXIST "%~dp0\\node.exe" (',
+      `  "%~dp0\\node.exe"  "%~dp0\\${script}" %*`,
+      ') ELSE (',
+      '  @SETLOCAL',
+      '  @SET PATHEXT=%PATHEXT:;.JS;=;%',
+      `  node  "%~dp0\\${script}" %*`,
+      ')',
+      '',
+    ].join('\r\n');
+  const ARGS = ['https://site.example/?q=a%20b&r="x"', '%PATH%', 'x"&echo PWNED>pwned.txt&"', 'C:\\site\\\\', 'next'];
+
+  for (const [name, template] of [
+    ['the current template', CURRENT],
+    ['the older template', OLDER],
+  ] as const) {
+    it(`${name}: a percent-escaped URL, a quote and trailing backslashes reach the script literally`, async () => {
+      const dir = makeTempDir('child-shim-');
+      mkdirSync(join(dir, 'node_modules', 'lh', 'cli'), { recursive: true });
+      writeFileSync(join(dir, 'node_modules', 'lh', 'cli', 'index.js'), 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+      const shim = join(dir, 'lighthouse.cmd');
+      writeFileSync(shim, template('node_modules\\lh\\cli\\index.js'));
+      const r = await runProcess({ command: shim, args: ARGS, cwd: dir, gitHardening: false, timeoutMs: 30_000 });
+      expect(r.outcome, r.notRun?.message ?? r.stderr).toBe('completed');
+      expect(JSON.parse(r.stdout.trim())).toEqual(ARGS);
+      expect(existsSync(join(dir, 'pwned.txt'))).toBe(false);
+    });
+  }
+
+  it('a shim of something else, or one whose script is missing, is still a batch file — judged as one', async () => {
+    const dir = makeTempDir('child-shim-other-');
+    writeFileSync(join(dir, 'sh-tool.cmd'), CURRENT('bin\\tool.sh').replace(/node\.exe/g, 'sh.exe').replace('"_prog=node"', '"_prog=sh"'));
+    writeFileSync(join(dir, 'gone.cmd'), CURRENT('node_modules\\gone\\index.js'));
+    for (const name of ['sh-tool.cmd', 'gone.cmd']) {
+      const r = await runProcess({ command: join(dir, name), args: ['a%20b'], cwd: dir, gitHardening: false, timeoutMs: 30_000 });
+      expect(r.notRun?.code, name).toBe('batch_argument_refused');
+    }
   });
 });
 

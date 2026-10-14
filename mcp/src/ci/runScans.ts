@@ -159,9 +159,12 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
       }
 
       const findings = collectFindings(storage, opts.projectPath);
-      // A secret replaced in place is new: the gate compares the values of
-      // the findings it keys alike, in memory (ci/secretValues.ts).
-      await rememberSecretValues(scannedProject(opts.projectPath), findings);
+      // The gate keys secrets by their values, read in memory from where
+      // gitleaks' reports of this run locate them (ci/secretValues.ts): a
+      // secret replaced in place, or added above another, is new.
+      await rememberSecretValues(scannedProject(opts.projectPath), findings, {
+        reportDirs: reportDirsOf(storage, opts.projectPath),
+      });
       return { findings, steps, rulesSource, scanSettings };
     } finally {
       try {
@@ -354,6 +357,13 @@ function collectFindings(storage: Storage, projectPath: string): Finding[] {
     all.push(...storage.findings.listByScan(scan.scan_id));
   }
   return dedupeFindings(all);
+}
+
+/** The report directories of this run's unscoped scans of the project (the gitleaks reports among them). */
+function reportDirsOf(storage: Storage, projectPath: string): string[] {
+  const project = scannedProject(projectPath);
+  const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
+  return rows.filter((scan) => !isScopedScan(scan)).flatMap((scan) => scan.report_paths);
 }
 
 /** `resolveProjectPath`'s spelling of `projectPath`, or its canonical form when it no longer resolves. */

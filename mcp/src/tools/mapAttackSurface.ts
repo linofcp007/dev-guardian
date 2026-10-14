@@ -48,6 +48,7 @@
  */
 
 import { readProjectBytes } from '../platform/projectFs.js';
+import { networkPathOf } from '../platform/projectPath.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
@@ -700,14 +701,25 @@ function importSpecs(
   // were not read" accounting below applies the file cap to the same list
   // discovery did. See `dedupeResolved`'s doc comment for what slides
   // otherwise.
-  const resolvedSpecPaths =
+  const named =
     specPaths === undefined
       ? undefined
       : dedupeResolved(specPaths.map((p) => resolveExplicitSpecPath(projectPath, p)));
+  // A spec on a share is never opened: on Windows that is an SMB
+  // authentication to the host the path names (review 11, finding 8).
+  const onShare = (named ?? []).filter((p) => networkPathOf(p) !== null);
+  const resolvedSpecPaths = named?.filter((p) => !onShare.includes(p));
   const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
 
   const specRoutes: RouteRecord[] = [];
-  const specFiles: SpecFileReport[] = [];
+  const specFiles: SpecFileReport[] = onShare.map((file) => ({
+    file,
+    format: 'unknown',
+    status: 'parse_error',
+    routes_found: 0,
+    reason: 'A network (UNC) path, or a link to one: not read — dev-guardian reads local files only.',
+    unresolved_refs: 0,
+  }));
   let specsParsed = 0;
 
   for (const { file, text } of discovery.specs) {

@@ -82,14 +82,27 @@ Enforced by the compiler where possible, by review where not:
   "BatBadBut"). On Windows WP-CLI, WPScan, Lighthouse, npm, composer and
   bundle are `.bat` / `.cmd` files, which `cmd.exe` parses twice; a `"` before
   an `&` in a slug or a URL ran a second command. `runners/spawn.ts` refuses,
-  for every caller, an argument with `"`, `%`, CR, LF or NUL when the command
-  runs through `cmd.exe` (`notRun.code: 'batch_argument_refused'`); a tool
+  for every caller, an argument with `"`, `%`, CR, LF or NUL — or ending in
+  two or more backslashes, which cross-spawn escapes wrong (3.4.1) — when the
+  command runs through `cmd.exe` (`notRun.code: 'batch_argument_refused'`); a tool
   parses a URL and hands over its `href` (`platform/toolArgs.ts#httpUrl`,
   `schemas.ts#httpUrlField`), takes a slug or a token by its alphabet, refuses
   a `"` in a path, and passes a body (`gh … --body-file`, `runners/argFile.ts`)
-  in a file, never on the command line. A new tool that passes user or
+  in a file, never on the command line — and its own fixed arguments hold no
+  `"` either (`create_github_issues` searched with `'"[guardian:" in:title'`,
+  so through a `gh.cmd` it could not run at all, review 11). An npm cmd-shim
+  (`lighthouse.cmd`, the two templates npm's `cmd-shim` writes, Node only) is
+  not a batch file to judge: `runners/npmCmdShim.ts` runs the Node script it
+  names directly, every argument literal — a percent-escaped URL reached
+  Lighthouse only that way. A new tool that passes user or
   repository text to a program does the same, with a test that puts the `"`
   BEFORE the `&` (`test/integration/batchArgumentTools.test.ts`).
+- **Every path-shaped tool argument is held to the `project_path` rule for
+  the network** (3.4.1, review 11): `platform/projectPath.ts#networkPathOf`
+  — a UNC spelling, `//host`, `\\?\UNC\…` or a local spelling a link leads to
+  a share — refused before any file call, which on Windows authenticates to
+  the host the path names. `toolProjectPath` applies it; `wp_install_path`,
+  `scan_skill`'s `target` and `map_attack_surface`'s `spec_paths` call it.
 - **Commit the compiled `mcp/dist/`.** The repo *is* the distribution — Claude
   Code runs `mcp/dist/server.js` directly, with no install-time build. `dist/` is
   gitignored globally *except* `mcp/dist/` (see [`.gitignore`](../../.gitignore)).
@@ -113,9 +126,14 @@ Enforced by the compiler where possible, by review where not:
   and nothing else from the build — that entry loads its per-event parts: a
   detector it needs is a new `load*` there, its module re-exported by the
   part of the event that runs it (`src/hooksBash.ts`, …). `test/e2e/pluginInstall.test.ts` runs the CLI's
-  subcommands, the hooks and the server from a copy of the files git tracks —
-  so `git add` a new file the install needs (a build output too) before it
-  passes, as it must be committed to ship.
+  subcommands, the hooks and the server from a real `git archive` of the
+  index's tree (every tracked file at its working-tree content; a copy of the
+  index, never the index) extracted at a path with a space — so `git add` a
+  new file the install needs (a build output too) before it passes, as it
+  must be committed to ship. The hooks run exactly as `hooks/hooks.json`
+  declares them (exec form, `${CLAUDE_PLUGIN_ROOT}` the install), a damaged
+  `mcp/dist` beside it is the negative control, and outside a git checkout
+  the suite is skipped (3.4.1, review 11).
 - **Markdownlint stays clean** for `skills/`, `commands/`, the three READMEs
   and `docs/` (config: [`.markdownlint.jsonc`](../../.markdownlint.jsonc)):
   `npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "docs/**/*.md"`.

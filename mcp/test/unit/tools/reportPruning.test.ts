@@ -5,11 +5,49 @@
  */
 import { existsSync, mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_KEPT_REPORTS, ensureReportDir } from '../../../src/tools/scanHelpers.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
+
+// Review 11: when `.guardian/reports` is a link or not a directory, a scan's
+// reports go to a fresh `guardian-reports-<kind>-…` in the temp directory —
+// and nothing ever removed those (a review run left 15).
+describe('the temp directory fallback is pruned like the project folder', () => {
+  it(`keeps the ${DEFAULT_KEPT_REPORTS} newest of its kind, and no other kind`, () => {
+    const temp = makeTempDir('reports-fallback-tmp-');
+    for (const name of ['TMPDIR', 'TMP', 'TEMP']) vi.stubEnv(name, temp);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const project = makeTempDir('reports-fallback-');
+      mkdirSync(join(project, '.guardian'));
+      writeFileSync(join(project, '.guardian', 'reports'), 'not a directory');
+      const old = (name: string, ageS: number): void => {
+        mkdirSync(join(temp, name));
+        const at = new Date(Date.now() - ageS * 1000);
+        utimesSync(join(temp, name), at, at);
+      };
+      for (let i = 1; i <= 4; i++) {
+        old(`guardian-reports-deps-old00${i}`, 100 * i);
+        old(`guardian-reports-depsaudit-old00${i}`, 100 * i);
+        old(`guardian-reports-dast-old00${i}`, 100 * i);
+      }
+      const made = ensureReportDir(project, 'abcdef0123456789', 'deps');
+      expect(made.startsWith(join(temp, 'guardian-reports-deps-'))).toBe(true);
+      const left = readdirSync(temp).sort();
+      expect(left.filter((n) => n.startsWith('guardian-reports-deps-'))).toEqual(
+        ['guardian-reports-deps-old001', 'guardian-reports-deps-old002', made.slice(temp.length + 1)].sort(),
+      );
+      // Another kind (`depsaudit-` is not `deps-`), and a kind never pruned (DAST evidence), untouched.
+      expect(left.filter((n) => n.startsWith('guardian-reports-depsaudit-'))).toHaveLength(4);
+      expect(left.filter((n) => n.startsWith('guardian-reports-dast-'))).toHaveLength(4);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+});
 afterEach(() => {
   delete process.env['GUARDIAN_KEEP_REPORTS'];
 });

@@ -7,7 +7,8 @@
  * of the other (review 8, C12).
  *
  * What dev-spec-driven reads (its reader, `guardianRecord` in
- * `mcp/lib/engine/guardian.js`; unchanged from 1.30.0 to 1.30.1):
+ * `mcp/lib/engine/guardian.js`; 1.30.0 and 1.30.1 read the first two groups,
+ * 1.30.2 the third too):
  *
  *   - since 1.29 — `exit_code` (0 pass · 1 blocked · 2 incomplete · 3
  *     config/usage; a report that contradicts the process's exit is refused),
@@ -20,12 +21,17 @@
  *     existing finding counted as new), `new_findings_count` (before
  *     `new_findings`, so a `--compact` report counts right) and the gating
  *     `coverage_gap_details[].{tool, kind, remedy}` (`gating: false` entries
- *     skipped).
+ *     skipped);
+ *   - since 1.30.2 — `accepted_gaps` with `accepted_gap_details[].{tool, kind,
+ *     file, reason}` (one per `accepted_gaps` line, same order, every accepted
+ *     line naming one file — so the reader counts accepted files without
+ *     parsing the lines; it parses them only for a report without the details),
+ *     `unused_timeout_acceptances` (a warning) and `coverage_notes` (a count).
  *
- * dev-spec-driven 1.30.x reads neither `coverage` nor `accepted_gaps` (nor a
- * gap's `detail`, `new_findings_by_severity` or `compact`): it takes the
- * verdict from `exit_code` and the gaps from `coverage_gaps` /
- * `coverage_gap_details`. This file freezes those keys too — they are the
+ * dev-spec-driven reads neither `coverage` (nor a gap's `detail`,
+ * `new_findings_by_severity` or `compact`): it takes the verdict from
+ * `exit_code` and the gaps from `coverage_gaps` / `coverage_gap_details`.
+ * This file freezes those keys too — they are the
  * documented verdict (docs/ci.md) other callers read — so it holds more than
  * dev-spec-driven needs, never less. Keys are only ever added. Change one of
  * these and this test fails before dev-spec-driven's gate quietly stops
@@ -145,6 +151,54 @@ describe('the JSON verdict dev-spec-driven parses (contract)', () => {
     for (const d of details) {
       if (d['kind'] !== 'missing_tool') expect(d['remedy']).not.toMatch(/^Install /);
     }
+  });
+
+  it('accepted_gap_details: one per accepted_gaps line, same order — tool, kind, file, reason (3.4.1)', () => {
+    expect(json['accepted_gap_details']).toEqual([]);
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: [{ name: 'semgrep', status: 'ok' }],
+      missing_tools: ['semgrep'],
+      partial_parses: {
+        semgrep: [
+          { file: 'src/big.js', type: 'Timeout' },
+          { file: 'src/gen.js', type: 'Timeout' },
+          { file: 'wp/a.php', type: 'PartialParsing' },
+        ],
+      },
+    };
+    const accepted = JSON.parse(
+      renderJson(
+        evaluateGate({
+          findings: [],
+          baseline: null,
+          failOn: 'high',
+          steps: [step],
+          droppedBaselineEntries: 0,
+          acceptedTimeouts: ['src/big.js', 'src/gen.js'],
+          acceptedPartialParses: ['wp/a.php'],
+        }),
+      ),
+    ) as Record<string, unknown>;
+    expect(accepted['exit_code']).toBe(CI_EXIT.PASS);
+    const lines = accepted['accepted_gaps'] as string[];
+    const details = accepted['accepted_gap_details'] as Array<Record<string, unknown>>;
+    expect(lines).toHaveLength(3);
+    expect(details).toHaveLength(lines.length);
+    for (const [i, d] of details.entries()) {
+      expect(Object.keys(d).sort()).toEqual(['file', 'kind', 'reason', 'tool']);
+      expect(d['tool']).toBe('semgrep');
+      expect(['file_timeout', 'partial_parse']).toContain(d['kind']);
+      expect(typeof d['reason']).toBe('string');
+      // Same order: each line names its entry's file.
+      expect(lines[i]).toContain(d['file'] as string);
+    }
+    expect(details.map((d) => [d['kind'], d['file']])).toEqual([
+      ['partial_parse', 'wp/a.php'],
+      ['file_timeout', 'src/big.js'],
+      ['file_timeout', 'src/gen.js'],
+    ]);
   });
 
   it('the GapKind set is exactly the contract’s', () => {

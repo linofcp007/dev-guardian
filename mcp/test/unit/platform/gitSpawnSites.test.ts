@@ -48,17 +48,20 @@ type Kind =
 
 const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string }>> = {
   'mcp/src/platform/gitSafety.ts': {
-    count: 5,
+    count: 6,
     kind: 'helper',
     reason:
       'the configuration probe and the submodule listing (sync, and async through one spawn helper), ' +
       'git itself with the overrides applied, and System32 taskkill /T by its full path — how the plain ' +
-      "spawner (the hook bundle's async git, which may hold no npm package) stops git's tree on Windows",
+      "spawner (the hook bundle's async git, which may hold no npm package) stops git's tree on Windows — " +
+      "and System32 PowerShell by its full path, which finds what a timed-out synchronous git left (execGitSync's tree kill)",
   },
   'mcp/src/runners/spawn.ts': {
-    count: 2,
+    count: 3,
     kind: 'primitive',
-    reason: 'cross-spawn without a shell (spawnNoShell), and captureOutput, the one-process probes classified below',
+    reason:
+      'cross-spawn without a shell (spawnNoShell), Node on the script an npm cmd-shim names (no cmd.exe), ' +
+      'and captureOutput, the one-process probes classified below',
   },
   'mcp/src/runners/childProcess.ts': {
     count: 1,

@@ -17,6 +17,7 @@ import { Storage } from '../../../src/storage/index.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -86,8 +87,9 @@ describe('bulkInsert writes in chunks', () => {
     storage.scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
     const commits: number[] = [];
     const t0 = Date.now();
-    storage.findings.bulkInsert(rows('s1', 50), { gapMs: 5000, afterChunk: (so) => commits.push(so) });
-    expect(Date.now() - t0).toBeLessThan(4000);
+    // A pause it should not take would be a minute: a wait, far past the bound.
+    storage.findings.bulkInsert(rows('s1', 50), { gapMs: 60_000, afterChunk: (so) => commits.push(so) });
+    expect(Date.now() - t0).toBeLessThan(hangBound(4000));
     expect(commits).toEqual([50]);
     db.close();
   });

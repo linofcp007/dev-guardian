@@ -6,7 +6,7 @@ import { execa } from 'execa';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
-import { PERF_STRICT } from '../../helpers/timing.js';
+import { hangBound, PERF_STRICT } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -201,7 +201,7 @@ describe('runProcess kills the whole process tree', () => {
       });
       const elapsed = Date.now() - started;
       expect(result.outcome).toBe('timed_out');
-      expect(elapsed).toBeLessThan(PERF_STRICT ? 5_000 : 15_000);
+      expect(elapsed).toBeLessThan(PERF_STRICT ? 5_000 : hangBound(15_000));
     },
     30_000,
   );
@@ -217,7 +217,7 @@ describe('runProcess kills the whole process tree', () => {
     });
     const elapsed = Date.now() - started;
     expect(result.outcome).toBe('timed_out');
-    expect(elapsed).toBeLessThan(NATIVE_KILL_BUDGET_MS);
+    expect(elapsed).toBeLessThan(hangBound(NATIVE_KILL_BUDGET_MS));
     const pid = readPid(pidFile);
     expect(await waitFor(() => !isAlive(pid), 3_000)).toBe(true);
   }, 30_000);
@@ -237,7 +237,7 @@ describe('runProcess kills the whole process tree', () => {
     controller.abort();
     const result = await running;
     expect(result.outcome).toBe('cancelled');
-    expect(Date.now() - started).toBeLessThan(NATIVE_KILL_BUDGET_MS);
+    expect(Date.now() - started).toBeLessThan(hangBound(NATIVE_KILL_BUDGET_MS));
     const pid = readPid(pidFile);
     expect(await waitFor(() => !isAlive(pid), 3_000)).toBe(true);
   }, 30_000);
@@ -263,7 +263,7 @@ describe('runProcess kills the whole process tree', () => {
     const started = Date.now();
     const result = await runProcess({ command: execPath, args: [parent], cwd: dir, timeoutMs: 1_500 });
     expect(result.outcome).toBe('timed_out');
-    expect(Date.now() - started).toBeLessThan(12_000);
+    expect(Date.now() - started).toBeLessThan(hangBound(12_000));
   }, 30_000);
 
   /**

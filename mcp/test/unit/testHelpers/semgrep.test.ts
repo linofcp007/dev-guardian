@@ -15,6 +15,7 @@ import {
   semgrepStdout,
 } from '../../helpers/semgrep.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 afterEach(() => {
@@ -57,7 +58,7 @@ describe('runSemgrep — a hung semgrep fails at the bound, never hangs the work
     expect(String(caught)).toMatch(/did not finish within 1\.5 s and was killed/);
     expect(String(caught)).toContain('--config x.yml --json .');
     expect(elapsed).toBeGreaterThanOrEqual(1_400);
-    expect(elapsed).toBeLessThan(8_000);
+    expect(elapsed).toBeLessThan(hangBound(8_000));
   });
 
   it('GUARDIAN_TEST_SEMGREP_TIMEOUT_MS sets the default bound', () => {

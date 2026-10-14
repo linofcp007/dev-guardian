@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { expectLinear } from '../../helpers/timing.js';
 import { ChainIndex, chainScope, MAX_ADMIT_PAIRS, meetAdmit, openGapFor, scopeAdmits, type Admit, type Bookkeeping } from '../../../src/history/runCompare.js';
 import { findingKey, toolsOfKey } from '../../../src/history/runNames.js';
 import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../../../src/runners/semgrepReport.js';
@@ -158,10 +159,14 @@ describe('carry-forward: the per-key scope and the per-finding verdict agree', (
       expect(two.every((asked) => openGapFor(holder, asked, f(file, rule)) !== null)).toBe(open);
     }
     const index = new ChainIndex();
-    const t0 = performance.now();
     for (let i = 0; i < 5000; i++) index.push(gap(i));
     expect(index.scope(holder, 'semgrep')).toEqual({ kind: 'never' });
-    expect(performance.now() - t0).toBeLessThan(2000);
+    // The cost is linear in the chain: a shape, never "under 2 s" (review 11, D).
+    expectLinear('ChainIndex: a chain of n crossed gaps, then its scope', (n) => {
+      const grown = new ChainIndex();
+      for (let i = 0; i < n; i++) grown.push(gap(i));
+      grown.scope(holder, 'semgrep');
+    }, 300);
   });
 
   it('one index, a growing chain, many holders: the scope still agrees with every newer scan\'s verdict', () => {
@@ -215,16 +220,18 @@ describe('the admit set stays bounded (round 3 review, M-2)', () => {
     missing_tools: ['semgrep'],
   });
 
-  it('2000 scans alternating two disjoint sets of 200 files and 200 rules: within budget', () => {
-    const a = gapOf('a', 200);
-    const b = gapOf('b', 200);
-    const index = new ChainIndex();
-    const t0 = performance.now();
-    for (let i = 0; i < 2000; i++) {
-      index.push(i % 2 === 0 ? a : b);
-      index.scope(holder, 'semgrep');
-    }
-    expect(performance.now() - t0).toBeLessThan(2000);
+  // W x W per step was the defect: linear in the sets' width W, a shape —
+  // never "under 2 s" (review 11, D).
+  it('scans alternating two disjoint sets of W files and W rules: linear in W', () => {
+    expectLinear('ChainIndex: 40 scans alternating two disjoint W-wide gaps', (w) => {
+      const a = gapOf('a', w);
+      const b = gapOf('b', w);
+      const index = new ChainIndex();
+      for (let i = 0; i < 40; i++) {
+        index.push(i % 2 === 0 ? a : b);
+        index.scope(holder, 'semgrep');
+      }
+    }, 25);
   });
 
   it('the same shape under the bound stays exact: a repeat that is skipped changes nothing', () => {

@@ -21,31 +21,61 @@
  *
  * ---- How the install is made --------------------------------------------------
  *
- * Every path `git ls-files` names, copied from the working tree into a temp
- * directory — what a clone of the next commit holds, and nothing git does not
- * track: no `node_modules`. A file the install needs must therefore be
- * TRACKED for this file to pass — a new source, a new build output (`npm run
- * build`, then `git add` what it made) — exactly as it must be committed to
- * ship. The first positive control proves the copy is an install: none of
- * `mcp/package.json`'s dependencies resolves from it.
+ * A real `git archive` (review 11, finding 16: it was a copy of what `git
+ * ls-files` names), extracted into a temp directory whose path holds a SPACE,
+ * as `C:\Users\Jane Doe\.claude\plugins\…` does: the tree of the next commit
+ * — the index, with every tracked file's working-tree content (`git add -u`
+ * into a copy of the index, so the real one is never touched) — and nothing
+ * git does not track: no `node_modules`, and whatever `export-ignore` would
+ * leave out. A file the install needs must therefore be TRACKED for this
+ * file to pass — a new source, a new build output (`npm run build`, then
+ * `git add` what it made) — exactly as it must be committed to ship. The
+ * first positive control proves the archive is an install: none of
+ * `mcp/package.json`'s dependencies resolves from it. Outside a git checkout
+ * (an exported tree) there is nothing to archive, and the suite is skipped,
+ * visibly.
  *
  * Every command is checked for what the defect looked like — exit 3 and a
  * `Cannot find package` — on top of its own exit code. The one real scan is
  * the gate's exact command, so it takes as long as the scanners installed
- * here take (none: a few seconds, with exit 2 for the missing coverage).
+ * here take (none: a few seconds, with exit 2 for the missing coverage). The
+ * hooks run exactly as `hooks/hooks.json` declares them — exec form, its
+ * `command` and `args`, `${CLAUDE_PLUGIN_ROOT}` replaced by the install's
+ * root — one run per declared entry. A damaged `mcp/dist` beside it is the
+ * negative control: what these checks would see if the build were broken.
  */
 
-import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, cpSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { execGitSync } from '../../src/platform/gitSafety.js';
 import { sarifLog, sarifResult, sarifRun, writeSarif } from '../helpers/sarif.js';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+
+/** `git` in the repository, plainly (this repository is trusted): stdout as bytes. */
+function gitIn(args: readonly string[], env: Record<string, string> = {}): { status: number | null; stdout: Buffer; stderr: string } {
+  const r = spawnSync('git', ['-C', REPO_ROOT, ...args], {
+    env: { ...process.env, ...env },
+    maxBuffer: 1024 * 1024 * 1024,
+    windowsHide: true,
+  });
+  return { status: r.status, stdout: r.stdout ?? Buffer.alloc(0), stderr: (r.stderr ?? Buffer.alloc(0)).toString('utf8') };
+}
+
+/** Whether REPO_ROOT is the root of a git work tree (not an exported copy of one). */
+const IN_CHECKOUT = ((): boolean => {
+  const top = gitIn(['rev-parse', '--show-toplevel']);
+  if (top.status !== 0) return false;
+  try {
+    return realpathSync.native(top.stdout.toString('utf8').trim()).toLowerCase() === realpathSync.native(REPO_ROOT).toLowerCase();
+  } catch {
+    return false;
+  }
+})();
 
 /** A CLI run that reaches no scanner, a hook, the server's handshake: a hang-breaker, generous for a loaded machine. */
 const FAST_TIMEOUT_MS = 45_000;
@@ -60,22 +90,28 @@ afterAll(cleanupTempDirs);
 /** What the 3.2.0 defect printed, in any of its spellings. */
 const UNRESOLVED = /Cannot find (?:package|module)|ERR_MODULE_NOT_FOUND|unexpected error/;
 
-/** Copies every file git tracks (working-tree content) into `into`; returns how many. */
-function installTrackedFiles(into: string): number {
-  const r = execGitSync(REPO_ROOT, ['ls-files', '-z', '--cached'], { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
-  if (r.status !== 0) throw new Error(`git ls-files failed: ${r.stderr}`);
-  let copied = 0;
-  for (const rel of r.stdout.split('\0')) {
-    if (rel === '') continue;
-    const from = join(REPO_ROOT, rel);
-    // Deleted in the working tree, not yet in the index: not in the next commit either.
-    if (!existsSync(from) || !statSync(from).isFile()) continue;
-    const to = join(into, rel);
-    mkdirSync(dirname(to), { recursive: true });
-    copyFileSync(from, to);
-    copied++;
-  }
-  return copied;
+/**
+ * `git archive` of the next commit's tree — the index, every tracked file at
+ * its working-tree content — extracted into `into`; returns how many files
+ * the tree holds. A copy of the index is updated (`git add -u`), never the
+ * index itself.
+ */
+function installArchive(into: string): number {
+  const indexPath = gitIn(['rev-parse', '--git-path', 'index']).stdout.toString('utf8').trim();
+  const tempIndex = join(makeTempDir('guardian-install-index-'), 'index');
+  copyFileSync(resolve(REPO_ROOT, indexPath), tempIndex);
+  const env = { GIT_INDEX_FILE: tempIndex };
+  const added = gitIn(['add', '-u'], env);
+  if (added.status !== 0) throw new Error(`git add -u failed: ${added.stderr}`);
+  const tree = gitIn(['write-tree'], env).stdout.toString('utf8').trim();
+  if (!/^[0-9a-f]{40,64}$/.test(tree)) throw new Error(`git write-tree gave ${JSON.stringify(tree)}`);
+  const archive = gitIn(['archive', '--format=tar', tree]);
+  if (archive.status !== 0) throw new Error(`git archive failed: ${archive.stderr}`);
+  // System32's bsdtar on Windows: GNU tar (Git Bash's) reads `C:` as a host.
+  const tar = process.platform === 'win32' ? join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+  const x = spawnSync(tar, ['-x', '-f', '-', '-C', into], { input: archive.stdout, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+  if (x.status !== 0) throw new Error(`tar -x failed: ${(x.stderr ?? Buffer.alloc(0)).toString('utf8')}`);
+  return gitIn(['ls-tree', '-r', '--name-only', '-z', tree]).stdout.toString('utf8').split('\0').filter((f) => f !== '').length;
 }
 
 interface Run {
@@ -84,14 +120,16 @@ interface Run {
   stderr: string;
 }
 
-describe('a plugin install — the tracked files, no node_modules', () => {
+describe.skipIf(!IN_CHECKOUT)('a plugin install — a git archive, at a path with a space, no node_modules', () => {
   let install: string;
   let cli: string;
   let project: string;
 
   beforeAll(() => {
-    install = makeTempDir('guardian-install-');
-    expect(installTrackedFiles(install)).toBeGreaterThan(1000);
+    install = makeTempDir('guardian install ');
+    expect(install).toMatch(/ /);
+    expect(installArchive(install)).toBeGreaterThan(1000);
+    expect(existsSync(join(install, 'mcp', 'node_modules'))).toBe(false);
     cli = join(install, 'cli', 'dev-guardian.mjs');
     project = makeTempDir('guardian-install-project-');
     writeFileSync(join(project, 'index.js'), 'console.log("hello");\n');
@@ -118,8 +156,9 @@ describe('a plugin install — the tracked files, no node_modules', () => {
 
   it('what ships in mcp/dist: the two bundles (the hooks one in parts), the server’s entry, the bundles’ declarations and the assets — no per-file output, no source map', () => {
     const dist = join(install, 'mcp', 'dist');
-    const shipped = execGitSync(REPO_ROOT, ['ls-files', '-z', '--', 'mcp/dist'], { timeoutMs: 60_000 })
-      .stdout.split('\0')
+    const shipped = gitIn(['ls-files', '-z', '--', 'mcp/dist'])
+      .stdout.toString('utf8')
+      .split('\0')
       .filter((f) => f !== '')
       .map((f) => f.slice('mcp/dist/'.length));
     const bundles = ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksSession.js', 'hooksVet.js', 'hooksWrite.js', 'server.js'];
@@ -254,11 +293,36 @@ describe('a plugin install — the tracked files, no node_modules', () => {
     });
   });
 
-  describe('the hooks', () => {
-    const hook = (payload: Record<string, unknown>): { output: unknown; run: Run } => {
+  describe('the hooks, as hooks/hooks.json declares them', () => {
+    interface Declared {
+      event: string;
+      matcher?: string;
+      command: string;
+      args: string[];
+    }
+    /** Every hook entry of the install's hooks.json, flattened. */
+    const declared = (): Declared[] => {
+      const doc = JSON.parse(readFileSync(join(install, 'hooks', 'hooks.json'), 'utf8')) as {
+        hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ type: string; command: string; args?: string[] }> }>>;
+      };
+      return Object.entries(doc.hooks).flatMap(([event, groups]) =>
+        groups.flatMap((g) =>
+          g.hooks.map((h) => ({ event, ...(g.matcher !== undefined ? { matcher: g.matcher } : {}), command: h.command, args: h.args ?? [] })),
+        ),
+      );
+    };
+
+    /**
+     * One declared entry run as Claude Code runs it: exec form (no shell),
+     * its `command` — `node`, run here as this Node — and its `args`, with
+     * `${CLAUDE_PLUGIN_ROOT}` the install's root (a path with a space).
+     */
+    const runDeclared = (entry: Declared, payload: Record<string, unknown>): { output: unknown; run: Run } => {
+      expect(entry.command).toBe('node');
+      const args = entry.args.map((a) => a.split('${CLAUDE_PLUGIN_ROOT}').join(install));
       const home = makeTempDir('guardian-install-home-');
-      const r = node([join(install, 'hooks', 'guardian-hook.mjs')], {
-        input: JSON.stringify({ cwd: project, ...payload }),
+      const r = node(args, {
+        input: JSON.stringify({ cwd: project, hook_event_name: entry.event, ...payload }),
         // The user-level hook configuration is this test's, not the machine's (as in hooksDispatcher.test.ts).
         env: { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: '', GUARDIAN_HOOKS: '', GUARDIAN_HOOKS_BASH_BLOCK: '', CLAUDE_PROJECT_DIR: project },
       });
@@ -266,23 +330,41 @@ describe('a plugin install — the tracked files, no node_modules', () => {
       return { output: text === '' ? undefined : (JSON.parse(text) as unknown), run: r };
     };
 
+    const entry = (event: string, tool?: string): Declared => {
+      const found = declared().find((d) => d.event === event && (tool === undefined || d.matcher === undefined || new RegExp(d.matcher).test(tool)));
+      if (found === undefined) throw new Error(`hooks.json declares no ${event} hook${tool !== undefined ? ` for ${tool}` : ''}`);
+      return found;
+    };
+
+    it('every entry is exec form — node, and the dispatcher under ${CLAUDE_PLUGIN_ROOT} with its event — and runs from the install', () => {
+      const all = declared();
+      expect(all.length).toBeGreaterThanOrEqual(4);
+      for (const d of all) {
+        expect(d.command, d.event).toBe('node');
+        expect(d.args, d.event).toEqual(['${CLAUDE_PLUGIN_ROOT}/hooks/guardian-hook.mjs', d.event]);
+        // A tool no matcher names: the dispatcher answers nothing, exit 0 — it loaded.
+        const { run: r } = runDeclared(d, { tool_name: 'Read', tool_input: { file_path: join(project, 'index.js') } });
+        expect(r.status, `${d.event} ${d.matcher ?? ''}\n${r.stderr}`).toBe(0);
+        expect(r.stderr).not.toMatch(UNRESOLVED);
+      }
+    });
+
     it('SessionStart loads every guard module', () => {
-      const { output, run: r } = hook({ hook_event_name: 'SessionStart' });
+      const { output, run: r } = runDeclared(entry('SessionStart'), {});
       expect(r.status, r.stderr).toBe(0);
       const context = (output as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput?.additionalContext;
       expect(context).toBeTypeOf('string');
       expect(context).not.toMatch(/could not be loaded/);
     });
 
-    it('PreToolUse denies rm -rf /', () => {
-      const { output } = hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
+    it('PreToolUse (the Bash entry) denies rm -rf /', () => {
+      const { output } = runDeclared(entry('PreToolUse', 'Bash'), { tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
       expect(output).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     });
 
     // Each from its own loader in mcp/dist/hooks.js: the install gate and package vetting, the secret scan.
     it('PreToolUse vets an npx download — offline, it says so: the vetting loaded', () => {
-      const { output, run: r } = hook({
-        hook_event_name: 'PreToolUse',
+      const { output, run: r } = runDeclared(entry('PreToolUse', 'Bash'), {
         tool_name: 'Bash',
         tool_input: { command: 'npx -y zz-no-such-pkg-install-test' },
       });
@@ -290,14 +372,75 @@ describe('a plugin install — the tracked files, no node_modules', () => {
       expect(JSON.stringify(output)).toMatch(/could not vet zz-no-such-pkg-install-test/);
     });
 
+    it('PreToolUse (the Write entry) denies a write to the hooks configuration', () => {
+      const { output, run: r } = runDeclared(entry('PreToolUse', 'Write'), {
+        tool_name: 'Write',
+        tool_input: { file_path: join(project, '.guardian', 'hooks.config.json'), content: '{"enabled":false}' },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(output, JSON.stringify(output)).toMatchObject({ hookSpecificOutput: { permissionDecision: expect.stringMatching(/deny|ask/) } });
+    });
+
     it('PostToolUse warns about a secret just written', () => {
       const key = ['AKIA', 'Z7Q4', 'XR2M', 'P9LK', 'W3TB'].join('');
-      const { output } = hook({
-        hook_event_name: 'PostToolUse',
+      const { output } = runDeclared(entry('PostToolUse', 'Write'), {
         tool_name: 'Write',
         tool_input: { file_path: join(project, 'aws.js'), content: `const k = "${key}";\n` },
       });
       expect(JSON.stringify(output)).toMatch(/AWS access key/);
+    });
+  });
+
+  // The negative control (review 11, finding 16): the same install with its
+  // bundles cut short. Each check above must tell that apart from a working
+  // build — or it proves nothing about one.
+  describe('negative control: the same install, its bundles damaged', () => {
+    let damaged: string;
+    beforeAll(() => {
+      damaged = makeTempDir('guardian install damaged ');
+      for (const part of ['cli', 'hooks', '.claude-plugin', join('mcp', 'dist'), join('mcp', 'package.json')]) {
+        cpSync(join(install, part), join(damaged, part), { recursive: true });
+      }
+      for (const bundle of ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksVet.js', 'hooksWrite.js', 'hooksSession.js']) {
+        const path = join(damaged, 'mcp', 'dist', bundle);
+        const text = readFileSync(path, 'utf8');
+        writeFileSync(path, text.slice(0, Math.min(200_000, Math.floor(text.length / 2))));
+      }
+    }, COPY_TIMEOUT_MS);
+
+    it('the CLI exits 3 and says the engine could not be loaded — what `loaded` refuses', () => {
+      const r = node([join(damaged, 'cli', 'dev-guardian.mjs'), '--help']);
+      expect(r.status).toBe(3);
+      expect(r.stderr).toMatch(/its engine, mcp\/dist\/engine\.js, could not be loaded/);
+      expect(() => loaded(r, 0)).toThrow();
+    });
+
+    it('the server does not answer: it exits', () => {
+      const r = spawnSyncCapped(process.execPath, [join(damaged, 'mcp', 'dist', 'server.js')], {
+        cwd: project,
+        encoding: 'utf8',
+        timeout: FAST_TIMEOUT_MS,
+        input: '',
+        env: { ...process.env, NO_COLOR: '1' },
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stdout ?? '').not.toMatch(/"serverInfo"/);
+    });
+
+    it('the hooks fail open — exit 0 — and the guard the deny check looks for is gone', () => {
+      const doc = JSON.parse(readFileSync(join(damaged, 'hooks', 'hooks.json'), 'utf8')) as {
+        hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ args?: string[] }> }>>;
+      };
+      const bash = (doc.hooks['PreToolUse'] ?? []).find((g) => g.matcher !== undefined && new RegExp(g.matcher).test('Bash'));
+      const args = (bash?.hooks[0]?.args ?? []).map((a) => a.split('${CLAUDE_PLUGIN_ROOT}').join(damaged));
+      expect(args.length).toBe(2);
+      const home = makeTempDir('guardian-install-home-');
+      const r = node(args, {
+        input: JSON.stringify({ cwd: project, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } }),
+        env: { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: '', GUARDIAN_HOOKS: '', GUARDIAN_HOOKS_BASH_BLOCK: '', CLAUDE_PROJECT_DIR: project },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).not.toMatch(/"permissionDecision":\s*"deny"/);
     });
   });
 

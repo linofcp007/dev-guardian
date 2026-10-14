@@ -7,8 +7,6 @@
  * means and why `unknown` is never folded into `ok`.
  */
 
-import { existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { parsePackageSpec } from '../pkgvet/parseCommand.js';
@@ -18,6 +16,7 @@ import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
 import type { ToolCallMeta } from './index.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const ECOSYSTEM_ALIASES: Record<string, PkgEcosystem> = {
   npm: 'npm',
@@ -73,12 +72,16 @@ async function handler(
   if (ecosystem === undefined) {
     return { ok: false, error: { code: 'unsupported_target', message: `unsupported ecosystem '${inp.ecosystem}'` } };
   }
+  // The project's registry configuration (`.npmrc`, `nuget.config`) is read
+  // from here: held to every tool's `project_path` rule (`toolProjectPath`),
+  // never resolved on its own — a UNC path, `//host/…`, `\\?\UNC\…` or a link
+  // to a share made Windows authenticate to a host the caller chose (review
+  // 11, finding 8). Without one, the server's working directory, as before.
   let projectDir = process.cwd();
   if (inp.project_path !== undefined && inp.project_path !== '') {
-    projectDir = resolve(inp.project_path);
-    if (!existsSync(projectDir) || !statSync(projectDir).isDirectory()) {
-      return { ok: false, error: { code: 'target_not_found', message: `project_path is not a directory: ${projectDir}` } };
-    }
+    const resolved = toolProjectPath(inp.project_path);
+    if (typeof resolved !== 'string') return resolved;
+    projectDir = resolved;
   }
 
   const specs: PackageSpec[] = [];

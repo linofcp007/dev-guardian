@@ -85,8 +85,14 @@ export function ensureReportDir(projectPath: string, scanId: string, prefix: str
     `[dev-guardian] ${join(projectPath, '.guardian', 'reports')} is a link or not a directory; ` +
       `this scan's reports go to the temp directory instead\n`,
   );
-  return mkdtempSync(join(tmpdir(), `guardian-reports-${prefix}-`));
+  const fallback = mkdtempSync(join(tmpdir(), `${TEMP_REPORTS_PREFIX}${prefix}-`));
+  // Pruned like the project's (review 11): every such scan left one behind.
+  pruneReports(tmpdir(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`);
+  return fallback;
 }
+
+/** The temp directory fallback's names: `guardian-reports-<kind>-<random>`. */
+const TEMP_REPORTS_PREFIX = 'guardian-reports-';
 
 /**
  * How many report directories of one kind `.guardian/reports/` keeps — the
@@ -131,8 +137,13 @@ function keptReports(): number {
  * are touched (a `Dirent` is typed without following a link, and `rmSync`
  * removes a link inside one, never what it names). Best effort: a directory
  * a running scanner still holds is left for the next scan.
+ *
+ * `name`: the directories' name before `-<id>` — `prefix` in a project's
+ * `.guardian/reports/`, `guardian-reports-<prefix>` in the temp directory
+ * {@link ensureReportDir} falls back to, which nothing pruned (review 11).
+ * On POSIX only this account's own directories are touched.
  */
-export function pruneReports(reportsDir: string, prefix: string, current: string): void {
+export function pruneReports(reportsDir: string, prefix: string, current: string, name: string = prefix): void {
   if (!PRUNED_REPORT_PREFIXES.has(prefix)) return;
   let entries;
   try {
@@ -140,18 +151,21 @@ export function pruneReports(reportsDir: string, prefix: string, current: string
   } catch {
     return;
   }
+  const uid = process.getuid?.();
   const others: Array<{ path: string; mtime: number }> = [];
   for (const e of entries) {
-    if (!e.isDirectory() || !e.name.startsWith(`${prefix}-`)) continue;
+    if (!e.isDirectory() || !e.name.startsWith(`${name}-`)) continue;
     // The id after the prefix: `deps-<id>` is not `depsaudit-<id>`'s, nor
     // `init-secrets-<id>` a `secrets-` one (a prefix is never a hyphenated
-    // form of another's id: ids are hex or a tree hash).
-    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(prefix.length + 1))) continue;
+    // form of another's id: ids are hex, a tree hash or mkdtemp's suffix).
+    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(name.length + 1))) continue;
     const path = join(reportsDir, e.name);
     if (path === current) continue;
     try {
       const st = lstatSync(path);
-      if (st.isDirectory() && !st.isSymbolicLink()) others.push({ path, mtime: st.mtimeMs });
+      if (st.isDirectory() && !st.isSymbolicLink() && (uid === undefined || st.uid === uid)) {
+        others.push({ path, mtime: st.mtimeMs });
+      }
     } catch {
       /* gone meanwhile */
     }

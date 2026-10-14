@@ -32,13 +32,14 @@ import {
 } from '../../../src/platform/projectFs.js';
 import { CAN_SYMLINK, POSIX } from '../../helpers/fsCapabilities.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
 const fast = <T>(fn: () => T): T => {
   const t0 = Date.now();
   const out = fn();
-  expect(Date.now() - t0).toBeLessThan(2000);
+  expect(Date.now() - t0).toBeLessThan(hangBound(2000));
   return out;
 };
 
@@ -233,7 +234,7 @@ describe('hashProjectFile', () => {
     const t0 = Date.now();
     expect(await hashProjectFile(root, 'zero')).toBe('link:/dev/zero');
     expect(await hashProjectFile(root, 'pipe')).toBe('special');
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
   });
 });
 

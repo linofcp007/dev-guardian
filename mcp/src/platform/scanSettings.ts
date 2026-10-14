@@ -39,7 +39,7 @@
 
 import { posix } from 'node:path';
 import { describeReadRefusal, readProjectText } from './projectFs.js';
-import { describeYamlRefusal, parseYamlBounded } from './boundedParse.js';
+import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './boundedParse.js';
 
 /** Where the settings live, relative to the project root. */
 export const SCAN_SETTINGS_RELATIVE_PATH = '.guardian/scan.yml';
@@ -90,7 +90,10 @@ export function loadScanSettings(root: string): ScanSettingsLoad {
   const invalid = (error: string): ScanSettingsLoad => ({ kind: 'invalid', path, error, settings: defaultScanSettings() });
   if (read.status === 'refused') return invalid(`the file was not read: ${describeReadRefusal(read.reason)}`);
   if (read.text.trim() === '') return { kind: 'loaded', path, settings: defaultScanSettings() };
-  const parsed = parseYamlBounded(read.text);
+  // A key written twice is refused, never "the last one wins": a reviewer
+  // read `timeout: 30` and the scan applied the `timeout: 1` below it
+  // (review 11, finding 15e).
+  const parsed = parseYamlBounded(read.text, YAML_CONFIG_LIMITS, { uniqueKeys: true });
   if (!parsed.ok) {
     return invalid(parsed.reason === 'invalid' ? `invalid YAML: ${(parsed.detail ?? 'unparsable').split('\n')[0] ?? ''}` : describeYamlRefusal(parsed));
   }
