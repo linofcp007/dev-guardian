@@ -1561,7 +1561,7 @@ function execGitSync(dir, args, opts = {}) {
   const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], options);
   const code = r.error?.code;
   if ((code === "ETIMEDOUT" || code === "ENOBUFS") && typeof r.pid === "number" && r.pid > 0) {
-    stopSyncTree(r.pid, Date.now() - started);
+    stopSyncTree(r.pid, started);
   }
   return {
     status: r.error === void 0 ? r.status : null,
@@ -1571,7 +1571,7 @@ function execGitSync(dir, args, opts = {}) {
     notApplied: safety.notApplied
   };
 }
-function stopSyncTree(pid, elapsedMs) {
+function stopSyncTree(pid, startedAt2) {
   try {
     if (process.platform !== "win32") {
       process.kill(-pid, "SIGKILL");
@@ -1579,7 +1579,7 @@ function stopSyncTree(pid, elapsedMs) {
     }
     const root = envValue2(process.env, "SystemRoot") ?? "C:\\Windows";
     const taskkill = join6(root, "System32", "taskkill.exe");
-    const script = `$since = (Get-Date).AddMilliseconds(-${Math.ceil(elapsedMs) + 1e3}); Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Where-Object { $_.CreationDate -ge $since } | ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
+    const script = `$since = [DateTimeOffset]::FromUnixTimeMilliseconds(${Math.floor(startedAt2) - 1e3}).LocalDateTime; Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Where-Object { $_.CreationDate -ge $since } | ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
     spawnSync(join6(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], {
       windowsHide: true,
       stdio: "ignore",
