@@ -18,7 +18,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
@@ -49,7 +49,12 @@ async function until(check: () => boolean, ms: number): Promise<boolean> {
 
 const HAS_GIT = spawnSync('git', ['--version'], { windowsHide: true }).status === 0;
 
-/** The pids of the processes whose command line holds `text` (not this one). */
+/**
+ * The pids of the processes whose command line holds `text` (not this one).
+ * On Linux from `/proc` — a slim container has no `ps` (procps), and the
+ * Docker run failed on `spawnSync ps ENOENT`; a zombie's command line is
+ * empty there, so a stopped process that nobody reaped does not count.
+ */
 function processesNaming(text: string): number[] {
   const out =
     process.platform === 'win32'
@@ -63,11 +68,22 @@ function processesNaming(text: string): number[] {
           ],
           { windowsHide: true, encoding: 'utf8' },
         )
-      : execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
-          .split('\n')
-          .filter((line) => line.includes(text) && !line.includes('ps -eo'))
-          .map((line) => line.trim().split(/\s+/)[0] ?? '')
-          .join('\n');
+      : existsSync('/proc/self/cmdline')
+        ? readdirSync('/proc')
+            .filter((entry) => /^\d+$/.test(entry))
+            .filter((pid) => {
+              try {
+                return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').includes(text);
+              } catch {
+                return false; // gone since the listing
+              }
+            })
+            .join('\n')
+        : execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' })
+            .split('\n')
+            .filter((line) => line.includes(text) && !line.includes('ps -eo'))
+            .map((line) => line.trim().split(/\s+/)[0] ?? '')
+            .join('\n');
   return out
     .split(/\r?\n/)
     .map((s) => Number(s.trim()))
