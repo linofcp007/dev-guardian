@@ -19757,6 +19757,9 @@ function remedyFor(kind, tool54, detail) {
     case "path_too_long":
       return "Enable Windows long paths (LongPathsEnabled=1 under HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem, then restart) or move the project to a shorter path.";
     case "scanner_failed":
+      if (/SEMGREP_SEND_METRICS=off/.test(detail)) {
+        return "Unset SEMGREP_SEND_METRICS for the scan (Semgrep cannot build --config=auto with metrics off), or scan with --local-only.";
+      }
       return /did not load|rule/i.test(detail) ? "Fix or remove the rule the detail names, then rerun the scan." : "Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.";
     case "skipped":
       return /local_only|--local-only/i.test(detail) ? "Add rules of the project's own (a committed .semgrep.yml, or the init_project tool), or drop --local-only." : "Read why the scanner was skipped in the detail and give it something it can scan, or rerun where it can run.";
@@ -37742,6 +37745,22 @@ function semgrepScanFlags(configRoot) {
 function semgrepSpawn(env) {
   return { command: SEMGREP_COMMAND, env: { ...pythonUtf8Env(env), ...SEMGREP_NO_VERSION_CHECK_ENV } };
 }
+function semgrepErrorLine(stderr) {
+  for (const line of stderr.split(/\r?\n/)) {
+    const m = /\[ERROR\]:?\s*(\S.*)$/.exec(line);
+    const message2 = m?.[1]?.trim();
+    if (message2 !== void 0 && message2 !== "") return message2.length > 500 ? `${message2.slice(0, 500)}\u2026` : message2;
+  }
+  return null;
+}
+function metricsOffConflict(configs, env) {
+  if (!configs.some((c) => c === "auto" || c === "--config=auto")) return null;
+  const source = env ?? process.env;
+  const key = Object.keys(source).find((k) => k.toUpperCase() === "SEMGREP_SEND_METRICS");
+  const value = key !== void 0 ? source[key] : void 0;
+  if (value === void 0 || value.trim().toLowerCase() !== "off") return null;
+  return "SEMGREP_SEND_METRICS=off is set in the environment, and Semgrep cannot build its registry rules (--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI's --local-only)";
+}
 function runSemgrep(opts, run2 = runProcess) {
   return run2({ ...opts, ...semgrepSpawn(opts.env) });
 }
@@ -38574,7 +38593,14 @@ function judgeSemgrepRun(args) {
     missing_tools.push("semgrep");
     return;
   }
-  const detail = check2.reason ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "semgrep failed";
+  const errorLine = semgrepErrorLine(result.stderr);
+  const said = check2.reason ?? errorLine ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "semgrep failed";
+  const metrics = via === null ? metricsOffConflict(configs, ctx.scriptEnv) : null;
+  const detail = [
+    said,
+    ...check2.reason !== void 0 && errorLine !== null ? [`semgrep said: ${errorLine}`] : [],
+    ...metrics !== null ? [metrics] : []
+  ].join(" \u2014 ");
   if (check2.rule_config_error !== void 0) {
     tools_run.push({
       name: "semgrep",

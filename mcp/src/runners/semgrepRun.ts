@@ -75,6 +75,41 @@ export function semgrepSpawn(env: NodeJS.ProcessEnv | undefined): { command: str
   return { command: SEMGREP_COMMAND, env: { ...pythonUtf8Env(env), ...SEMGREP_NO_VERSION_CHECK_ENV } };
 }
 
+/**
+ * Semgrep's own message on stderr — `[00.07][ERROR]: Cannot create auto
+ * config when metrics are off. …` — or null when it printed none. A run that
+ * wrote no report said why only there, and the reason used to be "semgrep
+ * wrote no JSON report (exit 2)" alone (review 11, finding 10).
+ */
+export function semgrepErrorLine(stderr: string): string | null {
+  for (const line of stderr.split(/\r?\n/)) {
+    const m = /\[ERROR\]:?\s*(\S.*)$/.exec(line);
+    const message = m?.[1]?.trim();
+    if (message !== undefined && message !== '') return message.length > 500 ? `${message.slice(0, 500)}…` : message;
+  }
+  return null;
+}
+
+/**
+ * Why the registry rules (`--config=auto`, which dev-guardian passes when not
+ * local-only) cannot run in `env`, or null: `SEMGREP_SEND_METRICS=off`.
+ * Semgrep builds `auto` from the project's languages and refuses to with
+ * metrics off — every full scan exited 2, the cause nowhere in the answer
+ * (review 11, finding 10). The setting is the user's, so it is named, never
+ * overridden: dev-guardian does not turn metrics back on.
+ */
+export function metricsOffConflict(configs: readonly string[], env: NodeJS.ProcessEnv | undefined): string | null {
+  if (!configs.some((c) => c === 'auto' || c === '--config=auto')) return null;
+  const source = env ?? process.env;
+  const key = Object.keys(source).find((k) => k.toUpperCase() === 'SEMGREP_SEND_METRICS');
+  const value = key !== undefined ? source[key] : undefined;
+  if (value === undefined || value.trim().toLowerCase() !== 'off') return null;
+  return (
+    'SEMGREP_SEND_METRICS=off is set in the environment, and Semgrep cannot build its registry rules ' +
+    '(--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI\'s --local-only)'
+  );
+}
+
 type SemgrepRunOptions = Omit<ProcessRunOptions, 'command'>;
 
 /** Run Semgrep — through `run` when the caller injects one (create_fix_pr's worktree runner). */

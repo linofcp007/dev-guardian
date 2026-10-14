@@ -121,6 +121,15 @@ describe('every gap as data', () => {
     }
   });
 
+  it('a Semgrep that refused --config=auto under SEMGREP_SEND_METRICS=off: the remedy says so, not "fix the rule" (review 11, finding 10)', () => {
+    const detail =
+      'security_scan_full: semgrep failed (semgrep wrote no JSON report (exit 2) — semgrep said: Cannot create auto config when ' +
+      'metrics are off. — SEMGREP_SEND_METRICS=off is set in the environment, and Semgrep cannot build its registry rules ' +
+      "(--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI's --local-only))";
+    expect(remedyFor('scanner_failed', 'semgrep', detail)).toMatch(/^Unset SEMGREP_SEND_METRICS/);
+    expect(remedyFor('scanner_failed', 'semgrep', 'semgrep failed (a rule did not load)')).toMatch(/rule/);
+  });
+
   it('kinds from what a step says: not installed, no lockfile, a refused step, a failed run, a shallow clone', () => {
     const steps: ScanStepResult[] = [
       { tool: 'security_scan_full', ran: true, tools_run: [], missing_tools: ['bandit'] },

@@ -105,7 +105,7 @@ import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerPar
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { nameRepoConfig } from '../runners/repoConfig.js';
-import { runSemgrep as spawnSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
+import { metricsOffConflict, runSemgrep as spawnSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
   mayHoldTaintRules,
@@ -555,8 +555,18 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
     missing_tools.push('semgrep');
     return;
   }
-  const detail =
-    check.reason ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? 'semgrep failed';
+  // Semgrep's own `[ERROR]` line goes with the reason whatever it is: "wrote
+  // no JSON report (exit 2)" alone named no cause (review 11, finding 10) —
+  // and SEMGREP_SEND_METRICS=off, the commonest one, is named outright.
+  const errorLine = semgrepErrorLine(result.stderr);
+  const said = check.reason ?? errorLine ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? 'semgrep failed';
+  // The container fallback does not inherit the variable: only Semgrep run here.
+  const metrics = via === null ? metricsOffConflict(configs, ctx.scriptEnv) : null;
+  const detail = [
+    said,
+    ...(check.reason !== undefined && errorLine !== null ? [`semgrep said: ${errorLine}`] : []),
+    ...(metrics !== null ? [metrics] : []),
+  ].join(' — ');
   if (check.rule_config_error !== undefined) {
     // Semgrep refused the rule configuration (an unknown language: exit 8):
     // installed, and the rules are what to fix.

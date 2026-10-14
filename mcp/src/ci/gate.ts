@@ -463,6 +463,10 @@ export function remedyFor(kind: GapKind, tool: string, detail: string): string {
     case 'path_too_long':
       return 'Enable Windows long paths (LongPathsEnabled=1 under HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem, then restart) or move the project to a shorter path.';
     case 'scanner_failed':
+      // Before the rule test: the line says "registry rules" (review 11, finding 10).
+      if (/SEMGREP_SEND_METRICS=off/.test(detail)) {
+        return 'Unset SEMGREP_SEND_METRICS for the scan (Semgrep cannot build --config=auto with metrics off), or scan with --local-only.';
+      }
       return /did not load|rule/i.test(detail)
         ? 'Fix or remove the rule the detail names, then rerun the scan.'
         : 'Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.';
