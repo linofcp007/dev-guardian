@@ -45,6 +45,8 @@ const PER_PAGE = 1000;
  * self-collision measurement recorded in the directory README: large enough
  * to cover what typosquatters actually target, small enough that the list's
  * own legitimate near-neighbours stay a handful.
+ *
+ * @type {Readonly<Record<string, { registry: string, count: number, valid: RegExp } | undefined>>}
  */
 const ECOSYSTEMS = {
   npm: { registry: 'npmjs.org', count: 2000, valid: /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/ },
@@ -53,6 +55,11 @@ const ECOSYSTEMS = {
   nuget: { registry: 'nuget.org', count: 2000, valid: /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/ },
 };
 
+/**
+ * @param {string} registry
+ * @param {number} page
+ * @returns {Promise<string[]>}
+ */
 async function fetchPage(registry, page) {
   const url = `${BASE}/${registry}/package_names?sort=downloads&order=desc&per_page=${PER_PAGE}&page=${page}`;
   const res = await fetch(url, { headers: { accept: 'application/json' } });
@@ -62,6 +69,7 @@ async function fetchPage(registry, page) {
   return body.filter((x) => typeof x === 'string');
 }
 
+/** @param {string} eco */
 async function generate(eco) {
   const spec = ECOSYSTEMS[eco];
   if (!spec) throw new Error(`unknown ecosystem '${eco}' (expected one of ${Object.keys(ECOSYSTEMS).join(', ')})`);

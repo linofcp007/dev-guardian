@@ -1,6 +1,6 @@
 {
   "name": "@dev-guardian/mcp-server",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "MCP server for the dev-guardian plugin. Exposes security, quality, bugfix, deps, compliance, observability and performance capabilities as MCP tools and resources via stdio transport.",
   "type": "module",
   "main": "./dist/server.js",
@@ -23,7 +23,7 @@
     "test:coverage": "vitest run --coverage",
     "test:docker": "node scripts/test-docker.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "tsc -p tsconfig.test.json && node scripts/unusedExports.mjs"
+    "lint": "tsc -p tsconfig.test.json && tsc -p tsconfig.js.json && node scripts/unusedExports.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",

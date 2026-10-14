@@ -56,8 +56,8 @@
  *                                                 in a job of their own
  *                             Needs network + git: resolves the release tag to its
  *                             commit SHA and pins that, not just the tag.
- *                             Exit codes: 0 done, 1 missing/unknown target or
- *                             refused overwrite, 3 usage error
+ *                             Exit codes: 0 done, 1 refused overwrite, 3 usage
+ *                             error (a missing/unknown target too)
  *   status                  One-screen terminal summary of the latest scan
  *                           for this project (read-only — no scan runs).
  *                           Reports; does not gate: exits 0 even on a
@@ -129,6 +129,7 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
@@ -151,7 +152,43 @@ import { spawn } from 'node:child_process';
 // broken environment, a test pointing it nowhere) came back as a directory
 // tree the CLI had made — and a later `mkdtemp` there then succeeded where it
 // must fail. With no temp directory, the CLI runs uncached and creates nothing.
-if (existsSync(tmpdir())) module.enableCompileCache?.();
+// compile-cache:begin — the same in hooks/guardian-hook.mjs, cli/dev-guardian.mjs and
+// dist/server.js (mcp/scripts/bundleOptions.mjs, SERVER_JS); hooksDispatcher.test.ts holds them equal.
+/**
+ * Where Node's on-disk compile cache may live: `undefined` for Node's own
+ * default, `null` for no cache at all. Never a temp directory that is not
+ * there (Node creates the cache's directory with every missing parent, and a
+ * TMPDIR that is not there must stay not there). On Windows, Node's default
+ * under the account's own `%TEMP%`. Elsewhere, a directory of this account's
+ * own in the temp directory, made `0700` and used only when it is a directory
+ * this account owns that nobody else can write: in a temp directory every
+ * account shares (Linux's `/tmp`), Node's default `node-compile-cache/<version>-<uid>`
+ * is used as it is found — another account can create it first, writable,
+ * and plant compiled code this process then runs (measured, Node 22.13 and 24).
+ *
+ * @returns {string | null | undefined}
+ */
+function compileCacheDir() {
+  const tmp = tmpdir();
+  if (!existsSync(tmp)) return null;
+  if (process.platform === 'win32') return undefined;
+  const uid = process.getuid?.() ?? -1;
+  const dir = join(tmp, `dev-guardian-node-compile-cache-${uid}`);
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'EEXIST') return null;
+  }
+  const st = lstatSync(dir);
+  return st.isDirectory() && st.uid === uid && (st.mode & 0o077) === 0 ? dir : null;
+}
+try {
+  const dir = compileCacheDir();
+  if (dir !== null) module.enableCompileCache?.(dir);
+} catch {
+  /* no cache: it only runs slower */
+}
+// compile-cache:end
 
 // Everything this CLI uses from the server's code comes from ONE file, the
 // self-contained bundle `mcp/dist/engine.js` (built from `mcp/src/engine.ts`,
@@ -168,6 +205,140 @@ if (existsSync(tmpdir())) module.enableCompileCache?.();
 // bundle's `load*Modules()` functions, which the bundle keeps lazy: `--help`,
 // `check`, `mcp-config` and `ci-init` never evaluate them, on any Node
 // version (`mcp/test/e2e/cliLazyStorage.test.ts`).
+//
+// A bundle that is missing or damaged is an install to repair, said in one
+// line with exit 3 (review of 3.3.0): the import used to throw out of the
+// module — a stack trace and exit 1, which is `scan`'s "the gate failed", so a
+// caller read a broken install as a new finding. Every shape of it (review 11,
+// finding 14):
+//   - an import that throws (missing, truncated, throwing): its error named;
+//   - one that loads but lacks what this CLI uses — `cli/` and `mcp/dist/`
+//     from two builds — the names it lacks: it was a TypeError and exit 1 on
+//     every command, `--help` included;
+//   - one that never settles: when nothing else is pending, `beforeExit`
+//     says so before Node would exit 13 with its unsettled-top-level-await
+//     warning, and the deadline catches one that keeps the process busy;
+//   - one that exits while it loads (`process.exit(0)` in it): the `exit`
+//     listener makes that 3.
+// One message each, never two (review 12, finding 14). What the engine prints
+// while it loads goes to stderr: it must not corrupt `--format json`. And
+// `--help` still prints the usage (the hosts it cannot name aside), then the
+// message, exit 3.
+const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
+const ROOT = resolve(HERE, '..'); // <plugin>
+const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
+// Item 6a: the absolute path this project's own CLI substitutes into every
+// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
+// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
+// file installed into ANOTHER project told the agent to run
+// `node cli/dev-guardian.mjs`, a path that exists only inside the
+// dev-guardian repo itself.
+const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
+// How every command this CLI tells a reader to run is spelled: a plugin
+// install puts no `dev-guardian` on PATH, so a bare `dev-guardian baseline
+// update` was "command not found" (review 8, C7). Forward slashes read the
+// same in cmd, PowerShell and every POSIX shell.
+const CLI_COMMAND = `node "${CLI_JS.split(sep).join('/')}"`;
+
+/** The engine's exports this file destructures below — the same names (cliEngineExports.test.ts holds them equal). */
+const ENGINE_EXPORTS = [
+  'ALL_HOSTS',
+  'assessBashCommand',
+  'canonicalPath',
+  'decodeText',
+  'describeReadRefusal',
+  'describeWriteRefusal',
+  'detectOs',
+  'ensureGuardianDirIgnored',
+  'execGitSync',
+  'hardenCommandSearch',
+  'InvalidProjectPathError',
+  'isWithinDir',
+  'loadCiModules',
+  'loadDashboardModules',
+  'loadDbModules',
+  'loadImportSarifModules',
+  'previewMcpConfig',
+  'PROJECT_LOCKFILE_MAX_BYTES',
+  'readProjectText',
+  'resolveProjectPath',
+  'resolveVersion',
+  'scanForSecrets',
+  'setupHost',
+  'untrustedText',
+  'writeProjectFile',
+];
+/** @param {string} why */
+const engineDamaged = (why) =>
+  `dev-guardian: its engine, mcp/dist/engine.js, ${why} — the plugin install is incomplete or damaged. ` +
+  'Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build.\n';
+/** Whether this run asked only for the usage (`--help`, `-h`, `help`, or nothing). */
+const asksOnlyForHelp = (() => {
+  const first = process.argv[2];
+  return first === undefined || first === '--help' || first === '-h' || first === 'help';
+})();
+/** @param {string} why @returns {Promise<never>} */
+const engineExit = async (why) => {
+  engineLoading = false;
+  restoreStdout();
+  if (asksOnlyForHelp) usage(null);
+  await new Promise((done) => process.stderr.write(engineDamaged(why), () => done(undefined)));
+  return process.exit(3);
+};
+/**
+ * How long the engine may take to load — normally well under a second; 60 s,
+ * or `GUARDIAN_ENGINE_LOAD_DEADLINE_MS` (1 000 or more: docs/env.md).
+ */
+const ENGINE_LOAD_DEADLINE_MS = (() => {
+  const set = Number(process.env['GUARDIAN_ENGINE_LOAD_DEADLINE_MS']);
+  return Number.isInteger(set) && set >= 1000 ? set : 60_000;
+})();
+let engineLoading = true;
+// Whatever the engine prints while it loads goes to stderr (see above).
+const stdoutWrite = process.stdout.write;
+process.stdout.write = /** @type {typeof process.stdout.write} */ (
+  /** @type {unknown} */ ((/** @type {unknown[]} */ ...args) => Reflect.apply(process.stderr.write, process.stderr, args))
+);
+function restoreStdout() {
+  process.stdout.write = stdoutWrite;
+}
+/** @param {number} code */
+const exitWhileLoading = (code) => {
+  if (!engineLoading) return;
+  engineLoading = false;
+  restoreStdout();
+  // Synchronous: an `exit` listener's asynchronous write is never flushed.
+  writeSync(2, engineDamaged(`exited while it was loading (exit ${code})`));
+  process.exitCode = 3;
+};
+process.on('exit', exitWhileLoading);
+// Nothing left to wait for, the import still pending: said here, before Node's
+// own unsettled-top-level-await warning and exit 13.
+const drainedWhileLoading = () => {
+  if (!engineLoading) return;
+  void engineExit('never finished loading (it waits on something that never comes)');
+};
+process.once('beforeExit', drainedWhileLoading);
+const engineDeadline = setTimeout(() => {
+  void engineExit(`did not finish loading in ${ENGINE_LOAD_DEADLINE_MS / 1000} s`);
+}, ENGINE_LOAD_DEADLINE_MS);
+engineDeadline.unref();
+const engine = await import('../mcp/dist/engine.js').catch(async (/** @type {unknown} */ err) => {
+  engineLoading = false;
+  const why = err instanceof Error ? (/** @type {NodeJS.ErrnoException} */ (err).code ?? err.message) : String(err);
+  return engineExit(`could not be loaded (${why})`);
+});
+engineLoading = false;
+restoreStdout();
+clearTimeout(engineDeadline);
+process.off('exit', exitWhileLoading);
+process.off('beforeExit', drainedWhileLoading);
+{
+  // What this file takes from the engine, below: each must be there.
+  const engineExports = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (engine));
+  const lacking = ENGINE_EXPORTS.filter((name) => engineExports[name] === undefined);
+  if (lacking.length > 0) await engineExit(`is not the one this CLI needs: it lacks ${lacking.join(', ')}`);
+}
 const {
   ALL_HOSTS,
   assessBashCommand,
@@ -189,33 +360,47 @@ const {
   PROJECT_LOCKFILE_MAX_BYTES,
   readProjectText,
   resolveProjectPath,
+  resolveVersion,
   scanForSecrets,
   setupHost,
   untrustedText,
   writeProjectFile,
-} = await import('../mcp/dist/engine.js');
+} = engine;
+
+/**
+ * Types — this file is type-checked (`mcp/tsconfig.js.json`, `npm run lint`).
+ * The engine's are its source's: `mcp/dist/engine.d.ts` re-exports
+ * `mcp/src/engine.ts`'s, so the checker never reads the bundle itself.
+ *
+ * @template T
+ * @typedef {{ error: string, value?: undefined } | { error?: undefined, value: T }} Parsed
+ *   an argument parser's answer: a usage error, or what the arguments say
+ */
+/**
+ * @typedef {{ error: string, value?: undefined, nextIndex?: undefined } | { error?: undefined, value: string, nextIndex: number }} Operand
+ *   a flag's value, and the index to resume the argument loop from
+ * @typedef {Awaited<ReturnType<typeof loadCiEngine>>} CiModules
+ * @typedef {Awaited<ReturnType<CiModules['startApp']>>} StartedApp
+ * @typedef {Parameters<CiModules['evaluateGate']>[0]} GateInput
+ * @typedef {Awaited<ReturnType<typeof loadDashboardEngine>>} DashboardModules
+ * @typedef {Awaited<ReturnType<typeof loadDbEngine>>} DbModules
+ * @typedef {Awaited<ReturnType<typeof loadImportSarifEngine>>} ImportSarifModules
+ * @typedef {Parameters<typeof previewMcpConfig>[0]} HostName
+ * @typedef {Parameters<typeof previewMcpConfig>[1]} McpScope
+ */
 
 // `scan` runs in the project it scans: no spawn by bare name may find a binary
 // there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
 hardenCommandSearch();
 
-const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
-const ROOT = resolve(HERE, '..'); // <plugin>
-const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
-// Item 6a: the absolute path this project's own CLI substitutes into every
-// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
-// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
-// file installed into ANOTHER project told the agent to run
-// `node cli/dev-guardian.mjs`, a path that exists only inside the
-// dev-guardian repo itself.
-const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
-// How every command this CLI tells a reader to run is spelled: a plugin
-// install puts no `dev-guardian` on PATH, so a bare `dev-guardian baseline
-// update` was "command not found" (review 8, C7). Forward slashes read the
-// same in cmd, PowerShell and every POSIX shell.
-const CLI_COMMAND = `node "${CLI_JS.split(sep).join('/')}"`;
 const HOST_RULES_DIR = resolve(ROOT, 'host-rules');
+/** @type {ReadonlySet<string>} */
 const VALID_HOSTS = new Set([...ALL_HOSTS, 'all']);
+/**
+ * @param {string | undefined} name
+ * @returns {name is HostName | 'all'}
+ */
+const isHostArg = (name) => name !== undefined && VALID_HOSTS.has(name);
 
 // --- CI (scan / baseline) -------------------------------------------------
 //
@@ -261,7 +446,13 @@ process.on('warning', (warning) => {
   process.stderr.write(`${warning.stack ?? `${warning.name}: ${warning.message}`}\n`);
 });
 
-function usage() {
+/**
+ * The usage, on stdout. `hosts`: what `mcp-config` takes — null when the engine
+ * that knows them did not load (the usage still prints; review 12, finding 14).
+ *
+ * @param {readonly string[] | null} [hosts]
+ */
+function usage(hosts = ALL_HOSTS) {
   process.stdout.write(`dev-guardian — CLI (no MCP connection needed)
 
 A plugin install puts no \`dev-guardian\` on PATH. Run this CLI as:
@@ -278,9 +469,10 @@ Usage:
   node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
   node cli/dev-guardian.mjs db adopt [--project <path>] [--yes [--rehome]]
   node cli/dev-guardian.mjs import-sarif <file> [--project <path>] [--allow-outside-project] [--max-results <n>]
+  node cli/dev-guardian.mjs --version
 
 mcp-config — wire the MCP server into an AI host
-  Hosts: ${[...ALL_HOSTS].join(', ')}, all
+  Hosts: ${hosts === null ? '(not listed: the engine did not load)' : [...hosts].join(', ')}, all
   --write              Write/merge into the project (+ drop the rules file)
   --scope project|global   MCP scope (default project)
   --global             Shorthand for --scope global. Also required to include a
@@ -293,8 +485,9 @@ mcp-config — wire the MCP server into an AI host
   Rules files are managed as a delimited block inside the target file
   (<!-- dev-guardian:begin --> … <!-- dev-guardian:end -->) — your own content
   around it is never touched or replaced.
-  Exit codes: 0 preview/write completed, 1 missing or unknown host,
-              3 usage error (e.g. --project with no value)
+  Exit codes: 0 preview/write completed, 1 MCP server not built
+              (mcp/dist/server.js missing), 3 usage error (a missing or
+              unknown host, --project with no value)
 
 check — run the guardrail detectors (same engine as the hooks)
   --file <path>        Scan a file for hard-coded secrets (UTF-8, or UTF-16
@@ -374,8 +567,9 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          no commit (not fetched) is exit 3.
   --rules-ref <ref>     Read the project's Semgrep rules (.semgrep.yml/.yaml and
                          those .dev-guardian/configs.json records), .guardianignore,
-                         .trivyignore and .bandit from <ref> instead of the tree:
-                         a pull request cannot delete the rule that catches it.
+                         .trivyignore, .bandit and .guardian/scan.yml from <ref>
+                         instead of the tree: a pull request cannot delete the
+                         rule that catches it.
                          .semgrepignore, .gitleaks.toml, .gitleaksignore, actionlint
                          and zizmor configuration and the .NET build's files are
                          still read from the tree — each one the tree changes
@@ -489,10 +683,10 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
   NEVER generates a pipeline for dev-guardian's own repository — only for
   the project passed via --project (default: current directory), and
   never through a symlink that escapes it either way (read or write).
-  Exit codes: 0 preview/write completed, 1 missing/unknown target or an
-              existing pipeline file refused without --force, 3 usage or
-              configuration error, or a --force refused on a symlink (same
-              convention as scan/baseline update).
+  Exit codes: 0 preview/write completed, 1 an existing pipeline file
+              refused without --force, 3 usage or configuration error (a
+              missing/unknown target too), or a --force refused on a
+              symlink (same convention as scan/baseline update).
 
 status — one-screen terminal summary of the latest scan for this project
   --project <path>      Target project directory (default: current directory)
@@ -563,11 +757,18 @@ Examples:
  * command's OWN usage-error convention — see `usage()`'s `check` section,
  * which documents the same code for the same kind of mistake), never a
  * crash.
+ *
+ * A `--scope` that is neither `project` nor `global` is a usage error too: it
+ * read as `project`, so `--scope globl --write` wrote the project's
+ * configuration where the user asked for their global one.
+ *
+ * @param {string[]} argv
+ * @returns {Parsed<{ _: string[], scope: McpScope, write: boolean, force: boolean, updateMcp: boolean, project: string, deprecatedForceUsed: boolean }>}
  */
 function parseArgs(argv) {
-  const out = { _: [], scope: 'project', write: false, force: false, updateMcp: false, project: process.cwd() };
+  const out = { _: /** @type {string[]} */ ([]), scope: 'project', write: false, force: false, updateMcp: false, project: process.cwd(), deprecatedForceUsed: false };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     if (a === '--write') out.write = true;
     else if (a === '--global') out.scope = 'global';
     else if (a === '--update-mcp') out.updateMcp = true;
@@ -576,28 +777,29 @@ function parseArgs(argv) {
       out.deprecatedForceUsed = true;
     } else if (a === '--scope') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return { error: r.error };
+      if (r.error !== undefined) return { error: r.error };
       out.scope = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--scope=')) out.scope = a.slice('--scope='.length);
     else if (a === '--project') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return { error: r.error };
+      if (r.error !== undefined) return { error: r.error };
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else out._.push(a);
   }
-  if (out.scope !== 'project' && out.scope !== 'global') out.scope = 'project';
+  const scope = out.scope;
+  if (scope !== 'project' && scope !== 'global') return { error: `--scope must be project or global (got '${scope}')` };
   // `--force` is a deprecated alias of `--update-mcp` (item 6b): both drive
   // the exact same underlying `force` behaviour downstream (a stale MCP
   // entry / rules block gets updated in place), so they collapse to one
   // flag here rather than `setupHost` having to know about two names for
   // the same thing.
-  out.force = out.force || out.updateMcp;
-  return { value: out };
+  return { value: { ...out, scope, force: out.force || out.updateMcp } };
 }
 
+/** @param {string} s */
 function indent(s) {
   return s
     .split('\n')
@@ -605,9 +807,10 @@ function indent(s) {
     .join('\n');
 }
 
+/** @param {string[]} argv */
 function cmdMcpConfig(argv) {
   const parsed = parseArgs(argv);
-  if (parsed.error) {
+  if (parsed.error !== undefined) {
     // This command's own usage-error convention (see `usage()`'s `check`
     // section, which documents the same code for the same kind of mistake) —
     // exit 3 (USAGE_ERROR_EXIT, as for every command since 3.3.0 — 2 is
@@ -621,10 +824,11 @@ function cmdMcpConfig(argv) {
     process.stderr.write('warning: --force is deprecated; use --update-mcp instead.\n');
   }
   const hostArg = args._[0];
-  if (!hostArg || !VALID_HOSTS.has(hostArg)) {
+  if (!isHostArg(hostArg)) {
+    // A usage error like any other (3), not 1.
     process.stderr.write(`Missing or unknown host: ${hostArg ?? '(none)'}\n\n`);
     usage();
-    process.exit(1);
+    process.exit(USAGE_ERROR_EXIT);
   }
   if (!existsSync(SERVER_JS)) {
     process.stderr.write(
@@ -683,17 +887,22 @@ function cmdMcpConfig(argv) {
 }
 
 /**
- * `check`'s arguments, or `{ error }` — a usage error, exit 2 (review of
+ * `check`'s arguments, or `{ error }` — a usage error, exit 3 (review of
  * 3.0.0, M3). Every argument is accounted for: `--file` together with
  * `--bash` used to print the command's verdict and ignore the file (`check
  * --file short.js --bash ls` read "OK", exit 0), `--min bogus` quietly became
  * `medium`, and an unknown flag (`--jsn`) or a stray word was accepted.
+ *
+ * @param {string[]} argv
+ * @returns {Parsed<{ file: string | undefined, bash: string | undefined, min: 'high' | 'medium', json: boolean, powershell: boolean }>}
  */
 function parseCheckArgs(argv) {
+  /** @type {{ file: string | undefined, bash: string | undefined, min: string | undefined, json: boolean, powershell: boolean }} */
   const out = { file: undefined, bash: undefined, min: undefined, json: false, powershell: false };
+  /** @type {Record<string, 'file' | 'bash' | 'min' | undefined>} */
   const valued = { '--file': 'file', '--bash': 'bash', '--min': 'min' };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     const eq = a.indexOf('=');
     const flag = a.startsWith('--') && eq > 0 ? a.slice(0, eq) : a;
     const key = valued[flag];
@@ -733,6 +942,10 @@ const MAX_REPO_CONFIG_BYTES = 1024 * 1024;
  * a checkout a pull request controls can put a FIFO or a `/dev/zero` link at
  * any of these names — `readFileSync` blocked on the first and read the
  * second without end, until the CI job's own timeout.
+ *
+ * @param {string} projectPath
+ * @param {string} relPath
+ * @returns {unknown}
  */
 function readRepoJson(projectPath, relPath) {
   const r = readProjectText(projectPath, relPath, MAX_REPO_CONFIG_BYTES);
@@ -744,13 +957,20 @@ function readRepoJson(projectPath, relPath) {
   }
 }
 
+/**
+ * @param {string} projectDir
+ * @returns {string[]}
+ */
 function loadAllowlist(projectDir) {
   const data = readRepoJson(projectDir, join('.guardian', 'hooks-allowlist.json'));
-  if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
-  if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
-  return [];
+  /** @param {unknown[]} list */
+  const strings = (list) => list.filter((x) => typeof x === 'string');
+  if (Array.isArray(data)) return strings(data);
+  const secrets = data !== null && typeof data === 'object' ? /** @type {{ secrets?: unknown }} */ (data).secrets : undefined;
+  return Array.isArray(secrets) ? strings(secrets) : [];
 }
 
+/** @param {string[]} argv */
 function cmdCheck(argv) {
   const parsed = parseCheckArgs(argv);
   if (parsed.error !== undefined) {
@@ -823,6 +1043,9 @@ function cmdCheck(argv) {
  * anywhere in the pipeline (including starting the application) — goes
  * through this one function, so there is exactly one place that decides the
  * wording ("error: " prefix) and the exit code for all of them.
+ *
+ * @param {string} message
+ * @returns {never}
  */
 function usageError(message) {
   process.stderr.write(`error: ${message}\n`);
@@ -857,6 +1080,10 @@ const APP_START_TIMEOUT_MS = 60_000;
  * "no baseline": the committed baseline is what the gate subtracts, and a
  * pull request must not be able to swap in a file from outside the checkout,
  * nor make the job wait on a FIFO.
+ *
+ * @param {string} projectPath
+ * @param {string} relPath
+ * @returns {string | null}
  */
 function readBaselineOrExit(projectPath, relPath) {
   const r = readProjectText(projectPath, relPath, PROJECT_LOCKFILE_MAX_BYTES);
@@ -872,6 +1099,10 @@ function readBaselineOrExit(projectPath, relPath) {
  * finding new, and the advice that came with it — run `baseline update` —
  * rebuilt the file and reset every `added` date. `where` names the file
  * (`.guardian/baseline.json`, or `… at <ref>`).
+ *
+ * @param {CiModules} ci
+ * @param {string | null} text
+ * @param {string} where
  */
 function parseBaselineOrExit(ci, text, where) {
   const read = ci.readBaselineText(text);
@@ -883,7 +1114,12 @@ function parseBaselineOrExit(ci, text, where) {
   );
 }
 
-/** A `.guardian/scan.yml` that is there but not valid is a configuration error (exit 3), never half-applied. */
+/**
+ * A `.guardian/scan.yml` that is there but not valid is a configuration error (exit 3), never half-applied.
+ *
+ * @param {ReturnType<CiModules['loadScanSettings']>} loaded
+ * @param {string} where
+ */
 function refuseInvalidScanSettings(loaded, where) {
   if (loaded.kind !== 'invalid') return;
   usageError(`${where} is not valid: ${loaded.error} — fix it (docs/ci.md, "Scan settings") and run again`);
@@ -904,16 +1140,30 @@ function refuseInvalidScanSettings(loaded, where) {
  * itself becoming a hard failure — the security property this function
  * exists for is "never silently RUN a repo-declared command", not "every
  * repository must carry a well-formed ci.json".
+ *
+ * @param {string} projectPath
+ * @returns {string | null}
  */
 function findStartCommandInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
   const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (data && typeof data === 'object' && !Array.isArray(data) && data.start_command) {
+  if (isRecord(data) && data['start_command']) {
     return configPath;
   }
   return null;
 }
 
+/**
+ * Whether `value` is a JSON object (not an array, not null).
+ *
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** @param {string} configPath */
 function startCommandRefusalMessage(configPath) {
   return (
     `refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "start_command" (found at ${configPath}). ` +
@@ -932,16 +1182,20 @@ function startCommandRefusalMessage(configPath) {
  * loudly, rather than read or silently ignored. Returns the config path when
  * it declares the key, else `null`; lenient on everything else, like
  * `findStartCommandInRepoConfig`.
+ *
+ * @param {string} projectPath
+ * @returns {string | null}
  */
 function findAcceptPartialParseInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
   const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (data && typeof data === 'object' && !Array.isArray(data) && data.accept_partial_parse !== undefined) {
+  if (isRecord(data) && data['accept_partial_parse'] !== undefined) {
     return configPath;
   }
   return null;
 }
 
+/** @param {string} configPath */
 function acceptPartialParseRefusalMessage(configPath) {
   return (
     `refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "accept_partial_parse" (found at ${configPath}). ` +
@@ -959,6 +1213,9 @@ function acceptPartialParseRefusalMessage(configPath) {
  * a usage error rather than accepted and silently useless. Backslashes and a
  * leading `./` are fine (the gate normalises both); globs are not expanded,
  * so `*.php` is the literal file name `*.php`.
+ *
+ * @param {string} value
+ * @returns {string | null}
  */
 function checkAcceptedPartialParse(value) {
   const posix = value.replace(/\\/g, '/');
@@ -976,7 +1233,11 @@ function checkAcceptedPartialParse(value) {
  *  string), so it must be the last flag handled and must stop the loop —
  *  otherwise a plausible token after it (say, another `--flag`-looking
  *  argument meant for the started app) would be mis-parsed as one of THIS
- *  CLI's own flags instead of being passed straight through. */
+ *  CLI's own flags instead of being passed straight through.
+ *
+ * @param {string[]} argv
+ * @param {number} i
+ */
 function consumeStartCommand(argv, i) {
   return argv.slice(i + 1);
 }
@@ -1000,6 +1261,9 @@ function consumeStartCommand(argv, i) {
  * `--sarif $SARIF_PATH` and `--sarif=$SARIF_PATH` to these two shapes
  * respectively, and a user must get the same refusal regardless of which one
  * their pipeline happened to write.
+ *
+ * @param {string | undefined} value
+ * @param {boolean} requireNonEmpty
  */
 function isMissingOperand(value, requireNonEmpty) {
   return value === undefined || (requireNonEmpty === true && value === '');
@@ -1047,17 +1311,53 @@ function isMissingOperand(value, requireNonEmpty) {
  * second prefix needed — or `{ value, nextIndex }`, where `nextIndex` is the
  * loop index to resume from (the consumed value token), matching the
  * pre-increment `argv[++i]` this replaces.
+ *
+ * @param {string[]} argv
+ * @param {number} i
+ * @param {string} flagName
+ * @returns {Operand}
  */
 function takeOperand(argv, i, flagName, requireNonEmpty = false) {
   const nextIndex = i + 1;
   const value = argv[nextIndex];
-  if (isMissingOperand(value, requireNonEmpty)) {
+  if (value === undefined || isMissingOperand(value, requireNonEmpty)) {
     return { error: `${flagName} requires a value` };
   }
   return { value, nextIndex };
 }
 
+/**
+ * @typedef {{
+ *   project: string,
+ *   failOn: string,
+ *   format: string,
+ *   sarif: string | undefined,
+ *   baseUrl: string | undefined,
+ *   authorizedTarget: boolean,
+ *   localOnly: boolean,
+ *   startCommand: string[] | undefined,
+ *   acceptPartialParse: string[],
+ *   baselineRef: string | undefined,
+ *   rulesRef: string | undefined,
+ *   resetExclusionsFrom: string | undefined,
+ *   compact: boolean,
+ * }} ScanArgs
+ * @typedef {{
+ *   project: string,
+ *   baseUrl: string | undefined,
+ *   authorizedTarget: boolean,
+ *   localOnly: boolean,
+ *   startCommand: string[] | undefined,
+ *   acceptPartialParse: string[],
+ * }} BaselineUpdateArgs
+ */
+
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<ScanArgs>}
+ */
 function parseScanArgs(argv) {
+  /** @type {ScanArgs} */
   const out = {
     project: process.cwd(),
     failOn: 'high',
@@ -1074,7 +1374,7 @@ function parseScanArgs(argv) {
     compact: false,
   };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     const ref = refFlag(a);
     if (ref !== null) {
       // requireNonEmpty: an unset CI variable (`--baseline-ref "$BASE"`) must
@@ -1082,7 +1382,7 @@ function parseScanArgs(argv) {
       let value;
       if (a === ref.flag) {
         const r = takeOperand(argv, i, a, true);
-        if (r.error) return r;
+        if (r.error !== undefined) return r;
         value = r.value;
         i = r.nextIndex;
       } else {
@@ -1092,25 +1392,25 @@ function parseScanArgs(argv) {
       out[ref.key] = value;
     } else if (a === '--project') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
       const r = takeAcceptPartialParse(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.acceptPartialParse.push(r.value);
       i = r.nextIndex;
     } else if (a === '--compact') out.compact = true;
     else if (a === '--fail-on') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.failOn = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--fail-on=')) out.failOn = a.slice('--fail-on='.length);
     else if (a === '--format') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.format = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--format=')) out.format = a.slice('--format='.length);
@@ -1120,7 +1420,7 @@ function parseScanArgs(argv) {
       // meaningfully refuses), so --sarif "" is refused exactly like a
       // missing --sarif, not silently accepted as "write to ''".
       const r = takeOperand(argv, i, a, true);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.sarif = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--sarif=')) {
@@ -1129,7 +1429,7 @@ function parseScanArgs(argv) {
       out.sarif = value;
     } else if (a === '--base-url') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.baseUrl = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
@@ -1147,13 +1447,18 @@ function parseScanArgs(argv) {
  * `--baseline-ref` / `--rules-ref` in either spelling (`--x v`, `--x=v`), or
  * null. Both take a git ref and are read against the scanned project's
  * repository (`mcp/src/ci/refConfig.ts`).
+ *
+ * @param {string} a
+ * @returns {{ flag: string, key: 'baselineRef' | 'rulesRef' | 'resetExclusionsFrom' } | null}
  */
 function refFlag(a) {
-  for (const [flag, key] of [
+  /** @type {ReadonlyArray<readonly [string, 'baselineRef' | 'rulesRef' | 'resetExclusionsFrom']>} */
+  const refFlags = [
     ['--baseline-ref', 'baselineRef'],
     ['--rules-ref', 'rulesRef'],
     ['--reset-exclusions-from', 'resetExclusionsFrom'],
-  ]) {
+  ];
+  for (const [flag, key] of refFlags) {
     if (a === flag || a.startsWith(`${flag}=`)) return { flag, key };
   }
   return null;
@@ -1168,13 +1473,18 @@ function refFlag(a) {
  * accepted is complete in the same sense (review 8, finding 13 — `baseline
  * update` refused the flag, so on a project that needs it, it always exited
  * 2 while `scan` passed).
+ *
+ * @param {string[]} argv
+ * @param {number} i
+ * @param {string} a
+ * @returns {Operand}
  */
 function takeAcceptPartialParse(argv, i, a) {
   let value;
   let nextIndex = i;
   if (a === '--accept-partial-parse') {
     const r = takeOperand(argv, i, a, true);
-    if (r.error) return r;
+    if (r.error !== undefined) return r;
     value = r.value;
     nextIndex = r.nextIndex;
   } else {
@@ -1186,7 +1496,12 @@ function takeAcceptPartialParse(argv, i, a) {
   return { value, nextIndex };
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<BaselineUpdateArgs>}
+ */
 function parseBaselineUpdateArgs(argv) {
+  /** @type {BaselineUpdateArgs} */
   const out = {
     project: process.cwd(),
     baseUrl: undefined,
@@ -1196,21 +1511,21 @@ function parseBaselineUpdateArgs(argv) {
     acceptPartialParse: [],
   };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     if (a === '--project') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
       const r = takeAcceptPartialParse(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.acceptPartialParse.push(r.value);
       i = r.nextIndex;
     } else if (a === '--base-url') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.baseUrl = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
@@ -1238,6 +1553,9 @@ function parseBaselineUpdateArgs(argv) {
  * Returns the path as the user spelled it, resolved — not the canonical one:
  * every step re-resolves it to the canonical spelling it keys rows by, and
  * the reports name the directory the way it was given.
+ *
+ * @param {string} rawProject
+ * @returns {string}
  */
 function resolveProjectOrExit(rawProject) {
   const projectPath = resolve(rawProject);
@@ -1258,6 +1576,13 @@ function resolveProjectOrExit(rawProject) {
   return projectPath;
 }
 
+/**
+ * The application to start, `null` for none — or a usage error.
+ *
+ * @param {string} projectPath
+ * @param {{ startCommand: string[] | undefined, baseUrl: string | undefined }} opts
+ * @returns {{ command: string[], healthUrl: string } | null}
+ */
 function enforceStartCommandRules(projectPath, opts) {
   const offendingConfig = findStartCommandInRepoConfig(projectPath);
   if (offendingConfig) return usageError(startCommandRefusalMessage(offendingConfig));
@@ -1277,7 +1602,9 @@ function enforceStartCommandRules(projectPath, opts) {
           'pointing at the origin --start-command will make the app listen on.',
       );
     }
+    return { command: opts.startCommand, healthUrl: opts.baseUrl };
   }
+  return null;
 }
 
 /**
@@ -1320,10 +1647,14 @@ function enforceStartCommandRules(projectPath, opts) {
  * must not ALSO run afterwards for a scan the user explicitly cancelled;
  * checking this flag after the try/finally block is how the caller yields
  * to whichever exit path actually applies.
+ *
+ * @param {() => StartedApp | null} getApp
+ * @param {() => Promise<StartedApp> | null} getStartingApp
  */
 function armInterruptTeardown(getApp, getStartingApp) {
   const controller = new AbortController();
   let interrupted = false;
+  /** @param {number} exitCode */
   const onSignal = (exitCode) => () => {
     interrupted = true;
     void (async () => {
@@ -1370,12 +1701,13 @@ function armInterruptTeardown(getApp, getStartingApp) {
   };
 }
 
+/** @param {string[]} argv */
 async function cmdScan(argv) {
   const parsed = parseScanArgs(argv);
   // parseScanArgs's own `error` is already a complete, flag-naming message
   // (an unknown flag, or a value-taking flag with no operand) — no second
   // prefix needed here.
-  if (parsed.error) return usageError(parsed.error);
+  if (parsed.error !== undefined) return usageError(parsed.error);
   const opts = parsed.value;
 
   const ci = await loadCiModules();
@@ -1393,12 +1725,14 @@ async function cmdScan(argv) {
     resetExclusionsFromRef,
     renamesSince,
     showPrefix,
-    resolveVersion,
     loadScanSettings,
     SCAN_SETTINGS_RELATIVE_PATH,
+    filesChangedSince,
+    scanSettingsCommit,
   } = ci;
 
-  if (!SEVERITIES.includes(opts.failOn)) {
+  const failOn = SEVERITIES.find((s) => s === opts.failOn);
+  if (failOn === undefined) {
     return usageError(`--fail-on must be one of ${SEVERITIES.join('|')} (got '${opts.failOn}')`);
   }
   if (opts.format !== 'human' && opts.format !== 'json') {
@@ -1409,7 +1743,7 @@ async function cmdScan(argv) {
   }
 
   const projectPath = resolveProjectOrExit(opts.project);
-  enforceStartCommandRules(projectPath, opts);
+  const start = enforceStartCommandRules(projectPath, opts);
   // The same argv-only rule for --accept-partial-parse, checked whatever argv
   // says (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
@@ -1444,6 +1778,7 @@ async function cmdScan(argv) {
   // The baseline, read and judged BEFORE the scan: one that is there but not
   // readable is exit 3 now, not after minutes of scanning (review 8, finding 9).
   let baselineText;
+  /** @type {GateInput['baselineSource']} */
   let baselineSource;
   let baselineWhere = BASELINE_RELATIVE_PATH;
   if (baselineRef !== null && baselineAtRef !== null) {
@@ -1478,17 +1813,20 @@ async function cmdScan(argv) {
   // up the call stack. Putting the exit-inducing call inside a nested catch
   // would skip `app.stop()` below on exactly the path this exists to cover
   // ("a scan that throws must not leave the user's application running").
+  /** @type {StartedApp | null} */
   let app = null;
+  /** @type {Promise<StartedApp> | null} */
   let startingApp = null;
   const interrupt = armInterruptTeardown(() => app, () => startingApp);
-  let pipelineError = null;
+  /** @type {{ error: unknown } | null} */
+  let pipelineFailure = null;
   let result;
   try {
-    if (opts.startCommand !== undefined) {
+    if (start !== null) {
       startingApp = startApp({
-        command: opts.startCommand,
+        command: start.command,
         cwd: projectPath,
-        healthUrl: opts.baseUrl,
+        healthUrl: start.healthUrl,
         timeoutMs: APP_START_TIMEOUT_MS,
         signal: interrupt.signal,
       });
@@ -1500,9 +1838,13 @@ async function cmdScan(argv) {
       authorizedTarget: opts.authorizedTarget ? true : undefined,
       localOnly: opts.localOnly ? true : undefined,
       ...(rulesRef !== null ? { rulesRef } : {}),
+      // Under a ref, the files changed since it are scanned for secrets whole
+      // (a private key's BEGIN / END lines fall outside gitleaks' -U0 hunks;
+      // review 12, finding 11).
+      ...(baselineRef !== null ? { changedSince: baselineRef } : rulesRef !== null ? { changedSince: rulesRef } : {}),
     });
   } catch (e) {
-    pipelineError = e;
+    pipelineFailure = { error: e };
   } finally {
     interrupt.dispose();
     if (app) await app.stop();
@@ -1514,8 +1856,10 @@ async function cmdScan(argv) {
     // own abort caused.
     return;
   }
-  if (pipelineError) {
-    return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
+  // Whatever was thrown, a falsy value too: there is no result.
+  if (pipelineFailure !== null || result === undefined) {
+    const e = pipelineFailure?.error;
+    return usageError(`scan failed to run: ${e instanceof Error ? e.message : String(e)}`);
   }
   // The ref's `.guardian/scan.yml` (--rules-ref), as the scan read it.
   refuseInvalidScanSettings(
@@ -1527,37 +1871,69 @@ async function cmdScan(argv) {
   // (review 8, finding 6; mcp/src/ci/renames.ts).
   const renamedFrom = await renamesSince(projectPath, baselineRef !== null ? baselineRef.commit : null);
 
+  // An accepted timeout covers a file only as it was when the acceptance was
+  // reviewed: under --baseline-ref / --rules-ref the ref, without one the last
+  // commit of .guardian/scan.yml — a pull request appended a command injection
+  // to an accepted file and passed (review 11 finding 1, review 12 finding 10:
+  // dev-spec-driven runs this gate without a ref; mcp/src/ci/changedSince.ts).
+  const acceptTimeouts = result.scanSettings.settings.semgrep.acceptTimeouts;
+  /** @type {GateInput['timeoutAcceptanceRef']} */
+  let timeoutAcceptanceRef;
+  const refs = [baselineRef, rulesRef].filter((r) => r !== null);
+  if (acceptTimeouts.length > 0) {
+    /** @type {Set<string>} */
+    const changed = new Set();
+    /** @type {string | undefined} */
+    let error;
+    /** @type {{ ref: string, commit: string }[]} */
+    let against = refs.map((r) => ({ ref: r.ref, commit: r.commit }));
+    if (against.length === 0) {
+      const last = await scanSettingsCommit(projectPath);
+      if ('commit' in last) against = [{ ref: `the last commit of ${SCAN_SETTINGS_RELATIVE_PATH} (${last.commit.slice(0, 12)})`, commit: last.commit }];
+      else if ('error' in last) error = last.error;
+      // not a git repository: nothing to compare with, the entries stand as written
+    }
+    for (const commit of new Set(against.map((r) => r.commit))) {
+      const r = await filesChangedSince(projectPath, commit, acceptTimeouts);
+      if ('error' in r) error ??= r.error;
+      else for (const path of r.changed) changed.add(path);
+    }
+    const ref = against.length > 0 ? [...new Set(against.map((r) => r.ref))].join(' and ') : `a commit of ${SCAN_SETTINGS_RELATIVE_PATH}`;
+    if (against.length > 0 || error !== undefined) {
+      timeoutAcceptanceRef = error !== undefined ? { ref, changed, error } : { ref, changed };
+    }
+  }
+
   const verdict = evaluateGate({
     findings: result.findings,
     baseline: parsedBaseline ? parsedBaseline.file : null,
-    failOn: opts.failOn,
+    failOn,
     steps: result.steps,
     droppedBaselineEntries: parsedBaseline ? parsedBaseline.dropped : 0,
     // argv only — see `findAcceptPartialParseInRepoConfig`.
     acceptedPartialParses: opts.acceptPartialParse,
     // The committed `.guardian/scan.yml` (the --rules-ref ref's when given).
-    acceptedTimeouts: result.scanSettings.settings.semgrep.acceptTimeouts,
+    acceptedTimeouts: acceptTimeouts,
+    ...(timeoutAcceptanceRef !== undefined ? { timeoutAcceptanceRef } : {}),
     baselineSource,
     rulesSource: result.rulesSource,
     exclusionsReset,
     renamedFrom,
   });
 
-  // The verdict reaches stdout FIRST, whatever happens to --sarif below: a
-  // SARIF write that failed used to end the run with exit 3 before the gate's
-  // verdict was printed at all (review 8, finding 19).
-  const text =
-    opts.format === 'json'
-      ? renderJson(verdict, { toolVersion: resolveVersion(), compact: opts.compact })
-      : renderHuman(verdict, { command: CLI_COMMAND });
-  process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
-  process.exitCode = verdict.exitCode;
-
   // --sarif is independent of --format: a pipeline commonly wants a human
   // headline in its own log AND a SARIF file for code-scanning upload in
   // the same run, so this always fires when the flag is given, regardless
   // of --format. URIs are relative to the REPOSITORY root (review 8,
   // finding 18): the project's own place in it goes in front of each.
+  //
+  // Written BEFORE the verdict is printed, so that the verdict printed and the
+  // exit code agree (review of 3.3.0: `--format json` printed `"exit_code": 0`
+  // and the run then exited 3 on a failed write). A failed write never stops
+  // the verdict from being printed (review 8, finding 19: it used to end the
+  // run before the gate's verdict reached stdout at all).
+  /** @type {string | undefined} */
+  let sarifError;
   if (opts.sarif) {
     let repoPrefix = '';
     try {
@@ -1570,12 +1946,20 @@ async function cmdScan(argv) {
       mkdirSync(dirname(sarifPath), { recursive: true });
       writeFileSync(sarifPath, renderSarif(verdict, projectPath, { repoPrefix }));
     } catch (e) {
-      process.stderr.write(`error: --sarif ${opts.sarif} was not written: ${e instanceof Error ? e.message : String(e)}\n`);
-      // A gate verdict (1, 2) stays the exit code; a pass is not one without
-      // the report the pipeline asked for.
-      if (verdict.exitCode === 0) process.exitCode = USAGE_ERROR_EXIT;
+      sarifError = `error: --sarif ${opts.sarif} was not written: ${e instanceof Error ? e.message : String(e)}\n`;
     }
   }
+
+  // A gate verdict (1, 2) stays the exit code; a pass is not one without the
+  // report the pipeline asked for — 3, and the verdict printed says 3 too.
+  const exitCode = verdict.exitCode === 0 && sarifError !== undefined ? USAGE_ERROR_EXIT : verdict.exitCode;
+  const shown = exitCode === verdict.exitCode ? verdict : { ...verdict, exitCode };
+  const text =
+    opts.format === 'json'
+      ? renderJson(shown, { toolVersion: resolveVersion(), compact: opts.compact })
+      : renderHuman(shown, { command: CLI_COMMAND });
+  process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
+  if (sarifError !== undefined) process.stderr.write(sarifError);
 
   // Faithfully returned, never re-derived: evaluateGate already decided
   // whether this is a pass, a gate failure, or an incomplete scan.
@@ -1593,11 +1977,12 @@ async function cmdScan(argv) {
   // returning lets Node exit on its own once the event loop drains AND the
   // write flushes; nothing here holds the loop open past that; `runScans`
   // has already closed its ephemeral database and removed its temp
-  // directory in its own `finally` blocks by this point. (`exitCode` was set
-  // with the verdict above, before --sarif.)
+  // directory in its own `finally` blocks by this point.
+  process.exitCode = exitCode;
   return;
 }
 
+/** @param {string[]} argv */
 async function cmdBaseline(argv) {
   const sub = argv[0];
   if (sub !== 'update') {
@@ -1606,7 +1991,7 @@ async function cmdBaseline(argv) {
 
   const parsed = parseBaselineUpdateArgs(argv.slice(1));
   // Same reasoning as cmdScan's own — see the comment there.
-  if (parsed.error) return usageError(parsed.error);
+  if (parsed.error !== undefined) return usageError(parsed.error);
   const opts = parsed.value;
 
   const ci = await loadCiModules();
@@ -1624,7 +2009,7 @@ async function cmdBaseline(argv) {
   } = ci;
 
   const projectPath = resolveProjectOrExit(opts.project);
-  enforceStartCommandRules(projectPath, opts);
+  const start = enforceStartCommandRules(projectPath, opts);
   // --accept-partial-parse stays argv-only here too (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
   if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
@@ -1647,17 +2032,20 @@ async function cmdBaseline(argv) {
   // must be stopped — including on SIGINT/SIGTERM — before this function
   // can exit, on every path, and `usageError` below must never be reached
   // from inside a catch nested in this try.
+  /** @type {StartedApp | null} */
   let app = null;
+  /** @type {Promise<StartedApp> | null} */
   let startingApp = null;
   const interrupt = armInterruptTeardown(() => app, () => startingApp);
-  let pipelineError = null;
+  /** @type {{ error: unknown } | null} */
+  let pipelineFailure = null;
   let result;
   try {
-    if (opts.startCommand !== undefined) {
+    if (start !== null) {
       startingApp = startApp({
-        command: opts.startCommand,
+        command: start.command,
         cwd: projectPath,
-        healthUrl: opts.baseUrl,
+        healthUrl: start.healthUrl,
         timeoutMs: APP_START_TIMEOUT_MS,
         signal: interrupt.signal,
       });
@@ -1670,7 +2058,7 @@ async function cmdBaseline(argv) {
       localOnly: opts.localOnly ? true : undefined,
     });
   } catch (e) {
-    pipelineError = e;
+    pipelineFailure = { error: e };
   } finally {
     interrupt.dispose();
     if (app) await app.stop();
@@ -1678,8 +2066,10 @@ async function cmdBaseline(argv) {
   if (interrupt.isInterrupted()) {
     return;
   }
-  if (pipelineError) {
-    return usageError(`scan failed to run: ${pipelineError instanceof Error ? pipelineError.message : String(pipelineError)}`);
+  // Whatever was thrown, a falsy value too: there is no result.
+  if (pipelineFailure !== null || result === undefined) {
+    const e = pipelineFailure?.error;
+    return usageError(`scan failed to run: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // An entry's date survives its file being renamed (mcp/src/ci/renames.ts).
@@ -1828,6 +2218,8 @@ const DEFAULT_CI_BRANCH = 'main';
  * render, and where the rendered pipeline lives in the TARGET project —
  * each path is GitHub's/GitLab's/Bitbucket's own fixed convention, not a
  * choice this tool makes.
+ *
+ * @type {Readonly<Record<string, { templateFile: string, outputPath: string } | undefined>>}
  */
 const CI_TARGETS = {
   github: { templateFile: 'github.yml', outputPath: join('.github', 'workflows', 'dev-guardian.yml') },
@@ -1835,22 +2227,26 @@ const CI_TARGETS = {
   bitbucket: { templateFile: 'bitbucket.yml', outputPath: 'bitbucket-pipelines.yml' },
 };
 
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<{ _: string[], project: string, write: boolean, force: boolean, attest: boolean, branch: string }>}
+ */
 function parseCiInitArgs(argv) {
-  const out = { _: [], project: process.cwd(), write: false, force: false, attest: false, branch: DEFAULT_CI_BRANCH };
+  const out = { _: /** @type {string[]} */ ([]), project: process.cwd(), write: false, force: false, attest: false, branch: DEFAULT_CI_BRANCH };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     if (a === '--write') out.write = true;
     else if (a === '--force') out.force = true;
     else if (a === '--attest') out.attest = true;
     else if (a === '--project') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return { error: r.error };
+      if (r.error !== undefined) return { error: r.error };
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
     else if (a === '--branch') {
       const r = takeOperand(argv, i, a, true); // requireNonEmpty — an empty branch name is never meaningful
-      if (r.error) return { error: r.error };
+      if (r.error !== undefined) return { error: r.error };
       out.branch = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--branch=')) {
@@ -1903,9 +2299,14 @@ const SECTION_TOKEN = /\{\{\s*[#^/]/;
  * (so a typo is never silently kept or dropped), an unclosed, unopened or
  * nested one, and any malformed marker, including one sharing its line with
  * anything else.
+ *
+ * @param {string} text
+ * @param {Record<string, boolean>} sections
  */
 function applyCiSections(text, sections) {
+  /** @type {string[]} */
   const out = [];
+  /** @type {{ name: string, keep: boolean } | null} */
   let open = null;
   for (const line of text.split('\n')) {
     const m = SECTION_LINE.exec(line);
@@ -1918,7 +2319,8 @@ function applyCiSections(text, sections) {
       if (open === null || open.keep) out.push(line);
       continue;
     }
-    const [, kind, name] = m;
+    const kind = m[1];
+    const name = m[2] ?? '';
     if (kind === '/') {
       if (open === null || open.name !== name) throw new Error(`ci-init: section end {{/${name}}} without an opening`);
       open = null;
@@ -1933,8 +2335,13 @@ function applyCiSections(text, sections) {
   return out.join('\n');
 }
 
+/**
+ * @param {string} text
+ * @param {Record<string, unknown>} vars
+ * @param {Record<string, boolean>} [sections]
+ */
 export function renderCiTemplate(text, vars, sections = {}) {
-  const rendered = applyCiSections(text, sections).replace(PLACEHOLDER_TOKEN, (whole, key) => {
+  const rendered = applyCiSections(text, sections).replace(PLACEHOLDER_TOKEN, (_whole, /** @type {string} */ key) => {
     if (!Object.hasOwn(vars, key)) throw new Error(`ci-init: template references unknown placeholder {{${key}}}`);
     return String(vars[key]);
   });
@@ -1943,6 +2350,11 @@ export function renderCiTemplate(text, vars, sections = {}) {
   return rendered;
 }
 
+/**
+ * @param {string} path
+ * @param {string} label
+ * @returns {unknown}
+ */
 function readJsonOrExit(path, label) {
   let text;
   try {
@@ -1974,16 +2386,22 @@ const RELEASE_TAG_SHAPE = /^v\d+\.\d+\.\d+$/;
  * template referencing it would fail loudly via `renderCiTemplate`'s own
  * unknown-placeholder check. Keys starting with `_` (`_readme`, `_note`, …)
  * are documentation, not data, and are skipped.
+ *
+ * @param {Record<string, unknown>} pinned
+ * @param {string} sectionName
+ * @param {Record<string, string>} fieldSuffix
+ * @returns {Record<string, unknown>}
  */
 function placeholdersFromSection(pinned, sectionName, fieldSuffix) {
   const section = pinned[sectionName];
-  if (typeof section !== 'object' || section === null || Array.isArray(section)) {
+  if (!isRecord(section)) {
     throw new Error(`ci-init: ${PINNED_PATH} "${sectionName}" is missing or not an object`);
   }
+  /** @type {Record<string, unknown>} */
   const out = {};
   for (const [key, entry] of Object.entries(section)) {
     if (key.startsWith('_')) continue;
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       throw new Error(`ci-init: ${PINNED_PATH} "${sectionName}.${key}" is not an object`);
     }
     const prefix = key.toUpperCase();
@@ -2019,6 +2437,10 @@ const COMMIT_SHA_SHAPE = /^[0-9a-f]{40}$/;
  * `ci-init` call in the test suite would exit 3 for a reason that has
  * nothing to do with what the suite is testing. Production `ci-init` never
  * sets this itself; only a test's own `env` does.
+ *
+ * @param {string} repoUrl
+ * @param {string} tag
+ * @returns {string | null}
  */
 function resolveDevGuardianCommitSha(repoUrl, tag) {
   const pinned = process.env['GUARDIAN_CI_INIT_PIN_SHA'];
@@ -2040,6 +2462,9 @@ function resolveDevGuardianCommitSha(repoUrl, tag) {
  * have this tag (a shallow or tag-less install) — `resolveDevGuardianCommitSha`
  * falls back to the network in either case, never assumes offline means
  * "unknown".
+ *
+ * @param {string} tag
+ * @returns {string | null}
  */
 function resolveTagLocally(tag) {
   // Hardened like every git dev-guardian starts (`platform/gitSafety.ts`),
@@ -2064,6 +2489,10 @@ function resolveTagLocally(tag) {
  * to the plain one only for a lightweight tag (no such line at all).
  * Returns null on any failure — no network, no `git`, unknown tag, or an
  * answer not shaped like a commit SHA — never throws.
+ *
+ * @param {string} repoUrl
+ * @param {string} tag
+ * @returns {string | null}
  */
 function resolveTagRemotely(repoUrl, tag) {
   // From the temp directory, not the working directory: `ci-init` runs in the
@@ -2087,12 +2516,18 @@ function resolveTagRemotely(repoUrl, tag) {
   return sha !== undefined && COMMIT_SHA_SHAPE.test(sha) ? sha : null;
 }
 
-/** Builds the placeholder table every `configs/ci/*.yml` template draws from — see `renderCiTemplate`. */
+/**
+ * Builds the placeholder table every `configs/ci/*.yml` template draws from — see `renderCiTemplate`.
+ *
+ * @param {unknown} plugin
+ * @param {unknown} pinned
+ * @param {string} branch
+ */
 function ciTemplateVars(plugin, pinned, branch) {
-  if (typeof plugin !== 'object' || plugin === null || Array.isArray(plugin)) {
+  if (!isRecord(plugin)) {
     return usageError(`ci-init: ${PLUGIN_JSON_PATH} does not contain a JSON object`);
   }
-  if (typeof pinned !== 'object' || pinned === null || Array.isArray(pinned)) {
+  if (!isRecord(pinned)) {
     return usageError(`ci-init: ${PINNED_PATH} does not contain a JSON object`);
   }
   const repo = plugin.repository;
@@ -2160,12 +2595,18 @@ function ciTemplateVars(plugin, pinned, branch) {
  * `realpathSync` cannot resolve must read as "not inside" rather than
  * crash a usage check.
  */
-/** Whether `candidate` (an absolute, already-resolved path) IS `root` or is inside it. */
+/**
+ * Whether `candidate` (an absolute, already-resolved path) IS `root` or is inside it.
+ *
+ * @param {string} root
+ * @param {string} candidate
+ */
 function isWithin(root, candidate) {
   const rel = relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
+/** @param {string} projectPath */
 function isDevGuardianOwnRepo(projectPath) {
   if (isWithin(resolve(ROOT), resolve(projectPath))) return true;
   try {
@@ -2175,6 +2616,10 @@ function isDevGuardianOwnRepo(projectPath) {
   }
 }
 
+/**
+ * @param {string} p
+ * @returns {string | null}
+ */
 function safeRealpath(p) {
   try {
     return realpathSync(p);
@@ -2183,6 +2628,7 @@ function safeRealpath(p) {
   }
 }
 
+/** @param {string} p */
 function safeLstat(p) {
   try {
     return lstatSync(p);
@@ -2212,13 +2658,17 @@ function safeLstat(p) {
  * (`refuseEscapingLeafSymlink`) and otherwise replaces the entry by rename
  * (`replaceFile`). Not `wx` alone: on Windows a `wx` open over a dangling
  * symlink follows it and creates the link's target, wherever that is.
+ *
+ * @param {string} projectPath
+ * @param {string} outPath
+ * @returns {string | null}
  */
 function firstEscapingAncestor(projectPath, outPath) {
   const rootReal = safeRealpath(projectPath) ?? resolve(projectPath);
   const segments = relative(projectPath, outPath).split(sep).filter((s) => s.length > 0);
   let current = projectPath;
   for (let i = 0; i < segments.length - 1; i++) {
-    current = join(current, segments[i]);
+    current = join(current, segments[i] ?? '');
     if (!existsSync(current)) continue;
     const real = safeRealpath(current);
     if (real === null) continue;
@@ -2239,6 +2689,10 @@ function firstEscapingAncestor(projectPath, outPath) {
  * Returns `{ ok: true }` when `outPath` is not a symlink, or is one that
  * resolves INSIDE the project (replaced by a plain file — what `--force`
  * means for every other existing path); `{ ok: false, reason }` otherwise.
+ *
+ * @param {string} projectPath
+ * @param {string} outPath
+ * @returns {{ ok: true, reason?: undefined } | { ok: false, reason: string }}
  */
 function refuseEscapingLeafSymlink(projectPath, outPath) {
   const st = safeLstat(outPath);
@@ -2254,7 +2708,11 @@ function refuseEscapingLeafSymlink(projectPath, outPath) {
   return { ok: true };
 }
 
-/** Remove `path`, ignoring a failure: it is a temp file this command made. */
+/**
+ * Remove `path`, ignoring a failure: it is a temp file this command made.
+ *
+ * @param {string} path
+ */
 function removeTemp(path) {
   try {
     unlinkSync(path);
@@ -2269,6 +2727,9 @@ function removeTemp(path) {
  * at that name — anyone's, a link included — fails the open with EEXIST and
  * is never written to or deleted. Once the open succeeded the file is this
  * call's, and a failed write removes it.
+ *
+ * @param {string} outPath
+ * @param {string} content
  */
 function writeTempBeside(outPath, content) {
   const { dir, base } = parse(outPath);
@@ -2291,6 +2752,9 @@ function writeTempBeside(outPath, content) {
  * `outPath` is replaced, never written through (a truncating `'w'` write goes
  * through the inode every name of the file shares) — and `outPath` is never
  * absent or half-written.
+ *
+ * @param {string} outPath
+ * @param {string} content
  */
 function replaceFile(outPath, content) {
   const tmp = writeTempBeside(outPath, content);
@@ -2317,6 +2781,9 @@ function replaceFile(outPath, content) {
  * falls back to an `lstat` check and a `wx` write. That leaves one race, on
  * Windows only: a dangling symlink created at `outPath` between the check and
  * the open would be followed. POSIX `O_EXCL` never follows a link.
+ *
+ * @param {string} outPath
+ * @param {string} content
  */
 function createFile(outPath, content) {
   const tmp = writeTempBeside(outPath, content);
@@ -2346,11 +2813,14 @@ function createFile(outPath, content) {
  * loudly, rather than read or silently ignored; lenient on everything else,
  * like `findStartCommandInRepoConfig`. The config path when it declares the
  * key, else null.
+ *
+ * @param {string} projectPath
+ * @returns {string | null}
  */
 function findAttestInRepoConfig(projectPath) {
   const configPath = resolve(projectPath, CI_CONFIG_RELATIVE_PATH);
   const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
-  if (data && typeof data === 'object' && !Array.isArray(data) && data.attest !== undefined) return configPath;
+  if (isRecord(data) && data['attest'] !== undefined) return configPath;
   return null;
 }
 
@@ -2378,6 +2848,8 @@ const ATTEST_GITHUB_ONLY =
  * the branch the pipeline triggers on: `--signer-workflow` names the workflow
  * FILE, and a copy of it on any other branch — edited to run on a push there
  * — signs as the same path.
+ *
+ * @param {string} branch
  */
 function attestVerifyHint(branch) {
   return (
@@ -2397,9 +2869,10 @@ const ATTEST_SCOPE_NOTE =
   'the gate passed. On a public repository the full JSON report is printed to the public job log, and the ' +
   'reports artifact can be downloaded by any signed-in GitHub user while it is retained.';
 
+/** @param {string[]} argv */
 function cmdCiInit(argv) {
   const parsed = parseCiInitArgs(argv);
-  if (parsed.error) return usageError(parsed.error);
+  if (parsed.error !== undefined) return usageError(parsed.error);
   const args = parsed.value;
 
   const targetArg = args._[0];
@@ -2410,7 +2883,8 @@ function cmdCiInit(argv) {
         `Valid targets: ${Object.keys(CI_TARGETS).join(', ')}\n\n`,
     );
     usage();
-    process.exit(1);
+    // A usage error like any other (3); 1 is an existing file refused.
+    process.exit(USAGE_ERROR_EXIT);
   }
   if (args.attest && targetArg !== 'github') return usageError(`ci-init ${targetArg}: ${ATTEST_GITHUB_ONLY}`);
 
@@ -2617,6 +3091,8 @@ function cmdCiInit(argv) {
  * this error across versions; the `code` has not), so a genuine, unrelated
  * failure inside `storage`/`dashboard` (a real bug) is never misreported as
  * a Node-version problem — only this one, specific, well-known shape is.
+ *
+ * @param {unknown} error
  */
 export function isNodeSqliteUnavailable(error) {
   if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_UNKNOWN_BUILTIN_MODULE') {
@@ -2633,6 +3109,10 @@ export function isNodeSqliteUnavailable(error) {
  * command requires Node.js >= 22.13", and exit 3, rather than as an
  * unexpected error; anything else is rethrown, to the subcommand's own
  * `.catch(fatal)`.
+ *
+ * @template T
+ * @param {() => Promise<T>} load
+ * @returns {Promise<T>}
  */
 async function loadOrExit(load) {
   try {
@@ -2664,6 +3144,9 @@ function loadDashboardModules() {
  * when neither location has one. The existence checks this function used to
  * make itself opened a predictable fallback path in the shared temp
  * directory whenever it existed.
+ *
+ * @param {DashboardModules} mods
+ * @param {string} projectPath
  */
 function resolveDbHandle(mods, projectPath) {
   const opened = mods.openDatabase({ projectPath, existingOnly: true });
@@ -2679,6 +3162,10 @@ function resolveDbHandle(mods, projectPath) {
   return opened.db;
 }
 
+/**
+ * @param {DashboardModules} mods
+ * @param {string} projectPath
+ */
 function buildProjectSnapshot(mods, projectPath) {
   const db = resolveDbHandle(mods, projectPath);
   try {
@@ -2693,13 +3180,17 @@ function buildProjectSnapshot(mods, projectPath) {
   }
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<{ project: string }>}
+ */
 function parseStatusArgs(argv) {
   const out = { project: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     if (a === '--project') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
@@ -2708,13 +3199,18 @@ function parseStatusArgs(argv) {
   return { value: out };
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<{ project: string, out: string | undefined, noOpen: boolean }>}
+ */
 function parseDashboardArgs(argv) {
+  /** @type {{ project: string, out: string | undefined, noOpen: boolean }} */
   const out = { project: process.cwd(), out: undefined, noOpen: false };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     if (a === '--project') {
       const r = takeOperand(argv, i, a);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
@@ -2730,7 +3226,7 @@ function parseDashboardArgs(argv) {
       // got wrong. Refusing right here, the same way --sarif already does,
       // gives --out the same clean, flag-naming usage error instead.
       const r = takeOperand(argv, i, a, true);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.out = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--out=')) {
@@ -2743,12 +3239,13 @@ function parseDashboardArgs(argv) {
   return { value: out };
 }
 
+/** @param {string[]} argv */
 async function cmdStatus(argv) {
   const parsed = parseStatusArgs(argv);
   // parseStatusArgs's own `error` is already a complete, flag-naming message
   // (an unknown flag, or a value-taking flag with no operand) — no second
   // prefix needed here. Same convention as cmdScan/cmdBaseline.
-  if (parsed.error) return usageError(parsed.error);
+  if (parsed.error !== undefined) return usageError(parsed.error);
   const opts = parsed.value;
 
   const projectPath = resolveProjectOrExit(opts.project);
@@ -2781,13 +3278,18 @@ function loadImportSarifModules() {
   return loadOrExit(loadImportSarifEngine);
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<{ file: string, project: string, allowOutside: boolean, maxResults: number | undefined }>}
+ */
 function parseImportSarifArgs(argv) {
+  /** @type {{ file: string | undefined, project: string, allowOutside: boolean, maxResults: number | undefined }} */
   const out = { file: undefined, project: process.cwd(), allowOutside: false, maxResults: undefined };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     if (a === '--project') {
       const r = takeOperand(argv, i, a, true);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) {
@@ -2799,7 +3301,7 @@ function parseImportSarifArgs(argv) {
       let raw = a.slice('--max-results='.length);
       if (a === '--max-results') {
         const r = takeOperand(argv, i, a, true);
-        if (r.error) return r;
+        if (r.error !== undefined) return r;
         raw = r.value;
         i = r.nextIndex;
       }
@@ -2812,16 +3314,38 @@ function parseImportSarifArgs(argv) {
     else if (out.file === undefined) out.file = a;
     else return { error: `Unexpected argument: ${a}` };
   }
-  if (out.file === undefined) return { error: 'import-sarif requires the SARIF file to import' };
-  return { value: out };
+  const file = out.file;
+  if (file === undefined) return { error: 'import-sarif requires the SARIF file to import' };
+  return { value: { ...out, file } };
 }
+
+/**
+ * @typedef {{
+ *   scan_id: string,
+ *   scan_type: string,
+ *   coverage: string,
+ *   counts: {
+ *     results: number,
+ *     imported: number,
+ *     without_location: number,
+ *     skipped: unknown[],
+ *     suppressed_at_source: number,
+ *     not_findings: number,
+ *     duplicates: number,
+ *     truncated: number,
+ *   },
+ *   warnings: string[],
+ * }} ImportedRun
+ *   one run of a SARIF log, as `import_sarif` reports it
+ */
 
 /** Exit 1 for a log the tool refuses (invalid, outside the project, not a plain file, absent); 3 is a usage error. */
 const IMPORT_SARIF_REFUSALS = new Set(['invalid_sarif', 'outside_project', 'refused_file', 'not_found']);
 
+/** @param {string[]} argv */
 async function cmdImportSarif(argv) {
   const parsed = parseImportSarifArgs(argv);
-  if (parsed.error) return usageError(parsed.error);
+  if (parsed.error !== undefined) return usageError(parsed.error);
   const opts = parsed.value;
 
   const projectPath = resolveProjectOrExit(opts.project);
@@ -2869,8 +3393,11 @@ async function cmdImportSarif(argv) {
   }
 
   let partial = false;
+  /** @type {string[]} */
   const lines = [];
-  for (const run of result.runs) {
+  // The tool's own answer (`mcp/src/tools/importSarif.ts`), which its result type leaves open.
+  const runs = /** @type {ImportedRun[]} */ (result.runs);
+  for (const run of runs) {
     const c = run.counts;
     if (c.skipped.length > 0 || c.truncated > 0) partial = true;
     lines.push(
@@ -2924,6 +3451,10 @@ async function cmdImportSarif(argv) {
  * executables, spawned directly with `target` as their one argument — never
  * shared this class of bug, because neither re-parses its own argument for
  * shell metacharacters.
+ *
+ * @param {string} platform
+ * @param {string} target
+ * @returns {{ command: string, args: string[] }}
  */
 export function resolveOpenerCommand(platform, target) {
   if (platform === 'win32') return { command: 'explorer.exe', args: [target] };
@@ -2948,6 +3479,8 @@ export function resolveOpenerCommand(platform, target) {
  * `detached: true` + `unref()` so this process exiting neither waits on, nor
  * attempts to tear down, the browser it started; `stdio: 'ignore'` keeps the
  * browser process from holding this CLI's own stdout/stderr pipes open.
+ *
+ * @param {string} target
  */
 function openInBrowser(target) {
   const { command, args } = resolveOpenerCommand(process.platform, target);
@@ -2962,10 +3495,11 @@ function openInBrowser(target) {
   }
 }
 
+/** @param {string[]} argv */
 async function cmdDashboard(argv) {
   const parsed = parseDashboardArgs(argv);
   // Same convention as cmdScan/cmdBaseline — see cmdStatus's own comment.
-  if (parsed.error) return usageError(parsed.error);
+  if (parsed.error !== undefined) return usageError(parsed.error);
   const opts = parsed.value;
 
   const projectPath = resolveProjectOrExit(opts.project);
@@ -3029,6 +3563,9 @@ async function cmdDashboard(argv) {
  * exits 3, instead of an "unhandled promise rejection" warning on stderr —
  * exactly the kind of stray noise the pristine-output requirement (the
  * design of record, and this task's e2e) exists to keep out of a CI log.
+ *
+ * @param {unknown} e
+ * @returns {never}
  */
 function fatal(e) {
   const out = fatalOutcome(e);
@@ -3048,6 +3585,9 @@ function fatal(e) {
  * the bundle `mcp/dist/engine.js`, so this file holds no class to test
  * `instanceof` against.
  * Anything else is still unexpected, exit 3.
+ *
+ * @param {unknown} e
+ * @returns {{ text: string, exitCode: number }}
  */
 export function fatalOutcome(e) {
   if (e instanceof Error && e.name === 'GuardianDbError') {
@@ -3081,13 +3621,17 @@ function loadDbModules() {
   return loadOrExit(loadDbEngine);
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<{ project: string, yes: boolean, rehome: boolean }>}
+ */
 function parseDbAdoptArgs(argv) {
   const out = { project: process.cwd(), yes: false, rehome: false };
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     if (a === '--project') {
       const r = takeOperand(argv, i, a, true);
-      if (r.error) return r;
+      if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--project=')) {
@@ -3101,6 +3645,7 @@ function parseDbAdoptArgs(argv) {
   return { value: out };
 }
 
+/** @type {Readonly<Record<string, string | undefined>>} */
 const PATH_TARGET = {
   canonical: "this project's canonical path",
   'this-project': 'leads to this project: --rehome moves these rows to its canonical path',
@@ -3109,8 +3654,13 @@ const PATH_TARGET = {
   unresolved: 'not looked at (a network, device or process-relative path): never touched',
 };
 
-/** The human-readable report `db adopt` prints (stdout). */
+/**
+ * The human-readable report `db adopt` prints (stdout).
+ *
+ * @param {ReturnType<DbModules['inspectProjectDatabase']>} report
+ */
 function renderDbReport(report) {
+  /** @type {string[]} */
   const lines = [];
   for (const w of report.warnings) lines.push(`!! ${w}`);
   if (report.warnings.length > 0) lines.push('');
@@ -3168,13 +3718,14 @@ function renderDbReport(report) {
   return `${lines.join('\n')}\n`;
 }
 
+/** @param {string[]} argv */
 async function cmdDb(argv) {
   const [sub, ...rest] = argv;
   if (sub !== 'adopt') {
     return usageError(`Unknown db subcommand: '${sub ?? '(none)'}' (only 'adopt' is supported)`);
   }
   const parsed = parseDbAdoptArgs(rest);
-  if (parsed.error) return usageError(parsed.error);
+  if (parsed.error !== undefined) return usageError(parsed.error);
   const opts = parsed.value;
   const projectPath = resolveProjectOrExit(opts.project);
   const mods = await loadDbModules();
@@ -3219,6 +3770,7 @@ async function cmdDb(argv) {
   }
   try {
     const done = mods.registerProjectDatabase(projectPath, { rehome: opts.rehome });
+    /** @type {string[]} */
     const lines = [];
     if (!done.already) {
       lines.push(`Registered '${done.db_path}' as this user's database (id ${done.db_id}). The server uses it from its next start.`);
@@ -3252,10 +3804,12 @@ const HELP_FLAGS = new Set(['-h', '--help', 'help']);
  * Stops at `--start-command`, because everything after that belongs to the
  * user's application: `scan --start-command npm start --help` is asking npm
  * for help, not us, and swallowing it would silently skip the scan.
+ *
+ * @param {string[]} rest
  */
 function asksForHelp(rest) {
   for (let i = 0; i < rest.length; i++) {
-    const a = rest[i];
+    const a = rest[i] ?? '';
     if (a === '--start-command') return false;
     // A value-taking flag's operand is its value, never a help request:
     // `scan --baseline-ref --help` used to print the usage and exit 0 without
@@ -3296,6 +3850,12 @@ function main() {
   if (!cmd || HELP_FLAGS.has(cmd)) {
     usage();
     process.exit(cmd ? 0 : USAGE_ERROR_EXIT);
+  }
+  // The release this CLI is — plugin.json's version, the one a scan verdict's
+  // `tool_version` names. It was an unknown command (exit 3).
+  if (cmd === '--version' || cmd === '-V') {
+    process.stdout.write(`${resolveVersion()}\n`);
+    return;
   }
   // `scan --help` is the first thing anyone types. Answer it rather than
   // rejecting it as an unknown flag.

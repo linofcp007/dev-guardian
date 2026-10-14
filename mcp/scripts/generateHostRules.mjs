@@ -53,6 +53,10 @@ const hostRulesDir = resolve(repoRoot, 'host-rules');
  *  plugin's own install layout on itself. See the module doc above. */
 const DOGFOOD_CLI_PATH = 'cli/dev-guardian.mjs';
 
+/**
+ * @param {string} path
+ * @param {string} content
+ */
 function writeGenerated(path, content) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, 'utf8');
@@ -65,7 +69,9 @@ for (const host of ALL_HOSTS) {
   writeGenerated(resolve(hostRulesDir, spec.rules.template_file), renderHostRulesFile(host));
 }
 
-for (const [host, targetPath] of Object.entries(DOGFOOD_RULE_TARGETS)) {
+for (const host of ALL_HOSTS) {
+  const targetPath = DOGFOOD_RULE_TARGETS[host];
+  if (targetPath === undefined) continue;
   const rendered = substituteCliPath(renderHostRulesFile(host), DOGFOOD_CLI_PATH);
   writeGenerated(resolve(repoRoot, targetPath), rendered);
 }

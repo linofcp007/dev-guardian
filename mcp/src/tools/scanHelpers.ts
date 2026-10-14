@@ -14,8 +14,9 @@
  *   when one scanner inside a composite run was skipped.
  */
 
-import { lstatSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { lstatSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
@@ -85,7 +86,42 @@ export function ensureReportDir(projectPath: string, scanId: string, prefix: str
     `[dev-guardian] ${join(projectPath, '.guardian', 'reports')} is a link or not a directory; ` +
       `this scan's reports go to the temp directory instead\n`,
   );
-  return mkdtempSync(join(tmpdir(), `guardian-reports-${prefix}-`));
+  const fallback = mkdtempSync(join(tmpdir(), `${TEMP_REPORTS_PREFIX}${prefix}-`));
+  try {
+    // Just made by mkdtemp: nothing else is in it yet.
+    writeFileSync(join(fallback, OWNER_MARKER), accountToken(), { flag: 'wx' });
+  } catch {
+    /* unmarked: never pruned, which is the safe side */
+  }
+  // Pruned like the project's (review 11): every such scan left one behind.
+  pruneReports(tmpdir(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`, { markedOnly: true });
+  return fallback;
+}
+
+/** The temp directory fallback's names: `guardian-reports-<kind>-<random>`. */
+const TEMP_REPORTS_PREFIX = 'guardian-reports-';
+
+/**
+ * The file in a temp fallback directory that names the account that made it
+ * ({@link accountToken}): in a temp directory several accounts share, only a
+ * directory holding this account's is pruned.
+ */
+const OWNER_MARKER = '.dev-guardian-owner';
+
+/** This account, as an owner marker holds it: a digest of its user name and home directory. */
+function accountToken(): string {
+  let user = '';
+  try {
+    user = userInfo().username;
+  } catch {
+    /* no user entry: the home directory alone */
+  }
+  return createHash('sha256').update(`dev-guardian-owner\n${user}\n${homedir()}`).digest('hex');
+}
+
+/** Whether `dir` holds this account's {@link OWNER_MARKER}. */
+function markedByThisAccount(dir: string): boolean {
+  return readSmallTextFile(join(dir, OWNER_MARKER), 256)?.trim() === accountToken();
 }
 
 /**
@@ -131,8 +167,23 @@ function keptReports(): number {
  * are touched (a `Dirent` is typed without following a link, and `rmSync`
  * removes a link inside one, never what it names). Best effort: a directory
  * a running scanner still holds is left for the next scan.
+ *
+ * `name`: the directories' name before `-<id>` — `prefix` in a project's
+ * `.guardian/reports/`, `guardian-reports-<prefix>` in the temp directory
+ * {@link ensureReportDir} falls back to, which nothing pruned (review 11).
+ * On POSIX only this account's own directories are touched. `markedOnly`
+ * (the temp directory): only one holding this account's
+ * {@link OWNER_MARKER} — Windows reports no owner (every uid reads 0), and
+ * the prune deleted a folder SYSTEM owned in a shared temp directory
+ * (review 12).
  */
-export function pruneReports(reportsDir: string, prefix: string, current: string): void {
+export function pruneReports(
+  reportsDir: string,
+  prefix: string,
+  current: string,
+  name: string = prefix,
+  opts: { markedOnly?: boolean } = {},
+): void {
   if (!PRUNED_REPORT_PREFIXES.has(prefix)) return;
   let entries;
   try {
@@ -140,18 +191,22 @@ export function pruneReports(reportsDir: string, prefix: string, current: string
   } catch {
     return;
   }
+  const uid = process.getuid?.();
   const others: Array<{ path: string; mtime: number }> = [];
   for (const e of entries) {
-    if (!e.isDirectory() || !e.name.startsWith(`${prefix}-`)) continue;
+    if (!e.isDirectory() || !e.name.startsWith(`${name}-`)) continue;
     // The id after the prefix: `deps-<id>` is not `depsaudit-<id>`'s, nor
     // `init-secrets-<id>` a `secrets-` one (a prefix is never a hyphenated
-    // form of another's id: ids are hex or a tree hash).
-    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(prefix.length + 1))) continue;
+    // form of another's id: ids are hex, a tree hash or mkdtemp's suffix).
+    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(name.length + 1))) continue;
     const path = join(reportsDir, e.name);
     if (path === current) continue;
     try {
       const st = lstatSync(path);
-      if (st.isDirectory() && !st.isSymbolicLink()) others.push({ path, mtime: st.mtimeMs });
+      if (!st.isDirectory() || st.isSymbolicLink() || (uid !== undefined && st.uid !== uid)) continue;
+      if (opts.markedOnly !== true || markedByThisAccount(path)) {
+        others.push({ path, mtime: st.mtimeMs });
+      }
     } catch {
       /* gone meanwhile */
     }

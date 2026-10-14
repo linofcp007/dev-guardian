@@ -22,9 +22,9 @@ import { readConfigSources } from '../agentaudit/configSources.js';
 import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { filterFindings } from '../severity/filter.js';
 import { SeverityMin } from '../schemas.js';
-import type { Finding, ToolResult, ToolRun } from '../types.js';
+import type { ToolResult, ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { countBySeverity } from '../severity/counts.js';
 
 const inputSchema = {
@@ -46,7 +46,7 @@ const inputSchema = {
   severity_min: SeverityMin,
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'audit_agent_config',
   title: 'Audit the agent workspace configuration',
   description:
@@ -57,21 +57,16 @@ const tool: ToolModule = {
     'Reads only; audit_mcp_tools inspects what servers serve.',
   inputSchema,
   handler: (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 // No `await` inside — every check is synchronous — but the registry's
 // `ToolModule.handler` contract always returns a Promise, so this is async.
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    include_user_config?: boolean;
-    severity_min?: Finding['severity'];
-  };
 
   let projectPath: string;
   try {

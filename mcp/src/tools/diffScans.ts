@@ -49,12 +49,12 @@ import {
   suppressedOfEither,
 } from '../history/openSet.js';
 import { classifyDiff, compareScansFor, describeMeasurementGaps, measurementGaps } from '../history/runCompare.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { sameImportSlot, sarifSlotOfScan } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type DomainError, type Finding, type ScanType, type ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 /** Items returned per bucket; the counts in `summary` are never capped. */
 export const ITEMS_PER_BUCKET = 50;
@@ -88,7 +88,7 @@ const inputSchema = {
   ),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'diff_scans',
   title: 'Diff scans (regression / resolution detection)',
   description:
@@ -108,23 +108,14 @@ const tool: ToolModule = {
     "(import_sarif) source_tool names the tool whose imports are compared; imports of two tools are never diffed.",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    scan_type?: ScanType;
-    source_tool?: string;
-    from_scan_id?: string;
-    from?: 'baseline' | 'previous';
-    to_scan_id?: string;
-    to?: 'latest';
-  };
 
   const skipHits: SkipHit[] = [];
 
@@ -218,12 +209,8 @@ function resolveTo(
     // it, the scan must belong to it — every history reader answers for one
     // project.
     if (inp.project_path !== undefined) {
-      let projectPath: string;
-      try {
-        projectPath = resolveProjectPath(inp.project_path).path;
-      } catch (e) {
-        return { ok: false, err: failDomain(projectPathErrorCode(e), (e as Error).message) };
-      }
+      const projectPath = toolProjectPath(inp.project_path);
+      if (typeof projectPath !== 'string') return { ok: false, err: projectPath };
       if (scan.project_path !== projectPath) {
         return {
           ok: false,
@@ -239,12 +226,8 @@ function resolveTo(
     if (incomplete !== null) return { ok: false, err: failDomain('unknown_scan_id', incomplete) };
     return { ok: true, value: scan };
   }
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, err: failDomain(projectPathErrorCode(e), (e as Error).message) };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return { ok: false, err: projectPath };
   // Default: this project's newest usable state scan.
   const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
   if (!choice.ok) return { ok: false, err: failDomain('unsupported_target', choice.message) };

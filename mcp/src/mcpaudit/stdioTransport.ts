@@ -175,7 +175,9 @@ export class ProbeStdioTransport implements Transport {
       signalOnParentExit: 'SIGKILL',
     });
     this.child = child;
-    const { stdout, stderr, stdin } = child.process;
+    const stdout = child.process?.stdout;
+    const stderr = child.process?.stderr;
+    const stdin = child.process?.stdin;
 
     stdout?.on('data', (chunk: Buffer | string) => {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
@@ -216,7 +218,7 @@ export class ProbeStdioTransport implements Transport {
     });
     stdin?.on('error', (e: Error) => this.onerror?.(e));
 
-    const spawned = new Promise<'spawned'>((resolve) => child.process.once('spawn', () => resolve('spawned')));
+    const spawned = new Promise<'spawned'>((resolve) => child.process?.once('spawn', () => resolve('spawned')));
     // Resolves after the process has exited AND its pipes have closed, so
     // stderr is complete by then.
     this.done = child.done.then((exit) => {
@@ -263,7 +265,7 @@ export class ProbeStdioTransport implements Transport {
 
   send(message: JSONRPCMessage): Promise<void> {
     return new Promise((resolve, reject) => {
-      const stdin = this.child?.process.stdin;
+      const stdin = this.child?.process?.stdin;
       if (stdin === undefined || stdin === null || this.exited !== null || this.closing !== null) {
         reject(new Error('Not connected'));
         return;
@@ -286,13 +288,13 @@ export class ProbeStdioTransport implements Transport {
       return;
     }
     try {
-      child.process.stdin?.end();
+      child.process?.stdin?.end();
     } catch {
       /* already closed */
     }
     // Nothing more is read: drain what the pipes hold so the process can exit.
-    child.process.stdout?.resume();
-    child.process.stderr?.resume();
+    child.process?.stdout?.resume();
+    child.process?.stderr?.resume();
     // The whole tree: SIGTERM (POSIX group) or taskkill + MSYS (Windows), the
     // kill after TERM_GRACE_MS, and pipes something outside the tree holds
     // abandoned after KILL_GRACE_MS more.

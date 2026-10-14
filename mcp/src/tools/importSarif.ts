@@ -15,18 +15,19 @@
  * refusal below is a fixed text.
  */
 
-import { basename, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { readSmallText, type TextRead } from '../hooks/configFile.js';
 import { isWithinDir, readProjectText } from '../platform/projectFs.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
+import { canonicalPath, isNetworkPath, networkPathProblem } from '../platform/projectPath.js';
 import { importSarif, SarifImportError, type SarifImportCounts } from '../sarif/importSarif.js';
 import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ScanResult, ToolResult } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 /** Largest log read: 50 MiB (US-1.AC-13). */
@@ -52,7 +53,7 @@ const inputSchema = {
     .describe('Results imported before stopping (the scan is then partial). Default 50000.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'import_sarif',
   title: 'Import a SARIF log',
   description:
@@ -63,31 +64,28 @@ const tool: ToolModule = {
     'The log: a file of at most 50 MiB under project_path, unless allow_outside_project.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 type Result = ToolResult<Record<string, unknown>>;
 
-function handler(input: Record<string, unknown>, ctx: PluginContext): Promise<Result> {
+function handler(input: ToolInput<typeof inputSchema>, ctx: PluginContext): Promise<Result> {
   return Promise.resolve(run(input, ctx));
 }
 
-function run(input: Record<string, unknown>, ctx: PluginContext): Result {
-  const inp = input as {
-    project_path?: string;
-    sarif_path: string;
-    allow_outside_project?: boolean;
-    max_results?: number;
-  };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return fail(projectPathErrorCode(e), (e as Error).message);
-  }
+function run(inp: ToolInput<typeof inputSchema>, ctx: PluginContext): Result {
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
-  const logPath = resolve(projectPath, inp.sarif_path);
+  // A log on a share is never opened, inside the project or out of it with
+  // allow_outside_project: on Windows that is an SMB authentication to the
+  // host the path names, and a 42 s stall on one that does not answer
+  // (review 12, finding 9).
+  const share = networkPathProblem('sarif_path', resolve(projectPath, inp.sarif_path));
+  if (share !== null) return fail('unsupported_target', `${share}.`);
+  const given = resolve(projectPath, inp.sarif_path);
+  const logPath = isWithinDir(projectPath, given) ? given : inProjectSpelling(projectPath, given);
   const inside = isWithinDir(projectPath, logPath);
   if (!inside && inp.allow_outside_project !== true) {
     return fail(
@@ -194,6 +192,22 @@ function refusalText(reason: string): string {
     default:
       return 'The log could not be read.';
   }
+}
+
+/**
+ * `path` in the project's own spelling, when only its spelling put it
+ * outside (review 10, a 3.3.0 regression): the CLI resolves `--file` from its
+ * working directory, which may be spelt with an 8.3 short name
+ * (`C:\Users\ADMINI~1\…`) while the project path is canonical, so a log
+ * inside the project read as outside it. The DIRECTORY is canonicalised, never
+ * the file — a linked log is still judged by the read — and a network path is
+ * never asked of the filesystem. A path still outside is returned unchanged.
+ */
+function inProjectSpelling(projectPath: string, path: string): string {
+  const dir = dirname(path);
+  if (isNetworkPath(dir)) return path;
+  const respelled = join(canonicalPath(dir), basename(path));
+  return isWithinDir(projectPath, respelled) ? respelled : path;
 }
 
 function fail(code: DomainError['code'], message: string): Result {

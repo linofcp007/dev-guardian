@@ -193,3 +193,19 @@ export function registerFold(spec: FoldSpec): ToolModule {
   });
   return fold;
 }
+
+/**
+ * How a model calls `name`: the fold call that runs it (`dotnet_check { check:
+ * "secrets" }`) when it is a hidden alias, else the name. For a response that
+ * tells the model what ran or what to run — a Claude Code model can call only
+ * listed names. A stored identity (a finding's `tool`, a `tools_run` name, a
+ * scan type) keeps the member's name: fingerprints and history match on it.
+ */
+export function listedCall(name: string): string {
+  for (const fold of FOLDS) {
+    if (fold.name === name) return name;
+    const mode = Object.entries(fold.modes).find(([, member]) => member === name)?.[0];
+    if (mode !== undefined) return `${fold.name} { ${fold.modeKey}: "${mode}" }`;
+  }
+  return name;
+}

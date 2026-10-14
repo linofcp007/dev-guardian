@@ -57,15 +57,28 @@ Runs the vitest suite in Linux containers (git archive HEAD, npm ci, vitest run 
   --only <path>       run only these test files or directories (repeatable)
 Exit: 0 all passed · 1 an image failed · 2 Docker is not available (or a usage error).`;
 
+/**
+ * @param {string} message
+ * @returns {never}
+ */
 function usageError(message) {
   console.error(`test-docker: ${message}\n\n${USAGE}`);
   process.exit(2);
 }
 
+/**
+ * @typedef {{ images: string[], toolchain: boolean, coverage: boolean, workers: number, only: string[] }} Options
+ */
+
+/**
+ * @param {string[]} argv
+ * @returns {Options}
+ */
 function parseArgs(argv) {
+  /** @type {Options} */
   const o = { images: [], toolchain: false, coverage: true, workers: 4, only: [] };
   for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
+    const a = argv[i] ?? '';
     const value = () => {
       const v = a.includes('=') ? a.slice(a.indexOf('=') + 1) : argv[++i];
       if (v === undefined || v === '' || v.startsWith('--')) usageError(`${a.split('=')[0]} needs a value`);
@@ -87,30 +100,45 @@ function parseArgs(argv) {
   return o;
 }
 
+/**
+ * @param {string[]} args
+ * @param {import('node:child_process').SpawnSyncOptions} [opts]
+ */
 const docker = (args, opts = {}) => spawnSync('docker', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true, ...opts });
+/** @param {unknown} s */
 const firstLine = (s) => String(s ?? '').trim().split(/\r?\n/)[0] ?? '';
 
 /** Docker answers, and runs Linux containers. */
 function checkDocker() {
   const v = docker(['version', '--format', '{{.Server.Version}}|{{.Server.Os}}|{{.Server.Arch}}']);
-  if (v.error) return { ok: false, why: v.error.code === 'ENOENT' ? 'the docker command was not found' : v.error.message };
+  if (v.error) {
+    const code = /** @type {NodeJS.ErrnoException} */ (v.error).code;
+    return { ok: false, why: code === 'ENOENT' ? 'the docker command was not found' : v.error.message };
+  }
   if (v.status !== 0) return { ok: false, why: `the Docker daemon did not answer (is Docker running?) — ${firstLine(v.stderr)}` };
-  const [version, os, arch] = v.stdout.trim().split('|');
+  const [version, os, arch] = String(v.stdout).trim().split('|');
   if (os !== 'linux') return { ok: false, why: `Docker runs ${os} containers — switch it to Linux containers` };
   return { ok: true, version, arch };
 }
 
-/** gitleaks' and Trivy's pinned release for this architecture, read from the install catalog so the two never drift. */
+/**
+ * gitleaks' and Trivy's pinned release for this architecture, read from the install catalog so the two never drift.
+ *
+ * @param {string | undefined} arch
+ */
 function pinnedReleases(arch) {
   const text = readFileSync(join(MCP, 'src', 'runners', 'installCatalog.ts'), 'utf8');
   const platform = arch === 'arm64' ? 'linux-arm64' : 'linux-amd64';
   const trivyVersion = /TRIVY_INSTALL_TAG = 'v([^']+)'/.exec(text)?.[1];
   const gitleaksVersion = /GITLEAKS_VERSION = '([^']+)'/.exec(text)?.[1];
+  // A catalog that no longer spells them so must fail here, not build a URL holding "undefined".
+  if (trivyVersion === undefined || gitleaksVersion === undefined) throw new Error('no Trivy or gitleaks version in installCatalog.ts');
+  /** @param {string} tool */
   const asset = (tool) => {
     const block = text.slice(text.indexOf(`version: ${tool.toUpperCase()}_VERSION`));
     const m = new RegExp(`'${platform}': \\{ file: \`([^\`]+)\`, sha256: '([0-9a-f]{64})'`).exec(block);
     if (m === null) throw new Error(`no ${platform} asset for ${tool} in installCatalog.ts`);
-    return { file: m[1], sha256: m[2] };
+    return { file: m[1] ?? '', sha256: m[2] ?? '' };
   };
   const trivy = asset('trivy');
   const gitleaks = asset('gitleaks');
@@ -120,12 +148,23 @@ function pinnedReleases(arch) {
   };
 }
 
+/**
+ * @param {string} image
+ * @param {boolean} toolchain
+ */
 function imageTag(image, toolchain) {
   const t = image.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[.-]+/, '').slice(0, 100);
   return `dev-guardian-test:${t}${toolchain ? '-toolchain' : ''}`;
 }
 
-/** The image a run uses: the base plus git (and, with --toolchain, the scanners) — built once, cached by Docker. */
+/**
+ * The image a run uses: the base plus git (and, with --toolchain, the scanners) — built once, cached by Docker.
+ *
+ * @param {string} image
+ * @param {Options} o
+ * @param {string | undefined} arch
+ * @returns {{ ref: string } | { error: string }}
+ */
 function prepare(image, o, arch) {
   if (docker(['image', 'inspect', image]).status !== 0) {
     console.log(`  pulling ${image} (needs network)…`);
@@ -140,6 +179,10 @@ function prepare(image, o, arch) {
   ];
   if (o.toolchain) {
     const r = pinnedReleases(arch);
+    /**
+     * @param {{ url: string, file: string, sha256: string }} rel
+     * @param {string} binary
+     */
     const fetch = (rel, binary) =>
       `RUN curl -fsSL -o /tmp/a.tgz ${rel.url}${rel.file} && echo "${rel.sha256}  /tmp/a.tgz" | sha256sum -c - ` +
       `&& tar -C /usr/local/bin -xzf /tmp/a.tgz ${binary} && rm /tmp/a.tgz`;
@@ -155,7 +198,7 @@ function prepare(image, o, arch) {
     console.log(`  building ${tag} (once, cached — needs network)…`);
     const b = docker(['build', '-q', '-t', tag, '-'], { input: lines.join('\n') });
     if (b.status !== 0) {
-      `${b.stderr}${b.stdout}`.trim().split(/\r?\n/).slice(-8).forEach((l) => console.log(`    ${l}`));
+      `${String(b.stderr)}${String(b.stdout)}`.trim().split(/\r?\n/).slice(-8).forEach((l) => console.log(`    ${l}`));
       return { error: `could not build ${tag}` };
     }
   }
@@ -169,6 +212,13 @@ function archive() {
   return r.stdout;
 }
 
+/**
+ * @param {string} ref
+ * @param {string} image
+ * @param {Options} o
+ * @param {Buffer} tar
+ * @returns {Promise<{ code: number | null, out: string, coverage: boolean }>}
+ */
 function runIn(ref, image, o, tar) {
   const coverage = o.coverage && image === FLOOR_IMAGE;
   const vitest = ['npx', 'vitest', 'run', `--maxWorkers=${o.workers}`, ...(coverage ? ['--coverage', '--coverage.reporter=text-summary', '--coverage.reportOnFailure'] : []), ...o.only];
@@ -213,6 +263,7 @@ async function main() {
   mkdirSync(LOG_DIR, { recursive: true });
   const tar = archive();
   console.log(`dev-guardian — the test suite in Linux containers (Docker ${d.version}, linux/${d.arch}), HEAD of ${ROOT}\n`);
+  /** @type {Array<{ image: string, ok: boolean, summary: string }>} */
   const rows = [];
   for (const image of o.images) {
     console.log(`▸ ${image}${o.toolchain ? ' + toolchain' : ''}`);
@@ -231,6 +282,7 @@ async function main() {
     const out = r.out.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
     const files = /Test Files\s+([^\n]+)/.exec(out)?.[1]?.trim() ?? '?';
     const tests = /\n\s*Tests\s+([^\n]+)/.exec(out)?.[1]?.trim() ?? '?';
+    /** @param {string} label */
     const pct = (label) => new RegExp(`${label}\\s*:\\s*([\\d.]+%)`).exec(out)?.[1] ?? '?';
     const failedThresholds = [...out.matchAll(/ERROR: Coverage for (\w+) \(([\d.]+%)\) does not meet global threshold \(([\d.]+%)\)/g)];
     const cov = !r.coverage

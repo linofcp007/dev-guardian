@@ -11,7 +11,7 @@ import { LLM_SCAN_DEFAULTS, type ScanMode } from '../llmscan/types.js';
 import { fail, planStatus, startPlan } from '../llmscan/service.js';
 import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -37,7 +37,7 @@ const inputSchema = {
 
 const parser = z.object(inputSchema).strict();
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'llm_scan_start',
   title: 'Plan an LLM-assisted scan',
   description:
@@ -45,15 +45,17 @@ const tool: ToolModule = {
     'calls no model. modes: verify (a task per finding with a file and line), hunt (needs ' +
     'map_attack_surface). Returns plan_id, the task count, what was left out and a token estimate; above ' +
     'max_estimated_tokens nothing is handed out until confirm: true, which the user must agree to. Then ' +
-    'repeat llm_scan_task, the brief in a fresh subagent, llm_scan_submit. llm_scan_start {plan_id} ' +
-    'returns the report.',
+    'repeat llm_scan {step: "task"}, the brief in a fresh subagent, llm_scan {step: "submit"}. llm_scan ' +
+    '{step: "start", plan_id} returns the report.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
-async function handler(input: Record<string, unknown>, ctx: PluginContext) {
+async function handler(input: ToolInput<typeof inputSchema>, ctx: PluginContext) {
+  // Parsed again: an in-process caller (a test) hands its input unparsed, and
+  // the step's own refusal is invalid_input.
   const parsed = parser.safeParse(input);
   if (!parsed.success) {
     return fail('invalid_input', `Invalid input: ${parsed.error.issues.map((i) => `${i.path.join('.') || '$'}: ${i.message}`).join('; ')}`);

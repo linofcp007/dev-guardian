@@ -21,6 +21,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { parse, resolve } from 'node:path';
+import { walkLinksUnder } from '../hooks/configFile.js';
 
 type InvalidProjectPathReason = 'not_found' | 'not_a_directory' | 'root_or_home' | 'network_path';
 
@@ -37,8 +38,10 @@ export class InvalidProjectPathError extends Error {
   constructor(
     public readonly reason: InvalidProjectPathReason,
     public readonly path: string,
+    /** The link on the way that leads to the network, when the path itself is spelled locally. */
+    via?: string,
   ) {
-    super(`Invalid project_path (${reason}): ${path}${REASON_HINT[reason]}`);
+    super(`Invalid project_path (${reason}): ${path}${via !== undefined ? ` (through the link ${via})` : ''}${REASON_HINT[reason]}`);
     this.name = 'InvalidProjectPathError';
   }
 }
@@ -73,13 +76,53 @@ interface ResolvedProjectPath {
   warning?: string;
 }
 
+/**
+ * Where `raw` reaches the network, or null when it stays local: its own
+ * spelling (`\\host\share`, `//host/share`, `\\?\UNC\…`), its resolved
+ * spelling (a relative path under a UNC working directory), or a link on the
+ * way (a directory symlink, a junction) to a share. Judged on strings and on
+ * the links' own text (lstat and readlink only): any other file call on such
+ * a path authenticates to its host over SMB, and on a host that does not
+ * answer blocks about 21 s. Every tool argument that names a local path is
+ * held to it, not only `project_path` (review 11, finding 8: `vet_packages`
+ * read `.npmrc` from a share the caller chose). Never on POSIX.
+ */
+export function networkPathOf(raw: string): { path: string; via?: string } | null {
+  if (isNetworkPath(raw)) return { path: raw };
+  const candidate = resolve(raw);
+  if (isNetworkPath(candidate)) return { path: candidate };
+  if (process.platform === 'win32') {
+    const walk = walkLinksUnder(parse(candidate).root, candidate);
+    if (!walk.ok && walk.reason === 'remote-link') return { path: candidate, via: walk.at };
+  }
+  return null;
+}
+
+/**
+ * The refusal for an argument other than `project_path` that names a network
+ * path ({@link networkPathOf}), or null when it is local.
+ */
+export function networkPathProblem(name: string, raw: string): string | null {
+  const net = networkPathOf(raw);
+  if (net === null) return null;
+  const via = net.via !== undefined ? ` (through the link ${net.via})` : '';
+  return (
+    `${name} ${JSON.stringify(net.path)}${via} is a network (UNC) path: dev-guardian reads local paths only — ` +
+    'a file call on a share authenticates to its host, and blocks while the host does not answer'
+  );
+}
+
 export function resolveProjectPath(input?: string): ResolvedProjectPath {
   const raw = input && input.length > 0 ? input : process.cwd();
   // The input names the host; `resolve()` is pure, and its result is checked
-  // too (a relative path under a UNC working directory).
-  if (isNetworkPath(raw)) throw new InvalidProjectPathError('network_path', raw);
+  // too (a relative path under a UNC working directory). A local spelling
+  // can still lead there: a link (a directory symlink, a junction) on the way
+  // to a share. `existsSync` and `statSync` follow it, and on a share that
+  // does not answer each blocked ~21 s — 42 s, then "does not exist" (review
+  // 10). Decided on the links' own text, read with lstat and readlink only.
+  const net = networkPathOf(raw);
+  if (net !== null) throw new InvalidProjectPathError('network_path', net.path, net.via);
   const candidate = resolve(raw);
-  if (isNetworkPath(candidate)) throw new InvalidProjectPathError('network_path', candidate);
 
   if (!existsSync(candidate)) {
     throw new InvalidProjectPathError('not_found', candidate);

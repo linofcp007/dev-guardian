@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { decideInstallCommand, MAX_DEADLINE_MS, vetDeadlineMs, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
+import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
 import { hangBound } from '../../helpers/timing.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
@@ -777,6 +778,233 @@ describe('decideInstallCommand — launchers are vetted like installs (review P1
   });
 });
 
+// Review of 3.3.0 (HIGH): the "npx of a locally installed bin" skip dropped a
+// package npm still fetches — and with it the malicious-package deny, which
+// has no escape hatch. A `cd` that never moves the shell (a subshell, a
+// pipeline, the background) was taken as the launcher's directory, and a
+// `.bin/<name>` that is a directory, a lone `.cmd`, the unscoped bin of a
+// scoped name and the bin of a `-p` package all counted as installed.
+describe('decideInstallCommand — the local-bin skip never drops a package npm fetches (review of 3.3.0)', () => {
+  /** Every npm name exists, and every one is malicious (an OSV `MAL-` advisory). */
+  function maliciousRegistry(): { fetchImpl: typeof fetch; calls: string[] } {
+    const calls: string[] = [];
+    const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200 });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      calls.push(url);
+      if (url === OSV) {
+        const queries = (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries;
+        return json({ results: queries.map(() => ({ vulns: [{ id: 'MAL-2026-33' }] })) });
+      }
+      if (url.startsWith('https://registry.npmjs.org/')) return json(npmDoc('1.0.0').body);
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, calls };
+  }
+  const binFile = (dir: string, name: string): void => {
+    mkdirSync(join(dir, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules', '.bin', name), '#!/bin/sh\n');
+  };
+  const denied = async (command: string, shell: 'bash' | 'powershell' = 'bash'): Promise<void> => {
+    const d = await decideInstallCommand(command, opts(maliciousRegistry().fetchImpl, { popular: {}, shell }));
+    expect(d?.deny, command).toMatch(/MAL-2026-33/);
+  };
+
+  beforeEach(() => {
+    mkdirSync(join(project, '.git'));
+  });
+
+  it.each([
+    '(cd web && npm ci) && npx zz-evil',
+    '(cd web; true); npx zz-evil',
+    'cd web & npx zz-evil',
+    'cd web | cat; npx zz-evil',
+    'echo $(cd web) && npx zz-evil',
+    'echo `cd web` && npx zz-evil',
+  ])('%s — the `cd` never moved the shell: vetted, and denied', async (command) => {
+    binFile(join(project, 'web'), 'zz-evil');
+    await denied(command);
+  });
+
+  it('a `cd` inside a subshell still moves the launcher inside it', async () => {
+    binFile(join(project, 'web'), 'zz-evil');
+    const f = maliciousRegistry();
+    expect(await decideInstallCommand('(cd web && npx zz-evil)', opts(f.fetchImpl, { popular: {} }))).toBeNull();
+    expect(f.calls).toEqual([]);
+  });
+
+  it('`.bin/<name>` that is a directory (a committed `.bin/<name>/.keep`) is not an installed bin', async () => {
+    mkdirSync(join(project, 'node_modules', '.bin', 'zz-evil'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'zz-evil', '.keep'), '');
+    await denied('npx zz-evil');
+  });
+
+  it('a lone `.bin/<name>.cmd` is not one either', async () => {
+    mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'zz-evil.cmd'), '@echo off\n');
+    await denied('npx zz-evil');
+  });
+
+  it('a scoped name is never matched against an unscoped bin', async () => {
+    binFile(project, 'eslint');
+    await denied('npx @zz-evil/eslint --fix');
+    await denied('bunx @zz-evil/eslint');
+  });
+
+  it('a `-p` package is never matched against a bin of its name', async () => {
+    binFile(project, 'zz-evil');
+    await denied('npx -p zz-evil tool');
+    await denied('npx --package=zz-evil tool');
+  });
+
+  // Review of 3.4.0, finding 5 — judged against npm's own resolution (libnpmexec):
+  // a `cd` that may not have run, a nearer `package.json` (npm's prefix), a
+  // package.json merely present, and `--prefix` all skipped a package npm fetched.
+  it.each([
+    'false && cd web; npx zz-evil',
+    '[ -d nope ] && cd web; npx zz-evil',
+    'if false; then cd web; fi; npx zz-evil',
+    'while false; do cd web; done; npx zz-evil',
+    'f() { cd web; }; npx zz-evil',
+    'function f { cd web; }; npx zz-evil',
+    '{ cd web; } & npx zz-evil',
+    '{ cd web; } | cat; npx zz-evil',
+    'cd web && true & npx zz-evil',
+    'cd web || npx zz-evil',
+    'CDPATH=other cd web && npx zz-evil',
+    'export CDPATH=other; cd web; npx zz-evil',
+    'cd web/node_modules/.bin/zz-evil; cd ../../..; npx zz-evil',
+  ])('%s — the `cd` may not have moved the shell there: vetted, and denied', async (command) => {
+    binFile(join(project, 'web'), 'zz-evil');
+    mkdirSync(join(project, 'other', 'web'), { recursive: true });
+    await denied(command);
+  });
+
+  it.each(['env -C other npx zz-evil', 'env --chdir=other npx zz-evil', 'sudo -D other npx zz-evil'])(
+    '%s — the launcher runs elsewhere than the line: vetted, and denied',
+    async (command) => {
+      binFile(project, 'zz-evil');
+      mkdirSync(join(project, 'other'), { recursive: true });
+      await denied(command);
+    },
+  );
+
+  it('CDPATH in the environment: a bare `cd name` is not taken as moving there', async () => {
+    binFile(join(project, 'web'), 'zz-evil');
+    const d = await decideInstallCommand('cd web && npx zz-evil', opts(maliciousRegistry().fetchImpl, { popular: {}, env: { CDPATH: '/elsewhere' } }));
+    expect(d?.deny).toMatch(/MAL-2026-33/);
+  });
+
+  it('a `cd` that surely ran — at the head of a list, or joined to it by && — still moves it', async () => {
+    binFile(join(project, 'web'), 'zz-evil');
+    const f = maliciousRegistry();
+    for (const command of ['cd web; npx zz-evil', 'cd web && npx zz-evil', 'cd -- web && npx zz-evil', 'cd ./web; true; npx zz-evil']) {
+      expect(await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} })), command).toBeNull();
+    }
+    expect(f.calls).toEqual([]);
+  });
+
+  // Review 12, finding 4: `cd` through a link (a symlink, a Windows junction)
+  // left the line's logical directory, which the walk up for an installed bin
+  // followed — to the project's own bin — while npx, run in the link's target,
+  // found none there and fetched the package.
+  it.each(['cd jweb && npx zz-evil', 'cd jweb/deep && npx zz-evil', 'cd ./jweb; npx zz-evil'])(
+    '%s — a cd through a link: vetted, and denied',
+    async (command) => {
+      binFile(project, 'zz-evil');
+      const outside = mkdtempSync(join(tmpdir(), 'pkgvet-hookout-'));
+      try {
+        mkdirSync(join(outside, 'deep'), { recursive: true });
+        symlinkSync(outside, join(project, 'jweb'), process.platform === 'win32' ? 'junction' : 'dir');
+        await denied(command);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ['{}', 'no name'],
+    ['{"name":"not-zz-evil","version":"1.0.0"}', 'another name'],
+    ['not json', 'no JSON'],
+  ])('a node_modules/<name>/package.json of %s (%s) is no installed package', async (manifest) => {
+    mkdirSync(join(project, 'node_modules', 'zz-evil'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'zz-evil', 'package.json'), manifest);
+    await denied('npx zz-evil');
+  });
+
+  it("a nearer package.json is npm's prefix: the package in a parent's node_modules is not in its tree", async () => {
+    mkdirSync(join(project, 'node_modules', 'zz-evil'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'zz-evil', 'package.json'), '{"name":"zz-evil"}');
+    mkdirSync(join(project, 'sub'), { recursive: true });
+    writeFileSync(join(project, 'sub', 'package.json'), '{"name":"sub"}');
+    await denied('cd sub && npx zz-evil');
+    // …while a bin in a parent's node_modules/.bin is one npm walks up to.
+    binFile(project, 'zz-evil');
+    const f = maliciousRegistry();
+    expect(await decideInstallCommand('cd sub && npx zz-evil', opts(f.fetchImpl, { popular: {} }))).toBeNull();
+  });
+
+  it.each(['npx --prefix ../elsewhere zz-evil', 'npx --prefix=/ zz-evil', 'npm --prefix .. exec zz-evil', 'npm -C .. exec zz-evil'])(
+    '%s — npm looks for the project elsewhere: vetted, and denied',
+    async (command) => {
+      binFile(project, 'zz-evil');
+      await denied(command);
+    },
+  );
+
+  it('a package installed by name still runs locally, scoped or under -p', async () => {
+    for (const name of ['@zz-evil/eslint', 'zz-evil']) {
+      mkdirSync(join(project, 'node_modules', name), { recursive: true });
+      writeFileSync(join(project, 'node_modules', name, 'package.json'), `{"name":"${name}"}`);
+    }
+    const f = maliciousRegistry();
+    for (const command of ['npx @zz-evil/eslint --fix', 'npx -p zz-evil tool', 'npx zz-evil']) {
+      expect(await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} })), command).toBeNull();
+    }
+    expect(f.calls).toEqual([]);
+  });
+
+  // Review of 3.3.0 (MEDIUM): `bash -c 'npm i x'`, `cmd //c npm i x`,
+  // `pwsh -c 'npm i x'` and `echo 'npx x' | sh` were never vetted, while
+  // `npm i x` was denied. The hook hands the shell guard's nested scripts in.
+  describe('the installs of a script the command hands a shell', () => {
+    it.each([
+      ["bash -c 'npm i zz-evil'", [{ text: 'npm i zz-evil', shell: 'bash' }], 'bash'],
+      ['cmd //c npm i zz-evil', [{ text: 'npm i zz-evil', shell: 'bash' }], 'bash'],
+      ["pwsh -c 'npm i zz-evil'", [{ text: 'npm i zz-evil', shell: 'powershell' }], 'powershell'],
+      ["echo 'npx zz-evil' | sh", [{ text: 'npx zz-evil', shell: 'bash' }], 'bash'],
+    ] as const)('%s — a malicious package is denied', async (command, nested, shell) => {
+      const d = await decideInstallCommand(command, opts(maliciousRegistry().fetchImpl, { popular: {}, shell, nested }));
+      expect(d?.deny).toMatch(/MAL-2026-33/);
+    });
+
+    it('a missing name in a nested script warns, never denies: it is not one plain install statement', async () => {
+      const f = fakeRegistry();
+      const d = await decideInstallCommand("bash -c 'npm i zz-no-such-pkg'", opts(f.fetchImpl, { popular: {}, nested: [{ text: 'npm i zz-no-such-pkg', shell: 'bash' }] }));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry/s);
+    });
+
+    it('after the outer command changes directory, a nested launcher is not taken as an installed copy', async () => {
+      binFile(project, 'zz-evil');
+      const nested = [{ text: 'npx zz-evil', shell: 'bash' as const }];
+      await expect(
+        decideInstallCommand("cd web && bash -c 'npx zz-evil'", opts(maliciousRegistry().fetchImpl, { popular: {}, nested })),
+      ).resolves.toMatchObject({ deny: expect.stringMatching(/MAL-2026-33/) });
+      // …while with no outer `cd` the copy installed where the hook runs is what runs.
+      expect(await decideInstallCommand("bash -c 'npx zz-evil'", opts(maliciousRegistry().fetchImpl, { popular: {}, nested }))).toBeNull();
+    });
+
+    it('a package the command line installs itself is looked up once', async () => {
+      const f = maliciousRegistry();
+      const d = await decideInstallCommand("npm i zz-evil && bash -c 'npm i zz-evil'", opts(f.fetchImpl, { popular: {}, nested: [{ text: 'npm i zz-evil', shell: 'bash' }] }));
+      expect(d?.deny).toMatch(/MAL-2026-33/);
+      expect(f.calls.filter((u) => u.startsWith('https://registry.npmjs.org/'))).toHaveLength(1);
+    });
+  });
+});
+
 // Review of 3.0.0, I4: whether a local workspace explains a 404 was computed
 // for EVERY package, before the network, by walking up to 3000 workspace
 // directories each time — 17 packages in a 3000-directory monorepo took
@@ -858,10 +1086,17 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
     expect(MAX_DEADLINE_MS).toBeLessThanOrEqual(12_000);
   });
 
+  // Review of 3.4.0, finding 4: `GUARDIAN_PKG_VET_DEADLINE_MS=1` left no time to
+  // look a package up, and the deny of a malicious one became a note.
+  it('GUARDIAN_PKG_VET_DEADLINE_MS is never below the network budget', () => {
+    for (const raw of ['0', '1', '2999']) expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: raw })).toBe(HOOK_BUDGET_MS);
+    expect(vetDeadlineMs({ GUARDIAN_PKG_VET_DEADLINE_MS: '3001' })).toBe(3001);
+  });
+
   it('GUARDIAN_PKG_VET_DEADLINE_MS sets the deadline', async () => {
     const d = await decideInstallCommand(
       `npm i ${NAMES.join(' ')}`,
-      opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '0', GUARDIAN_PKG_VET_DEADLINE_MS: '0' } }),
+      opts(all404(), { cwd: mono, env: { GUARDIAN_OFFLINE: '0', GUARDIAN_PKG_VET_DEADLINE_MS: '3000' }, startedAt: Date.now() - 3500 }),
     );
     expect(d?.context).toMatch(/time budget/);
   });

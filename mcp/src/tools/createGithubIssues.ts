@@ -45,7 +45,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
+import { withTextFile } from '../runners/argFile.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
 import { scannerAvailable } from './scanHelpers.js';
@@ -57,7 +57,8 @@ import {
 } from '../severity/breakdown.js';
 import type { DomainError, Finding, Severity, ToolResult } from '../types.js';
 import { SEVERITY_ORDER } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -90,7 +91,7 @@ const inputSchema = {
     ),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'create_github_issues',
   title: 'File GitHub issues for top findings',
   description:
@@ -101,7 +102,7 @@ const tool: ToolModule = {
     '(`labels_omitted`). It files real issues unless dry_run: preview first.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
@@ -116,22 +117,11 @@ interface IssuePlan {
 }
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    severity_min?: Severity;
-    max_issues?: number;
-    labels?: string[];
-    dry_run?: boolean;
-  };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const ghBin = await scannerAvailable('gh');
   if (!ghBin) {
@@ -341,7 +331,16 @@ export const ISSUE_LIST_LIMIT = 1000;
  * that comes back AT the limit may have been cut — the issue for this very
  * finding could be the one past it — so it fails closed: nothing is filed,
  * rather than a duplicate public issue.
+ *
+ * The search holds no quote: GitHub's tokenizer reads `[guardian:<tag>]` as
+ * the word `guardian`, so `guardian in:title` finds every such issue (and a
+ * few others, which the tag pattern below drops). The old phrase,
+ * `"[guardian:" in:title`, held a `"`, which `runners/spawn.ts` never hands
+ * `cmd.exe` — so through a `gh.cmd` the tool could not run at all (review 11,
+ * finding 15b).
  */
+export const ISSUE_SEARCH = 'guardian in:title';
+
 async function listExistingTags(
   cwd: string,
 ): Promise<{ ok: true; tags: Set<string> } | { ok: false; error: string }> {
@@ -350,7 +349,7 @@ async function listExistingTags(
     args: [
       'issue', 'list',
       '--state', 'all',
-      '--search', '"[guardian:" in:title',
+      '--search', ISSUE_SEARCH,
       '--limit', String(ISSUE_LIST_LIMIT),
       '--json', 'number,title,state',
     ],
@@ -451,9 +450,12 @@ async function createIssue(
   body: string,
   labels: string[],
 ): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
-  const args = ['issue', 'create', '--title', title, '--body', body];
-  for (const l of labels) args.push('--label', l);
-  const r = await runProcess({ command: 'gh', args, cwd, timeoutMs: 30_000 });
+  // The body from a file (`runners/argFile.ts`): it is markdown built from findings.
+  const r = await withTextFile(body, (bodyFile) => {
+    const args = ['issue', 'create', '--title', title, '--body-file', bodyFile];
+    for (const l of labels) args.push('--label', l);
+    return runProcess({ command: 'gh', args, cwd, timeoutMs: 30_000 });
+  });
   if (r.outcome === 'completed') {
     // gh prints the URL of the created issue.
     const url = r.stdout

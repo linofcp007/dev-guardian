@@ -16,6 +16,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  climbsOut,
   MAX_HOOK_CONFIG_BYTES,
   isRemoteOrDeviceTarget,
   readSmallJsonFile,
@@ -371,7 +372,7 @@ describe('readSmallJsonFile — what it opened, not what the path said', () => {
         const r = await readInChild(cfg, 3000, 45_000);
         expect(r.timedOut).toBe(false);
         expect(r.code).toBe(0);
-        expect(r.readMs).toBeLessThan(20_000);
+        expect(r.readMs).toBeLessThan(hangBound(20_000));
         const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
         expect(total).toBe(3000);
         const unexpected = Object.keys(r.counts).filter(
@@ -460,6 +461,19 @@ describe('readSmallJsonFile — a link to the network is refused before anything
     const cfg = join(dir, 'hooks.config.json');
     link(DEVICE, cfg, 'file');
     expect(readSmallJsonFile(cfg, undefined, dir)).toEqual({ status: 'refused', reason: 'remote-link' });
+  });
+
+  // Review of 3.4.0, plausible: `rel.startsWith('..')` took a first component
+  // named `..x` — inside the directory — for a path outside it, and the walk was skipped.
+  it.skipIf(!CAN_SYMLINK)('a first component named `..x` is walked like any other (needs symlink rights; skipped without them)', () => {
+    link(UNC, join(dir, '..x'), 'dir');
+    expect(walkLinksUnder(dir, join(dir, '..x', 'hooks.config.json'))).toMatchObject({ ok: false, reason: 'remote-link' });
+    expect(walkLinksUnder(join(dir, 'sub'), join(dir, 'other.json'))).toEqual({ ok: true });
+  });
+
+  it('climbsOut is `..` and a separator, never a name that starts with two dots', () => {
+    expect(['..', '../x', '..\\x'].map(climbsOut)).toEqual([true, true, true]);
+    expect(['..x', '..x/y', '...', 'x/..', ''].map(climbsOut)).toEqual([false, false, false, false, false]);
   });
 
   it.skipIf(!CAN_SYMLINK)('local links — absolute and relative, file and directory — are still followed and read (needs symlink rights; skipped without them)', () => {

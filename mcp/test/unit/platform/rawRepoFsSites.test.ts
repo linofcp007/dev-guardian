@@ -92,6 +92,20 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'repo-safe',
     reason: "hooks/ (another reviewer's): a stat of an already-opened path's identity; opens nothing",
   },
+  'src/hooks/distCheck.ts': {
+    apis: { readFileSync: 1 },
+    kind: 'own',
+    reason: "the plugin's own mcp/dist/engine.js, hashed against the digest the build wrote; never a project file",
+  },
+  'src/pkgvet/hookDecision.ts': {
+    apis: { statSync: 1, realpathSync: 1 },
+    kind: 'repo-safe',
+    reason:
+      'whether node_modules/.bin/<name> is a FILE (npm runs only a file), after walkLinksUnder refused any link to a ' +
+      'network or device path on the way; and the real path of the hook\'s working directory (where the shell already ' +
+      'is) and of a cd target once lstat found no link on the way the cd names (review 12, finding 4) — never of a ' +
+      'network path; a stat opens nothing',
+  },
   'src/hostsetup/setup.ts': {
     apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2 },
     kind: 'own',
@@ -164,6 +178,11 @@ const ALLOWED: Record<string, Allowed> = {
       "names only, of a rule directory a scan loads (the plugin's own, the project's, or one the user " +
       'registered): Dirent-typed, never descends a link; each rule file is read with readSmallText (bounded, ' +
       'non-blocking, regular files only)',
+  },
+  'src/runners/argFile.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "a pull request's or an issue's body, into its own mkdtemp directory for gh --body-file",
   },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
@@ -250,9 +269,11 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'an SBOM file generate_sbom wrote, at the path its own scan row recorded',
   },
   'src/tools/scanHelpers.ts': {
-    apis: { readdirSync: 1 },
+    apis: { readdirSync: 1, writeFileSync: 1 },
     kind: 'own',
-    reason: 'the .guardian/reports directory ensureReportDir just verified link-free, listed to prune older report directories',
+    reason:
+      'the .guardian/reports directory ensureReportDir just verified link-free, listed to prune older report directories; ' +
+      'the owner marker written into the temp fallback directory mkdtemp just made',
   },
   'src/tools/scanIac.ts': {
     apis: { writeFileSync: 1 },
@@ -268,11 +289,6 @@ const ALLOWED: Record<string, Allowed> = {
     apis: { writeFileSync: 2 },
     kind: 'own',
     reason: 'the audit report into the directory ensureReportDir verified or created',
-  },
-  'src/tools/vetPackages.ts': {
-    apis: { statSync: 1, existsSync: 1 },
-    kind: 'user',
-    reason: 'is-it-a-directory of the project_dir argument itself',
   },
   'src/tools/wpVulnCheck.ts': {
     apis: { readdirSync: 1, readFileSync: 1, writeFileSync: 1, existsSync: 2 },
@@ -308,6 +324,11 @@ const ALLOWED: Record<string, Allowed> = {
     apis: { statSync: 1, accessSync: 1 },
     kind: 'host',
     reason: 'candidates on the PATH entries a bare command name is looked up in — absolute, local entries only, never the current directory',
+  },
+  'src/runners/npmCmdShim.ts': {
+    apis: { statSync: 1 },
+    kind: 'host',
+    reason: 'is-it-a-file of the script an npm cmd-shim found on PATH names, and of node.exe beside it (the shim itself is read through one descriptor)',
   },
   'src/platform/scope.ts': {
     apis: { realpathSync: 1 },

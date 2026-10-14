@@ -12,8 +12,10 @@
  *   2. Open SQLite at `<project_root>/.guardian/guardian.db` when it is this
  *      user's (else the per-user fallback, or an in-memory database when
  *      neither can be used — never an exit), apply migrations.
- *   3. Probe a usable bash. Failure is fatal-for-scripts but the server
- *      still starts so resources and pure-SQL tools can serve data.
+ *   3. Probe a usable bash — started after step 4, awaited before step 6
+ *      attaches the tools, so its process runs beside the work between.
+ *      Failure is fatal-for-scripts but the server still starts so resources
+ *      and pure-SQL tools can serve data.
  *   4. Reap scans whose owning process died (storage/maintenance.ts), and
  *      rewrite suppressions and baselines stored under a 2.0.0 spelling of
  *      a project path to the canonical one. Best-effort: a failure is
@@ -51,6 +53,7 @@ import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
 import { openDatabase, Storage } from './storage/index.js';
 import { SESSION_BUSY_TIMEOUT_MS } from './storage/db.js';
 import { canonicalizeProjectPathsAtStartup, reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
+import { setScanClockLog } from './storage/scanClock.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, listedTools, TOOLS } from './tools/index.js';
 import { SERVER_INSTRUCTIONS } from './tools/instructions.js';
@@ -89,6 +92,8 @@ async function main(): Promise<void> {
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
+  // A wall clock that stepped back past the hold, said where diagnostics go (storage/scanClock.ts).
+  setScanClockLog((line) => logErr(`clock: ${line}`));
 
   // Reap dead processes' scans. Never fatal. (Retention runs after connect.)
   reapOrphanedScans(storage, logErr);
@@ -106,15 +111,10 @@ async function main(): Promise<void> {
   if (userBin.added && userBin.dir !== null) logErr(`PATH: appended ${userBin.dir} (the pinned installers' directory)`);
 
   // Probe a usable shell once; tools read the choice from the cache later.
-  const shell = await probeShell(storage.runtimeMeta);
-  if (shell === null) {
-    logErr(
-      'no usable bash found — script-invoking tools will return no_bash_shell. ' +
-        'Install Git Bash or WSL, then restart.',
-    );
-  } else {
-    logErr(`shell: ${shell.label}`);
-  }
+  // The probe runs a shell (about 70 ms on Windows): started here, it runs
+  // while the synchronous start-up work below is done, and is awaited before
+  // the tools that read it are attached (3.4.0).
+  const shellProbe = probeShell(storage.runtimeMeta);
 
   // Ensure .guardian/ is git-ignored in the target project (baseline.json excepted).
   const guard = ensureGuardianIgnored(projectPath);
@@ -125,6 +125,16 @@ async function main(): Promise<void> {
 
   // Build the MCP server.
   const mcp = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
+
+  const shell = await shellProbe;
+  if (shell === null) {
+    logErr(
+      'no usable bash found — script-invoking tools will return no_bash_shell. ' +
+        'Install Git Bash or WSL, then restart.',
+    );
+  } else {
+    logErr(`shell: ${shell.label}`);
+  }
 
   const progressNotifier: ProgressNotifier = {
     send: (payload: ProgressPayload) => {

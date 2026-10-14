@@ -48,7 +48,6 @@ import type { PluginContext } from '../context.js';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { languageFromPath } from '../surface/extract.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
@@ -60,7 +59,8 @@ import { makePypiPinResolver } from '../validate/pypiPins.js';
 import { validateStatically } from '../validate/staticProvider.js';
 import { buildSummary, type DastCrossReference } from '../validate/summary.js';
 import { IMPLEMENTED_PROVIDERS, type FindingValidation } from '../validate/types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 /** The one `scan_dast` check whose finding is evidence of live, anonymous
  *  reachability — see `dast/analyze.ts`'s `checkAnonymousExposure`. */
@@ -96,7 +96,14 @@ const Providers = z
     "static (the finding's file) and/or dependency (a CVE's package). Default: both.",
   );
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  fingerprint: Fingerprint,
+  finding_fingerprint: FindingFingerprint,
+  providers: Providers,
+};
+
+const tool = defineTool({
   name: 'validate_finding',
   title: 'Qualify findings by reachability',
   // An agent's only discovery surface. It must carry the preconditions and
@@ -113,14 +120,9 @@ const tool: ToolModule = {
     'map_attack_surface. Report only: it never suppresses a finding or changes a severity. The unit is ' +
     'the file; Ruby, Java, C# and PHP never get unreachable; nothing detects a dynamic import, so where ' +
     'one is used unreachable can be wrong and this tool cannot tell you when.',
-  inputSchema: {
-    project_path: ProjectPath,
-    fingerprint: Fingerprint,
-    finding_fingerprint: FindingFingerprint,
-    providers: Providers,
-  },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
@@ -149,17 +151,11 @@ const NO_OPEN_FINDINGS_NOTE =
   'scan_sast) first, then re-run validate_finding.';
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
   // `summary.providers_run` reports what actually ran, in the fixed order of
   // IMPLEMENTED_PROVIDERS — never the argument echoed back.
-  const inp = input as {
-    project_path?: string;
-    fingerprint?: string;
-    finding_fingerprint?: string;
-    providers?: string[];
-  };
   if (
     inp.fingerprint !== undefined &&
     inp.finding_fingerprint !== undefined &&
@@ -175,14 +171,8 @@ async function handler(
   const requested = new Set(inp.providers ?? IMPLEMENTED_PROVIDERS);
   const providersRun = IMPLEMENTED_PROVIDERS.filter((p) => requested.has(p));
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    // The code every tool answers an unusable project_path with
-    // (`projectPathErrorCode`), so hosts and skills handle one failure.
-    return fail(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // PROJECT-SCOPED, deliberately. Everything downstream is keyed to
   // `projectPath`: routes and findings are relativized against it, verdicts

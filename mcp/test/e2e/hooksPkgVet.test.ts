@@ -21,7 +21,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
-import { PERF_STRICT } from '../helpers/timing.js';
+import { hangBound } from '../helpers/timing.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '..', '..', '..');
@@ -86,9 +86,9 @@ vi.setConfig({ testTimeout: timeoutAbove(HOOK_TIMEOUT_MS) });
  * shape, 64 KB of `-c`). So by default the bound is 12 s: under that kill,
  * far under every defect, and above what a machine at 100% CPU adds (a
  * 3 s bound measured 3.0 s there, review 3.0 R7 round 2). The tight number,
- * for a quiet machine, runs with GUARDIAN_PERF_STRICT=1.
+ * for a quiet machine, runs with GUARDIAN_PERF_STRICT=1 — `hangBound` of
+ * test/helpers/timing.ts (this file kept a copy of it, `answersWithin`).
  */
-const answersWithin = (strictMs: number): number => (PERF_STRICT ? strictMs : 12_000);
 
 const LEAKY_ENV =
   /^(?:npm_config_|NPM_CONFIG_|PIP_|UV_|YARN_|BUN_|NUGET_|NuGetPackageSourceCredentials_|COMPOSER|VIRTUAL_ENV$|CONDA_PREFIX$|XDG_CONFIG_DIRS$|GUARDIAN_)/i;
@@ -253,7 +253,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     const r = runHook('npm install express', { 'https://registry.npmjs.org/express': { hang: true }, [OSV]: { hang: true } });
     expect(r.status).toBe(0);
     expect(r.ms - answered.ms, `${String(r.ms)} ms against ${String(answered.ms)} ms answered`).toBeLessThan(5000);
-    expect(r.ms).toBeLessThan(answersWithin(6000));
+    expect(r.ms).toBeLessThan(hangBound(6000));
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/could not vet express.*not verified/s);
   });
@@ -273,7 +273,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
         [OSV]: { osv: {} },
       });
       expect(r.status).toBe(0);
-      expect(r.ms).toBeLessThan(answersWithin(10_000));
+      expect(r.ms).toBeLessThan(hangBound(10_000));
       // Fix round 1 (controller ruling): a registry configuration that could
       // not be read may name a private registry — UNKNOWN, so a warning, never
       // a deny. The reviewer's repro was exactly this: WARN at 166117a, DENY
@@ -294,7 +294,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       [OSV]: { osv: {} },
     });
     expect(r.status).toBe(0);
-    expect(r.ms).toBeLessThan(answersWithin(5000));
+    expect(r.ms).toBeLessThan(hangBound(5000));
     expect(r.requests.filter((u) => u.includes('registry.npmjs.org/express'))).toHaveLength(1);
   }, 30_000);
 
@@ -502,6 +502,22 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
     });
+
+    // Review of 3.3.0: a script handed to a shell was never vetted.
+    it.each([
+      ["bash -c 'npx -y evil-cli-zz'", 'Bash'],
+      ["echo 'npx -y evil-cli-zz' | sh", 'Bash'],
+      ['cmd //c npx -y evil-cli-zz', 'Bash'],
+      ["pwsh -Command 'npx -y evil-cli-zz'", 'PowerShell'],
+    ])('%s — a malicious version in a nested script is denied', (command, tool) => {
+      const r = runHook(
+        command,
+        { 'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'), [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } } },
+        { tool },
+      );
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
+    });
   });
 
   // Review of 3.0.0, I4: 17 packages in a 3000-directory monorepo took 16.5 s
@@ -522,7 +538,7 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     it('17 packages offline answer well inside the deadline', () => {
       monorepo();
       const r = runHook(`npm i ${NAMES.join(' ')}`, {}, { env: { GUARDIAN_OFFLINE: '1' } });
-      expect(r.ms).toBeLessThan(answersWithin(8000));
+      expect(r.ms).toBeLessThan(hangBound(8000));
       expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/not verified/);
     }, 120_000);
 
@@ -531,17 +547,30 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       const routes: Record<string, Route> = { [OSV]: { osv: {} } };
       for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
       const r = runHook(`npm i ${NAMES.join(' ')}`, routes);
-      expect(r.ms).toBeLessThan(answersWithin(8000));
+      expect(r.ms).toBeLessThan(hangBound(8000));
       const said = `${r.output?.hookSpecificOutput?.permissionDecisionReason ?? ''}${r.output?.hookSpecificOutput?.additionalContext ?? ''}`;
       for (const name of NAMES) expect(said).toContain(name);
     }, 120_000);
 
-    it('GUARDIAN_PKG_VET_DEADLINE_MS=0: every package reads "time budget", never silence', () => {
+    // Review of 3.4.0, finding 4: `GUARDIAN_PKG_VET_DEADLINE_MS=1` (or 0) left
+    // no time to look anything up — the deny of a malicious package became a
+    // "not verified" note. The deadline is never below the network budget.
+    it.each(['0', '1'])('GUARDIAN_PKG_VET_DEADLINE_MS=%s still looks every package up', (deadline) => {
       const routes: Record<string, Route> = { [OSV]: { osv: {} } };
       for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
-      const r = runHook(`npm i ${NAMES.join(' ')}`, routes, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '0' } });
-      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
-      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/time budget/);
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: deadline } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(`${r.output?.hookSpecificOutput?.permissionDecisionReason ?? ''}${r.output?.hookSpecificOutput?.additionalContext ?? ''}`).not.toMatch(
+        /time budget/,
+      );
+    });
+
+    it('GUARDIAN_PKG_VET_DEADLINE_MS=1 still denies a malicious version', () => {
+      const r = runHook('npm i evil-cli-zz@1.0.0', {
+        'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+        [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+      }, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '1' } });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
     });
   });
 });

@@ -30,8 +30,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE = join(root, 'scripts', 'unusedExports.baseline.json');
 const ENTRIES = new Set(['src/engine.ts', 'src/cli.ts', 'src/hooksEntry.ts', 'src/server.ts']);
 
-/** Every `.ts` file under `dir`, project-relative with `/`. */
+/**
+ * Every `.ts` file under `dir`, project-relative with `/`.
+ *
+ * @param {string} dir
+ * @returns {string[]}
+ */
 function files(dir) {
+  /** @type {string[]} */
   const out = [];
   for (const e of readdirSync(join(root, dir), { withFileTypes: true })) {
     const rel = `${dir}/${e.name}`;
@@ -43,7 +49,14 @@ function files(dir) {
   return out;
 }
 
-/** `./x.js` from `src/a/b.ts` → `src/a/x.ts` (or `…/index.ts`); null for a package or an unknown file. */
+/**
+ * `./x.js` from `src/a/b.ts` → `src/a/x.ts` (or `…/index.ts`); null for a package or an unknown file.
+ *
+ * @param {string} from
+ * @param {string} spec
+ * @param {ReadonlySet<string>} known
+ * @returns {string | null}
+ */
 function resolveSpecifier(from, spec, known) {
   if (!spec.startsWith('.')) return null;
   const base = relative(root, resolve(root, dirname(from), spec)).split('\\').join('/');
@@ -55,19 +68,27 @@ function resolveSpecifier(from, spec, known) {
 
 const all = [...files('src'), ...files('test')];
 const known = new Set(all);
-/** module → its exported names. */
+/** module → its exported names. @type {Map<string, Set<string>>} */
 const exported = new Map();
-/** module → the names other modules import from it; `*` for all of them. */
+/** module → the names other modules import from it; `*` for all of them. @type {Map<string, Set<string>>} */
 const imported = new Map();
+/**
+ * @param {string} mod
+ * @param {string} name
+ */
 const use = (mod, name) => {
-  if (!imported.has(mod)) imported.set(mod, new Set());
-  imported.get(mod).add(name);
+  const names = imported.get(mod) ?? new Set();
+  imported.set(mod, names);
+  names.add(name);
 };
 
 for (const file of all) {
   const sf = ts.createSourceFile(file, readFileSync(join(root, file), 'utf8'), ts.ScriptTarget.Latest, true);
+  /** @type {Set<string>} */
   const names = new Set();
-  const hasExport = (node) => ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export;
+  /** @param {import('typescript').Node} node */
+  const hasExport = (node) => ts.getCombinedModifierFlags(/** @type {import('typescript').Declaration} */ (node)) & ts.ModifierFlags.Export;
+  /** @param {import('typescript').Node} node */
   const visit = (node) => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       const spec = node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : null;
@@ -102,8 +123,9 @@ for (const file of all) {
         for (const d of node.declarationList.declarations) {
           if (ts.isIdentifier(d.name)) names.add(d.name.text);
         }
-      } else if (node.name && ts.isIdentifier(node.name)) {
-        names.add(node.name.text);
+      } else {
+        const { name } = /** @type {import('typescript').NamedDeclaration} */ (node);
+        if (name && ts.isIdentifier(name)) names.add(name.text);
       }
     }
     ts.forEachChild(node, visit);

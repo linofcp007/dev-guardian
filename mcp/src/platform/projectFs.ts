@@ -554,6 +554,15 @@ export type ProjectWriteResult =
 interface ProjectWriteOptions {
   /** `create`: only when nothing is at that name. `replace`: create, or replace a regular file. */
   mode: 'create' | 'replace';
+  /**
+   * Refuse a directory on the way that is a link (a junction included) even
+   * when it stays inside the project — {@link makeProjectDir}'s rule, for
+   * dev-guardian's own `.guardian/` files. Without it, a link that resolves
+   * inside the project is followed: `.guardian` → `.` made the CLI's
+   * `.guardian/.gitignore` (`*`) land at the project root and ignore every
+   * new file (review 10, finding 10).
+   */
+  refuseLinkedDirs?: boolean;
 }
 
 /** A readable sentence for a refusal, for a tool's `reason` field. */
@@ -786,7 +795,13 @@ export function writeProjectFile(
     return { ok: false, reason: 'outside-project' };
   }
   const bytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
-  const badDir = ensureDirsInside(root, dirname(target));
+  const parent = dirname(target);
+  const badDir =
+    options.refuseLinkedDirs === true
+      ? caseFold(parent) === caseFold(resolve(root)) || makeProjectDir(root, relative(resolve(root), parent)) !== null
+        ? null
+        : parent
+      : ensureDirsInside(root, parent);
   if (badDir !== null) return { ok: false, reason: 'escaping-directory', detail: relative(resolve(root), badDir) };
 
   let existing: Stats | null = null;

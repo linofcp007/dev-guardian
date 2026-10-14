@@ -6,7 +6,7 @@
  * leak into a result.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,6 +16,7 @@ import { Storage } from '../../src/storage/index.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 beforeAll(async () => {
   await import('../../src/tools/vetPackages.js');
@@ -191,6 +192,37 @@ describe('vet_packages tool', () => {
     const r = await run({ ecosystem: 'npm', packages: ['left-pad'], project_path: join(project, 'nope') });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('target_not_found');
+  });
+
+  // Review 11, finding 8: the one project_path tool that skipped
+  // `toolProjectPath` — a UNC path made Windows authenticate to the host it
+  // names, then read `.npmrc` / `nuget.config` from the share. 192.0.2.1 is
+  // RFC 5737 TEST-NET-1: nothing answers, so a file call there could only wait.
+  it.runIf(process.platform === 'win32')('refuses every network spelling of project_path before touching it', async () => {
+    for (const unc of ['\\\\192.0.2.1\\share\\x', '//192.0.2.1/share/x', '\\\\?\\UNC\\192.0.2.1\\share\\x']) {
+      const t0 = Date.now();
+      const r = await run({ ecosystem: 'npm', packages: ['left-pad'], project_path: unc });
+      expect(Date.now() - t0).toBeLessThan(hangBound(1000));
+      expect(r.ok, unc).toBe(false);
+      if (!r.ok) {
+        expect(r.error.code).toBe('unsupported_target');
+        expect(r.error.message).toMatch(/network/);
+      }
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('refuses a local spelling that a link leads to a share', async () => {
+    const link = join(project, 'share');
+    try {
+      symlinkSync('\\\\192.0.2.1\\share\\x', link, 'dir');
+    } catch {
+      return; // no symlink privilege on this machine: nothing to plant
+    }
+    const t0 = Date.now();
+    const r = await run({ ecosystem: 'npm', packages: ['left-pad'], project_path: join(link, 'sub') });
+    expect(Date.now() - t0).toBeLessThan(hangBound(1000));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.message).toMatch(/network[\s\S]*through the link/);
   });
 
   it('a private nuget.config source under project_path makes a missing id unknown', async () => {

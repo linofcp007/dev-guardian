@@ -1,9 +1,10 @@
 /**
- * What the three LLM-scan tools do, apart from their MCP shape: make a plan,
+ * What the three LLM-scan steps do, apart from their MCP shape: make a plan,
  * report on it, lease its next task, and take an answer for a leased task.
- * The tools (`tools/llmScan{Start,Task,Submit}.ts`) only parse their input and
- * call these, so sampling (a later task) can drive the same lease and the
- * same submission without a second copy of either.
+ * The tools (`tools/llmScan{Start,Task,Submit}.ts`, listed as the one fold
+ * `llm_scan { step }` — `tools/folds.ts`) only parse their input and call
+ * these, so sampling (a later task) can drive the same lease and the same
+ * submission without a second copy of either.
  *
  * Every state change of a task goes through the guarded primitives of
  * `storage/llmScanRepo.ts` (D-2): there is no unconditional update here.
@@ -106,7 +107,7 @@ export function loadPlan(storage: Storage, planId: string, opts: { allowAbandone
       : fail('not_found', `No LLM scan plan with id ${planId}.`);
   }
   if (plan.status === 'abandoned' && opts.allowAbandoned !== true) {
-    return fail('plan_abandoned', `Plan ${planId} was abandoned (no activity for a long time). Start a new plan with llm_scan_start.`, { plan_id: planId });
+    return fail('plan_abandoned', `Plan ${planId} was abandoned (no activity for a long time). Start a new plan with llm_scan { step: "start" }.`, { plan_id: planId });
   }
   return { ok: true, plan };
 }
@@ -179,12 +180,17 @@ interface StartInput {
   confirm: boolean;
 }
 
+/**
+ * The loop, as the listed tool `llm_scan` runs it: a model in Claude Code can
+ * call only listed names, so every hint names the fold's step, never the
+ * hidden aliases `llm_scan_start` / `_task` / `_submit`.
+ */
 const RECIPE = {
   loop: [
-    'llm_scan_task { plan_id } -> one task: task_id, lease_token, brief, response_schema. Repeat for the next one (tasks may be leased in parallel).',
+    'llm_scan { step: "task", plan_id } -> one task: task_id, lease_token, brief, response_schema. Repeat for the next one (tasks may be leased in parallel).',
     'Run the brief in a FRESH context — a subagent with its own context, one per task — and take its JSON answer. The brief says what the subagent may read.',
-    'llm_scan_submit { plan_id, task_id, lease_token, independence, payload } with that answer. An invalid answer is refused with the reason: fix it and submit again (up to two more tries).',
-    'Until llm_scan_task answers { done: true, report }. llm_scan_start { plan_id } gives the report at any time.',
+    'llm_scan { step: "submit", plan_id, task_id, lease_token, independence, payload } with that answer. An invalid answer is refused with the reason: fix it and submit again (up to two more tries).',
+    'Until step task answers { done: true, report }. llm_scan { step: "start", plan_id } gives the report at any time.',
   ],
   independence: "'subagent' when a fresh context ran the brief; 'same_context' when you ran it yourself (shown, and never used to demote or confirm).",
   lease: `A leased task is yours for ${String(LLM_SCAN_DEFAULTS.lease_minutes)} minutes; after that it goes to whoever asks next.`,
@@ -218,7 +224,7 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
   if (active.length >= LLM_SCAN_DEFAULTS.max_open_plans) {
     return fail(
       'too_many_open_plans',
-      `This project already has ${String(active.length)} open LLM scan plans (the limit is ${String(LLM_SCAN_DEFAULTS.max_open_plans)}). Finish one, or read its report with llm_scan_start { plan_id }: ${active.join(', ')}.`,
+      `This project already has ${String(active.length)} open LLM scan plans (the limit is ${String(LLM_SCAN_DEFAULTS.max_open_plans)}). Finish one, or read its report with llm_scan { step: "start", plan_id }: ${active.join(', ')}.`,
       { open_plans: active },
     );
   }
@@ -351,14 +357,14 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
     beyond_max_tasks: tasks.length - deliverable.length,
     needs_confirm: needsConfirm(stored),
     ...tokenLimitFields(stored, tasks),
-    ...(needsConfirm(stored) ? { confirm_with: 'llm_scan_start { plan_id, confirm: true }' } : {}),
+    ...(needsConfirm(stored) ? { confirm_with: 'llm_scan { step: "start", plan_id, confirm: true }' } : {}),
     notes: plan.notes,
     recipe: RECIPE,
     prompt_version: CURRENT_PROMPT_VERSION,
   };
 }
 
-/** The plan's status and report (`llm_scan_start { plan_id }`), confirming it first when asked. */
+/** The plan's status and report (`llm_scan { step: "start", plan_id }`), confirming it first when asked. */
 export function planStatus(storage: Storage, planId: string, project: string | null, confirm: boolean): Out {
   const loaded = loadPlan(storage, planId);
   if (!loaded.ok) return loaded;
@@ -435,7 +441,7 @@ export function leaseNext(storage: Storage, planId: string, only: { kinds?: read
   if (needsConfirm(plan)) {
     return fail(
       'needs_confirm',
-      `The plan's estimate (${String(plan.estimate.total_tokens)} tokens) is above the limit (${String(plan.limits.max_estimated_tokens)}). Confirm with llm_scan_start { plan_id: "${plan.id}", confirm: true } before any task is handed out. ${tokenLimitNote(deliverableWithinTokenLimit(plan, repo.listTasks(plan.id)))}`,
+      `The plan's estimate (${String(plan.estimate.total_tokens)} tokens) is above the limit (${String(plan.limits.max_estimated_tokens)}). Confirm with llm_scan { step: "start", plan_id: "${plan.id}", confirm: true } before any task is handed out. ${tokenLimitNote(deliverableWithinTokenLimit(plan, repo.listTasks(plan.id)))}`,
       { plan_id: plan.id, confirm: true, ...tokenLimitFields(plan, repo.listTasks(plan.id)) },
     );
   }

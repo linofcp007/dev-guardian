@@ -15,11 +15,11 @@
 
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { describeWriteRefusal, listProjectDir, presentInProject, writeProjectFile } from '../platform/projectFs.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import type { ToolResult } from '../types.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 interface Proposal {
   target: string;
@@ -28,36 +28,33 @@ interface Proposal {
   contents: string;
 }
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  apply: z
+    .boolean()
+    .optional()
+    .describe('When true, write the proposed files to disk. Default: false (dry-run).'),
+};
+
+const tool = defineTool({
   name: 'observability_setup',
   title: 'Configure logging + metrics scaffolding',
   description:
     'Propose stack-appropriate observability files (Pino logger / structlog / Monolog, plus a ' +
     'Prometheus-compatible metrics module). When apply=true (default false), writes the files; ' +
     'otherwise returns proposals only.',
-  inputSchema: {
-    project_path: ProjectPath,
-    apply: z
-      .boolean()
-      .optional()
-      .describe('When true, write the proposed files to disk. Default: false (dry-run).'),
-  },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; apply?: boolean };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const apply = inp.apply ?? false;
   const stack = inferStack(projectPath, ctx);
@@ -417,10 +414,3 @@ public static class Metrics
     }
 }
 `;
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
-}

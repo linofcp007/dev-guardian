@@ -9,7 +9,7 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 ## Qué incluye
 
 - **13 skills** y **10 comandos** slash para Claude Code / Cowork (abajo).
-- Un **servidor MCP** con **52 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés). Los 13 nombres de herramientas que 3.3.0 agrupó en `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` y `prioritize_findings` siguen respondiendo a las llamadas; ya no se listan.
+- Un **servidor MCP** con **50 herramientas** y **18 recursos**, en TypeScript sobre `node:sqlite`, ya compilado en el repositorio — referencia completa en [docs/tools.md](docs/tools.md) (en inglés). Los 13 nombres de herramientas que 3.3.0 agrupó en `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` y `prioritize_findings`, y los tres pasos del escaneo con LLM que 3.4.0 agrupó en `llm_scan`, siguen respondiendo a las llamadas; ya no se listan.
 - **154 reglas Semgrep en 12 packs** escritas para este proyecto: clases de bugs para siete lenguajes, un pack RGPD, un pack de inventario de rutas para nueve lenguajes, un pack Node/Express (SQL montado por interpolación, ruta de la petición en una API de ficheros, URL de la petición solicitada) y un pack para aplicaciones con LLM (salida del modelo en eval/shell/SQL, código remoto al cargar un modelo, superficie de inyección de prompt, llamadas sin límite de tokens) que `scan_sast` ejecuta — ver [docs/rule-packs.md](docs/rule-packs.md).
 - **Hooks de protección** que bloquean comandos de shell catastróficos, revisan paquetes en el momento de instalarlos y avisan cuando se escribe un secreto en un archivo — ver [docs/hooks.md](docs/hooks.md).
 - Una **CLI** (`cli/dev-guardian.mjs`) para gates de CI, configuración de hosts, un resumen en terminal y un panel HTML.
@@ -18,6 +18,7 @@ Trilingüe: las skills y los comandos responden en inglés, portugués o españo
 
 - **Node.js ≥ 22.13.** La base de datos es el `node:sqlite` integrado en Node, sin ningún flag. Con un Node más antiguo el servidor termina con `dev-guardian requires Node.js >= 22.13 (node:sqlite)`.
 - **git.**
+- **Claude Code 2.1.139 o posterior, para los hooks de protección.** `hooks/hooks.json` los ejecuta en forma exec (`"command": "node"`, el dispatcher en `"args"`). Un Claude Code más antiguo no pasa los `"args"`, así que ningún hook arranca — y un hook que nunca arranca no puede avisarte. Las herramientas MCP y la CLI no dependen de ello.
 - **Los escáneres que quieras usar**, instalados aparte. `check_toolchain` indica cuáles están presentes (y marca el Trivy comprometido 0.69.4–0.69.6); `install_toolchain` o `/guardian-init` instalan el resto. Un escáner que falta se informa como hueco de cobertura, nunca como resultado limpio.
 - **Opcional: Docker.** Sin un `semgrep` nativo, `scan_sast` y `map_attack_surface` recurren a la imagen `semgrep/semgrep`.
 - **Windows:** todos los escaneos se ejecutan de forma nativa, sin shell. Solo hace falta un bash para el informe de estado inicial de `init_project` y para el recurso a WSL de `install_toolchain` cuando no hay winget, scoop ni choco. dev-guardian busca primero Git Bash, luego WSL y luego cualquier `bash` en el `PATH`.
@@ -84,7 +85,7 @@ La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo,
 | Bugs y calidad | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
 | Dependencias y cadena de suministro | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Superficie de ataque | `map_attack_surface`, `scan_dast`, `validate_finding` |
-| Escaneo asistido por LLM | `llm_scan_start`, `llm_scan_task`, `llm_scan_submit` — el modelo de tu host verifica los findings y busca lo que los escáneres no ven; el servidor no llama a ningún modelo ([docs/llm-scan.md](docs/llm-scan.md), en inglés) |
+| Escaneo asistido por LLM | `llm_scan` (`step`: start, task, submit) — el modelo de tu host verifica los findings y busca lo que los escáneres no ven; el servidor no llama a ningún modelo ([docs/llm-scan.md](docs/llm-scan.md), en inglés) |
 | Historial y triaje | `diff_scans`, `set_baseline`, `suppress_finding`, `risk_score`, `prioritize_findings`, `health_status` |
 | Informes | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
 | Configuración y operación | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |
@@ -130,12 +131,12 @@ Detalles, configuración y formas de desactivarlos: [docs/hooks.md](docs/hooks.m
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline y Claude Desktop reciben el servidor MCP y un archivo de reglas (sin skills, comandos ni hooks). Clona una vez y después ejecuta la CLI **por su ruta absoluta** desde tu proyecto:
 
 ```text
-git clone --depth 1 --branch v3.3.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.4.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-El clon de arriba fija la 3.3.0; para seguir una versión posterior, clona su etiqueta `vX.Y.Z`. `--update-mcp`, `--global` y `ci-init` necesitan la 3.0.0 o posterior — 2.0.0 además escribe las configuraciones globales de Windsurf y Claude Desktop con `mcp-config all --write`. La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
+El clon de arriba fija la 3.4.0; para seguir una versión posterior, clona su etiqueta `vX.Y.Z`. `--update-mcp`, `--global` y `ci-init` necesitan la 3.0.0 o posterior — 2.0.0 además escribe las configuraciones globales de Windsurf y Claude Desktop con `mcp-config all --write`. La CLI rellena las rutas absolutas, fusiona en lugar de sobrescribir y solo gestiona un bloque delimitado dentro de archivos como `AGENTS.md`; `--update-mcp` actualiza una entrada desfasada. Rutas por host y fragmentos manuales: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 

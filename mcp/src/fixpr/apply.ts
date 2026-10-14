@@ -266,8 +266,18 @@ const COMPOSER_INSTALLING = new Set(['require', 'install', 'update', 'upgrade'])
  * rewritten to `bundle lock --update <gem>`, and any other subcommand is
  * refused — they install gems into the host's GEM_HOME and compile native
  * extensions. Returns why the command was refused, or null.
+ *
+ * A token with a `"` or a `%` is refused as well: the step's package
+ * identifier and version come from the scanned project's manifests, no real
+ * one holds either, and on Windows npm, composer and bundle are batch files
+ * that would hand them to `cmd.exe` (review 10, finding 3; `runners/spawn.ts`
+ * refuses them there too).
  */
 function harden(argv: { command: string; args: string[] }, lockfileOnly: boolean): string | null {
+  const odd = argv.args.find((token) => /["%]/.test(token));
+  if (odd !== undefined) {
+    return `refused: ${JSON.stringify(odd.slice(0, 120))} holds a " or a %, which no package identifier or version holds`;
+  }
   const sub = argv.args[0] ?? '';
   if (argv.command === 'bundle') {
     if (sub === 'update') argv.args.splice(0, 1, 'lock', '--update');

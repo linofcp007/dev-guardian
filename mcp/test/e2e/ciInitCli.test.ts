@@ -123,17 +123,18 @@ function runCliNoPin(args: string[]) {
 }
 
 describe('ci-init: usage errors', () => {
-  it('exits 1 on a missing target', () => {
+  // A usage error like any other: 3 (review of 3.3.0 — it was 1, the exit of an existing file refused).
+  it('exits 3 on a missing target', () => {
     const project = makeProject();
     const r = runCli(['ci-init', '--project', project]);
-    expect(r.status).toBe(1);
+    expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/Missing or unknown ci-init target/);
   });
 
-  it('exits 1 on an unknown target', () => {
+  it('exits 3 on an unknown target', () => {
     const project = makeProject();
     const r = runCli(['ci-init', 'jenkins', '--project', project]);
-    expect(r.status).toBe(1);
+    expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/unknown ci-init target: jenkins/);
   });
 

@@ -31,7 +31,11 @@
  *     accepted when the project lists the file under
  *     `semgrep.accept_timeouts` in its committed `.guardian/scan.yml`
  *     (`acceptedTimeouts`; read from the `--rules-ref` ref when given, so a
- *     pull request cannot accept its own);
+ *     pull request cannot accept its own) — and, under `--baseline-ref` or
+ *     `--rules-ref`, only while the file is as it was at the ref
+ *     (`timeoutAcceptanceRef`): a pull request appended a command injection
+ *     to an accepted file, the rule that would have caught it timed out, and
+ *     the gate passed (review 11, finding 1);
  *   - a taint `Fixpoint timeout` (the dataflow analysis of some functions
  *     gave up; Semgrep has no setting for it) never gates: it is a NOTE,
  *     reported, not a coverage gap (review 8, finding 3 — a medium-sized
@@ -58,7 +62,9 @@
  * order — its `kind` ({@link GapKind}), the line itself as `detail`, a
  * `remedy` (one English sentence, runnable where it names a command) and
  * `gating` — followed by one entry per accepted gap and per note, with
- * `gating: false` (those are not in `coverageGaps`).
+ * `gating: false` (those are not in `coverageGaps`). `acceptedGapDetails`
+ * holds one entry per `acceptedGaps` line — the scanner, the kind, the file
+ * and why — and every accepted line names one file (3.4.0).
  */
 
 import { SEVERITY_ORDER, type Finding, type RepoSuppression, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
@@ -69,18 +75,21 @@ import { newFindings } from './baseline.js';
 import { BASELINE_RELATIVE_PATH } from './baseline.js';
 import {
   CI_EXIT,
+  type AcceptedGapDetail,
   type BaselineFile,
   type BaselineSource,
   type CiExitCode,
   type CoverageGapDetail,
   type ExclusionReset,
+  type GapCause,
   type GapKind,
   type PartialParseRef,
   type RulesSource,
   type ScanStepResult,
+  type TimeoutAcceptanceRef,
 } from './types.js';
 
-export type { CoverageGapDetail, GapKind } from './types.js';
+export type { AcceptedGapDetail, CoverageGapDetail, GapCause, GapKind } from './types.js';
 
 export interface GateInput {
   findings: readonly Finding[];
@@ -93,8 +102,10 @@ export interface GateInput {
    * corrupt line). Zero when the baseline is absent or parsed with nothing
    * dropped.
    *
-   * Purely informational: folded into `coverageGaps` for visibility, never
-   * into `coverage` or `exitCode`. A corrupt baseline LINE is not a scanner
+   * Purely informational: a NOTE (`coverageNotes`, a `coverage_gap_details`
+   * entry with `gating: false`), never in `coverageGaps` — "one line per gap
+   * that gates" (it was there until 3.4, review 10) — nor in `coverage` or
+   * `exitCode`. A corrupt baseline LINE is not a scanner
    * that failed to run, so it does not get to invent a second, independent
    * reason to fail or flag the build — and it does not need to, because any
    * finding a dropped entry actually un-suppresses is still caught, on its
@@ -119,6 +130,12 @@ export interface GateInput {
    * `acceptedPartialParses`.
    */
   acceptedTimeouts?: readonly string[];
+  /**
+   * Under `--baseline-ref` / `--rules-ref`: which `acceptedTimeouts` files
+   * changed since the ref ({@link TimeoutAcceptanceRef}). A timeout on one is
+   * not accepted. Omitted: no ref, every listed file is accepted.
+   */
+  timeoutAcceptanceRef?: TimeoutAcceptanceRef;
   /**
    * Where `baseline` and the scan's rules came from (`--baseline-ref`,
    * `--rules-ref`; `ci/refConfig.ts`). Visibility only, like
@@ -157,8 +174,9 @@ export interface GateVerdict {
    */
   coverageGapDetails: CoverageGapDetail[];
   /**
-   * Gaps reported but never gating — today the taint fixpoint timeouts. Not
-   * in `coverageGaps`, not in the exit code; `coverage` still reads them.
+   * Gaps reported but never gating — the taint fixpoint timeouts, and the
+   * baseline entries that could not be read. Not in `coverageGaps`, not in
+   * the exit code; `coverage` still reads the taint ones.
    */
   coverageNotes: string[];
   /**
@@ -182,8 +200,18 @@ export interface GateVerdict {
    * code — but still in `coverage`, which stays `partial`.
    */
   acceptedGaps: string[];
+  /** One per `acceptedGaps` line, same order: the scanner, the kind, the file and why ({@link AcceptedGapDetail}). */
+  acceptedGapDetails: AcceptedGapDetail[];
   /** `--accept-partial-parse` paths no step reported as partly parsed (normalised). */
   unusedPartialParseAcceptances: string[];
+  /**
+   * `semgrep.accept_timeouts` entries no step reported a per-file `Timeout`
+   * on (normalised): an entry that outlived its file's timeout, or one that
+   * never named a file — said on every run, as an unused
+   * `--accept-partial-parse` is, so a stale acceptance does not sit in the
+   * committed file unnoticed (review 10).
+   */
+  unusedTimeoutAcceptances: string[];
   /**
    * Findings the scanned repository's own configuration suppressed — its
    * `.trivyignore` (`ToolRun.suppressed_by_repo_config`), per step and
@@ -305,10 +333,25 @@ interface MissingJudgement {
   note: string;
   /** The kind its files make it, when they decide it. */
   kind?: GapKind;
-  /** Lines for `acceptedGaps`, with their kind. */
-  accepted: Array<{ line: string; kind: GapKind }>;
+  /** Lines for `acceptedGaps`, one per file, with the detail `acceptedGapDetails` holds. */
+  accepted: Array<{ line: string; detail: AcceptedGapDetail }>;
   /** Lines for `coverageNotes`. */
   notes: string[];
+  /** Why it gates, when a reader must tell it apart from its kind's usual cause (`CoverageGapDetail.cause`). */
+  cause?: GapCause;
+}
+
+/**
+ * Whether a per-file `Timeout` on `file` is accepted: listed in
+ * `semgrep.accept_timeouts`, and the same content as when the acceptance was
+ * reviewed — at the `--baseline-ref` / `--rules-ref` ref, or without one at
+ * the last commit of `.guardian/scan.yml` (review 11 finding 1, review 12
+ * finding 10).
+ */
+function timeoutAccepted(file: string, accept: Acceptances): boolean {
+  if (!accept.timeouts.has(file)) return false;
+  const at = accept.timeoutRef;
+  return at === undefined || (at.error === undefined && !at.changed.has(file));
 }
 
 function judgeMissing(
@@ -316,29 +359,30 @@ function judgeMissing(
   name: string,
   refs: readonly PartialParseRef[],
   toolsRun: readonly ToolRun[],
-  acceptParse: ReadonlySet<string>,
-  acceptTimeouts: ReadonlySet<string>,
+  accept: Acceptances,
 ): MissingJudgement {
   const out: MissingJudgement = { gating: true, note: '', accepted: [], notes: [] };
   if (refs.length === 0) return out;
 
   const taint = refs.filter((r) => r.type === FIXPOINT_TIMEOUT_TYPE);
   const files = refs.filter((r) => r.type !== FIXPOINT_TIMEOUT_TYPE);
-  const parseOk = files.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type) && acceptParse.has(r.file));
-  const timeoutOk = files.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && acceptTimeouts.has(r.file));
+  const parseOk = files.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type) && accept.parse.has(r.file));
+  const timeoutOk = files.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && timeoutAccepted(r.file, accept));
   const gatingRefs = files.filter((r) => !parseOk.includes(r) && !timeoutOk.includes(r));
 
   if (taint.length > 0) out.notes.push(`${step}: ${name} ${describeTaint(taint)}`);
-  if (parseOk.length > 0) {
+  // One line per file, so `acceptedGapDetails` is one entry per line.
+  for (const file of uniqueFiles(parseOk)) {
+    const types = [...new Set(parseOk.filter((r) => r.file === file).map((r) => r.type))];
     out.accepted.push({
-      line: `${step}: ${name} only partly parsed ${uniqueFiles(parseOk).join(', ')} — accepted (--accept-partial-parse)`,
-      kind: 'partial_parse',
+      line: `${step}: ${name} only partly parsed ${file} — accepted (--accept-partial-parse)`,
+      detail: { tool: name, kind: 'partial_parse', file, reason: `${types.join(', ')} — accepted by --accept-partial-parse` },
     });
   }
-  if (timeoutOk.length > 0) {
+  for (const file of uniqueFiles(timeoutOk)) {
     out.accepted.push({
-      line: `${step}: ${name} timed out on ${uniqueFiles(timeoutOk).join(', ')} — accepted (${ACCEPT_TIMEOUTS_SOURCE})`,
-      kind: 'file_timeout',
+      line: `${step}: ${name} timed out on ${file} — accepted (${ACCEPT_TIMEOUTS_SOURCE})`,
+      detail: { tool: name, kind: 'file_timeout', file, reason: `${ACCEPTABLE_TIMEOUT_TYPE} — accepted by ${ACCEPT_TIMEOUTS_SOURCE}` },
     });
   }
 
@@ -356,7 +400,12 @@ function judgeMissing(
   out.accepted = [];
   if (gatingRefs.length > 0) {
     out.kind = kindOfRefs(gatingRefs);
-    out.note = notAcceptedNote(gatingRefs);
+    out.note = notAcceptedNote(gatingRefs, accept);
+    // Every file listed, and refused for having changed: its own remedy —
+    // "list it under accept_timeouts" says nothing to someone who did.
+    if (accept.timeoutRef !== undefined && gatingRefs.every((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && accept.timeouts.has(r.file))) {
+      out.cause = 'accepted_file_changed';
+    }
   } else if (blocker !== undefined) {
     out.note = ` — its partial parse is accepted, but ${name} also ${blocker.status} in this step`;
   }
@@ -380,14 +429,27 @@ function kindOfRefs(refs: readonly PartialParseRef[]): GapKind {
  * ` — not accepted: a.php, Timeout on b.js (…what accepts each…)`: a parse
  * gap by its file, any other by its type, and what would accept them.
  */
-function notAcceptedNote(refs: readonly PartialParseRef[]): string {
+function notAcceptedNote(refs: readonly PartialParseRef[], accept: Acceptances): string {
   const parse = refs.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type));
   if (parse.length > 0) {
     return ` — not accepted: ${uniqueFiles(parse).join(', ')} (--accept-partial-parse <path> accepts one file, matched exactly)`;
   }
+  // Listed in accept_timeouts, refused for what the ref says (review 11, finding 1).
+  const at = accept.timeoutRef;
+  const listed = refs.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && accept.timeouts.has(r.file));
+  if (at !== undefined && listed.length === refs.length) {
+    const files = uniqueFiles(listed).join(', ');
+    return at.error !== undefined
+      ? ` — not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but whether it changed since ${at.ref} could not be told (${at.error}), and an acceptance covers a file only as it was when it was reviewed`
+      : ` — not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but changed since ${at.ref}: an acceptance covers a file only as it was when it was reviewed — review the change as if no SAST ran on it, or raise semgrep.timeout`;
+  }
   const named = refs.map((r) => `${r.type} on ${r.file}`);
   const hints = [`--accept-partial-parse accepts parse errors only: ${ACCEPTABLE_PARSE_TYPES.join(', ')}`];
   if (refs.some((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE)) hints.push(`a reviewed per-file Timeout is accepted in ${ACCEPT_TIMEOUTS_SOURCE}`);
+  if (listed.length > 0 && at !== undefined) {
+    const why = at.error !== undefined ? `whether it changed since ${at.ref} could not be told` : `it changed since ${at.ref}`;
+    hints.push(`${uniqueFiles(listed).join(', ')} is listed there but not accepted: ${why}`);
+  }
   if (refs.some((r) => r.type === PATH_TOO_LONG_TYPE)) hints.push('a file at a path too long for Windows was never opened and is never accepted');
   return ` — not accepted: ${named.join(', ')} (${hints.join('; ')})`;
 }
@@ -432,8 +494,17 @@ const INSTALL_HINT: Readonly<Record<string, string>> = {
  * where it names a command. The `other` and `skipped` ones are chosen by what
  * the line says, since those kinds hold several causes.
  */
-export function remedyFor(kind: GapKind, tool: string, detail: string): string {
+export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: GapCause): string {
   const scanner = tool.split(':')[0] ?? tool;
+  if (cause === 'accepted_file_changed') {
+    // The file IS listed (review 12, finding 10): "list it" would say nothing.
+    return (
+      'The file is listed in .guardian/scan.yml semgrep.accept_timeouts, but it changed since that acceptance was reviewed ' +
+      '(the --baseline-ref / --rules-ref ref, or without one the last commit of .guardian/scan.yml): review the change as if no ' +
+      'SAST ran on it, then raise semgrep.timeout so the file is analysed — or, after review, commit .guardian/scan.yml again ' +
+      '(on the base branch, under --rules-ref) to accept the file as it is now.'
+    );
+  }
   switch (kind) {
     case 'missing_tool': {
       const hint = INSTALL_HINT[scanner];
@@ -452,6 +523,13 @@ export function remedyFor(kind: GapKind, tool: string, detail: string): string {
     case 'path_too_long':
       return 'Enable Windows long paths (LongPathsEnabled=1 under HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem, then restart) or move the project to a shorter path.';
     case 'scanner_failed':
+      // Before the rule test: the line says "registry rules" (review 11, finding 10).
+      if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {
+        return 'Unset SEMGREP_SEND_METRICS, or set it to on, off or auto (Semgrep refuses any other value, in any case), then rerun the scan.';
+      }
+      if (/SEMGREP_SEND_METRICS=/.test(detail)) {
+        return 'Unset SEMGREP_SEND_METRICS for the scan (Semgrep cannot build --config=auto with metrics off), or scan with --local-only.';
+      }
       return /did not load|rule/i.test(detail)
         ? 'Fix or remove the rule the detail names, then rerun the scan.'
         : 'Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.';
@@ -462,6 +540,9 @@ export function remedyFor(kind: GapKind, tool: string, detail: string): string {
     default:
       if (/shallow|history truncated/i.test(detail)) return 'Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.';
       if (/^baseline: /.test(detail)) return 'Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.';
+      if (/\.guardian\/'s generated output/.test(detail)) {
+        return "Stop tracking the named files (`git rm --cached <file>`) and move any code they hold out of .guardian/ — dev-guardian's reports, database and dashboard are never committed, and no scan reads them.";
+      }
       if (/target limit|size limit/i.test(detail)) return "Split the files over Semgrep's 1 MB target limit, or list them in .guardianignore after review.";
       if (/submodule/i.test(detail)) return 'Scan each submodule as a project of its own, or list it in .guardianignore after review.';
       if (/did not load/i.test(detail)) return 'Fix or remove the rule the detail names, then rerun the scan.';
@@ -469,98 +550,156 @@ export function remedyFor(kind: GapKind, tool: string, detail: string): string {
   }
 }
 
-function detailOf(tool: string, kind: GapKind, detail: string, gating: boolean): CoverageGapDetail {
-  return { tool, kind, detail, remedy: remedyFor(kind, tool, detail), gating };
+function detailOf(tool: string, kind: GapKind, detail: string, gating: boolean, cause?: GapCause): CoverageGapDetail {
+  return { tool, kind, detail, remedy: remedyFor(kind, tool, detail, cause), gating, ...(cause !== undefined ? { cause } : {}) };
+}
+
+/**
+ * What the steps say about coverage, tallied once ({@link tallySteps}).
+ *
+ * Coverage comes from a single call to computeCoverage over the union of
+ * every step's tool bookkeeping — never a second, hand-rolled notion of
+ * "complete". A step that refused to run (`ran: false`) contributes its own
+ * `tool` name into the "missing" side of that union: it is a gap in exactly
+ * the sense computeCoverage already understands (something expected did not
+ * happen), so `coverage` itself comes out 'partial' or 'none' rather than
+ * leaving `coverage: 'full'` sitting next to an INCOMPLETE_SCAN exit code.
+ */
+interface StepTally {
+  allToolsRun: ToolRun[];
+  allMissingTools: string[];
+  /** The same, minus the accepted gaps and the notes: what the exit code is decided on. */
+  gatingMissingTools: string[];
+  coverageGaps: string[];
+  gapDetails: CoverageGapDetail[];
+  acceptedGaps: string[];
+  acceptedDetails: CoverageGapDetail[];
+  acceptedGapDetails: AcceptedGapDetail[];
+  coverageNotes: string[];
+  noteDetails: CoverageGapDetail[];
+  suppressedByRepoConfig: RepoSuppressionEntry[];
+  /** Files a step reported only partly parsed, of any type (normalised). */
+  reported: Set<string>;
+  /** Files a step reported a per-file Semgrep `Timeout` on. */
+  timedOut: Set<string>;
+}
+
+/** What the gate accepts, normalised: `--accept-partial-parse` and `semgrep.accept_timeouts`. */
+interface Acceptances {
+  parse: ReadonlySet<string>;
+  timeouts: ReadonlySet<string>;
+  /** Under a ref: the listed files that changed since it (see {@link timeoutAccepted}). */
+  timeoutRef?: TimeoutAcceptanceRef;
+}
+
+function pushGap(t: StepTally, line: string, tool: string, kind: GapKind, gating: boolean, cause?: GapCause): void {
+  t.coverageGaps.push(line);
+  t.gapDetails.push(detailOf(tool, kind, line, gating, cause));
+}
+
+function pushNote(t: StepTally, note: string, tool: string, kind: GapKind): void {
+  t.coverageNotes.push(note);
+  t.noteDetails.push(detailOf(tool, kind, note, false));
+}
+
+function tallySteps(steps: readonly ScanStepResult[], accept: Acceptances): StepTally {
+  const t: StepTally = {
+    allToolsRun: [],
+    allMissingTools: [],
+    gatingMissingTools: [],
+    coverageGaps: [],
+    gapDetails: [],
+    acceptedGaps: [],
+    acceptedDetails: [],
+    acceptedGapDetails: [],
+    coverageNotes: [],
+    noteDetails: [],
+    suppressedByRepoConfig: [],
+    reported: new Set(),
+    timedOut: new Set(),
+  };
+  for (const step of steps) tallyStep(t, step, accept);
+  return t;
+}
+
+function tallyStep(t: StepTally, step: ScanStepResult, accept: Acceptances): void {
+  t.allToolsRun.push(...step.tools_run);
+  for (const run of step.tools_run) {
+    const s = run.suppressed_by_repo_config;
+    if (s !== undefined) t.suppressedByRepoConfig.push({ step: step.tool, tool: run.name, ...s });
+  }
+
+  if (!step.ran) {
+    t.allMissingTools.push(step.tool);
+    t.gatingMissingTools.push(step.tool);
+    pushGap(t, `${step.tool}: ${step.reason ?? 'did not run'}`, step.tool, kindOfRefusal(step.reason), true);
+    return;
+  }
+
+  for (const missing of step.missing_tools) tallyMissing(t, step, missing, accept);
+
+  for (const run of step.tools_run) {
+    if (run.status === 'failed') {
+      pushGap(t, `${step.tool}: ${run.name} failed${run.reason ? ` (${run.reason})` : ''}`, run.name, 'scanner_failed', true);
+    }
+    // status 'skipped' (nothing to do, e.g. no Dockerfile) is deliberately
+    // not a gap — computeCoverage's own contract, see scanCoverage.ts.
+  }
+}
+
+/** One `missing_tools` entry of a step: a note, an accepted gap, or a gap that gates. */
+function tallyMissing(t: StepTally, step: ScanStepResult, missing: string, accept: Acceptances): void {
+  t.allMissingTools.push(missing);
+  const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
+  for (const ref of refs) {
+    t.reported.add(ref.file);
+    if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) t.timedOut.add(ref.file);
+  }
+  const judged = judgeMissing(step.tool, missing, refs, step.tools_run, accept);
+  for (const note of judged.notes) pushNote(t, note, missing, 'taint_timeout');
+  if (!judged.gating) {
+    for (const a of judged.accepted) {
+      t.acceptedGaps.push(a.line);
+      t.acceptedDetails.push(detailOf(missing, a.detail.kind, a.line, false));
+      t.acceptedGapDetails.push(a.detail);
+    }
+    return;
+  }
+  t.gatingMissingTools.push(missing);
+  const described = describeMissing(missing, step.tools_run);
+  if (described.line !== null) {
+    pushGap(t, `${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true, judged.cause);
+  }
 }
 
 export function evaluateGate(input: GateInput): GateVerdict {
   const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
-  const acceptParse = new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath));
-  const acceptTimeouts = new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath));
-  const reported = new Set<string>();
-
-  // Coverage comes from a single call to computeCoverage over the union of
-  // every step's tool bookkeeping — never a second, hand-rolled notion of
-  // "complete". A step that refused to run (`ran: false`) contributes its
-  // own `tool` name into the "missing" side of that union: it is a gap in
-  // exactly the sense computeCoverage already understands (something
-  // expected did not happen), so `coverage` itself comes out 'partial' or
-  // 'none' rather than leaving `coverage: 'full'` sitting next to an
-  // INCOMPLETE_SCAN exit code.
-  const allToolsRun: ToolRun[] = [];
-  const allMissingTools: string[] = [];
-  // The same, minus the accepted gaps and the notes: what the exit code is decided on.
-  const gatingMissingTools: string[] = [];
-  const coverageGaps: string[] = [];
-  const gapDetails: CoverageGapDetail[] = [];
-  const acceptedGaps: string[] = [];
-  const acceptedDetails: CoverageGapDetail[] = [];
-  const coverageNotes: string[] = [];
-  const noteDetails: CoverageGapDetail[] = [];
-  const pushGap = (line: string, tool: string, kind: GapKind, gating: boolean): void => {
-    coverageGaps.push(line);
-    gapDetails.push(detailOf(tool, kind, line, gating));
-  };
-
-  const suppressedByRepoConfig: RepoSuppressionEntry[] = [];
-
-  for (const step of steps) {
-    allToolsRun.push(...step.tools_run);
-    for (const run of step.tools_run) {
-      const s = run.suppressed_by_repo_config;
-      if (s !== undefined) suppressedByRepoConfig.push({ step: step.tool, tool: run.name, ...s });
-    }
-
-    if (!step.ran) {
-      allMissingTools.push(step.tool);
-      gatingMissingTools.push(step.tool);
-      pushGap(`${step.tool}: ${step.reason ?? 'did not run'}`, step.tool, kindOfRefusal(step.reason), true);
-      continue;
-    }
-
-    for (const missing of step.missing_tools) {
-      allMissingTools.push(missing);
-      const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
-      for (const ref of refs) reported.add(ref.file);
-      const judged = judgeMissing(step.tool, missing, refs, step.tools_run, acceptParse, acceptTimeouts);
-      for (const note of judged.notes) {
-        coverageNotes.push(note);
-        noteDetails.push(detailOf(missing, 'taint_timeout', note, false));
-      }
-      if (!judged.gating) {
-        for (const a of judged.accepted) {
-          acceptedGaps.push(a.line);
-          acceptedDetails.push(detailOf(missing, a.kind, a.line, false));
+  const accept: Acceptances = {
+    parse: new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath)),
+    timeouts: new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath)),
+    ...(input.timeoutAcceptanceRef !== undefined
+      ? {
+          timeoutRef: {
+            ...input.timeoutAcceptanceRef,
+            changed: new Set([...input.timeoutAcceptanceRef.changed].map(normalizeAcceptedPath)),
+          },
         }
-        continue;
-      }
-      gatingMissingTools.push(missing);
-      const described = describeMissing(missing, step.tools_run);
-      if (described.line !== null) {
-        pushGap(`${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true);
-      }
-    }
-
-    for (const run of step.tools_run) {
-      if (run.status === 'failed') {
-        pushGap(`${step.tool}: ${run.name} failed${run.reason ? ` (${run.reason})` : ''}`, run.name, 'scanner_failed', true);
-      }
-      // status 'skipped' (nothing to do, e.g. no Dockerfile) is deliberately
-      // not a gap — computeCoverage's own contract, see scanCoverage.ts.
-    }
-  }
+      : {}),
+  };
+  const t = tallySteps(steps, accept);
 
   if (droppedBaselineEntries > 0) {
     const noun = droppedBaselineEntries === 1 ? 'entry' : 'entries';
     const verb = droppedBaselineEntries === 1 ? 'is' : 'are';
-    // Visible, never gating (see `GateInput.droppedBaselineEntries`).
-    pushGap(`baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`, 'baseline', 'other', false);
+    // Visible, never gating (see `GateInput.droppedBaselineEntries`): a note,
+    // not a line of `coverageGaps`, which are the gaps that gate.
+    pushNote(t, `baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`, 'baseline', 'other');
   }
 
   // Every gap, accepted ones and notes included: an accepted partial parse is
   // still partial coverage, and says so in the JSON and the SARIF.
-  const coverage = computeCoverage(allToolsRun, allMissingTools);
-  const gatingCoverage = computeCoverage(allToolsRun, gatingMissingTools);
+  const coverage = computeCoverage(t.allToolsRun, t.allMissingTools);
+  const gatingCoverage = computeCoverage(t.allToolsRun, t.gatingMissingTools);
 
   // Historical debt must not fail the build: `newFindings` already excludes
   // anything the baseline recognises, however severe.
@@ -583,13 +722,15 @@ export function evaluateGate(input: GateInput): GateVerdict {
     blocking,
     coverage,
     gatingCoverage,
-    coverageGaps,
-    coverageGapDetails: [...gapDetails, ...acceptedDetails, ...noteDetails],
-    coverageNotes,
+    coverageGaps: t.coverageGaps,
+    coverageGapDetails: [...t.gapDetails, ...t.acceptedDetails, ...t.noteDetails],
+    coverageNotes: t.coverageNotes,
     baselineAbsent: baseline === null,
-    acceptedGaps,
-    unusedPartialParseAcceptances: [...acceptParse].filter((path) => !reported.has(path)),
-    suppressedByRepoConfig,
+    acceptedGaps: t.acceptedGaps,
+    acceptedGapDetails: t.acceptedGapDetails,
+    unusedPartialParseAcceptances: [...accept.parse].filter((path) => !t.reported.has(path)),
+    unusedTimeoutAcceptances: [...accept.timeouts].filter((path) => !t.timedOut.has(path)),
+    suppressedByRepoConfig: t.suppressedByRepoConfig,
     baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
     rulesSource: input.rulesSource ?? { from: 'tree' },
     exclusionsReset: input.exclusionsReset ?? null,

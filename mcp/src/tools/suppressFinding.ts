@@ -32,20 +32,18 @@ import type { PluginContext } from '../context.js';
 import { dependencyCoordinates } from '../fingerprint/findingIdentity.js';
 import { partitionSuppressed } from '../history/openSet.js';
 import { findingVulnIds } from '../intel/vulnIds.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import {
   CVE_SOURCE_SCAN_TYPES,
   OPENVEX_JUSTIFICATIONS,
   type DomainError,
   type Finding,
-  type OpenVexJustification,
   type ToolResult,
-  type VexSuppressionStatus,
 } from '../types.js';
 import { vexSourceScan } from '../vex/scope.js';
 import { isVexCopyIn, vexStatementKeys } from '../vex/statements.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -81,7 +79,7 @@ const inputSchema = {
     .describe('Optional free-text VEX impact statement, with vex_status.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'suppress_finding',
   title: 'Suppress a finding',
   description:
@@ -92,23 +90,14 @@ const tool: ToolModule = {
     'the vulnerability.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    finding_fingerprint: string;
-    reason: string;
-    expires_at?: string;
-    vex_status?: VexSuppressionStatus;
-    justification?: OpenVexJustification;
-    impact_statement?: string;
-  };
 
   if (!inp.finding_fingerprint || !inp.reason) {
     return failDomain(
@@ -122,12 +111,8 @@ async function handler(
   const vexProblem = vexArgumentProblem(inp);
   if (vexProblem !== null) return failDomain('unsupported_target', vexProblem);
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const located = ctx.storage.findings.findLatestInProject(projectPath, inp.finding_fingerprint);
   if (!located) {

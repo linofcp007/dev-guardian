@@ -35,6 +35,7 @@ import { toSarif, type SarifSuppressed } from '../report/sarif.js';
 import { suppressionNote } from '../runners/trivyRun.js';
 import {
   CI_EXIT,
+  type AcceptedGapDetail,
   type BaselineSource,
   type CiExitCode,
   type CoverageGapDetail,
@@ -74,11 +75,12 @@ const EXIT_LABEL: Record<CiExitCode, string> = {
  * scan) — a reader must be able to tell that apart from a genuine, clean
  * PASS at a glance, not by cross-referencing the coverage line themselves.
  *
- * `coverageGaps` is printed in full whenever non-empty. That is also how the
- * dropped-baseline-entries line (carried forward from Task 2's review)
- * reaches human output: it is just another entry in `coverageGaps`, so it
- * needs no special case here — contrast `renderSarif`, which does need one,
- * because SARIF has no general-purpose home for free text.
+ * `coverageGaps` is printed in full whenever non-empty, and `coverageNotes`
+ * under `notes (not gating):`. That is also how the dropped-baseline-entries
+ * line (carried forward from Task 2's review) reaches human output: a note
+ * since 3.4 (it never gated, and `coverage_gaps` holds the gaps that do —
+ * review 10), so it needs no special case here — contrast `renderSarif`,
+ * which does need one, because SARIF has no general-purpose home for free text.
  *
  * `baselineAbsent` (added on review of this task) gets its own line, printed
  * plainly rather than folded into `coverageGaps`: the design of record requires the
@@ -93,6 +95,9 @@ export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
   const command = opts.command ?? DEFAULT_CLI_COMMAND;
   const lines: string[] = [
     `dev-guardian CI: ${EXIT_LABEL[v.exitCode]} (exit code ${v.exitCode})`,
+    // Right under the verdict: a pass with accepted gaps is not a pass over
+    // every file (review 11, finding 1) — said where a reader looks first.
+    ...acceptedSummary(v),
     `coverage: ${v.coverage}`,
     // Where the baseline and the rules came from, every run: on a pull
     // request, "the scanned tree's own" is the pull request's (docs/ci.md).
@@ -141,6 +146,9 @@ export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
   for (const path of v.unusedPartialParseAcceptances) {
     lines.push(`note: --accept-partial-parse ${path}: no step reported it partly parsed (unused)`);
   }
+  for (const path of v.unusedTimeoutAcceptances) {
+    lines.push(`note: .guardian/scan.yml semgrep.accept_timeouts ${path}: no step reported a Timeout on it (unused — remove it)`);
+  }
 
   if (v.blocking.length > 0) {
     lines.push('blocking findings:');
@@ -174,6 +182,23 @@ export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
   // scanners: control, bidi and zero-width characters are written as visible
   // `\u{XXXX}` before they reach a terminal (`platform/untrustedText.ts`).
   return `${untrustedText(lines.join('\n'))}\n`;
+}
+
+/**
+ * `N file(s) not analysed (accepted)` — and `M file(s) only partly parsed
+ * (accepted)` — over the distinct files `acceptedGapDetails` names (one file
+ * may be accepted in two steps); no line when nothing was accepted.
+ */
+function acceptedSummary(v: GateVerdict): string[] {
+  const files = (kind: 'file_timeout' | 'partial_parse'): number =>
+    new Set(v.acceptedGapDetails.filter((d) => d.kind === kind).map((d) => d.file)).size;
+  const timedOut = files('file_timeout');
+  const partly = files('partial_parse');
+  const parts = [
+    ...(timedOut > 0 ? [`${timedOut} file(s) not analysed (accepted)`] : []),
+    ...(partly > 0 ? [`${partly} file(s) only partly parsed (accepted)`] : []),
+  ];
+  return parts.length > 0 ? [`${parts.join(', ')} — listed under "accepted (not gating)"`] : [];
 }
 
 function shortCommit(commit: string): string {
@@ -225,12 +250,18 @@ function describeFinding(f: Finding): string {
 
 /**
  * The JSON verdict. Its keys are a contract: dev-spec-driven's finish gate
- * parses `exit_code`, `coverage`, `coverage_gaps` (a string array, kept so),
- * `new_findings`, `blocking_findings` (`file_path`, `line_start`, `severity`,
- * `rule_id`, `title`), `baseline_absent` and `accepted_gaps`, and since 3.3.0
- * reads `tool_version`, `coverage_gap_details` and `baseline_status` when
- * they are there (`test/unit/ci/verdictContract.test.ts` freezes them).
- * Keys are only ever added.
+ * (1.29 and later) parses `exit_code`, `coverage_gaps` (a string array, kept
+ * so), `new_findings` and `blocking_findings` (`file_path`, `line_start`,
+ * `severity`, `rule_id`, `title`, `tool`), and since 1.30 reads
+ * `tool_version`, `baseline_absent` / `baseline_status`,
+ * `new_findings_count` and the gating `coverage_gap_details` (`tool`, `kind`,
+ * `remedy`) when they are there; since 1.30.2 `accepted_gaps` with
+ * `accepted_gap_details` (`tool`, `kind`, `file`, `reason`),
+ * `unused_timeout_acceptances`, `coverage_notes` and a gating gap's `cause`
+ * (`accepted_file_changed`). It does not read `coverage`,
+ * `new_findings_by_severity` or `compact`, documented keys (docs/ci.md) that
+ * `test/unit/ci/verdictContract.test.ts` freezes with the rest — that file
+ * says what each dev-spec-driven version reads. Keys are only ever added.
  */
 export interface JsonVerdict {
   /** The dev-guardian version that judged — dev-spec warns below the one it needs. */
@@ -258,7 +289,15 @@ export interface JsonVerdict {
    */
   baseline_status: 'present' | 'absent';
   accepted_gaps: string[];
+  /**
+   * One per `accepted_gaps` line, same order: `tool`, `kind` (`file_timeout`
+   * or `partial_parse`), `file`, `reason` (3.4.0 and later) — what a reader
+   * counts accepted files by, never by parsing the lines.
+   */
+  accepted_gap_details: AcceptedGapDetail[];
   unused_partial_parse_acceptances: string[];
+  /** `.guardian/scan.yml` `semgrep.accept_timeouts` entries no step reported a Timeout on (3.4.0 and later). */
+  unused_timeout_acceptances: string[];
   suppressed_by_repo_config: RepoSuppressionEntry[];
   baseline_source: BaselineSource;
   rules_source: RulesSource;
@@ -303,7 +342,9 @@ export function renderJson(v: GateVerdict, opts: JsonOptions = {}): string {
     baseline_absent: v.baselineAbsent,
     baseline_status: v.baselineAbsent ? 'absent' : 'present',
     accepted_gaps: v.acceptedGaps,
+    accepted_gap_details: v.acceptedGapDetails,
     unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
+    unused_timeout_acceptances: v.unusedTimeoutAcceptances,
     suppressed_by_repo_config: v.suppressedByRepoConfig,
     baseline_source: v.baselineSource,
     rules_source: v.rulesSource,
@@ -317,8 +358,8 @@ export function renderJson(v: GateVerdict, opts: JsonOptions = {}): string {
 // ---------------------------------------------------------------------------
 
 /**
- * `gate.ts#evaluateGate` always builds the dropped-baseline-entries gap with
- * this exact prefix, and no other `coverageGaps` line starts with it — every
+ * `gate.ts#evaluateGate` always builds the dropped-baseline-entries note with
+ * this exact prefix, and no other `coverageNotes` line starts with it — every
  * other line is `${step.tool}: ...`, and no scan step is named "baseline".
  * Matching the prefix (rather than owning a second copy of gate.ts's
  * wording) is what lets `renderSarif` single that one line out from the
@@ -417,7 +458,7 @@ export function renderSarif(v: GateVerdict, projectPath: string, opts: SarifOpti
   // belongs in the schema-validation test, not here.
   const doc = parsed as SarifDocument;
 
-  const baselineGaps = v.coverageGaps.filter((gap) => gap.startsWith(BASELINE_GAP_PREFIX));
+  const baselineGaps = v.coverageNotes.filter((note) => note.startsWith(BASELINE_GAP_PREFIX));
   const run = doc.runs[0];
   if (run !== undefined) {
     const invocation: SarifInvocation = { executionSuccessful: v.coverage === 'full' };

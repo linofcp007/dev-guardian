@@ -1,12 +1,17 @@
 /**
- * The one way dev-guardian starts a child process and stops its whole tree
- * (review 8, finding 4). `runProcess` (the scanners, the package managers,
- * the archive extraction), `ci/appRunner.ts` (the application a DAST pass
- * probes) and `mcpaudit/stdioTransport.ts` (a third-party MCP server) each
- * carried their own spawn, tree kill and exit hook; they now share these.
+ * How dev-guardian starts a child that may own a process TREE, and stops that
+ * whole tree (review 8, finding 4). `runProcess` (the scanners, the package
+ * managers, the archive extraction), `ci/appRunner.ts` (the application a DAST
+ * pass probes), `mcpaudit/stdioTransport.ts` (a third-party MCP server) and,
+ * since 3.4.0, async git (`runners/gitExec.ts`) share these. Not every child:
+ * the one-process probes (`spawn.ts#captureOutput`), the tree kill's own
+ * `ps`/`grep`/`taskkill`, and the synchronous git of `platform/gitSafety.ts`
+ * (`execGitSync`, which the hooks use) start the plain way —
+ * `test/unit/platform/gitSpawnSites.test.ts` classifies each.
  *
  * Starting ({@link startChild}): `spawn.ts#spawnNoShell` — `cross-spawn`,
- * no shell, no console window — with the child's environment exactly as given
+ * no shell, no console window, a batch file never handed an argument
+ * `cmd.exe` could misread — with the child's environment exactly as given
  * (the caller merges; nothing of this process's is added behind its back),
  * `detached` on POSIX, the leader of its own process group, and a unique
  * `GUARDIAN_PROC_TREE_ID` on Windows, so {@link stopTree} can find what it
@@ -37,7 +42,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { onExit } from 'signal-exit';
-import { isSpawnFailure, settlesWithin, spawnNoShell } from './spawn.js';
+import { BatchArgumentRefused, isSpawnFailure, settlesWithin, spawnNoShell } from './spawn.js';
 import { killWindowsTree, PROC_TREE_ENV } from './windowsTreeKill.js';
 
 export { readText } from './spawn.js';
@@ -61,7 +66,12 @@ interface StartChildOptions {
 }
 
 export interface Child {
-  readonly process: ChildProcess;
+  /**
+   * The process; null when none was started because `cmd.exe` would have
+   * been handed an argument it cannot take safely (`spawn.ts`,
+   * `BatchArgumentRefused`) — `done` has then settled with that `spawnError`.
+   */
+  readonly process: ChildProcess | null;
   /** The command as spawned — `windowsTreeKill` reads the Git Bash it may be. */
   readonly command: string;
   /** Settles once the process has exited and its pipes have closed (or were abandoned). Never rejects. */
@@ -81,7 +91,8 @@ const POSIX_GROUP = process.platform !== 'win32';
  * Starts `command` with `args`: no shell, the environment as given, stdout and
  * stderr piped, and — for {@link stopTree} — its own process group on POSIX or
  * a tree token on Windows. A command that cannot be started is not a throw:
- * `done` settles with its `spawnError`.
+ * `done` settles with its `spawnError` — a refused batch-file argument too,
+ * with `process` null.
  *
  * `command` is an absolute path: a caller resolves a bare name with
  * `findOnPath` first (`platform/binaryPath.ts`) — `cross-spawn`'s own lookup
@@ -90,8 +101,22 @@ const POSIX_GROUP = process.platform !== 'win32';
 export function startChild(command: string, args: readonly string[], options: StartChildOptions): Child {
   const treeToken = POSIX_GROUP ? null : randomUUID();
   const env = treeToken === null ? options.env : { ...options.env, [PROC_TREE_ENV]: treeToken };
-  // `detached` never on Windows (spawnNoShell): there it means a new console, not a group.
-  const proc = spawnNoShell(command, args, { cwd: options.cwd, env, detached: true, stdio: [options.stdin ?? 'ignore', 'pipe', 'pipe'] });
+  let proc: ChildProcess;
+  try {
+    // `detached` never on Windows (spawnNoShell): there it means a new console, not a group.
+    proc = spawnNoShell(command, args, { cwd: options.cwd, env, detached: true, stdio: [options.stdin ?? 'ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    if (!(e instanceof BatchArgumentRefused)) throw e;
+    const refused: ChildState = {
+      process: null,
+      command,
+      done: Promise.resolve({ exitCode: null, signal: null, spawnError: e }),
+      settled: () => true,
+      treeToken: null,
+      stopping: null,
+    };
+    return refused;
+  }
 
   let isSettled = false;
   let removeExitHook: (() => void) | null = null;
@@ -145,8 +170,8 @@ export function stopTree(child: Child, options: StopTreeOptions): Promise<void> 
 
 async function stopOnce(child: ChildState, { graceMs, abandonMs }: StopTreeOptions): Promise<void> {
   const proc = child.process;
-  const pid = proc.pid;
-  if (pid === undefined || child.settled()) {
+  const pid = proc?.pid;
+  if (proc === null || pid === undefined || child.settled()) {
     await child.done;
     return;
   }

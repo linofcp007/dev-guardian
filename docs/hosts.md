@@ -7,10 +7,10 @@ The engine is the MCP server, so any host that speaks MCP over stdio can use dev
 The server and the CLI are committed pre-built and bundled (`mcp/dist/server.js` starts the server from `mcp/dist/engine.js`, which the CLI runs too, and neither needs a runtime `node_modules`), so there is nothing to install or build — only Node.js ≥ 22.13 and git.
 
 ```text
-git clone --depth 1 --branch v3.3.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.4.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 ```
 
-The clone above pins 3.3.0; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
+The clone above pins 3.4.0; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
 
 ## 2. Wire a host into a project
 
@@ -42,7 +42,7 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | `--scope project\|global`, `--global` | which config to write. `all --write` skips the two global-only hosts (Windsurf, Claude Desktop) unless `--global` is given, so it never touches a global config by surprise; naming either host directly writes its global config. |
 | `--update-mcp` | refresh an entry or rules block that is already there but out of date (`--force` is a deprecated alias) |
 
-Exit codes: 0 done, 1 missing or unknown host, 2 usage error.
+Exit codes: 0 done, 1 the MCP server is not built (`mcp/dist/server.js` missing), 3 a missing or unknown host or another usage error.
 
 ### How rules files are merged
 

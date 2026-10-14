@@ -27,14 +27,14 @@ import { runSyft } from '../runners/syftRun.js';
 import { runTrivy } from '../runners/trivyRun.js';
 import { summarize as summariseSbom } from '../runners/scannerParsers/syft.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
+import type { ToolResult } from '../types.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
   ensureReportDir,
   scannerAvailable,
 } from './scanHelpers.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 type SbomFormat = 'cyclonedx-json' | 'spdx-json';
 
@@ -58,7 +58,7 @@ const inputSchema = {
     .describe(`Inline the SBOM when it is at most this many KB (0 never; at most ${MAX_INLINE_KB}). Default ${DEFAULT_INLINE_KB}.`),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'generate_sbom',
   title: 'Generate an SBOM (Syft or Trivy)',
   description:
@@ -68,25 +68,16 @@ const tool: ToolModule = {
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
   contentOnlyKeys: ['inline'],
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: import('../context.js').PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    format?: SbomFormat;
-    inline_max_kb?: number;
-  };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // The tree the SBOM describes, taken before anything is written: export_vex
   // compares it with the dependency scan's before trusting the SBOM's product.
@@ -189,11 +180,4 @@ async function handler(
   payload['inline_max_kb'] = inlineMaxBytes / 1024;
 
   return payload as ToolResult<Record<string, unknown>>;
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

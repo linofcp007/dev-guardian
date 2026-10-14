@@ -11,6 +11,7 @@
  *   - and when every plan failed, the tool still answered `ok: true`.
  */
 
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/tools/scanHelpers.js', async () => {
@@ -25,6 +26,7 @@ vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from '../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import { TOOLS } from '../../src/tools/index.js';
+import { ISSUE_SEARCH } from '../../src/tools/createGithubIssues.js';
 import { okResult } from '../helpers/toolResult.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
 import { freshPlugin, projectDir, seedScan } from '../helpers/historySeed.js';
@@ -62,7 +64,8 @@ function fakeGh(repo: FakeRepo): void {
   vi.mocked(scannerAvailable).mockResolvedValue('gh');
   vi.mocked(runProcess).mockImplementation(async (opts: ProcessRunOptions) => {
     const args = opts.args ?? [];
-    repo.calls.push(args);
+    // The body comes in a file (runners/argFile.ts), removed after the call: recorded as its text.
+    repo.calls.push(args.map((a, i) => (args[i - 1] === '--body-file' ? readFileSync(a, 'utf8') : a)));
     const [noun, verb] = args;
     if (noun === 'issue' && verb === 'list') {
       const stateIdx = args.indexOf('--state');
@@ -151,7 +154,13 @@ describe('create_github_issues', () => {
     expect(list).toContain('--state');
     expect(list[list.indexOf('--state') + 1]).toBe('all');
     expect(list).toContain('--search');
-    expect(list[list.indexOf('--search') + 1]).toBe('"[guardian:" in:title');
+    expect(list[list.indexOf('--search') + 1]).toBe(ISSUE_SEARCH);
+    // Through a gh.cmd every argument goes through cmd.exe, which is never
+    // handed a quote or a percent sign (runners/spawn.ts): the old
+    // '"[guardian:" in:title' made the tool unable to run there at all
+    // (review 11, finding 15b).
+    expect(ISSUE_SEARCH).toBe('guardian in:title');
+    for (const arg of list) expect(arg, arg).not.toMatch(/["%]/);
   });
 
   it('files nothing when the listing may have been cut at its limit — it could hide an existing issue', async () => {
@@ -213,7 +222,7 @@ describe('create_github_issues', () => {
     expect(r.plans).toHaveLength(1);
     expect(r.plans[0]?.body).not.toContain('hunter2');
     const create = repo.calls.find((c) => c[0] === 'issue' && c[1] === 'create') ?? [];
-    const bodyIdx = create.indexOf('--body');
+    const bodyIdx = create.indexOf('--body-file');
     expect(bodyIdx).toBeGreaterThanOrEqual(0);
     expect(create[bodyIdx + 1] ?? '').not.toContain('hunter2');
   });

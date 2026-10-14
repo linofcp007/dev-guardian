@@ -16,36 +16,33 @@
 
 import type { PluginContext } from '../context.js';
 import { findLatestUsable, openSetForProject } from '../history/openSet.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { ScanRecord, ScanType, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'dotnet_describe_setup',
   title: '.NET posture summary',
   description:
     "Aggregate read of one project's accumulated .NET state (project_path, default: the server's " +
-    'working directory): latest dotnet_target_framework_check (EOL frameworks), ' +
-    'scan_dotnet_secrets, dotnet_efcore_audit, deps_audit if a NuGet lockfile exists. Plus open ' +
+    'working directory): latest dotnet_check checks target_framework (EOL frameworks), secrets and ' +
+    'efcore, deps_audit if a NuGet lockfile exists. Plus open ' +
     '.NET-relevant findings. No scanner spawn.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // The target-framework check reports through `meta`, so its scanner
   // coverage does not disqualify it; the others are finding scans, and one

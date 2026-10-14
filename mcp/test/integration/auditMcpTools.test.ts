@@ -23,6 +23,7 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
+import { hangBound } from '../helpers/timing.js';
 
 vi.setConfig({ testTimeout: 90_000 });
 
@@ -341,7 +342,7 @@ describe('audit_mcp_tools: servers that do not answer', () => {
     writeMcpJson(dir, { hang: stdio('hang') });
     const started = Date.now();
     const r = await audit(makePlugin(), { project_path: dir, servers: ['hang'], timeout_ms: 3000 });
-    expect(Date.now() - started).toBeLessThan(60_000);
+    expect(Date.now() - started).toBeLessThan(hangBound(60_000));
 
     expect(r.servers[0]?.status).toBe('failed');
     expect(r.servers[0]?.reason).toMatch(/did not answer|timed out/i);

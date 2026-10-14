@@ -48,10 +48,10 @@
  */
 
 import { readProjectBytes } from '../platform/projectFs.js';
+import { networkPathOf } from '../platform/projectPath.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { Force, ProjectPath } from '../schemas.js';
 import { collectEnvVars } from '../surface/collectors/envVars.js';
 import { collectPorts } from '../surface/collectors/ports.js';
@@ -93,7 +93,8 @@ import type {
   ToolResult,
   ToolRun,
 } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { ensureReportDir, readJsonSafe } from './scanHelpers.js';
 import { applySemgrepCoverageGaps, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { semgrepScanFlags } from '../runners/semgrepRun.js';
@@ -139,7 +140,14 @@ const SpecPaths = z
     'OpenAPI / Swagger documents to read instead of discovering them.',
   );
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  force: Force,
+  include_env_vars: IncludeEnvVars,
+  spec_paths: SpecPaths,
+};
+
+const tool = defineTool({
   name: 'map_attack_surface',
   title: 'Map the attack surface',
   // No "auth hint" in this description on purpose, for code-extracted routes:
@@ -160,36 +168,19 @@ const tool: ToolModule = {
     'against the routes: shadow endpoints and dead documentation. Stores a snapshot ' +
     '(guardian://surface/latest has the full route list) and returns a summary with samples. scan_dast ' +
     'and validate_finding need it.',
-  inputSchema: {
-    project_path: ProjectPath,
-    force: Force,
-    include_env_vars: IncludeEnvVars,
-    spec_paths: SpecPaths,
-  },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    force?: boolean;
-    include_env_vars?: boolean;
-    spec_paths?: string[];
-  };
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    // The code every tool answers an unusable project_path with
-    // (`projectPathErrorCode`), so hosts and skills handle one failure.
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const treeHash = await computeTreeHash(projectPath);
   const includeEnvVars = inp.include_env_vars !== false;
@@ -710,14 +701,25 @@ function importSpecs(
   // were not read" accounting below applies the file cap to the same list
   // discovery did. See `dedupeResolved`'s doc comment for what slides
   // otherwise.
-  const resolvedSpecPaths =
+  const named =
     specPaths === undefined
       ? undefined
       : dedupeResolved(specPaths.map((p) => resolveExplicitSpecPath(projectPath, p)));
+  // A spec on a share is never opened: on Windows that is an SMB
+  // authentication to the host the path names (review 11, finding 8).
+  const onShare = (named ?? []).filter((p) => networkPathOf(p) !== null);
+  const resolvedSpecPaths = named?.filter((p) => !onShare.includes(p));
   const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
 
   const specRoutes: RouteRecord[] = [];
-  const specFiles: SpecFileReport[] = [];
+  const specFiles: SpecFileReport[] = onShare.map((file) => ({
+    file,
+    format: 'unknown',
+    status: 'parse_error',
+    routes_found: 0,
+    reason: 'A network (UNC) path, or a link to one: not read — dev-guardian reads local files only.',
+    unresolved_refs: 0,
+  }));
   let specsParsed = 0;
 
   for (const { file, text } of discovery.specs) {

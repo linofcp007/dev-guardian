@@ -62,7 +62,7 @@
  * in `src/`, `cli/` or `hooks/` bypasses it.
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import { dirname, join, relative, resolve } from 'node:path';
 import { findOnPath } from './binaryPath.js';
 import { entryKindAnywhere } from './projectFs.js';
@@ -707,10 +707,17 @@ function nextSubmodules(walk: Walk, dir: string, depth: number, links: Gitlinks)
 
 async function walkAsync(walk: Walk, root: string, dir: string, depth: number): Promise<void> {
   walk.visited.add(dir);
-  const probe = await probeAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
+  // The submodule listing runs nothing a repository configures (`gitlinkArgs`:
+  // the index only, fsmonitor off, in the probe's own hardened environment),
+  // so it starts beside the configuration read rather than after it: one git
+  // process's time less on every first call for a directory (3.4.0 — about
+  // 60 ms on Windows). It is used only when the read is a listing, as before.
+  const [probe, links] = await Promise.all([
+    probeAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs),
+    gitlinksAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs),
+  ]);
   walk.read.push(depth === 0 ? { dir, probe } : { dir, probe, submodule: relativeLabel(root, dir) });
   if (probe.kind !== 'listing') return;
-  const links = await gitlinksAsync(walk.git, dir, walk.env, walk.timeoutMs, walk.reuseMs);
   for (const sub of nextSubmodules(walk, dir, depth, links)) await walkAsync(walk, root, sub, depth + 1);
 }
 
@@ -824,7 +831,7 @@ async function gitlinksAsync(git: string, dir: string, env: NodeJS.ProcessEnv, t
   const key = probeCacheKey(git, dir, env);
   const hit = cachedGitlinks(key, reuseMs);
   if (hit !== null) return hit;
-  const r = await collect(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
+  const r = await gitSpawner(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
   if (r.error !== undefined) return gitlinksError(r.error, dir, timeoutMs);
   return rememberGitlinks(key, parseGitlinks(dir, r.status, r.stdout));
 }
@@ -900,7 +907,7 @@ function probeSyncUncached(git: string, dir: string, env: NodeJS.ProcessEnv, tim
 }
 
 async function probeAsyncUncached(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<Probe> {
-  const r = await collect(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
+  const r = await gitSpawner(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
   if (r.error !== undefined) return probeError(r.error, dir, timeoutMs);
   return interpretExit(r.status, r.stdout, r.stderr.toString('utf8'), dir);
 }
@@ -992,7 +999,7 @@ export function describeNotApplied(keys: readonly string[]): string | null {
 
 export interface GitExecOptions {
   timeoutMs?: number;
-  /** stdout larger than this fails the run (`failure.code: 'too-large'`). Default 100 MB, execa's. */
+  /** stdout larger than this fails the run (`failure.code: 'too-large'`). Default 100 MB. */
   maxBuffer?: number;
   /** The environment the git runs with (default: this process's). */
   env?: NodeJS.ProcessEnv;
@@ -1030,7 +1037,7 @@ export async function execGitBuffer(dir: string, args: readonly string[], opts: 
   if (safety.refused !== null) return refusedResult(safety, Buffer.alloc(0));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = await collect(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], {
+  const r = await gitSpawner(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     timeoutMs,
     maxBuffer,
@@ -1044,20 +1051,36 @@ export async function execGitBuffer(dir: string, args: readonly string[], opts: 
   };
 }
 
-/** {@link execGit}, synchronously. */
+/**
+ * {@link execGit}, synchronously. A git stopped at its timeout (or for its
+ * output) is stopped with what it started, as the async spawners do (review
+ * 11, finding 15c): `spawnSync` kills git alone, and an `ls-remote` or a
+ * clone over HTTPS left `git-remote-http` running, holding its connection,
+ * for as long as the server kept it open. See {@link stopSyncTree}.
+ */
 export function execGitSync(dir: string, args: readonly string[], opts: GitExecOptions = {}): GitExecResult<string> {
   const safety = gitSafetyForSync([dir, ...(opts.alsoRepos ?? [])], opts);
   if (safety.refused !== null) return refusedResult(safety, '');
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], {
+  const started = Date.now();
+  // `detached` (POSIX: a process group of its own, so that what git started
+  // can be stopped with it) is honoured by `spawnSync` — Node's synchronous
+  // runner reads it — though `@types/node` leaves it out of its options.
+  const options: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+    detached: process.platform !== 'win32',
+  };
+  const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], options);
+  const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
+  if ((code === 'ETIMEDOUT' || code === 'ENOBUFS') && typeof r.pid === 'number' && r.pid > 0) {
+    stopSyncTree(r.pid, started);
+  }
   return {
     status: r.error === undefined ? r.status : null,
     stdout: typeof r.stdout === 'string' ? r.stdout : '',
@@ -1065,6 +1088,54 @@ export function execGitSync(dir: string, args: readonly string[], opts: GitExecO
     failure: r.error === undefined ? null : execFailure(r.error, timeoutMs, maxBuffer),
     notApplied: safety.notApplied,
   };
+}
+
+/** The most the after-the-fact sweep of {@link stopSyncTree} may take, per step. */
+const SYNC_SWEEP_TIMEOUT_MS = 15_000;
+
+/**
+ * What a synchronous git that was stopped left running, stopped too.
+ * `spawnSync` has already killed git (`pid`) by the time it returns, so this
+ * runs after the fact:
+ *
+ *   - POSIX: git led a process group of its own (`detached`), which its
+ *     helpers joined; the whole group is killed.
+ *   - Windows: there are no groups, and `taskkill /T` walks from a living
+ *     parent — git is gone. The processes whose parent was git's pid and
+ *     that were created since it started (`startedAt`, less a second: never
+ *     an older process that happened to get that pid) are listed with CIM
+ *     and each stopped with its own tree (`taskkill /T /F`), System32's
+ *     PowerShell and taskkill by their full paths. Only on this path: a
+ *     timeout has already cost its seconds. The cut-off is that instant,
+ *     written into the script — not "now, less the time git took" counted
+ *     when PowerShell has started: on a loaded machine its start took
+ *     seconds, the cut-off fell after git's helper was created, and the
+ *     helper was left running.
+ *
+ * Best effort and never throws: a sweep that fails leaves what the kill of
+ * git alone left.
+ */
+function stopSyncTree(pid: number, startedAt: number): void {
+  try {
+    if (process.platform !== 'win32') {
+      process.kill(-pid, 'SIGKILL');
+      return;
+    }
+    const root = envValue(process.env, 'SystemRoot') ?? 'C:\\Windows';
+    const taskkill = join(root, 'System32', 'taskkill.exe');
+    const script =
+      `$since = [DateTimeOffset]::FromUnixTimeMilliseconds(${Math.floor(startedAt) - 1000}).LocalDateTime; ` +
+      `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | ` +
+      'Where-Object { $_.CreationDate -ge $since } | ' +
+      `ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
+    spawnSync(join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', script], {
+      windowsHide: true,
+      stdio: 'ignore',
+      timeout: SYNC_SWEEP_TIMEOUT_MS,
+    });
+  } catch {
+    /* gone already, or nothing to stop */
+  }
 }
 
 function refusedResult<T>(safety: GitSafety, empty: T): GitExecResult<T> {
@@ -1079,15 +1150,74 @@ function execFailure(error: NodeJS.ErrnoException, timeoutMs: number, maxBuffer:
   return { code: 'spawn', message: `git failed to run (${error.code ?? error.message})` };
 }
 
-interface Collected {
+/** What an async git run gives back — see {@link GitSpawner}. */
+export interface Collected {
   status: number | null;
   stdout: Buffer;
   stderr: Buffer;
+  /** Set when git did not run, or was stopped: `ENOENT`, `ETIMEDOUT`, `ENOBUFS`, or the spawn error. */
   error?: NodeJS.ErrnoException;
 }
 
-/** spawn, collect both streams, kill on timeout or oversize; never rejects. */
-function collect(command: string, args: readonly string[], opts: { env: NodeJS.ProcessEnv; timeoutMs: number; maxBuffer: number }): Promise<Collected> {
+/** The environment, the timeout and the stdout cap of one async git run. */
+export interface CollectOptions {
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  maxBuffer: number;
+}
+
+/**
+ * How every async git of this module is started, and stopped on a timeout or
+ * an oversized output. Never rejects.
+ */
+export type GitSpawner = (command: string, args: readonly string[], opts: CollectOptions) => Promise<Collected>;
+
+/**
+ * The spawner in use: {@link spawnGitPlain} until `runners/gitExec.ts` installs the
+ * one that stops git's whole TREE (`runners/childProcess.ts`). A stalled
+ * `git clone` over HTTPS is two processes — git and `git remote-https` — and
+ * killing git alone left the helper holding the pipes: `scan_skill` on a URL
+ * that stalled answered after more than 330 s against its 120 s timeout
+ * (review 10, finding 12). Installed rather than imported: the hook bundle
+ * loads this module for `execGitSync` and may hold no npm package
+ * (`hooksDistImports.test.ts`), which the shared tree kill brings
+ * (`cross-spawn`, `signal-exit`). Every module that runs git for the engine
+ * reaches `runners/git.ts`, which installs it; the hooks keep the plain one,
+ * which stops git's tree with what Node and the OS have.
+ */
+let gitSpawner: GitSpawner = spawnGitPlain;
+
+/** Install how async git runs (`runners/gitExec.ts`); returns the one it replaced. */
+export function useGitSpawner(spawner: GitSpawner): GitSpawner {
+  const previous = gitSpawner;
+  gitSpawner = spawner;
+  return previous;
+}
+
+/** After a stop, how long the plain spawner waits for git's pipes before it no longer reads them. */
+const PLAIN_ABANDON_MS = 2_000;
+
+/**
+ * spawn, collect both streams; never rejects. The spawner the hook bundle's
+ * async git runs on (SessionStart's `git status` and configuration probe),
+ * which may hold no npm package for the shared tree kill — see
+ * {@link gitSpawner}. On a timeout or an oversized output it stops git's whole
+ * TREE with what Node and the OS have: on POSIX git leads a process group of
+ * its own (`detached`) and the group is killed; on Windows `taskkill /T /F`
+ * (System32's, by its full path) stops git with its descendants, and git is
+ * killed once that is done. It answers at most {@link PLAIN_ABANDON_MS} after
+ * the stop, whatever still holds the pipes: it killed git alone and waited for
+ * them, so a helper git had started held the answer — and the SessionStart
+ * briefing — for as long as the helper lived
+ * (`test/unit/platform/gitSafetyPlainSpawn.test.ts`).
+ *
+ * A git that cannot be started resolves to that failure too: Node refuses to
+ * start a `.cmd` / `.bat` without a shell (EINVAL, synchronously, since its
+ * fix for "BatBadBut"), and a git found as `git.cmd` (an old Git for Windows'
+ * `cmd\git.cmd`, a wrapper) made this promise reject instead (review 11,
+ * finding 15d).
+ */
+export function spawnGitPlain(command: string, args: readonly string[], opts: CollectOptions): Promise<Collected> {
   return new Promise((resolveRun) => {
     let settled = false;
     const out: Buffer[] = [];
@@ -1095,18 +1225,35 @@ function collect(command: string, args: readonly string[], opts: { env: NodeJS.P
     let outBytes = 0;
     let errBytes = 0;
     let error: NodeJS.ErrnoException | undefined;
+    let abandon: NodeJS.Timeout | undefined;
+    let timer: NodeJS.Timeout | undefined;
     const finish = (status: number | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(abandon);
       resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...(error !== undefined ? { error } : {}) });
     };
+    let child: ReturnType<typeof spawnPiped>;
+    try {
+      child = spawnPiped(command, args, opts.env);
+    } catch (e) {
+      error = e instanceof Error ? e : Object.assign(new Error(String(e)), { code: 'EINVAL' });
+      finish(null);
+      return;
+    }
+    const started = child;
     const fail = (code: string, message: string): void => {
       if (error === undefined) error = Object.assign(new Error(message), { code });
-      child.kill('SIGKILL');
+      if (abandon !== undefined) return;
+      stopPlainTree(started);
+      abandon = setTimeout(() => {
+        started.stdout.destroy();
+        started.stderr.destroy();
+        finish(null);
+      }, PLAIN_ABANDON_MS);
     };
-    const child = spawn(command, args, { env: opts.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const timer = setTimeout(() => fail('ETIMEDOUT', `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
+    timer = setTimeout(() => fail('ETIMEDOUT', `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
       outBytes += chunk.length;
       if (outBytes > opts.maxBuffer) fail('ENOBUFS', 'stdout maxBuffer exceeded');
@@ -1120,8 +1267,48 @@ function collect(command: string, args: readonly string[], opts: { env: NodeJS.P
       error ??= e;
       finish(null);
     });
-    child.on('close', (code) => finish(code));
+    // A stopped git has no status of its own (taskkill's exit code is not git's).
+    child.on('close', (code) => finish(error !== undefined ? null : code));
   });
+}
+
+/** git with piped output, the leader of its own process group on POSIX; throws what `spawn` throws. */
+function spawnPiped(command: string, args: readonly string[], env: NodeJS.ProcessEnv) {
+  return spawn(command, args, {
+    env,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // POSIX: a process group of its own, so that a stop reaches what git started.
+    detached: process.platform !== 'win32',
+  });
+}
+
+/**
+ * Stops `child` and what it started — see {@link spawnGitPlain}. Best effort:
+ * git is killed in every case, the tree with it where the OS allows.
+ */
+function stopPlainTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    // Before git itself: `/T` finds the descendants through their parent.
+    const root = envValue(process.env, 'SystemRoot') ?? 'C:/Windows';
+    const killer = spawn(join(root, 'System32', 'taskkill.exe'), ['/T', '/F', '/PID', String(pid)], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    const last = (): void => {
+      child.kill('SIGKILL');
+    };
+    killer.on('exit', last);
+    killer.on('error', last);
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
 }
 
 function setVar(env: NodeJS.ProcessEnv, name: string, value: string, platform: NodeJS.Platform): void {

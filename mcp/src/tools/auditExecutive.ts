@@ -25,7 +25,6 @@
 
 import { randomUUID } from 'node:crypto';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { z } from 'zod';
 import { ProjectPath, SeverityMin } from '../schemas.js';
 import { filterFindings } from '../severity/filter.js';
@@ -35,19 +34,28 @@ import {
   type Finding,
   type FindingsCountBySeverity,
   type ScanCoverage,
-  type Severity,
   type ToolResult,
   type ToolRun,
 } from '../types.js';
-import { registerToolModule, TOOLS, type ToolCallMeta, type ToolModule } from './index.js';
+import { listedCall } from './fold.js';
+import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput, TOOLS } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 const BASE_SUB_TOOLS = ['security_scan_full', 'quality_check', 'deps_audit', 'compliance_check'] as const;
 const WP_EXTRA_SUB_TOOLS = ['scan_wordpress'] as const;
+/**
+ * The .NET children, by the member names their scans, `tools_run` entries
+ * and `meta.sub_scan_ids` are recorded under; a response names each by the
+ * call a model makes (`call`: `dotnet_check { check: "secrets" }`).
+ */
 const DOTNET_EXTRA_SUB_TOOLS = ['scan_dotnet_secrets', 'dotnet_target_framework_check'] as const;
 
 interface SubScanSummary {
+  /** The member name the sub-scan is recorded under. */
   tool: string;
+  /** How a model runs it again: the listed call (`tools/fold.ts#listedCall`). */
+  call?: string;
   scan_id?: string;
   ok: boolean;
   /** Not run, on purpose: why (only under `local_only`). */
@@ -60,7 +68,18 @@ interface SubScanSummary {
   warnings?: string[];
 }
 
-const tool: ToolModule = {
+const inputSchema = {
+  project_path: ProjectPath,
+  severity_min: SeverityMin,
+  local_only: z
+    .boolean()
+    .optional()
+    .describe(
+      'Semgrep on disk only, no scan_wordpress; the rest still goes out (`local_only_gaps`).',
+    ),
+};
+
+const tool = defineTool({
   name: 'audit_executive',
   title: 'Executive audit (security, quality, deps, compliance)',
   description:
@@ -70,35 +89,21 @@ const tool: ToolModule = {
     "metrics), Trivy's database, npm, PyPI, NuGet feeds; Trivy's and Semgrep's version checks are off. " +
     "Runs code: pip-audit's virtualenv, a .NET restore (MSBuild), the project's ESLint. local_only keeps " +
     'Semgrep local (`local_only_gaps`: what still went out).',
-  inputSchema: {
-    project_path: ProjectPath,
-    severity_min: SeverityMin,
-    local_only: z
-      .boolean()
-      .optional()
-      .describe(
-        'Semgrep on disk only, no scan_wordpress; the rest still goes out (`local_only_gaps`).',
-      ),
-  },
+  inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; severity_min?: Severity; local_only?: boolean };
   const localOnly = inp.local_only === true;
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // No bash check: none of the sub-tools runs a shell script any more.
 
@@ -130,57 +135,13 @@ async function handler(
   const subTools = buildSubToolsForStack(ctx, projectPath);
 
   const subResultsArr = await Promise.all(
-    subTools.map(async (toolName) => {
-      const skipped = localOnly ? NO_LOCAL_ONLY_MODE[toolName] : undefined;
-      if (skipped !== undefined) {
-        return [toolName, { tool: toolName, ok: false, skipped } satisfies SubScanSummary] as const;
-      }
-      const subTool = TOOLS.find((t) => t.name === toolName);
-      if (!subTool) {
-        return [
-          toolName,
-          {
-            tool: toolName,
-            ok: false,
-            error: { code: 'scanner_failed', message: `Tool '${toolName}' is not registered.` },
-          } satisfies SubScanSummary,
-        ] as const;
-      }
-      // The host's callMeta, so cancelling the audit aborts every sub-scan's
-      // scanner processes and their progress reaches the host (the emitter
-      // keeps one shared token's progress increasing across all four).
-      const childInput =
-        localOnly && 'local_only' in subTool.inputSchema ? { ...subInput, local_only: true } : subInput;
-      const result = await subTool.handler(childInput, ctx, callMeta);
-      if (result.ok) {
-        const r = result as unknown as {
-          ok: true;
-          scan_id?: string;
-          findings_count_by_severity?: FindingsCountBySeverity;
-          top_findings?: Finding[];
-          coverage?: ScanCoverage;
-          missing_tools?: string[];
-          warnings?: string[];
-        };
-        const summary: SubScanSummary = { tool: toolName, ok: true };
-        if (r.scan_id !== undefined) summary.scan_id = r.scan_id;
-        if (r.findings_count_by_severity !== undefined)
-          summary.findings_count_by_severity = r.findings_count_by_severity;
-        if (r.top_findings !== undefined) summary.top_findings = r.top_findings;
-        if (r.coverage !== undefined) summary.coverage = r.coverage;
-        if (r.missing_tools !== undefined) summary.missing_tools = r.missing_tools;
-        if (r.warnings !== undefined) summary.warnings = r.warnings;
-        return [toolName, summary] as const;
-      }
-      return [
-        toolName,
-        { tool: toolName, ok: false, error: result.error } satisfies SubScanSummary,
-      ] as const;
-    }),
+    subTools.map(
+      async (toolName) => [toolName, await runSubScan(toolName, { subInput, localOnly, ctx, callMeta })] as const,
+    ),
   );
 
   for (const [name, summary] of subResultsArr) {
-    subResults[name] = summary;
+    subResults[name] = { ...summary, call: listedCall(name) };
   }
 
   // Update audit row meta to link children.
@@ -223,26 +184,7 @@ async function handler(
   const aggregate_counts = countBySeverity(filteredAggregate);
   const top_findings = topFindings(filteredAggregate, 10);
 
-  // Delta vs previous audit scan, when one exists. Compared unfiltered on
-  // BOTH sides: the previous audit row holds whatever its own call found,
-  // and measuring a filtered present against an unfiltered past reports
-  // every below-floor finding as `resolved`.
-  const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
-  let deltas: Record<string, unknown> | undefined;
-  if (previousAudit) {
-    const prevFindings = ctx.storage.findings.listByScan(previousAudit);
-    const prevFingerprints = new Set(prevFindings.map((f) => f.fingerprint));
-    const curFingerprints = new Set(aggregateFindings.map((f) => f.fingerprint));
-    let newCount = 0;
-    let resolvedCount = 0;
-    for (const fp of curFingerprints) if (!prevFingerprints.has(fp)) newCount += 1;
-    for (const fp of prevFingerprints) if (!curFingerprints.has(fp)) resolvedCount += 1;
-    deltas = {
-      since_audit_scan_id: previousAudit,
-      new_findings: newCount,
-      resolved_findings: resolvedCount,
-    };
-  }
+  const deltas = auditDelta(ctx, projectPath, auditScanId, aggregateFindings);
 
   // Persist a snapshot of the aggregated findings on the audit row so
   // diff_scans can run against the audit scan_id directly. UNFILTERED, for
@@ -256,35 +198,7 @@ async function handler(
       aggregateFindings.map((f) => ({ ...f, scan_id: auditScanId })),
     );
   }
-  // Coverage roll-up: the aggregate "0 critical" is only trustworthy when
-  // every sub-scan actually ran its scanners. Take the worst coverage across
-  // the children and surface each gap (including the loud "0 findings is not
-  // clean" line from a sub-scan that scanned nothing) so the executive summary
-  // can never be mistaken for a clean bill of health.
-  const aggregateMissing = new Set<string>();
-  const coverageList: ScanCoverage[] = [];
-  const coverage_warnings: string[] = [];
-  for (const summary of Object.values(subResults)) {
-    if (summary.skipped !== undefined) {
-      coverageList.push('partial');
-      coverage_warnings.push(`${summary.tool}: skipped — ${summary.skipped}`);
-      continue;
-    }
-    if (!summary.ok) {
-      coverageList.push('none');
-      coverage_warnings.push(
-        `${summary.tool}: did not run (${summary.error?.code ?? 'failed'}) — not covered.`,
-      );
-      continue;
-    }
-    coverageList.push(summary.coverage ?? 'full');
-    for (const m of summary.missing_tools ?? []) aggregateMissing.add(m);
-    if (summary.coverage && summary.coverage !== 'full') {
-      const loud = (summary.warnings ?? []).find((w) => w.startsWith('⚠️'));
-      coverage_warnings.push(loud ?? `${summary.tool}: coverage=${summary.coverage}.`);
-    }
-  }
-  const overallCoverage = worstCoverage(coverageList);
+  const { overallCoverage, coverage_warnings, aggregateMissing } = rollUpCoverage(subResults);
   const local_only_gaps = localOnly ? localOnlyGaps(subTools) : [];
 
   ctx.storage.scans.finalize({
@@ -318,6 +232,123 @@ async function handler(
     top_findings,
     ...(deltas ? { deltas } : {}),
   };
+}
+
+/**
+ * One sub-tool, run as the MCP host would run it (its own handler, the
+ * host's callMeta), summarised. Never a throw for a sub-tool that is skipped,
+ * missing or failing: each is a summary saying so.
+ */
+async function runSubScan(
+  toolName: string,
+  run: { subInput: Record<string, unknown>; localOnly: boolean; ctx: PluginContext; callMeta: ToolCallMeta | undefined },
+): Promise<SubScanSummary> {
+  const { subInput, localOnly, ctx, callMeta } = run;
+  const skipped = localOnly ? NO_LOCAL_ONLY_MODE[toolName] : undefined;
+  if (skipped !== undefined) {
+    return { tool: toolName, ok: false, skipped };
+  }
+  const subTool = TOOLS.find((t) => t.name === toolName);
+  if (!subTool) {
+    return {
+      tool: toolName,
+      ok: false,
+      error: { code: 'scanner_failed', message: `Tool '${toolName}' is not registered.` },
+    };
+  }
+  // The host's callMeta, so cancelling the audit aborts every sub-scan's
+  // scanner processes and their progress reaches the host (the emitter
+  // keeps one shared token's progress increasing across all four).
+  const childInput =
+    localOnly && 'local_only' in subTool.inputSchema ? { ...subInput, local_only: true } : subInput;
+  const result = await subTool.handler(childInput, ctx, callMeta);
+  if (result.ok) {
+    const r = result as unknown as {
+      ok: true;
+      scan_id?: string;
+      findings_count_by_severity?: FindingsCountBySeverity;
+      top_findings?: Finding[];
+      coverage?: ScanCoverage;
+      missing_tools?: string[];
+      warnings?: string[];
+    };
+    const summary: SubScanSummary = { tool: toolName, ok: true };
+    if (r.scan_id !== undefined) summary.scan_id = r.scan_id;
+    if (r.findings_count_by_severity !== undefined)
+      summary.findings_count_by_severity = r.findings_count_by_severity;
+    if (r.top_findings !== undefined) summary.top_findings = r.top_findings;
+    if (r.coverage !== undefined) summary.coverage = r.coverage;
+    if (r.missing_tools !== undefined) summary.missing_tools = r.missing_tools;
+    if (r.warnings !== undefined) summary.warnings = r.warnings;
+    return summary;
+  }
+  return { tool: toolName, ok: false, error: result.error };
+}
+
+/**
+ * Change since this project's previous audit, when there is one. Compared
+ * unfiltered on BOTH sides: the previous audit row holds whatever its own
+ * call found, and measuring a filtered present against an unfiltered past
+ * reports every below-floor finding as `resolved`.
+ */
+function auditDelta(
+  ctx: PluginContext,
+  projectPath: string,
+  auditScanId: string,
+  aggregateFindings: readonly Finding[],
+): Record<string, unknown> | undefined {
+  const previousAudit = findPreviousAudit(ctx, projectPath, auditScanId);
+  if (!previousAudit) return undefined;
+  const prevFindings = ctx.storage.findings.listByScan(previousAudit);
+  const prevFingerprints = new Set(prevFindings.map((f) => f.fingerprint));
+  const curFingerprints = new Set(aggregateFindings.map((f) => f.fingerprint));
+  let newCount = 0;
+  let resolvedCount = 0;
+  for (const fp of curFingerprints) if (!prevFingerprints.has(fp)) newCount += 1;
+  for (const fp of prevFingerprints) if (!curFingerprints.has(fp)) resolvedCount += 1;
+  return {
+    since_audit_scan_id: previousAudit,
+    new_findings: newCount,
+    resolved_findings: resolvedCount,
+  };
+}
+
+/**
+ * Coverage roll-up: the aggregate "0 critical" is only trustworthy when
+ * every sub-scan actually ran its scanners. Take the worst coverage across
+ * the children and surface each gap (including the loud "0 findings is not
+ * clean" line from a sub-scan that scanned nothing) so the executive summary
+ * can never be mistaken for a clean bill of health.
+ */
+function rollUpCoverage(subResults: Record<string, SubScanSummary>): {
+  overallCoverage: ScanCoverage;
+  coverage_warnings: string[];
+  aggregateMissing: Set<string>;
+} {
+  const aggregateMissing = new Set<string>();
+  const coverageList: ScanCoverage[] = [];
+  const coverage_warnings: string[] = [];
+  for (const summary of Object.values(subResults)) {
+    if (summary.skipped !== undefined) {
+      coverageList.push('partial');
+      coverage_warnings.push(`${summary.call ?? summary.tool}: skipped — ${summary.skipped}`);
+      continue;
+    }
+    if (!summary.ok) {
+      coverageList.push('none');
+      coverage_warnings.push(
+        `${summary.call ?? summary.tool}: did not run (${summary.error?.code ?? 'failed'}) — not covered.`,
+      );
+      continue;
+    }
+    coverageList.push(summary.coverage ?? 'full');
+    for (const m of summary.missing_tools ?? []) aggregateMissing.add(m);
+    if (summary.coverage && summary.coverage !== 'full') {
+      const loud = (summary.warnings ?? []).find((w) => w.startsWith('⚠️'));
+      coverage_warnings.push(loud ?? `${summary.call ?? summary.tool}: coverage=${summary.coverage}.`);
+    }
+  }
+  return { overallCoverage: worstCoverage(coverageList), coverage_warnings, aggregateMissing };
 }
 
 /**

@@ -241,11 +241,27 @@ function isBoundary(text: string, at: number): boolean {
  * nothing more.
  */
 function runEnds(text: string, inClass: (c: number) => boolean): (i: number) => number {
+  const cached = windowRunEnds?.get(inClass);
+  if (cached !== undefined) return cached;
   const ends = new Int32Array(text.length + 1);
   ends[text.length] = text.length;
   for (let i = text.length - 1; i >= 0; i -= 1) ends[i] = inClass(text.charCodeAt(i)) ? (ends[i + 1] ?? i) : i;
-  return (i: number): number => (i >= text.length ? text.length : (ends[i] ?? i));
+  const end = (i: number): number => (i >= text.length ? text.length : (ends[i] ?? i));
+  windowRunEnds?.set(inClass, end);
+  return end;
 }
+
+/**
+ * The run ends of the window {@link firstHit} is searching, per class — set
+ * only while it searches one window, so it holds that window's and no other:
+ * a finder called again in it, past a match set aside, reuses them instead of
+ * making one more pass over the whole window, and a window full of
+ * placeholders costs one pass, not one per placeholder. Scoped by the call,
+ * not by comparing texts: telling a window from the last one by its text
+ * (`===`) compared two 16 KB windows on every search, which made a long line
+ * cost more than linearly under V8's coverage (the floor container's run).
+ */
+let windowRunEnds: Map<(c: number) => boolean, (i: number) => number> | undefined;
 
 /**
  * The `jwt` pattern's first match at or after `from`, in linear time. A
@@ -483,8 +499,8 @@ function lineWindows(line: string, overlap: number = OVERLAP): LineWindow[] {
  * which holds it whole when it is no longer than the rule's overlap; the search in
  * this window stops, so a window costs at most two searches per rule.
  */
-function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow): SecretMatch | null {
-  let from = 0;
+function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow, start = 0): SecretMatch | null {
+  let from = start;
   for (let tries = 0; tries < 2; tries += 1) {
     let m: SecretMatch | null;
     if (rule.find !== undefined) m = rule.find(w.text, from);
@@ -502,6 +518,34 @@ function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow): SecretMatch | 
     return m;
   }
   return null;
+}
+
+/**
+ * A rule's first match in a window that is a hit — past every match set aside
+ * before it: a placeholder (AWS's documented example key), a value too plain
+ * to be a credential. A rule used to stop at its first match, and AWS's
+ * example key before a real key on one line reported nothing at all (review of
+ * 3.3.0); then it set aside at most 16, and 17 example keys before a real one
+ * hid it again (review of 3.4.0, finding 11). Each search starts where the one
+ * before ended, and a finder's run ends are worked out once per window
+ * ({@link runEnds}), so all the searches of a window read it about once: a
+ * line of nothing but placeholders costs what a line with none does.
+ */
+function firstHit(rule: SecretRule, re: RegExp, w: LineWindow, line: number, skipPlaceholders: boolean): SecretHit | null {
+  windowRunEnds = new Map();
+  try {
+    let start = 0;
+    while (start <= w.text.length) {
+      const m = firstMatch(rule, re, w, start);
+      if (m === null) return null;
+      const hit = judge(rule, m, line, skipPlaceholders);
+      if (hit !== null) return hit;
+      start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
+    }
+    return null;
+  } finally {
+    windowRunEnds = undefined;
+  }
 }
 
 /**
@@ -542,7 +586,7 @@ export function scanForSecrets(text: string, options: SecretScanOptions = {}): S
         if (allow.some((a) => lower.includes(a))) continue;
         for (const { rule, re } of group) {
           if (found.has(rule)) continue;
-          const hit = judge(rule, firstMatch(rule, re, w), i, skipPlaceholders);
+          const hit = firstHit(rule, re, w, i, skipPlaceholders);
           if (hit !== null) found.set(rule, hit);
         }
       }

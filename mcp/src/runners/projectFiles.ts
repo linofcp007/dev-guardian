@@ -21,6 +21,17 @@ import { FS_EXCLUDE } from '../treeHash/computeTreeHash.js';
 export const PROJECT_WALK_EXCLUDE: ReadonlySet<string> = new Set([...FS_EXCLUDE, 'vendor']);
 
 /**
+ * {@link PROJECT_WALK_EXCLUDE} without `.guardian`, for the listings that
+ * stand for what a SCANNER reads (a scope's files, gitleaks' working tree):
+ * there only the root `.guardian/`'s generated output is left out, by its
+ * project-relative path (`platform/guardianOutput.ts#isGuardianOutput`) — a
+ * `.guardian` folder below the root is the project's code, and leaving it
+ * out by name let `lib/.guardian/handler.js` through the CI gate unscanned
+ * (review 10, finding 1).
+ */
+export const SCANNED_WALK_EXCLUDE: ReadonlySet<string> = new Set([...PROJECT_WALK_EXCLUDE].filter((d) => d !== '.guardian'));
+
+/**
  * What the walks that mirror what a SCANNER reads leave out besides
  * {@link PROJECT_WALK_EXCLUDE} — Trivy's dependency-manifest walk
  * (`scannerParsers/trivy.ts`) and its IaC-looking-files walk

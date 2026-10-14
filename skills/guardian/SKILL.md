@@ -74,7 +74,7 @@ such as SAST, CVE or secrets in English.
 | "check the Dockerfile / Terraform" | `/guardian-infra docker` / `iac` |
 | "is the agent config / `.mcp.json` safe?" | `audit_agent_config { project_path: "<project>" }` |
 | "are MCP server X's tools safe?" | `guardian-security` → `audit_mcp_tools { servers: ["X"] }` (it starts X) |
-| "have a model verify the findings" | `guardian-security` → `llm_scan_start` |
+| "have a model verify the findings" | `guardian-security` → `llm_scan` |
 | AI / LLM features in the app | `/guardian-scan` — see [`references/llm-apps.md`](references/llm-apps.md) |
 
 When the request is ambiguous, ask one short question — never assume silently.

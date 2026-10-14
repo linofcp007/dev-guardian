@@ -122,7 +122,7 @@ const PAGE = 25;
 /** How many skipped scans a summary names, per reason. The count is exact. */
 export const SKIPPED_SAMPLE = 5;
 
-/** The tool name of a finding the LLM hunt wrote (`llm_scan_submit`). */
+/** The tool name of a finding the LLM hunt wrote (`llm_scan { step: "submit" }`). */
 const HUNT_TOOL = 'llm-hunt';
 
 export type SkipReason = 'coverage_none';

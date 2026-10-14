@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { evaluateGate, remedyFor, type GateInput } from '../../../src/ci/gate.js';
-import { renderSarif } from '../../../src/ci/report.js';
+import { renderHuman, renderJson, renderSarif } from '../../../src/ci/report.js';
 import { CI_EXIT, GAP_KINDS, type ScanStepResult } from '../../../src/ci/types.js';
 import type { Finding, ToolRun } from '../../../src/types.js';
 
@@ -48,6 +48,18 @@ describe('a per-file Timeout: accepted by the committed .guardian/scan.yml, noth
     expect(v.coverageGaps).toEqual([]);
     expect(v.acceptedGaps).toEqual([`security_scan_full: semgrep timed out on ${F} — accepted (.guardian/scan.yml semgrep.accept_timeouts)`]);
     expect(v.coverageGapDetails).toEqual([expect.objectContaining({ kind: 'file_timeout', gating: false })]);
+    expect(v.unusedTimeoutAcceptances).toEqual([]);
+  });
+
+  it('an entry no step reported a Timeout on is named unused, on every run — a stale one never sits unnoticed (review 10)', () => {
+    // The file timed out once and was accepted; it no longer does, or a
+    // parse error on it is not what the entry accepts.
+    const v = evaluateGate(
+      input({ steps: [semgrepStep([{ file: 'src/other.js', type: 'PartialParsing' }, { file: F, type: 'PartialParsing' }])], acceptedTimeouts: [F, './src/gone.js'] }),
+    );
+    expect(v.unusedTimeoutAcceptances).toEqual([F, 'src/gone.js']);
+    expect(renderJson(v)).toContain('"unused_timeout_acceptances"');
+    expect(renderHuman(v)).toContain('note: .guardian/scan.yml semgrep.accept_timeouts src/gone.js: no step reported a Timeout on it (unused');
   });
 
   it('--accept-partial-parse never accepts a Timeout, and accept_timeouts never a parse error', () => {
@@ -66,6 +78,78 @@ describe('a per-file Timeout: accepted by the committed .guardian/scan.yml, noth
     expect(v.exitCode).toBe(CI_EXIT.PASS);
     expect(v.acceptedGaps).toHaveLength(2);
   });
+
+  // Review 11, finding 1: the acceptance was by path alone, so a pull request
+  // appended `exec('cat ' + req.query.file)` to an accepted file, the rule
+  // timed out on it as on the rest, and the gate passed with exit 0.
+  it('under a ref: a timeout on a listed file that changed since the ref is not accepted — exit 2, saying why', () => {
+    const steps = [semgrepStep([{ file: F, type: 'Timeout' }])];
+    const changed = evaluateGate(input({ steps, acceptedTimeouts: [F], timeoutAcceptanceRef: { ref: 'BASE', changed: new Set([F]) } }));
+    expect(changed.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(changed.acceptedGaps).toEqual([]);
+    expect(changed.acceptedGapDetails).toEqual([]);
+    expect(changed.coverageGaps[0]).toMatch(/not accepted: Timeout on src\/huge\.js, listed in \.guardian\/scan\.yml semgrep\.accept_timeouts, but changed since BASE/);
+    expect(changed.coverageGapDetails[0]).toMatchObject({ kind: 'file_timeout', gating: true });
+    // Its own cause and remedy (review 12, finding 10): "list it under
+    // accept_timeouts" said nothing to someone who had.
+    expect(changed.coverageGapDetails[0]?.cause).toBe('accepted_file_changed');
+    expect(changed.coverageGapDetails[0]?.remedy).toMatch(/^The file is listed in \.guardian\/scan\.yml semgrep\.accept_timeouts, but it changed/);
+    expect(changed.coverageGapDetails[0]?.remedy).not.toMatch(/list the file under/);
+    // An unlisted file's timeout keeps the usual remedy, and no cause.
+    const unlisted = evaluateGate(input({ steps, timeoutAcceptanceRef: { ref: 'BASE', changed: new Set() } }));
+    expect(unlisted.coverageGapDetails[0]?.cause).toBeUndefined();
+    expect(unlisted.coverageGapDetails[0]?.remedy).toMatch(/list the file under semgrep\.accept_timeouts/);
+    // Listed and timed out: used, never "unused".
+    expect(changed.unusedTimeoutAcceptances).toEqual([]);
+
+    const same = evaluateGate(input({ steps, acceptedTimeouts: [F], timeoutAcceptanceRef: { ref: 'BASE', changed: new Set(['src/other.js']) } }));
+    expect(same.exitCode).toBe(CI_EXIT.PASS);
+    expect(same.acceptedGaps).toHaveLength(1);
+
+    // A comparison that could not be made accepts nothing: never read as "unchanged".
+    const unknown = evaluateGate(
+      input({ steps, acceptedTimeouts: [F], timeoutAcceptanceRef: { ref: 'BASE', changed: new Set(), error: 'bad object BASE' } }),
+    );
+    expect(unknown.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(unknown.coverageGaps[0]).toMatch(/could not be told \(bad object BASE\)/);
+
+    // The path the ref's diff names is normalised like the list's.
+    const spelled = evaluateGate(input({ steps, acceptedTimeouts: [F], timeoutAcceptanceRef: { ref: 'BASE', changed: new Set([`.\\${F.replace('/', '\\')}`]) } }));
+    expect(spelled.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+  });
+
+  it('a pass with accepted files says so under the headline, and in accepted_gap_details — one entry per file', () => {
+    const v = evaluateGate(input({
+      steps: [
+        semgrepStep([{ file: F, type: 'Timeout' }, { file: 'src/gen.js', type: 'Timeout' }, { file: 'a.php', type: 'PartialParsing' }]),
+        { ...semgrepStep([{ file: F, type: 'Timeout' }]), tool: 'map_attack_surface' },
+      ],
+      acceptedTimeouts: [F, 'src/gen.js'],
+      acceptedPartialParses: ['a.php'],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    // One line per file now (a step's two timed-out files were one line).
+    expect(v.acceptedGaps).toEqual([
+      'security_scan_full: semgrep only partly parsed a.php — accepted (--accept-partial-parse)',
+      `security_scan_full: semgrep timed out on ${F} — accepted (.guardian/scan.yml semgrep.accept_timeouts)`,
+      'security_scan_full: semgrep timed out on src/gen.js — accepted (.guardian/scan.yml semgrep.accept_timeouts)',
+      `map_attack_surface: semgrep timed out on ${F} — accepted (.guardian/scan.yml semgrep.accept_timeouts)`,
+    ]);
+    expect(v.acceptedGapDetails.map((d) => [d.kind, d.file])).toEqual([
+      ['partial_parse', 'a.php'],
+      ['file_timeout', F],
+      ['file_timeout', 'src/gen.js'],
+      ['file_timeout', F],
+    ]);
+    expect(v.acceptedGapDetails[0]?.reason).toBe('PartialParsing — accepted by --accept-partial-parse');
+    expect(v.acceptedGapDetails[1]?.reason).toBe('Timeout — accepted by .guardian/scan.yml semgrep.accept_timeouts');
+    const human = renderHuman(v).split('\n');
+    expect(human[0]).toBe('dev-guardian CI: PASS (exit code 0)');
+    // Distinct files: src/huge.js is accepted in two steps, and counted once.
+    expect(human[1]).toBe('2 file(s) not analysed (accepted), 1 file(s) only partly parsed (accepted) — listed under "accepted (not gating)"');
+    const plain = renderHuman(evaluateGate(input())).split('\n');
+    expect(plain[1]).toMatch(/^coverage: /);
+  });
 });
 
 describe('a gap no acceptance clears', () => {
@@ -78,6 +162,16 @@ describe('a gap no acceptance clears', () => {
     expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
     expect(v.coverageGapDetails[0]).toMatchObject({ kind: 'path_too_long', gating: true });
     expect(v.coverageGapDetails[0]?.remedy).toMatch(/LongPathsEnabled/);
+  });
+
+  it('a file git tracks in .guardian/’s generated output: a gap no flag clears, whose remedy is to stop tracking it (review 10, finding 1)', () => {
+    const reason = "1 file(s) git tracks in .guardian/'s generated output were not scanned: .guardian/reports/evil.js — x";
+    const v = evaluateGate(
+      input({ steps: [semgrepStep([{ file: F, type: 'PartialParsing' }], { reason, unscanned: { guardian_output: 1 } })], acceptedPartialParses: [F] }),
+    );
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.acceptedGaps).toEqual([]);
+    expect(remedyFor('other', 'semgrep', `security_scan_full: semgrep ran with reduced coverage (${reason})`)).toMatch(/git rm --cached/);
   });
 
   it('a run that also missed files over the size limit (unscanned), or rules that did not load: never cleared by naming files', () => {
@@ -97,6 +191,15 @@ describe('every gap as data', () => {
       if (kind === 'missing_tool') expect(remedy).toMatch(/^Install semgrep \(`pipx install semgrep`\)/);
       else expect(remedy, kind).not.toMatch(/^Install/);
     }
+  });
+
+  it('a Semgrep that refused --config=auto under SEMGREP_SEND_METRICS=off: the remedy says so, not "fix the rule" (review 11, finding 10)', () => {
+    const detail =
+      'security_scan_full: semgrep failed (semgrep wrote no JSON report (exit 2) — semgrep said: Cannot create auto config when ' +
+      'metrics are off. — SEMGREP_SEND_METRICS=off is set in the environment, and Semgrep cannot build its registry rules ' +
+      "(--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI's --local-only))";
+    expect(remedyFor('scanner_failed', 'semgrep', detail)).toMatch(/^Unset SEMGREP_SEND_METRICS/);
+    expect(remedyFor('scanner_failed', 'semgrep', 'semgrep failed (a rule did not load)')).toMatch(/rule/);
   });
 
   it('kinds from what a step says: not installed, no lockfile, a refused step, a failed run, a shallow clone', () => {

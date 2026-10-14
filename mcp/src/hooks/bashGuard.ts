@@ -99,13 +99,22 @@
 
 import { homedir } from 'node:os';
 import { userDataDir } from './dataRegistry.js';
-import { windowsName } from './guardedPath.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
-import { ASSIGNMENT, basename, cmdSwitch, parseRedirect, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { pushAll } from './shell/arrays.js';
+import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
+import { ASSIGNMENT, basename, cmdSwitch, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
+import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
+import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
 import { MASK, splitShell, type ShellStatement, type ShellWord } from './shell/split.js';
+import { type Steps, workdirs } from './shell/workdir.js';
 
-// The tokenizer and the command-word resolution live in `shell/`; what this
-// module exported from them before stays exported from here.
+// How a command is READ lives in `shell/` — the tokenizer (`split.ts`), the
+// command-word resolution (`command.ts`), cmd.exe's line reader (`cmd.ts`),
+// paths as the command moves between directories (`paths.ts`), what it does
+// to the filesystem (`effects.ts`), the program text it hands an interpreter
+// (`interpreters.ts`) — and this module judges it. What it exported from them before stays exported
+// from here.
 export { commandWordIndex } from './shell/command.js';
 export { splitShell, type ShellSplit, type ShellStatement, type ShellWord, type StatementEnd } from './shell/split.js';
 
@@ -157,6 +166,16 @@ export interface BashAssessment {
    * block is switched off report.
    */
   ask?: string;
+  /**
+   * The scripts the command hands a shell, each as that shell reads it — a
+   * `bash -c` / `eval` / `pwsh -c` / `-EncodedCommand` script, a `cmd /c` line,
+   * a script fed to a shell (`echo '…' | sh`, `cat <<EOF | bash`), a process
+   * substitution — to the guard's nesting depth, at most
+   * {@link MAX_NOTED_SCRIPTS}. The hook vets the installs in them as it does
+   * the command's own (review of 3.3.0: `bash -c 'npm i x'` was never vetted).
+   * Absent when there is none.
+   */
+  scripts?: ReadonlyArray<{ text: string; shell: 'bash' | 'powershell' }>;
 }
 
 /**
@@ -459,9 +478,16 @@ const WINDOWS_DIR_NAMES = ['windows', 'users', 'program files', 'program files (
  * command deleting them is `rm`, PowerShell's `Remove-Item`, `rd`/`del` or
  * `find`, so this is shared by every delete-assessing function below. A glob
  * that can name one of them counts as naming it (`/[a-z]*`, `/?*`, `/c/U*`).
+ * So does any other spelling of the same path ({@link plainTarget}): `/usr/..`,
+ * `C:\Windows\.`, `\\?\C:\Windows`, `\\host\c$\`, `FileSystem::C:\`,
+ * `$WINDIR`, `~/..` (review of 3.3.0).
  */
 function catastrophicKind(raw: string, tildeUsers = true): TargetKind | null {
-  const t = stripQuotes(raw);
+  return spelledKind(stripQuotes(raw), tildeUsers) ?? plainKind(raw, tildeUsers);
+}
+
+/** {@link catastrophicKind} of a target as written — the spellings it names outright. */
+function spelledKind(t: string, tildeUsers: boolean): TargetKind | null {
   if (t === '/' || /^\/\*+$/.test(t)) return 'root'; // root, or everything under root
   // PowerShell's `\` and `\*` are the current drive's root; in bash the `\`
   // is an escape, so `rm -rf \*` arrives here as `*` and is not this.
@@ -504,6 +530,114 @@ function catastrophicKind(raw: string, tildeUsers = true): TargetKind | null {
     return 'root';
   }
   return globNamesCatastrophic(t) ? 'root' : null;
+}
+
+/** The longest target {@link plainTarget} reads: no catastrophic path is long, however it is spelled. */
+const MAX_PLAIN_TARGET = 4096;
+
+/**
+ * Windows' own directories by the variable that names them, as bash (`$WINDIR`,
+ * `${SYSTEMROOT}` — Git Bash sees the Windows environment), cmd (`%windir%`) and
+ * PowerShell (`$env:windir`, `${env:ProgramFiles(x86)}`) spell it — each as the
+ * path it names on a default installation, which is what is compared.
+ */
+const ROOT_VARIABLES: Readonly<Record<string, string>> = {
+  windir: 'C:/Windows',
+  systemroot: 'C:/Windows',
+  programfiles: 'C:/Program Files',
+  'programfiles(x86)': 'C:/Program Files (x86)',
+  programw6432: 'C:/Program Files',
+  programdata: 'C:/ProgramData',
+  allusersprofile: 'C:/ProgramData',
+  systemdrive: 'C:/',
+  homedrive: 'C:/',
+};
+
+/** The variables that name the home directory, in the same spellings; `$HOMEDRIVE$HOMEPATH` is matched whole. */
+const HOME_VARIABLES = new Set(['home', 'userprofile']);
+
+/** A variable at the start of a target: `$X`, `${X}`, `$env:X`, `${env:X}`, `%X%` — its name, lower-cased, and the rest. */
+function leadingVariable(t: string): { name: string; rest: string } | undefined {
+  const m = /^(?:\$\{(?:env:)?([A-Za-z_][\w()]*)\}|\$(?:env:)?([A-Za-z_]\w*(?:\(x86\))?)|%([A-Za-z_][\w()]*)%)/i.exec(t);
+  if (m === null) return undefined;
+  const name = (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase();
+  return { name, rest: t.slice((m[0] ?? '').length) };
+}
+
+/**
+ * A delete target with its spelling taken away (review of 3.3.0: each of these
+ * only warned): quotes; PowerShell's provider prefix (`FileSystem::`,
+ * `Microsoft.PowerShell.Core\FileSystem::`); a device prefix (`\\?\`, `\\.\`,
+ * `\\?\UNC\`); an administrative share (`\\host\c$\…` is that host's `C:\…`,
+ * whichever host — deleting another machine's system folder is no less
+ * catastrophic); `\` read as `/`, doubled separators and `.` segments dropped,
+ * `..` folded (never above the root); and on a Windows path a segment's
+ * trailing dots and spaces, which Windows drops when it opens it. A leading
+ * home variable (`~`, `$HOME`, `$USERPROFILE`, `%USERPROFILE%`,
+ * `$env:USERPROFILE`, `$HOMEDRIVE$HOMEPATH`) is kept as `~` with how far the
+ * rest climbs above it (`up`); one of Windows' own (`$WINDIR`, `%ProgramFiles%`,
+ * …) is replaced by the path it names — unless `variables` is off. `undefined`
+ * for a relative path (`C:` and `C:dir` are relative to drive C's current
+ * directory), which names nothing this can judge.
+ */
+function plainTarget(raw: string, variables = true): { path: string; home: boolean; up: number } | undefined {
+  let t = stripQuotes(raw.trim());
+  if (t.length === 0 || t.length > MAX_PLAIN_TARGET) return undefined;
+  t = t.replace(/^(?:Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
+  const unc = /^[\\/]{2}[?.][\\/]UNC[\\/]/i.exec(t);
+  if (unc !== null) t = `//${t.slice(unc[0].length)}`;
+  else t = t.replace(/^[\\/]{2}[?.][\\/](?=[A-Za-z]:)/, '');
+  const share = /^[\\/]{2}[^\\/]+[\\/]([A-Za-z])\$(?=[\\/]|$)/.exec(t);
+  if (share !== null) t = `${share[1] ?? ''}:/${t.slice(share[0].length)}`;
+  let home = false;
+  const homePair = /^(?:\$\{?(?:env:)?HOMEDRIVE\}?\$\{?(?:env:)?HOMEPATH\}?|%HOMEDRIVE%%HOMEPATH%)/i.exec(t);
+  if (/^~(?=[\\/]|$)/.test(t)) home = true;
+  else if (variables && homePair !== null) {
+    home = true;
+    t = `~${t.slice(homePair[0].length)}`;
+  } else if (variables) {
+    const v = leadingVariable(t);
+    if (v !== undefined && HOME_VARIABLES.has(v.name)) {
+      home = true;
+      t = `~${v.rest}`;
+    } else if (v !== undefined && ROOT_VARIABLES[v.name] !== undefined) t = `${ROOT_VARIABLES[v.name] ?? ''}${v.rest}`;
+  }
+  const drive = /^[A-Za-z]:/.exec(t)?.[0] ?? '';
+  const body = t.slice(drive.length);
+  if (!home && !/^[\\/]/.test(body)) return undefined;
+  const windows = drive !== '' || /^[\\/](?:mnt[\\/])?[A-Za-z](?:[\\/]|$)/.test(body);
+  const segments: string[] = [];
+  let up = 0;
+  for (const raw0 of (home ? body.slice(1) : body).split(/[\\/]+/)) {
+    const seg = windows && raw0 !== '.' && raw0 !== '..' ? raw0.replace(/[. ]+$/, '') : raw0;
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (segments.length > 0) segments.pop();
+      else if (home) up += 1;
+      continue;
+    }
+    segments.push(seg);
+  }
+  if (home) return { path: ['~', ...segments].join('/'), home, up };
+  return { path: `${drive}/${segments.join('/')}`, home, up: 0 };
+}
+
+/**
+ * {@link catastrophicKind} of a target's plain path ({@link plainTarget}): what
+ * the spellings it names outright are judged as. A climb above the home
+ * directory reaches the directory every home is in (`/home`, `C:\Users`), or
+ * the root — a system directory either way; `~/../alice` is another account's
+ * home.
+ */
+function plainKind(raw: string, tildeUsers: boolean): TargetKind | null {
+  const plain = plainTarget(raw);
+  if (plain === undefined) return null;
+  if (plain.home) {
+    const below = plain.path === '~' ? 0 : plain.path.split('/').length - 1;
+    if (plain.up === 0) return below === 0 ? 'home' : null;
+    return below < plain.up ? 'root' : below === plain.up ? 'home' : null;
+  }
+  return plain.path === stripQuotes(raw) ? null : spelledKind(plain.path, tildeUsers);
 }
 
 function isCatastrophicTarget(raw: string, tildeUsers = true): boolean {
@@ -553,10 +687,14 @@ interface HomeDir {
 /**
  * A delete target as a comparable path: quotes and a trailing `/`, `\`, `/*`
  * or `\*` gone, `\` read as `/`, and — where paths fold case (Windows) — Git
- * Bash's `/c/…` and WSL's `/mnt/c/…` read as `c:/…`, lower-cased.
+ * Bash's `/c/…` and WSL's `/mnt/c/…` read as `c:/…`, lower-cased. An absolute
+ * path is read plain first ({@link plainTarget}, its variables as written):
+ * `C:\Users\alice\.` and `\\?\C:\Users\alice` are `C:\Users\alice` (review of
+ * 3.3.0).
  */
 function targetKey(raw: string, fold: boolean): string {
-  const t = stripQuotes(raw.trim())
+  const plain = plainTarget(raw, false);
+  const t = stripQuotes((plain !== undefined && !plain.home ? plain.path : raw).trim())
     .replace(/\\/g, '/')
     .replace(/\/{2,}/g, '/')
     .replace(/\/+\*?$/, '');
@@ -574,10 +712,75 @@ function homeDirFor(home: string | undefined, platform: string): HomeDir | undef
 /**
  * The home directory named outright — `C:\Users\alice`, `/c/Users/alice/`,
  * `/home/alice/*` — compared with `os.homedir()`, case-insensitively on
- * Windows (review I2). A path below it is not the home directory.
+ * Windows (review I2), where its 8.3 name counts too (`C:\Users\ADMINI~1`, what
+ * `%TEMP%` is often spelled with — review of 3.4.0, finding 9). A path below it
+ * is not the home directory.
  */
 function isHomeTarget(raw: string, home: HomeDir | undefined): boolean {
-  return home !== undefined && targetKey(raw, home.fold) === home.key;
+  if (home === undefined) return false;
+  const key = targetKey(raw, home.fold);
+  if (key === home.key) return true;
+  if (!home.fold) return false;
+  const cut = key.lastIndexOf('/');
+  const homeCut = home.key.lastIndexOf('/');
+  if (cut < 0 || key.slice(0, cut) !== home.key.slice(0, homeCut)) return false;
+  const short = /^([^~/]{1,6})~\d+$/.exec(key.slice(cut + 1));
+  return short !== null && home.key.slice(homeCut + 1).replace(/[\s.]/g, '').startsWith(short[1] ?? '');
+}
+
+/**
+ * What a delete's target is read against beyond its own spelling (review of
+ * 3.4.0, finding 9: `rm -rf ..` from a child of the home directory, `cd / &&
+ * rm -rf *`, `"$TEMP/../../.."` and `Get-ChildItem C:\ | Remove-Item -Recurse`
+ * only warned — a relative target was never resolved).
+ */
+interface DeleteContext {
+  /** The directory the command runs in, absolute and with `/` separators, when it is known. */
+  dir?: string | undefined;
+  /** The values of the variables a target may start with, by lower-cased name: `temp`, `tmp`, `tmpdir`, `localappdata`, `appdata`. */
+  vars?: Readonly<Record<string, string>> | undefined;
+  /** A bare drive (`C:`) is that drive's root — Git Bash's reading, not cmd's or PowerShell's (the drive's current directory). */
+  bareDriveRoot?: boolean | undefined;
+  /** What the pipe hands a PowerShell delete with no path of its own. */
+  piped?: string | undefined;
+}
+
+/** `$PWD`, `${PWD}`, `$env:PWD`, `$(pwd)`, `` `pwd` `` at the start of a target. */
+const PWD_PREFIX = /^(?:\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{?PWD\}?|\$env:PWD)(?=[\\/]|$)/i;
+
+/**
+ * A delete target read against {@link DeleteContext}: a relative one joined
+ * to the directory the command runs in, one led by `$PWD` (and its spellings)
+ * or by `$TEMP`, `$TMP`, `$TMPDIR`, `$LOCALAPPDATA`, `$APPDATA` (in bash's,
+ * cmd's and PowerShell's spellings) with that value in its place — left to
+ * {@link catastrophicKind} and {@link isHomeTarget} to fold its `..`s. `undefined`
+ * when there is nothing to read it against.
+ */
+function resolvedTarget(raw: string, ctx: DeleteContext): string | undefined {
+  const t = stripQuotes(raw.trim());
+  if (t === '' || t.length > MAX_PLAIN_TARGET || t.includes('::')) return undefined;
+  const pwd = PWD_PREFIX.exec(t);
+  if (pwd !== null) return ctx.dir === undefined ? undefined : `${ctx.dir}${t.slice(pwd[0].length)}`;
+  const v = leadingVariable(t);
+  if (v !== undefined) {
+    const value = ctx.vars?.[v.name];
+    return value === undefined || value === '' ? undefined : `${value.replace(/\\/g, '/')}${v.rest.replace(/\\/g, '/')}`;
+  }
+  if (/^(?:[\\/~$%]|[A-Za-z]:)/.test(t) || ctx.dir === undefined) return undefined;
+  return `${ctx.dir}/${t}`;
+}
+
+/** The targets a delete is judged on: each as written, and as {@link resolvedTarget} reads it. */
+function judgedTargets(targets: readonly string[], ctx: DeleteContext): string[] {
+  return targets.flatMap((t) => {
+    const resolved = resolvedTarget(t, ctx);
+    return resolved === undefined ? [t] : [t, resolved];
+  });
+}
+
+/** Git Bash's bare drive: `C:`, `C:.`, `C:..` — the drive's root there. */
+function isBareDrive(raw: string): boolean {
+  return /^[A-Za-z]:\.{0,2}$/.test(stripQuotes(raw.trim()));
 }
 
 /** Remove-Item's path parameters and their abbreviations: `-Path`, `-LiteralPath`, `-LP`, `-PSPath`. */
@@ -597,7 +800,7 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
  * aliases in PowerShell, its dash flags too).
  */
-function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
+function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true, ctx: DeleteContext = {}): MatchedRule | null {
   const head = words[start];
   if (head === undefined) return null;
   const name = basename(head.value).toLowerCase();
@@ -660,8 +863,47 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
   // delete as much as their forced forms — measured: both removed a whole tree.
   if (!(recursive || noPreserve)) return null;
 
-  if (noPreserve || targets.some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) return { ...RULE_RM_ROOT };
+  // A PowerShell delete with no path of its own deletes what the pipe hands it.
+  if (targets.length === 0 && ctx.piped !== undefined) targets.push(ctx.piped);
+  if (
+    noPreserve ||
+    (ctx.bareDriveRoot === true && targets.some(isBareDrive)) ||
+    judgedTargets(targets, ctx).some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))
+  ) {
+    return { ...RULE_RM_ROOT };
+  }
   return { ...RULE_RM_BROAD };
+}
+
+/** PowerShell's listing cmdlets and their aliases: what they write down a pipe is items a `Remove-Item` after them deletes. */
+const LISTERS = new Set(['get-childitem', 'gci', 'ls', 'dir', 'get-item', 'gi']);
+
+/** `Get-ChildItem`'s parameters that narrow what it lists, and those that take a value. */
+const LIST_NARROWING = /^-(?:fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?|name)$/i;
+const LIST_VALUED = /^-(?:de(?:p(?:th?)?)?|fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?)$/i;
+
+/**
+ * What a PowerShell listing hands a delete down the pipe (review of 3.4.0,
+ * finding 9: `Get-ChildItem C:\ | Remove-Item -Recurse` only warned): the
+ * children of the path `Get-ChildItem` / `gci` / `ls` / `dir` lists (`-Path`,
+ * `-LiteralPath` or its first operand; `.` without one), the item `Get-Item`
+ * names. Nothing when a filter narrows the listing (`-Filter`, `-Include`,
+ * `-Exclude`, `-Attributes`, `-Name`): what it lists is then not all of it.
+ */
+function pipedItems(words: readonly ShellWord[]): string | undefined {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? '');
+  if (!LISTERS.has(name)) return undefined;
+  const args = withoutRedirections(words.slice(at + 1));
+  if (args.some((a) => LIST_NARROWING.test(a.split(':')[0] ?? a))) return undefined;
+  let path = psParam(args, ['path', 'literalpath', 'lp', 'pspath']);
+  for (let i = 0; path === undefined && i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (a.startsWith('-')) i += LIST_VALUED.test(a) ? 1 : 0;
+    else path = a;
+  }
+  if (name === 'get-item' || name === 'gi') return path ?? '.';
+  return `${(path ?? '.').replace(/[\\/]+$/, '')}/*`;
 }
 
 const RULE_RM_ROOT: MatchedRule = {
@@ -716,7 +958,7 @@ const RULE_FIND_BROAD: MatchedRule = {
  * first test; a value after a test (`-path /`) is not a start path. With none,
  * GNU find starts at `.`.
  */
-function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
+function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true, ctx: DeleteContext = {}): MatchedRule | null {
   const head = words[start];
   if (head === undefined || basename(head.value) !== 'find') return null;
 
@@ -724,7 +966,7 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
   const execs = findExecCommands(words, start);
   const viaExec = execs.some((cmd) => FIND_DELETERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? '')));
   // A delete inside an `-exec` is judged on its own targets too.
-  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers)).find((r) => r?.level === 'block');
+  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers, { ...ctx, piped: undefined })).find((r) => r?.level === 'block');
   if (inner !== undefined && inner !== null) return inner;
   if (!viaExec && !rest.some((w) => w.value === '-delete')) return null;
 
@@ -743,9 +985,11 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
   }
   if (targets.length === 0) targets.push('.');
   const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
+  // A relative start path is where the command runs (review of 3.4.0, finding 9: `cd / && find . -delete`).
+  const judged = judgedTargets(targets, ctx);
 
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'root')) return { ...RULE_FIND_ROOT };
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'home' || isHomeTarget(t, home))) {
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === 'root')) return { ...RULE_FIND_ROOT };
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === 'home' || isHomeTarget(t, home))) {
     return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
@@ -792,6 +1036,13 @@ const USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
 /** Claude Code's own settings, project or user level; separators optional as in `HOOK_CONFIG_PATH`. */
 const CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
 
+/**
+ * Claude Code's managed settings — `ClaudeCode/managed-settings.json` under Program Files, ProgramData or
+ * `/Library/Application Support`, `/etc/claude-code/managed-settings.json` — which win over every other
+ * settings file (review 12, finding 7). Always this machine's: never "elsewhere".
+ */
+const MANAGED_SETTINGS_PATH = /(?:ClaudeCode|claude-code)\/?managed-settings\.json$/i;
+
 /** The same files through Claude Code's `CLAUDE_CONFIG_DIR`, spelled as a variable (bash, cmd, PowerShell). */
 const CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
 
@@ -802,18 +1053,13 @@ const CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLA
  * name, separators optional as in `HOOK_CONFIG_PATH` (`~/.claude-conta2/settings.json`).
  */
 function isSettingsPath(path: string, configDirName: string | undefined): boolean {
-  if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path)) return true;
+  if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path) || MANAGED_SETTINGS_PATH.test(path)) return true;
   if (configDirName === undefined) return false;
   const lower = path.toLowerCase();
   for (const file of ['settings.json', 'settings.local.json']) {
     if (lower.endsWith(`${configDirName}/${file}`) || lower.endsWith(`${configDirName}${file}`)) return true;
   }
   return false;
-}
-
-/** A path as the registry checks compare it: `/` separators, no doubled or trailing one, lower-cased. */
-function normalizedPath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
 /**
@@ -861,11 +1107,12 @@ function configDirNameOf(dir: string | undefined): string | undefined {
  * `enabledPlugins` when the same text names dev-guardian. The Write/Edit guard
  * (`settingsGuard.ts`) judges an edit of the settings by the value it sets; the
  * content a shell command writes cannot be read reliably, so here the key alone
- * decides, anywhere in the command's text.
+ * decides, anywhere in the command's text — `NODE_OPTIONS` and
+ * `GUARDIAN_PKG_VET_DEADLINE_MS` among them (review of 3.4.0, finding 4).
  */
 function namesLooseningKey(text: string): boolean {
   return (
-    /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET\b/i.test(text) ||
+    /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET(?:_DEADLINE_MS)?\b|\bNODE_OPTIONS\b/i.test(text) ||
     (/enabledPlugins/i.test(text) && /dev-guardian/i.test(text))
   );
 }
@@ -911,78 +1158,7 @@ function base64Literals(text: string): string[] {
   return out;
 }
 
-/** A command word's name: its last path segment, lower-cased, without `.exe`. */
-function commandName(word: string): string {
-  return basename(word).toLowerCase().replace(/\.exe$/, '');
-}
-
-// ── paths, as the command moves between directories
-
-/** A path that does not depend on the current directory: `/…`, `~…`, `$VAR…`, `%VAR%…`, `\\…`, `C:…`. */
-function isAbsolutePath(path: string): boolean {
-  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path);
-}
-
-/**
- * `target` as the command sees it after the `cd`s before it (`cwd`; `''` while
- * there was none): joined onto `cwd` unless absolute, every `\` read as `/`,
- * and `.` and `..` segments folded. So `cd ~/.config/dev-guardian && echo … >
- * hooks.json` names the file it writes, and so does `echo … >
- * .guardian/x/../hooks.config.json`.
- */
-function resolveFrom(cwd: string, target: string): string {
-  const joined = cwd === '' || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, '')}/${target}`;
-  const parts = joined.replace(/\\/g, '/').split('/');
-  const out: string[] = [];
-  parts.forEach((part, i) => {
-    if (part === '.' || (part === '' && i > 0 && i < parts.length - 1)) return;
-    const prev = out[out.length - 1];
-    if (part === '..' && prev !== undefined && prev !== '..' && prev !== '') {
-      out.pop();
-      return;
-    }
-    out.push(part);
-  });
-  return out.join('/');
-}
-
-/** `a/b/c` → `a/b`; `''` when there is no directory part. */
-function dirOf(path: string): string {
-  const cut = path.lastIndexOf('/');
-  return cut < 0 ? '' : path.slice(0, cut);
-}
-
-/** The longest current directory tracked. */
-const MAX_CWD = 320;
-
-const CD_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
-const CD_RETURNS = new Set(['popd', 'pop-location']);
-
-/**
- * The directory a `cd`, `pushd` or `Set-Location` moves to from `cwd`, or
- * `undefined` when `name` is none of them. A bare `cd` goes home; `cd -`,
- * `popd` and `Pop-Location` go back somewhere this does not track, which reads
- * as where the command started (`''`).
- */
-function cwdAfter(name: string, args: readonly string[], cwd: string, dataDir?: string): string | undefined {
-  if (CD_RETURNS.has(name)) return '';
-  if (!CD_COMMANDS.has(name)) return undefined;
-  const dir =
-    psParam(args, ['path', 'literalpath']) ?? args.find((a) => a === '-' || !(a.startsWith('-') || /^\/d$/i.test(a)));
-  if (dir === undefined) return '~';
-  if (dir === '-') return '';
-  const next = resolveFrom(cwd, dir);
-  // Only a directory a later relative path could need is tracked: one that
-  // names a configuration directory or a parent of one — or dev-guardian's
-  // data directory, whose registry is guarded too (review 3.0 wave 2, round
-  // 2). Any other relative target still names its own path in full. And
-  // never one longer than a real directory: a chain of `cd`s built to be slow.
-  if (next.length > MAX_CWD) return '';
-  const tracked =
-    /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) ||
-    (dataDir !== undefined && normalizedPath(next).startsWith(dataDir));
-  return tracked ? next : '';
-}
+// ── globs and braces (where a command moves between directories: `shell/paths.ts`)
 
 const GLOB = /[*?[]/;
 
@@ -1114,1264 +1290,6 @@ function expandWords(words: ShellWord[]): ShellWord[] {
     for (const value of expanded) out.push({ value, quoted: false });
   }
   return out ?? words;
-}
-
-/**
- * `*` / `?` matching without backtracking (a `[…]` class matches any one
- * character): the classic two-pointer walk, O(pattern × name). A pattern
- * turned into a RegExp of `.*` runs backtracks exponentially on a name it
- * does not match.
- */
-function wildcardMatch(pattern: string, name: string): boolean {
-  const pat = pattern.replace(/\[[^\]]*\]/g, '?');
-  let pi = 0;
-  let ni = 0;
-  let star = -1;
-  let mark = 0;
-  while (ni < name.length) {
-    const c = pat.charAt(pi);
-    if (pi < pat.length && (c === '?' || c === name.charAt(ni))) {
-      pi += 1;
-      ni += 1;
-    } else if (pi < pat.length && c === '*') {
-      star = pi;
-      mark = ni;
-      pi += 1;
-    } else if (star >= 0) {
-      pi = star + 1;
-      mark += 1;
-      ni = mark;
-    } else return false;
-  }
-  while (pat.charAt(pi) === '*') pi += 1;
-  return pi === pat.length;
-}
-
-// ── what a command does to the filesystem
-
-/**
- * What one simple command does to the filesystem, as far as this guard models
- * it. Every path is already resolved against the directory the command runs
- * in ({@link resolveFrom}).
- */
-interface Effects {
-  /** Files written: created, overwritten, appended to or emptied. */
-  writes: string[];
-  /** Paths deleted or moved away. */
-  removes: string[];
-  /** Directories a whole tree is moved or copied onto — replaced, when they did not exist. */
-  dirs: string[];
-  /** FIFOs and device nodes created. */
-  special: string[];
-  /** Links created. */
-  links: string[];
-  /**
-   * The files a HARD link is made to — a second name for the same file, through
-   * which a write reaches it (review round 3, item 5).
-   */
-  hardLinkSources: string[];
-  /**
-   * Directories whose whole content a command deletes without a delete command
-   * (review 8, item 9): `rsync --delete` and `robocopy /MIR` into them, a
-   * recursive `[IO.Directory]::Delete`.
-   */
-  trees: string[];
-}
-
-function noEffects(): Effects {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
-}
-
-/**
- * `into.push(...from)` without the spread: a spread passes every element as an
- * argument, and past ~125 000 of them (`rm a a a … /`, 245 KB) the engine
- * throws RangeError — which the hook turned into no decision at all (fix
- * round 3, I-1). Every append of a user-sized array in this file goes here.
- */
-function pushAll<T>(into: T[], from: readonly T[]): void {
-  for (const x of from) into.push(x);
-}
-
-function mergeEffects(into: Effects, from: Effects): void {
-  pushAll(into.writes, from.writes);
-  pushAll(into.removes, from.removes);
-  pushAll(into.dirs, from.dirs);
-  pushAll(into.special, from.special);
-  pushAll(into.links, from.links);
-  pushAll(into.hardLinkSources, from.hardLinkSources);
-  pushAll(into.trees, from.trees);
-}
-
-
-/** `a/b/c` → `c`, for either separator. */
-function lastSegment(path: string): string {
-  return path.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path;
-}
-
-/** The words that are not options, `--` ending the options; `valued` options consume the next word. */
-function operands(args: readonly string[], valued: ReadonlySet<string>): string[] {
-  const out: string[] = [];
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? '';
-    if (!optionsDone && a === '--') {
-      optionsDone = true;
-      continue;
-    }
-    if (!optionsDone && a.startsWith('-') && a.length > 1) {
-      if (valued.has(a)) i++;
-      continue;
-    }
-    out.push(a);
-  }
-  return out;
-}
-
-/** `ln [opts] TARGET… LINK`, `ln [opts] TARGET`, `ln -t DIR TARGET…`: the paths it creates. */
-function lnDestinations(args: readonly string[]): string[] {
-  let dir: string | undefined;
-  const rest: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? '';
-    const long = /^--target-directory=(.+)$/.exec(a);
-    if (long !== null) dir = long[1];
-    else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) dir = args[++i];
-    else if (/^-t./.test(a)) dir = a.slice(2);
-    else if (a === '-S' || a === '--suffix') i++;
-    else rest.push(a);
-  }
-  const targets = operands(rest, new Set());
-  if (dir !== undefined) return targets.map((t) => `${dir}/${lastSegment(t)}`);
-  if (targets.length >= 2) return [targets[targets.length - 1] ?? ''];
-  return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
-}
-
-/** The files `ln` hard-links to — every source operand, unless `-s` / `--symbolic` makes the links symbolic. */
-function lnHardSources(args: readonly string[]): string[] {
-  if (args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
-  let dir = false;
-  const rest: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? '';
-    if (/^--target-directory=/.test(a)) dir = true;
-    else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) {
-      dir = true;
-      i += 1;
-    } else if (/^-t./.test(a)) dir = true;
-    else if (a === '-S' || a === '--suffix') i += 1;
-    else rest.push(a);
-  }
-  const names = operands(rest, new Set());
-  return dir || names.length < 2 ? names : names.slice(0, -1);
-}
-
-/**
- * `New-Item`'s parameters that take a value, by the name the code below uses,
- * with every name and alias it may be spelled by. PowerShell binds any prefix
- * that names one parameter (review 3.0, wave 2: `ni -it HardLink` is
- * `-ItemType`), and a common parameter never makes one ambiguous — measured
- * on pwsh 7.6 and Windows PowerShell 5.1, `-i` is `-ItemType` and `-v` is
- * `-Value`, whatever `-InformationAction` and `-Verbose` begin with (round 2).
- * `-t` begins both `-Type` and `-Target`, and PowerShell refuses it.
- */
-const NEW_ITEM_VALUED: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['type', ['itemtype', 'type']],
-  ['path', ['path', 'literalpath', 'pspath', 'lp']],
-  ['name', ['name']],
-  ['target', ['value', 'target']],
-  ['credential', ['credential']],
-];
-
-function newItemParam(spelled: string): string | undefined {
-  const exact = NEW_ITEM_VALUED.find(([, names]) => names.includes(spelled));
-  if (exact !== undefined) return exact[0];
-  const matches = NEW_ITEM_VALUED.filter(([, names]) => names.some((n) => n.startsWith(spelled)));
-  return matches.length === 1 ? matches[0]?.[0] : undefined;
-}
-
-/**
- * The item type a FileSystem `-ItemType` value names. The provider matches
- * the value as a prefix, wildcards allowed, in this order — so `h` and
- * `Hard` are `HardLink`, `s*` is `SymbolicLink` — and `''` is a file.
- */
-function itemTypeOf(value: string): string {
-  if (value === '') return 'file';
-  const pattern = `${value.toLowerCase()}*`;
-  if (wildcardMatch(pattern, 'directory') || wildcardMatch(pattern, 'container')) return 'directory';
-  return ['file', 'symboliclink', 'junction', 'hardlink'].find((t) => wildcardMatch(pattern, t)) ?? 'unknown';
-}
-
-/** `New-Item`'s item type ({@link itemTypeOf}) and paths (`-Path`, `-LiteralPath`, `-Name`, or the first positional). */
-function newItemArgs(args: readonly string[]): { itemType: string; paths: string[]; target?: string } {
-  let spelledType = '';
-  let target: string | undefined;
-  const paths: string[] = [];
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? '';
-    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
-    if (param === null) {
-      positional.push(a);
-      continue;
-    }
-    const name = newItemParam((param[1] ?? '').toLowerCase());
-    const inline = param[2];
-    const value = inline !== undefined ? inline : name !== undefined ? (args[++i] ?? '') : undefined;
-    if (value === undefined) continue;
-    if (name === 'type') spelledType = value;
-    else if (name === 'path' || name === 'name') paths.push(value);
-    else if (name === 'target') target = value;
-  }
-  if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? '');
-  const itemType = itemTypeOf(spelledType);
-  return target === undefined ? { itemType, paths } : { itemType, paths, target };
-}
-
-/** `mklink [/D|/H|/J] LINK TARGET`: the link is the first operand. */
-function mklinkDestinations(args: readonly string[]): string[] {
-  const link = args.find((a) => !a.startsWith('/'));
-  return link === undefined ? [] : [link];
-}
-
-/** A cmd.exe command: its words, and the files its `>` / `>>` redirections write. */
-interface CmdCommand {
-  words: string[];
-  redirects: string[];
-}
-
-/**
- * Splits a cmd.exe command line into its commands — on `&`, `&&`, `||` and `|`
- * outside double quotes — and each command into words, on whitespace outside
- * double quotes. Quotes are removed, backslashes are literal, and `^` escapes
- * the next character (`^&` is a literal `&`), as in cmd. A `>` or `>>` (after an
- * optional descriptor digit) makes the next word a file the command writes;
- * `>&1` duplicates a descriptor and names none; `<` reads a file.
- */
-function splitCmdLine(line: string): CmdCommand[] {
-  const commands: CmdCommand[] = [];
-  let words: string[] = [];
-  let redirects: string[] = [];
-  let cur = '';
-  let inQuote = false;
-  let has = false;
-  let role: 'arg' | 'write' | 'read' = 'arg';
-  const endWord = (): void => {
-    if (has) {
-      if (role === 'write') redirects.push(cur);
-      else if (role === 'arg') words.push(cur);
-      role = 'arg';
-    }
-    cur = '';
-    has = false;
-  };
-  const endCommand = (): void => {
-    endWord();
-    role = 'arg';
-    if (words.length > 0 || redirects.length > 0) commands.push({ words, redirects });
-    words = [];
-    redirects = [];
-  };
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') {
-      inQuote = !inQuote;
-      has = true;
-    } else if (!inQuote && ch === '^' && i + 1 < line.length) {
-      i += 1;
-      cur += line.charAt(i);
-      has = true;
-    } else if (!inQuote && (ch === '&' || ch === '|')) {
-      endCommand();
-      if (line.charAt(i + 1) === ch) i += 1;
-    } else if (!inQuote && (ch === '>' || ch === '<')) {
-      if (has && /^\d$/.test(cur)) {
-        cur = '';
-        has = false;
-      } else endWord();
-      if (ch === '>' && line.charAt(i + 1) === '>') i += 1;
-      if (line.charAt(i + 1) === '&') {
-        i += 1;
-        while (/\d/.test(line.charAt(i + 1))) i += 1;
-        continue;
-      }
-      role = ch === '>' ? 'write' : 'read';
-    } else if (!inQuote && /\s/.test(ch)) {
-      if (has) endWord();
-    } else {
-      cur += ch;
-      has = true;
-    }
-  }
-  endCommand();
-  return commands;
-}
-
-/** A cmd.exe command's own name and arguments, past a leading `@` and any `call`. */
-function cmdCommandWords(words: readonly string[]): string[] {
-  const out = [...words];
-  const first = out[0];
-  if (first !== undefined && first.startsWith('@')) {
-    if (first.length > 1) out[0] = first.slice(1);
-    else out.shift();
-  }
-  while (out.length > 0 && (out[0] ?? '').toLowerCase() === 'call') out.shift();
-  return out;
-}
-
-/**
- * `cmd /c LINE` (or `/k`): what every command of the line does. The line is
- * what follows the `/c`/`/k` switch. When its first word is itself a whole
- * command line — `cmd /c "mklink a b"` hands cmd ONE quoted word — it is split
- * the way cmd splits it (`splitCmdLine`), and EVERY command is assessed past a
- * leading `@` or `call`: a `mklink`, a `copy` / `move` / `del` / `ren`, a
- * nested `cmd /c`, a `>` redirection, and a `cd /d` that later relative paths
- * are resolved from. Any other word is kept whole, so a quoted path with a
- * space in it (`"C:\Users\me\CLAUDE SKILLS\…"`) is judged as the one path it
- * is — splitting every word on whitespace, as this once did, cut such a path in
- * two and never recognised it (final review I11); checking only the first
- * command of a split line let a mklink after `&&` through (re-review); a
- * redirection inside the quoted line was not seen at all (Part Y).
- */
-/** `cmd /c cmd /c …` nesting judged; deeper is not (a chain thousands deep once overflowed the stack). */
-const MAX_CMD_NESTING = 8;
-
-/** A word as a POSIX shell word that reads back as exactly itself. */
-function posixWord(word: string): string {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
-}
-
-/**
- * The line `cmd /c LINE` (or `/k`) runs, as text for the full assessment
- * (`collect`). A first word that is itself a whole line (`cmd /c "rd /s /q
- * C:\ & echo"`) is kept as written, its backslashes doubled — cmd reads them
- * literally, a POSIX reader as escapes — and its `^x` escapes outside double
- * quotes become POSIX `\x`, so `echo a ^& b` stays one command; every later
- * shell word is quoted so it reads back as itself (`cmd /c rd /s /q C:\` keeps
- * its `C:\`). cmd's own `&`, `&&`, `||` and `|` read the same way to the
- * POSIX reader.
- */
-function cmdLineText(rawArgs: readonly string[]): string | undefined {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return undefined;
-  const [first, ...more] = args.slice(at + 1);
-  if (first === undefined) return undefined;
-  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
-  return [head, ...more.map(posixWord)].join(' ');
-}
-
-/** A cmd line respelled for the POSIX reader: `\` literal, `^x` outside double quotes an escaped `x`. */
-function cmdTextAsPosix(line: string): string {
-  let out = '';
-  let inQuote = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') inQuote = !inQuote;
-    if (ch === '\\') out += '\\\\';
-    else if (ch === '^' && !inQuote && i + 1 < line.length) {
-      i += 1;
-      out += `\\${line.charAt(i)}`;
-    } else out += ch;
-  }
-  return out;
-}
-
-/** The commands `cmd /c LINE` (or `/k`) runs — see {@link cmdEffects} for how the line is read. */
-function cmdLine(rawArgs: readonly string[]): CmdCommand[] {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return [];
-  const first = args[at + 1];
-  if (first === undefined) return [];
-  const head = first.trim();
-  const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
-  // The shell words after the first one continue the line's LAST command.
-  const last = commands[commands.length - 1];
-  if (last !== undefined) pushAll(last.words, args.slice(at + 2));
-  return commands;
-}
-
-/**
- * Every command a `cmd /c` line runs, nested `cmd /c` lines flattened, as
- * shell words — for the checks that read a command rather than its file
- * effects: the plugin command and program text (fix round 1, M1).
- */
-function cmdInnerCommands(args: readonly string[], depth = 0): ShellWord[][] {
-  if (depth > MAX_CMD_NESTING) return [];
-  const out: ShellWord[][] = [];
-  for (const command of cmdLine(args)) {
-    const words = cmdCommandWords(command.words);
-    const name = (words[0] ?? '').toLowerCase().replace(/\.exe$/, '');
-    if (name === 'cmd') pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
-    else out.push(words.map((value) => ({ value, quoted: false })));
-  }
-  return out;
-}
-
-function cmdEffects(args: readonly string[], cwd: string, depth = 0): Effects {
-  const e = noEffects();
-  if (depth > MAX_CMD_NESTING) return e;
-  const commands = cmdLine(args);
-  let dir = cwd;
-  for (const command of commands) {
-    const [raw, ...rest] = cmdCommandWords(command.words);
-    const name = (raw ?? '').toLowerCase().replace(/\.exe$/, '');
-    pushAll(e.writes, command.redirects.map((r) => resolveFrom(dir, r)));
-    mergeEffects(e, effectsOf(name, rest, dir, depth + 1));
-    dir = cwdAfter(name, rest, dir) ?? dir;
-  }
-  return e;
-}
-
-/**
- * The files a simple command's redirections write: `> f`, `>> f`, `>| f`,
- * `N> f`, `&> f`, `>f`. Only an UNQUOTED operator counts
- * ({@link ShellWord.redirectAt}); `>&2` / `>&-` duplicate or close a
- * descriptor and name no file, and `<…` only reads.
- */
-function redirectTargets(words: readonly ShellWord[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    const r = word === undefined ? null : parseRedirect(word);
-    if (r === null || !r.op.startsWith('>')) continue;
-    const next = words[i + 1]?.value;
-    if (r.op.endsWith('&')) {
-      const fd = r.inline !== '' ? r.inline : (next ?? '');
-      if (/^\d*-?$/.test(fd)) continue;
-    }
-    const target = r.inline !== '' ? r.inline : next;
-    if (target !== undefined) out.push(target);
-  }
-  return out;
-}
-
-/**
- * The argument values with every redirection (operator and operand) removed,
- * so `tee /tmp/x < .guardian/hooks.config.json` reads as `tee /tmp/x`: a file
- * a command reads through `<` is never one it writes.
- */
-function withoutRedirections(words: readonly ShellWord[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === undefined) continue;
-    const r = parseRedirect(word);
-    if (r === null) {
-      out.push(word.value);
-      continue;
-    }
-    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
-    if (r.inline === '') i += 1;
-  }
-  return out;
-}
-
-/** `DIR/<last segment of src>`, for a copy or move into a directory. */
-function intoDir(dir: string, src: string): string {
-  return `${dir.replace(/[\\/]+$/, '')}/${lastSegment(src)}`;
-}
-
-/** A PowerShell `-Name value` / `-Name:value` parameter's value, by any of `names`. */
-function psParam(args: readonly string[], names: readonly string[]): string | undefined {
-  for (let i = 0; i < args.length; i += 1) {
-    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? '');
-    if (m === null || !names.includes((m[1] ?? '').toLowerCase())) continue;
-    return m[2] !== undefined ? m[2] : args[i + 1];
-  }
-  return undefined;
-}
-
-/** Values of `name`'s option, spelled `-o F`, `-oF`, `--output F` or `--output=F`. */
-function optionValues(args: readonly string[], short: string, long: string): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    if (a === short || a === long) {
-      const v = args[i + 1];
-      if (v !== undefined) out.push(v);
-    } else if (a.startsWith(`${long}=`)) out.push(a.slice(long.length + 1));
-    else if (a.startsWith(short) && a.length > short.length && !a.startsWith('--')) out.push(a.slice(short.length));
-  }
-  return out;
-}
-
-/** The sources and destination of a copy or a move. */
-interface Transfer {
-  sources: string[];
-  dest?: string;
-  /** `dest` came from `-t` / `--target-directory`: an existing directory the sources go INTO. */
-  into: boolean;
-  /** `-r`, `-R`, `-a`, `--recursive`, `--archive`, PowerShell `-Recurse`, xcopy/robocopy `/E` `/S` `/MIR`. */
-  recursive: boolean;
-}
-
-/** `cp`/`mv`/`install` options that take a value, none of them the destination. */
-const COPY_VALUED = new Set(['-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group']);
-/** PowerShell `Copy-Item`/`Move-Item` parameters, by full lower-case name: those naming paths… */
-const PS_PATH_PARAMS = ['path', 'literalpath', 'destination'];
-/** …the others that take a value, and the switches. */
-const PS_VALUE_PARAMS = ['filter', 'include', 'exclude', 'credential', 'fromsession', 'tosession'];
-const PS_SWITCHES = ['recurse', 'force', 'container', 'passthru', 'whatif', 'confirm'];
-
-/** A full PowerShell parameter name `spelled` names: itself, or a prefix of 3+ letters (`-Dest`, `-Rec`). */
-function psName(spelled: string): string | undefined {
-  const lower = spelled.toLowerCase();
-  const all = [...PS_PATH_PARAMS, ...PS_VALUE_PARAMS, ...PS_SWITCHES];
-  if (all.includes(lower)) return lower;
-  return lower.length >= 3 ? all.find((n) => n.startsWith(lower)) : undefined;
-}
-
-/**
- * The sources and destination of a copy or a move: POSIX `cp`/`mv`/`install`
- * (the last operand, or `-t DIR`), PowerShell `Copy-Item`/`Move-Item`
- * (`-Path`, `-Destination`, or the first two positionals), and cmd `copy` /
- * `move`, whose `/Y`-style switches are not paths (`slashSwitches`).
- */
-function parseTransfer(args: readonly string[], slashSwitches: boolean): Transfer {
-  const named: string[] = [];
-  const positional: string[] = [];
-  let dest: string | undefined;
-  let into = false;
-  let recursive = false;
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    if (slashSwitches && /^\/[A-Za-z]/.test(a)) continue;
-    if (optionsDone || a === '-' || !a.startsWith('-')) {
-      positional.push(a);
-      continue;
-    }
-    if (a === '--') {
-      optionsDone = true;
-      continue;
-    }
-    const target = /^--target-directory(?:=(.*))?$/.exec(a);
-    if (target !== null) {
-      dest = target[1] ?? args[++i];
-      into = true;
-      continue;
-    }
-    if (a === '--recursive' || a === '--archive') {
-      recursive = true;
-      continue;
-    }
-    const ps = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
-    const param = ps === null ? undefined : psName(ps[1] ?? '');
-    if (ps !== null && param !== undefined) {
-      const value = PS_PATH_PARAMS.includes(param) || PS_VALUE_PARAMS.includes(param) ? (ps[2] ?? args[++i]) : undefined;
-      if (param === 'recurse') recursive = true;
-      else if (param === 'destination') dest = value;
-      else if ((param === 'path' || param === 'literalpath') && value !== undefined) named.push(value);
-      continue;
-    }
-    if (COPY_VALUED.has(a)) {
-      i += 1;
-      continue;
-    }
-    if (/^-[a-zA-Z]*t$/.test(a)) {
-      dest = args[++i];
-      into = true;
-    } else if (/^-t./.test(a)) {
-      dest = a.slice(2);
-      into = true;
-    }
-    if (!a.startsWith('--') && /[rRa]/.test(a.slice(1))) recursive = true;
-  }
-  const sources = [...named, ...positional];
-  if (dest === undefined && sources.length >= 2) dest = sources.pop();
-  return dest === undefined ? { sources, into, recursive } : { sources, dest, into, recursive };
-}
-
-/** `rsync` options that take a value — never the destination. */
-const RSYNC_VALUED = new Set([
-  '-e', '--rsh', '-f', '--filter', '--exclude', '--include', '--exclude-from', '--include-from', '--files-from',
-  '-T', '--temp-dir', '-B', '--block-size', '--chmod', '--chown', '--log-file', '--password-file', '--partial-dir',
-  '--backup-dir', '--suffix', '--compare-dest', '--copy-dest', '--link-dest', '--rsync-path', '-M',
-  '--remote-option', '--port', '--timeout', '--contimeout', '--bwlimit', '--max-size', '--min-size', '--out-format',
-  '--info', '--debug', '--iconv', '--usermap', '--groupmap', '--address', '--sockopts', '--max-delete',
-]);
-
-/**
- * `perl`/`ruby` switches: the `-e` program texts, whether `-i` edits the file
- * operands in place, and those operands. A short cluster is read letter by
- * letter (`-pi`, `-lne`, `-0777`): a code letter takes the rest of the cluster
- * or the next word, `i` takes the rest as its backup extension (`-i.bak`, and
- * `-pie` is `-p -i` with extension `e`), a value letter (`-I dir`, `-M mod`)
- * takes the rest or the next word. Without a program text, the first operand
- * is the script file.
- */
-function perlLike(
-  args: readonly string[],
-  codeLetters: string,
-  valueLetters: string,
-): { code: string[]; inPlace: boolean; files: string[] } {
-  const code: string[] = [];
-  const operandsSeen: string[] = [];
-  let inPlace = false;
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    if (!optionsDone && a === '--') {
-      optionsDone = true;
-      continue;
-    }
-    if (optionsDone || !a.startsWith('-') || a.length === 1 || a.startsWith('--')) {
-      if (optionsDone || !a.startsWith('--')) operandsSeen.push(a);
-      continue;
-    }
-    for (let k = 1; k < a.length; k += 1) {
-      const c = a.charAt(k);
-      if (codeLetters.includes(c)) {
-        const rest = a.slice(k + 1);
-        code.push(rest !== '' ? rest : (args[++i] ?? ''));
-        break;
-      }
-      if (c === 'i') {
-        inPlace = true;
-        break;
-      }
-      if (valueLetters.includes(c)) {
-        if (k === a.length - 1) i += 1;
-        break;
-      }
-      if (c === '0') while (/[0-9a-fA-Fx]/.test(a.charAt(k + 1))) k += 1;
-      if (c === 'l') while (/[0-9]/.test(a.charAt(k + 1))) k += 1;
-    }
-  }
-  const files = code.length > 0 ? operandsSeen : operandsSeen.slice(1);
-  return { code, inPlace, files };
-}
-
-const SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
-
-/** vi / vim / ex options whose value is the next word (a short cluster ending in one of these letters, too). */
-const EDITOR_VALUED_LETTERS = 'cSuUiTwWtq';
-
-/** The files `vi`, `vim`, `nvim` or `ex` opens — every operand but an option's value and a `+cmd`. */
-function editorFiles(args: readonly string[]): string[] {
-  const out: string[] = [];
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    if (!optionsDone && a === '--') {
-      optionsDone = true;
-      continue;
-    }
-    if (!optionsDone && a === '--cmd') {
-      i += 1;
-      continue;
-    }
-    if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
-      if (EDITOR_VALUED_LETTERS.includes(a.charAt(a.length - 1))) i += 1;
-      continue;
-    }
-    if (!optionsDone && (a.startsWith('-') || a.startsWith('+'))) continue;
-    out.push(a);
-  }
-  return out;
-}
-
-/**
- * The files a command itself writes — `tee`, `sed -i`, `dd of=`, `curl -o`,
- * `wget -O`, `sort -o`, `truncate`, `sponge`, `shred`, `perl -i` / `ruby -i`,
- * and PowerShell `Set-Content`/`Add-Content`/`Clear-Content`/`Out-File`/
- * `Tee-Object`. Never a file it only reads. Copies, moves, renames and
- * `New-Item` are in {@link effectsOf}.
- */
-function commandWriteDestinations(name: string, args: readonly string[]): string[] {
-  switch (name) {
-    case 'tee':
-    case 'sponge':
-      return operands(args, new Set());
-    case 'sed':
-      return args.some((a) => SED_IN_PLACE.test(a))
-        ? operands(args, new Set(['-e', '-f', '--expression', '--file', '-l', '--line-length']))
-        : [];
-    case 'dd':
-      return args.filter((a) => a.startsWith('of=')).map((a) => a.slice(3));
-    case 'curl':
-      return optionValues(args, '-o', '--output');
-    case 'wget':
-      return optionValues(args, '-O', '--output-document');
-    case 'sort':
-      return optionValues(args, '-o', '--output');
-    case 'truncate':
-      return operands(args, new Set(['-s', '--size', '-r', '--reference']));
-    case 'shred':
-      return operands(args, new Set(['-n', '--iterations', '-s', '--size', '--random-source']));
-    case 'perl': {
-      const p = perlLike(args, 'eE', 'IMm');
-      return p.inPlace ? p.files : [];
-    }
-    case 'ruby': {
-      const p = perlLike(args, 'e', 'IrCEFx');
-      return p.inPlace ? p.files : [];
-    }
-    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
-    // `vim -es -c '…' -c wq f` write the files they open.
-    case 'ed':
-    case 'red':
-      return operands(args, new Set(['-p', '--prompt']));
-    case 'ex':
-    case 'vi':
-    case 'vim':
-    case 'nvim':
-    case 'gvim':
-      return editorFiles(args);
-    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
-    case 'sc':
-    case 'set-content':
-    case 'add-content':
-    case 'ac':
-    case 'clear-content':
-    case 'clc':
-    case 'out-file':
-    case 'tee-object':
-      // Any argument: the path is positional or a -Path/-LiteralPath/-FilePath
-      // value, and nothing else these take looks like a hook config path.
-      return args.map((a) => a.replace(/^-[A-Za-z]+:/, ''));
-    default:
-      return [];
-  }
-}
-
-/** Commands that delete what they are given. */
-const REMOVERS = new Set(['rm', 'unlink', 'ri', 'remove-item', 'del', 'erase', 'rd', 'rmdir']);
-
-/** cmd.exe commands with `/x` switches, which Git Bash spells `//x` ({@link cmdSwitch}). */
-const CMD_SWITCHED = new Set(['copy', 'move', 'xcopy', 'robocopy', 'mklink', 'del', 'erase', 'rd', 'rmdir', 'ren', 'rename']);
-
-/**
- * What `name args` does to the filesystem, from `cwd` — every path resolved
- * ({@link resolveFrom}). A copy writes its destination (and each source's name
- * inside it) and, recursive, may replace that directory wholesale; a move also
- * removes its sources; a rename removes its source and writes its new name; a
- * delete removes; `ln`, `mklink` and `New-Item -ItemType SymbolicLink` create
- * links, `mkfifo` and `mknod` special files; `cmd /c` is assessed command by
- * command ({@link cmdEffects}). Never a link's SOURCE: `ln -s
- * ~/.config/dev-guardian/hooks.json backup.json` reads the config.
- */
-function effectsOf(name: string, rawArgs: readonly string[], cwd: string, depth = 0): Effects {
-  if (name === 'cmd') return cmdEffects(rawArgs, cwd, depth);
-  // cmd's own commands, run from Git Bash, take their switches as `//Y` (review 8, item 2).
-  const args = CMD_SWITCHED.has(name) ? rawArgs.map(cmdSwitch) : rawArgs;
-  const at = (p: string): string => resolveFrom(cwd, p);
-  const e = noEffects();
-  switch (name) {
-    case 'mkfifo':
-      pushAll(e.special, operands(args, new Set(['-m', '--mode'])).map(at));
-      return e;
-    case 'mknod':
-      pushAll(e.special, operands(args, new Set(['-m', '--mode'])).slice(0, 1).map(at));
-      return e;
-    case 'ln':
-      pushAll(e.links, lnDestinations(args).map(at));
-      pushAll(e.hardLinkSources, lnHardSources(args).map(at));
-      return e;
-    case 'link':
-      pushAll(e.hardLinkSources, operands(args, new Set()).slice(0, 1).map(at));
-      return e;
-    case 'fsutil':
-      // `fsutil hardlink create <new> <existing>`
-      if (/^hardlink$/i.test(args[0] ?? '') && /^create$/i.test(args[1] ?? '')) {
-        if (args[2] !== undefined) e.links.push(at(args[2]));
-        if (args[3] !== undefined) e.hardLinkSources.push(at(args[3]));
-      }
-      return e;
-    case 'mklink': {
-      pushAll(e.links, mklinkDestinations(args).map(at));
-      // `mklink /H <link> <target>`: a hard link to the target.
-      const names = args.filter((a) => !a.startsWith('/'));
-      if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== undefined) e.hardLinkSources.push(at(names[1]));
-      return e;
-    }
-    case 'new-item':
-    case 'ni': {
-      const item = newItemArgs(args);
-      if (['symboliclink', 'hardlink', 'junction'].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
-      if (item.itemType === 'hardlink' && item.target !== undefined) e.hardLinkSources.push(at(item.target));
-      else if (item.itemType === 'file') pushAll(e.writes, item.paths.map(at));
-      return e;
-    }
-    case 'cp':
-    case 'install':
-    case 'copy-item':
-    case 'cpi':
-    case 'copy':
-    case 'mv':
-    case 'move-item':
-    case 'mi':
-    case 'move': {
-      const t = parseTransfer(args, name === 'copy' || name === 'move');
-      const moves = name === 'mv' || name === 'move-item' || name === 'mi' || name === 'move';
-      if (moves) pushAll(e.removes, t.sources.map(at));
-      // `cp -l` / `--link` hard-links instead of copying.
-      if (name === 'cp' && args.some((a) => a === '--link' || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a))) pushAll(e.hardLinkSources, t.sources.map(at));
-      if (t.dest === undefined) return e;
-      const dest = t.dest;
-      if (!t.into) e.writes.push(at(dest));
-      pushAll(e.writes, t.sources.map((s) => at(intoDir(dest, s))));
-      if (!t.into && (moves || t.recursive)) e.dirs.push(at(dest));
-      return e;
-    }
-    case 'xcopy':
-    case 'robocopy': {
-      const [, dest, ...files] = args.filter((a) => !/^\/[A-Za-z]/.test(a));
-      if (dest !== undefined) {
-        e.dirs.push(at(dest));
-        e.writes.push(at(dest));
-        pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
-        // `/MIR` and `/PURGE` delete what the source lacks: from an empty source, everything.
-        if (name === 'robocopy' && args.some((a) => /^\/(?:mir|purge)$/i.test(a))) e.trees.push(at(dest));
-      }
-      return e;
-    }
-    case 'rsync': {
-      const paths = operands(args, RSYNC_VALUED);
-      const dest = paths.pop();
-      if (dest === undefined || paths.length === 0) return e;
-      e.writes.push(at(dest));
-      pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
-      if (args.some((a) => a === '--recursive' || a === '--archive' || /^-[a-zA-Z]*[ra]/.test(a))) e.dirs.push(at(dest));
-      if (args.some((a) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a))) e.trees.push(at(dest));
-      return e;
-    }
-    case 'ren':
-    case 'rename':
-    case 'rename-item':
-    case 'rni': {
-      const positional = args.filter((a) => !a.startsWith('-') && !/^\/[A-Za-z]$/.test(a));
-      const src = psParam(args, ['path', 'literalpath']) ?? positional.shift();
-      const newName = psParam(args, ['newname']) ?? positional.shift();
-      if (src === undefined) return e;
-      e.removes.push(at(src));
-      if (newName !== undefined) {
-        const dest = /[\\/]/.test(newName) ? newName : `${dirOf(src.replace(/\\/g, '/')) || '.'}/${newName}`;
-        e.writes.push(at(dest));
-        e.dirs.push(at(dest));
-      }
-      return e;
-    }
-    default:
-      break;
-  }
-  if (REMOVERS.has(name)) pushAll(e.removes, operands(args, new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
-  const written = commandWriteDestinations(name, args).map(at);
-  pushAll(e.writes, written);
-  if (name === 'shred' && args.some((a) => a === '--remove' || a.startsWith('--remove=') || /^-[a-zA-Z]*u/.test(a))) {
-    pushAll(e.removes, written);
-  }
-  return e;
-}
-
-// ── program text on the command line
-
-const PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
-const INTERPRETERS = new Set(['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node', 'perl', 'ruby', 'php', 'pwsh', 'powershell']);
-/** `X run … python -c …`: tools that run an interpreter in a managed environment. */
-const RUN_WRAPPERS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'rye', 'hatch', 'conda', 'mamba', 'micromamba', 'pixi']);
-
-function isInterpreter(name: string): boolean {
-  return PYTHON.test(name) || INTERPRETERS.has(name);
-}
-
-/** Commands that launch the program named after their own flags: `npx node …`, cmd's `start /b node …`. */
-const LAUNCHERS = new Set(['npx', 'bunx', 'pnpx', 'start']);
-/** Package managers whose subcommand launches a program: `pnpm dlx`, `npm exec`, `yarn dlx`, `bun x`, … */
-const LAUNCHER_SUBCOMMANDS: Readonly<Record<string, ReadonlySet<string>>> = {
-  npm: new Set(['exec', 'x']),
-  pnpm: new Set(['dlx', 'exec']),
-  yarn: new Set(['dlx', 'exec']),
-  bun: new Set(['x']),
-};
-/** Launcher options whose next word is their value, not the program (`npx -p pkg`). */
-const LAUNCHER_VALUED = new Set(['-p', '--package', '-c', '--call', '/d']);
-
-/** The index of the first word at or after `from` that is not a `-` flag (`words.length` if none). */
-function firstNonFlag(words: readonly ShellWord[], from: number): number {
-  let k = from;
-  while (k < words.length && (words[k]?.value ?? '').startsWith('-')) k += 1;
-  return k;
-}
-
-/** An interpreter's name as written — `node@20` (through `npx`) is `node`. */
-function interpreterName(word: string): string {
-  return commandName(word).replace(/@[\w.^~<>=-]*$/, '');
-}
-
-/**
- * Index of the interpreter a command runs: at `start`, behind `uv run`-style
- * wrappers, or behind a launcher (`npx --yes node@20`, `start "" /b node`);
- * -1 for none.
- */
-function interpreterIndex(words: readonly ShellWord[], start: number): number {
-  let i = start;
-  // No hop cap: every hop moves `i` forward, so this is linear — and a cap of
-  // four made five `npx -y` in front of `node -e …` a silent ok (fix round 4).
-  while (i < words.length) {
-    const name = interpreterName(words[i]?.value ?? '');
-    // `bun x` launches before `bun` interprets; global flags may come first
-    // (`pnpm --silent dlx`, `npm --yes exec`).
-    const sub = LAUNCHER_SUBCOMMANDS[name] === undefined ? -1 : firstNonFlag(words, i + 1);
-    const launches = sub >= 0 && LAUNCHER_SUBCOMMANDS[name]?.has(words[sub]?.value ?? '') === true;
-    if (isInterpreter(name) && !launches) return i;
-    if (RUN_WRAPPERS.has(name) && words[i + 1]?.value === 'run') {
-      for (let k = i + 2; k < Math.min(words.length, i + 10); k += 1) {
-        if (isInterpreter(interpreterName(words[k]?.value ?? ''))) return k;
-      }
-      return -1;
-    }
-    if (launches) i = sub + 1;
-    else if (LAUNCHERS.has(name)) i += 1;
-    else return -1;
-    // Past the launcher's own options (and `start`'s empty "" title).
-    while (i < words.length) {
-      const w = words[i]?.value ?? '';
-      if (w !== '' && !/^(?:-|\/[A-Za-z])/.test(w)) break;
-      i += LAUNCHER_VALUED.has(w.toLowerCase()) ? 2 : 1;
-    }
-  }
-  return -1;
-}
-
-/** Node / Bun options that take a value (none of them program text). */
-const NODE_VALUED = new Set([
-  '-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions', '--input-type',
-  '--env-file', '--title', '--cwd', '--config', '--preload',
-]);
-
-/** `node -e CODE`, `--eval`, `-p`, `--print`, `-pe`, `--eval=CODE`; nothing once a script file is named. */
-function nodeCode(args: readonly string[]): string[] {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    const eq = /^--(?:eval|print)=([\s\S]*)$/.exec(a);
-    if (eq !== null) return [eq[1] ?? ''];
-    if (/^-(?:e|p|pe|ep)$/.test(a) || a === '--eval' || a === '--print') return [args[i + 1] ?? ''];
-    if (NODE_VALUED.has(a)) {
-      i += 1;
-      continue;
-    }
-    if (!a.startsWith('-')) return [];
-  }
-  return [];
-}
-
-/** `python -c CODE` (also clustered: `-Bc CODE`, `-cCODE`); nothing for `-m`, a script file or `-` (stdin). */
-function pythonCode(args: readonly string[]): string[] {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    if (a === '-' || !a.startsWith('-')) return [];
-    if (a.startsWith('--')) continue;
-    for (let k = 1; k < a.length; k += 1) {
-      const c = a.charAt(k);
-      if (c === 'c') {
-        const rest = a.slice(k + 1);
-        return [rest !== '' ? rest : (args[i + 1] ?? '')];
-      }
-      if (c === 'm') return [];
-      if (c === 'W' || c === 'X') {
-        if (k === a.length - 1) i += 1;
-        break;
-      }
-    }
-  }
-  return [];
-}
-
-/** `php -r CODE` (and `-B`/`-R`/`-E` per-line code); nothing once a script file is named. */
-function phpCode(args: readonly string[]): string[] {
-  const code: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    if (/^-[rBRE]$/.test(a)) {
-      code.push(args[i + 1] ?? '');
-      i += 1;
-    } else if (/^-r./.test(a)) code.push(a.slice(2));
-    else if (a === '-f' || a === '-F' || !a.startsWith('-')) return code;
-    else if (/^-[dcz]$/.test(a)) i += 1;
-  }
-  return code;
-}
-
-/** PowerShell's `-EncodedCommand` payload: base64 of UTF-16LE text. */
-function decodeUtf16Base64(text: string): string {
-  if (!/^[A-Za-z0-9+/=]+$/.test(text)) return '';
-  return Buffer.from(text, 'base64').toString('utf16le');
-}
-
-/** `pwsh`/`powershell` parameters that take a value (none of them program text). */
-const PS_HOST_VALUED = new Set([
-  'ex', 'ep', 'executionpolicy', 'w', 'windowstyle', 'wd', 'workingdirectory', 'configurationname', 'o', 'of',
-  'outputformat', 'if', 'inputformat', 'v', 'version', 'psconsolefile', 'settings', 'settingsfile',
-  'custompipename', 'configurationfile',
-]);
-
-/**
- * The program text `pwsh` / `powershell` runs: everything after `-Command`
- * (`-c`, or a 3+ letter prefix of it), as PowerShell itself joins it, or the
- * decoded `-EncodedCommand` (`-e`, `-ec`, `-enc`, …). Windows PowerShell 5 also
- * runs a first positional argument as a command; pwsh 7 runs it as a file.
- */
-function powershellCommand(args: readonly string[], name: string): string[] {
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? '';
-    const m = /^[-/]([A-Za-z]+)$/.exec(a);
-    if (m === null) return name === 'powershell' ? [args.slice(i).join(' ')] : [];
-    const p = (m[1] ?? '').toLowerCase();
-    if (p === 'c' || (p.length >= 3 && 'command'.startsWith(p))) {
-      const rest = args.slice(i + 1);
-      return rest.length === 0 || rest[0] === '-' ? [] : [rest.join(' ')];
-    }
-    if (p === 'e' || (p.length >= 2 && 'encodedcommand'.startsWith(p))) return [decodeUtf16Base64(args[i + 1] ?? '')];
-    if (p === 'f' || p === 'file') return [];
-    if (PS_HOST_VALUED.has(p)) i += 1;
-  }
-  return [];
-}
-
-/**
- * Program text a command hands an interpreter on its own command line —
- * `node -e`, `python -c`, `perl -e`, `ruby -e`, `php -r`, `deno eval`,
- * `pwsh -Command` / `-EncodedCommand`, also behind `uv run` and the like. A
- * script FILE is never read: its code is on disk, and cannot be judged here.
- */
-function inlineCode(words: readonly ShellWord[], start: number): string[] {
-  const at = interpreterIndex(words, start);
-  if (at < 0) return [];
-  const name = interpreterName(words[at]?.value ?? '');
-  const args = words.slice(at + 1).map((w) => w.value);
-  if (PYTHON.test(name)) return pythonCode(args);
-  switch (name) {
-    case 'node':
-    case 'nodejs':
-    case 'bun':
-    case 'tsx':
-    case 'ts-node':
-      return nodeCode(args);
-    case 'deno':
-      return args[0] === 'eval' ? args.slice(1).filter((a) => !a.startsWith('-')).slice(0, 1) : [];
-    case 'perl':
-      return perlLike(args, 'eE', 'IMm').code;
-    case 'ruby':
-      return perlLike(args, 'e', 'IrCEFx').code;
-    case 'php':
-      return phpCode(args);
-    case 'pwsh':
-    case 'powershell':
-      return powershellCommand(args, name);
-    default:
-      return [];
-  }
-}
-
-/**
- * True when `words` runs an interpreter that reads its program from stdin —
- * no `-c`/`-e` text, no module, no script file, whatever options come first
- * ({@link interpreterProgram}). What `python - <<EOF … EOF` and `echo '…' |
- * node` hand it is its program.
- */
-function isBareInterpreterStdin(words: readonly ShellWord[]): boolean {
-  const program = interpreterProgram(withoutRedirectWords(words), 0);
-  return program.kind === 'dash' || (program.kind === 'none' && program.readsStdin);
-}
-
-/**
- * Where an interpreter's program comes from (review round 3, item 2):
- *
- *   - `inline` — on its command line (`python -c`, `node -e`, `perl -e`,
- *     `php -r`, `deno eval`), or a module (`python -m json.tool`): stdin, or
- *     any operand, is data;
- *   - `file` — its first operand, `words[index]`;
- *   - `dash` — an explicit `-`: stdin;
- *   - `none` — no program at all, which `readsStdin` interpreters (python,
- *     node, perl, ruby, php) then read from stdin; and the operand a process
- *     substitution right after them would fill;
- *   - `unknown` — not an interpreter this knows the options of.
- *
- * Read with each interpreter's own table of options that take a value, so
- * `python3 -W ignore -`, `node --max-old-space-size 4096 i.js` and `perl -I lib
- * f.pl` find the program behind them — `-W ignore` read `ignore` as the script.
- */
-type InterpreterProgram =
-  | { kind: 'inline' }
-  | { kind: 'file'; index: number }
-  | { kind: 'dash' }
-  | { kind: 'none'; readsStdin: boolean }
-  | { kind: 'unknown' };
-
-/** Node's own options that take the next word as their value (besides `--opt=value`). */
-const NODE_OPTION_VALUED = new Set([
-  ...NODE_VALUED,
-  '--max-old-space-size', '--max-semi-space-size', '--stack-size', '--max-http-header-size', '--inspect-port',
-  '--debug-port', '--openssl-config', '--icu-data-dir', '--redirect-warnings', '--report-dir', '--report-directory',
-  '--report-filename', '--report-signal', '--diagnostic-dir', '--heapsnapshot-signal', '--heapsnapshot-near-heap-limit',
-  '--dns-result-order', '--unhandled-rejections', '--disable-warning', '--watch-path', '--test-reporter',
-  '--test-reporter-destination', '--test-name-pattern', '--test-concurrency', '--experimental-policy',
-  '--policy-integrity', '--secure-heap', '--secure-heap-min', '--cpu-prof-dir', '--cpu-prof-name', '--cpu-prof-interval',
-  '--heap-prof-dir', '--heap-prof-name', '--heap-prof-interval', '--trace-event-categories',
-  '--trace-event-file-pattern', '--use-largepages', '--tls-cipher-list', '--tls-keylog', '--localstorage-file',
-  '--env-file-if-exists', '--experimental-sea-config',
-]);
-
-/** deno run's and bun run's options that take the next word as their value. */
-const DENO_RUN_VALUED = new Set(['-c', '--config', '--import-map', '--lock', '--cert', '--location', '--seed', '--env-file', '--ext']);
-const BUN_RUN_VALUED = new Set([
-  '--cwd', '-c', '--config', '--env-file', '-r', '--preload', '--tsconfig-override', '-d', '--define', '-l', '--loader',
-  '--main-fields', '--conditions', '--filter', '-F', '--elide-lines', '--shell',
-]);
-
-/** The operand at `i`: `-` is stdin, anything else the program file. */
-function operandAt(words: readonly ShellWord[], i: number, readsStdin: boolean): InterpreterProgram {
-  const w = words[i];
-  if (w === undefined) return { kind: 'none', readsStdin };
-  return w.value === '-' ? { kind: 'dash' } : { kind: 'file', index: i };
-}
-
-/**
- * A POSIX-style option cluster (`-uW ignore`, `-Wignore`, `-e 'code'`): `inline`
- * letters define the program, `valued` letters take the rest of the cluster or
- * the next word. Returns how many words the option used, or `inline`.
- */
-function clusterWords(word: string, inline: string, valued: string): number | 'inline' {
-  for (let k = 1; k < word.length; k += 1) {
-    const c = word.charAt(k);
-    if (inline.includes(c)) return 'inline';
-    if (valued.includes(c)) return k === word.length - 1 ? 2 : 1;
-  }
-  return 1;
-}
-
-function interpreterProgram(words: readonly ShellWord[], at: number): InterpreterProgram {
-  const name = interpreterName(words[at]?.value ?? '');
-  const python = PYTHON.test(name);
-  const nodeLike = ['node', 'nodejs', 'tsx', 'ts-node'].includes(name);
-  if (!python && !nodeLike && !['perl', 'ruby', 'php', 'deno', 'bun'].includes(name)) return { kind: 'unknown' };
-  let i = at + 1;
-  if (name === 'deno' || name === 'bun') {
-    const sub = words[i]?.value ?? '';
-    if (sub === 'eval' || (name === 'bun' && /^(?:-e|-p|--eval|--print)$/.test(sub))) return { kind: 'inline' };
-    if (sub === 'run') i += 1;
-    else if (name === 'deno' || sub !== '-') return { kind: 'unknown' };
-  }
-  const readsStdin = !['deno', 'bun', 'tsx', 'ts-node'].includes(name);
-  for (; i < words.length; i += 1) {
-    const v = words[i]?.value ?? '';
-    if (v === '--') return operandAt(words, i + 1, readsStdin);
-    if (v === '-' || !v.startsWith('-')) return operandAt(words, i, readsStdin);
-    if (python) {
-      if (v.startsWith('--')) {
-        if (v === '--check-hash-based-pycs') i += 1;
-        continue;
-      }
-      const used = clusterWords(v, 'cm', 'WXQ');
-      if (used === 'inline') return { kind: 'inline' };
-      i += used - 1;
-    } else if (nodeLike) {
-      if (/^-(?:e|p|pe|ep)$/.test(v) || /^--(?:eval|print)(?:=|$)/.test(v)) return { kind: 'inline' };
-      if (!v.includes('=') && NODE_OPTION_VALUED.has(v)) i += 1;
-    } else if (name === 'deno' || name === 'bun') {
-      if (!v.includes('=') && (name === 'deno' ? DENO_RUN_VALUED : BUN_RUN_VALUED).has(v)) i += 1;
-    } else if (name === 'php') {
-      if (/^-[rBRE]/.test(v)) return { kind: 'inline' };
-      if (v === '-f' || v === '-F') return operandAt(words, i + 1, readsStdin);
-      if (/^-[dcz]$/.test(v)) i += 1;
-    } else {
-      // perl and ruby: `-e` program text; the letters that take a value, as `perlLike` reads them.
-      if (v.startsWith('--')) continue;
-      const used = clusterWords(v, name === 'perl' ? 'eE' : 'e', name === 'perl' ? 'IMm' : 'IrCEFx');
-      if (used === 'inline') return { kind: 'inline' };
-      i += used - 1;
-    }
-  }
-  return { kind: 'none', readsStdin };
-}
-
-/** How a program's string literals are written: Python, JavaScript, or the rest (Perl, Ruby, PHP, PowerShell). */
-type CodeLang = 'python' | 'js' | 'other';
-
-function codeLang(interpreter: string): CodeLang {
-  if (PYTHON.test(interpreter)) return 'python';
-  return ['node', 'nodejs', 'bun', 'deno', 'tsx', 'ts-node'].includes(interpreter) ? 'js' : 'other';
-}
-
-/**
- * The string literals of a piece of program text: `'…'` and `"…"`, plus
- * `` `…` `` in JavaScript and `'''…'''` / `"""…"""` in Python. A backslash
- * escapes the next character only when that is a backslash or the closing
- * quote, so a Windows path or a raw string keeps its backslashes. A comment
- * outside a literal — `#` (Python and the rest), `// ` (JavaScript and the
- * rest) — is skipped, so an apostrophe in it does not pair with the next
- * quote. Not a parser for any one language: it finds the literals a path would
- * be written in.
- */
-function codeLiterals(code: string, lang: CodeLang): string[] {
-  const quotes = lang === 'js' ? ['"', "'", '`'] : ['"', "'"];
-  const out: string[] = [];
-  let i = 0;
-  while (i < code.length) {
-    const ch = code.charAt(i);
-    const atWordStart = i === 0 || /\s/.test(code.charAt(i - 1));
-    const comment =
-      atWordStart && ((ch === '#' && lang !== 'js') || (lang !== 'python' && code.startsWith('// ', i)));
-    if (comment) {
-      const nl = code.indexOf('\n', i);
-      i = nl < 0 ? code.length : nl + 1;
-      continue;
-    }
-    if (!quotes.includes(ch)) {
-      i += 1;
-      continue;
-    }
-    const close = lang === 'python' && code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
-    let lit = '';
-    let j = i + close.length;
-    while (j < code.length) {
-      const c = code.charAt(j);
-      const next = code.charAt(j + 1);
-      if (c === '\\' && (next === '\\' || next === ch)) {
-        lit += next;
-        j += 2;
-        continue;
-      }
-      if (code.startsWith(close, j)) break;
-      lit += c;
-      j += 1;
-    }
-    out.push(lit);
-    i = j + close.length;
-  }
-  return out;
-}
-
-/** Literals as paths: trimmed, every run of backslashes read as `/`. */
-function literalPaths(literals: readonly string[]): string[] {
-  return asWindowsOpens(literals.map((l) => tail(l.trim()).replace(/\\+/g, '/')));
-}
-
-/**
- * The end of a path, which is all any pattern here is anchored to — so a
- * megabyte-long word full of `.guardian/hooks` cannot make `hooks[^/]*\.json$`
- * rescan it from every occurrence.
- */
-function tail(path: string): string {
-  return path.length > 1024 ? path.slice(-1024) : path;
-}
-
-/**
- * Each path, and — when it differs — the name Windows opens for it: without
- * an NTFS stream suffix or trailing dots and spaces (review M1:
- * `hooks.config.json::$DATA` writes the file itself). Both are judged, so the
- * second can only add a match; elsewhere a colon is part of a name, and
- * refusing that odd name there costs nothing.
- */
-function asWindowsOpens(paths: readonly string[]): string[] {
-  const out = [...paths];
-  for (const p of paths) {
-    const named = windowsName(p);
-    if (named !== p) out.push(named);
-  }
-  return out;
 }
 
 /**
@@ -2515,7 +1433,10 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
       e.removes.push(first);
       // `[IO.Directory]::Delete('C:\', $true)`: the whole tree (review 8, item 9).
       if (kind === 'directory' && /^\$?true$/i.test(call.args[1] ?? '')) e.trees.push(first);
-    } else if (method === 'createsymboliclink') e.links.push(first);
+    } else if (method === 'createsymboliclink') {
+      e.links.push(first);
+      if (second !== undefined) e.aliases.push([first, second]);
+    }
     else if (method === 'move' || method === 'replace') {
       e.removes.push(first);
       if (second !== undefined) (kind === 'directory' ? e.dirs : e.writes).push(second);
@@ -2569,6 +1490,17 @@ const RULE_HARD_LINK: MatchedRule = {
 
 /** The directory that holds Claude Code's project or user settings; separators optional as in `HOOK_CONFIG_PATH`. */
 const CLAUDE_DIR = /\.claude\/?$/i;
+
+/** The directory that holds Claude Code's managed settings ({@link MANAGED_SETTINGS_PATH}). */
+const MANAGED_SETTINGS_DIR = /(?:^|\/)(?:etc\/?claude-code|ClaudeCode)\/?$/i;
+
+const RULE_LINK: MatchedRule = {
+  id: 'guard-config-link',
+  level: 'block',
+  reason:
+    "Makes a symbolic link or a junction to the guardrail hooks' own configuration, to Claude Code's settings or to " +
+    'the directory that holds them — a second name through which a later command rewrites them without naming them',
+};
 
 /**
  * dev-guardian's registry of trusted databases written from the shell (review
@@ -2694,6 +1626,7 @@ function placeOf(raw: string, scope: Scope): Placement {
     if (places.home === undefined) return 'inside';
     return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? 'inside' : 'outside';
   }
+  if (MANAGED_SETTINGS_PATH.test(key)) return 'inside';
   if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
     return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
   }
@@ -2718,6 +1651,146 @@ const RULE_DISK_WRITE: MatchedRule = {
   reason: 'Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/…)',
 };
 
+/** The most links one command's lines may make that later paths are read through ({@link throughLinks}). */
+const MAX_ALIASES = 64;
+/** The most paths one command may have looked up on disk ({@link AssessOptions.realPath}). */
+const MAX_LOOKUPS = 64;
+
+/**
+ * A path the command names, absolute and `/`-separated — `~` read as the home
+ * directory, on Windows an MSYS `/c/…` as `C:/…`, a relative one from the
+ * directory the statements start in — or `undefined` when that cannot be told
+ * (a variable, `~user`, a drive-relative `C:x`, an unknown start).
+ */
+function absoluteOf(raw: string, scope: Scope): string | undefined {
+  const t = stripQuotes(raw).replace(/\\/g, '/');
+  if (/^~(?=\/|$)/.test(t)) return scope.homePath === undefined ? undefined : `${scope.homePath.replace(/\/+$/, '')}${t.slice(1)}`;
+  if (/^[~$%]/.test(t)) return undefined;
+  if (scope.windows === true) {
+    const msys = /^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/.exec(t);
+    if (msys !== null) return `${(msys[1] ?? '').toUpperCase()}:${t.slice(msys[0].length) || '/'}`;
+    if (/^[A-Za-z]:(?!\/)/.test(t)) return undefined;
+  }
+  if (/^(?:\/|[A-Za-z]:\/)/.test(t)) return t;
+  return scope.dir === undefined ? undefined : resolveFrom(scope.dir, t);
+}
+
+/** How a link and a path under it are compared: absolute when it can be told, no trailing `/`, lower-cased on Windows. */
+function aliasKey(raw: string, scope: Scope): string {
+  const k = (absoluteOf(raw, scope) ?? stripQuotes(raw).replace(/\\/g, '/')).replace(/\/+$/, '');
+  return scope.windows === true ? k.toLowerCase() : k;
+}
+
+/**
+ * How much of a path {@link realPathOf} looks up: all of it (a directory a
+ * tree lands on, a link's target); all of it when its name could be a
+ * guarded file, else its directory (a write — `cp` of a hundred files into
+ * one directory looks that directory up once); only its directory (a remove,
+ * a new link or FIFO, a hard link: a link AT the path is what they act on).
+ */
+type Lookup = 'path' | 'name' | 'parent';
+
+/**
+ * Where an absolute path really leads through the links already on disk
+ * ({@link AssessOptions.realPath}), `/`-separated — `undefined` when as
+ * written, unknown, or past {@link MAX_LOOKUPS} or the budget (each noted).
+ */
+function realPathOf(raw: string, scope: Scope, lookup: Lookup): string | undefined {
+  const realPath = scope.realPath;
+  if (realPath === undefined) return undefined;
+  const whole = absoluteOf(raw, scope)?.replace(/(?<=.)\/+$/, '');
+  if (whole === undefined || GLOB.test(whole) || /^\/dev\//.test(whole)) return undefined;
+  const cut = whole.lastIndexOf('/');
+  // A name that may be a guarded file: `….json` (a stream or trailing dots after it too), or an 8.3 short name.
+  if (lookup === 'path' || (lookup === 'name' && /\.json|~\d/i.test(whole.slice(cut + 1)))) return lookedUp(whole, realPath, scope);
+  if (cut <= 0 || /^[A-Za-z]:$/.test(whole.slice(0, cut))) return undefined;
+  const dir = lookedUp(whole.slice(0, cut), realPath, scope);
+  return dir === undefined ? undefined : `${dir.replace(/\/+$/, '')}${whole.slice(cut)}`;
+}
+
+/** {@link realPathOf}'s one lookup of `abs`, asked once per path ({@link Notes.realPaths}). */
+function lookedUp(abs: string, realPath: (path: string) => string | undefined, scope: Scope): string | undefined {
+  const notes = scope.notes;
+  if (notes.realPaths.has(abs)) return notes.realPaths.get(abs);
+  if (notes.realPaths.size >= MAX_LOOKUPS) {
+    notes.links = true;
+    return undefined;
+  }
+  if (notes.now() > notes.deadline) {
+    notes.budget = true;
+    return undefined;
+  }
+  let real: string | undefined;
+  try {
+    real = realPath(abs)?.replace(/\\/g, '/');
+  } catch {
+    real = undefined;
+  }
+  const differs = real !== undefined && (scope.windows === true ? real.toLowerCase() !== abs.toLowerCase() : real !== abs);
+  const found = differs ? real : undefined;
+  notes.realPaths.set(abs, found);
+  return found;
+}
+
+/**
+ * `effects` with every path also as it really leads (review 12, finding 1):
+ * through a link this command made before it — `mklink /J z .claude &&
+ * echo … > z/settings.local.json` writes `.claude/settings.local.json`; the
+ * links are kept, up to {@link MAX_ALIASES}, in {@link Notes.aliases} — and
+ * through one already on disk ({@link realPathOf}). Paths are only added, so
+ * each is still judged as written. `targets`: what the links made here point
+ * at, read the same way.
+ */
+function throughLinks(effects: Effects, scope: Scope): { effects: Effects; targets: string[] } {
+  const notes = scope.notes;
+  /**
+   * `paths`, and where each leads ({@link Lookup}). A link AT the path is
+   * followed unless `lookup` is `parent` — a write goes through it, while a
+   * remove, a new link, a FIFO or a hard link acts on the link itself.
+   */
+  const expand = (paths: readonly string[], lookup: Lookup): string[] => {
+    const out = [...paths];
+    for (const p of paths) {
+      if (notes.aliases.length > 0) {
+        const key = aliasKey(p, scope);
+        for (const [link, target] of notes.aliases) {
+          if ((lookup !== 'parent' && key === link) || key.startsWith(`${link}/`)) out.push(`${target}${key.slice(link.length)}`);
+        }
+      }
+      const real = realPathOf(p, scope, lookup);
+      if (real !== undefined) out.push(real);
+    }
+    return out;
+  };
+  // The links and their targets through the links made BEFORE them; every
+  // other path also through these — a `cmd /c` line's `mklink` and its write.
+  const targets = expand(
+    effects.aliases.map(([, target]) => target),
+    'path',
+  );
+  const links = expand(effects.links, 'parent');
+  for (const [link, target] of effects.aliases) {
+    if (notes.aliases.length >= MAX_ALIASES) {
+      notes.links = true;
+      break;
+    }
+    notes.aliases.push([aliasKey(link, scope), aliasKey(target, scope)]);
+  }
+  return {
+    effects: {
+      writes: expand(effects.writes, 'name'),
+      removes: expand(effects.removes, 'parent'),
+      dirs: expand(effects.dirs, 'path'),
+      special: expand(effects.special, 'parent'),
+      links,
+      hardLinkSources: expand(effects.hardLinkSources, 'parent'),
+      trees: expand(effects.trees, 'path'),
+      aliases: effects.aliases,
+    },
+    targets,
+  };
+}
+
 /**
  * The rules a command's filesystem effects break. The guard's own
  * configuration: a FIFO, device node or link created at a config file (a link
@@ -2725,18 +1798,23 @@ const RULE_DISK_WRITE: MatchedRule = {
  * onto a config file (M5); its removal, or the user-level directory's; a
  * directory moved or copied onto a config directory. Claude Code's settings: a
  * write of `.claude/settings*.json` whose command names a loosening key
- * anywhere (`raw`).
+ * anywhere (`raw`). Each path is judged as written and as it really leads
+ * ({@link throughLinks}); a symbolic link or a junction made to any of those
+ * files or directories is a second name for it (review 12, finding 1).
  */
 function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
+  const { effects: named, targets: linkTargets } = throughLinks(effects, scope);
   const e: Effects = {
-    writes: asWindowsOpens(effects.writes.map(tail)),
-    removes: asWindowsOpens(effects.removes.map(tail)),
-    dirs: asWindowsOpens(effects.dirs.map(tail)),
-    special: asWindowsOpens(effects.special.map(tail)),
-    links: asWindowsOpens(effects.links.map(tail)),
-    hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
-    trees: effects.trees.map(tail),
+    writes: asWindowsOpens(named.writes.map(tail)),
+    removes: asWindowsOpens(named.removes.map(tail)),
+    dirs: asWindowsOpens(named.dirs.map(tail)),
+    special: asWindowsOpens(named.special.map(tail)),
+    links: asWindowsOpens(named.links.map(tail)),
+    hardLinkSources: asWindowsOpens(named.hardLinkSources.map(tail)),
+    trees: named.trees.map(tail),
+    aliases: [],
   };
+  const targets = asWindowsOpens(linkTargets.map(tail));
   const out: MatchedRule[] = [];
   // Each guarded path is this session's only where the hooks read it; one
   // elsewhere — another project's, a test fixture's HOME — warns (review 8, item 14).
@@ -2758,6 +1836,7 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   const linksGuarded = (p: string): boolean =>
     isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
   judged(RULE_HARD_LINK, locate(e.hardLinkSources, linksGuarded, scope));
+  judged(RULE_LINK, locate(targets, (p) => linksGuarded(p) || MANAGED_SETTINGS_DIR.test(p), scope));
   // A whole tree deleted by a copy or a .NET call (review 8, item 9), and a
   // block device written by `tee` or `cp` (`cat /dev/zero | tee /dev/sda`).
   if (e.trees.some((p) => isCatastrophicTarget(p, scope.tildeUsers) || isHomeTarget(p, scope.home))) out.push({ ...RULE_RM_ROOT });
@@ -2772,7 +1851,8 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     e.special.some(inRegistry) ||
     e.hardLinkSources.some(inRegistry) ||
     e.links.some(registryOrData) ||
-    e.dirs.some(registryOrData)
+    e.dirs.some(registryOrData) ||
+    targets.some(registryOrData)
   ) {
     out.push({ ...RULE_REGISTRY });
   }
@@ -3052,6 +2132,8 @@ interface Scope {
   cmdLine?: boolean;
   /** `~name` is another account's home: a POSIX shell's reading, never the PowerShell tool's. */
   tildeUsers?: boolean;
+  /** These statements are PowerShell's — the PowerShell tool's, or a script handed to `pwsh -c` / `iex`. */
+  powershell?: boolean;
   /** Where a guarded path is this session's ({@link placeOf}); none: everywhere. */
   places?: Places | undefined;
   /** Where the command was before its last `cd` — what `cd -` returns to ({@link moveCwd}). */
@@ -3060,6 +2142,22 @@ interface Scope {
   dirStack?: readonly string[];
   /** `CDPATH`, when the command set it. */
   cdpath?: readonly string[];
+  /**
+   * The directory these statements start in — absolute, `/`-separated — when
+   * it is known: the hook's working directory, then where a nested script is
+   * handed over. What a relative delete target is read against.
+   */
+  dir?: string | undefined;
+  /** The home directory's path, `/`-separated, for a `cd ~`. */
+  homePath?: string | undefined;
+  /** The variables a delete target may start with ({@link DeleteContext}). */
+  vars?: Readonly<Record<string, string>> | undefined;
+  /** Git Bash reads a bare drive (`C:`) as its root ({@link DeleteContext}). */
+  bareDriveRoot?: boolean;
+  /** The command runs on Windows: paths compare case-insensitively, an MSYS `/c/…` is `C:/…`. */
+  windows?: boolean;
+  /** {@link AssessOptions.realPath}. */
+  realPath?: ((path: string) => string | undefined) | undefined;
 }
 
 /**
@@ -3115,6 +2213,8 @@ interface NestedScript {
   powershell: boolean;
   /** Handed to `Invoke-Expression` (`iex`), which runs it as PowerShell. */
   iex?: boolean;
+  /** What it runs is not on the command line: `iex $s`, `Invoke-Expression -Command $code`. */
+  unread?: true;
 }
 
 function shellScript(text: string): NestedScript {
@@ -3159,11 +2259,15 @@ function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
     return script === undefined || script.trim() === '' ? [] : [shellScript(script)];
   }
   if (launcher === 'iex' || launcher === 'invoke-expression') {
-    const script = words
-      .slice(start + 1)
+    const args = words.slice(start + 1).filter((w, k) => !(k === 0 && !w.quoted && /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(w.value)));
+    const script = args
       .map((w) => w.value)
       .join(' ')
       .trim();
+    // Only variables — `iex $s`, `iex $env:X` — run what the command line does not hold (review of 3.4.0, finding 6).
+    if (args.length > 0 && args.every((w) => !w.quoted && /^\$(?:\{[^}]*\}|[\w:?]+)$/.test(w.value))) {
+      return [{ text: script, powershell: true, iex: true, unread: true }];
+    }
     return script.length > 0 ? [{ text: script, powershell: true, iex: true }] : [];
   }
   let sawShell = false;
@@ -3212,17 +2316,102 @@ function scriptAfterDashC(words: readonly ShellWord[], from: number): string | u
   return undefined;
 }
 
+/** What reads its stdin as a script, and in which language: a POSIX shell, PowerShell, or cmd.exe. */
+type ReaderKind = 'shell' | 'powershell' | 'cmd';
+
+/** A POSIX shell's options that take the next word as their value. */
+const SHELL_VALUED = /^(?:[-+][oO]|--rcfile|--init-file)$/;
+
 /**
- * True when `words` is a bare shell invocation reading its script from
- * stdin — the shell name and, at most, flags after it; no `-c` script (that
- * is `nestedScripts`'s job) and no script-file argument. This is what
- * `bash <<EOF … EOF` and `… | bash` both hand a shell: the fed text IS the
- * script, executed exactly as if it were typed at an interactive prompt.
+ * Whether a command reads what it is fed as a script, and as which language
+ * — a shell given no script of its own, past the runners in front of it
+ * (`sudo`, `env`, `timeout 5`, `nice`, … and `busybox`): `bash`, `sh -`,
+ * `bash -s -- x` (`-s`: the words after are the script's arguments), `bash
+ * /dev/stdin`, `su root`; `source /dev/stdin`; PowerShell's `iex` /
+ * `Invoke-Expression` with no argument and its host with `-Command -` or no
+ * command at all; cmd.exe with no `/c` or `/k`. A shell with a `-c` script
+ * (`nestedScripts`'s) or a script file reads its stdin as data. Before review
+ * of 3.4.0, finding 6, only a shell's name followed by nothing but flags
+ * counted: `| bash -s -- x`, `| env bash`, `| timeout 5 bash`, `| bash
+ * /dev/stdin`, `| busybox sh`, `| iex` and `| cmd` were silent.
  */
-function isBareShellStdin(words: readonly ShellWord[]): boolean {
-  const head = words[0];
-  if (head === undefined || !SHELLS.has(basename(head.value))) return false;
-  return words.slice(1).every((w) => w.value.startsWith('-'));
+function scriptReader(words: readonly ShellWord[]): ReaderKind | undefined {
+  const plain = withoutRedirectWords(words);
+  let at = resolveCommand(plain, PIPE_RUNNERS).index;
+  if (commandName(plain[at]?.value ?? '') === 'busybox') at += 1;
+  const name = commandName(plain[at]?.value ?? '');
+  const args = plain.slice(at + 1);
+  if (name === 'iex' || name === 'invoke-expression') return args.length === 0 ? 'powershell' : undefined;
+  if (name === 'pwsh' || name === 'powershell') return powershellReadsStdin(args.map((w) => w.value)) ? 'powershell' : undefined;
+  if (name === 'cmd') {
+    // `cmd /k` (or `/c`) with no command after it runs what it reads, as a bare `cmd` does (review 12, finding 8).
+    const run = args.findIndex((a) => /^\/[ck]$/i.test(cmdSwitch(a.value)));
+    if (run >= 0 && run < args.length - 1) return undefined;
+    return args.every((a) => /^\/[A-Za-z]+$/.test(cmdSwitch(a.value))) ? 'cmd' : undefined;
+  }
+  if (name === 'source' || name === '.') return STDIN_PATHS.has(args[0]?.value ?? '') ? 'shell' : undefined;
+  // `xargs -I{} bash -c {}`, `xargs sh -c`: each line it reads IS a shell's
+  // script (review 12, finding 8) — not `xargs -I{} sh -c 'gcc -c {}'`, where
+  // the line is a word of a script the command line holds.
+  if (name === 'xargs') {
+    const rest = plain.slice(at);
+    const p = resolveCommand(rest).index;
+    const program = commandName(rest[p]?.value ?? '');
+    if (!SCRIPT_SHELLS.has(program) && program !== 'su') return undefined;
+    const c = rest.findIndex((w, k) => k > p && !w.quoted && DASH_C.test(w.value));
+    if (c < 0) return undefined;
+    const script = rest[c + 1]?.value;
+    const replace = xargsReplacement(rest.slice(1, p).map((w) => w.value));
+    return script === undefined || (replace !== undefined && script.trim() === replace) ? 'shell' : undefined;
+  }
+  // `script -q -c bash` runs a shell that reads the pipe; without `-c`, `script` runs the user's shell.
+  if (name === 'script') {
+    const c = args.findIndex((a) => /^(?:-[A-Za-z]*c|--command)$/.test(a.value) || a.value.startsWith('--command='));
+    if (c < 0) return 'shell';
+    const program = args[c]?.value.startsWith('--command=') ? args[c]?.value.slice('--command='.length) : args[c + 1]?.value;
+    const inner = program === undefined ? undefined : splitShell(program).statements;
+    const only = inner?.length === 1 && inner[0]?.commands.length === 1 ? inner[0]?.commands[0] : undefined;
+    return only === undefined ? undefined : scriptReader(only);
+  }
+  if (!STDIN_SHELLS.has(name)) return undefined;
+  if (name === 'su') return args.some((a) => /^(?:-[A-Za-z]*c|--command|--session-command)(?:=|$)/.test(a.value)) ? undefined : 'shell';
+  for (let i = 0; i < args.length; i += 1) {
+    const w = args[i];
+    if (w === undefined) break;
+    const v = w.value;
+    if (w.quoted) return STDIN_PATHS.has(v) ? 'shell' : undefined;
+    if (v === '-') return 'shell';
+    if (v === '--') return args[i + 1] === undefined || STDIN_PATHS.has(args[i + 1]?.value ?? '') ? 'shell' : undefined;
+    if (SHELL_VALUED.test(v)) {
+      i += 1;
+      continue;
+    }
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(v)) return undefined;
+    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(v)) return 'shell';
+    if (/^[-+]/.test(v)) continue;
+    return STDIN_PATHS.has(v) ? 'shell' : undefined;
+  }
+  return 'shell';
+}
+
+/** Whether a command reads its stdin as a script ({@link scriptReader}). */
+function readsScript(words: readonly ShellWord[]): boolean {
+  return scriptReader(words) !== undefined;
+}
+
+/** A script fed to a reader: its text, or `opaque` (a decoder's output), or `unread` (any other output). */
+interface FedScript {
+  text: string;
+  reader: readonly ShellWord[];
+  opaque?: true;
+  unread?: true;
+  /** The language it is run as, when the reader's words do not say ({@link scriptReader}). */
+  kind?: ReaderKind;
+}
+
+/** Whether a pipeline member downloads: what it feeds a reader is `remote-pipe-to-shell`'s, not unread text. */
+function downloads(words: readonly ShellWord[]): boolean {
+  return DOWNLOADERS.has(commandName(words[resolveCommand(words).index]?.value ?? ''));
 }
 
 /**
@@ -3230,39 +2419,181 @@ function isBareShellStdin(words: readonly ShellWord[]): boolean {
  * finding 4: text is data only until something feeds it to a program as its
  * *script*, and the existing heredoc-is-data behaviour (`git commit -F -
  * <<'EOF'`) must not change for any command that is not itself such a reader
- * (`reads`: a bare shell, or a bare interpreter). Two shapes:
+ * (`reads`: a shell reading its stdin — {@link scriptReader} — or a bare
+ * interpreter). Two shapes:
  *
  *   - `bash <<EOF … EOF` — the heredoc IS the script. `splitShell` captures
  *     the body on the statement (`heredocBodies`) precisely so this can
  *     recognise it; every other command's heredoc stays inert, as before.
- *   - `echo '…' | bash` / `printf '…' | sh` — the reader is the LAST member
- *     of the pipeline and reads the PREVIOUS member's output as its script.
- *     `printf`'s own format-vs-arguments split is not modelled; the last
- *     argument is used, which is exactly right for the common single- or
- *     two-argument form (`printf '%s' 'rm -rf ~'`) and merely imprecise,
- *     not wrong, for anything fancier.
+ *   - `echo '…' | bash` / `printf '…' | sh` — a reader in the pipeline reads
+ *     the output of the members before it as its script. `printf`'s own
+ *     format-vs-arguments split is not modelled; the last argument is used,
+ *     which is exactly right for the common single- or two-argument form
+ *     (`printf '%s' 'rm -rf ~'`) and merely imprecise, not wrong, for anything
+ *     fancier. What `cat` passes on counts too — `cat <<'EOF' | bash`, `cat
+ *     <<< '…' | sh` — and, read as PowerShell (`powershell`), a string that
+ *     begins the pipeline (`'…' | bash`). Output that cannot be read here
+ *     (`cat f | bash`, `gc x.ps1 | iex`) is `unread`: never a silent ok
+ *     (review of 3.4.0, finding 6).
  */
-function fedScripts(
-  statement: ShellStatement,
-  reads: (words: readonly ShellWord[]) => boolean,
-): Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> {
-  const scripts: Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> = [];
-
-  if (statement.commands.length === 1 && statement.heredocBodies) {
-    const only = statement.commands[0];
-    if (only !== undefined && reads(only)) pushAll(scripts, statement.heredocBodies.map((text) => ({ text, reader: only })));
+function fedScripts(statement: ShellStatement, reads: (words: readonly ShellWord[]) => boolean, powershell = false): FedScript[] {
+  const scripts: FedScript[] = [];
+  const first = statement.commands[0];
+  if (statement.heredocBodies && first !== undefined && reads(first)) {
+    pushAll(scripts, statement.heredocBodies.map((text) => ({ text, reader: first })));
   }
-
-  if (statement.commands.length >= 2) {
-    const last = statement.commands[statement.commands.length - 1];
-    if (last !== undefined && reads(last)) {
-      const fed = textOutputOf(statement.commands.slice(0, -1));
-      if (fed === 'opaque') scripts.push({ text: '', reader: last, opaque: true });
-      else if (fed !== undefined && fed.trim().length > 0) scripts.push({ text: fed.trim(), reader: last });
-    }
+  let downloaded = false;
+  for (let c = 1; c < statement.commands.length; c += 1) {
+    downloaded ||= downloads(statement.commands[c - 1] ?? []);
+    const reader = statement.commands[c];
+    if (reader === undefined || !reads(reader)) continue;
+    const fed = textOutputOf(statement.commands, { heredocs: statement.heredocBodies, powershell }, c);
+    if (fed === 'opaque') scripts.push({ text: '', reader, opaque: true });
+    else if (fed === undefined) {
+      if (!downloaded) scripts.push({ text: '', reader, unread: true });
+    } else if (fed.trim().length > 0) scripts.push({ text: fed.trim(), reader });
   }
-
   return scripts;
+}
+
+const RULE_UNREAD_SCRIPT: MatchedRule = {
+  id: 'unread-script',
+  level: 'warn',
+  reason:
+    'Runs text it could not read as a script (… | bash, gc x | iex, iex (…), [scriptblock]::Create($x), … | cmd) — what it runs was not assessed',
+};
+
+/** A statement's closing word for the group a pipe after it reads from: `)`, or a reserved word that ends a compound command. */
+const GROUP_CLOSERS = /^(\}|done|fi|esac)\s*\|/;
+
+/**
+ * Scripts a reader takes from a group in front of its pipe (review of 3.4.0,
+ * finding 6): `(echo '…') | bash`, `{ echo '…'; } | bash` — the group's
+ * statements' output, as {@link textOutputOf} reads it; and any other
+ * compound (`done | bash`, `fi | bash`) or output it cannot read, `unread`.
+ * `(` at the start of the line leaves no statement, so a `)` group is the
+ * statements back to the last one that ended with `(`, or the line's start.
+ */
+function groupFedScripts(statements: readonly ShellStatement[], powershell: boolean): FedScript[] {
+  const out: FedScript[] = [];
+  // Where the group a pipe may read from begins — after the last statement
+  // that ended with `(`, at the last that began with `{` — never before the
+  // last group already read: one pass, each statement read once.
+  let afterOpen = 0;
+  let brace = 0;
+  let read = 0;
+  for (let k = 0; k < statements.length; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined) continue;
+    const reader = statement.commands[0];
+    const closer = GROUP_CLOSERS.exec(statement.masked)?.[1];
+    const paren = /^\|/.test(statement.masked) && k > 0 && statements[k - 1]?.end === ')';
+    if (reader !== undefined && (closer !== undefined || paren) && readsScript(reader)) {
+      if (closer !== undefined && closer !== '}') out.push({ text: '', reader, unread: true });
+      else {
+        const texts: string[] = [];
+        let unread = false;
+        for (let j = Math.max(paren ? afterOpen : brace, read); j < k; j += 1) {
+          const text = textOutputOf(statements[j]?.commands ?? [], { heredocs: statements[j]?.heredocBodies, powershell });
+          if (typeof text === 'string') texts.push(text);
+          else unread = true;
+        }
+        if (unread) out.push({ text: '', reader, unread: true });
+        else if (texts.join('').trim() !== '') out.push({ text: texts.join('\n').trim(), reader });
+      }
+      read = k + 1;
+    }
+    if (/^\{/.test(statement.masked)) brace = k;
+    if (statement.end === '(') afterOpen = k + 1;
+  }
+  return out;
+}
+
+/**
+ * Scripts an output process substitution reads (review of 3.4.0, finding 6):
+ * `… | tee >(bash)`, `echo '…' > >(bash)` — the `>(` ends statement `k` with
+ * its `>`, and a reader that is the substitution's first command reads what
+ * `tee` passes on or what the command writes there.
+ */
+function outputSubstitutionScripts(statements: readonly ShellStatement[], powershell: boolean): FedScript[] {
+  const out: FedScript[] = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined || statement.end !== '(' || !statement.masked.endsWith('>')) continue;
+    const reader = statements[k + 1]?.commands[0];
+    if (reader === undefined || !readsScript(reader)) continue;
+    const members = statement.commands.map((words, c) => {
+      if (c < statement.commands.length - 1) return words;
+      let end = words.length;
+      while (end > 0 && words[end - 1]?.value === '>') end -= 1;
+      return words.slice(0, end);
+    });
+    const text = textOutputOf(members, { heredocs: statement.heredocBodies, powershell });
+    if (text === 'opaque') out.push({ text: '', reader, opaque: true });
+    else if (text === undefined) out.push({ text: '', reader, unread: true });
+    else if (text.trim() !== '') out.push({ text: text.trim(), reader });
+  }
+  return out;
+}
+
+/**
+ * The program `iex (…)` / `Invoke-Expression $(…)` runs (review of 3.4.0,
+ * finding 6): the `(` ends statement `k` right after `iex` (or its
+ * `-Command`, or the `$` of `$(`), and the statements up to the one the `)`
+ * ends write it — a string there is the program; anything else (`gc x.ps1
+ * -Raw`) is `unread`.
+ */
+function iexSubexpressionScripts(statements: readonly ShellStatement[]): FedScript[] {
+  const out: FedScript[] = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    const words = statement?.commands[statement.commands.length - 1];
+    if (statement === undefined || words === undefined || statement.end !== '(') continue;
+    const at = resolveCommand(words).index;
+    const name = commandName(words[at]?.value ?? '');
+    if (name !== 'iex' && name !== 'invoke-expression') continue;
+    if (!words.slice(at + 1).every((w) => w.value === '$' || /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(w.value))) continue;
+    // One statement in the parentheses is read; more (`iex (a; b)`), or
+    // another `(` inside, is not — and is unread, never silent.
+    const body = statements[k + 1];
+    const text = body?.end === ')' ? textOutputOf(body.commands, { heredocs: body.heredocBodies, powershell: true }) : undefined;
+    if (typeof text === 'string') {
+      if (text.trim() !== '') out.push({ text: text.trim(), reader: words, kind: 'powershell' });
+    } else out.push({ text: '', reader: words, unread: true });
+  }
+  return out;
+}
+
+/** A script block made from text: `[scriptblock]::Create(`, and the engine's `InvokeScript(` / `NewScriptBlock(`. */
+const SCRIPT_BLOCK_CALL =
+  /\[\s*(?:System\s*\.\s*Management\s*\.\s*Automation\s*\.\s*)?scriptblock\s*\]\s*::\s*Create\s*\(|\$ExecutionContext\s*\.\s*(?:SessionState\s*\.\s*)?InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)\s*\(|\.\s*AddScript\s*\(/gi;
+
+/** The most script-block calls of one command read, and how far into each one's argument. */
+const MAX_SCRIPT_BLOCK_CALLS = 32;
+const MAX_SCRIPT_BLOCK_ARG = 16 * 1024;
+
+/**
+ * The program a PowerShell script block is made from (review of 3.4.0,
+ * finding 6: `& ([scriptblock]::Create('Remove-Item -Recurse -Force C:\'))`
+ * was silent): its argument when it is one string literal (`'…'` with `''`,
+ * or `"…"`), else `unread`. A download there is
+ * `powershell-iex-download`'s.
+ */
+function scriptBlockScripts(text: string): Array<string | 'unread'> {
+  const out: Array<string | 'unread'> = [];
+  let calls = 0;
+  for (const m of text.matchAll(SCRIPT_BLOCK_CALL)) {
+    if ((calls += 1) > MAX_SCRIPT_BLOCK_CALLS) {
+      out.push('unread');
+      break;
+    }
+    const from = m.index + m[0].length;
+    const window = text.slice(from, from + MAX_SCRIPT_BLOCK_ARG);
+    const literal = /^\s*(?:'((?:[^']|'')*)'|"((?:[^"`]|`.)*)")\s*\)/.exec(window);
+    if (literal === null) out.push('unread');
+    else out.push(literal[1] !== undefined ? literal[1].replace(/''/g, "'") : (literal[2] ?? '').replace(/`(.)/g, '$1'));
+  }
+  return out;
 }
 
 /** The most encoded text decoded to judge what it decodes to. */
@@ -3322,22 +2653,58 @@ function hereStringText(words: readonly ShellWord[]): string | undefined {
  * writes `rm -rf /`. `opaque` when a decoder writes text that cannot be read
  * here (`base64 -d payload.b64`, `xxd -r`, `gunzip`); `undefined` for anything
  * else (`cat f`), which is no different from running a file.
+ *
+ * What a member only passes on is read through it (review of 3.3.0: these were
+ * silent): `cat` with no file to read — its here-string (`cat <<< '…'`), the
+ * statement's heredoc (`cat <<'EOF' | bash`; a heredoc's operator leaves no
+ * word, so the statement's bodies are taken as `cat`'s), or the member before
+ * it — and `tee`, which copies its input to stdout. Read as PowerShell
+ * (`feed.powershell`), a pipeline that begins with a string writes it:
+ * `'rm -rf /' | bash`.
+ *
+ * Of the members before `end` (all of them by default) — a reader in the
+ * middle of a pipeline reads the members before it (review of 3.4.0, finding
+ * 6) — walked back from the last, never sliced or recursed into, so that a
+ * pipeline of any length costs one pass.
  */
-function textOutputOf(members: readonly ShellWord[][]): string | 'opaque' | undefined {
-  const last = members[members.length - 1];
-  if (last === undefined) return undefined;
-  const at = resolveCommand(last).index;
-  const name = commandName(last[at]?.value ?? '');
-  const args = withoutRedirections(last.slice(at + 1));
-  if (name === 'echo') return args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(' ');
-  if (name === 'printf') return args[args.length - 1] ?? '';
-  const decoder = decoderOf(last);
-  if (decoder === undefined) return undefined;
-  if (decoder === 'other') return 'opaque';
-  const here = hereStringText(last);
-  const input = here ?? (members.length > 1 ? textOutputOf(members.slice(0, -1)) : undefined);
-  if (typeof input !== 'string') return 'opaque';
-  return decodeBase64(input) ?? 'opaque';
+function textOutputOf(
+  members: readonly ShellWord[][],
+  feed: { heredocs?: readonly string[] | undefined; powershell?: boolean } = {},
+  end = members.length,
+): string | 'opaque' | undefined {
+  // The base64 decoders met on the way back, the last member's first.
+  let decodes = 0;
+  const decoded = (text: string): string | 'opaque' => {
+    let t = text;
+    for (let k = 0; k < decodes; k += 1) {
+      const d = decodeBase64(t);
+      if (d === undefined) return 'opaque';
+      t = d;
+    }
+    return t;
+  };
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const last = members[i];
+    if (last === undefined) return undefined;
+    const lone = last.length === 1 ? last[0] : undefined;
+    if (feed.powershell === true && i === 0 && lone !== undefined && lone.quoted) return decoded(lone.value);
+    const at = resolveCommand(last).index;
+    const name = commandName(last[at]?.value ?? '');
+    const args = withoutRedirections(last.slice(at + 1));
+    if (name === 'echo') return decoded(args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(' '));
+    if (name === 'printf') return decoded(args[args.length - 1] ?? '');
+    if (!((name === 'cat' && args.every((a) => a === '-')) || name === 'tee')) {
+      const decoder = decoderOf(last);
+      if (decoder === undefined) return decodes > 0 ? 'opaque' : undefined;
+      if (decoder === 'other') return 'opaque';
+      decodes += 1;
+    }
+    // What this member reads: its here-string, the statement's heredoc, or the member before it.
+    const here = hereStringText(last);
+    if (here !== undefined) return decoded(here);
+    if (feed.heredocs !== undefined && feed.heredocs.length > 0) return decoded(feed.heredocs.join('\n'));
+  }
+  return decodes > 0 ? 'opaque' : undefined;
 }
 
 /**
@@ -3379,7 +2746,7 @@ function processSubstitutionScripts(statements: readonly ShellStatement[]): Arra
     for (let j = k + 1; j < statements.length; j += 1) {
       const body = statements[j];
       if (body === undefined) break;
-      const text = textOutputOf(body.commands.map(expandWords));
+      const text = textOutputOf(body.commands.map(expandWords), { heredocs: body.heredocBodies });
       if (text === 'opaque') opaque = true;
       else if (text !== undefined) texts.push(text);
       if (body.end === ')') break;
@@ -3584,19 +2951,6 @@ function xargsReplacement(options: readonly string[]): string | undefined {
     }
   }
   return replace === '' ? undefined : replace;
-}
-
-/** `words` without their redirections (`<<< text`, `> f`, `2>&1`) — the operator word and a detached target both go. */
-function withoutRedirectWords(words: readonly ShellWord[]): ShellWord[] {
-  const out: ShellWord[] = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === undefined) continue;
-    const r = parseRedirect(word);
-    if (r === null) out.push(word);
-    else if (r.inline === '') i += 1;
-  }
-  return out;
 }
 
 /**
@@ -4649,6 +4003,85 @@ function wslScript(words: readonly ShellWord[], start: number): string | undefin
 
 const MAX_NESTING = 3;
 
+/** The longest directory followed: no real one is longer, and a line of long `cd`s must not cost its square. */
+const MAX_DIR = 4096;
+
+/** A `/`-separated path with its `.` and `..` segments folded — never above its root or drive. */
+function foldDots(path: string): string {
+  const drive = /^[A-Za-z]:/.exec(path)?.[0] ?? '';
+  const parts: string[] = [];
+  for (const seg of path.slice(drive.length).split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return `${drive}/${parts.join('/')}`;
+}
+
+/**
+ * The directory a command runs in ({@link workdirs}' `may`: what a deny must
+ * assume) — the moves applied to where the statements start: `~`, `$HOME`,
+ * `$USERPROFILE` (and `$env:` / `%…%`) the home directory, `$PWD` where the
+ * command is, `$TEMP`, `$TMP`, `$TMPDIR`, `$LOCALAPPDATA`, `$APPDATA` what they
+ * name, and Git Bash's bare `C:` the drive's root (review 12, finding 16:
+ * `cd "$HOME"`, `cd $env:TEMP\..\..\..`, `cd C:` were not followed). `undefined`
+ * when any of it is not known.
+ */
+function dirAfter(
+  start: string | undefined,
+  steps: Steps,
+  ctx: { homePath?: string | undefined; vars?: Readonly<Record<string, string>> | undefined; bareDriveRoot?: boolean },
+): string | undefined {
+  if (steps === null) return undefined;
+  let cur = start;
+  for (const step of steps) {
+    let target = step.replace(/\\/g, '/');
+    if (target === '~' || target.startsWith('~/')) {
+      if (ctx.homePath === undefined) return undefined;
+      target = `${ctx.homePath}${target.slice(1)}`;
+    } else if (/^[$%]/.test(target)) {
+      const v = leadingVariable(target);
+      const value =
+        v === undefined ? undefined : HOME_VARIABLES.has(v.name) ? ctx.homePath : v.name === 'pwd' ? cur : ctx.vars?.[v.name];
+      if (v === undefined || value === undefined) return undefined;
+      target = `${value.replace(/\\/g, '/')}${v.rest.replace(/\\/g, '/')}`;
+    } else if (/^[A-Za-z]:\.?$/.test(target)) {
+      // `cd C:` — the drive's root in Git Bash; in cmd and PowerShell, the drive's own current directory.
+      if (ctx.bareDriveRoot !== true) return undefined;
+      target = `${target.charAt(0)}:/`;
+    }
+    if (/^(?:\/|[A-Za-z]:\/)/.test(target)) cur = foldDots(target);
+    else if (cur === undefined) return undefined;
+    else cur = foldDots(`${cur}/${target}`);
+    if (cur.length > MAX_DIR) return undefined;
+  }
+  return cur;
+}
+
+/** The variables a delete target may start with, from the environment ({@link DeleteContext.vars}). */
+function targetVariables(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const get = (...names: string[]): string | undefined => {
+    for (const name of names) {
+      const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+      const value = key === undefined ? undefined : env[key]?.trim();
+      if (value !== undefined && value !== '') return value;
+    }
+    return undefined;
+  };
+  const out: Record<string, string> = {};
+  for (const [name, from] of [
+    ['temp', ['TEMP', 'TMP']],
+    ['tmp', ['TMP', 'TEMP']],
+    ['tmpdir', ['TMPDIR']],
+    ['localappdata', ['LOCALAPPDATA']],
+    ['appdata', ['APPDATA']],
+  ] as const) {
+    const value = get(...from);
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+}
+
 /**
  * Every rule `command` breaks, into `out`. `scope` carries the whole command
  * as given (a loosening key for Claude Code's settings is looked for there)
@@ -4693,8 +4126,41 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   }
   // `bash <(echo 'rm -rf /')`: what the substitution writes is the script (review 8, item 8).
   if (commandText.includes('<(')) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  // Where each command runs, as the `cd`s before it moved it (review of
+  // 3.4.0, finding 9): a relative delete target is read against it.
+  const dirs = workdirs(statements);
+  const startDir = scope.dir;
+  // Worked out once per list of moves: the tracker hands every command up to
+  // the next move the same list, so a line of thousands of commands after
+  // dozens of `cd`s does not fold the same path thousands of times.
+  let memoSteps: Steps | undefined;
+  let memoDir: string | undefined;
+  const dirOf = (steps: Steps): string | undefined => {
+    if (steps !== memoSteps) {
+      memoSteps = steps;
+      memoDir = dirAfter(startDir, steps, { homePath: scope.homePath, vars: scope.vars, bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true });
+    }
+    return memoDir;
+  };
+  // What a reader is fed from outside one statement's pipeline (review of
+  // 3.4.0, finding 6): `tee >(bash)`, `(echo …) | bash`, `{ …; } | bash`,
+  // `iex (gc x.ps1 -Raw)`, and a script block made from text.
+  const powershellScope = scope.powershell === true;
+  collectFed(
+    [
+      ...(commandText.includes('>(') ? outputSubstitutionScripts(statements, powershellScope) : []),
+      ...groupFedScripts(statements, powershellScope),
+      ...iexSubexpressionScripts(statements),
+      ...(powershellScope && /scriptblock|InvokeCommand|AddScript/i.test(cmd)
+        ? scriptBlockScripts(cmd).map((text): FedScript => (text === 'unread' ? { text: '', reader: [], unread: true } : { text, reader: [], kind: 'powershell' }))
+        : []),
+    ],
+    depth,
+    out,
+    scope,
+  );
 
-  for (const written of statements) {
+  for (const [s, written] of statements.entries()) {
     // The total time budget: a hook that outlives Claude Code's 15 s timeout
     // lets the command run unassessed, so what is left is reported instead.
     if (scope.notes.now() > scope.notes.deadline) {
@@ -4722,7 +4188,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     }
     const piped = pipesDownloadIntoShell(statement);
     if (piped !== null) out.push(piped);
-    for (const words of statement.commands) {
+    for (const [c, words] of statement.commands.entries()) {
       // The budget is checked per command too: one statement can hold a
       // pipeline of thousands of commands (fix round 3, I-2).
       if (scope.notes.now() > scope.notes.deadline) {
@@ -4731,16 +4197,24 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers);
+      const here = dirOf(dirs[s]?.[c]?.may ?? null);
+      const deleting: DeleteContext = {
+        dir: here,
+        vars: scope.vars,
+        bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true,
+        piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : undefined,
+      };
+      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (del !== null) out.push(del);
-      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers);
+      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (find !== null) out.push(find);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       // `bash <<< 'rm -rf /'`, `sh <<< "$(echo … | base64 -d)"`: the here-string is the script (review 8, item 8).
-      const here = hereStringText(words);
-      if (here !== undefined && isBareShellStdin(withoutRedirectWords(words.slice(resolved.index)))) {
-        const generated = substitutionOutput(here);
-        collectGenerated([generated ?? here], depth, out, scope);
+      const hereText = hereStringText(words);
+      const hereReader = hereText === undefined ? undefined : scriptReader(words);
+      if (hereText !== undefined && hereReader !== undefined) {
+        const generated = substitutionOutput(hereText) ?? hereText;
+        collectFed([generated === 'opaque' ? { text: '', reader: words, opaque: true } : { text: generated, reader: words, kind: hereReader }], depth, out, { ...scope, dir: here });
       }
       // `python3 -c "$(curl …)"`, `node -e "$(curl …)"`: the program IS a
       // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
@@ -4769,7 +4243,11 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       // warning, never a silent ok (fix round 3, I-4).
       if (depth >= MAX_NESTING && (scripts.length > 0 || line !== undefined)) scope.notes.depth = true;
       if (depth < MAX_NESTING) {
-        for (const { text: script, powershell, iex } of scripts) {
+        for (const { text: script, powershell, iex, unread } of scripts) {
+          if (unread === true) {
+            out.push({ ...RULE_UNREAD_SCRIPT });
+            continue;
+          }
           // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
           // script IS a download, executed without ever spelling `| sh`.
           // Recursing alone would not catch this: the extracted script is
@@ -4783,14 +4261,18 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // `iex "& { $(irm …) }"`: whatever `iex` is handed is code, so a
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false });
+          noteScript(scope, script, powershell);
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
         // Every command of a `cmd /c` line gets the full assessment, like a
         // top-level statement: deletes, pattern rules, nested shells (fix
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
-        if (line !== undefined) collect(line, depth + 1, out, { ...scope, cmdLine: true });
+        if (line !== undefined) {
+          noteScript(scope, line, false);
+          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false, dir: here });
+        }
       }
       moveCwd(scope, words, resolved.index);
     }
@@ -4798,20 +4280,44 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // EOF`, `echo '…' | bash`, `printf '…' | sh` — is assessed as a command
     // in its own right, the same way a `-c` script already is above. Scoped
     // to the STATEMENT rather than any one command in its pipeline, since
-    // both shapes this covers depend on more than one command
-    // (`isBareShellStdin` on the shell, plus either a heredoc on the same
-    // statement or the *preceding* pipeline member). A program an
-    // interpreter reads the same way (`python - <<EOF`) is judged as program
-    // text, like `python -c`.
-    const fed = fedScripts(statement, isBareShellStdin);
-    if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
-    if (depth < MAX_NESTING) {
-      for (const { text, opaque } of fed) if (opaque !== true) collect(text, depth + 1, out, { ...scope, cmdLine: false });
-    } else if (fed.length > 0) scope.notes.depth = true;
-    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin)) {
+    // both shapes this covers depend on more than one command (a reader —
+    // `scriptReader` — plus either a heredoc on the same statement or the
+    // members before it). A program an interpreter reads the same way
+    // (`python - <<EOF`) is judged as program text, like `python -c`.
+    const fed = fedScripts(statement, readsScript, scope.powershell === true);
+    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf(dirs[s]?.[0]?.may ?? null) });
+    for (const { text, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
+      if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
       else pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope));
     }
+  }
+}
+
+/**
+ * Scripts fed to a reader ({@link FedScript}), each assessed as the language
+ * its reader runs — a POSIX shell's, PowerShell's (read both ways, as a `pwsh
+ * -c` script is), or a cmd.exe line's — and a warning for a decoder's output
+ * (`decoded-script`) or any other output (`unread-script`) that cannot be
+ * read here: never a silent ok.
+ */
+function collectFed(fed: readonly FedScript[], depth: number, out: MatchedRule[], scope: Scope): void {
+  if (fed.length === 0) return;
+  if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
+  if (fed.some((f) => f.unread === true)) out.push({ ...RULE_UNREAD_SCRIPT });
+  const readable = fed.filter((f) => f.opaque !== true && f.unread !== true);
+  if (readable.length === 0) return;
+  if (depth >= MAX_NESTING) {
+    scope.notes.depth = true;
+    return;
+  }
+  for (const f of readable) {
+    const kind = f.kind ?? scriptReader(f.reader) ?? 'shell';
+    const powershell = kind === 'powershell';
+    noteScript(scope, f.text, powershell);
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell });
+    const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
+    if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
   }
 }
 
@@ -4826,7 +4332,10 @@ function collectGenerated(texts: ReadonlyArray<string | 'opaque' | undefined>, d
     if (text === undefined) continue;
     if (text === 'opaque') out.push({ ...RULE_DECODED_SCRIPT });
     else if (depth >= MAX_NESTING) scope.notes.depth = true;
-    else collect(text, depth + 1, out, { ...scope, cmdLine: false });
+    else {
+      noteScript(scope, text, false);
+      collect(text, depth + 1, out, { ...scope, cmdLine: false, powershell: false });
+    }
   }
 }
 
@@ -4877,6 +4386,22 @@ export interface AssessOptions {
    */
   cwd?: string;
   projectDir?: string;
+  /**
+   * The environment the command runs with: `TEMP`, `TMP`, `TMPDIR`,
+   * `LOCALAPPDATA`, `APPDATA` are what a delete target led by them names
+   * (default: this process's; tests).
+   */
+  env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Where an absolute path really leads through the links already on disk —
+   * a symbolic link, a junction, an 8.3 name on the way — or `undefined` when
+   * as written or unknown. A redirect into `z/` with `z` a junction to
+   * `.claude` writes Claude Code's settings (review 12, finding 1). The
+   * dispatcher passes one that never asks the network; without it (the CLI's
+   * `check`, the tests) paths are judged as written, and through the links
+   * the command itself makes.
+   */
+  realPath?: (path: string) => string | undefined;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -4897,6 +4422,7 @@ function partialRule(notes: Notes): MatchedRule | null {
     ...(notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : []),
     ...(notes.calls ? [`an [IO.File] call's arguments over ${MAX_CALL_ARGS} characters`] : []),
     ...(notes.failed ? ['the assessment failed'] : []),
+    ...(notes.links ? [`more than ${MAX_ALIASES} links made, or ${MAX_LOOKUPS} paths looked up through links`] : []),
   ];
   return causes.length === 0
     ? null
@@ -4923,6 +4449,27 @@ interface Notes {
   calls: boolean;
   deadline: number;
   now: () => number;
+  /** The scripts handed to a shell so far ({@link BashAssessment.scripts}), by `shell\0text`. */
+  scripts: Map<string, { text: string; shell: 'bash' | 'powershell' }>;
+  /** The links the command made so far, `[link, target]` as {@link aliasKey} spells them ({@link throughLinks}). */
+  aliases: Array<readonly [string, string]>;
+  /** The paths looked up on disk so far, with where each really leads ({@link realPathOf}). */
+  realPaths: Map<string, string | undefined>;
+  /** More links, or lookups, than {@link MAX_ALIASES} / {@link MAX_LOOKUPS}. */
+  links: boolean;
+}
+
+/** The most nested scripts {@link BashAssessment.scripts} lists. */
+const MAX_NOTED_SCRIPTS = 64;
+
+/** Records a script the command hands a shell, for the install vetting ({@link BashAssessment.scripts}). */
+function noteScript(scope: Scope, text: string, powershell: boolean): void {
+  const scripts = scope.notes.scripts;
+  const shell = powershell ? 'powershell' : 'bash';
+  const t = text.trim();
+  if (t === '' || scripts.size >= MAX_NOTED_SCRIPTS) return;
+  const key = `${shell}\0${t}`;
+  if (!scripts.has(key)) scripts.set(key, { text: t, shell });
 }
 
 /** `text` cut at the cap, noting that something was dropped. */
@@ -4957,10 +4504,17 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
     configDirName: configDirNameOf(configDir),
     dataDir: dataDir === '' ? undefined : dataDir,
     tildeUsers: opts.shell !== 'powershell',
+    powershell: opts.shell === 'powershell',
     places:
       opts.cwd === undefined && opts.projectDir === undefined
         ? undefined
         : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) },
+    dir: opts.cwd === undefined || opts.cwd.trim() === '' ? undefined : foldDots(opts.cwd.replace(/\\/g, '/')),
+    homePath: homeRaw === undefined ? undefined : homeRaw.replace(/\\/g, '/'),
+    vars: targetVariables(opts.env ?? process.env),
+    bareDriveRoot: platform === 'win32' && opts.shell !== 'powershell',
+    windows: platform === 'win32',
+    realPath: opts.realPath,
   };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
@@ -4980,8 +4534,17 @@ interface Where {
   dataDir: string | undefined;
   /** `~name` names a home directory — false for the PowerShell tool. */
   tildeUsers: boolean;
+  /** The command is PowerShell's (the PowerShell tool): a string that begins a pipeline is its output. */
+  powershell: boolean;
   /** Where the guarded paths are this session's, when the caller said where it runs. */
   places: Places | undefined;
+  /** The working directory, `/`-separated, when the caller said it. */
+  dir: string | undefined;
+  homePath: string | undefined;
+  vars: Readonly<Record<string, string>>;
+  bareDriveRoot: boolean;
+  windows: boolean;
+  realPath: ((path: string) => string | undefined) | undefined;
 }
 
 /** {@link userDataDir}, or `''` when it cannot be worked out. */
@@ -5015,6 +4578,10 @@ function assessReadings(
     calls: false,
     deadline,
     now,
+    scripts: new Map(),
+    aliases: [],
+    realPaths: new Map(),
+    links: false,
   };
 
   const matched: MatchedRule[] = [];
@@ -5033,8 +4600,9 @@ function assessReadings(
   }
   const partial = partialRule(notes);
   if (partial !== null) matched.push(partial);
+  const scripts = notes.scripts.size > 0 ? { scripts: [...notes.scripts.values()] } : {};
 
-  if (matched.length === 0) return { level: 'ok', reasons: [], rules: [] };
+  if (matched.length === 0) return { level: 'ok', reasons: [], rules: [], ...scripts };
 
   // De-dupe by id, then most severe first.
   const byId = new Map<string, MatchedRule>();
@@ -5053,5 +4621,6 @@ function assessReadings(
     rules: effective.map((r) => r.id),
     ...(own === undefined ? {} : { denyMessage: own }),
     ...(ask === undefined ? {} : { ask }),
+    ...scripts,
   };
 }

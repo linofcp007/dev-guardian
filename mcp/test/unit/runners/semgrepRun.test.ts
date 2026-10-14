@@ -17,7 +17,14 @@ vi.mock('../../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() })
 import { runProcess } from '../../../src/runners/processRunner.js';
 import { buildSemgrepDockerArgs, DEFAULT_SEMGREP_IMAGE } from '../../../src/runners/dockerScanner.js';
 import { TOOL_CATALOG } from '../../../src/runners/installCatalog.js';
-import { runSemgrep, SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV, semgrepSpawn } from '../../../src/runners/semgrepRun.js';
+import {
+  metricsEnvProblem,
+  runSemgrep,
+  SEMGREP_COMMAND,
+  SEMGREP_NO_VERSION_CHECK_ENV,
+  semgrepErrorLine,
+  semgrepSpawn,
+} from '../../../src/runners/semgrepRun.js';
 import { runVersionProbe } from '../../../src/runners/toolProbe.js';
 
 beforeEach(() => {
@@ -60,6 +67,58 @@ describe('semgrepSpawn / runSemgrep', () => {
       env: { PYTHONUTF8: '1', SEMGREP_ENABLE_VERSION_CHECK: '0' },
     });
     expect(runProcess).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Review 12, finding 13: Semgrep refuses every SEMGREP_SEND_METRICS value but
+ * `on`, `off` and `auto` — `0`, `false` and `OFF` made every run exit 2 with
+ * only `Usage: …` named — and a dead proxy's error was dropped.
+ */
+describe('SEMGREP_SEND_METRICS and what Semgrep said', () => {
+  it('a value that plainly means on, off or auto is spelt as Semgrep takes it; anything else is left as it is', () => {
+    for (const [given, sent] of [
+      ['0', 'off'],
+      ['false', 'off'],
+      ['OFF', 'off'],
+      ['off', 'off'],
+      ['1', 'on'],
+      ['AUTO', 'auto'],
+      ['maybe', 'maybe'],
+    ] as const) {
+      expect(semgrepSpawn({ PATH: '/bin', SEMGREP_SEND_METRICS: given }).env['SEMGREP_SEND_METRICS'], given).toBe(sent);
+    }
+    expect(semgrepSpawn({ PATH: '/bin' }).env['SEMGREP_SEND_METRICS']).toBeUndefined();
+  });
+
+  it('names the variable with its value: refused outright, or metrics off against --config=auto', () => {
+    expect(metricsEnvProblem(['auto'], { SEMGREP_SEND_METRICS: 'OFF' })).toMatch(
+      /^SEMGREP_SEND_METRICS=OFF is set in the environment \(metrics off\), and Semgrep cannot build/,
+    );
+    expect(metricsEnvProblem(['auto'], { SEMGREP_SEND_METRICS: '0' })).toMatch(/^SEMGREP_SEND_METRICS=0 is set .*\(metrics off\)/);
+    expect(metricsEnvProblem(['local.yml'], { SEMGREP_SEND_METRICS: 'false' })).toBeNull();
+    expect(metricsEnvProblem(['local.yml'], { SEMGREP_SEND_METRICS: 'maybe' })).toMatch(
+      /^SEMGREP_SEND_METRICS=maybe is set in the environment, a value Semgrep refuses/,
+    );
+    expect(metricsEnvProblem(['auto'], { SEMGREP_SEND_METRICS: 'on' })).toBeNull();
+    expect(metricsEnvProblem(['auto'], {})).toBeNull();
+  });
+
+  it("Semgrep's own message: an [ERROR] line, a command-line error with its continuation, a network error", () => {
+    expect(semgrepErrorLine('[00.07][ERROR]: Cannot create auto config when metrics are off.\n')).toBe(
+      'Cannot create auto config when metrics are off.',
+    );
+    expect(
+      semgrepErrorLine(
+        "Usage: semgrep scan [--help] [OPTION]… [TARGETS]…\nsemgrep scan: environment variable 'SEMGREP_SEND_METRICS': invalid value\n              'false', expected one of 'on', 'off' or 'auto'\n",
+      ),
+    ).toBe("environment variable 'SEMGREP_SEND_METRICS': invalid value 'false', expected one of 'on', 'off' or 'auto'");
+    expect(
+      semgrepErrorLine(
+        "HTTPSConnectionPool(host='semgrep.dev', port=443): Max retries exceeded with url: /c/auto (Caused by ProxyError('Unable to connect to proxy'))\nTraceback (most recent call last):\n  File \"x.py\", line 1\n",
+      ),
+    ).toMatch(/^HTTPSConnectionPool\(host='semgrep\.dev', port=443\): Max retries exceeded .*ProxyError/);
+    expect(semgrepErrorLine('nothing to say\n')).toBeNull();
   });
 });
 

@@ -8,7 +8,7 @@
  * - The CLI (`cli/dev-guardian.mjs`) imports it for everything `cli.ts`
  *   exports — the light helpers directly, the scan pipeline and the storage
  *   layer through its lazy `load*Modules()`.
- * - `dist/server.js` is a two-line file that imports it and calls
+ * - `dist/server.js` is a short file that turns the compile cache on, imports it and calls
  *   {@link startServer} (`scripts/bundleOptions.mjs#SERVER_JS`), so every path
  *   that names the server — `plugin.json`, the host configurations
  *   `mcp-config` writes — stays what it was.
@@ -16,7 +16,7 @@
  * `startServer` reaches `server.ts` through a dynamic `import()`, which the
  * bundle keeps lazy (esbuild wraps a module reached only that way in an
  * initializer that runs on the first call, as for `cli.ts`'s loaders): the
- * CLI never evaluates the server's module graph — the SDK, the 63 tools — and
+ * CLI never evaluates the server's module graph — the SDK, every tool module — and
  * `server.ts` stays the entry `npm run dev` runs with tsx, starting itself on
  * import.
  */

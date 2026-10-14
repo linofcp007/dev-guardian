@@ -92,6 +92,30 @@ describe('mcp-config — --project with no value', () => {
   });
 });
 
+// A usage error like any other: 3 (review of 3.3.0 — a missing or unknown host exited 1).
+describe('mcp-config — a missing or unknown host', () => {
+  it.each([[['mcp-config']], [['mcp-config', 'bogus']]])('%j exits 3, naming it', (args) => {
+    const r = runCli(args);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/^Missing or unknown host: (\(none\)|bogus)\n/);
+  });
+});
+
+// A --scope that is neither project nor global read as project: `--scope globl
+// --write` wrote the project's configuration where the user asked for their own.
+describe('mcp-config — --scope takes project or global, nothing else', () => {
+  it.each([[['--scope', 'globl']], [['--scope=Global']], [['--scope', '']]])('%j exits 3, naming the value', (flags) => {
+    const r = runCli(['mcp-config', 'cursor', ...flags]);
+    expect(r.status).toBe(3);
+    expect(r.stderr).toMatch(/--scope must be project or global \(got '.*'\)/);
+  });
+
+  it.each([[['--scope', 'global']], [['--scope=project']], [['--global']]])('%j still works', (flags) => {
+    const r = runCli(['mcp-config', 'cursor', ...flags]);
+    expect(r.status, r.stderr).toBe(0);
+  });
+});
+
 describe('mcp-config --write — CLI path substitution + delimited rules block (items 6a/6b)', () => {
   let project: string;
 

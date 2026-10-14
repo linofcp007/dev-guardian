@@ -48,21 +48,32 @@ type Kind =
 
 const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string }>> = {
   'mcp/src/platform/gitSafety.ts': {
-    count: 4,
+    count: 6,
     kind: 'helper',
     reason:
       'the configuration probe and the submodule listing (sync, and async through one spawn helper), ' +
-      'and git itself with the overrides applied',
+      'git itself with the overrides applied, and System32 taskkill /T by its full path — how the plain ' +
+      "spawner (the hook bundle's async git, which may hold no npm package) stops git's tree on Windows — " +
+      "and System32 PowerShell by its full path, which finds what a timed-out synchronous git left (execGitSync's tree kill)",
   },
   'mcp/src/runners/spawn.ts': {
-    count: 2,
+    count: 3,
     kind: 'primitive',
-    reason: 'cross-spawn without a shell (spawnNoShell), and captureOutput, the one-process probes classified below',
+    reason:
+      'cross-spawn without a shell (spawnNoShell), Node on the script an npm cmd-shim names (no cmd.exe), ' +
+      'and captureOutput, the one-process probes classified below',
   },
   'mcp/src/runners/childProcess.ts': {
     count: 1,
     kind: 'primitive',
     reason: 'startChild: the tree-owning child runProcess, the DAST app and the audited MCP server are started as',
+  },
+  'mcp/src/runners/gitExec.ts': {
+    count: 1,
+    kind: 'helper',
+    reason:
+      "gitSafety's async git on startChild, so a timeout stops git's whole tree (review 10, finding 12): " +
+      'the command and its environment are what execGit hands it, the overrides already applied',
   },
   'mcp/src/runners/processRunner.ts': {
     count: 1,
@@ -196,14 +207,18 @@ describe('every raw spawn is classified (platform/gitSafety.ts)', () => {
 
   it('the hook and the CLI run git only through the helper they import from dist', () => {
     const hook = SOURCES.find((s) => s.rel === 'hooks/guardian-hook.mjs')?.text ?? '';
-    // The hook loads it from its bundle, dist/hooks.js (src/hooksEntry.ts), since 3.3.0.
+    // The hook loads it from its bundle, dist/hooks.js (src/hooksEntry.ts), since 3.3.0 — from
+    // the bundle's SessionStart part, dist/hooksSession.js, since 3.4.0.
     expect(hook).toMatch(/await detector\('loadGitSafety'\)/);
     const hooksEntry = SOURCES.find((s) => s.rel === 'mcp/src/hooksEntry.ts')?.text ?? '';
-    expect(hooksEntry).toMatch(/^export const loadGitSafety = \(\) => import\('\.\/platform\/gitSafety\.js'\);$/m);
+    expect(hooksEntry).toMatch(/^export const loadGitSafety = async \(\) => \(await import\('\.\/hooksSession\.js'\)\)\.gitSafety;$/m);
+    expect(readFileSync(join(REPO, 'mcp', 'src', 'hooksSession.ts'), 'utf8')).toMatch(/^export \* as gitSafety from '\.\/platform\/gitSafety\.js';$/m);
     // The CLI imports it from its bundle, dist/engine.js, which re-exports the helper (src/cli.ts) —
-    // an awaited dynamic import since 3.3.0, so Node's compile cache is on before the bundle loads.
+    // an awaited dynamic import since 3.3.0, so Node's compile cache is on before the bundle loads
+    // (one a missing or damaged bundle turns into exit 3 since 3.4.0).
     const cli = SOURCES.find((s) => s.rel === 'cli/dev-guardian.mjs')?.text ?? '';
-    expect(cli).toMatch(/^const \{[^}]*\bexecGitSync,[^}]*\} = await import\('\.\.\/mcp\/dist\/engine\.js'\);$/m);
+    expect(cli).toMatch(/^const engine = await import\('\.\.\/mcp\/dist\/engine\.js'\)\.catch\(/m);
+    expect(cli).toMatch(/^const \{[^}]*\bexecGitSync,[^}]*\} = engine;$/m);
     const entry = SOURCES.find((s) => s.rel === 'mcp/src/cli.ts')?.text ?? '';
     expect(entry).toMatch(/^export \{ execGitSync \} from '\.\/platform\/gitSafety\.js';$/m);
   });

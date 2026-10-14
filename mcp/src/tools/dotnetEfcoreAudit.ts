@@ -18,14 +18,14 @@ import { randomUUID } from 'node:crypto';
 import { listProjectDir, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import {
   makeFinding,
 } from '../runners/scannerParsers/index.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
 import type { Finding, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 interface Rule {
   id: string;
@@ -73,7 +73,7 @@ const RULES: Rule[] = [
 
 const inputSchema = { project_path: ProjectPath };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'dotnet_efcore_audit',
   title: 'EF Core migrations audit',
   description:
@@ -81,24 +81,16 @@ const tool: ToolModule = {
     'without defaultValue, raw SQL with credentials). Pure source scan — no SDK required.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return {
-      ok: false,
-      error: { code: projectPathErrorCode(e), message: (e as Error).message },
-    };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const migrationDirs = findMigrationsDirs(projectPath);
   const findings: Finding[] = [];

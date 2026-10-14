@@ -6,6 +6,7 @@
  * handling, exception handling, where findings come from, temp-dir hygiene
  * — never scanning itself, so none of it needs Semgrep installed.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -567,5 +568,71 @@ describe('runScans', () => {
     const result = await runScans({ projectPath });
 
     expect(result.findings.map((f) => f.fingerprint).sort()).toEqual(['fp-failed', 'fp-project']);
+  });
+
+  // Review 12, finding 11: gitleaks reads history as -U0 hunks, and a private
+  // key replaced in place had its BEGIN / END lines in none. Under a ref, the
+  // files changed since it are read whole: scan_secrets scoped to their paths,
+  // right after security_scan_full; its findings gate like the rest.
+  it('with changedSince: scan_secrets reads the changed files whole (scope.paths), after security_scan_full, and its findings gate', async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git('init', '-q');
+    writeFileSync(join(projectPath, 'same.js'), '1\n');
+    writeFileSync(join(projectPath, 'key.pem'), 'a\n');
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    writeFileSync(join(projectPath, 'key.pem'), 'b\n');
+    git('commit', '-qam', 'pr');
+
+    const order: string[] = [];
+    const inputs: unknown[] = [];
+    mockTool('security_scan_full', async () => {
+      order.push('security_scan_full');
+      return ok();
+    });
+    mockTool('license_compatibility', async () => {
+      order.push('license_compatibility');
+      return ok();
+    });
+    mockTool('scan_secrets', async (input, ctx) => {
+      order.push('scan_secrets');
+      inputs.push(input);
+      ctx.storage.scans.insert({ scan_id: 'whole', scan_type: 'secrets', project_path: projectPath, tree_hash: 't', meta: { scope: { kind: 'paths' } } });
+      const leak = { tool: 'gitleaks', severity: 'high' as const, category: 'security' as const, title: 'key', fix_available: false, scan_id: 'whole' };
+      ctx.storage.findings.bulkInsert([
+        { ...leak, fingerprint: 'fp-key', file_path: 'key.pem', line_start: 1, line_end: 6, snippet: 'rule=private-key' },
+        // One line: whole in the hunk that added it, so the history pass judged
+        // it (with what applies only to history) — never taken from here.
+        { ...leak, fingerprint: 'fp-one-line', file_path: 'key.pem', line_start: 1, line_end: 1, snippet: 'rule=aws-access-token' },
+      ]);
+      ctx.storage.scans.finalize({ scan_id: 'whole', status: 'completed', tools_run: [{ name: 'gitleaks-working-tree', status: 'ok' }], missing_tools: [] });
+      return ok({ tools_run: [{ name: 'gitleaks-working-tree', status: 'ok' }], missing_tools: [] });
+    });
+
+    const result = await runScans({ projectPath, changedSince: { ref: 'BASE', commit, prefix: '' } });
+    expect(order).toEqual(['security_scan_full', 'scan_secrets', 'license_compatibility']);
+    expect(inputs).toEqual([{ project_path: projectPath, force: true, scope: { paths: ['key.pem'] } }]);
+    expect(result.findings.map((f) => f.fingerprint)).toEqual(['fp-key']);
+
+    // Without a ref, no such step.
+    inputs.length = 0;
+    await runScans({ projectPath });
+    expect(inputs).toEqual([]);
+  });
+
+  it('with changedSince and a commit git cannot diff: a failed scan_secrets step — a gap, never a pass', async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    spawnSync('git', ['init', '-q'], { cwd: projectPath });
+    const result = await runScans({ projectPath, changedSince: { ref: 'BASE', commit: 'f'.repeat(40), prefix: '' } });
+    const step = result.steps.find((s) => s.tool === 'scan_secrets');
+    expect(step).toMatchObject({ ran: false, reason: expect.stringMatching(/^the files changed since BASE could not be listed/) });
+    const verdict = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(verdict.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
   });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);

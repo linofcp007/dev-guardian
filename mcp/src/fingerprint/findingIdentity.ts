@@ -409,8 +409,15 @@ export interface GateKeys {
    *     tree — `(rule, path, occurrence)`, the commit only in the message:
    *     an unrelated uncommitted edit to the file, a squash merge (a new
    *     commit) or a whitespace commit touching the line each made a
-   *     baselined secret new. The occurrence is counted per pass (history,
-   *     files), a secret found twice on one line of history once;
+   *     baselined secret new. When the run read the secrets' values
+   *     (`secretValue`, review 11 finding 2), the occurrence is the secret's
+   *     place among the file's distinct values of that rule, in the order
+   *     they were introduced — by commit, then line ({@link valueSlots}) —
+   *     so every commit and pass that saw one value shares its key, and a
+   *     secret added above a baselined one, in a later commit, takes a new
+   *     occurrence instead of the baselined one's. Without values (a caller
+   *     that read none): counted per pass (history, files) by line, a secret
+   *     found twice on one line of history once — the 3.3.0 rule;
    *   - the path as the baseline recorded it, when the file was renamed
    *     since (`renamedFrom`, from `git diff -M`: `ci/renames.ts`).
    *
@@ -426,10 +433,26 @@ export interface GateKeys {
  */
 export function gateMatchKeys(
   findings: readonly GateKeySubject[],
-  opts: { renamedFrom?: ReadonlyMap<string, string> } = {},
+  opts: {
+    renamedFrom?: ReadonlyMap<string, string>;
+    /**
+     * A gitleaks finding's secret as a per-run HMAC, or undefined when it
+     * could not be read (`ci/secretValues.ts`). Absent: values are not
+     * compared, and a slot is keyed whatever it holds (the pre-3.4 rule).
+     */
+    secretValue?: (finding: GateKeySubject) => string | undefined;
+    /**
+     * When a gitleaks finding's secret was introduced: its commit's time in
+     * ms, `Infinity` for one no commit holds (the working tree), undefined
+     * when not known (`ci/secretValues.ts#secretIntroducedAt`). Orders the
+     * values of a file for their occurrences; without it, by line alone.
+     */
+    introducedAt?: (finding: GateKeySubject) => number | undefined;
+  } = {},
 ): GateKeys[] {
   const renamed = opts.renamedFrom ?? new Map<string, string>();
   const out: GateKeys[] = findings.map(() => ({}));
+  const byValue = opts.secretValue;
 
   // The identity as the baseline knew it: the stored recipe over the old path.
   const moved = findings.flatMap((finding, index) => {
@@ -443,8 +466,10 @@ export function gateMatchKeys(
     if (slot !== undefined) slot.renamedIdentity = identity;
   }
 
-  // The match key: grouped by (tool, rule, path, content), occurrences
-  // counted per pass, one line of a secret's history counted once.
+  // The match key: grouped by (tool, rule, path, content). A secret whose
+  // values were read is keyed by its value's slot (below); everything else
+  // by occurrence counted per pass, one line of a secret's history once.
+  const valued = new Map<string, Array<{ index: number; finding: GateKeySubject }>>();
   const groups = new Map<string, Array<{ index: number; finding: GateKeySubject; pass: string; head: string }>>();
   findings.forEach((finding, index) => {
     const content = matchContentKey(finding);
@@ -452,6 +477,12 @@ export function gateMatchKeys(
     const current = locate(finding.file_path, undefined).key;
     const path = renamed.get(current) ?? current;
     const head = JSON.stringify([MATCH_KEY_VERSION, finding.tool.toLowerCase(), finding.rule_id ?? '', path, content]);
+    if (byValue !== undefined && isGitleaksSecret(finding)) {
+      const members = valued.get(head);
+      if (members === undefined) valued.set(head, [{ index, finding }]);
+      else members.push({ index, finding });
+      return;
+    }
     const pass = isGitleaksSecret(finding) ? (isHistoryLocator(finding) ? 'history' : 'files') : '';
     const key = `${head}\n${pass}`;
     const members = groups.get(key);
@@ -459,6 +490,9 @@ export function gateMatchKeys(
     if (members === undefined) groups.set(key, [member]);
     else members.push(member);
   });
+  // Each (head, occurrence) is one slot — the same secret in every pass that
+  // saw it. A slot is keyed only when what its members hold is one value.
+  const slots = new Map<string, Array<{ index: number; finding: GateKeySubject }>>();
   for (const members of groups.values()) {
     members.sort(
       (a, b) =>
@@ -472,15 +506,87 @@ export function gateMatchKeys(
     let lastLine: number | undefined;
     for (const m of members) {
       // A secret found on the same line by two commits (a whitespace commit
-      // touching it) is one secret.
-      const sameSecret = m.pass === 'history' && m.finding.line_start !== undefined && m.finding.line_start === lastLine;
-      if (!sameSecret) occurrence += 1;
+      // touching it) is one occurrence — without values, nothing says whether
+      // it is one secret (with them, {@link valueSlots} keys secrets instead).
+      const sameLine = m.pass === 'history' && m.finding.line_start !== undefined && m.finding.line_start === lastLine;
+      if (!sameLine) occurrence += 1;
       lastLine = m.finding.line_start;
+      const slotKey = `${m.head}\n${occurrence}`;
+      const slot = slots.get(slotKey);
+      if (slot === undefined) slots.set(slotKey, [m]);
+      else slot.push(m);
+    }
+  }
+  for (const [slotKey, members] of slots) {
+    const matchKey = sha256(slotKey);
+    for (const m of members) {
       const slot = out[m.index];
-      if (slot !== undefined) slot.matchKey = sha256(`${m.head}\n${occurrence}`);
+      if (slot !== undefined) slot.matchKey = matchKey;
+    }
+  }
+  if (byValue !== undefined) {
+    for (const [head, members] of valued) {
+      for (const [index, occurrence] of valueSlots(members, byValue, opts.introducedAt)) {
+        const slot = out[index];
+        if (slot !== undefined) slot.matchKey = sha256(`${head}\n${occurrence}`);
+      }
     }
   }
   return out;
+}
+
+/**
+ * The occurrence of each gitleaks finding of one (rule, path) whose value is
+ * known — finding index → occurrence (review 11, finding 2). One occurrence
+ * per distinct VALUE, so every commit that touched a secret's line, the
+ * working-tree copy and a move to another line all share the secret's key —
+ * and so does another copy of the value in the same file, which is not new
+ * (decided in review 12, finding 12: a move must pass, telling a copy from a
+ * move would take tracking deletions, and a copy exposes nothing the baseline
+ * did not accept; in another file it is new, the path being in the key).
+ * The values are numbered in the order they were introduced: by the earliest
+ * commit holding each (`introducedAt`; the working tree after every commit),
+ * then line. Counted by line alone, a new secret added ABOVE a baselined one
+ * took occurrence 0 — the baselined one's key — and passed the gate. A value
+ * that cannot be read gets no occurrence: that finding matches by its exact
+ * identity only. Ties (one commit, one line) are broken by the fingerprint,
+ * which is the same in every run.
+ */
+function valueSlots(
+  members: ReadonlyArray<{ index: number; finding: GateKeySubject }>,
+  secretValue: (f: GateKeySubject) => string | undefined,
+  introducedAt: ((f: GateKeySubject) => number | undefined) | undefined,
+): Map<number, number> {
+  const first = new Map<string, { at: number; line: number; end: number; fingerprint: string }>();
+  const valueOf = new Map<number, string>();
+  for (const { index, finding } of members) {
+    const value = secretValue(finding);
+    if (value === undefined) continue;
+    valueOf.set(index, value);
+    const at = introducedAt?.(finding) ?? (isHistoryLocator(finding) ? Number.MAX_SAFE_INTEGER : Number.POSITIVE_INFINITY);
+    const here = { at, line: finding.line_start ?? 0, end: finding.line_end ?? 0, fingerprint: finding.fingerprint };
+    const seen = first.get(value);
+    if (seen === undefined || earlier(here, seen)) first.set(value, here);
+  }
+  const order = [...first.entries()].sort((a, b) => (earlier(a[1], b[1]) ? -1 : earlier(b[1], a[1]) ? 1 : 0));
+  const occurrence = new Map(order.map(([value], i) => [value, i]));
+  const out = new Map<number, number>();
+  for (const [index, value] of valueOf) {
+    const n = occurrence.get(value);
+    if (n !== undefined) out.set(index, n);
+  }
+  return out;
+}
+
+/** Whether `a` was introduced before `b`: commit time, then line, then the fingerprint. */
+function earlier(
+  a: { at: number; line: number; end: number; fingerprint: string },
+  b: { at: number; line: number; end: number; fingerprint: string },
+): boolean {
+  if (a.at !== b.at) return a.at < b.at;
+  if (a.line !== b.line) return a.line < b.line;
+  if (a.end !== b.end) return a.end < b.end;
+  return a.fingerprint < b.fingerprint;
 }
 
 /** The content a match key hashes (see {@link GateKeys.matchKey}), or null when there is none to key on. */

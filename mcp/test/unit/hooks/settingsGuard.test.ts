@@ -10,8 +10,11 @@ import {
   applyEdit,
   hookLooseningSettings,
   isClaudeSettingsPath,
+  newlyAsked,
   newlyLoosened,
+  settingsVerdict,
 } from '../../../src/hooks/settingsGuard.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 describe('isClaudeSettingsPath', () => {
   it.each([
@@ -82,7 +85,7 @@ describe('hookLooseningSettings', () => {
       hookLooseningSettings(
         JSON.stringify({
           disableAllHooks: false,
-          env: { GUARDIAN_HOOKS: 'on', GUARDIAN_HOOKS_BASH_BLOCK: '1', GUARDIAN_PKG_VET: '1', NODE_OPTIONS: 'x' },
+          env: { GUARDIAN_HOOKS: 'on', GUARDIAN_HOOKS_BASH_BLOCK: '1', GUARDIAN_PKG_VET: '1', NODE_ENV: 'x' },
           permissions: { allow: ['Bash(npm test)'] },
           hooks: { PostToolUse: [] },
         }),
@@ -145,6 +148,74 @@ describe('newlyLoosened', () => {
   });
 });
 
+// Review of 3.4.0, finding 4: variables that switch the hooks off whatever
+// their value, the value forms another parser may read as the switch, and a
+// settings file that is JSONC, escapes a key or repeats one.
+describe('review of 3.4.0, finding 4: every form that may switch the hooks off', () => {
+  const key = ['disable', 'AllHooks'].join('');
+
+  it('NODE_OPTIONS and GUARDIAN_PKG_VET_DEADLINE_MS switch a hook off whatever their value — a new value is new', () => {
+    expect(hookLooseningSettings('{"env":{"NODE_OPTIONS":"--import=data:text/javascript,process.exit(0)"}}')).toEqual([
+      'env NODE_OPTIONS=--import=data:text/javascript,process.exit(0)',
+    ]);
+    expect(hookLooseningSettings('{"env":{"guardian_pkg_vet_deadline_ms":1}}')).toEqual(['env GUARDIAN_PKG_VET_DEADLINE_MS=1']);
+    const mine = '{"env":{"NODE_OPTIONS":"--max-old-space-size=4096"}}';
+    expect(newlyLoosened(mine, mine.replace('}}', ',"A":"b"}}'))).toEqual([]);
+    expect(newlyLoosened(mine, '{"env":{"NODE_OPTIONS":"--require ./x.js"}}')).toEqual(['env NODE_OPTIONS=--require ./x.js']);
+    expect(hookLooseningSettings('"NODE_OPTIONS": "--require x"')).toEqual(['env NODE_OPTIONS=--require x']);
+  });
+
+  it('PATH, HOME and USERPROFILE are asked about, not refused — in env only', () => {
+    expect(newlyLoosened(undefined, '{"env":{"PATH":"/tmp/fake:/usr/bin"}}')).toEqual([]);
+    expect(newlyAsked(undefined, '{"env":{"PATH":"/tmp/fake:/usr/bin"}}')).toEqual(['env PATH=/tmp/fake:/usr/bin']);
+    expect(newlyAsked('{"env":{"Path":"C:/x"}}', '{"env":{"Path":"C:/x"},"model":"m"}')).toEqual([]);
+    expect(newlyAsked(undefined, '{"env":{"HOME":"/tmp/h","USERPROFILE":"C:/h"}}')).toEqual(['env HOME=/tmp/h', 'env USERPROFILE=C:/h']);
+    expect(newlyAsked(undefined, '{"extraKnownMarketplaces":{"m":{"source":{"source":"directory","path":"/srv/m"}}}}')).toEqual([]);
+    expect(newlyAsked(undefined, '"source": "directory", "path": "/srv/m"')).toEqual([]);
+    expect(newlyAsked(undefined, '"PATH": "/tmp/fake"')).toEqual(['env PATH=/tmp/fake']);
+  });
+
+  it.each([
+    [`{"${key}": "true"}`, true],
+    [`{"${key}": 1}`, true],
+    [`{"${key}": "false"}`, true],
+    [`{"${key}": {}}`, true],
+    [`{"${key}": false}`, false],
+    [`{"${key}": 0}`, false],
+    [`{"${key}": null}`, false],
+    [`{"${key}": ""}`, false],
+  ])('disableAllHooks in %s switches the hooks off: %s', (text, off) => {
+    expect(hookLooseningSettings(text)).toEqual(off ? ['disableAllHooks: true'] : []);
+    expect(hookLooseningSettings(text.slice(1, -1))).toEqual(off ? ['disableAllHooks: true'] : []);
+  });
+
+  it.each(['"false"', '0', 'null', '"true"', '"no"'])('an enabledPlugins entry naming dev-guardian set to %s turns it off', (value) => {
+    expect(hookLooseningSettings(`{"enabledPlugins":{"dev-guardian@m":${value}}}`)).toEqual(['enabledPlugins dev-guardian@m=false']);
+    expect(hookLooseningSettings(`"dev-guardian@m": ${value}`)).toEqual(['enabledPlugins dev-guardian@m=false']);
+  });
+
+  it('a JSONC file, an escaped key and a repeated key are all read', () => {
+    const escaped = '"disable\\u0041llHooks"';
+    expect(hookLooseningSettings(`// mine\n{ ${escaped}: true, /* x */ "model": "m", }`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(`${escaped}: true`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(`{"${key}": true, "${key}": false}`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings('{"env":{"GUARDIAN_HOOKS":"off"},"env":{"GUARDIAN_HOOKS":"on"}}')).toEqual(['env GUARDIAN_HOOKS=off']);
+    expect(hookLooseningSettings('{"env":{"GUARDIAN_HOOKS":"off","GUARDIAN_HOOKS":"on"}}')).toEqual(['env GUARDIAN_HOOKS=off']);
+  });
+
+  it('a file nested past what is read, or that is no JSON, falls back to the patterns without throwing', () => {
+    expect(hookLooseningSettings(`${'['.repeat(100)}{"${key}": true}${']'.repeat(100)}`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(`{"${key}": true`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings('/* unterminated')).toEqual([]);
+  });
+
+  it('a large settings file is read in linear time', () => {
+    const make = (n: number): string =>
+      JSON.stringify({ permissions: { allow: Array.from({ length: Math.ceil(n / 24) }, (_, k) => `Bash(npm run t${String(k)})`) } }, null, 1);
+    expectLinear('the lenient settings reader', (n) => hookLooseningSettings(`// c\n${make(n)}`), 16 * 1024);
+  }, 120_000);
+});
+
 describe('applyEdit', () => {
   it('replaces the first occurrence, or every one with replaceAll', () => {
     expect(applyEdit('a b a', 'a', 'x')).toBe('x b a');
@@ -158,5 +229,63 @@ describe('applyEdit', () => {
 
   it('keeps `$` sequences in the replacement literal', () => {
     expect(applyEdit('a', 'a', "$& $' $1")).toBe("$& $' $1");
+  });
+});
+
+// Review 12, findings 2, 3 and 7.
+describe('review 12: deep settings, more env switches, managed settings', () => {
+  const key = ['disable', 'AllHooks'].join('');
+  const deep = (depth: number, reps: number, extra = `"${key}":true`): string =>
+    `{"nest":${'['.repeat(depth)}0${']'.repeat(depth)},"note":"${'dev-guardian'.repeat(reps)}",${extra}}`;
+
+  it('valid JSON nested past what the lenient reader reads is read by JSON.parse, not the patterns (finding 2)', () => {
+    expect(hookLooseningSettings(deep(70, 10))).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(deep(70, 10, '"env":{"NODE_OPTIONS":"--require=./x.js"}'))).toEqual(['env NODE_OPTIONS=--require=./x.js']);
+    expect(hookLooseningSettings(deep(70, 10, '"enabledPlugins":{"dev-guardian@m":false}'))).toEqual(['enabledPlugins dev-guardian@m=false']);
+    expect(hookLooseningSettings(deep(70, 10, '"permissions":{}'))).toEqual([]);
+  });
+
+  it('valid JSON nested 70 deep with a long dev-guardian string: eight times as long costs well under 22.6 times as much', () => {
+    expectLinear('deep settings with a long string', (n) => hookLooseningSettings(deep(70, Math.ceil(n / 12))), 2_000);
+  }, 120_000);
+
+  it('a fragment with a long string repeating dev-guardian: the plugin pattern stays linear', () => {
+    expectLinear('a fragment repeating dev-guardian', (n) => hookLooseningSettings(`"note": "${'dev-guardian'.repeat(Math.ceil(n / 12))}", "x": 1`), 2_000);
+    expect(hookLooseningSettings(`"note": "${'dev-guardian'.repeat(100)}", "dev-guardian@m": false`)).toEqual(['enabledPlugins dev-guardian@m=false']);
+  }, 120_000);
+
+  it('settingsVerdict reads each side once, and says when it ran past its deadline', () => {
+    expect(settingsVerdict('{}', `{"${key}": true, "env": {"PATH": "/x"}}`)).toEqual({ off: ['disableAllHooks: true'], ask: ['env PATH=/x'] });
+    let t = 0;
+    const now = (): number => (t += 1000);
+    expect(settingsVerdict('{}', '{}', { deadline: 1500, now })).toMatchObject({ late: true });
+  });
+
+  it.each([
+    ['GUARDIAN_OFFLINE', '1', 'off'],
+    ['NODE_TLS_REJECT_UNAUTHORIZED', '0', 'off'],
+    ['NODE_USE_ENV_PROXY', '1', 'ask'],
+    ['HTTPS_PROXY', 'http://127.0.0.1:9', 'ask'],
+    ['http_proxy', 'http://127.0.0.1:9', 'ask'],
+    ['NODE_EXTRA_CA_CERTS', '/x/ca.pem', 'ask'],
+    ['GUARDIAN_ANYTHING', 'x', 'ask'],
+    ['NODE_TLS_REJECT_UNAUTHORIZED', '1', 'ask'],
+    ['NODE_ENV', 'test', 'none'],
+    ['GUARDIAN_HOOKS', 'on', 'none'],
+    ['GUARDIAN_PKG_VET', '1', 'none'],
+  ] as const)('env %s=%s: %s (finding 3)', (name, value, expected) => {
+    const v = settingsVerdict(undefined, JSON.stringify({ env: { [name]: value } }));
+    expect({ off: v.off.length > 0, ask: v.ask.length > 0 }).toEqual({ off: expected === 'off', ask: expected === 'ask' });
+  });
+
+  it.each([
+    ['C:\\Program Files\\ClaudeCode\\managed-settings.json', true],
+    ['C:/ProgramData/ClaudeCode/managed-settings.json', true],
+    ['/Library/Application Support/ClaudeCode/managed-settings.json', true],
+    ['/etc/claude-code/managed-settings.json', true],
+    ['/etc/claude-code/other.json', false],
+    ['docs/managed-settings.json', false],
+  ] as const)('%s is Claude Code settings: %s (finding 7)', (path, expected) => {
+    expect(isClaudeSettingsPath(path)).toBe(expected);
   });
 });

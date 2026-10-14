@@ -41,7 +41,8 @@ import { entryKindAnywhere, projectEntryKind } from './projectFs.js';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { changedFiles, git, repoState, resolveCommit, splitNul } from '../runners/git.js';
-import { listProjectFiles, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
+import { listProjectFiles, SCANNED_WALK_EXCLUDE } from '../runners/projectFiles.js';
+import { isGuardianOutput } from './guardianOutput.js';
 import { globToRegExp, hasGlobMagic } from './glob.js';
 import type { ProjectExclusions } from './guardianIgnore.js';
 
@@ -224,8 +225,9 @@ interface PathPart {
 
 /**
  * `paths` entries → files. A literal file or directory is taken as named (a
- * directory expanded with the project walk, which skips `PROJECT_WALK_EXCLUDE`
- * below it); an entry that names nothing on disk but holds glob syntax is
+ * directory expanded with the project walk, which skips `SCANNED_WALK_EXCLUDE`
+ * below it, and the root `.guardian/`'s generated output — never a `.guardian`
+ * folder below the root, review 10 finding 1); an entry that names nothing on disk but holds glob syntax is
  * matched against every project file and each of its directories. Anything
  * not found is refused, all of them in one error.
  */
@@ -253,8 +255,9 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
     } else if (kind === 'dir') {
       dirs.push(rel);
       // The walk never descends through a link; each file is still checked.
-      for (const f of listProjectFiles(abs)) {
+      for (const f of listProjectFiles(abs, SCANNED_WALK_EXCLUDE)) {
         const fileRel = rel === '' ? f : `${rel}/${f}`;
+        if (isGuardianOutput(fileRel)) continue;
         assertInside(fileRel);
         files.add(fileRel);
       }
@@ -266,7 +269,7 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
     } else if (hasGlobMagic(rel)) {
       // Not `expandGlob`: it stops after 50 000 entries without saying so,
       // and a truncated scope would read as a complete one.
-      allFiles ??= listProjectFiles(projectPath);
+      allFiles ??= listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f));
       const re = globToRegExp(rel);
       globs.push(re);
       let matched = 0;
@@ -412,14 +415,16 @@ async function listZ(cwd: string, args: readonly string[]): Promise<string[]> {
   return splitNul(r.stdout).map(normaliseRelPath);
 }
 
+/** Untracked files git does not ignore — but `SCANNED_WALK_EXCLUDE` and the root `.guardian/`'s generated output. */
 async function untracked(cwd: string): Promise<string[]> {
-  return listZ(cwd, [
+  const listed = await listZ(cwd, [
     'ls-files',
     '-z',
     '--others',
     '--exclude-standard',
-    ...[...PROJECT_WALK_EXCLUDE].map((d) => `--exclude=${d}/`),
+    ...[...SCANNED_WALK_EXCLUDE].map((d) => `--exclude=${d}/`),
   ]);
+  return listed.filter((f) => !isGuardianOutput(f));
 }
 
 /**

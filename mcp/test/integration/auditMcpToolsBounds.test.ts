@@ -29,7 +29,7 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
-import { PERF_STRICT } from '../helpers/timing.js';
+import { hangBound } from '../helpers/timing.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../helpers/tsxNode.js';
 
 vi.setConfig({ testTimeout: 180_000 });
@@ -164,8 +164,8 @@ describe('C1: the audit keeps its own time', () => {
     const dir = project({ flood: stdio('flood') });
     const r = await auditInChild({ project_path: dir, servers: ['flood'], timeout_ms: 5000 }, 120_000);
     expect(r.killed, 'the audit never returned and was killed').toBe(false);
-    expect(r.elapsed).toBeLessThan(30_000);
-    expect(r.maxGap).toBeLessThan(3000);
+    expect(r.elapsed).toBeLessThan(hangBound(30_000));
+    expect(r.maxGap).toBeLessThan(hangBound(3000));
     const server = r.result?.servers[0];
     expect(server?.status).toBe('failed');
     expect(server?.reason).toMatch(/budget|more than|did not answer/i);
@@ -175,7 +175,7 @@ describe('C1: the audit keeps its own time', () => {
     const dir = project({ unc: { command: UNC_COMMAND, args: [] } });
     const r = await auditInChild({ project_path: dir, servers: ['unc'], timeout_ms: 2000 }, 120_000);
     expect(r.killed, 'the audit never returned and was killed').toBe(false);
-    expect(r.elapsed).toBeLessThan(10_000);
+    expect(r.elapsed).toBeLessThan(hangBound(10_000));
     expect(r.result?.servers[0]?.status).toBe('skipped');
     expect(r.result?.servers[0]?.reason).toContain('allow_remote');
   });
@@ -184,8 +184,8 @@ describe('C1: the audit keeps its own time', () => {
     const dir = project({ unc: { command: UNC_COMMAND, args: [] } });
     const r = await auditInChild({ project_path: dir, servers: ['unc'], timeout_ms: 2000, allow_remote: true }, 120_000);
     expect(r.killed, 'the audit never returned and was killed').toBe(false);
-    expect(r.elapsed).toBeLessThan(20_000);
-    expect(r.maxGap).toBeLessThan(3000);
+    expect(r.elapsed).toBeLessThan(hangBound(20_000));
+    expect(r.maxGap).toBeLessThan(hangBound(3000));
     expect(r.result?.servers[0]?.status).toBe('failed');
   });
 });
@@ -277,8 +277,8 @@ describe('C1 residual: the analysis is bounded, yields, and is never a clean pas
   // yielding runs measured 2.0, 4.0 and 7.5 s there (review 3.0, R7).
   const quick = (r: ChildAudit): void => {
     expect(r.killed, 'the audit never returned and was killed').toBe(false);
-    expect(r.elapsed).toBeLessThan(60_000);
-    expect(r.maxGap).toBeLessThan(PERF_STRICT ? 1500 : 10_000);
+    expect(r.elapsed).toBeLessThan(hangBound(60_000));
+    expect(r.maxGap).toBeLessThan(hangBound(1500));
   };
 
   it.each([
@@ -478,7 +478,7 @@ describe('I8: cancelling stops launching', () => {
     setTimeout(() => controller.abort(), 1500);
     const t0 = Date.now();
     const r = await audit({ project_path: dir, servers: ['slow', 'next'], timeout_ms: 60_000 }, { signal: controller.signal });
-    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(30_000));
     expect(r.servers.find((s) => s.name === 'next')?.status).toBe('skipped');
     expect(existsSync(join(dir, 'probe-poisoned-next.json'))).toBe(false);
   });
@@ -490,7 +490,7 @@ describe('M9: an overall budget for the whole audit', () => {
     const dir = project({ slow: stdio('hang'), next: stdio('poisoned', { env: { MARK: 'next' } }) });
     const t0 = Date.now();
     const r = await audit({ project_path: dir, servers: ['slow', 'next'], timeout_ms: 60_000 });
-    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(30_000));
     expect(r.servers.find((s) => s.name === 'slow')?.status).toBe('failed');
     const next = r.servers.find((s) => s.name === 'next');
     expect(next?.status).toBe('skipped');

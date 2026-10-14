@@ -36,6 +36,7 @@
 
 import { spawn } from 'node:child_process';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { jsonObjectsIn } from '../../../src/llmscan/answerText.js';
 
 export type DriverMode = 'subagent' | 'brief-only';
 
@@ -47,19 +48,22 @@ export const MODE_TOOLS: Readonly<Record<DriverMode, readonly string[]>> = {
 
 /**
  * Appended to the system prompt. The production brief tells the model to
- * submit through `llm_scan_submit`; here there is no MCP server, so the
- * payload comes back as the final message instead.
+ * submit through `llm_scan { step: "submit" }` (v6; `llm_scan_submit` in
+ * v1–v5); here there is no MCP server, so the payload comes back as the final
+ * message instead. The note names both tools, so one note serves every
+ * version: the v5 / v6 comparison differs in the brief alone. (Runs before
+ * the fold, v1–v5, were measured with a note naming `llm_scan_submit` only.)
  *
  * Text before the payload is allowed, as in the product: there the host
- * model may write anything before it calls `llm_scan_submit`, and only the
- * `payload` argument is validated. Until prompts v5 this note said "with
- * nothing before or after it", which left a model that reads no file
- * nowhere to reason before the object (D-10, D-11); runs v1–v4 were
- * measured under that wording. Prose before the object is still counted as
- * a lenient extraction in the report.
+ * model may write anything before it submits, and only the `payload`
+ * argument is validated. Until prompts v5 this note said "with nothing
+ * before or after it", which left a model that reads no file nowhere to
+ * reason before the object (D-10, D-11); runs v1–v4 were measured under that
+ * wording. Prose before the object is still counted as a lenient extraction
+ * in the report.
  */
 export const HARNESS_NOTE =
-  'This session runs inside an offline evaluation. There is no llm_scan_submit tool and no MCP server: ' +
+  'This session runs inside an offline evaluation. There is no llm_scan tool, no llm_scan_submit tool and no MCP server: ' +
   'where the task tells you to submit your answer, end your final message instead with the JSON payload the response schema describes ' +
   '(the payload object itself, without plan_id, task_id or lease_token). Your working may come before it; nothing may come after it.';
 
@@ -161,6 +165,18 @@ export function addUsage(a: Usage, b: Usage): Usage {
     cache_read: a.cache_read + b.cache_read,
     total: a.total + b.total,
   };
+}
+
+/**
+ * The report's cost line: what the CLI said the runs cost, summed, and how
+ * many runs said nothing. Tokens alone do not tell what a run spent (cache
+ * reads and writes, input and output are priced apart).
+ */
+export function costSummary(runs: ReadonlyArray<{ cost_usd: number | null }>): string {
+  const said = runs.filter((r) => r.cost_usd !== null);
+  const total = said.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
+  const silent = runs.length - said.length;
+  return `$${total.toFixed(2)} by the CLI's own estimate${silent > 0 ? ` (${String(silent)} of ${String(runs.length)} runs gave none)` : ''}`;
 }
 
 /**
@@ -275,55 +291,6 @@ export function extractAnswerDetailed(text: string): { value: unknown; lenient: 
   const objects = jsonObjectsIn(text);
   const only = objects.length === 1 ? objects[0] : undefined;
   return only === undefined ? { value: undefined, lenient: false } : unwrap(only, true);
-}
-
-/**
- * Every top-level JSON object in `text`, left to right; braces that do not
- * open one are skipped, and so is an empty `{}` — quoted code, never an answer.
- */
-function jsonObjectsIn(text: string): Array<Record<string, unknown>> {
-  const out: Array<Record<string, unknown>> = [];
-  let i = text.indexOf('{');
-  while (i !== -1) {
-    const end = closingBrace(text, i);
-    if (end !== -1) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text.slice(i, end + 1)) as unknown;
-      } catch {
-        parsed = undefined;
-      }
-      const r = rec(parsed);
-      if (r !== undefined) {
-        if (Object.keys(r).length > 0) out.push(r);
-        i = text.indexOf('{', end + 1);
-        continue;
-      }
-    }
-    i = text.indexOf('{', i + 1);
-  }
-  return out;
-}
-
-/** The index of the `}` that closes the `{` at `start`, skipping JSON strings; -1 when none does. */
-function closingBrace(text: string, start: number): number {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let k = start; k < text.length; k += 1) {
-    const c = text[k];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === '\\') escaped = true;
-      else if (c === '"') inString = false;
-    } else if (c === '"') inString = true;
-    else if (c === '{') depth += 1;
-    else if (c === '}') {
-      depth -= 1;
-      if (depth === 0) return k;
-    }
-  }
-  return -1;
 }
 
 /**
@@ -486,6 +453,12 @@ export interface DrivenTask<T> {
   failure: 'error' | 'invalid' | null;
   attempts: Attempt[];
   usage: Usage;
+  /**
+   * What the CLI said the attempts cost (`total_cost_usd` of each result
+   * event), summed; null when none of them said. Its own estimate, at API
+   * prices — the figure a run's spend is held to.
+   */
+  cost_usd: number | null;
   tool_calls: ToolCall[];
   out_of_brief: OutOfBriefCall[];
   /** Answers refused by the schema (not by a failed run). */
@@ -579,11 +552,13 @@ export async function driveTask<T>(
 
   function finish(value: T | null, failure: DrivenTask<T>['failure']): DrivenTask<T> {
     const toolCalls = attempts.flatMap((a) => a.run.tool_calls);
+    const costs = attempts.map((a) => a.run.cost_usd).filter((c): c is number => c !== null);
     return {
       value,
       failure,
       attempts,
       usage,
+      cost_usd: costs.length === 0 ? null : costs.reduce((s, c) => s + c, 0),
       tool_calls: toolCalls,
       out_of_brief: outOfBriefCalls(toolCalls, MODE_TOOLS[opts.mode], cwd),
       schema_refusals: schemaRefusals,

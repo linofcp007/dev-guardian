@@ -44,6 +44,7 @@ const EXPECTED_TOOLS = [
   'init_project',
   'install_toolchain',
   'license_compatibility',
+  'llm_scan',
   'llm_scan_start',
   'llm_scan_submit',
   'llm_scan_task',
@@ -95,6 +96,9 @@ const HIDDEN_ALIASES = [
   'dotnet_describe_setup',
   'dotnet_efcore_audit',
   'dotnet_target_framework_check',
+  'llm_scan_start',
+  'llm_scan_submit',
+  'llm_scan_task',
   'regression_alert',
   'scan_dotnet_secrets',
   'triage_findings',
@@ -141,9 +145,9 @@ describe('MCP surface — stability snapshot', () => {
     expect(RESOURCES.map((r) => r.name).sort()).toEqual(EXPECTED_RESOURCES);
   });
 
-  it('T-23 matches the counts documented in the README (52 tools listed, 18 resources)', () => {
-    expect(listedTools()).toHaveLength(52);
-    expect(TOOLS).toHaveLength(65);
+  it('T-23 matches the counts documented in the README (50 tools listed, 18 resources)', () => {
+    expect(listedTools()).toHaveLength(50);
+    expect(TOOLS).toHaveLength(66);
     expect(RESOURCES).toHaveLength(18);
   });
 });

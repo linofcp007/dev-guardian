@@ -23,6 +23,11 @@
  * budgets file is broken and nothing was actually checked" — an earlier
  * version of this tool collapsed both into an empty `findings` array, which
  * read a typo'd budget as "all clear".
+ *
+ * Lighthouse is handed `target_url` parsed and re-serialised (http or https
+ * only), and k6 a script path with no `"` (`platform/toolArgs.ts`): on
+ * Windows an npm-installed Lighthouse is `lighthouse.cmd`, and a `"` in the
+ * URL closed the quotes `cmd.exe` wraps it in (review 10, finding 3).
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -31,9 +36,9 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { budgetViolationFindings, evaluatePerfBudgets, loadBudgets, type PerfBudgets } from '../budgets/budgets.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { runProcess } from '../runners/processRunner.js';
-import { ProjectPath } from '../schemas.js';
+import { httpUrl, pathArgProblem } from '../platform/toolArgs.js';
+import { httpUrlField, ProjectPath } from '../schemas.js';
 import type { DomainError, Finding, ToolResult } from '../types.js';
 import { ensureReportDir, scannerAvailable } from './scanHelpers.js';
 import {
@@ -42,13 +47,12 @@ import {
   getProp,
   getString,
 } from '../runners/scannerParsers/index.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = {
   project_path: ProjectPath,
-  target_url: z
-    .string()
-    .url()
+  target_url: httpUrlField()
     .optional()
     .describe('URL to probe with Lighthouse. Mutually exclusive with k6_script_path.'),
   k6_script_path: z
@@ -61,7 +65,7 @@ const inputSchema = {
     .describe('Categories to include. Default: all five.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'perf_check',
   title: 'Performance check (Lighthouse or k6)',
   description:
@@ -71,27 +75,17 @@ const tool: ToolModule = {
     'budget. Sends real load to the URL.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    target_url?: string;
-    k6_script_path?: string;
-    lighthouse_categories?: string[];
-  };
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // Narrow the VALUES, not a boolean derived from them: `hasUrl` told the
   // reader the url was present but told the compiler nothing, which is why
@@ -108,13 +102,18 @@ async function handler(
       'Provide exactly one of target_url (Lighthouse) or k6_script_path (k6).',
     );
   }
+  // What the program is handed, checked before anything runs (see the module comment).
+  const lighthouseUrl = targetUrl === undefined ? undefined : httpUrl(targetUrl);
+  if (lighthouseUrl === null) return failDomain('invalid_input', 'target_url must be an http:// or https:// URL.');
+  const scriptProblem = k6Script === undefined ? null : pathArgProblem('k6_script_path', k6Script);
+  if (scriptProblem !== null) return failDomain('invalid_input', `${scriptProblem}.`);
 
   const scanId = randomUUID();
   const reportDir = ensureReportDir(projectPath, scanId, 'perf');
 
-  if (targetUrl !== undefined) {
+  if (lighthouseUrl !== undefined) {
     return runLighthouse({
-      url: targetUrl,
+      url: lighthouseUrl,
       categories: inp.lighthouse_categories,
       reportDir,
       projectPath,

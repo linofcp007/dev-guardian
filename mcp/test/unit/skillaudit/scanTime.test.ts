@@ -7,22 +7,24 @@
  * 500 KB, a Markdown line full of backtick spans took 6.8 s and one full of
  * quoted phrases 1.6 s, both growing with the square of the length.
  *
- * Each case is a 1 MB line built to hand the slow shape as many starting
- * points as it can. The budget is generous — linear code takes well under a
- * second — so that a loaded machine does not fail it and a quadratic one
- * still does.
+ * Each case is a line built to hand the slow shape as many starting points
+ * as it can, scanned at two lengths 8x apart (`expectLinear`): linear code
+ * costs about 8x as much, a quadratic rule about 64x. It was one 1 MB line
+ * under a 4 s budget — a number of milliseconds, which measures the machine
+ * (review 11, D).
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, it, vi } from 'vitest';
 
 import { scanContent } from '../../../src/skillaudit/patterns.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 vi.setConfig({ testTimeout: 120_000 });
 
-const SIZE = 1_000_000;
-const BUDGET_MS = 4_000;
+/** The smaller of the two sizes compared (8x it is the other): a shape, never "under 4 s" (review 11, D). */
+const SIZE = 4_000;
 
-const line = (chunk: string): string => chunk.repeat(Math.ceil(SIZE / chunk.length)).slice(0, SIZE);
+const line = (chunk: string, size: number): string => chunk.repeat(Math.ceil(size / chunk.length)).slice(0, size);
 
 describe('every rule stays linear on a 1 MB line', () => {
   it.each([
@@ -34,13 +36,11 @@ describe('every rule stays linear on a 1 MB line', () => {
     ['env pipelines', 'env | x | env | y '],
     ['redirects', 'a > b >> c > d '],
     ['download words and URLs', 'download get fetch https://x.invalid/a '],
-  ])('%s', (_label, chunk) => {
-    const text = line(chunk);
+  ])('%s', (label, chunk) => {
     for (const isCode of [true, false]) {
-      const started = performance.now();
-      scanContent(text, isCode);
-      const elapsed = performance.now() - started;
-      expect(elapsed, `${isCode ? 'code' : 'instruction'} file: ${Math.round(elapsed)} ms`).toBeLessThan(BUDGET_MS);
+      expectLinear(`${label} (${isCode ? 'code' : 'instruction'} file)`, (size) => {
+        scanContent(line(chunk, size), isCode);
+      }, SIZE);
     }
   });
 });

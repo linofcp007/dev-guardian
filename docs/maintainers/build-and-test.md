@@ -8,7 +8,7 @@
 ```bash
 cd mcp
 npm ci               # first time only — Node >= 22.13; no native modules, storage is node:sqlite
-npm run lint         # tsc over src/ AND test/ (tsconfig.test.json, which includes src/)
+npm run lint         # tsc over src/ AND test/ (tsconfig.test.json), then the hand-written JS (tsconfig.js.json)
 npm run build        # tsc type-check, esbuild bundles -> mcp/dist, copy-assets, host-rules, docs
 npm test             # vitest run (full suite) — the gate before a commit
 npm run test:fast    # unit + docs minus the 15 slowest unit files (vitest.fast.config.ts) — the inner loop
@@ -40,15 +40,35 @@ of it committed:
   everything the CLI uses (`src/cli.ts`), every npm package inlined. The server
   and the CLI shared 98.8% of their code as two 3.7 MB bundles; one bundle
   cannot ship them from different builds.
-- `server.js` — two lines that import `engine.js` and call `startServer()`
+- `server.js` — the server's entry: it turns Node's compile cache on (in a directory only the account can write — the block it shares with the hook and the CLI), imports `engine.js`, has the cache written at once (a killed server never wrote it) and calls `startServer()`
   (`SERVER_JS` in `scripts/bundleOptions.mjs`), at the path `plugin.json` and
   every host configuration name.
-- `hooks.js` — the bundle of `src/hooksEntry.ts`: the detectors the hook
-  dispatcher loads, each behind a lazy `load*` loader, so an event evaluates
-  only its own (the hook runs on every tool call). Its inputs are this repo's
-  sources only — no npm package, no storage layer (`hooksDistImports.test.ts`).
+- `hooks.js` — the bundle of `src/hooksEntry.ts`: what every hook event needs
+  (the configuration reader, the guarded-path resolution) and the `load*`
+  loaders of the detectors, which live in four parts of their own, each a
+  self-contained bundle of what one kind of event runs (3.4.0):
+  `hooksBash.js` (the shell guard and the install gate), `hooksVet.js`
+  (install vetting), `hooksWrite.js` (the write guards and the secret scan),
+  `hooksSession.js` (SessionStart's git, database registry and engine check).
+  The entry's `import('./hooksBash.js')` is left to the runtime (the
+  `hook-parts` plugin in `bundleOptions.mjs`); under tsx and vitest it is the
+  source `src/hooksBash.ts`. An event parses only its parts: 3.3.0's one file
+  made every write parse 368 KB and load `node:crypto` and
+  `node:child_process`. Not esbuild's code splitting, which made a chunk per
+  module: a dozen files per event, each a dynamic `import()` with its own
+  cost (~3 ms on Windows), was slower than the one file. The hooks build
+  carries the engine's size and SHA-256 (`define`d as
+  `__GUARDIAN_ENGINE_DIGEST__`, read by `src/hooks/distCheck.ts`), so
+  SessionStart names a damaged `engine.js` without loading it — the engine is
+  built first (`buildDist`). Their inputs are this repo's sources only — no
+  npm package, no storage layer (`hooksDistImports.test.ts`, which also holds
+  each event to its own part).
 - `storage/migrations/*.sql` and `hostsetup/legacyRulesTemplates/*` —
   `copy-assets.mjs`, one level below the bundles, where their probes look.
+- `engine.d.ts`, `hooks.d.ts` — one line each, `export * from
+  '../src/engine.js'` / `'../src/hooksEntry.js'`: the types the CLI and the
+  hook dispatcher are checked against (`tsconfig.js.json`), so the checker
+  never reads a bundle (`DECLARATIONS` in `bundleOptions.mjs`, 3.4.0).
 
 Nothing else: `tsconfig.json` is `noEmit` (tsc only type-checks), no source
 map ships, and `scripts/bundle.mjs` empties `dist/` before it writes — 743

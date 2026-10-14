@@ -9,8 +9,9 @@
  * `-v host:container`. On Windows `-v C:\proj:/src` is ambiguous (the drive
  * colon collides with the v-flag's own `:` separator); `--mount`'s comma-keyed
  * syntax has no such problem and tolerates spaces in the path (this repo lives
- * under "CLAUDE SKILLS"). Because we invoke Docker via execa with shell:false,
- * each arg is a single argv element — no shell quoting needed.
+ * under "CLAUDE SKILLS"). Because Docker runs through `runProcess`, which
+ * never uses a shell, each arg is a single argv element — no shell quoting
+ * needed.
  */
 
 import { join } from 'node:path';
@@ -52,7 +53,7 @@ export interface SemgrepDockerOptions {
    * not by ours. `scan_sast`'s `local_only` mode sets both together.
    */
   metricsOff?: boolean;
-  /** Flags passed after the configs (the per-file timeouts, `--exclude=.guardian` — runners/semgrepRun.ts). */
+  /** Flags passed after the configs (the per-file timeouts, the root `.guardian/` output excluded — runners/semgrepRun.ts). */
   extraArgs?: readonly string[];
   /**
    * Further host directories to bind into the container, READ-ONLY — the
