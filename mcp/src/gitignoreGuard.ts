@@ -275,7 +275,11 @@ const DOT_GUARDIAN_GITIGNORE = '.guardian/.gitignore';
  * even under an older root block.
  *
  * Written only when absent — never over the user's own — and never through a
- * link (`platform/projectFs.ts`). Never throws; true when it wrote the file.
+ * link (`platform/projectFs.ts`): not the file, and not a `.guardian` that
+ * is one, even to a directory inside the project — `.guardian` → `.` (a
+ * junction) made this land as the ROOT `.gitignore`, whose `*` hid every new
+ * file from git and from the scanners that list files through it (review
+ * 10, finding 10). Never throws; true when it wrote the file.
  */
 export function ensureGuardianDirIgnored(projectPath: string): boolean {
   const content =
@@ -284,7 +288,7 @@ export function ensureGuardianDirIgnored(projectPath: string): boolean {
     '*\n' +
     SHARED_GUARDIAN_FILES.map((f) => `!${f}\n`).join('');
   try {
-    return writeProjectFile(projectPath, DOT_GUARDIAN_GITIGNORE, content, { mode: 'create' }).ok;
+    return writeProjectFile(projectPath, DOT_GUARDIAN_GITIGNORE, content, { mode: 'create', refuseLinkedDirs: true }).ok;
   } catch {
     return false;
   }

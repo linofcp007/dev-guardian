@@ -123,7 +123,7 @@ Only when the user asks for "paranoid" or "full deep":
 - **Are the project's MCP servers safe?** [`references/mcp-servers.md`](references/mcp-servers.md) —
   `audit_agent_config` reads; `audit_mcp_tools` starts the servers the user names.
 - **Have a model verify the findings, or hunt what the scanners miss:**
-  [`references/llm-scan.md`](references/llm-scan.md) — `llm_scan_start` / `llm_scan_task` / `llm_scan_submit`.
+  [`references/llm-scan.md`](references/llm-scan.md) — `llm_scan` (`step`: start, task, submit).
 
 ## When not to run a full scan
 

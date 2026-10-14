@@ -60,6 +60,7 @@ import { Storage } from '../storage/index.js';
 import { TOOLS } from '../tools/index.js';
 import type { Finding, ToolRun } from '../types.js';
 import { configDifferences, copyConfigFromRef, type ResolvedRef } from './refConfig.js';
+import { rememberSecretValues } from './secretValues.js';
 import type { PartialParseRef, RulesSource, ScanStepResult } from './types.js';
 
 // Side-effect registration of every tool — populates TOOLS. See
@@ -157,7 +158,11 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
         steps.push(await runStep(name, buildInput(name, opts), ctx));
       }
 
-      return { findings: collectFindings(storage, opts.projectPath), steps, rulesSource, scanSettings };
+      const findings = collectFindings(storage, opts.projectPath);
+      // A secret replaced in place is new: the gate compares the values of
+      // the findings it keys alike, in memory (ci/secretValues.ts).
+      await rememberSecretValues(scannedProject(opts.projectPath), findings);
+      return { findings, steps, rulesSource, scanSettings };
     } finally {
       try {
         db.close();

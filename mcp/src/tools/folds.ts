@@ -12,12 +12,14 @@
  *   - `wp_report` — what is recorded about one WordPress project: posture,
  *     hardening, one plugin;
  *   - `diff_scans` — two scans compared: a diff, or a regression score;
- *   - `prioritize_findings` — the open findings ranked, or triaged.
+ *   - `prioritize_findings` — the open findings ranked, or triaged;
+ *   - `llm_scan` — the LLM scan's three steps: plan, lease a task, submit its
+ *     answer. Each step keeps its member's required arguments (the fold
+ *     parses with the member's schema). The prompts from v6 name
+ *     `llm_scan { step: "submit" }`; a brief of an older plan names
+ *     `llm_scan_submit`, which still answers.
  *
- * Not folded: the LLM scan's `llm_scan_start` / `_task` / `_submit` — their
- * versioned prompts (configs/llm-scan/prompts) tell the subagent to answer
- * with `llm_scan_submit`, and each step has its own required arguments;
- * `generate_sbom` and `sbom_diff` — two entries, little to save.
+ * Not folded: `generate_sbom` and `sbom_diff` — two entries, little to save.
  */
 
 import { registerFold } from './fold.js';
@@ -140,5 +142,30 @@ registerFold({
   params: {
     limit: 'rank: how many to return, 1–500. Default 50.',
     mission_wellbeing: 'rank: SSVC Mission & Well-being of this system. Default medium.',
+  },
+});
+
+registerFold({
+  name: 'llm_scan',
+  title: 'LLM-assisted scan',
+  description:
+    "Your model verifies the scanners' findings and hunts what they miss; the server calls no model. step " +
+    'start: plan it, modes verify (a task per finding with a file and line) or hunt (needs ' +
+    'map_attack_surface); returns plan_id and a token estimate. Above max_estimated_tokens nothing is handed ' +
+    'out until confirm: true, which the user must agree to. step task: lease the next task; its brief goes to ' +
+    "a fresh subagent, one per task; done: true and the report at the end. step submit: that task's answer " +
+    'as payload; an invalid one is refused with the reasons, two more tries.',
+  modeKey: 'step',
+  modeDescription:
+    'start: plan (with plan_id: its report). task {plan_id}: lease the next task. submit {plan_id, task_id, ' +
+    "lease_token, independence, payload}: that task's answer.",
+  modes: { start: 'llm_scan_start', task: 'llm_scan_task', submit: 'llm_scan_submit' },
+  params: {
+    plan_id:
+      'task, submit: the plan step start returned. start: report on this plan instead of planning (confirm: ' +
+      'true confirms it).',
+    task_id: 'submit: the task, as step task returned it.',
+    lease_token: 'submit: the lease_token step task returned with the task.',
+    payload: "submit: the answer, matching the task's response_schema. At most 64 KiB serialized.",
   },
 });

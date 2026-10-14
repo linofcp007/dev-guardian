@@ -70,6 +70,7 @@
 
 import { gateMatchKeys, indexFindings, type GateKeys } from '../fingerprint/findingIdentity.js';
 import { SEVERITIES, type Finding, type Severity } from '../types.js';
+import { secretValueOf, secretValuesRead } from './secretValues.js';
 import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion } from './types.js';
 
 /** Where the committed baseline lives, relative to the project root. */
@@ -250,7 +251,9 @@ export function newFindings(
  * identity (fingerprint as the fallback, `indexFindings`); the identity it had
  * before its file was renamed; the baseline's `match_id` (see
  * {@link BaselineEntry.match_id}). The keys are computed over the whole set,
- * since occurrences are counted within it.
+ * since occurrences are counted within it — and, when the scan read the
+ * secrets' values (`ci/secretValues.ts`), a slot holding a secret replaced
+ * in place is keyed by nothing (review 10, finding 5).
  */
 function baselineMatcher(
   baseline: BaselineFile | null,
@@ -263,7 +266,10 @@ function baselineMatcher(
   for (const entry of entries) {
     if (entry.match_id !== undefined && !byMatchKey.has(entry.match_id)) byMatchKey.set(entry.match_id, entry);
   }
-  const keys = gateMatchKeys(findings, renamedFrom !== undefined ? { renamedFrom } : {});
+  const keys = gateMatchKeys(findings, {
+    ...(renamedFrom !== undefined ? { renamedFrom } : {}),
+    ...(secretValuesRead(findings) ? { secretValue: secretValueOf } : {}),
+  });
   return {
     keys,
     entryFor: (finding, index) => {

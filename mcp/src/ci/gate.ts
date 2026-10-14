@@ -93,8 +93,10 @@ export interface GateInput {
    * corrupt line). Zero when the baseline is absent or parsed with nothing
    * dropped.
    *
-   * Purely informational: folded into `coverageGaps` for visibility, never
-   * into `coverage` or `exitCode`. A corrupt baseline LINE is not a scanner
+   * Purely informational: a NOTE (`coverageNotes`, a `coverage_gap_details`
+   * entry with `gating: false`), never in `coverageGaps` — "one line per gap
+   * that gates" (it was there until 3.4, review 10) — nor in `coverage` or
+   * `exitCode`. A corrupt baseline LINE is not a scanner
    * that failed to run, so it does not get to invent a second, independent
    * reason to fail or flag the build — and it does not need to, because any
    * finding a dropped entry actually un-suppresses is still caught, on its
@@ -157,8 +159,9 @@ export interface GateVerdict {
    */
   coverageGapDetails: CoverageGapDetail[];
   /**
-   * Gaps reported but never gating — today the taint fixpoint timeouts. Not
-   * in `coverageGaps`, not in the exit code; `coverage` still reads them.
+   * Gaps reported but never gating — the taint fixpoint timeouts, and the
+   * baseline entries that could not be read. Not in `coverageGaps`, not in
+   * the exit code; `coverage` still reads the taint ones.
    */
   coverageNotes: string[];
   /**
@@ -184,6 +187,14 @@ export interface GateVerdict {
   acceptedGaps: string[];
   /** `--accept-partial-parse` paths no step reported as partly parsed (normalised). */
   unusedPartialParseAcceptances: string[];
+  /**
+   * `semgrep.accept_timeouts` entries no step reported a per-file `Timeout`
+   * on (normalised): an entry that outlived its file's timeout, or one that
+   * never named a file — said on every run, as an unused
+   * `--accept-partial-parse` is, so a stale acceptance does not sit in the
+   * committed file unnoticed (review 10).
+   */
+  unusedTimeoutAcceptances: string[];
   /**
    * Findings the scanned repository's own configuration suppressed — its
    * `.trivyignore` (`ToolRun.suppressed_by_repo_config`), per step and
@@ -462,6 +473,9 @@ export function remedyFor(kind: GapKind, tool: string, detail: string): string {
     default:
       if (/shallow|history truncated/i.test(detail)) return 'Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.';
       if (/^baseline: /.test(detail)) return 'Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.';
+      if (/\.guardian\/'s generated output/.test(detail)) {
+        return "Stop tracking the named files (`git rm --cached <file>`) and move any code they hold out of .guardian/ — dev-guardian's reports, database and dashboard are never committed, and no scan reads them.";
+      }
       if (/target limit|size limit/i.test(detail)) return "Split the files over Semgrep's 1 MB target limit, or list them in .guardianignore after review.";
       if (/submodule/i.test(detail)) return 'Scan each submodule as a project of its own, or list it in .guardianignore after review.';
       if (/did not load/i.test(detail)) return 'Fix or remove the rule the detail names, then rerun the scan.';
@@ -473,94 +487,139 @@ function detailOf(tool: string, kind: GapKind, detail: string, gating: boolean):
   return { tool, kind, detail, remedy: remedyFor(kind, tool, detail), gating };
 }
 
+/**
+ * What the steps say about coverage, tallied once ({@link tallySteps}).
+ *
+ * Coverage comes from a single call to computeCoverage over the union of
+ * every step's tool bookkeeping — never a second, hand-rolled notion of
+ * "complete". A step that refused to run (`ran: false`) contributes its own
+ * `tool` name into the "missing" side of that union: it is a gap in exactly
+ * the sense computeCoverage already understands (something expected did not
+ * happen), so `coverage` itself comes out 'partial' or 'none' rather than
+ * leaving `coverage: 'full'` sitting next to an INCOMPLETE_SCAN exit code.
+ */
+interface StepTally {
+  allToolsRun: ToolRun[];
+  allMissingTools: string[];
+  /** The same, minus the accepted gaps and the notes: what the exit code is decided on. */
+  gatingMissingTools: string[];
+  coverageGaps: string[];
+  gapDetails: CoverageGapDetail[];
+  acceptedGaps: string[];
+  acceptedDetails: CoverageGapDetail[];
+  coverageNotes: string[];
+  noteDetails: CoverageGapDetail[];
+  suppressedByRepoConfig: RepoSuppressionEntry[];
+  /** Files a step reported only partly parsed, of any type (normalised). */
+  reported: Set<string>;
+  /** Files a step reported a per-file Semgrep `Timeout` on. */
+  timedOut: Set<string>;
+}
+
+/** What the gate accepts, normalised: `--accept-partial-parse` and `semgrep.accept_timeouts`. */
+interface Acceptances {
+  parse: ReadonlySet<string>;
+  timeouts: ReadonlySet<string>;
+}
+
+function pushGap(t: StepTally, line: string, tool: string, kind: GapKind, gating: boolean): void {
+  t.coverageGaps.push(line);
+  t.gapDetails.push(detailOf(tool, kind, line, gating));
+}
+
+function pushNote(t: StepTally, note: string, tool: string, kind: GapKind): void {
+  t.coverageNotes.push(note);
+  t.noteDetails.push(detailOf(tool, kind, note, false));
+}
+
+function tallySteps(steps: readonly ScanStepResult[], accept: Acceptances): StepTally {
+  const t: StepTally = {
+    allToolsRun: [],
+    allMissingTools: [],
+    gatingMissingTools: [],
+    coverageGaps: [],
+    gapDetails: [],
+    acceptedGaps: [],
+    acceptedDetails: [],
+    coverageNotes: [],
+    noteDetails: [],
+    suppressedByRepoConfig: [],
+    reported: new Set(),
+    timedOut: new Set(),
+  };
+  for (const step of steps) tallyStep(t, step, accept);
+  return t;
+}
+
+function tallyStep(t: StepTally, step: ScanStepResult, accept: Acceptances): void {
+  t.allToolsRun.push(...step.tools_run);
+  for (const run of step.tools_run) {
+    const s = run.suppressed_by_repo_config;
+    if (s !== undefined) t.suppressedByRepoConfig.push({ step: step.tool, tool: run.name, ...s });
+  }
+
+  if (!step.ran) {
+    t.allMissingTools.push(step.tool);
+    t.gatingMissingTools.push(step.tool);
+    pushGap(t, `${step.tool}: ${step.reason ?? 'did not run'}`, step.tool, kindOfRefusal(step.reason), true);
+    return;
+  }
+
+  for (const missing of step.missing_tools) tallyMissing(t, step, missing, accept);
+
+  for (const run of step.tools_run) {
+    if (run.status === 'failed') {
+      pushGap(t, `${step.tool}: ${run.name} failed${run.reason ? ` (${run.reason})` : ''}`, run.name, 'scanner_failed', true);
+    }
+    // status 'skipped' (nothing to do, e.g. no Dockerfile) is deliberately
+    // not a gap — computeCoverage's own contract, see scanCoverage.ts.
+  }
+}
+
+/** One `missing_tools` entry of a step: a note, an accepted gap, or a gap that gates. */
+function tallyMissing(t: StepTally, step: ScanStepResult, missing: string, accept: Acceptances): void {
+  t.allMissingTools.push(missing);
+  const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
+  for (const ref of refs) {
+    t.reported.add(ref.file);
+    if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) t.timedOut.add(ref.file);
+  }
+  const judged = judgeMissing(step.tool, missing, refs, step.tools_run, accept.parse, accept.timeouts);
+  for (const note of judged.notes) pushNote(t, note, missing, 'taint_timeout');
+  if (!judged.gating) {
+    for (const a of judged.accepted) {
+      t.acceptedGaps.push(a.line);
+      t.acceptedDetails.push(detailOf(missing, a.kind, a.line, false));
+    }
+    return;
+  }
+  t.gatingMissingTools.push(missing);
+  const described = describeMissing(missing, step.tools_run);
+  if (described.line !== null) {
+    pushGap(t, `${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true);
+  }
+}
+
 export function evaluateGate(input: GateInput): GateVerdict {
   const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
-  const acceptParse = new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath));
-  const acceptTimeouts = new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath));
-  const reported = new Set<string>();
-
-  // Coverage comes from a single call to computeCoverage over the union of
-  // every step's tool bookkeeping — never a second, hand-rolled notion of
-  // "complete". A step that refused to run (`ran: false`) contributes its
-  // own `tool` name into the "missing" side of that union: it is a gap in
-  // exactly the sense computeCoverage already understands (something
-  // expected did not happen), so `coverage` itself comes out 'partial' or
-  // 'none' rather than leaving `coverage: 'full'` sitting next to an
-  // INCOMPLETE_SCAN exit code.
-  const allToolsRun: ToolRun[] = [];
-  const allMissingTools: string[] = [];
-  // The same, minus the accepted gaps and the notes: what the exit code is decided on.
-  const gatingMissingTools: string[] = [];
-  const coverageGaps: string[] = [];
-  const gapDetails: CoverageGapDetail[] = [];
-  const acceptedGaps: string[] = [];
-  const acceptedDetails: CoverageGapDetail[] = [];
-  const coverageNotes: string[] = [];
-  const noteDetails: CoverageGapDetail[] = [];
-  const pushGap = (line: string, tool: string, kind: GapKind, gating: boolean): void => {
-    coverageGaps.push(line);
-    gapDetails.push(detailOf(tool, kind, line, gating));
+  const accept: Acceptances = {
+    parse: new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath)),
+    timeouts: new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath)),
   };
-
-  const suppressedByRepoConfig: RepoSuppressionEntry[] = [];
-
-  for (const step of steps) {
-    allToolsRun.push(...step.tools_run);
-    for (const run of step.tools_run) {
-      const s = run.suppressed_by_repo_config;
-      if (s !== undefined) suppressedByRepoConfig.push({ step: step.tool, tool: run.name, ...s });
-    }
-
-    if (!step.ran) {
-      allMissingTools.push(step.tool);
-      gatingMissingTools.push(step.tool);
-      pushGap(`${step.tool}: ${step.reason ?? 'did not run'}`, step.tool, kindOfRefusal(step.reason), true);
-      continue;
-    }
-
-    for (const missing of step.missing_tools) {
-      allMissingTools.push(missing);
-      const refs = (step.partial_parses?.[missing] ?? []).map((r) => ({ ...r, file: normalizeAcceptedPath(r.file) }));
-      for (const ref of refs) reported.add(ref.file);
-      const judged = judgeMissing(step.tool, missing, refs, step.tools_run, acceptParse, acceptTimeouts);
-      for (const note of judged.notes) {
-        coverageNotes.push(note);
-        noteDetails.push(detailOf(missing, 'taint_timeout', note, false));
-      }
-      if (!judged.gating) {
-        for (const a of judged.accepted) {
-          acceptedGaps.push(a.line);
-          acceptedDetails.push(detailOf(missing, a.kind, a.line, false));
-        }
-        continue;
-      }
-      gatingMissingTools.push(missing);
-      const described = describeMissing(missing, step.tools_run);
-      if (described.line !== null) {
-        pushGap(`${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true);
-      }
-    }
-
-    for (const run of step.tools_run) {
-      if (run.status === 'failed') {
-        pushGap(`${step.tool}: ${run.name} failed${run.reason ? ` (${run.reason})` : ''}`, run.name, 'scanner_failed', true);
-      }
-      // status 'skipped' (nothing to do, e.g. no Dockerfile) is deliberately
-      // not a gap — computeCoverage's own contract, see scanCoverage.ts.
-    }
-  }
+  const t = tallySteps(steps, accept);
 
   if (droppedBaselineEntries > 0) {
     const noun = droppedBaselineEntries === 1 ? 'entry' : 'entries';
     const verb = droppedBaselineEntries === 1 ? 'is' : 'are';
-    // Visible, never gating (see `GateInput.droppedBaselineEntries`).
-    pushGap(`baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`, 'baseline', 'other', false);
+    // Visible, never gating (see `GateInput.droppedBaselineEntries`): a note,
+    // not a line of `coverageGaps`, which are the gaps that gate.
+    pushNote(t, `baseline: ${droppedBaselineEntries} ${noun} could not be read and ${verb} no longer suppressed`, 'baseline', 'other');
   }
 
   // Every gap, accepted ones and notes included: an accepted partial parse is
   // still partial coverage, and says so in the JSON and the SARIF.
-  const coverage = computeCoverage(allToolsRun, allMissingTools);
-  const gatingCoverage = computeCoverage(allToolsRun, gatingMissingTools);
+  const coverage = computeCoverage(t.allToolsRun, t.allMissingTools);
+  const gatingCoverage = computeCoverage(t.allToolsRun, t.gatingMissingTools);
 
   // Historical debt must not fail the build: `newFindings` already excludes
   // anything the baseline recognises, however severe.
@@ -583,13 +642,14 @@ export function evaluateGate(input: GateInput): GateVerdict {
     blocking,
     coverage,
     gatingCoverage,
-    coverageGaps,
-    coverageGapDetails: [...gapDetails, ...acceptedDetails, ...noteDetails],
-    coverageNotes,
+    coverageGaps: t.coverageGaps,
+    coverageGapDetails: [...t.gapDetails, ...t.acceptedDetails, ...t.noteDetails],
+    coverageNotes: t.coverageNotes,
     baselineAbsent: baseline === null,
-    acceptedGaps,
-    unusedPartialParseAcceptances: [...acceptParse].filter((path) => !reported.has(path)),
-    suppressedByRepoConfig,
+    acceptedGaps: t.acceptedGaps,
+    unusedPartialParseAcceptances: [...accept.parse].filter((path) => !t.reported.has(path)),
+    unusedTimeoutAcceptances: [...accept.timeouts].filter((path) => !t.timedOut.has(path)),
+    suppressedByRepoConfig: t.suppressedByRepoConfig,
     baselineSource: input.baselineSource ?? { from: 'tree', path: BASELINE_RELATIVE_PATH },
     rulesSource: input.rulesSource ?? { from: 'tree' },
     exclusionsReset: input.exclusionsReset ?? null,

@@ -1,11 +1,13 @@
 /**
- * How dev-guardian starts a child that owns a process tree, and stops the
- * whole tree (review 8, finding 4) — git's own spawns are
- * `platform/gitSafety.ts`'s, the one-process probes `spawn.ts#captureOutput`.
- * `runProcess` (the scanners, the package managers, the archive extraction),
- * `ci/appRunner.ts` (the application a DAST pass probes) and
- * `mcpaudit/stdioTransport.ts` (a third-party MCP server) each carried their
- * own spawn, tree kill and exit hook; they now share these.
+ * How dev-guardian starts a child that may own a process TREE, and stops that
+ * whole tree (review 8, finding 4). `runProcess` (the scanners, the package
+ * managers, the archive extraction), `ci/appRunner.ts` (the application a DAST
+ * pass probes), `mcpaudit/stdioTransport.ts` (a third-party MCP server) and,
+ * since 3.4.0, async git (`runners/gitExec.ts`) share these. Not every child:
+ * the one-process probes (`spawn.ts#captureOutput`), the tree kill's own
+ * `ps`/`grep`/`taskkill`, and the synchronous git of `platform/gitSafety.ts`
+ * (`execGitSync`, which the hooks use) start the plain way —
+ * `test/unit/platform/gitSpawnSites.test.ts` classifies each.
  *
  * Starting ({@link startChild}): `spawn.ts#spawnNoShell` — `cross-spawn`,
  * no shell, no console window, a batch file never handed an argument

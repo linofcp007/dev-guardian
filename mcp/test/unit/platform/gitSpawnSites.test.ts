@@ -64,6 +64,13 @@ const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string
     kind: 'primitive',
     reason: 'startChild: the tree-owning child runProcess, the DAST app and the audited MCP server are started as',
   },
+  'mcp/src/runners/gitExec.ts': {
+    count: 1,
+    kind: 'helper',
+    reason:
+      "gitSafety's async git on startChild, so a timeout stops git's whole tree (review 10, finding 12): " +
+      'the command and its environment are what execGit hands it, the overrides already applied',
+  },
   'mcp/src/runners/processRunner.ts': {
     count: 1,
     kind: 'hardened',

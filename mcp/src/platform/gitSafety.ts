@@ -824,7 +824,7 @@ async function gitlinksAsync(git: string, dir: string, env: NodeJS.ProcessEnv, t
   const key = probeCacheKey(git, dir, env);
   const hit = cachedGitlinks(key, reuseMs);
   if (hit !== null) return hit;
-  const r = await collect(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
+  const r = await gitSpawner(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
   if (r.error !== undefined) return gitlinksError(r.error, dir, timeoutMs);
   return rememberGitlinks(key, parseGitlinks(dir, r.status, r.stdout));
 }
@@ -900,7 +900,7 @@ function probeSyncUncached(git: string, dir: string, env: NodeJS.ProcessEnv, tim
 }
 
 async function probeAsyncUncached(git: string, dir: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<Probe> {
-  const r = await collect(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
+  const r = await gitSpawner(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
   if (r.error !== undefined) return probeError(r.error, dir, timeoutMs);
   return interpretExit(r.status, r.stdout, r.stderr.toString('utf8'), dir);
 }
@@ -992,7 +992,7 @@ export function describeNotApplied(keys: readonly string[]): string | null {
 
 export interface GitExecOptions {
   timeoutMs?: number;
-  /** stdout larger than this fails the run (`failure.code: 'too-large'`). Default 100 MB, execa's. */
+  /** stdout larger than this fails the run (`failure.code: 'too-large'`). Default 100 MB. */
   maxBuffer?: number;
   /** The environment the git runs with (default: this process's). */
   env?: NodeJS.ProcessEnv;
@@ -1030,7 +1030,7 @@ export async function execGitBuffer(dir: string, args: readonly string[], opts: 
   if (safety.refused !== null) return refusedResult(safety, Buffer.alloc(0));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = await collect(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], {
+  const r = await gitSpawner(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     timeoutMs,
     maxBuffer,
@@ -1079,15 +1079,51 @@ function execFailure(error: NodeJS.ErrnoException, timeoutMs: number, maxBuffer:
   return { code: 'spawn', message: `git failed to run (${error.code ?? error.message})` };
 }
 
-interface Collected {
+/** What an async git run gives back — see {@link GitSpawner}. */
+export interface Collected {
   status: number | null;
   stdout: Buffer;
   stderr: Buffer;
+  /** Set when git did not run, or was stopped: `ENOENT`, `ETIMEDOUT`, `ENOBUFS`, or the spawn error. */
   error?: NodeJS.ErrnoException;
 }
 
-/** spawn, collect both streams, kill on timeout or oversize; never rejects. */
-function collect(command: string, args: readonly string[], opts: { env: NodeJS.ProcessEnv; timeoutMs: number; maxBuffer: number }): Promise<Collected> {
+/** The environment, the timeout and the stdout cap of one async git run. */
+export interface CollectOptions {
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  maxBuffer: number;
+}
+
+/**
+ * How every async git of this module is started, and stopped on a timeout or
+ * an oversized output. Never rejects.
+ */
+export type GitSpawner = (command: string, args: readonly string[], opts: CollectOptions) => Promise<Collected>;
+
+/**
+ * The spawner in use: {@link collect} until `runners/gitExec.ts` installs the
+ * one that stops git's whole TREE (`runners/childProcess.ts`). A stalled
+ * `git clone` over HTTPS is two processes — git and `git remote-https` — and
+ * killing git alone left the helper holding the pipes: `scan_skill` on a URL
+ * that stalled answered after more than 330 s against its 120 s timeout
+ * (review 10, finding 12). Installed rather than imported: the hook bundle
+ * loads this module for `execGitSync` and may hold no npm package
+ * (`hooksDistImports.test.ts`), which the shared tree kill brings
+ * (`cross-spawn`, `signal-exit`). Every module that runs git for the engine
+ * reaches `runners/git.ts`, which installs it.
+ */
+let gitSpawner: GitSpawner = collect;
+
+/** Install how async git runs (`runners/gitExec.ts`); returns the one it replaced. */
+export function useGitSpawner(spawner: GitSpawner): GitSpawner {
+  const previous = gitSpawner;
+  gitSpawner = spawner;
+  return previous;
+}
+
+/** spawn, collect both streams, kill on timeout or oversize; never rejects. Git itself only — see {@link gitSpawner}. */
+function collect(command: string, args: readonly string[], opts: CollectOptions): Promise<Collected> {
   return new Promise((resolveRun) => {
     let settled = false;
     const out: Buffer[] = [];

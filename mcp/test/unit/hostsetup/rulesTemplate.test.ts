@@ -39,11 +39,13 @@ function blocks(text: string): string[] {
 
 function recipeProblems(text: string): string[] {
   const problems: string[] = [];
-  for (const tool of ['llm_scan_start', 'llm_scan_task', 'llm_scan_submit']) {
-    if (!text.includes(tool)) problems.push(`names ${tool}`);
+  // The listed fold and its three steps; never a hidden alias, which a model in Claude Code cannot call.
+  for (const step of ['start', 'task', 'submit']) {
+    if (!text.includes(`llm_scan { step: "${step}"`)) problems.push(`names llm_scan { step: "${step}" }`);
   }
+  if (/llm_scan_(?:start|task|submit)/.test(text)) problems.push('names a hidden alias of llm_scan');
   const bs = blocks(text);
-  if (!bs.some((b) => b.includes('llm_scan_task') && /sub-?agent/i.test(b) && /\b(per|each|every|one)\b[^.]*\btask\b/i.test(b))) {
+  if (!bs.some((b) => b.includes('llm_scan') && /sub-?agent/i.test(b) && /\b(per|each|every|one)\b[^.]*\btask\b/i.test(b))) {
     problems.push('says to run each task in a fresh subagent');
   }
   if (!bs.some((b) => /\bCodex\b/.test(b) && /sub-?agent/i.test(b) && /\b(spawn|launch|start|ask|explicit)/i.test(b))) {

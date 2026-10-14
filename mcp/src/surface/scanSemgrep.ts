@@ -21,7 +21,7 @@ interface SemgrepRunOptions {
   rulesPath: string;
   outFile: string;
   reportDir: string;
-  /** Flags after the config: the per-file timeouts and `--exclude=.guardian` (`runners/semgrepRun.ts#semgrepScanFlags`). */
+  /** Flags after the config: the per-file timeouts and the root `.guardian/` output excluded (`runners/semgrepRun.ts#semgrepScanFlags`). */
   extraArgs?: readonly string[];
 }
 

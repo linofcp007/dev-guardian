@@ -102,12 +102,12 @@ export async function runVersionProbe(probe: VersionProbe, cwd: string): Promise
     return { installed: false, version: '', error: `version probe timed out after ${PROBE_TIMEOUT_MS / 1000} s` };
   }
   if (r.outcome !== 'completed') {
-    // A failure is either "not there" or "there but broken", and the exit
-    // code cannot tell them apart on Windows: the runner resolves the command
-    // first, but cross-spawn runs an UNRESOLVED one via `cmd.exe /c`
-    // — so a missing tool comes back as exit 1 with a localised "is not
-    // recognized" message, not as a spawn error. The PATH lookup decides:
-    // nothing found means not installed, and says nothing more.
+    // A failure is either "not there" or "there but broken", and the run
+    // alone does not say which: a shim on PATH whose target is gone (a
+    // `.cmd` run through `cmd.exe`) fails like a broken tool. The PATH
+    // lookup decides — the one `runProcess` itself makes before it spawns
+    // (`platform/binaryPath.ts`): nothing found means not installed, and
+    // says nothing more.
     const onPath = await resolveBinary(probe.command);
     if (!onPath) return { installed: false, version: '' };
     const why = firstLine(r.stderr) ?? firstLine(r.stdout) ?? r.outcome;

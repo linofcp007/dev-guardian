@@ -40,7 +40,9 @@
  * `gitleaks detect --no-git -s .` in the project — with a generated config
  * that extends the project's own `.gitleaks.toml` (or gitleaks' defaults) and
  * allowlists the directories no scan of the project's own files reads
- * (`node_modules`, `vendor`, `.git`, build output, `.guardian`). Copying it
+ * (`node_modules`, `vendor`, `.git`, build output) and the root `.guardian/`'s
+ * generated output (`platform/guardianOutput.ts` — never a `.guardian`
+ * folder below the root, which is the project's code). Copying it
  * first is not an option: the common case is a WordPress site copied off a
  * server, whose `wp-content/uploads` alone can be gigabytes.
  *
@@ -79,6 +81,7 @@ import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
+import { DOT_GUARDIAN, ROOT_OUTPUT_PATHS, isGuardianOutput } from '../platform/guardianOutput.js';
 import { describeReadRefusal, presentInProject, readProjectBytes } from '../platform/projectFs.js';
 import { honouredRootFiles, withProjectConfig } from './repoConfig.js';
 import { openPrivateReportDir, sanitizeGitleaksReport, type PrivateReportDir } from '../secrets/verify/rawReport.js';
@@ -99,7 +102,7 @@ import {
 } from './git.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
-import { PROJECT_WALK_EXCLUDE } from './projectFiles.js';
+import { SCANNED_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
 import { parseInputAsJson, type ScannerParser } from './scannerParsers/index.js';
 
@@ -174,8 +177,12 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 /** The uncommitted-files copy stops at this many bytes in total (a named gap). */
 const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 
-/** Never scanned by a files pass, wherever they sit. */
-const EXCLUDED_DIRS: readonly string[] = [...PROJECT_WALK_EXCLUDE];
+/**
+ * Never scanned by a files pass, wherever they sit. Not `.guardian`: only
+ * the root one's generated output is left out ({@link isExcluded}) — a
+ * `lib/.guardian/handler.js` is the project's code (review 10, finding 1).
+ */
+const EXCLUDED_DIRS: readonly string[] = [...SCANNED_WALK_EXCLUDE];
 
 export async function runGitleaksScan(opts: GitleaksScanOptions): Promise<GitleaksScanResult> {
   const result: GitleaksScanResult = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
@@ -514,6 +521,94 @@ async function workingTreePass(opts: ScanRun, result: GitleaksScanResult, hasCom
 }
 
 /**
+ * {@link filesPass}'s copy: each candidate that is still a regular file, read
+ * through `platform/projectFs.ts` and written below `tmp` — or counted in the
+ * gaps (unreadable, over the per-file size, over the total).
+ */
+function copyForScan(
+  opts: ScanRun,
+  candidates: readonly string[],
+  tmp: string,
+  limits: { maxFile: number; maxTotal: number },
+): { copied: number; gaps: string[] } {
+  const { maxFile, maxTotal } = limits;
+  const unreadable: string[] = [];
+  let copied = 0;
+  let oversized = 0;
+  let overTotal = 0;
+  let total = 0;
+  for (const rel of candidates) {
+    const from = join(opts.projectPath, rel);
+    let size: number;
+    try {
+      const st = lstatSync(from);
+      if (!st.isFile()) continue;
+      size = st.size;
+    } catch {
+      continue; // deleted since git listed it: nothing to read
+    }
+    if (size > maxFile) {
+      oversized += 1;
+      continue;
+    }
+    if (total + size > maxTotal) {
+      overTotal += 1;
+      continue;
+    }
+    // `platform/projectFs.ts`: judged on the descriptor it reads, so a
+    // file swapped for a FIFO or a link since the lstat above is refused,
+    // never waited on or followed out of the project (review of 3.0, W2E).
+    const read = readProjectBytes(opts.projectPath, rel, maxFile);
+    if (read.status === 'absent') continue; // deleted since git listed it
+    if (read.status === 'refused') {
+      if (read.reason === 'too-large') oversized += 1;
+      else unreadable.push(`${rel} (${describeReadRefusal(read.reason)})`);
+      continue;
+    }
+    try {
+      const to = join(tmp, rel);
+      mkdirSync(dirname(to), { recursive: true });
+      writeFileSync(to, read.bytes);
+      copied += 1;
+      total += read.bytes.length;
+    } catch (e) {
+      unreadable.push(`${rel} (${errorCode(e)})`);
+    }
+  }
+  const gaps: string[] = [];
+  if (unreadable.length > 0) {
+    gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(', ')}${unreadable.length > 5 ? ', …' : ''}`);
+  }
+  if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
+  if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
+  return { copied, gaps };
+}
+
+/** gitleaks over {@link copyForScan}'s copy at `tmp`, recorded as the working-tree pass. */
+async function scanCopy(opts: ScanRun, result: GitleaksScanResult, tmp: string, okReason: string, gaps: readonly string[]): Promise<void> {
+  const outFile = join(opts.reportDir, 'secrets-working-tree.json');
+  rmSync(outFile, { force: true });
+  const target = reportTarget(opts, outFile);
+  const args = [
+    'detect',
+    '--no-git',
+    '--no-banner',
+    '--report-format=json',
+    `--report-path=${target.path}`,
+    ...target.redact,
+    '-s',
+    '.',
+    `--gitleaks-ignore-path=${opts.projectPath}`,
+  ];
+  const projectConfig = join(opts.projectPath, '.gitleaks.toml');
+  if (presentInProject(opts.projectPath, '.gitleaks.toml')) args.push(`--config=${projectConfig}`);
+  const run = await runProcess({ command: 'gitleaks', args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
+  if (run.outcome === 'cancelled') result.cancelled = true;
+  const report = takeReport(opts, target.path, outFile);
+  recordFilesRun(result, GITLEAKS_WORKING_TREE, run, report, 'working_tree', okReason, gaps, []);
+}
+
+/**
  * gitleaks over a list of uncommitted project files, copied to a temporary
  * directory (see the module comment for the size limits and what a file that
  * cannot be read costs).
@@ -543,58 +638,8 @@ async function filesPass(
     result.tools_run.push({ name, status: 'failed', reason: `working tree: no temporary directory: ${message(e)}` });
     return;
   }
-  const gaps: string[] = [];
-  const notes: string[] = [];
-  let copied = 0;
   try {
-    const unreadable: string[] = [];
-    let oversized = 0;
-    let overTotal = 0;
-    let total = 0;
-    for (const rel of candidates) {
-      const from = join(opts.projectPath, rel);
-      let size: number;
-      try {
-        const st = lstatSync(from);
-        if (!st.isFile()) continue;
-        size = st.size;
-      } catch {
-        continue; // deleted since git listed it: nothing to read
-      }
-      if (size > maxFile) {
-        oversized += 1;
-        continue;
-      }
-      if (total + size > maxTotal) {
-        overTotal += 1;
-        continue;
-      }
-      // `platform/projectFs.ts`: judged on the descriptor it reads, so a
-      // file swapped for a FIFO or a link since the lstat above is refused,
-      // never waited on or followed out of the project (review of 3.0, W2E).
-      const read = readProjectBytes(opts.projectPath, rel, maxFile);
-      if (read.status === 'absent') continue; // deleted since git listed it
-      if (read.status === 'refused') {
-        if (read.reason === 'too-large') oversized += 1;
-        else unreadable.push(`${rel} (${describeReadRefusal(read.reason)})`);
-        continue;
-      }
-      try {
-        const to = join(tmp, rel);
-        mkdirSync(dirname(to), { recursive: true });
-        writeFileSync(to, read.bytes);
-        copied += 1;
-        total += read.bytes.length;
-      } catch (e) {
-        unreadable.push(`${rel} (${errorCode(e)})`);
-      }
-    }
-    if (unreadable.length > 0) {
-      gaps.push(`${unreadable.length} file(s) could not be read: ${unreadable.slice(0, 5).join(', ')}${unreadable.length > 5 ? ', …' : ''}`);
-    }
-    if (oversized > 0) gaps.push(`${oversized} file(s) not scanned: over ${megabytes(maxFile)} each`);
-    if (overTotal > 0) gaps.push(`${overTotal} file(s) not scanned: over the ${bytesLabel(maxTotal)} total`);
-
+    const { copied, gaps } = copyForScan(opts, candidates, tmp, { maxFile, maxTotal });
     if (copied === 0) {
       result.tools_run.push({
         name,
@@ -603,27 +648,7 @@ async function filesPass(
       });
       return;
     }
-
-    const outFile = join(opts.reportDir, 'secrets-working-tree.json');
-    rmSync(outFile, { force: true });
-    const target = reportTarget(opts, outFile);
-    const args = [
-      'detect',
-      '--no-git',
-      '--no-banner',
-      '--report-format=json',
-      `--report-path=${target.path}`,
-      ...target.redact,
-      '-s',
-      '.',
-      `--gitleaks-ignore-path=${opts.projectPath}`,
-    ];
-    const projectConfig = join(opts.projectPath, '.gitleaks.toml');
-    if (presentInProject(opts.projectPath, '.gitleaks.toml')) args.push(`--config=${projectConfig}`);
-    const run = await runProcess({ command: 'gitleaks', args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
-    if (run.outcome === 'cancelled') result.cancelled = true;
-    const report = takeReport(opts, target.path, outFile);
-    recordFilesRun(result, name, run, report, 'working_tree', labels.scanned(copied), gaps, notes);
+    await scanCopy(opts, result, tmp, labels.scanned(copied), gaps);
   } finally {
     try {
       rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -681,15 +706,22 @@ async function directoryPass(opts: ScanRun, result: GitleaksScanResult, name: st
     result.tools_run.push({ name, status: 'skipped', reason: `${prefix}: it holds nothing gitleaks reads (0 bytes)` });
     return;
   }
-  const excluded = EXCLUDED_DIRS.join(', ');
+  const excluded = [...EXCLUDED_DIRS, `the root ${DOT_GUARDIAN}/'s generated output`].join(', ');
   const scanned = bytes === null ? '' : ` (~${bytes} bytes)`;
   recordFilesRun(result, name, run, report, 'directory', `${prefix}${scanned}, excluding ${excluded}`, [], []);
 }
 
-/** The config for {@link directoryPass}: the project's (or the default) plus the excluded directories. */
+/**
+ * The config for {@link directoryPass}: the project's (or the default) plus
+ * the excluded directories, at any depth, and the root `.guardian/`'s
+ * generated output, anchored (gitleaks matches the path relative to `-s .`,
+ * `/`-separated on Windows too — measured on 8.30.1).
+ */
 export function directoryConfig(projectPath: string): string {
   const own = join(projectPath, '.gitleaks.toml');
-  const names = EXCLUDED_DIRS.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const names = EXCLUDED_DIRS.map(escape).join('|');
+  const output = ROOT_OUTPUT_PATHS.map((p) => `${escape(p)}(?:/|$)`).join('|');
   return [
     '# Generated by dev-guardian for one scan: the project\'s gitleaks config (or',
     '# gitleaks\' defaults) plus the directories no scan of the project\'s own files reads.',
@@ -698,7 +730,7 @@ export function directoryConfig(projectPath: string): string {
     '',
     '[allowlist]',
     'description = "dev-guardian: vendored, generated and tool directories"',
-    `paths = ['''(^|/)(${names})/''']`,
+    `paths = ['''(^|/)(${names})/''', '''^(?:\\./)?(?:${output})''']`,
     '',
   ].join('\n');
 }
@@ -844,8 +876,9 @@ function fatalLine(stderr: string): string | null {
   return lines.find((l) => /\b(FTL|ERR)\b/.test(l)) ?? lines.find((l) => l.length > 0) ?? null;
 }
 
+/** A `.git` at any depth, or the root `.guardian/`'s generated output (`platform/guardianOutput.ts`). */
 function isExcluded(rel: string): boolean {
-  return rel.split('/').some((segment) => segment === '.guardian' || segment === '.git');
+  return rel.split('/').includes('.git') || isGuardianOutput(rel);
 }
 
 function describeCount(n: number | null, noun: string): string {

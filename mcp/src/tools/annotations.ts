@@ -147,7 +147,9 @@ export const TOOL_ANNOTATIONS: Readonly<Record<string, Hints>> = {
   // Adds a scan to the history per call.
   import_sarif: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   // The LLM scan's plan and its leases (the model's own sampling goes to the client, not out).
-  llm_scan_start: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  // The fold `llm_scan` (./folds.ts) runs all three steps, whose hints are the same.
+  llm_scan: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  llm_scan_start:{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   llm_scan_task: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   llm_scan_submit: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 };

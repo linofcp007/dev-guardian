@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { evaluateGate, remedyFor, type GateInput } from '../../../src/ci/gate.js';
-import { renderSarif } from '../../../src/ci/report.js';
+import { renderHuman, renderJson, renderSarif } from '../../../src/ci/report.js';
 import { CI_EXIT, GAP_KINDS, type ScanStepResult } from '../../../src/ci/types.js';
 import type { Finding, ToolRun } from '../../../src/types.js';
 
@@ -48,6 +48,18 @@ describe('a per-file Timeout: accepted by the committed .guardian/scan.yml, noth
     expect(v.coverageGaps).toEqual([]);
     expect(v.acceptedGaps).toEqual([`security_scan_full: semgrep timed out on ${F} — accepted (.guardian/scan.yml semgrep.accept_timeouts)`]);
     expect(v.coverageGapDetails).toEqual([expect.objectContaining({ kind: 'file_timeout', gating: false })]);
+    expect(v.unusedTimeoutAcceptances).toEqual([]);
+  });
+
+  it('an entry no step reported a Timeout on is named unused, on every run — a stale one never sits unnoticed (review 10)', () => {
+    // The file timed out once and was accepted; it no longer does, or a
+    // parse error on it is not what the entry accepts.
+    const v = evaluateGate(
+      input({ steps: [semgrepStep([{ file: 'src/other.js', type: 'PartialParsing' }, { file: F, type: 'PartialParsing' }])], acceptedTimeouts: [F, './src/gone.js'] }),
+    );
+    expect(v.unusedTimeoutAcceptances).toEqual([F, 'src/gone.js']);
+    expect(renderJson(v)).toContain('"unused_timeout_acceptances"');
+    expect(renderHuman(v)).toContain('note: .guardian/scan.yml semgrep.accept_timeouts src/gone.js: no step reported a Timeout on it (unused');
   });
 
   it('--accept-partial-parse never accepts a Timeout, and accept_timeouts never a parse error', () => {
@@ -78,6 +90,16 @@ describe('a gap no acceptance clears', () => {
     expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
     expect(v.coverageGapDetails[0]).toMatchObject({ kind: 'path_too_long', gating: true });
     expect(v.coverageGapDetails[0]?.remedy).toMatch(/LongPathsEnabled/);
+  });
+
+  it('a file git tracks in .guardian/’s generated output: a gap no flag clears, whose remedy is to stop tracking it (review 10, finding 1)', () => {
+    const reason = "1 file(s) git tracks in .guardian/'s generated output were not scanned: .guardian/reports/evil.js — x";
+    const v = evaluateGate(
+      input({ steps: [semgrepStep([{ file: F, type: 'PartialParsing' }], { reason, unscanned: { guardian_output: 1 } })], acceptedPartialParses: [F] }),
+    );
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.acceptedGaps).toEqual([]);
+    expect(remedyFor('other', 'semgrep', `security_scan_full: semgrep ran with reduced coverage (${reason})`)).toMatch(/git rm --cached/);
   });
 
   it('a run that also missed files over the size limit (unscanned), or rules that did not load: never cleared by naming files', () => {

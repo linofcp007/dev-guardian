@@ -8523,6 +8523,7 @@ __export(gitSafety_exports, {
   parseConfigListing: () => parseConfigListing,
   safetyFromListing: () => safetyFromListing,
   staticGitSafety: () => staticGitSafety,
+  useGitSpawner: () => useGitSpawner,
   withoutHooksPath: () => withoutHooksPath
 });
 import { spawn, spawnSync } from "node:child_process";
@@ -8902,7 +8903,7 @@ async function gitlinksAsync(git, dir, env, timeoutMs, reuseMs) {
   const key = probeCacheKey(git, dir, env);
   const hit = cachedGitlinks(key, reuseMs);
   if (hit !== null) return hit;
-  const r = await collect3(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
+  const r = await gitSpawner(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
   if (r.error !== void 0) return gitlinksError(r.error, dir, timeoutMs);
   return rememberGitlinks(key, parseGitlinks(dir, r.status, r.stdout));
 }
@@ -8949,7 +8950,7 @@ function probeSyncUncached(git, dir, env, timeoutMs) {
   return interpretExit(r.status, Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.alloc(0), String(r.stderr ?? ""), dir);
 }
 async function probeAsyncUncached(git, dir, env, timeoutMs) {
-  const r = await collect3(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
+  const r = await gitSpawner(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
   if (r.error !== void 0) return probeError(r.error, dir, timeoutMs);
   return interpretExit(r.status, r.stdout, r.stderr.toString("utf8"), dir);
 }
@@ -9013,7 +9014,7 @@ async function execGitBuffer(dir, args, opts = {}) {
   if (safety.refused !== null) return refusedResult(safety, Buffer.alloc(0));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS2;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = await collect3(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], {
+  const r = await gitSpawner(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     timeoutMs,
     maxBuffer
@@ -9056,6 +9057,11 @@ function execFailure(error, timeoutMs, maxBuffer) {
   if (error.code === "ETIMEDOUT") return { code: "timeout", message: `git took longer than ${timeoutMs} ms` };
   if (error.code === "ENOBUFS") return { code: "too-large", message: `git printed more than ${maxBuffer} bytes` };
   return { code: "spawn", message: `git failed to run (${error.code ?? error.message})` };
+}
+function useGitSpawner(spawner) {
+  const previous = gitSpawner;
+  gitSpawner = spawner;
+  return previous;
 }
 function collect3(command, args, opts) {
   return new Promise((resolveRun) => {
@@ -9107,7 +9113,7 @@ function sameName(a, b, platform) {
 function firstLine2(text) {
   return text.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
-var GIT_COMMAND, PROBE_TIMEOUT_MS, PROBE_MAX_BYTES, MAX_REPOSITORY_KEYS, STATIC_VARS, COMMAND_KEYS_REGEX, PROBE_KEY, TRUSTED_SCOPES, STRICT_UTF8, FILTER_KEY, CREDENTIAL_HELPER, STATIC_KEYS, HTTP_KEY, GIT_CANNOT_READ, MAX_SUBMODULES, MAX_SUBMODULE_DEPTH, GITLINK_LISTING_MAX_BYTES, gitlinkCache, PROBE_REUSE_MS, PROBE_CACHE_MAX, probeCache, DEFAULT_MAX_BUFFER, DEFAULT_TIMEOUT_MS2;
+var GIT_COMMAND, PROBE_TIMEOUT_MS, PROBE_MAX_BYTES, MAX_REPOSITORY_KEYS, STATIC_VARS, COMMAND_KEYS_REGEX, PROBE_KEY, TRUSTED_SCOPES, STRICT_UTF8, FILTER_KEY, CREDENTIAL_HELPER, STATIC_KEYS, HTTP_KEY, GIT_CANNOT_READ, MAX_SUBMODULES, MAX_SUBMODULE_DEPTH, GITLINK_LISTING_MAX_BYTES, gitlinkCache, PROBE_REUSE_MS, PROBE_CACHE_MAX, probeCache, DEFAULT_MAX_BUFFER, DEFAULT_TIMEOUT_MS2, gitSpawner;
 var init_gitSafety = __esm({
   "src/platform/gitSafety.ts"() {
     "use strict";
@@ -9150,6 +9156,7 @@ var init_gitSafety = __esm({
     probeCache = /* @__PURE__ */ new Map();
     DEFAULT_MAX_BUFFER = 1e8;
     DEFAULT_TIMEOUT_MS2 = 6e4;
+    gitSpawner = collect3;
   }
 });
 
@@ -9172,6 +9179,7 @@ function canonicalPath(p) {
 var init_projectPath = __esm({
   "src/platform/projectPath.ts"() {
     "use strict";
+    init_configFile();
   }
 });
 

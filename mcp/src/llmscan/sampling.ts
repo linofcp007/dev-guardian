@@ -19,6 +19,7 @@
  */
 
 import type { Storage } from '../storage/index.js';
+import { finalAnswerObject } from './answerText.js';
 import { fail, leaseNext, loadPlan, MAX_INVALID_SUBMISSIONS, reportOf, settlePlan, submitAnswer, type Out } from './service.js';
 import type { SamplingFn } from './types.js';
 
@@ -27,7 +28,16 @@ const SAMPLING_BUDGET_MS = 50_000;
 /** A request may run this long past the budget; the host's 60 s still holds. */
 const REQUEST_MARGIN_MS = 5_000;
 const MAX_ANSWER_TOKENS = 2_000;
-const SYSTEM_PROMPT = 'You verify one finding. Reply with ONLY the JSON object the brief asks for, no prose and no code fence.';
+/**
+ * Says what the brief says (prompts v5 on: the working in prose, then the
+ * object last). It used to ask for the object alone, "no prose", against a
+ * brief that asks for the working first — and `payloadOf` refused the working,
+ * spending one of the task's three tries on every answer that followed the
+ * brief.
+ */
+const SYSTEM_PROMPT =
+  'You verify one finding. Follow the brief: your working in a few lines of prose, then the one JSON object it ' +
+  'asks for, last, with nothing after it and no second object.';
 
 interface SamplingOptions {
   /** Milliseconds, monotonic enough for a budget; injectable for tests. */
@@ -49,20 +59,14 @@ function failureOf(err: unknown, cancelled: boolean): SamplingFailure {
 }
 
 /**
- * The reply as ONE JSON object: whitespace and a single code fence around it
- * are tolerated, prose is not. Anything else is returned as the raw text, which
- * the validator refuses (the same strictness as a host's submission).
+ * The reply's answer, as the brief asks for it: ONE JSON object that ends the
+ * reply — the working may come before it, a code fence may hold it
+ * (`answerText.ts#finalAnswerObject`). Text after the object, a second object
+ * (an answer and its correction) or no object: the raw text, which the
+ * validator refuses (the same strictness as a host's submission).
  */
 export function payloadOf(text: string): unknown {
-  const trimmed = text.trim();
-  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n?```$/.exec(trimmed);
-  const candidate = (fenced?.[1] ?? trimmed).trim();
-  if (!candidate.startsWith('{') || !candidate.endsWith('}')) return text;
-  try {
-    return JSON.parse(candidate) as unknown;
-  } catch {
-    return text;
-  }
+  return finalAnswerObject(text) ?? text;
 }
 
 export async function runSampling(storage: Storage, planId: string, sampling: SamplingFn, opts: SamplingOptions = {}): Promise<Out> {
@@ -132,7 +136,7 @@ export async function runSampling(storage: Storage, planId: string, sampling: Sa
       const res = submitAnswer(storage, { plan_id: planId, task_id: taskId, lease_token: token, independence: 'sampling', payload });
       if (res.ok === true && res['accepted'] === false && res['closed'] === undefined) {
         // Validator errors only: never file content.
-        text += `\n\nYour previous answer was refused: ${JSON.stringify(res['errors'])}. Answer again with only the corrected JSON.`;
+        text += `\n\nYour previous answer was refused: ${JSON.stringify(res['errors'])}. Answer again, ending with the one corrected JSON object.`;
         continue;
       }
       if (res.ok === true) closed = true; // accepted, or closed (stale, or out of tries)

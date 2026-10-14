@@ -96,6 +96,7 @@ import { lstatSync, mkdirSync, unlinkSync, writeFileSync, type Stats } from 'nod
 import { dirname, join, posix } from 'node:path';
 import { MANIFEST_RELATIVE_PATH, readManifest } from '../configdrift/manifest.js';
 import { execGitBuffer } from '../platform/gitSafety.js';
+import '../runners/gitExec.js';
 import { readProjectText } from '../platform/projectFs.js';
 import { CONVENTIONAL_TARGETS, SEMGREP_SOURCE_PREFIX } from '../platform/projectSemgrepConfig.js';
 import { git, repoState, resolveCommit, showPrefix, splitNul } from '../runners/git.js';
