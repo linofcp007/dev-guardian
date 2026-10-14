@@ -105,17 +105,21 @@ their respective projects.
   configuration (`.npmrc`, `pip.conf`, `nuget.config`, …) through the same
   link walk; one that is there but could not be read counts as possibly a
   private registry, so a missing name warns. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
-  `MultiEdit` (or MCP write) of `.claude/settings.json` or `settings.local.json` is denied
+  `MultiEdit` (or MCP write) of `.claude/settings.json` or `settings.local.json`,
+  or of the machine's `managed-settings.json`, is denied
   when it would newly set `disableAllHooks` (any value that may read as true),
   an `env` entry setting `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`,
-  `GUARDIAN_PKG_VET=0`, or `NODE_OPTIONS` / `GUARDIAN_PKG_VET_DEADLINE_MS` to any
+  `GUARDIAN_PKG_VET=0`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, or `NODE_OPTIONS` /
+  `GUARDIAN_PKG_VET_DEADLINE_MS` / `GUARDIAN_OFFLINE` to any
   value, or an `enabledPlugins` entry turning dev-guardian off — read as JSONC,
   escapes decoded and a repeated key counted every time; a new `env` `PATH`,
-  `HOME` or `USERPROFILE`, and an MCP tool's change whose result cannot be
-  worked out (a regex replace, a move onto the file), are asked about; every
-  other edit of those files is allowed. A shell write of them is denied when
-  the command names one of those keys, and so is `claude plugin
-  disable|uninstall` of dev-guardian.
+  `HOME`, `USERPROFILE`, other `NODE_*` / `GUARDIAN_*` variable or proxy, an
+  edit that cannot be applied as plain text, a reading past 4 s, and an MCP
+  tool's change whose result cannot be worked out (a regex replace, a move onto
+  the file) are asked about; every other edit of those files is allowed. A
+  shell write of them is denied when the command names one of those keys — a
+  write through a symbolic link or junction included, and making such a link
+  to them is denied — and so is `claude plugin disable|uninstall` of dev-guardian.
   See [docs/hooks.md](docs/hooks.md).
 - **`audit_mcp_tools` executes third-party code.** It starts the MCP servers
   named in its `servers` argument — their `command` and `args`, as the host
