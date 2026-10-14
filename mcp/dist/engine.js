@@ -19216,9 +19216,9 @@ function isScannedSource(rel2, exclusions) {
 }
 async function sizesOver(root, rels, limit) {
   const out = [];
-  const BATCH = 64;
-  for (let i = 0; i < rels.length; i += BATCH) {
-    const batch = rels.slice(i, i + BATCH);
+  const BATCH2 = 64;
+  for (let i = 0; i < rels.length; i += BATCH2) {
+    const batch = rels.slice(i, i + BATCH2);
     const sizes = await Promise.all(
       batch.map(async (rel2) => {
         try {
@@ -19662,25 +19662,31 @@ function describeMissing(name, toolsRun) {
 function reasonOf2(run2) {
   return run2.reason !== void 0 ? { reason: run2.reason } : {};
 }
-function judgeMissing(step, name, refs, toolsRun, acceptParse, acceptTimeouts) {
+function timeoutAccepted(file, accept) {
+  if (!accept.timeouts.has(file)) return false;
+  const at = accept.timeoutRef;
+  return at === void 0 || at.error === void 0 && !at.changed.has(file);
+}
+function judgeMissing(step, name, refs, toolsRun, accept) {
   const out = { gating: true, note: "", accepted: [], notes: [] };
   if (refs.length === 0) return out;
   const taint = refs.filter((r) => r.type === FIXPOINT_TIMEOUT_TYPE);
   const files = refs.filter((r) => r.type !== FIXPOINT_TIMEOUT_TYPE);
-  const parseOk = files.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type) && acceptParse.has(r.file));
-  const timeoutOk = files.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && acceptTimeouts.has(r.file));
+  const parseOk = files.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type) && accept.parse.has(r.file));
+  const timeoutOk = files.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && timeoutAccepted(r.file, accept));
   const gatingRefs = files.filter((r) => !parseOk.includes(r) && !timeoutOk.includes(r));
   if (taint.length > 0) out.notes.push(`${step}: ${name} ${describeTaint(taint)}`);
-  if (parseOk.length > 0) {
+  for (const file of uniqueFiles(parseOk)) {
+    const types = [...new Set(parseOk.filter((r) => r.file === file).map((r) => r.type))];
     out.accepted.push({
-      line: `${step}: ${name} only partly parsed ${uniqueFiles(parseOk).join(", ")} \u2014 accepted (--accept-partial-parse)`,
-      kind: "partial_parse"
+      line: `${step}: ${name} only partly parsed ${file} \u2014 accepted (--accept-partial-parse)`,
+      detail: { tool: name, kind: "partial_parse", file, reason: `${types.join(", ")} \u2014 accepted by --accept-partial-parse` }
     });
   }
-  if (timeoutOk.length > 0) {
+  for (const file of uniqueFiles(timeoutOk)) {
     out.accepted.push({
-      line: `${step}: ${name} timed out on ${uniqueFiles(timeoutOk).join(", ")} \u2014 accepted (${ACCEPT_TIMEOUTS_SOURCE})`,
-      kind: "file_timeout"
+      line: `${step}: ${name} timed out on ${file} \u2014 accepted (${ACCEPT_TIMEOUTS_SOURCE})`,
+      detail: { tool: name, kind: "file_timeout", file, reason: `${ACCEPTABLE_TIMEOUT_TYPE} \u2014 accepted by ${ACCEPT_TIMEOUTS_SOURCE}` }
     });
   }
   const sameName2 = toolsRun.filter((run2) => run2.name === name);
@@ -19694,7 +19700,7 @@ function judgeMissing(step, name, refs, toolsRun, acceptParse, acceptTimeouts) {
   out.accepted = [];
   if (gatingRefs.length > 0) {
     out.kind = kindOfRefs(gatingRefs);
-    out.note = notAcceptedNote(gatingRefs);
+    out.note = notAcceptedNote(gatingRefs, accept);
   } else if (blocker !== void 0) {
     out.note = ` \u2014 its partial parse is accepted, but ${name} also ${blocker.status} in this step`;
   }
@@ -19709,14 +19715,24 @@ function kindOfRefs(refs) {
   if (refs.some((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type))) return "partial_parse";
   return "other";
 }
-function notAcceptedNote(refs) {
+function notAcceptedNote(refs, accept) {
   const parse11 = refs.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type));
   if (parse11.length > 0) {
     return ` \u2014 not accepted: ${uniqueFiles(parse11).join(", ")} (--accept-partial-parse <path> accepts one file, matched exactly)`;
   }
+  const at = accept.timeoutRef;
+  const listed2 = refs.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && accept.timeouts.has(r.file));
+  if (at !== void 0 && listed2.length === refs.length) {
+    const files = uniqueFiles(listed2).join(", ");
+    return at.error !== void 0 ? ` \u2014 not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but whether it changed since ${at.ref} could not be told (${at.error}), and an acceptance covers a file only as it was at the ref` : ` \u2014 not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but changed since ${at.ref}: an acceptance covers a file only as it was at the ref \u2014 review the change as if no SAST ran on it, or raise semgrep.timeout`;
+  }
   const named2 = refs.map((r) => `${r.type} on ${r.file}`);
   const hints2 = [`--accept-partial-parse accepts parse errors only: ${ACCEPTABLE_PARSE_TYPES.join(", ")}`];
   if (refs.some((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE)) hints2.push(`a reviewed per-file Timeout is accepted in ${ACCEPT_TIMEOUTS_SOURCE}`);
+  if (listed2.length > 0 && at !== void 0) {
+    const why = at.error !== void 0 ? `whether it changed since ${at.ref} could not be told` : `it changed since ${at.ref}`;
+    hints2.push(`${uniqueFiles(listed2).join(", ")} is listed there but not accepted: ${why}`);
+  }
   if (refs.some((r) => r.type === PATH_TOO_LONG_TYPE)) hints2.push("a file at a path too long for Windows was never opened and is never accepted");
   return ` \u2014 not accepted: ${named2.join(", ")} (${hints2.join("; ")})`;
 }
@@ -19795,6 +19811,7 @@ function tallySteps(steps, accept) {
     gapDetails: [],
     acceptedGaps: [],
     acceptedDetails: [],
+    acceptedGapDetails: [],
     coverageNotes: [],
     noteDetails: [],
     suppressedByRepoConfig: [],
@@ -19830,12 +19847,13 @@ function tallyMissing(t, step, missing, accept) {
     t.reported.add(ref.file);
     if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) t.timedOut.add(ref.file);
   }
-  const judged = judgeMissing(step.tool, missing, refs, step.tools_run, accept.parse, accept.timeouts);
+  const judged = judgeMissing(step.tool, missing, refs, step.tools_run, accept);
   for (const note of judged.notes) pushNote(t, note, missing, "taint_timeout");
   if (!judged.gating) {
     for (const a of judged.accepted) {
       t.acceptedGaps.push(a.line);
-      t.acceptedDetails.push(detailOf(missing, a.kind, a.line, false));
+      t.acceptedDetails.push(detailOf(missing, a.detail.kind, a.line, false));
+      t.acceptedGapDetails.push(a.detail);
     }
     return;
   }
@@ -19849,7 +19867,13 @@ function evaluateGate(input) {
   const { findings, baseline, failOn, steps, droppedBaselineEntries } = input;
   const accept = {
     parse: new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath)),
-    timeouts: new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath))
+    timeouts: new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath)),
+    ...input.timeoutAcceptanceRef !== void 0 ? {
+      timeoutRef: {
+        ...input.timeoutAcceptanceRef,
+        changed: new Set([...input.timeoutAcceptanceRef.changed].map(normalizeAcceptedPath))
+      }
+    } : {}
   };
   const t = tallySteps(steps, accept);
   if (droppedBaselineEntries > 0) {
@@ -19875,6 +19899,7 @@ function evaluateGate(input) {
     coverageNotes: t.coverageNotes,
     baselineAbsent: baseline === null,
     acceptedGaps: t.acceptedGaps,
+    acceptedGapDetails: t.acceptedGapDetails,
     unusedPartialParseAcceptances: [...accept.parse].filter((path3) => !t.reported.has(path3)),
     unusedTimeoutAcceptances: [...accept.timeouts].filter((path3) => !t.timedOut.has(path3)),
     suppressedByRepoConfig: t.suppressedByRepoConfig,
@@ -20022,6 +20047,9 @@ function renderHuman(v, opts = {}) {
   const command = opts.command ?? DEFAULT_CLI_COMMAND;
   const lines = [
     `dev-guardian CI: ${EXIT_LABEL[v.exitCode]} (exit code ${v.exitCode})`,
+    // Right under the verdict: a pass with accepted gaps is not a pass over
+    // every file (review 11, finding 1) — said where a reader looks first.
+    ...acceptedSummary(v),
     `coverage: ${v.coverage}`,
     // Where the baseline and the rules came from, every run: on a pull
     // request, "the scanned tree's own" is the pull request's (docs/ci.md).
@@ -20083,6 +20111,16 @@ function renderHuman(v, opts = {}) {
   return `${untrustedText(lines.join("\n"))}
 `;
 }
+function acceptedSummary(v) {
+  const files = (kind) => new Set(v.acceptedGapDetails.filter((d) => d.kind === kind).map((d) => d.file)).size;
+  const timedOut = files("file_timeout");
+  const partly = files("partial_parse");
+  const parts = [
+    ...timedOut > 0 ? [`${timedOut} file(s) not analysed (accepted)`] : [],
+    ...partly > 0 ? [`${partly} file(s) only partly parsed (accepted)`] : []
+  ];
+  return parts.length > 0 ? [`${parts.join(", ")} \u2014 listed under "accepted (not gating)"`] : [];
+}
 function shortCommit(commit) {
   return commit.slice(0, 12);
 }
@@ -20130,6 +20168,7 @@ function renderJson(v, opts = {}) {
     baseline_absent: v.baselineAbsent,
     baseline_status: v.baselineAbsent ? "absent" : "present",
     accepted_gaps: v.acceptedGaps,
+    accepted_gap_details: v.acceptedGapDetails,
     unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
     unused_timeout_acceptances: v.unusedTimeoutAcceptances,
     suppressed_by_repo_config: v.suppressedByRepoConfig,
@@ -37560,11 +37599,11 @@ function classifyRestoreFailure(stdout, stderr) {
   const lines = `${stderr}
 ${stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const errorLine = lines.find((l) => /\berror\s+[A-Z]+\d+\b/.test(l)) ?? lines.find((l) => /\berror\b/i.test(l));
-  const firstLine8 = errorLine ?? lines[0] ?? "(no output)";
-  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine8)?.[1] ?? "restore_failed";
+  const firstLine9 = errorLine ?? lines[0] ?? "(no output)";
+  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine9)?.[1] ?? "restore_failed";
   const kind = KIND_BY_CODE[code] ?? "other";
   const lead = kind === "lock_out_of_sync" ? "packages.lock.json is out of sync with the project (restore runs in --locked-mode and never rewrites it)" : kind === "package_not_found" ? "a package or version could not be found on the configured feeds" : kind === "feed_unreachable" ? "a package feed could not be reached" : "restore failed";
-  const stripped = firstLine8.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
+  const stripped = firstLine9.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
   const message2 = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
   return { code, kind, reason: `${lead} (${code}: ${message2})` };
 }
@@ -38334,8 +38373,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message2, checkId) {
   if (message2 && message2.length > 0) {
-    const firstLine8 = message2.split(/\r?\n/)[0] ?? message2;
-    return firstLine8.length > 140 ? firstLine8.slice(0, 137) + "\u2026" : firstLine8;
+    const firstLine9 = message2.split(/\r?\n/)[0] ?? message2;
+    return firstLine9.length > 140 ? firstLine9.slice(0, 137) + "\u2026" : firstLine9;
   }
   return checkId;
 }
@@ -56650,8 +56689,8 @@ async function handler19(inp, _ctx) {
     if (r.outcome === "completed") {
       stagesInstalled.push(stage);
     } else {
-      const firstLine8 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
-      stagesFailed.push({ stage, error: firstLine8?.trim() ?? r.outcome });
+      const firstLine9 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine9?.trim() ?? r.outcome });
     }
   }
   return {
@@ -74120,12 +74159,12 @@ function framesAsResisted(framing) {
 }
 function citationContext(lines, code) {
   const blockOf = /* @__PURE__ */ new Map();
-  const firstLine8 = /* @__PURE__ */ new Map();
+  const firstLine9 = /* @__PURE__ */ new Map();
   for (const u of code) {
     if (u.block === null) continue;
     blockOf.set(u.line, u.block);
-    const first = firstLine8.get(u.block);
-    if (first === void 0 || u.line < first) firstLine8.set(u.block, u.line);
+    const first = firstLine9.get(u.block);
+    if (first === void 0 || u.line < first) firstLine9.set(u.block, u.line);
   }
   const lastLine = /* @__PURE__ */ new Map();
   for (const u of code) {
@@ -74143,7 +74182,7 @@ function citationContext(lines, code) {
     if (block !== void 0) {
       let yes = announced.get(block);
       if (yes === void 0) {
-        const first = firstLine8.get(block) ?? line;
+        const first = firstLine9.get(block) ?? line;
         const last = lastLine.get(block) ?? line;
         yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first))) && !directsUse(followingParagraph(lines, last - 1, isBlockLine));
         announced.set(block, yes);
@@ -76996,8 +77035,8 @@ function buildToolRun(run2, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine8 = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const reason = via ? `${via}: ${firstLine8 ?? "fallback failed"}` : firstLine8 ?? "unknown";
+  const firstLine9 = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const reason = via ? `${via}: ${firstLine9 ?? "fallback failed"}` : firstLine9 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 async function countRouteTargets(projectPath) {
@@ -78934,8 +78973,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run2) {
   if (run2.outcome === "completed") return { ok: true };
-  const firstLine8 = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine8 ?? `nuclei ${run2.outcome}` };
+  const firstLine9 = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine9 ?? `nuclei ${run2.outcome}` };
 }
 var DEFAULT_NUCLEI_RATE_LIMIT, ALWAYS_EXCLUDED_TAGS, NUCLEI_ENV_ALLOWLIST;
 var init_nuclei = __esm({
@@ -92008,7 +92047,7 @@ function isKeyBodyLine(line) {
   const content = line.replace(/\\[rn]/g, "").replace(/^[\s'"`]+|[\s'"`,+]+$/g, "");
   return /^[A-Za-z0-9+/=]{8,}$/.test(content);
 }
-function scrubSecrets(text2, firstLine8 = 1) {
+function scrubSecrets(text2, firstLine9 = 1) {
   const hits = scanForSecrets(text2, { skipPlaceholders: false });
   if (hits.length === 0) return text2;
   const lines = text2.split(/\r?\n/);
@@ -92033,7 +92072,7 @@ function scrubSecrets(text2, firstLine8 = 1) {
     const rules2 = rulesByLine.get(i);
     if (rules2 === void 0) return keyBody.has(i) ? "\u2039private key body removed\u203A" : line;
     const indent = /^\s*/.exec(line)?.[0] ?? "";
-    return `${indent}\u2039${rules2.join(", ")} line ${String(firstLine8 + i)}\u203A`;
+    return `${indent}\u2039${rules2.join(", ")} line ${String(firstLine9 + i)}\u203A`;
   }).join("\n");
 }
 function startsFunction(line) {
@@ -94240,6 +94279,38 @@ var init_renames = __esm({
     "use strict";
     init_baseline();
     init_git();
+  }
+});
+
+// src/ci/changedSince.ts
+var changedSince_exports = {};
+__export(changedSince_exports, {
+  filesChangedSince: () => filesChangedSince
+});
+async function filesChangedSince(projectPath, commit, paths) {
+  const changed = /* @__PURE__ */ new Set();
+  const wanted = [...new Set(paths)];
+  for (let i = 0; i < wanted.length; i += BATCH) {
+    const batch = wanted.slice(i, i + BATCH);
+    const listed2 = await git(projectPath, ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", commit, "--", ...batch]);
+    if (listed2.exitCode !== 0) return { error: firstLine8(listed2.stderr) || `git ls-tree exited ${listed2.exitCode}` };
+    const atCommit = new Set(splitNul(listed2.stdout));
+    for (const path3 of batch) if (!atCommit.has(path3)) changed.add(path3);
+    const diff = await git(projectPath, ["--literal-pathspecs", "diff", "--name-only", "--relative", "--no-renames", "-z", commit, "--", ...batch]);
+    if (diff.exitCode !== 0) return { error: firstLine8(diff.stderr) || `git diff exited ${diff.exitCode}` };
+    for (const path3 of splitNul(diff.stdout)) changed.add(path3);
+  }
+  return { changed };
+}
+function firstLine8(text2) {
+  return text2.split(/\r?\n/).find((l) => l.trim() !== "")?.trim() ?? "";
+}
+var BATCH;
+var init_changedSince = __esm({
+  "src/ci/changedSince.ts"() {
+    "use strict";
+    init_git();
+    BATCH = 100;
   }
 });
 
@@ -99618,7 +99689,7 @@ function requireNodeSqlite(db) {
   throw Object.assign(new Error(db.NODE_SQLITE_REQUIRED), { code: "ERR_UNKNOWN_BUILTIN_MODULE" });
 }
 async function loadCiModules() {
-  const [db, ciTypes, baseline, gate2, report, runScansMod, appRunner, types, refConfig, renames, git2, scanSettings] = await Promise.all([
+  const [db, ciTypes, baseline, gate2, report, runScansMod, appRunner, types, refConfig, renames, git2, scanSettings, changedSince] = await Promise.all([
     Promise.resolve().then(() => (init_db(), db_exports)),
     Promise.resolve().then(() => (init_types(), types_exports)),
     Promise.resolve().then(() => (init_baseline(), baseline_exports)),
@@ -99630,11 +99701,13 @@ async function loadCiModules() {
     Promise.resolve().then(() => (init_refConfig(), refConfig_exports)),
     Promise.resolve().then(() => (init_renames(), renames_exports)),
     Promise.resolve().then(() => (init_git(), git_exports)),
-    Promise.resolve().then(() => (init_scanSettings(), scanSettings_exports))
+    Promise.resolve().then(() => (init_scanSettings(), scanSettings_exports)),
+    Promise.resolve().then(() => (init_changedSince(), changedSince_exports))
   ]);
   requireNodeSqlite(db);
   return {
     CI_EXIT: ciTypes.CI_EXIT,
+    filesChangedSince: changedSince.filesChangedSince,
     BASELINE_RELATIVE_PATH: baseline.BASELINE_RELATIVE_PATH,
     parseBaseline: baseline.parseBaseline,
     readBaselineText: baseline.readBaselineText,

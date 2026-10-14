@@ -1686,6 +1686,7 @@ async function cmdScan(argv) {
     showPrefix,
     loadScanSettings,
     SCAN_SETTINGS_RELATIVE_PATH,
+    filesChangedSince,
   } = ci;
 
   const failOn = SEVERITIES.find((s) => s === opts.failOn);
@@ -1824,6 +1825,27 @@ async function cmdScan(argv) {
   // (review 8, finding 6; mcp/src/ci/renames.ts).
   const renamedFrom = await renamesSince(projectPath, baselineRef !== null ? baselineRef.commit : null);
 
+  // Under --baseline-ref / --rules-ref, an accepted timeout covers a file only
+  // as it was at the ref: a pull request appended a command injection to an
+  // accepted file and passed (review 11, finding 1; mcp/src/ci/changedSince.ts).
+  const acceptTimeouts = result.scanSettings.settings.semgrep.acceptTimeouts;
+  /** @type {GateInput['timeoutAcceptanceRef']} */
+  let timeoutAcceptanceRef;
+  const refs = [baselineRef, rulesRef].filter((r) => r !== null);
+  if (refs.length > 0 && acceptTimeouts.length > 0) {
+    /** @type {Set<string>} */
+    const changed = new Set();
+    /** @type {string | undefined} */
+    let error;
+    for (const commit of new Set(refs.map((r) => r.commit))) {
+      const r = await filesChangedSince(projectPath, commit, acceptTimeouts);
+      if ('error' in r) error ??= r.error;
+      else for (const path of r.changed) changed.add(path);
+    }
+    const ref = [...new Set(refs.map((r) => r.ref))].join(' and ');
+    timeoutAcceptanceRef = error !== undefined ? { ref, changed, error } : { ref, changed };
+  }
+
   const verdict = evaluateGate({
     findings: result.findings,
     baseline: parsedBaseline ? parsedBaseline.file : null,
@@ -1833,7 +1855,8 @@ async function cmdScan(argv) {
     // argv only — see `findAcceptPartialParseInRepoConfig`.
     acceptedPartialParses: opts.acceptPartialParse,
     // The committed `.guardian/scan.yml` (the --rules-ref ref's when given).
-    acceptedTimeouts: result.scanSettings.settings.semgrep.acceptTimeouts,
+    acceptedTimeouts: acceptTimeouts,
+    ...(timeoutAcceptanceRef !== undefined ? { timeoutAcceptanceRef } : {}),
     baselineSource,
     rulesSource: result.rulesSource,
     exclusionsReset,

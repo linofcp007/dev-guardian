@@ -144,6 +144,38 @@ export interface CoverageGapDetail {
 }
 
 /**
+ * One accepted gap as data — one per `accepted_gaps` line, same order (3.4.1,
+ * for dev-spec-driven, which counted them by parsing the English lines). An
+ * accepted gap is one file: a step with several accepted files has a line,
+ * and an entry, for each.
+ */
+export interface AcceptedGapDetail {
+  /** The scanner whose gap it is (`semgrep`, `bandit`, `guardian-dast:partial-surface`). */
+  tool: string;
+  /** `file_timeout` (not analysed by the rules that timed out) or `partial_parse` (read only in part). */
+  kind: Extract<GapKind, 'file_timeout' | 'partial_parse'>;
+  /** The file, project-relative, `/`-separated. */
+  file: string;
+  /** What the scanner reported on it and what accepted it, in English: `Timeout — accepted by .guardian/scan.yml semgrep.accept_timeouts`. */
+  reason: string;
+}
+
+/**
+ * Under `--baseline-ref` / `--rules-ref`: the `semgrep.accept_timeouts` files
+ * whose content is not what it was at that commit (`ci/changedSince.ts`). An
+ * acceptance covers a file as it was reviewed, so a timeout on one of these
+ * is not accepted (review 11, finding 1: a pull request appended a command
+ * injection to an accepted file and passed). `error`: the comparison could
+ * not be made, and no timeout is accepted.
+ */
+export interface TimeoutAcceptanceRef {
+  /** The ref(s) compared with, as given (`BASE`, `origin/main`). */
+  ref: string;
+  changed: ReadonlySet<string>;
+  error?: string;
+}
+
+/**
  * Where the gate's baseline came from (`--baseline-ref`, `ci/refConfig.ts`):
  * the scanned tree's own file — on a pull request, the pull request's — or
  * the commit a ref named.

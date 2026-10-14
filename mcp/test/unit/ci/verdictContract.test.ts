@@ -17,7 +17,10 @@
  *     `tool_version`, `coverage_gap_details[].{tool, kind, detail, remedy,
  *     gating}` (one per `coverage_gaps` line, same order, then the non-gating
  *     notes), `baseline_status`, and `--compact` (`new_findings` cut to the
- *     blocking ones, with `new_findings_count` and `new_findings_by_severity`).
+ *     blocking ones, with `new_findings_count` and `new_findings_by_severity`);
+ *   - since 3.4.1 — `accepted_gap_details[].{tool, kind, file, reason}`, one
+ *     per `accepted_gaps` line in the same order (every accepted line names
+ *     one file), so a reader counts accepted files without parsing the lines.
  *
  * Checked against dev-spec-driven 1.30.0's reader, `guardianRecord` in its
  * `mcp/lib/engine/guardian.js`: it reads no key this file does not freeze.
@@ -138,6 +141,54 @@ describe('the JSON verdict dev-spec-driven parses (contract)', () => {
     for (const d of details) {
       if (d['kind'] !== 'missing_tool') expect(d['remedy']).not.toMatch(/^Install /);
     }
+  });
+
+  it('accepted_gap_details: one per accepted_gaps line, same order — tool, kind, file, reason (3.4.1)', () => {
+    expect(json['accepted_gap_details']).toEqual([]);
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: [{ name: 'semgrep', status: 'ok' }],
+      missing_tools: ['semgrep'],
+      partial_parses: {
+        semgrep: [
+          { file: 'src/big.js', type: 'Timeout' },
+          { file: 'src/gen.js', type: 'Timeout' },
+          { file: 'wp/a.php', type: 'PartialParsing' },
+        ],
+      },
+    };
+    const accepted = JSON.parse(
+      renderJson(
+        evaluateGate({
+          findings: [],
+          baseline: null,
+          failOn: 'high',
+          steps: [step],
+          droppedBaselineEntries: 0,
+          acceptedTimeouts: ['src/big.js', 'src/gen.js'],
+          acceptedPartialParses: ['wp/a.php'],
+        }),
+      ),
+    ) as Record<string, unknown>;
+    expect(accepted['exit_code']).toBe(CI_EXIT.PASS);
+    const lines = accepted['accepted_gaps'] as string[];
+    const details = accepted['accepted_gap_details'] as Array<Record<string, unknown>>;
+    expect(lines).toHaveLength(3);
+    expect(details).toHaveLength(lines.length);
+    for (const [i, d] of details.entries()) {
+      expect(Object.keys(d).sort()).toEqual(['file', 'kind', 'reason', 'tool']);
+      expect(d['tool']).toBe('semgrep');
+      expect(['file_timeout', 'partial_parse']).toContain(d['kind']);
+      expect(typeof d['reason']).toBe('string');
+      // Same order: each line names its entry's file.
+      expect(lines[i]).toContain(d['file'] as string);
+    }
+    expect(details.map((d) => [d['kind'], d['file']])).toEqual([
+      ['partial_parse', 'wp/a.php'],
+      ['file_timeout', 'src/big.js'],
+      ['file_timeout', 'src/gen.js'],
+    ]);
   });
 
   it('the GapKind set is exactly the contract’s', () => {

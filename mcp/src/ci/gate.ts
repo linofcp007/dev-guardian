@@ -31,7 +31,11 @@
  *     accepted when the project lists the file under
  *     `semgrep.accept_timeouts` in its committed `.guardian/scan.yml`
  *     (`acceptedTimeouts`; read from the `--rules-ref` ref when given, so a
- *     pull request cannot accept its own);
+ *     pull request cannot accept its own) — and, under `--baseline-ref` or
+ *     `--rules-ref`, only while the file is as it was at the ref
+ *     (`timeoutAcceptanceRef`): a pull request appended a command injection
+ *     to an accepted file, the rule that would have caught it timed out, and
+ *     the gate passed (review 11, finding 1);
  *   - a taint `Fixpoint timeout` (the dataflow analysis of some functions
  *     gave up; Semgrep has no setting for it) never gates: it is a NOTE,
  *     reported, not a coverage gap (review 8, finding 3 — a medium-sized
@@ -58,7 +62,9 @@
  * order — its `kind` ({@link GapKind}), the line itself as `detail`, a
  * `remedy` (one English sentence, runnable where it names a command) and
  * `gating` — followed by one entry per accepted gap and per note, with
- * `gating: false` (those are not in `coverageGaps`).
+ * `gating: false` (those are not in `coverageGaps`). `acceptedGapDetails`
+ * holds one entry per `acceptedGaps` line — the scanner, the kind, the file
+ * and why — and every accepted line names one file (3.4.1).
  */
 
 import { SEVERITY_ORDER, type Finding, type RepoSuppression, type ScanCoverage, type Severity, type ToolRun } from '../types.js';
@@ -69,6 +75,7 @@ import { newFindings } from './baseline.js';
 import { BASELINE_RELATIVE_PATH } from './baseline.js';
 import {
   CI_EXIT,
+  type AcceptedGapDetail,
   type BaselineFile,
   type BaselineSource,
   type CiExitCode,
@@ -78,9 +85,10 @@ import {
   type PartialParseRef,
   type RulesSource,
   type ScanStepResult,
+  type TimeoutAcceptanceRef,
 } from './types.js';
 
-export type { CoverageGapDetail, GapKind } from './types.js';
+export type { AcceptedGapDetail, CoverageGapDetail, GapKind } from './types.js';
 
 export interface GateInput {
   findings: readonly Finding[];
@@ -121,6 +129,12 @@ export interface GateInput {
    * `acceptedPartialParses`.
    */
   acceptedTimeouts?: readonly string[];
+  /**
+   * Under `--baseline-ref` / `--rules-ref`: which `acceptedTimeouts` files
+   * changed since the ref ({@link TimeoutAcceptanceRef}). A timeout on one is
+   * not accepted. Omitted: no ref, every listed file is accepted.
+   */
+  timeoutAcceptanceRef?: TimeoutAcceptanceRef;
   /**
    * Where `baseline` and the scan's rules came from (`--baseline-ref`,
    * `--rules-ref`; `ci/refConfig.ts`). Visibility only, like
@@ -185,6 +199,8 @@ export interface GateVerdict {
    * code — but still in `coverage`, which stays `partial`.
    */
   acceptedGaps: string[];
+  /** One per `acceptedGaps` line, same order: the scanner, the kind, the file and why ({@link AcceptedGapDetail}). */
+  acceptedGapDetails: AcceptedGapDetail[];
   /** `--accept-partial-parse` paths no step reported as partly parsed (normalised). */
   unusedPartialParseAcceptances: string[];
   /**
@@ -316,10 +332,22 @@ interface MissingJudgement {
   note: string;
   /** The kind its files make it, when they decide it. */
   kind?: GapKind;
-  /** Lines for `acceptedGaps`, with their kind. */
-  accepted: Array<{ line: string; kind: GapKind }>;
+  /** Lines for `acceptedGaps`, one per file, with the detail `acceptedGapDetails` holds. */
+  accepted: Array<{ line: string; detail: AcceptedGapDetail }>;
   /** Lines for `coverageNotes`. */
   notes: string[];
+}
+
+/**
+ * Whether a per-file `Timeout` on `file` is accepted: listed in
+ * `semgrep.accept_timeouts`, and — under `--baseline-ref` / `--rules-ref` —
+ * the same content as at the ref (an acceptance covers the file as it was
+ * reviewed; review 11, finding 1).
+ */
+function timeoutAccepted(file: string, accept: Acceptances): boolean {
+  if (!accept.timeouts.has(file)) return false;
+  const at = accept.timeoutRef;
+  return at === undefined || (at.error === undefined && !at.changed.has(file));
 }
 
 function judgeMissing(
@@ -327,29 +355,30 @@ function judgeMissing(
   name: string,
   refs: readonly PartialParseRef[],
   toolsRun: readonly ToolRun[],
-  acceptParse: ReadonlySet<string>,
-  acceptTimeouts: ReadonlySet<string>,
+  accept: Acceptances,
 ): MissingJudgement {
   const out: MissingJudgement = { gating: true, note: '', accepted: [], notes: [] };
   if (refs.length === 0) return out;
 
   const taint = refs.filter((r) => r.type === FIXPOINT_TIMEOUT_TYPE);
   const files = refs.filter((r) => r.type !== FIXPOINT_TIMEOUT_TYPE);
-  const parseOk = files.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type) && acceptParse.has(r.file));
-  const timeoutOk = files.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && acceptTimeouts.has(r.file));
+  const parseOk = files.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type) && accept.parse.has(r.file));
+  const timeoutOk = files.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && timeoutAccepted(r.file, accept));
   const gatingRefs = files.filter((r) => !parseOk.includes(r) && !timeoutOk.includes(r));
 
   if (taint.length > 0) out.notes.push(`${step}: ${name} ${describeTaint(taint)}`);
-  if (parseOk.length > 0) {
+  // One line per file, so `acceptedGapDetails` is one entry per line.
+  for (const file of uniqueFiles(parseOk)) {
+    const types = [...new Set(parseOk.filter((r) => r.file === file).map((r) => r.type))];
     out.accepted.push({
-      line: `${step}: ${name} only partly parsed ${uniqueFiles(parseOk).join(', ')} — accepted (--accept-partial-parse)`,
-      kind: 'partial_parse',
+      line: `${step}: ${name} only partly parsed ${file} — accepted (--accept-partial-parse)`,
+      detail: { tool: name, kind: 'partial_parse', file, reason: `${types.join(', ')} — accepted by --accept-partial-parse` },
     });
   }
-  if (timeoutOk.length > 0) {
+  for (const file of uniqueFiles(timeoutOk)) {
     out.accepted.push({
-      line: `${step}: ${name} timed out on ${uniqueFiles(timeoutOk).join(', ')} — accepted (${ACCEPT_TIMEOUTS_SOURCE})`,
-      kind: 'file_timeout',
+      line: `${step}: ${name} timed out on ${file} — accepted (${ACCEPT_TIMEOUTS_SOURCE})`,
+      detail: { tool: name, kind: 'file_timeout', file, reason: `${ACCEPTABLE_TIMEOUT_TYPE} — accepted by ${ACCEPT_TIMEOUTS_SOURCE}` },
     });
   }
 
@@ -367,7 +396,7 @@ function judgeMissing(
   out.accepted = [];
   if (gatingRefs.length > 0) {
     out.kind = kindOfRefs(gatingRefs);
-    out.note = notAcceptedNote(gatingRefs);
+    out.note = notAcceptedNote(gatingRefs, accept);
   } else if (blocker !== undefined) {
     out.note = ` — its partial parse is accepted, but ${name} also ${blocker.status} in this step`;
   }
@@ -391,14 +420,27 @@ function kindOfRefs(refs: readonly PartialParseRef[]): GapKind {
  * ` — not accepted: a.php, Timeout on b.js (…what accepts each…)`: a parse
  * gap by its file, any other by its type, and what would accept them.
  */
-function notAcceptedNote(refs: readonly PartialParseRef[]): string {
+function notAcceptedNote(refs: readonly PartialParseRef[], accept: Acceptances): string {
   const parse = refs.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type));
   if (parse.length > 0) {
     return ` — not accepted: ${uniqueFiles(parse).join(', ')} (--accept-partial-parse <path> accepts one file, matched exactly)`;
   }
+  // Listed in accept_timeouts, refused for what the ref says (review 11, finding 1).
+  const at = accept.timeoutRef;
+  const listed = refs.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && accept.timeouts.has(r.file));
+  if (at !== undefined && listed.length === refs.length) {
+    const files = uniqueFiles(listed).join(', ');
+    return at.error !== undefined
+      ? ` — not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but whether it changed since ${at.ref} could not be told (${at.error}), and an acceptance covers a file only as it was at the ref`
+      : ` — not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but changed since ${at.ref}: an acceptance covers a file only as it was at the ref — review the change as if no SAST ran on it, or raise semgrep.timeout`;
+  }
   const named = refs.map((r) => `${r.type} on ${r.file}`);
   const hints = [`--accept-partial-parse accepts parse errors only: ${ACCEPTABLE_PARSE_TYPES.join(', ')}`];
   if (refs.some((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE)) hints.push(`a reviewed per-file Timeout is accepted in ${ACCEPT_TIMEOUTS_SOURCE}`);
+  if (listed.length > 0 && at !== undefined) {
+    const why = at.error !== undefined ? `whether it changed since ${at.ref} could not be told` : `it changed since ${at.ref}`;
+    hints.push(`${uniqueFiles(listed).join(', ')} is listed there but not accepted: ${why}`);
+  }
   if (refs.some((r) => r.type === PATH_TOO_LONG_TYPE)) hints.push('a file at a path too long for Windows was never opened and is never accepted');
   return ` — not accepted: ${named.join(', ')} (${hints.join('; ')})`;
 }
@@ -511,6 +553,7 @@ interface StepTally {
   gapDetails: CoverageGapDetail[];
   acceptedGaps: string[];
   acceptedDetails: CoverageGapDetail[];
+  acceptedGapDetails: AcceptedGapDetail[];
   coverageNotes: string[];
   noteDetails: CoverageGapDetail[];
   suppressedByRepoConfig: RepoSuppressionEntry[];
@@ -524,6 +567,8 @@ interface StepTally {
 interface Acceptances {
   parse: ReadonlySet<string>;
   timeouts: ReadonlySet<string>;
+  /** Under a ref: the listed files that changed since it (see {@link timeoutAccepted}). */
+  timeoutRef?: TimeoutAcceptanceRef;
 }
 
 function pushGap(t: StepTally, line: string, tool: string, kind: GapKind, gating: boolean): void {
@@ -545,6 +590,7 @@ function tallySteps(steps: readonly ScanStepResult[], accept: Acceptances): Step
     gapDetails: [],
     acceptedGaps: [],
     acceptedDetails: [],
+    acceptedGapDetails: [],
     coverageNotes: [],
     noteDetails: [],
     suppressedByRepoConfig: [],
@@ -588,12 +634,13 @@ function tallyMissing(t: StepTally, step: ScanStepResult, missing: string, accep
     t.reported.add(ref.file);
     if (ref.type === ACCEPTABLE_TIMEOUT_TYPE) t.timedOut.add(ref.file);
   }
-  const judged = judgeMissing(step.tool, missing, refs, step.tools_run, accept.parse, accept.timeouts);
+  const judged = judgeMissing(step.tool, missing, refs, step.tools_run, accept);
   for (const note of judged.notes) pushNote(t, note, missing, 'taint_timeout');
   if (!judged.gating) {
     for (const a of judged.accepted) {
       t.acceptedGaps.push(a.line);
-      t.acceptedDetails.push(detailOf(missing, a.kind, a.line, false));
+      t.acceptedDetails.push(detailOf(missing, a.detail.kind, a.line, false));
+      t.acceptedGapDetails.push(a.detail);
     }
     return;
   }
@@ -609,6 +656,14 @@ export function evaluateGate(input: GateInput): GateVerdict {
   const accept: Acceptances = {
     parse: new Set((input.acceptedPartialParses ?? []).map(normalizeAcceptedPath)),
     timeouts: new Set((input.acceptedTimeouts ?? []).map(normalizeAcceptedPath)),
+    ...(input.timeoutAcceptanceRef !== undefined
+      ? {
+          timeoutRef: {
+            ...input.timeoutAcceptanceRef,
+            changed: new Set([...input.timeoutAcceptanceRef.changed].map(normalizeAcceptedPath)),
+          },
+        }
+      : {}),
   };
   const t = tallySteps(steps, accept);
 
@@ -651,6 +706,7 @@ export function evaluateGate(input: GateInput): GateVerdict {
     coverageNotes: t.coverageNotes,
     baselineAbsent: baseline === null,
     acceptedGaps: t.acceptedGaps,
+    acceptedGapDetails: t.acceptedGapDetails,
     unusedPartialParseAcceptances: [...accept.parse].filter((path) => !t.reported.has(path)),
     unusedTimeoutAcceptances: [...accept.timeouts].filter((path) => !t.timedOut.has(path)),
     suppressedByRepoConfig: t.suppressedByRepoConfig,

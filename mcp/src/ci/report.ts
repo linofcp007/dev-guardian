@@ -35,6 +35,7 @@ import { toSarif, type SarifSuppressed } from '../report/sarif.js';
 import { suppressionNote } from '../runners/trivyRun.js';
 import {
   CI_EXIT,
+  type AcceptedGapDetail,
   type BaselineSource,
   type CiExitCode,
   type CoverageGapDetail,
@@ -94,6 +95,9 @@ export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
   const command = opts.command ?? DEFAULT_CLI_COMMAND;
   const lines: string[] = [
     `dev-guardian CI: ${EXIT_LABEL[v.exitCode]} (exit code ${v.exitCode})`,
+    // Right under the verdict: a pass with accepted gaps is not a pass over
+    // every file (review 11, finding 1) — said where a reader looks first.
+    ...acceptedSummary(v),
     `coverage: ${v.coverage}`,
     // Where the baseline and the rules came from, every run: on a pull
     // request, "the scanned tree's own" is the pull request's (docs/ci.md).
@@ -180,6 +184,23 @@ export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
   return `${untrustedText(lines.join('\n'))}\n`;
 }
 
+/**
+ * `N file(s) not analysed (accepted)` — and `M file(s) only partly parsed
+ * (accepted)` — over the distinct files `acceptedGapDetails` names (one file
+ * may be accepted in two steps); no line when nothing was accepted.
+ */
+function acceptedSummary(v: GateVerdict): string[] {
+  const files = (kind: 'file_timeout' | 'partial_parse'): number =>
+    new Set(v.acceptedGapDetails.filter((d) => d.kind === kind).map((d) => d.file)).size;
+  const timedOut = files('file_timeout');
+  const partly = files('partial_parse');
+  const parts = [
+    ...(timedOut > 0 ? [`${timedOut} file(s) not analysed (accepted)`] : []),
+    ...(partly > 0 ? [`${partly} file(s) only partly parsed (accepted)`] : []),
+  ];
+  return parts.length > 0 ? [`${parts.join(', ')} — listed under "accepted (not gating)"`] : [];
+}
+
 function shortCommit(commit: string): string {
   return commit.slice(0, 12);
 }
@@ -262,6 +283,12 @@ export interface JsonVerdict {
    */
   baseline_status: 'present' | 'absent';
   accepted_gaps: string[];
+  /**
+   * One per `accepted_gaps` line, same order: `tool`, `kind` (`file_timeout`
+   * or `partial_parse`), `file`, `reason` (3.4.1 and later) — what a reader
+   * counts accepted files by, never by parsing the lines.
+   */
+  accepted_gap_details: AcceptedGapDetail[];
   unused_partial_parse_acceptances: string[];
   /** `.guardian/scan.yml` `semgrep.accept_timeouts` entries no step reported a Timeout on (3.4.0 and later). */
   unused_timeout_acceptances: string[];
@@ -309,6 +336,7 @@ export function renderJson(v: GateVerdict, opts: JsonOptions = {}): string {
     baseline_absent: v.baselineAbsent,
     baseline_status: v.baselineAbsent ? 'absent' : 'present',
     accepted_gaps: v.acceptedGaps,
+    accepted_gap_details: v.acceptedGapDetails,
     unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
     unused_timeout_acceptances: v.unusedTimeoutAcceptances,
     suppressed_by_repo_config: v.suppressedByRepoConfig,
