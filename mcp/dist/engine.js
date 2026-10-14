@@ -36059,6 +36059,11 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
   const unusable = [];
   const seen = /* @__PURE__ */ new Set();
   for (const entry of registeredEntries(ctx, projectPath)) {
+    const share = networkPathProblem("the registered path", entry);
+    if (share !== null) {
+      unusable.push({ path: entry, reason: `not read: ${share}` });
+      continue;
+    }
     let isDir;
     try {
       isDir = statSync7(entry).isDirectory();
@@ -36068,6 +36073,10 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
     for (const file of isDir ? yamlFilesUnder2(entry) : [entry]) {
       if (seen.has(file)) continue;
       seen.add(file);
+      if (networkPathOf(file) !== null) {
+        unusable.push({ path: file, reason: "not read: a link to a network (UNC) path" });
+        continue;
+      }
       const verdict = validateSemgrepRulesFile(file);
       if (verdict.ok) usable.push(file);
       else unusable.push({ path: file, reason: verdict.reason });
@@ -36076,7 +36085,7 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
   return { usable, unusable };
 }
 function legacyRegistrationsNotApplied(ctx, projectPath) {
-  return readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => !isInside(projectPath, p) && pathExists(p));
+  return readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => !isInside(projectPath, p) && networkPathOf(p) === null && pathExists(p));
 }
 function legacyRegistrationNote(paths) {
   if (paths.length === 0) return null;
@@ -36118,6 +36127,7 @@ var init_customRules = __esm({
     init_boundedParse();
     init_configFile();
     init_projectFs();
+    init_projectPath();
     MAX_RULES_FILE_BYTES = YAML_CONFIG_LIMITS.maxBytes;
     CUSTOM_RULES_META_KEY = "custom_semgrep_configs";
     PATTERN_KEYS = [
@@ -57304,6 +57314,11 @@ async function compileWithSemgrep(projectPath, registered, rejected) {
   };
 }
 function consider(path3, registered, rejected) {
+  const share = networkPathProblem("the path", path3);
+  if (share !== null) {
+    rejected.push({ path: path3, reason: share });
+    return;
+  }
   let isDir;
   try {
     isDir = statSync10(path3).isDirectory();
@@ -57373,6 +57388,7 @@ var init_registerCustomRules = __esm({
     init_zod();
     init_customRules();
     init_glob();
+    init_projectPath();
     init_semgrepValidate();
     init_schemas4();
     init_tools();
@@ -68856,6 +68872,8 @@ function handler23(input, ctx) {
 function run(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
+  const share = networkPathProblem("sarif_path", resolve24(projectPath, inp.sarif_path));
+  if (share !== null) return fail("unsupported_target", `${share}.`);
   const given = resolve24(projectPath, inp.sarif_path);
   const logPath = isWithinDir(projectPath, given) ? given : inProjectSpelling(projectPath, given);
   const inside = isWithinDir(projectPath, logPath);
@@ -76079,12 +76097,67 @@ function extOf(name) {
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot).toLowerCase();
 }
+function fileUrlPath(target) {
+  if (!/^file:/i.test(target)) return null;
+  let rest = target.slice("file:".length);
+  try {
+    rest = decodeURIComponent(rest);
+  } catch {
+  }
+  if (rest.startsWith("//")) {
+    const authority = rest.slice(2).split("/")[0] ?? "";
+    const path3 = rest.slice(2 + authority.length);
+    if (authority !== "" && authority.toLowerCase() !== "localhost" && !/^[a-z]:$/i.test(authority)) {
+      return `\\\\${authority}${path3.split("/").join("\\")}`;
+    }
+    rest = /^[a-z]:$/i.test(authority) ? `${authority}${path3}` : path3;
+  }
+  return /^\/[a-z]:/i.test(rest) ? rest.slice(1) : rest;
+}
+function objectsDirsOf(dir) {
+  const out = [join80(dir, "objects"), join80(dir, ".git", "objects")];
+  const gitFile = readSmallText(join80(dir, ".git"), 4096, dir);
+  if (gitFile.status === "ok") {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(gitFile.text);
+    if (m?.[1] !== void 0) out.push(join80(resolve26(dir, m[1]), "objects"));
+  }
+  return out;
+}
+function alternatesProblem(dir, depth = 0) {
+  if (depth > 5) return null;
+  for (const objects of objectsDirsOf(dir)) {
+    if (networkPathOf(objects) !== null) return `the repository's objects are on a network path (${objects})`;
+    const alternates = readSmallText(join80(objects, "info", "alternates"), 64 * 1024, dirname25(objects));
+    if (alternates.status !== "ok") continue;
+    for (const raw of alternates.text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line === "" || line.startsWith("#")) continue;
+      const alternate = resolve26(objects, line);
+      if (networkPathOf(line) !== null || networkPathOf(alternate) !== null) {
+        return `the repository borrows objects from a network path (${line}, in ${join80(objects, "info", "alternates")})`;
+      }
+      const deeper = alternatesProblem(dirname25(alternate), depth + 1);
+      if (deeper !== null) return deeper;
+    }
+  }
+  return null;
+}
+function shareProblem(target) {
+  const fromUrl = fileUrlPath(target);
+  if (fromUrl === null && (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) || /^git@/.test(target))) return null;
+  const local = fromUrl ?? target;
+  const network = networkPathProblem("target", local);
+  if (network !== null) return network;
+  if (/\.git$/i.test(local) || fromUrl !== null) {
+    const problem = alternatesProblem(resolve26(local));
+    if (problem !== null) return `target ${JSON.stringify(target)}: ${problem}`;
+  }
+  return null;
+}
 async function ingestTarget(targetRaw) {
   const target = targetRaw.trim();
   if (!target) return { ok: false, code: "target_not_found", message: "Empty target." };
-  const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(target) || /^git@/.test(target);
-  const fileHost = /^file:\/\/([^/]*)/i.exec(target)?.[1] ?? "";
-  const share = fileHost !== "" && fileHost.toLowerCase() !== "localhost" && !/^[a-z]:$/i.test(fileHost) ? `target ${JSON.stringify(target)} names a host (a file:// URL of a share)` : isUrl ? null : networkPathProblem("target", target);
+  const share = shareProblem(target);
   if (share !== null) {
     return { ok: false, code: "unsupported_target", message: `${share}. Vet a local copy, or an https:// URL.` };
   }
@@ -76395,6 +76468,7 @@ var init_ingest = __esm({
     init_projectFs();
     init_gitSafety();
     init_projectPath();
+    init_configFile();
     init_gitExec();
     MAX_FILES = 4e3;
     MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;

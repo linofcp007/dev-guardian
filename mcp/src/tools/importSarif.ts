@@ -20,7 +20,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { readSmallText, type TextRead } from '../hooks/configFile.js';
 import { isWithinDir, readProjectText } from '../platform/projectFs.js';
-import { canonicalPath, isNetworkPath } from '../platform/projectPath.js';
+import { canonicalPath, isNetworkPath, networkPathProblem } from '../platform/projectPath.js';
 import { importSarif, SarifImportError, type SarifImportCounts } from '../sarif/importSarif.js';
 import { persistSarifImport } from '../sarif/persistImport.js';
 import { ProjectPath } from '../schemas.js';
@@ -78,6 +78,12 @@ function run(inp: ToolInput<typeof inputSchema>, ctx: PluginContext): Result {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== 'string') return projectPath;
 
+  // A log on a share is never opened, inside the project or out of it with
+  // allow_outside_project: on Windows that is an SMB authentication to the
+  // host the path names, and a 42 s stall on one that does not answer
+  // (review 12, finding 9).
+  const share = networkPathProblem('sarif_path', resolve(projectPath, inp.sarif_path));
+  if (share !== null) return fail('unsupported_target', `${share}.`);
   const given = resolve(projectPath, inp.sarif_path);
   const logPath = isWithinDir(projectPath, given) ? given : inProjectSpelling(projectPath, given);
   const inside = isWithinDir(projectPath, logPath);

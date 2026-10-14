@@ -13,11 +13,12 @@
  * wp_plugin_check), `scan_skill`'s `target` and `map_attack_surface`'s
  * `spec_paths`.
  */
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PluginContext } from '../../src/context.js';
+import { customRulesMetaKey, inspectCustomSemgrepConfigs } from '../../src/platform/customRules.js';
 import { networkPathOf, networkPathProblem } from '../../src/platform/projectPath.js';
 import { ingestTarget } from '../../src/skillaudit/ingest.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
@@ -35,6 +36,8 @@ const SPELLINGS = [UNC, '//192.0.2.1/share/x', '\\\\?\\UNC\\192.0.2.1\\share\\x'
 beforeAll(async () => {
   await import('../../src/tools/mapAttackSurface.js');
   await import('../../src/tools/wpVulnCheck.js');
+  await import('../../src/tools/registerCustomRules.js');
+  await import('../../src/tools/importSarif.js');
 });
 afterAll(cleanupTempDirs);
 
@@ -124,5 +127,67 @@ describe.runIf(WIN)('Windows: path arguments other than project_path refuse a sh
     expect(Date.now() - t0).toBeLessThan(hangBound(5000));
     expect(r.ok).toBe(true);
     expect(r.spec_files?.find((f) => f.file.includes('192.0.2.1'))?.reason).toMatch(/network/);
+  });
+
+  // Review 12, finding 9: three more path arguments reached SMB.
+  it('register_custom_rules: a share, or a link to one, is rejected — and a stored one is never re-read by a scan', async () => {
+    const tool = TOOLS.find((t) => t.name === 'register_custom_rules');
+    if (tool === undefined) throw new Error('register_custom_rules not registered');
+    const project = makeTempDir('dg-netarg-rules-');
+    const paths = [`${UNC}\\rules.yml`];
+    const link = linkToShare();
+    if (link !== null) paths.push(join(link, 'rules.yml'));
+    const ctx = plugin();
+    const t0 = Date.now();
+    const r = (await tool.handler({ project_path: project, paths }, ctx)) as {
+      ok: boolean;
+      registered?: string[];
+      rejected?: Array<{ path: string; reason: string }>;
+    };
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect(r.registered ?? []).toEqual([]);
+    expect((r.rejected ?? []).length).toBe(paths.length);
+    for (const x of r.rejected ?? []) expect(x.reason).toMatch(/network \(UNC\) path/);
+    // A registration stored before the check: read on every scan, never opened.
+    ctx.storage.runtimeMeta.setJson(customRulesMetaKey(project), [`${UNC}\\rules.yml`]);
+    const t1 = Date.now();
+    const inspected = inspectCustomSemgrepConfigs(ctx, project);
+    expect(Date.now() - t1).toBeLessThan(hangBound(1000));
+    expect(inspected.usable).toEqual([]);
+    expect(inspected.unusable[0]?.reason).toMatch(/not read: .*network/);
+  });
+
+  it('scan_skill: a file:////host URL, and a local repository whose objects/info/alternates names a share', async () => {
+    const repo = join(makeTempDir('dg-netarg-alt-'), 'skill.git');
+    mkdirSync(join(repo, 'objects', 'info'), { recursive: true });
+    writeFileSync(join(repo, 'objects', 'info', 'alternates'), `${UNC}\\objects\n`);
+    const targets = ['file:////192.0.2.1/share/x.git', 'file://192.0.2.1/share/x.git', repo, `file:///${repo.split('\\').join('/')}`];
+    for (const target of targets) {
+      const t0 = Date.now();
+      const r = await ingestTarget(target);
+      expect(Date.now() - t0, target).toBeLessThan(hangBound(1000));
+      expect(r.ok, target).toBe(false);
+      if (!r.ok) {
+        expect(r.code).toBe('unsupported_target');
+        expect(r.message, target).toMatch(/network/);
+      }
+    }
+  });
+
+  it('import_sarif: a log on a share is refused even with allow_outside_project', async () => {
+    const tool = TOOLS.find((t) => t.name === 'import_sarif');
+    if (tool === undefined) throw new Error('import_sarif not registered');
+    const project = makeTempDir('dg-netarg-sarif-');
+    for (const sarif_path of [`${UNC}\\results.sarif`, '//192.0.2.1/share/results.sarif']) {
+      const t0 = Date.now();
+      const r = (await tool.handler({ project_path: project, sarif_path, allow_outside_project: true }, plugin())) as {
+        ok: boolean;
+        error?: { code: string; message: string };
+      };
+      expect(Date.now() - t0, sarif_path).toBeLessThan(hangBound(1000));
+      expect(r.ok).toBe(false);
+      expect(r.error?.code).toBe('unsupported_target');
+      expect(r.error?.message).toMatch(/network/);
+    }
   });
 });

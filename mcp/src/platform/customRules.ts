@@ -46,6 +46,7 @@ import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './bou
 import type { PluginContext } from '../context.js';
 import { readSmallText } from '../hooks/configFile.js';
 import { listProjectDir } from './projectFs.js';
+import { networkPathOf, networkPathProblem } from './projectPath.js';
 
 /** The largest Semgrep rules file validated; the plugin's own largest pack is a few hundred KB. */
 /** No more than a rules file may be to be parsed (platform/boundedParse.ts). */
@@ -208,6 +209,14 @@ export function inspectCustomSemgrepConfigs(ctx: PluginContext, projectPath: str
   const unusable: Array<{ path: string; reason: string }> = [];
   const seen = new Set<string>();
   for (const entry of registeredEntries(ctx, projectPath)) {
+    // A registration stored before 3.4.0 may name a share, or a link to one:
+    // never opened again — every scan re-read it, authenticating to that host
+    // over SMB (review 12, finding 9).
+    const share = networkPathProblem('the registered path', entry);
+    if (share !== null) {
+      unusable.push({ path: entry, reason: `not read: ${share}` });
+      continue;
+    }
     let isDir: boolean;
     try {
       isDir = statSync(entry).isDirectory();
@@ -217,6 +226,10 @@ export function inspectCustomSemgrepConfigs(ctx: PluginContext, projectPath: str
     for (const file of isDir ? yamlFilesUnder(entry) : [entry]) {
       if (seen.has(file)) continue;
       seen.add(file);
+      if (networkPathOf(file) !== null) {
+        unusable.push({ path: file, reason: 'not read: a link to a network (UNC) path' });
+        continue;
+      }
       const verdict = validateSemgrepRulesFile(file);
       if (verdict.ok) usable.push(file);
       else unusable.push({ path: file, reason: verdict.reason });
@@ -231,7 +244,7 @@ export function inspectCustomSemgrepConfigs(ctx: PluginContext, projectPath: str
  * Only paths that still exist: a vanished one would not have run anyway.
  */
 export function legacyRegistrationsNotApplied(ctx: PluginContext, projectPath: string): string[] {
-  return readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => !isInside(projectPath, p) && pathExists(p));
+  return readList(ctx, CUSTOM_RULES_META_KEY).filter((p) => !isInside(projectPath, p) && networkPathOf(p) === null && pathExists(p));
 }
 
 /** The user-facing account of {@link legacyRegistrationsNotApplied}, or null. */
