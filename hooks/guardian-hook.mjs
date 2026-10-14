@@ -116,6 +116,7 @@ const HOOK_STARTED = Date.now();
  *   ignoredProjectSettings: string[],
  *   invalidSettings: string[],
  *   unreadConfigFiles?: string[],
+ *   ignoresEverything?: string,
  * }} HookConfig
  * @typedef {{ old_string?: unknown, new_string?: unknown, replace_all?: boolean }} SettingsEdit
  * @typedef {{ old_string: string, new_string: string, replace_all?: boolean }} TextEdit
@@ -600,6 +601,15 @@ function loadConfig(root, unread) {
   if (envBlock === '0' || envBlock === 'false') merged.bash.block = false;
   else if (envBlock === '1' || envBlock === 'true') merged.bash.block = true;
 
+  // An `ignorePaths` entry every path holds — `""`, or `"/"`, which begins
+  // every project-relative path — silences every secret warning, and the
+  // model heard nothing of it (review of 3.4.0, plausible): SessionStart says so.
+  const everything = merged.ignorePaths.filter((f) => f === '' || f === '/');
+  if (everything.length > 0) {
+    const from = user.ignorePaths !== undefined ? '~/.config/dev-guardian/hooks.json' : '.guardian/hooks.config.json';
+    merged.ignoresEverything = `in ${from}, "ignorePaths" holds ${everything.map((f) => JSON.stringify(f)).join(' and ')}`;
+  }
+
   return merged;
 }
 
@@ -739,7 +749,7 @@ function normalizePath(p) {
 function isIgnoredPath(absolutePath, root, ignorePaths) {
   if (!absolutePath) return false;
   const rel = normalizePath(relative(root, absolutePath));
-  const withLeadingSlash = rel.startsWith('..') ? normalizePath(absolutePath) : `/${rel}`;
+  const withLeadingSlash = climbsOut(rel) || isAbsolute(rel) ? normalizePath(absolutePath) : `/${rel}`;
   return ignorePaths.some((frag) => withLeadingSlash.includes(frag));
 }
 
@@ -828,6 +838,16 @@ function claudeSettingsFiles(root) {
 }
 
 /**
+ * Whether a `path.relative()` result climbs out of its directory: `..` or `..` and a separator, never
+ * a name that starts with two dots (`..x`) — the same as `climbsOut` in `mcp/src/hooks/configFile.ts`.
+ *
+ * @param {string} rel
+ */
+function climbsOut(rel) {
+  return rel === '..' || rel.startsWith('../') || rel.startsWith('..\\');
+}
+
+/**
  * `path` lies strictly below `dir`.
  *
  * @param {string} dir
@@ -835,7 +855,7 @@ function claudeSettingsFiles(root) {
  */
 function isBelow(dir, path) {
   const rel = relative(dir, path);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  return rel !== '' && !climbsOut(rel) && !isAbsolute(rel);
 }
 
 /**
@@ -956,6 +976,40 @@ async function unloadableGuardsNotice() {
   );
 }
 
+/**
+ * SessionStart's own checks, in the session part (`mcp/dist/hooksSession.js`):
+ * the hardened git of the branch line, whether the project's database is
+ * registered, and the engine's checksum. With that part damaged, the briefing
+ * said "active" and dropped all three without a word (review of 3.4.0,
+ * finding 12). `null` when it loads.
+ *
+ * @returns {Promise<string | null>}
+ */
+async function sessionPartNotice() {
+  /** @type {ReadonlyArray<{ loader: Loader, export: string }>} */
+  const parts = [
+    { loader: 'loadGitSafety', export: 'execGit' },
+    { loader: 'loadDbRegistry', export: 'databaseRegistration' },
+    { loader: 'loadDistCheck', export: 'engineDamage' },
+  ];
+  const loaded = await Promise.allSettled(
+    parts.map(async (p) => {
+      const mod = /** @type {Record<string, unknown>} */ (await detector(p.loader));
+      if (typeof mod[p.export] !== 'function') throw new Error(`${p.export} missing`);
+    }),
+  );
+  const failed = loaded.find((r) => r.status === 'rejected');
+  if (failed === undefined) return null;
+  /** @type {unknown} */
+  const err = failed.reason;
+  const reason = err instanceof Error ? (/** @type {NodeJS.ErrnoException} */ (err).code ?? err.message) : String(err);
+  return (
+    `⚠️ dev-guardian: its session checks (mcp/dist/hooksSession.js) could not be loaded (${reason}) — this briefing has ` +
+    'no branch line, no check that the project database is registered and no check of the engine bundle. The ' +
+    "guardrails are not affected. The plugin's mcp/dist is damaged; ask the user to reinstall or rebuild it."
+  );
+}
+
 // ─────────────────────────────── handlers ──────────────────────────────────
 
 /**
@@ -985,6 +1039,12 @@ function ignoredSettingsNotice(cfg) {
   }
   if (cfg.invalidSettings.length > 0) {
     lines.push(`⚠️ dev-guardian: ${cfg.invalidSettings.join('; ')} — the default applies to each.`);
+  }
+  if (cfg.ignoresEverything !== undefined) {
+    lines.push(
+      `⚠️ dev-guardian: ${cfg.ignoresEverything}, which every path matches — no secret written to a file is warned ` +
+        'about in this session.',
+    );
   }
   return lines.length > 0 ? lines.join('\n') : null;
 }
@@ -1031,10 +1091,11 @@ async function handleSessionStart(root, cfg) {
       ? git(root, ['status', '--porcelain=v2', '--branch', '--ignore-submodules=dirty'])
       : Promise.resolve('');
   // What the model must hear even when the project turned the briefing off:
-  // settings it asked for that were ignored, and guards that are not running.
-  const [off, engine] = await Promise.all([unloadableGuardsNotice(), engineNotice()]);
+  // settings it asked for that were ignored, guards that are not running, and
+  // the briefing's own checks when they could not run.
+  const [off, engine, session] = await Promise.all([unloadableGuardsNotice(), engineNotice(), sessionPartNotice()]);
   const guardsOff = off !== null;
-  const notice = [ignoredSettingsNotice(cfg), off, engine].filter(Boolean).join('\n') || null;
+  const notice = [ignoredSettingsNotice(cfg), off, engine, session].filter(Boolean).join('\n') || null;
   if (!cfg.sessionStart) {
     // The briefing is advisory and a project may turn it off — but not the
     // notice that the same project asked to loosen the guardrails.
@@ -1056,7 +1117,9 @@ async function handleSessionStart(root, cfg) {
     ? 'running with guards OFF (see below)'
     : engine !== null
       ? 'guardrails active — its MCP tools and CLI cannot run (see below)'
-      : 'active';
+      : session !== null
+        ? 'guardrails active — its session checks could not run (see below)'
+        : 'active';
   const head = `🛡️ dev-guardian ${state} (v${pluginVersion()})` + (branch ? ` · branch \`${branch}\`` : '');
   lines.push(head);
   if (changed > 0) lines.push(`${changed} uncommitted change(s) in the working tree.`);
@@ -1227,13 +1290,22 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   const command = input['command'];
   if (typeof command !== 'string' || !command) noop();
 
-  const assessBashCommand = await loadBashGuard();
   // The PowerShell tool's commands are also read with PowerShell's quoting:
   // under POSIX quoting alone, `Remove-Item "C:\Users\" -Recurse -Force` hid
   // its path behind an escaped closing quote and read as ok. Where the session
   // runs: a guarded path spelled in full outside the project, the working
   // directory and home warns instead of being denied (review 8, item 14).
-  const a = assessBashCommand(command, { shell: toolName === 'PowerShell' ? 'powershell' : 'bash', cwd, projectDir: root });
+  // A shell guard that cannot be loaded fails open alone: package vetting,
+  // in a part of its own, still runs (review of 3.4.0, finding 12 — a damaged
+  // `hooksBash.js` took it down too, and SessionStart named only the shell guard).
+  /** @type {ReturnType<Awaited<ReturnType<typeof loadBashGuard>>>} */
+  let a = { level: 'ok', reasons: [], rules: [] };
+  try {
+    const assessBashCommand = await loadBashGuard();
+    a = assessBashCommand(command, { shell: toolName === 'PowerShell' ? 'powershell' : 'bash', cwd, projectDir: root });
+  } catch (err) {
+    debug(`shell guard unavailable (fail-open): ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   if (a.level === 'block' && cfg.bash.block) {
     // Deliberately does not say HOW to turn this off (item 6) — that used to
@@ -1679,7 +1751,7 @@ const SETTINGS_MAX_BYTES = 1024 * 1024;
 function walkRootFor(abs, cwd, root) {
   for (const base of [root, cwd, homedir()]) {
     const rel = relative(base, abs);
-    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return base;
+    if (rel && !climbsOut(rel) && !isAbsolute(rel)) return base;
   }
   return undefined;
 }
@@ -1688,11 +1760,14 @@ function walkRootFor(abs, cwd, root) {
  * Refuses a write of Claude Code's own settings (`.claude/settings.json` /
  * `settings.local.json`, project or user level) whose RESULT switches
  * dev-guardian's hooks off — `"disableAllHooks": true`, an `env` entry
- * `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false` or
- * `GUARDIAN_PKG_VET=0`, or an `enabledPlugins` entry turning dev-guardian off —
- * that the file did not already set (final review M5; `enabledPlugins`:
- * follow-up Part Y). Every other edit of those files (permissions, other env
- * vars, other hooks) passes: agents make them legitimately. The new content is
+ * `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0|false`,
+ * `GUARDIAN_PKG_VET=0`, `NODE_OPTIONS` or `GUARDIAN_PKG_VET_DEADLINE_MS`, or an
+ * `enabledPlugins` entry turning dev-guardian off — that the file did not
+ * already set (final review M5; `enabledPlugins`: follow-up Part Y; the
+ * any-value variables: review of 3.4.0, finding 4). A new `env` `PATH`, `HOME`
+ * or `USERPROFILE` is asked about (`newlyAsked`). Every other edit of those
+ * files (permissions, other env vars, other hooks) passes: agents make them
+ * legitimately. The new content is
  * the write's `content`, or its edits applied to the file on disk; when that
  * cannot be reproduced, the edit's own strings are compared instead. A file on
  * the network is not read (review 8, item 13): its edit is judged on its own
@@ -1824,7 +1899,15 @@ async function secretBlockReason(write, cwd, root, cfg, allowlist) {
   // `blockIgnorePaths`, not `ignorePaths`: see `loadConfig`.
   if (absPath && (isPluginOwnFile(absPath) || isIgnoredPath(absPath, root, cfg.blockIgnorePaths))) return undefined;
 
-  const scanForSecrets = await loadSecretScan();
+  /** @type {Awaited<ReturnType<typeof loadSecretScan>>} */
+  let scanForSecrets;
+  try {
+    scanForSecrets = await loadSecretScan();
+  } catch (err) {
+    // Fails open alone: the question a guard before it raised is still asked.
+    debug(`secret scan unavailable (fail-open): ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
   // Block only on unambiguous, high-confidence provider tokens. The project
   // allowlist exempts from a block only when the project enabled it (see
   // `loadConfig`'s `userSecretBlock`).

@@ -625,9 +625,12 @@ function localShareAsLocal(path, hostname2 = "") {
   const rest = m[3] ?? "";
   return `${(m[2] ?? "").toUpperCase()}:${rest === "" ? "\\" : rest}`;
 }
+function climbsOut(rel) {
+  return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\");
+}
 function walkLinksUnder(under, path) {
   const rel = relative(resolve(under), resolve(path));
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { ok: true };
+  if (rel === "" || climbsOut(rel) || isAbsolute(rel)) return { ok: true };
   let current = resolve(under);
   const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;
@@ -777,7 +780,7 @@ function registryDir(ctx = {}) {
 }
 function atOrBelow(dir, path) {
   const rel = relative2(dir, path);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute3(rel);
+  return rel === "" || !climbsOut(rel) && !isAbsolute3(rel);
 }
 var MAX_ENTRIES = 1024;
 function filesIn(dir) {

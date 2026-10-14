@@ -619,6 +619,15 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       });
     });
 
+    // Review of 3.4.0, plausible: an `ignorePaths` entry every path holds
+    // silenced every secret warning, and SessionStart said nothing of it.
+    it.each([[['/']], [['']], [['/generated/', '/']]])('SessionStart says a project "ignorePaths" of %j silences every secret warning', (ignorePaths) => {
+      projectConfig({ ignorePaths });
+      expect(context(sessionStart())).toMatch(/in \.guardian\/hooks\.config\.json, "ignorePaths" holds .*which every path matches — no secret/);
+      projectConfig({ ignorePaths: ['/generated/'] });
+      expect(context(sessionStart())).not.toMatch(/every path matches/);
+    });
+
     // Final review M4: `ignorePaths` is advisory, but it also exempted a path
     // from the opt-in secret BLOCK — so a project file with
     // `"ignorePaths": ["/"]` switched off a block the USER had enabled. It now
@@ -1290,6 +1299,37 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         { cwd: projectDir, homeDir, hook: join(plugin, 'hooks', 'guardian-hook.mjs') },
       );
       expect(JSON.stringify(post.stdout)).toMatch(/AWS access key/);
+    }, 120_000);
+
+    // Review of 3.4.0, finding 12: a damaged hooksBash.js took package vetting
+    // down with the shell guard — SessionStart named only the guard — and a
+    // damaged hooksSession.js said "active" while its branch line, database
+    // check and engine check were silently gone.
+    it('a damaged shell-guard part leaves package vetting running', () => {
+      const plugin = join(base, 'part-bash');
+      install(plugin);
+      const file = join(plugin, 'mcp', 'dist', 'hooksBash.js');
+      writeFileSync(file, readFileSync(file, 'utf8').slice(0, 4096));
+      const r = runHook(preToolUse('Bash', { command: 'npm i left-pad-zz-unvetted' }, projectDir), {
+        cwd: projectDir,
+        homeDir,
+        hook: join(plugin, 'hooks', 'guardian-hook.mjs'),
+        env: { GUARDIAN_OFFLINE: '1' },
+      });
+      expect(r.status).toBe(0);
+      expect(JSON.stringify(r.stdout)).toMatch(/not verified/);
+      expect(sessionContext(plugin)).not.toMatch(/package vetting/);
+    }, 120_000);
+
+    it('a damaged session part is named, and the briefing does not say plainly "active"', () => {
+      const plugin = join(base, 'part-session');
+      install(plugin);
+      const file = join(plugin, 'mcp', 'dist', 'hooksSession.js');
+      writeFileSync(file, readFileSync(file, 'utf8').slice(0, 4096));
+      const context = sessionContext(plugin);
+      expect(context).toMatch(/dev-guardian guardrails active — its session checks could not run/);
+      expect(context).toMatch(/its session checks \(mcp\/dist\/hooksSession\.js\) could not be loaded .*no branch line/);
+      expect(sessionContext(plug)).not.toMatch(/session checks/);
     }, 120_000);
 
     // Review of 3.3.0: with the bundle damaged SessionStart said `v0.0.0`, and

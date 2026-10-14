@@ -28,9 +28,12 @@ var MAX_LINK_HOPS = 32;
 function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
+function climbsOut(rel) {
+  return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\");
+}
 function walkLinksUnder(under, path) {
   const rel = relative(resolve(under), resolve(path));
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { ok: true };
+  if (rel === "" || climbsOut(rel) || isAbsolute(rel)) return { ok: true };
   let current = resolve(under);
   const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;
@@ -2402,7 +2405,7 @@ function isPublicRegistryUrl(ecosystem, url) {
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside(dir, path) {
   const rel = relative2(dir, path);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute2(rel);
+  return rel !== "" && !climbsOut(rel) && !isAbsolute2(rel);
 }
 function walkRoot(path, ctx, under) {
   const abs = resolve2(path);

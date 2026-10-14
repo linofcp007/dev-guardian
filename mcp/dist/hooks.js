@@ -9,6 +9,7 @@ var __export = (target, all) => {
 var configFile_exports = {};
 __export(configFile_exports, {
   MAX_HOOK_CONFIG_BYTES: () => MAX_HOOK_CONFIG_BYTES,
+  climbsOut: () => climbsOut,
   isNetworkPath: () => isNetworkPath,
   isRemoteOrDeviceTarget: () => isRemoteOrDeviceTarget,
   localShareAsLocal: () => localShareAsLocal,
@@ -40,9 +41,12 @@ function localShareAsLocal(path, hostname2 = "") {
   const rest = m[3] ?? "";
   return `${(m[2] ?? "").toUpperCase()}:${rest === "" ? "\\" : rest}`;
 }
+function climbsOut(rel) {
+  return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\");
+}
 function walkLinksUnder(under, path) {
   const rel = relative(resolve(under), resolve(path));
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { ok: true };
+  if (rel === "" || climbsOut(rel) || isAbsolute(rel)) return { ok: true };
   let current = resolve(under);
   const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;

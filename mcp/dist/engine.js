@@ -53,9 +53,12 @@ import { isAbsolute, join, parse, relative, resolve } from "node:path";
 function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
+function climbsOut(rel2) {
+  return rel2 === ".." || rel2.startsWith("../") || rel2.startsWith("..\\");
+}
 function walkLinksUnder(under, path3) {
   const rel2 = relative(resolve(under), resolve(path3));
-  if (rel2 === "" || rel2.startsWith("..") || isAbsolute(rel2)) return { ok: true };
+  if (rel2 === "" || climbsOut(rel2) || isAbsolute(rel2)) return { ok: true };
   let current = resolve(under);
   const queue = rel2.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;
@@ -90111,7 +90114,7 @@ function isPublicRegistryUrl(ecosystem, url2) {
 }
 function isInside3(dir, path3) {
   const rel2 = relative35(dir, path3);
-  return rel2 !== "" && !rel2.startsWith("..") && !isAbsolute24(rel2);
+  return rel2 !== "" && !climbsOut(rel2) && !isAbsolute24(rel2);
 }
 function walkRoot2(path3, ctx, under) {
   const abs = resolve34(path3);
