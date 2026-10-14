@@ -1942,10 +1942,120 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       it('the dispatcher judges exactly the tools hooks.json routes to it', () => {
         const config = JSON.parse(readFileSync(join(REPO_ROOT, 'hooks', 'hooks.json'), 'utf8')) as { hooks: { PreToolUse: Array<{ matcher: string }> } };
         const routed = new RegExp(config.hooks.PreToolUse.find((e) => e.matcher.startsWith('^(Write'))?.matcher ?? '^$');
-        for (const tool of ['mcp__x__update_file', 'mcp__x__WriteFile', 'mcp__x__fileUpdate', 'mcp__x__push_files', 'mcp__x__get_settings', 'mcp__x__reset_file', 'mcp__x__read_file']) {
+        // A tool's own name may hold `__` (review of 3.4.0, finding 13): `write__v2` was routed here and not judged.
+        for (const tool of [
+          'mcp__x__update_file', 'mcp__x__WriteFile', 'mcp__x__fileUpdate', 'mcp__x__push_files', 'mcp__x__get_settings', 'mcp__x__reset_file',
+          'mcp__x__read_file', 'mcp__x__write__v2', 'mcp__x__set__file_v2', 'mcp__x__read__v2',
+        ]) {
           const denied = out(call(tool, { path: '.guardian/hooks.config.json', content: '{}' })).permissionDecision === 'deny';
           expect({ tool, denied }).toEqual({ tool, denied: routed.test(tool) });
         }
+      });
+    });
+
+    // Review of 3.4.0, finding 3: the filesystem server and desktop-commander
+    // expand a leading `~`, and the guards took `~/…` relative to the working
+    // directory — the user's hook configuration and the registry were written.
+    describe('a `~/…` path is also judged as the home directory’s (review of 3.4.0, finding 3)', () => {
+      it.each([
+        ['mcp__filesystem__write_file', '~/.config/dev-guardian/hooks.json'],
+        ['mcp__filesystem__write_file', '~\\.config\\dev-guardian\\hooks.json'],
+        ['mcp__desktop-commander__write_file', '~/.config/dev-guardian/hooks.json'],
+      ])('%s %s is denied', (tool, path) => {
+        const r = hook(preToolUse(tool, { path, content: '{"enabled": false}' }, projectDir));
+        expect(out(r).permissionDecision).toBe('deny');
+        expect(out(r).permissionDecisionReason).toMatch(/controls the guardrail hooks/);
+      });
+
+      it("a write into the registry spelled from `~` is denied", () => {
+        const r = hook(preToolUse('mcp__filesystem__write_file', { path: '~/gdata/registry/abc.json', content: '{}' }, projectDir), {
+          GUARDIAN_DATA_DIR: join(homeDir, 'gdata'),
+        });
+        expect(out(r).permissionDecisionReason).toMatch(/registry of trusted databases/);
+      });
+
+      it('a `~/…` path to anything else says nothing', () => {
+        expect(hook(preToolUse('mcp__filesystem__write_file', { path: '~/notes/todo.md', content: '# todo' }, projectDir)).stdout).toBeUndefined();
+      });
+    });
+
+    // Review of 3.4.0, finding 7: `{"disableAllHooksX": true}` written (allowed:
+    // no switch), then Serena's `replace_regex` of `X"` by `"` — whose result the
+    // guard could not work out, and let through — switched the hooks off.
+    describe('a settings change whose result cannot be worked out is the user’s to confirm (review of 3.4.0, finding 7)', () => {
+      const settingsFile = (): string => join(projectDir, '.claude', 'settings.local.json');
+      const key = ['disable', 'AllHooks'].join('');
+      const call = (tool: string, input: Record<string, unknown>): HookResult => hook(preToolUse(tool, input, projectDir));
+      beforeEach(() => {
+        mkdirSync(join(projectDir, '.claude'), { recursive: true });
+        writeFileSync(settingsFile(), `{"${key}X": true}`);
+      });
+
+      it("Serena's replace_regex of the settings asks", () => {
+        const r = call('mcp__serena__replace_regex', { relative_path: '.claude/settings.local.json', regex: 'X"', repl: '"' });
+        expect(out(r).permissionDecision).toBe('ask');
+        expect(out(r).permissionDecisionReason).toMatch(/cannot work out/);
+      });
+
+      it('the same change as a plain edit is worked out and denied — unless the tool matches it as a regex, which asks', () => {
+        const edit = { pathInProject: '.claude/settings.local.json', oldText: 'X"', newText: '"' };
+        expect(out(call('mcp__jetbrains__replace_text_in_file', edit)).permissionDecision).toBe('deny');
+        expect(out(call('mcp__jetbrains__replace_text_in_file', { ...edit, useRegex: true })).permissionDecision).toBe('ask');
+      });
+
+      it('a prepared file moved onto the settings asks', () => {
+        writeFileSync(join(projectDir, 'prepared.json'), `{"${key}": true}`);
+        const r = call('mcp__filesystem__move_file', { source: join(projectDir, 'prepared.json'), destination: settingsFile() });
+        expect(out(r).permissionDecision).toBe('ask');
+      });
+
+      it('a call that names only the path asks nothing, and a regex replace elsewhere neither', () => {
+        expect(call('mcp__x__get_update_status', { path: '.claude/settings.local.json' }).stdout).toBeUndefined();
+        expect(call('mcp__serena__replace_regex', { relative_path: 'src/a.ts', regex: 'X"', repl: '"' }).stdout).toBeUndefined();
+      });
+
+      it('a deny of a guard judged after the settings still wins over the question', () => {
+        const r = hook(
+          preToolUse('mcp__x__write_files', { files: [{ path: '.claude/settings.local.json', regex: 'X"' }, { path: '~/gdata/registry/abc.json', content: '{}' }] }, projectDir),
+          { GUARDIAN_DATA_DIR: join(homeDir, 'gdata') },
+        );
+        expect(out(r).permissionDecision).toBe('deny');
+        expect(out(r).permissionDecisionReason).toMatch(/registry of trusted databases/);
+      });
+    });
+
+    // Review of 3.4.0, finding 13: what lay past the reading's limits was
+    // silently unread, and a non-file tool's text was judged as a path.
+    describe('the limits of reading an MCP call are said, and a non-file tool’s text is no path (review of 3.4.0, finding 13)', () => {
+      const call = (tool: string, input: Record<string, unknown>): HookResult => hook(preToolUse(tool, input, projectDir));
+      const config = '.guardian/hooks.config.json';
+
+      it.each([
+        ['nested five levels deep', { a: { b: { c: { d: { path: config } } } }, content: '{}' }],
+        ['past 256 strings', { files: [...Array.from({ length: 140 }, (_, k) => ({ path: `src/f${String(k)}.ts`, content: 'x' })), { path: config, content: '{}' }] }],
+        ['past 32 strings that may be paths', { ...Object.fromEntries(Array.from({ length: 33 }, (_, k) => [`k${String(k)}`, `v${String(k)}`])), zz: config }],
+      ])('a file tool with an argument %s asks', (_what, input) => {
+        const r = call('mcp__srv__write_files', input);
+        expect(out(r).permissionDecision).toBe('ask');
+        expect(out(r).permissionDecisionReason).toMatch(/did not read all of mcp__srv__write_files's arguments/);
+      });
+
+      it('a tool whose name names no file only gets a note', () => {
+        const r = call('mcp__notion__update_page', { page: { blocks: { a: { b: { text: 'deep' } } } } });
+        expect(out(r).permissionDecision).toBeUndefined();
+        expect(out(r).additionalContext).toMatch(/did not read all of mcp__notion__update_page's arguments/);
+      });
+
+      it.each([
+        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: '.claude/settings.json', body: '{"disableAllHooks": true}' }],
+        ['mcp__github__create_issue', { owner: 'o', repo: 'r', title: config, body: 'the hook config' }],
+        ['mcp__clock__set_timezone', { timezone: config }],
+      ])('%s %j says nothing', (tool, input) => {
+        expect(call(tool, input).stdout).toBeUndefined();
+      });
+
+      it('a key that names a path is judged whatever the tool is called', () => {
+        expect(out(call('mcp__x__create_entry', { target_file: config, value: '{}' })).permissionDecision).toBe('deny');
       });
     });
   });
