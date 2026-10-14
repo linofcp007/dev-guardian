@@ -154,16 +154,16 @@ function isBoundary(text, at) {
   return before !== after;
 }
 function runEnds(text, inClass) {
-  const cached = RUN_ENDS.get(inClass);
-  if (cached !== void 0 && cached.text === text) return cached.end;
+  const cached = windowRunEnds?.get(inClass);
+  if (cached !== void 0) return cached;
   const ends = new Int32Array(text.length + 1);
   ends[text.length] = text.length;
   for (let i = text.length - 1; i >= 0; i -= 1) ends[i] = inClass(text.charCodeAt(i)) ? ends[i + 1] ?? i : i;
   const end = (i) => i >= text.length ? text.length : ends[i] ?? i;
-  RUN_ENDS.set(inClass, { text, end });
+  windowRunEnds?.set(inClass, end);
   return end;
 }
-var RUN_ENDS = /* @__PURE__ */ new Map();
+var windowRunEnds;
 function findJwt(text, from) {
   if (!text.includes(".eyJ", from)) return null;
   const end = runEnds(text, isB64url);
@@ -334,15 +334,20 @@ function firstMatch(rule, re, w, start = 0) {
   return null;
 }
 function firstHit(rule, re, w, line, skipPlaceholders) {
-  let start = 0;
-  while (start <= w.text.length) {
-    const m = firstMatch(rule, re, w, start);
-    if (m === null) return null;
-    const hit = judge(rule, m, line, skipPlaceholders);
-    if (hit !== null) return hit;
-    start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
+  windowRunEnds = /* @__PURE__ */ new Map();
+  try {
+    let start = 0;
+    while (start <= w.text.length) {
+      const m = firstMatch(rule, re, w, start);
+      if (m === null) return null;
+      const hit = judge(rule, m, line, skipPlaceholders);
+      if (hit !== null) return hit;
+      start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
+    }
+    return null;
+  } finally {
+    windowRunEnds = void 0;
   }
-  return null;
 }
 function scanForSecrets(text, options = {}) {
   if (!text) return [];

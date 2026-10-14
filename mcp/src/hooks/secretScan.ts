@@ -241,23 +241,27 @@ function isBoundary(text: string, at: number): boolean {
  * nothing more.
  */
 function runEnds(text: string, inClass: (c: number) => boolean): (i: number) => number {
-  const cached = RUN_ENDS.get(inClass);
-  if (cached !== undefined && cached.text === text) return cached.end;
+  const cached = windowRunEnds?.get(inClass);
+  if (cached !== undefined) return cached;
   const ends = new Int32Array(text.length + 1);
   ends[text.length] = text.length;
   for (let i = text.length - 1; i >= 0; i -= 1) ends[i] = inClass(text.charCodeAt(i)) ? (ends[i + 1] ?? i) : i;
   const end = (i: number): number => (i >= text.length ? text.length : (ends[i] ?? i));
-  RUN_ENDS.set(inClass, { text, end });
+  windowRunEnds?.set(inClass, end);
   return end;
 }
 
 /**
- * The last window's run ends, per class: a finder called again in the same
- * window — past a match set aside ({@link firstHit}) — reuses them instead of
- * making one more pass over the whole window, so a window full of placeholders
- * costs one pass, not one per placeholder.
+ * The run ends of the window {@link firstHit} is searching, per class — set
+ * only while it searches one window, so it holds that window's and no other:
+ * a finder called again in it, past a match set aside, reuses them instead of
+ * making one more pass over the whole window, and a window full of
+ * placeholders costs one pass, not one per placeholder. Scoped by the call,
+ * not by comparing texts: telling a window from the last one by its text
+ * (`===`) compared two 16 KB windows on every search, which made a long line
+ * cost more than linearly under V8's coverage (the floor container's run).
  */
-const RUN_ENDS = new Map<(c: number) => boolean, { text: string; end: (i: number) => number }>();
+let windowRunEnds: Map<(c: number) => boolean, (i: number) => number> | undefined;
 
 /**
  * The `jwt` pattern's first match at or after `from`, in linear time. A
@@ -528,15 +532,20 @@ function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow, start = 0): Sec
  * line of nothing but placeholders costs what a line with none does.
  */
 function firstHit(rule: SecretRule, re: RegExp, w: LineWindow, line: number, skipPlaceholders: boolean): SecretHit | null {
-  let start = 0;
-  while (start <= w.text.length) {
-    const m = firstMatch(rule, re, w, start);
-    if (m === null) return null;
-    const hit = judge(rule, m, line, skipPlaceholders);
-    if (hit !== null) return hit;
-    start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
+  windowRunEnds = new Map();
+  try {
+    let start = 0;
+    while (start <= w.text.length) {
+      const m = firstMatch(rule, re, w, start);
+      if (m === null) return null;
+      const hit = judge(rule, m, line, skipPlaceholders);
+      if (hit !== null) return hit;
+      start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
+    }
+    return null;
+  } finally {
+    windowRunEnds = undefined;
   }
-  return null;
 }
 
 /**
