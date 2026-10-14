@@ -129,6 +129,7 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
@@ -208,18 +209,87 @@ try {
 // A bundle that is missing or damaged is an install to repair, said in one
 // line with exit 3 (review of 3.3.0): the import used to throw out of the
 // module — a stack trace and exit 1, which is `scan`'s "the gate failed", so a
-// caller read a broken install as a new finding.
-const engine = await import('../mcp/dist/engine.js').catch(async (/** @type {unknown} */ err) => {
-  const why = err instanceof Error ? (/** @type {NodeJS.ErrnoException} */ (err).code ?? err.message) : String(err);
-  await new Promise((done) =>
-    process.stderr.write(
-      `dev-guardian: its engine, mcp/dist/engine.js, could not be loaded (${why}) — the plugin install is incomplete ` +
-        'or damaged. Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build.\n',
-      () => done(undefined),
-    ),
-  );
+// caller read a broken install as a new finding. Every shape of it (review 11,
+// finding 14):
+//   - an import that throws (missing, truncated, throwing): its error named;
+//   - one that loads but lacks what this CLI uses — `cli/` and `mcp/dist/`
+//     from two builds — the names it lacks: it was a TypeError and exit 1 on
+//     every command, `--help` included;
+//   - one that never settles: Node exits 13 when nothing else is pending
+//     (an unsettled top-level await) — rewritten to 3 by the `exit` listener
+//     below — and the deadline catches one that keeps the process busy.
+/** The engine's exports this file destructures below — the same names (cliEngineExports.test.ts holds them equal). */
+const ENGINE_EXPORTS = [
+  'ALL_HOSTS',
+  'assessBashCommand',
+  'canonicalPath',
+  'decodeText',
+  'describeReadRefusal',
+  'describeWriteRefusal',
+  'detectOs',
+  'ensureGuardianDirIgnored',
+  'execGitSync',
+  'hardenCommandSearch',
+  'InvalidProjectPathError',
+  'isWithinDir',
+  'loadCiModules',
+  'loadDashboardModules',
+  'loadDbModules',
+  'loadImportSarifModules',
+  'previewMcpConfig',
+  'PROJECT_LOCKFILE_MAX_BYTES',
+  'readProjectText',
+  'resolveProjectPath',
+  'resolveVersion',
+  'scanForSecrets',
+  'setupHost',
+  'untrustedText',
+  'writeProjectFile',
+];
+/** @param {string} why */
+const engineDamaged = (why) =>
+  `dev-guardian: its engine, mcp/dist/engine.js, ${why} — the plugin install is incomplete or damaged. ` +
+  'Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build.\n';
+/** @param {string} why @returns {Promise<never>} */
+const engineExit = async (why) => {
+  await new Promise((done) => process.stderr.write(engineDamaged(why), () => done(undefined)));
   return process.exit(3);
+};
+/**
+ * How long the engine may take to load — normally well under a second; 60 s,
+ * or `GUARDIAN_ENGINE_LOAD_DEADLINE_MS` (1 000 or more: docs/env.md).
+ */
+const ENGINE_LOAD_DEADLINE_MS = (() => {
+  const set = Number(process.env['GUARDIAN_ENGINE_LOAD_DEADLINE_MS']);
+  return Number.isInteger(set) && set >= 1000 ? set : 60_000;
+})();
+let engineLoading = true;
+/** @param {number} code */
+const exitWhileLoading = (code) => {
+  if (!engineLoading) return;
+  // Synchronous: an `exit` listener's asynchronous write is never flushed.
+  writeSync(2, engineDamaged(`never finished loading (Node was about to exit ${code})`));
+  process.exitCode = 3;
+};
+process.on('exit', exitWhileLoading);
+const engineDeadline = setTimeout(() => {
+  void engineExit(`did not finish loading in ${ENGINE_LOAD_DEADLINE_MS / 1000} s`);
+}, ENGINE_LOAD_DEADLINE_MS);
+engineDeadline.unref();
+const engine = await import('../mcp/dist/engine.js').catch(async (/** @type {unknown} */ err) => {
+  engineLoading = false;
+  const why = err instanceof Error ? (/** @type {NodeJS.ErrnoException} */ (err).code ?? err.message) : String(err);
+  return engineExit(`could not be loaded (${why})`);
 });
+engineLoading = false;
+clearTimeout(engineDeadline);
+process.off('exit', exitWhileLoading);
+{
+  // What this file takes from the engine, below: each must be there.
+  const engineExports = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (engine));
+  const lacking = ENGINE_EXPORTS.filter((name) => engineExports[name] === undefined);
+  if (lacking.length > 0) await engineExit(`is not the one this CLI needs: it lacks ${lacking.join(', ')}`);
+}
 const {
   ALL_HOSTS,
   assessBashCommand,
