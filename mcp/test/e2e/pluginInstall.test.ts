@@ -116,16 +116,21 @@ describe('a plugin install — the tracked files, no node_modules', () => {
     expect(statuses, `exit ${String(r.status)}\n${r.stderr}`).toContain(r.status);
   }
 
-  it('what ships in mcp/dist: the two bundles (the hooks one in parts), the server’s entry and the assets — no per-file output, no source map', () => {
+  it('what ships in mcp/dist: the two bundles (the hooks one in parts), the server’s entry, the bundles’ declarations and the assets — no per-file output, no source map', () => {
     const dist = join(install, 'mcp', 'dist');
     const shipped = execGitSync(REPO_ROOT, ['ls-files', '-z', '--', 'mcp/dist'], { timeoutMs: 60_000 })
       .stdout.split('\0')
       .filter((f) => f !== '')
       .map((f) => f.slice('mcp/dist/'.length));
     const bundles = ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksSession.js', 'hooksVet.js', 'hooksWrite.js', 'server.js'];
+    // One `export *` line each, for the type check of the CLI and the hook (3.4.0).
+    const declarations = ['engine.d.ts', 'hooks.d.ts'];
     expect(shipped.filter((f) => f.endsWith('.js')).sort()).toEqual(bundles);
+    expect(shipped.filter((f) => f.endsWith('.d.ts')).sort()).toEqual(declarations);
     expect(shipped.filter((f) => f.endsWith('.map'))).toEqual([]);
-    expect(shipped.filter((f) => !bundles.includes(f) && !/^storage\/migrations\/\d{3}_\w+\.sql$|^hostsetup\/legacyRulesTemplates\//.test(f))).toEqual([]);
+    expect(
+      shipped.filter((f) => !bundles.includes(f) && !declarations.includes(f) && !/^storage\/migrations\/\d{3}_\w+\.sql$|^hostsetup\/legacyRulesTemplates\//.test(f)),
+    ).toEqual([]);
     expect(bundles.every((b) => existsSync(join(dist, b)))).toBe(true);
   });
 
