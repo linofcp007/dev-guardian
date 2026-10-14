@@ -37,6 +37,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { describeReadRefusal, entryKindAnywhere, readProjectBytes } from '../platform/projectFs.js';
 import { execGit } from '../platform/gitSafety.js';
+import { networkPathProblem } from '../platform/projectPath.js';
 // A clone that stalls is stopped with its remote helper (review 10, finding 12).
 import '../runners/gitExec.js';
 
@@ -126,6 +127,22 @@ function extOf(name: string): string {
 export async function ingestTarget(targetRaw: string): Promise<IngestResult> {
   const target = targetRaw.trim();
   if (!target) return { ok: false, code: 'target_not_found', message: 'Empty target.' };
+
+  // A network path is never touched, whether it names a folder or a `.git`
+  // to clone — on Windows either is an SMB authentication to the host the
+  // caller chose (review 11, finding 8) — nor a `file://` URL naming a host,
+  // which git turns into one.
+  const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(target) || /^git@/.test(target);
+  const fileHost = /^file:\/\/([^/]*)/i.exec(target)?.[1] ?? '';
+  const share =
+    fileHost !== '' && fileHost.toLowerCase() !== 'localhost' && !/^[a-z]:$/i.test(fileHost)
+      ? `target ${JSON.stringify(target)} names a host (a file:// URL of a share)`
+      : isUrl
+        ? null
+        : networkPathProblem('target', target);
+  if (share !== null) {
+    return { ok: false, code: 'unsupported_target', message: `${share}. Vet a local copy, or an https:// URL.` };
+  }
 
   // Remote: git or URL.
   if (/^git@/.test(target) || /\.git($|\?)/.test(target)) {

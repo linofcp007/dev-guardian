@@ -1739,15 +1739,27 @@ function projectPathErrorCode(e) {
 function isNetworkPath(p, platform = process.platform) {
   return platform === "win32" && /^[\\/]{2}/.test(p);
 }
-function resolveProjectPath(input) {
-  const raw = input && input.length > 0 ? input : process.cwd();
-  if (isNetworkPath(raw)) throw new InvalidProjectPathError("network_path", raw);
+function networkPathOf(raw) {
+  if (isNetworkPath(raw)) return { path: raw };
   const candidate = resolve6(raw);
-  if (isNetworkPath(candidate)) throw new InvalidProjectPathError("network_path", candidate);
+  if (isNetworkPath(candidate)) return { path: candidate };
   if (process.platform === "win32") {
     const walk5 = walkLinksUnder(parse3(candidate).root, candidate);
-    if (!walk5.ok && walk5.reason === "remote-link") throw new InvalidProjectPathError("network_path", candidate, walk5.at);
+    if (!walk5.ok && walk5.reason === "remote-link") return { path: candidate, via: walk5.at };
   }
+  return null;
+}
+function networkPathProblem(name, raw) {
+  const net = networkPathOf(raw);
+  if (net === null) return null;
+  const via = net.via !== void 0 ? ` (through the link ${net.via})` : "";
+  return `${name} ${JSON.stringify(net.path)}${via} is a network (UNC) path: dev-guardian reads local paths only \u2014 a file call on a share authenticates to its host, and blocks while the host does not answer`;
+}
+function resolveProjectPath(input) {
+  const raw = input && input.length > 0 ? input : process.cwd();
+  const net = networkPathOf(raw);
+  if (net !== null) throw new InvalidProjectPathError("network_path", net.path, net.via);
+  const candidate = resolve6(raw);
   if (!existsSync2(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
@@ -14152,12 +14164,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve37, reject) {
+        return new Promise(function(resolve36, reject) {
           isexe(path3, options || {}, function(er, is) {
             if (er) {
               reject(er);
             } else {
-              resolve37(is);
+              resolve36(is);
             }
           });
         });
@@ -14223,27 +14235,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found2 = [];
-      const step = (i) => new Promise((resolve37, reject) => {
+      const step = (i) => new Promise((resolve36, reject) => {
         if (i === pathEnv.length)
-          return opt.all && found2.length ? resolve37(found2) : reject(getNotFoundError(cmd));
+          return opt.all && found2.length ? resolve36(found2) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path3.join(pathPart, cmd);
         const p = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve37(subStep(p, i, 0));
+        resolve36(subStep(p, i, 0));
       });
-      const subStep = (p, i, ii) => new Promise((resolve37, reject) => {
+      const subStep = (p, i, ii) => new Promise((resolve36, reject) => {
         if (ii === pathExt.length)
-          return resolve37(step(i + 1));
+          return resolve36(step(i + 1));
         const ext = pathExt[ii];
         isexe(p + ext, { pathExt: pathExtExe }, (er, is) => {
           if (!er && is) {
             if (opt.all)
               found2.push(p + ext);
             else
-              return resolve37(p + ext);
+              return resolve36(p + ext);
           }
-          return resolve37(subStep(p, i, ii + 1));
+          return resolve36(subStep(p, i, ii + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -14605,8 +14617,8 @@ function readText2(stream, onText) {
 }
 async function settlesWithin(p, ms) {
   let timer;
-  const timeout = new Promise((resolve37) => {
-    timer = setTimeout(() => resolve37(false), ms);
+  const timeout = new Promise((resolve36) => {
+    timer = setTimeout(() => resolve36(false), ms);
     timer.unref();
   });
   const settled = await Promise.race([p.then(() => true, () => true), timeout]);
@@ -14626,7 +14638,7 @@ function captureOutput(command, args, options) {
     if (!(e instanceof BatchArgumentRefused)) throw e;
     return Promise.resolve({ exitCode: null, stdout: "", stderr: "", timedOut: false, spawnError: e.message });
   }
-  return new Promise((resolve37) => {
+  return new Promise((resolve36) => {
     const max = options.maxBytes ?? 16 * 1024 * 1024;
     let stdout = "";
     let stderr = "";
@@ -14642,7 +14654,7 @@ function captureOutput(command, args, options) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve37({ exitCode, stdout, stderr, timedOut, ...spawnError !== void 0 ? { spawnError } : {} });
+      resolve36({ exitCode, stdout, stderr, timedOut, ...spawnError !== void 0 ? { spawnError } : {} });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -14831,12 +14843,12 @@ function startChild(command, args, options) {
   }
   let isSettled = false;
   let removeExitHook = null;
-  const done = new Promise((resolve37) => {
+  const done = new Promise((resolve36) => {
     const settle = (exit) => {
       if (isSettled) return;
       isSettled = true;
       removeExitHook?.();
-      resolve37(exit);
+      resolve36(exit);
     };
     proc.once("close", (code, signal) => settle({ exitCode: code, signal }));
     proc.on("error", (error2) => {
@@ -36442,7 +36454,7 @@ var init_concurrencyLimiter = __esm({
           this.active += 1;
           return;
         }
-        await new Promise((resolve37) => this.waiting.push(resolve37));
+        await new Promise((resolve36) => this.waiting.push(resolve36));
         this.active += 1;
       }
       release() {
@@ -48224,7 +48236,7 @@ function readDependencyEvidence(projectPath) {
     e.declaredIn ??= file;
     if (version2) e.versions.add(version2);
   };
-  const resolve37 = (name, ecosystem, file, version2) => {
+  const resolve36 = (name, ecosystem, file, version2) => {
     const e = entry(name, ecosystem);
     if (!e) return;
     e.lockFile ??= file;
@@ -48281,7 +48293,7 @@ function readDependencyEvidence(projectPath) {
       const rec = p && typeof p === "object" ? p : void 0;
       const name = rec?.["name"];
       const version2 = rec?.["version"];
-      if (typeof name === "string") resolve37(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
+      if (typeof name === "string") resolve36(name, "composer", "composer.lock", typeof version2 === "string" ? version2 : void 0);
     }
   }
   let cargoName;
@@ -48291,7 +48303,7 @@ function readDependencyEvidence(projectPath) {
     if (n?.[1]) cargoName = n[1];
     const v = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
     if (v?.[1] && cargoName !== void 0) {
-      resolve37(cargoName, "cargo", "Cargo.lock", v[1]);
+      resolve36(cargoName, "cargo", "Cargo.lock", v[1]);
       cargoName = void 0;
     }
   }
@@ -48299,10 +48311,10 @@ function readDependencyEvidence(projectPath) {
     const m = /^(\S+)\s+(v[^\s/]+)(\/go\.mod)?\s/.exec(line);
     if (!m?.[1]) continue;
     const inGoMod = out.get(m[1].toLowerCase())?.declaredIn === "go.mod";
-    resolve37(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
+    resolve36(m[1], "go", "go.sum", inGoMod || m[3] ? void 0 : m[2]);
   }
   for (const m of readText7("Gemfile.lock").matchAll(/^ {4}([^\s(]+) \(([^)]+)\)\s*$/gm)) {
-    if (m[1]) resolve37(m[1], "rubygems", "Gemfile.lock", m[2]);
+    if (m[1]) resolve36(m[1], "rubygems", "Gemfile.lock", m[2]);
   }
   for (const project of projects) {
     for (const lock of lockFileCandidates(project)) {
@@ -48314,7 +48326,7 @@ function readDependencyEvidence(projectPath) {
         if (!deps || typeof deps !== "object") continue;
         for (const [name, info] of Object.entries(deps)) {
           const resolved = info && typeof info === "object" ? info["resolved"] : void 0;
-          resolve37(name, "dotnet", relative20(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
+          resolve36(name, "dotnet", relative20(projectPath, lock) || lock, typeof resolved === "string" ? resolved : void 0);
         }
       }
     }
@@ -57308,7 +57320,7 @@ var init_protocol = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve37) => setTimeout(resolve37, pollInterval));
+            await new Promise((resolve36) => setTimeout(resolve36, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error2) {
@@ -57325,7 +57337,7 @@ var init_protocol = __esm({
        */
       request(request, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve37, reject) => {
+        return new Promise((resolve36, reject) => {
           const earlyReject = (error2) => {
             reject(error2);
           };
@@ -57403,7 +57415,7 @@ var init_protocol = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve37(parseResult.data);
+                resolve36(parseResult.data);
               }
             } catch (error2) {
               reject(error2);
@@ -57665,12 +57677,12 @@ var init_protocol = __esm({
           }
         } catch {
         }
-        return new Promise((resolve37, reject) => {
+        return new Promise((resolve36, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve37, interval);
+          const timeoutId = setTimeout(resolve36, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -60697,7 +60709,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve37.call(this, root, ref);
+      let _sch = resolve36.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -60724,7 +60736,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve37(root, ref) {
+    function resolve36(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -61554,7 +61566,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve37(baseURI, relativeURI, options) {
+    function resolve36(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -61923,7 +61935,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize: normalize2,
-      resolve: resolve37,
+      resolve: resolve36,
       resolveComponent,
       equal,
       serialize,
@@ -66294,7 +66306,7 @@ var init_mcp = __esm({
         let task = createTaskResult.task;
         const pollInterval = task.pollInterval ?? 5e3;
         while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-          await new Promise((resolve37) => setTimeout(resolve37, pollInterval));
+          await new Promise((resolve36) => setTimeout(resolve36, pollInterval));
           const updatedTask = await extra.taskStore.getTask(taskId);
           if (!updatedTask) {
             throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -70125,6 +70137,8 @@ function wpSiteKey(url2) {
 function wpInstallPathProblem(raw) {
   const unsafe = pathArgProblem("wp_install_path", raw);
   if (unsafe !== null) return `${unsafe}: pass the path of the install.`;
+  const network = networkPathProblem("wp_install_path", raw);
+  if (network !== null) return `${network}. Pass the path of a local install, or target_url for a remote site.`;
   if (namesOneInstall(raw)) return null;
   return `wp_install_path ${JSON.stringify(raw)} is relative and does not exist on this machine, so it names no single install (resolved against the server's working directory, every remote install passed the same way would share one record). Pass the absolute path of the install, or target_url for a remote site.`;
 }
@@ -70158,6 +70172,7 @@ var init_siteKeys = __esm({
   "src/wordpress/siteKeys.ts"() {
     "use strict";
     init_openSet();
+    init_projectPath();
     init_toolArgs();
   }
 });
@@ -75433,6 +75448,12 @@ function extOf(name) {
 async function ingestTarget(targetRaw) {
   const target = targetRaw.trim();
   if (!target) return { ok: false, code: "target_not_found", message: "Empty target." };
+  const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(target) || /^git@/.test(target);
+  const fileHost = /^file:\/\/([^/]*)/i.exec(target)?.[1] ?? "";
+  const share = fileHost !== "" && fileHost.toLowerCase() !== "localhost" && !/^[a-z]:$/i.test(fileHost) ? `target ${JSON.stringify(target)} names a host (a file:// URL of a share)` : isUrl ? null : networkPathProblem("target", target);
+  if (share !== null) {
+    return { ok: false, code: "unsupported_target", message: `${share}. Vet a local copy, or an https:// URL.` };
+  }
   if (/^git@/.test(target) || /\.git($|\?)/.test(target)) {
     return ingestGit(target);
   }
@@ -75739,6 +75760,7 @@ var init_ingest = __esm({
     init_processRunner();
     init_projectFs();
     init_gitSafety();
+    init_projectPath();
     init_gitExec();
     MAX_FILES = 4e3;
     MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
@@ -77635,10 +77657,19 @@ function buildSnapshot(parsed, projectPath, ctx, toolsRun, includeEnvVars, unrea
   };
 }
 function importSpecs(projectPath, specPaths2) {
-  const resolvedSpecPaths = specPaths2 === void 0 ? void 0 : dedupeResolved(specPaths2.map((p) => resolveExplicitSpecPath(projectPath, p)));
+  const named2 = specPaths2 === void 0 ? void 0 : dedupeResolved(specPaths2.map((p) => resolveExplicitSpecPath(projectPath, p)));
+  const onShare = (named2 ?? []).filter((p) => networkPathOf(p) !== null);
+  const resolvedSpecPaths = named2?.filter((p) => !onShare.includes(p));
   const discovery = discoverSpecs(projectPath, resolvedSpecPaths);
   const specRoutes = [];
-  const specFiles = [];
+  const specFiles = onShare.map((file) => ({
+    file,
+    format: "unknown",
+    status: "parse_error",
+    routes_found: 0,
+    reason: "A network (UNC) path, or a link to one: not read \u2014 dev-guardian reads local files only.",
+    unresolved_refs: 0
+  }));
   let specsParsed = 0;
   for (const { file, text: text2 } of discovery.specs) {
     const { routes, report } = importSpec(file, text2);
@@ -77881,6 +77912,7 @@ var init_mapAttackSurface = __esm({
   "src/tools/mapAttackSurface.ts"() {
     "use strict";
     init_projectFs();
+    init_projectPath();
     init_zod();
     init_schemas4();
     init_envVars();
@@ -84610,7 +84642,7 @@ async function analyzeServerListingAsync(listing, others, options = {}) {
       break;
     }
     if (steps.next().done === true) break;
-    await new Promise((resolve37) => setImmediate(resolve37));
+    await new Promise((resolve36) => setImmediate(resolve36));
   }
   return finishRun(run2, others);
 }
@@ -87177,7 +87209,7 @@ var init_sse = __esm({
         const baseFetch = this?._eventSourceInit?.fetch ?? this._fetch ?? fetch;
         const fetchImpl = this._followRedirects ? baseFetch : fetchWithinOrigin(baseFetch);
         let redirect;
-        return new Promise((resolve37, reject) => {
+        return new Promise((resolve36, reject) => {
           this._eventSource = new EventSource(this._url.href, {
             ...this._eventSourceInit,
             fetch: async (url2, init) => {
@@ -87199,7 +87231,7 @@ var init_sse = __esm({
           this._abortController = new AbortController();
           this._eventSource.onerror = (event) => {
             if (event.code === 401 && this._authProvider) {
-              this._authThenStart().then(resolve37, reject);
+              this._authThenStart().then(resolve36, reject);
               return;
             }
             const error2 = new SseError(event.code, redirect ?? event.message, event);
@@ -87221,7 +87253,7 @@ var init_sse = __esm({
               void this.close();
               return;
             }
-            resolve37();
+            resolve36();
           });
           this._eventSource.onmessage = (event) => {
             const messageEvent = event;
@@ -88309,7 +88341,7 @@ var init_stdioTransport = __esm({
           this.resumeLater(stderr);
         });
         stdin?.on("error", (e) => this.onerror?.(e));
-        const spawned = new Promise((resolve37) => child.process?.once("spawn", () => resolve37("spawned")));
+        const spawned = new Promise((resolve36) => child.process?.once("spawn", () => resolve36("spawned")));
         this.done = child.done.then((exit) => {
           this.exited = {
             exitCode: exit.exitCode,
@@ -88349,14 +88381,14 @@ var init_stdioTransport = __esm({
         void this.close();
       }
       send(message2) {
-        return new Promise((resolve37, reject) => {
+        return new Promise((resolve36, reject) => {
           const stdin = this.child?.process?.stdin;
           if (stdin === void 0 || stdin === null || this.exited !== null || this.closing !== null) {
             reject(new Error("Not connected"));
             return;
           }
-          if (stdin.write(serializeMessage(message2))) resolve37();
-          else stdin.once("drain", () => resolve37());
+          if (stdin.write(serializeMessage(message2))) resolve36();
+          else stdin.once("drain", () => resolve36());
         });
       }
       /** Kill the whole tree, wait for it (bounded), then report closed. Idempotent. */
@@ -91189,8 +91221,6 @@ var init_vet = __esm({
 });
 
 // src/tools/vetPackages.ts
-import { existsSync as existsSync24, statSync as statSync13 } from "node:fs";
-import { resolve as resolve35 } from "node:path";
 async function handler46(inp, _ctx, callMeta) {
   const ecosystem = ECOSYSTEM_ALIASES[inp.ecosystem];
   if (ecosystem === void 0) {
@@ -91198,10 +91228,9 @@ async function handler46(inp, _ctx, callMeta) {
   }
   let projectDir = process.cwd();
   if (inp.project_path !== void 0 && inp.project_path !== "") {
-    projectDir = resolve35(inp.project_path);
-    if (!existsSync24(projectDir) || !statSync13(projectDir).isDirectory()) {
-      return { ok: false, error: { code: "target_not_found", message: `project_path is not a directory: ${projectDir}` } };
-    }
+    const resolved = toolProjectPath(inp.project_path);
+    if (typeof resolved !== "string") return resolved;
+    projectDir = resolved;
   }
   const specs = [];
   const skipped2 = [];
@@ -91239,6 +91268,7 @@ var init_vetPackages = __esm({
     init_vet();
     init_schemas4();
     init_tools();
+    init_projectArg();
     ECOSYSTEM_ALIASES = {
       npm: "npm",
       pnpm: "npm",
@@ -91402,7 +91432,7 @@ var init_render = __esm({
 
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
-import { existsSync as existsSync25, readFileSync as readFileSync11, writeFileSync as writeFileSync19 } from "node:fs";
+import { existsSync as existsSync24, readFileSync as readFileSync11, writeFileSync as writeFileSync19 } from "node:fs";
 import { basename as basename13, join as join96, posix as posix4, win32 as win322 } from "node:path";
 async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
@@ -91533,7 +91563,7 @@ function readSbom(ctx, projectPath, unknowns) {
     return null;
   }
   const filePath = scan2.meta?.["file_path"];
-  if (typeof filePath !== "string" || !existsSync25(filePath)) {
+  if (typeof filePath !== "string" || !existsSync24(filePath)) {
     unknowns.push(
       `the newest SBOM (${scan2.scan_id}) has no file on disk any more (run generate_sbom again): no purls could be read`
     );
@@ -93996,8 +94026,8 @@ function attachOutputTail(child) {
   return () => tail2;
 }
 function sleep(ms) {
-  return new Promise((resolve37) => {
-    setTimeout(resolve37, ms);
+  return new Promise((resolve36) => {
+    setTimeout(resolve36, ms);
   });
 }
 var POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, KILL_GRACE_MS3, PIPE_ABANDON_MS2, OUTPUT_TAIL_BYTES;
@@ -95178,12 +95208,12 @@ var init_stdio3 = __esm({
         this.onclose?.();
       }
       send(message2) {
-        return new Promise((resolve37) => {
+        return new Promise((resolve36) => {
           const json = serializeMessage(message2);
           if (this._stdout.write(json)) {
-            resolve37();
+            resolve36();
           } else {
-            this._stdout.once("drain", resolve37);
+            this._stdout.once("drain", resolve36);
           }
         });
       }
@@ -95209,14 +95239,14 @@ var init_instructions = __esm({
 
 // src/server.ts
 var server_exports = {};
-import { resolve as resolve36 } from "node:path";
+import { resolve as resolve35 } from "node:path";
 async function main() {
   if (!nodeSqliteAvailable()) {
     process.stderr.write(`${NODE_SQLITE_REQUIRED}
 `);
     process.exit(1);
   }
-  const projectPath = resolve36(process.cwd());
+  const projectPath = resolve35(process.cwd());
   const droppedPath = hardenCommandSearch();
   if (droppedPath.length > 0) logErr(`PATH: dropped relative entries ${droppedPath.map((e) => JSON.stringify(e)).join(", ")} (they name the current directory)`);
   const { db, path: dbPath, warning: storageWarning } = openDatabase({ projectPath });
