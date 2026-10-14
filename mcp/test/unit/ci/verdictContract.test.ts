@@ -6,23 +6,30 @@
  * failing on either side — the two plugins' tests each used their own fake
  * of the other (review 8, C12).
  *
- * This file freezes what dev-spec-driven reads:
+ * What dev-spec-driven reads (its reader, `guardianRecord` in
+ * `mcp/lib/engine/guardian.js`; unchanged from 1.30.0 to 1.30.1):
  *
  *   - since 1.29 — `exit_code` (0 pass · 1 blocked · 2 incomplete · 3
- *     config/usage), `coverage`, `coverage_gaps` (a STRING array),
- *     `new_findings`, `blocking_findings[].{file_path, line_start, severity,
+ *     config/usage; a report that contradicts the process's exit is refused),
+ *     `coverage_gaps` (a STRING array, its first three lines), `new_findings`
+ *     (its length), `blocking_findings[].{file_path, line_start, severity,
  *     rule_id, title, tool}` (`tool` labels a finding with neither rule nor
- *     title), `baseline_absent`, `accepted_gaps`;
- *   - since 3.3.0 (dev-spec-driven 1.30 reads them when present) —
- *     `tool_version`, `coverage_gap_details[].{tool, kind, detail, remedy,
- *     gating}` (one per `coverage_gaps` line, same order, then the non-gating
- *     notes), `baseline_status`, and `--compact` (`new_findings` cut to the
- *     blocking ones, with `new_findings_count` and `new_findings_by_severity`).
+ *     title);
+ *   - since 1.30, when present (dev-guardian 3.3.0 and later) —
+ *     `tool_version`, `baseline_absent` or `baseline_status` (`absent`: every
+ *     existing finding counted as new), `new_findings_count` (before
+ *     `new_findings`, so a `--compact` report counts right) and the gating
+ *     `coverage_gap_details[].{tool, kind, remedy}` (`gating: false` entries
+ *     skipped).
  *
- * Checked against dev-spec-driven 1.30.0's reader, `guardianRecord` in its
- * `mcp/lib/engine/guardian.js`: it reads no key this file does not freeze.
- * Keys are only ever added. Change one of these and this test fails before
- * dev-spec-driven's gate quietly stops reading the verdict.
+ * dev-spec-driven 1.30.x reads neither `coverage` nor `accepted_gaps` (nor a
+ * gap's `detail`, `new_findings_by_severity` or `compact`): it takes the
+ * verdict from `exit_code` and the gaps from `coverage_gaps` /
+ * `coverage_gap_details`. This file freezes those keys too — they are the
+ * documented verdict (docs/ci.md) other callers read — so it holds more than
+ * dev-spec-driven needs, never less. Keys are only ever added. Change one of
+ * these and this test fails before dev-spec-driven's gate quietly stops
+ * reading the verdict.
  */
 import { describe, expect, it } from 'vitest';
 import { evaluateGate } from '../../../src/ci/gate.js';
@@ -30,7 +37,7 @@ import { renderJson } from '../../../src/ci/report.js';
 import { CI_EXIT, GAP_KINDS, type ScanStepResult } from '../../../src/ci/types.js';
 import { SEVERITIES, type Finding } from '../../../src/types.js';
 
-/** The GapKind set of the contract (scratch CONTRACT.md for dev-spec-driven 1.30 ↔ dev-guardian 3.3.0). */
+/** The GapKind set of the contract: dev-spec-driven 1.30.x's `GUARDIAN_GAP_KINDS` (an unknown kind reads `other` there). */
 const CONTRACT_GAP_KINDS = [
   'missing_tool',
   'no_lockfile',
@@ -83,7 +90,7 @@ function verdictOf(): ReturnType<typeof evaluateGate> {
 describe('the JSON verdict dev-spec-driven parses (contract)', () => {
   const json = JSON.parse(renderJson(verdictOf(), { toolVersion: '3.3.0' })) as Record<string, unknown>;
 
-  it('keeps every key dev-spec-driven 1.29 reads, with its type', () => {
+  it('keeps every key dev-spec-driven 1.29 reads, and coverage, baseline_absent and accepted_gaps, with their types', () => {
     expect(json['exit_code']).toBe(CI_EXIT.GATE_FAILED);
     expect([0, 1, 2, 3]).toContain(json['exit_code']);
     expect(['full', 'partial', 'none']).toContain(json['coverage']);
