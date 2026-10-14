@@ -45,7 +45,8 @@ Enforced by the compiler where possible, by review where not:
   cast from the registry's `Record<string, unknown>` is inside those two
   helpers: the SDK and a fold hand a handler the strict parse of exactly that
   schema (dg-maint finding 12 found 51 hand-written `input as {…}` casts).
-  The LLM scan's three tools are not converted yet.
+  The LLM scan's three tools also parse their input again in the handler
+  (a step's own refusal is `invalid_input`); `check_toolchain` takes none.
 - **A tool's `project_path` is `toolProjectPath(inp.project_path)`**
   (`tools/projectArg.ts`): the resolved path, or the `{ ok: false, error }`
   refusal (`projectPathErrorCode`'s code) a handler returns as it is — not a
