@@ -99601,6 +99601,15 @@ function collect(command, depth, out, scope) {
   if (commandText.includes("<(")) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
   const dirs = workdirs(statements);
   const startDir = scope.dir;
+  let memoSteps;
+  let memoDir;
+  const dirOf5 = (steps) => {
+    if (steps !== memoSteps) {
+      memoSteps = steps;
+      memoDir = dirAfter(startDir, steps, scope.homePath);
+    }
+    return memoDir;
+  };
   const powershellScope = scope.powershell === true;
   collectFed(
     [
@@ -99639,7 +99648,7 @@ function collect(command, depth, out, scope) {
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const here = dirAfter(startDir, dirs[s]?.[c]?.may ?? null, scope.homePath);
+      const here = dirOf5(dirs[s]?.[c]?.may ?? null);
       const deleting = {
         dir: here,
         vars: scope.vars,
@@ -99696,7 +99705,8 @@ function collect(command, depth, out, scope) {
       }
       moveCwd(scope, words, resolved.index);
     }
-    collectFed(fedScripts(statement, readsScript, scope.powershell === true), depth, out, { ...scope, dir: dirAfter(startDir, dirs[s]?.[0]?.may ?? null, scope.homePath) });
+    const fed = fedScripts(statement, readsScript, scope.powershell === true);
+    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf5(dirs[s]?.[0]?.may ?? null) });
     for (const { text: text2, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });

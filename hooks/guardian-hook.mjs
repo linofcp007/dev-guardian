@@ -1541,7 +1541,11 @@ function withHome(path) {
   const m = /^~(?:[\\/]+|$)/.exec(path);
   if (m === null) return [path];
   const rest = path.slice(m[0].length).replace(/\\/g, '/');
-  return [path, rest === '' ? homedir() : join(homedir(), rest)];
+  try {
+    return [path, rest === '' ? homedir() : join(homedir(), rest)];
+  } catch {
+    return [path]; // no home directory (no passwd entry): only as written
+  }
 }
 
 /**

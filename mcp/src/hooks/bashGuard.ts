@@ -3911,6 +3911,18 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   // 3.4.0, finding 9): a relative delete target is read against it.
   const dirs = workdirs(statements);
   const startDir = scope.dir;
+  // Worked out once per list of moves: the tracker hands every command up to
+  // the next move the same list, so a line of thousands of commands after
+  // dozens of `cd`s does not fold the same path thousands of times.
+  let memoSteps: Steps | undefined;
+  let memoDir: string | undefined;
+  const dirOf = (steps: Steps): string | undefined => {
+    if (steps !== memoSteps) {
+      memoSteps = steps;
+      memoDir = dirAfter(startDir, steps, scope.homePath);
+    }
+    return memoDir;
+  };
   // What a reader is fed from outside one statement's pipeline (review of
   // 3.4.0, finding 6): `tee >(bash)`, `(echo …) | bash`, `{ …; } | bash`,
   // `iex (gc x.ps1 -Raw)`, and a script block made from text.
@@ -3966,7 +3978,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const here = dirAfter(startDir, dirs[s]?.[c]?.may ?? null, scope.homePath);
+      const here = dirOf(dirs[s]?.[c]?.may ?? null);
       const deleting: DeleteContext = {
         dir: here,
         vars: scope.vars,
@@ -4053,7 +4065,8 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // `scriptReader` — plus either a heredoc on the same statement or the
     // members before it). A program an interpreter reads the same way
     // (`python - <<EOF`) is judged as program text, like `python -c`.
-    collectFed(fedScripts(statement, readsScript, scope.powershell === true), depth, out, { ...scope, dir: dirAfter(startDir, dirs[s]?.[0]?.may ?? null, scope.homePath) });
+    const fed = fedScripts(statement, readsScript, scope.powershell === true);
+    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf(dirs[s]?.[0]?.may ?? null) });
     for (const { text, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });

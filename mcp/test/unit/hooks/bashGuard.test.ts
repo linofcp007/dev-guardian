@@ -4148,6 +4148,7 @@ describe('assessBashCommand — a delete target read where the command runs (rev
     ['cd cd cd … then a delete', (n: number): string => `${'cd a; '.repeat(n / 6)}rm -rf ..`],
     ['a delete after each cd', (n: number): string => 'cd a; rm -rf x; '.repeat(n / 16)],
     ['a long relative target', (n: number): string => `rm -rf ${'a/'.repeat(n / 2)}..`],
+    ['many commands after dozens of cds', (n: number): string => `${'cd aaaaaaaa; '.repeat(60)}${'rm -rf x; '.repeat(n / 10)}`],
   ])('%s: eight times the command costs well under 22.6 times as much', (label, make) => {
     expectLinear(label, (n) => assessBashCommand(make(n), win), 2_000);
   }, 120_000);
