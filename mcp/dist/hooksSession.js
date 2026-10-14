@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3919591, sha256: "0f486da2899d40064017db9059afeff37d4800b325d6b1b61cdb296186d2a243" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3939665, sha256: "1dc4e50153b6e5b0d79a626dd9a774d21b8609fe0ec46d17a8888eb5cdc9d8cc" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -131,9 +131,12 @@ var MAX_LINK_HOPS = 32;
 function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
+function climbsOut(rel) {
+  return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\");
+}
 function walkLinksUnder(under, path) {
   const rel = relative(resolve(under), resolve(path));
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { ok: true };
+  if (rel === "" || climbsOut(rel) || isAbsolute(rel)) return { ok: true };
   let current = resolve(under);
   const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;

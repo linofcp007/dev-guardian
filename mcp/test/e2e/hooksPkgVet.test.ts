@@ -552,12 +552,25 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
       for (const name of NAMES) expect(said).toContain(name);
     }, 120_000);
 
-    it('GUARDIAN_PKG_VET_DEADLINE_MS=0: every package reads "time budget", never silence', () => {
+    // Review of 3.4.0, finding 4: `GUARDIAN_PKG_VET_DEADLINE_MS=1` (or 0) left
+    // no time to look anything up — the deny of a malicious package became a
+    // "not verified" note. The deadline is never below the network budget.
+    it.each(['0', '1'])('GUARDIAN_PKG_VET_DEADLINE_MS=%s still looks every package up', (deadline) => {
       const routes: Record<string, Route> = { [OSV]: { osv: {} } };
       for (const name of NAMES) routes[`https://registry.npmjs.org/${name}`] = { status: 404 };
-      const r = runHook(`npm i ${NAMES.join(' ')}`, routes, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '0' } });
-      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
-      expect(r.output?.hookSpecificOutput?.additionalContext).toMatch(/time budget/);
+      const r = runHook(`npm i ${NAMES.join(' ')}`, routes, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: deadline } });
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(`${r.output?.hookSpecificOutput?.permissionDecisionReason ?? ''}${r.output?.hookSpecificOutput?.additionalContext ?? ''}`).not.toMatch(
+        /time budget/,
+      );
+    });
+
+    it('GUARDIAN_PKG_VET_DEADLINE_MS=1 still denies a malicious version', () => {
+      const r = runHook('npm i evil-cli-zz@1.0.0', {
+        'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+        [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+      }, { env: { GUARDIAN_PKG_VET_DEADLINE_MS: '1' } });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain('MAL-2026-0077');
     });
   });
 });

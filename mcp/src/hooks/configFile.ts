@@ -126,6 +126,17 @@ export function localShareAsLocal(path: string, hostname = ''): string | undefin
 export type LinkWalk = { ok: true } | { ok: false; reason: 'remote-link' | 'unreadable'; at: string };
 
 /**
+ * Whether a `path.relative()` result climbs out of the directory it is
+ * relative to: `..`, or `..` and a separator — never a first component that
+ * merely starts with two dots. `rel.startsWith('..')` took `..x/hooks.json`,
+ * a name inside the directory, for a path outside it, and the link walk below
+ * skipped it (review of 3.4.0, plausible).
+ */
+export function climbsOut(rel: string): boolean {
+  return rel === '..' || rel.startsWith('../') || rel.startsWith('..\\');
+}
+
+/**
  * Walks `path`'s components below `under` with `lstat` and `readlink` only —
  * never opening, stat-ing or otherwise following a link — and says whether any
  * link on the way (a local link's own target included, hop by hop) points off
@@ -136,7 +147,7 @@ export type LinkWalk = { ok: true } | { ok: false; reason: 'remote-link' | 'unre
  */
 export function walkLinksUnder(under: string, path: string): LinkWalk {
   const rel = relative(resolve(under), resolve(path));
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return { ok: true };
+  if (rel === '' || climbsOut(rel) || isAbsolute(rel)) return { ok: true };
   let current = resolve(under);
   const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;

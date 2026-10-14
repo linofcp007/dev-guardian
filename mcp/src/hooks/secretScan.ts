@@ -241,11 +241,23 @@ function isBoundary(text: string, at: number): boolean {
  * nothing more.
  */
 function runEnds(text: string, inClass: (c: number) => boolean): (i: number) => number {
+  const cached = RUN_ENDS.get(inClass);
+  if (cached !== undefined && cached.text === text) return cached.end;
   const ends = new Int32Array(text.length + 1);
   ends[text.length] = text.length;
   for (let i = text.length - 1; i >= 0; i -= 1) ends[i] = inClass(text.charCodeAt(i)) ? (ends[i + 1] ?? i) : i;
-  return (i: number): number => (i >= text.length ? text.length : (ends[i] ?? i));
+  const end = (i: number): number => (i >= text.length ? text.length : (ends[i] ?? i));
+  RUN_ENDS.set(inClass, { text, end });
+  return end;
 }
+
+/**
+ * The last window's run ends, per class: a finder called again in the same
+ * window — past a match set aside ({@link firstHit}) — reuses them instead of
+ * making one more pass over the whole window, so a window full of placeholders
+ * costs one pass, not one per placeholder.
+ */
+const RUN_ENDS = new Map<(c: number) => boolean, { text: string; end: (i: number) => number }>();
 
 /**
  * The `jwt` pattern's first match at or after `from`, in linear time. A
@@ -505,25 +517,24 @@ function firstMatch(rule: SecretRule, re: RegExp, w: LineWindow, start = 0): Sec
 }
 
 /**
- * How many matches of one rule in one window may be set aside — a placeholder
- * (AWS's documented example key), a value too plain to be a credential —
- * before the rest of the window is left unread for that rule. A rule used to
- * stop at its first match: AWS's example key and a real key on one line
- * reported nothing at all, the real key hidden behind the documented one
- * (review of 3.3.0). The cap keeps a window's cost bounded — a line of nothing
- * but placeholders costs this many searches per rule, never one per match.
+ * A rule's first match in a window that is a hit — past every match set aside
+ * before it: a placeholder (AWS's documented example key), a value too plain
+ * to be a credential. A rule used to stop at its first match, and AWS's
+ * example key before a real key on one line reported nothing at all (review of
+ * 3.3.0); then it set aside at most 16, and 17 example keys before a real one
+ * hid it again (review of 3.4.0, finding 11). Each search starts where the one
+ * before ended, and a finder's run ends are worked out once per window
+ * ({@link runEnds}), so all the searches of a window read it about once: a
+ * line of nothing but placeholders costs what a line with none does.
  */
-const MAX_SET_ASIDE = 16;
-
-/** A rule's first match in a window that is a hit — past the placeholders before it, up to {@link MAX_SET_ASIDE} of them. */
 function firstHit(rule: SecretRule, re: RegExp, w: LineWindow, line: number, skipPlaceholders: boolean): SecretHit | null {
   let start = 0;
-  for (let k = 0; k <= MAX_SET_ASIDE && start <= w.text.length; k += 1) {
+  while (start <= w.text.length) {
     const m = firstMatch(rule, re, w, start);
     if (m === null) return null;
     const hit = judge(rule, m, line, skipPlaceholders);
     if (hit !== null) return hit;
-    start = m.index + Math.max(1, m.text.length);
+    start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
   }
   return null;
 }

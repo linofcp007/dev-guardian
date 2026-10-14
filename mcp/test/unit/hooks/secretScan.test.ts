@@ -250,6 +250,17 @@ describe('scanForSecrets — task-1: ReDoS caps (finding 9)', () => {
 
   // Typical, idle, at 100 KB: under 5 ms.
   lineShape('a single long unquoted line', (n) => `password = "${'a'.repeat(n)}"`, 100_000, 500);
+
+  // Review of 3.4.0, finding 11: every match set aside is read past, so a line
+  // of nothing but placeholders must not cost a search of the window per
+  // placeholder — the provider rules' AWS example key and the `.env` rule's
+  // plain values alike (its run ends were worked out again for each one).
+  lineShape(
+    'a line of nothing but placeholders',
+    (n) => `${`'${['AKIA', 'IOSFODNN7', 'EXAMPLE'].join('')}' password=changeme12 `.repeat(Math.ceil(n / 43))}`,
+    200_000,
+    500,
+  );
 });
 
 /**
@@ -427,13 +438,18 @@ describe('scanForSecrets — review 8: documentation is not a credential (item 1
     expect(scanForSecrets('password = "changeme"; password = "Gx7$kPq2zVw9MtRb"').length).toBeGreaterThan(0);
   });
 
-  it('a line of nothing but placeholders costs a bounded number of searches, not one per match', () => {
+  // Review of 3.4.0, finding 11: a cap of 16 set-aside matches per window let
+  // 17 example keys hide the real one after them, at either confidence. The
+  // cost of reading past them is held linear in the ReDoS block above.
+  it('any number of placeholders before a real key does not hide it', () => {
     const example = join('AKIA', 'IOSFODNN7', 'EXAMPLE');
-    // Past the cap of set-aside matches, a real key further along the line is not read — the price of a bounded window.
-    const many = `${`'${example}', `.repeat(40)}'${FAKE_AWS_KEY}'`;
-    expect(scanForSecrets(many, { minConfidence: 'high' })).toEqual([]);
-    const few = `${`'${example}', `.repeat(10)}'${FAKE_AWS_KEY}'`;
-    expect(scanForSecrets(few, { minConfidence: 'high' }).map((h) => h.ruleId)).toEqual(['aws-access-key-id']);
+    for (const count of [17, 40, 600]) {
+      const many = `${`'${example}', `.repeat(count)}'${FAKE_AWS_KEY}'`;
+      expect(scanForSecrets(many, { minConfidence: 'high' }).map((h) => h.ruleId), `${String(count)} placeholders`).toEqual(['aws-access-key-id']);
+      expect(scanForSecrets(many).map((h) => h.ruleId), `${String(count)} placeholders, medium`).toContain('aws-access-key-id');
+    }
+    // …and for the `.env` rule, past plain values set aside.
+    expect(scanForSecrets(`${'password=changeme12 '.repeat(40)}password=Gx7kPq2zVw9MtRbQ`).map((h) => h.ruleId)).toContain('generic-assignment-env');
   });
 
   it('redaction (skipPlaceholders: false) keeps every one of them', () => {

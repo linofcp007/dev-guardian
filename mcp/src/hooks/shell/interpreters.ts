@@ -179,6 +179,25 @@ export function powershellCommand(args: readonly string[], name: string): string
 }
 
 /**
+ * Whether `pwsh` / `powershell` with these arguments runs what arrives on its
+ * stdin (review of 3.4.0, finding 6): `-Command -` (`-c -`), `-File -`, or no
+ * command and no file at all — the host then reads its input as commands.
+ */
+export function powershellReadsStdin(args: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (a === '-') return true;
+    const m = /^[-/]([A-Za-z]+)$/.exec(a);
+    if (m === null) return false;
+    const p = (m[1] ?? '').toLowerCase();
+    if (p === 'c' || (p.length >= 3 && 'command'.startsWith(p)) || p === 'f' || p === 'file') return args[i + 1] === undefined || args[i + 1] === '-';
+    if (p === 'e' || (p.length >= 2 && 'encodedcommand'.startsWith(p))) return false;
+    if (PS_HOST_VALUED.has(p)) i += 1;
+  }
+  return true;
+}
+
+/**
  * Program text a command hands an interpreter on its own command line —
  * `node -e`, `python -c`, `perl -e`, `ruby -e`, `php -r`, `deno eval`,
  * `pwsh -Command` / `-EncodedCommand`, also behind `uv run` and the like. A

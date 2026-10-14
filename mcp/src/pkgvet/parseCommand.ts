@@ -25,8 +25,9 @@
  * (`hooks/shell/`), which is dependency-free — the hook loads this file from `mcp/dist`.
  */
 
-import { commandWordIndex } from '../hooks/shell/command.js';
+import { commandWordIndex, resolveCommand } from '../hooks/shell/command.js';
 import { splitShell, type ShellWord } from '../hooks/shell/split.js';
+import { workdirs } from '../hooks/shell/workdir.js';
 import { powershellAsPosix } from '../hooks/powershellText.js';
 
 export { powershellAsPosix };
@@ -75,11 +76,22 @@ export interface InstallCommand {
    * Where the command runs when a directory change earlier in the line moved
    * it: the targets of those `cd` / `pushd` / `Set-Location` words in order,
    * each relative to the one before (the hook resolves them against its own
-   * working directory) — `cd mcp && npx vitest run` runs `mcp`'s vitest.
-   * `null` when one of them went somewhere this parse cannot tell (`cd "$X"`,
-   * `cd -`, `popd`, a bare `cd`); absent when nothing moved it.
+   * working directory, and checks that each is a directory: a `cd` to one that
+   * is not there moved nothing) — `cd mcp && npx vitest run` runs `mcp`'s
+   * vitest. Only a move that surely ran counts (`shell/workdir.ts`'s `sure`,
+   * the shell guard's tracker): `null` when one may not have (`false && cd
+   * web`, `if …; then cd web; fi`, a function body, `{ cd web; } &`, under
+   * `CDPATH`), or went somewhere this parse cannot tell (`cd "$X"`, `popd`
+   * past the stack), or when the launcher itself runs elsewhere (`env -C`,
+   * `sudo -D`); absent when nothing moved it.
    */
   workdir?: readonly string[] | null;
+  /**
+   * The launcher was given npm's `--prefix` (`-C`): it looks for the project
+   * there, not where the command runs — so nothing is taken as installed
+   * (review of 3.4.0, finding 5).
+   */
+  prefixed?: boolean;
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -414,7 +426,7 @@ const UV_REGISTRY = ['--index', '--index-url', '--default-index', '--extra-index
  */
 const LAUNCH_FLAGS: Record<string, FlagTable> = {
   npx: {
-    value: set('--package', '-p', '--call', '-c', '--registry', '--cache', '--userconfig', '--prefix', '--workspace', '-w',
+    value: set('--package', '-p', '--call', '-c', '--registry', '--cache', '--userconfig', '--prefix', '-C', '--workspace', '-w',
       '--loglevel', '--node-options'),
     bool: set('--yes', '-y', '--no', '--no-install', '--ignore-existing', '--quiet', '-q', '--silent', '--prefer-offline',
       '--prefer-online', '--offline', '--workspaces', '--include-workspace-root', '--verbose'),
@@ -821,6 +833,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (registry !== undefined) out.customRegistry = registry;
   if (launch.localFirst === true) out.localFirst = true;
   if (byPackageFlag) out.byPackageFlag = true;
+  if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
   return out;
 }
 
@@ -931,14 +944,15 @@ function packageKey(p: PackageSpec): string {
  */
 export function parseInstallCommands(
   command: string,
-  opts: { shell?: CommandShell; nested?: ReadonlyArray<{ text: string; shell: CommandShell }> } = {},
+  opts: { shell?: CommandShell; nested?: ReadonlyArray<{ text: string; shell: CommandShell }>; cdpath?: boolean } = {},
 ): InstallCommand[] {
-  const out = readingsOf(command, opts.shell ?? 'bash', null);
+  const cdpath = opts.cdpath === true;
+  const out = readingsOf(command, opts.shell ?? 'bash', null, cdpath);
   if (opts.nested === undefined || opts.nested.length === 0) return out;
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const moved = movesDirectory(stripComments(command));
   for (const script of opts.nested) {
-    for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT)) {
+    for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
       if (packages.length === 0) continue;
       for (const p of packages) seen.add(packageKey(p));
@@ -952,14 +966,14 @@ export function parseInstallCommands(
 const NESTED_SCRIPT = 'found in a script the command hands a shell (bash -c, cmd /c, pwsh -c, a script piped to a shell) — vetted, never denied as missing';
 
 /** The install commands of `command` read the POSIX way and — for PowerShell — the way PowerShell reads it. */
-function readingsOf(command: string, shell: CommandShell, forced: string | null): InstallCommand[] {
+function readingsOf(command: string, shell: CommandShell, forced: string | null, cdpath: boolean): InstallCommand[] {
   const text = stripComments(command);
-  const out = parseReading(text, forced);
+  const out = parseReading(text, forced, cdpath);
   if (shell !== 'powershell') return out;
   const asPowerShell = powershellAsPosix(text);
   if (asPowerShell === text) return out;
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
-  for (const c of parseReading(asPowerShell, POWERSHELL_READING)) {
+  for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     if (packages.length === 0) continue;
     for (const p of packages) seen.add(packageKey(p));
@@ -982,7 +996,7 @@ function movesDirectory(text: string): boolean {
  * is the reason no package of this reading may be denied as missing;
  * otherwise the controller ruling's confident-shape test decides.
  */
-function parseReading(text: string, forced: string | null): InstallCommand[] {
+function parseReading(text: string, forced: string | null, cdpath: boolean): InstallCommand[] {
   const out: InstallCommand[] = [];
   let split;
   try {
@@ -994,12 +1008,12 @@ function parseReading(text: string, forced: string | null): InstallCommand[] {
   // denylist of uncertainty signals. `null` = deny-eligible.
   const notConfident = forced ?? confidentShape(text);
   const envChange = changesEnvironment(text, split.statements);
+  // Where each command runs, as the shell guard's tracker reads the `cd`s
+  // (review of 3.4.0, finding 5): only a move that surely ran counts.
+  const dirs = workdirs(split.statements, { cdpath });
   let dirChanged = false;
-  let workdir: readonly string[] | null | undefined;
-  // Where the command was when each subshell (`(`, `$(`) it is inside began.
-  const outer: Array<readonly string[] | null | undefined> = [];
-  for (const statement of split.statements) {
-    for (const words of statement.commands) {
+  split.statements.forEach((statement, s) => {
+    statement.commands.forEach((words, w) => {
       const d = detect(words);
       if (d !== null) {
         const context: string[] = [];
@@ -1007,27 +1021,28 @@ function parseReading(text: string, forced: string | null): InstallCommand[] {
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
         const c = collect(d, context);
         c.uncertain = notConfident === null ? [] : [...new Set([notConfident, ...c.uncertain])];
-        if (workdir !== undefined) c.workdir = workdir;
+        const sure = dirs[s]?.[w]?.sure ?? null;
+        if (runsElsewhere(words)) c.workdir = null;
+        else if (sure === null || sure.length > 0) c.workdir = sure;
         out.push(c);
       }
-      if (changesDirectory(words)) {
-        dirChanged = true;
-        // A `cd` in a pipeline or sent to the background moves a subshell,
-        // not the command after it — in bash; a PowerShell pipeline is the
-        // same runspace. Not known, then: nothing is taken as installed
-        // (review of 3.3.0: `cd web | cat; npx x`, `cd web & npx x` ran the
-        // check in `web`).
-        workdir = statement.commands.length > 1 || statement.end === '&' ? null : directoryAfter(workdir, words);
-      }
-    }
-    // A subshell's `cd` ends with it: `(cd web && npm ci) && npx x` runs `x`
-    // where the line began. A `)` whose `(` this split did not mark (one at
-    // the start of the line) leaves no way to tell what moved inside it.
-    if (statement.end === '(') outer.push(workdir);
-    else if (statement.end === ')') workdir = outer.length > 0 ? outer.pop() : workdir === undefined ? undefined : null;
-    else if (statement.end === '`') workdir = workdir === undefined ? undefined : null;
-  }
+      if (changesDirectory(words)) dirChanged = true;
+    });
+  });
   return out;
+}
+
+/** A runner in front of the command that moves it elsewhere first: `env -C dir`, `env --chdir=dir`, `sudo -D dir`, `sudo --chdir dir`. */
+function runsElsewhere(words: readonly ShellWord[]): boolean {
+  const at = resolveCommand(words).index;
+  let runner = '';
+  for (const w of words.slice(0, at)) {
+    const name = base(w.value);
+    if (name === 'env' || name === 'sudo' || name === 'doas') runner = name;
+    else if (runner === 'env' && /^(?:-[A-Za-z]*C|--chdir(?:=|$))/.test(w.value)) return true;
+    else if (runner === 'sudo' && /^(?:-[A-Za-z]*D|--chdir(?:=|$))/.test(w.value)) return true;
+  }
+  return false;
 }
 
 /**
@@ -1342,32 +1357,6 @@ const DIR_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'p
 function changesDirectory(words: readonly ShellWord[]): boolean {
   const head = words[commandStart(words)];
   return head !== undefined && DIR_COMMANDS.has(base(head.value));
-}
-
-/** A target this parse cannot read literally: an expansion, a glob, a cmd.exe `%VAR%`. */
-const UNREAD_TARGET = /[$`%*?[\]{}]/;
-
-/**
- * The working directory after one directory command ({@link changesDirectory}),
- * as {@link InstallCommand.workdir} spells it: `prev` with its target appended,
- * or `null` when the target cannot be read (an expansion, `cd -`, `popd`, no
- * operand or several). The flags of `cd` (`-L`, `-P`, `-e`, `-@`), of
- * `Set-Location` (`-Path`, `-LiteralPath`) and cmd.exe's `cd /d` are skipped.
- */
-function directoryAfter(prev: readonly string[] | null | undefined, words: readonly ShellWord[]): readonly string[] | null {
-  if (prev === null) return null;
-  const at = commandStart(words);
-  const name = base(words[at]?.value ?? '');
-  if (name === 'popd' || name === 'pop-location') return null;
-  const steps = prev ?? [];
-  if (name === 'cd..') return [...steps, '..'];
-  const operands = words
-    .slice(at + 1)
-    .map((w) => w.value)
-    .filter((v, _, all) => !/^-[LPe@]+$/.test(v) && !/^-(?:path|literalpath)$/i.test(v) && !(all.length > 1 && /^\/d$/i.test(v)));
-  const target = operands[0];
-  if (operands.length !== 1 || target === undefined || target === '' || target === '-' || UNREAD_TARGET.test(target)) return null;
-  return [...steps, target];
 }
 
 const ENV_COMMANDS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx']);

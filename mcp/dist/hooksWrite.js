@@ -154,11 +154,16 @@ function isBoundary(text, at) {
   return before !== after;
 }
 function runEnds(text, inClass) {
+  const cached = RUN_ENDS.get(inClass);
+  if (cached !== void 0 && cached.text === text) return cached.end;
   const ends = new Int32Array(text.length + 1);
   ends[text.length] = text.length;
   for (let i = text.length - 1; i >= 0; i -= 1) ends[i] = inClass(text.charCodeAt(i)) ? ends[i + 1] ?? i : i;
-  return (i) => i >= text.length ? text.length : ends[i] ?? i;
+  const end = (i) => i >= text.length ? text.length : ends[i] ?? i;
+  RUN_ENDS.set(inClass, { text, end });
+  return end;
 }
+var RUN_ENDS = /* @__PURE__ */ new Map();
 function findJwt(text, from) {
   if (!text.includes(".eyJ", from)) return null;
   const end = runEnds(text, isB64url);
@@ -328,15 +333,14 @@ function firstMatch(rule, re, w, start = 0) {
   }
   return null;
 }
-var MAX_SET_ASIDE = 16;
 function firstHit(rule, re, w, line, skipPlaceholders) {
   let start = 0;
-  for (let k = 0; k <= MAX_SET_ASIDE && start <= w.text.length; k += 1) {
+  while (start <= w.text.length) {
     const m = firstMatch(rule, re, w, start);
     if (m === null) return null;
     const hit = judge(rule, m, line, skipPlaceholders);
     if (hit !== null) return hit;
-    start = m.index + Math.max(1, m.text.length);
+    start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
   }
   return null;
 }
@@ -406,6 +410,7 @@ __export(settingsGuard_exports, {
   applyEdit: () => applyEdit,
   hookLooseningSettings: () => hookLooseningSettings,
   isClaudeSettingsPath: () => isClaudeSettingsPath,
+  newlyAsked: () => newlyAsked,
   newlyLoosened: () => newlyLoosened
 });
 function isClaudeSettingsPath(path, configDir) {
@@ -425,53 +430,160 @@ var ENV_SWITCHES = [
   { name: "GUARDIAN_HOOKS_BASH_BLOCK", off: ["0", "false"] },
   { name: "GUARDIAN_PKG_VET", off: ["0"] }
 ];
-function isPlainObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+var ENV_ANY_VALUE = ["NODE_OPTIONS", "GUARDIAN_PKG_VET_DEADLINE_MS"];
+var ENV_ASKED = ["PATH", "HOME", "USERPROFILE"];
 var OUR_PLUGIN = /dev-guardian/i;
-function fromObject(settings) {
-  const found = [];
-  if (settings["disableAllHooks"] === true) found.push("disableAllHooks: true");
-  const env = settings["env"];
-  if (isPlainObject(env)) {
-    for (const [key, value] of Object.entries(env)) {
-      const sw = ENV_SWITCHES.find((s) => s.name === key.toUpperCase());
-      if (sw !== void 0 && sw.off.includes(String(value))) found.push(`env ${sw.name}=${String(value)}`);
-    }
+var LenientObject = class {
+  constructor(entries) {
+    this.entries = entries;
   }
-  const plugins = settings["enabledPlugins"];
-  if (isPlainObject(plugins)) {
-    for (const [id, enabled] of Object.entries(plugins)) {
-      if (enabled === false && OUR_PLUGIN.test(id)) found.push(`enabledPlugins ${id}=false`);
+  entries;
+};
+var MAX_LENIENT_DEPTH = 64;
+function readLenient(text) {
+  let i = 0;
+  const n = text.length;
+  const NUMBER = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  const skip = () => {
+    while (i < n) {
+      const c = text.charCodeAt(i);
+      if (c === 32 || c === 9 || c === 10 || c === 13) i += 1;
+      else if (c === 47 && text.charCodeAt(i + 1) === 47) {
+        const end = text.indexOf("\n", i);
+        i = end < 0 ? n : end + 1;
+      } else if (c === 47 && text.charCodeAt(i + 1) === 42) {
+        const end = text.indexOf("*/", i + 2);
+        if (end < 0) throw new Error("unterminated comment");
+        i = end + 2;
+      } else return;
+    }
+  };
+  const string = () => {
+    let j = i + 1;
+    while (j < n && text.charCodeAt(j) !== 34) j += text.charCodeAt(j) === 92 ? 2 : 1;
+    if (j >= n) throw new Error("unterminated string");
+    const value2 = JSON.parse(text.slice(i, j + 1));
+    i = j + 1;
+    return String(value2);
+  };
+  const value = (depth) => {
+    if (depth > MAX_LENIENT_DEPTH) throw new Error("too deep");
+    skip();
+    const c = text.charAt(i);
+    if (c === '"') return string();
+    if (c === "{" || c === "[") {
+      const object = c === "{";
+      i += 1;
+      const entries = [];
+      const items = [];
+      for (; ; ) {
+        skip();
+        if (text.charAt(i) === (object ? "}" : "]")) {
+          i += 1;
+          return object ? new LenientObject(entries) : items;
+        }
+        if (object) {
+          if (text.charAt(i) !== '"') throw new Error("a key expected");
+          const key = string();
+          skip();
+          if (text.charAt(i) !== ":") throw new Error("a colon expected");
+          i += 1;
+          entries.push([key, value(depth + 1)]);
+        } else items.push(value(depth + 1));
+        skip();
+        if (text.charAt(i) === ",") i += 1;
+        else if (text.charAt(i) !== (object ? "}" : "]")) throw new Error("a comma expected");
+      }
+    }
+    for (const [word, literal] of [["true", true], ["false", false], ["null", null]]) {
+      if (text.startsWith(word, i)) {
+        i += word.length;
+        return literal;
+      }
+    }
+    NUMBER.lastIndex = i;
+    const m = NUMBER.exec(text);
+    if (m === null) throw new Error("a value expected");
+    i += m[0].length;
+    return Number(m[0]);
+  };
+  try {
+    const v = value(0);
+    skip();
+    return i === n ? v : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function truthy(v) {
+  return v instanceof LenientObject || Array.isArray(v) || Boolean(v);
+}
+function scalar(v) {
+  return v instanceof LenientObject || Array.isArray(v) ? void 0 : String(v);
+}
+function judgeEnv(key, value, found) {
+  const name = key.toUpperCase();
+  const text = scalar(value);
+  if (text === void 0) return;
+  const sw = ENV_SWITCHES.find((s) => s.name === name);
+  if (sw !== void 0 && sw.off.includes(text)) found.off.push(`env ${sw.name}=${text}`);
+  if (ENV_ANY_VALUE.includes(name)) found.off.push(`env ${name}=${text}`);
+  if (ENV_ASKED.includes(name)) found.ask.push(`env ${name}=${text}`);
+}
+function fromObject(settings) {
+  const found = { off: [], ask: [] };
+  for (const [key, value] of settings.entries) {
+    if (key === "disableAllHooks" && truthy(value)) found.off.push("disableAllHooks: true");
+    else if (key === "env" && value instanceof LenientObject) {
+      for (const [name, v] of value.entries) judgeEnv(name, v, found);
+    } else if (key === "enabledPlugins" && value instanceof LenientObject) {
+      for (const [id, enabled] of value.entries) {
+        if (enabled !== true && OUR_PLUGIN.test(id)) found.off.push(`enabledPlugins ${id}=false`);
+      }
     }
   }
   return found;
 }
 var TEXT_PATTERNS = [
-  { label: "disableAllHooks: true", re: /"disableAllHooks"\s*:\s*true\b/ },
+  { label: "disableAllHooks: true", re: /"disableAllHooks"\s*:\s*(?:true\b|"[^"\n]|-?(?:[1-9]|0\.\d*[1-9])|[[{])/ },
   { label: "env GUARDIAN_HOOKS=off", re: /"GUARDIAN_HOOKS"\s*:\s*"off"/i },
   { label: "env GUARDIAN_HOOKS_BASH_BLOCK=0", re: /"GUARDIAN_HOOKS_BASH_BLOCK"\s*:\s*(?:"0"|0\b)/i },
   { label: "env GUARDIAN_HOOKS_BASH_BLOCK=false", re: /"GUARDIAN_HOOKS_BASH_BLOCK"\s*:\s*(?:"false"|false\b)/i },
   { label: "env GUARDIAN_PKG_VET=0", re: /"GUARDIAN_PKG_VET"\s*:\s*(?:"0"|0\b)/i }
 ];
-var PLUGIN_OFF = /"([^"\n]*dev-guardian[^"\n]*)"\s*:\s*false\b/gi;
-function fromText(text) {
-  const found = TEXT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.label);
-  for (const m of text.matchAll(PLUGIN_OFF)) found.push(`enabledPlugins ${m[1] ?? ""}=false`);
+var ENV_VALUE = /"(NODE_OPTIONS|GUARDIAN_PKG_VET_DEADLINE_MS|PATH|HOME|USERPROFILE)"\s*:\s*("(?:[^"\\\n]|\\.)*"|-?\d[\d.eE+-]*|true|false|null)/gi;
+var PLUGIN_OFF = /"([^"\n]*dev-guardian[^"\n]*)"\s*:\s*(?!true\b)(?:false\b|null\b|-?\d|")/gi;
+function fromText(raw) {
+  const text = raw.includes("\\u") ? raw.replace(/\\u([0-9A-Fa-f]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16))) : raw;
+  const found = { off: TEXT_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.label), ask: [] };
+  for (const m of text.matchAll(PLUGIN_OFF)) found.off.push(`enabledPlugins ${m[1] ?? ""}=false`);
+  for (const m of text.matchAll(ENV_VALUE)) {
+    let value;
+    try {
+      value = JSON.parse(m[2] ?? "");
+    } catch {
+      continue;
+    }
+    const name = m[1] ?? "";
+    if (ENV_ANY_VALUE.includes(name.toUpperCase()) || name === name.toUpperCase()) judgeEnv(name, value, found);
+  }
   return found;
 }
-function hookLooseningSettings(content) {
+function settingsFound(content) {
   const text = content.charCodeAt(0) === 65279 ? content.slice(1) : content;
-  try {
-    const parsed = JSON.parse(text);
-    if (isPlainObject(parsed)) return fromObject(parsed);
-  } catch {
-  }
-  return fromText(text);
+  const read = readLenient(text);
+  return read instanceof LenientObject ? fromObject(read) : fromText(text);
+}
+function hookLooseningSettings(content) {
+  return settingsFound(content).off;
 }
 function newlyLoosened(before, after) {
   const had = new Set(before === void 0 ? [] : hookLooseningSettings(before));
   return hookLooseningSettings(after).filter((label) => !had.has(label));
+}
+function newlyAsked(before, after) {
+  const had = new Set(before === void 0 ? [] : settingsFound(before).ask);
+  return settingsFound(after).ask.filter((label) => !had.has(label));
 }
 function applyEdit(content, oldString, newString, replaceAll = false) {
   if (oldString === "") return void 0;
@@ -513,9 +625,12 @@ function localShareAsLocal(path, hostname2 = "") {
   const rest = m[3] ?? "";
   return `${(m[2] ?? "").toUpperCase()}:${rest === "" ? "\\" : rest}`;
 }
+function climbsOut(rel) {
+  return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\");
+}
 function walkLinksUnder(under, path) {
   const rel = relative(resolve(under), resolve(path));
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { ok: true };
+  if (rel === "" || climbsOut(rel) || isAbsolute(rel)) return { ok: true };
   let current = resolve(under);
   const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;
@@ -665,7 +780,7 @@ function registryDir(ctx = {}) {
 }
 function atOrBelow(dir, path) {
   const rel = relative2(dir, path);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute3(rel);
+  return rel === "" || !climbsOut(rel) && !isAbsolute3(rel);
 }
 var MAX_ENTRIES = 1024;
 function filesIn(dir) {

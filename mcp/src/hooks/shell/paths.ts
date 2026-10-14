@@ -56,6 +56,27 @@ export const CD_COMMANDS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl'
 export const CD_RETURNS = new Set(['popd', 'pop-location']);
 
 /**
+ * The directory a `cd` / `chdir` / `pushd` / `Set-Location` / `Push-Location`
+ * names — `-Path` / `-LiteralPath`, else its one operand past `cd`'s own flags
+ * (`-L`, `-P`, `-e`, `-@`, `--`) and cmd.exe's `/d` — `-` for `cd -`,
+ * `undefined` for none (a bare `cd` goes home), `null` for more than one (an
+ * error in bash, a substitution in zsh). Shared by {@link cwdAfter} and the
+ * line's directory tracker (`workdir.ts`).
+ */
+export function cdOperand(args: readonly string[]): string | undefined | null {
+  const named = psParam(args, ['path', 'literalpath']);
+  if (named !== undefined) return named;
+  const operands: string[] = [];
+  let ended = false;
+  for (const a of args) {
+    if (!ended && a === '--') ended = true;
+    else if (!ended && a !== '-' && (/^-[LPe@]+$/.test(a) || /^\/d$/i.test(a))) continue;
+    else operands.push(a);
+  }
+  return operands.length > 1 ? null : operands[0];
+}
+
+/**
  * The directory a `cd`, `pushd` or `Set-Location` moves to from `cwd`, or
  * `undefined` when `name` is none of them. A bare `cd` goes home; `cd -`,
  * `popd` and `Pop-Location` go back somewhere this does not track, which reads
@@ -64,8 +85,8 @@ export const CD_RETURNS = new Set(['popd', 'pop-location']);
 export function cwdAfter(name: string, args: readonly string[], cwd: string, dataDir?: string): string | undefined {
   if (CD_RETURNS.has(name)) return '';
   if (!CD_COMMANDS.has(name)) return undefined;
-  const dir =
-    psParam(args, ['path', 'literalpath']) ?? args.find((a) => a === '-' || !(a.startsWith('-') || /^\/d$/i.test(a)));
+  const dir = cdOperand(args);
+  if (dir === null) return '';
   if (dir === undefined) return '~';
   if (dir === '-') return '';
   const next = resolveFrom(cwd, dir);

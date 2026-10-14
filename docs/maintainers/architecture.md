@@ -37,7 +37,8 @@ quality, deps, observability, performance and compliance. Two halves:
   `hooksSession.js` — build-and-test.md). The shell guard's reading of a
   command lives in `mcp/src/hooks/shell/` — the tokenizer (`split.ts`), the
   command word (`command.ts`), cmd.exe's line (`cmd.ts`), paths as the command
-  moves (`paths.ts`), what it does to the filesystem (`effects.ts`), the
+  moves (`paths.ts`), where each command of the line runs (`workdir.ts`, which the
+  install vetting reads too), what it does to the filesystem (`effects.ts`), the
   program text it hands an interpreter (`interpreters.ts`) — and
   `bashGuard.ts` judges it. Every file a hook reads from
   the project or the user's home goes through `mcp/src/hooks/configFile.ts`:

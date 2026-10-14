@@ -68,7 +68,7 @@
 import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { isRemoteOrDeviceTarget, readSmallText, walkLinksUnder, type TextRead } from '../hooks/configFile.js';
+import { climbsOut, isRemoteOrDeviceTarget, readSmallText, walkLinksUnder, type TextRead } from '../hooks/configFile.js';
 import type { PkgEcosystem } from './types.js';
 
 /**
@@ -185,7 +185,7 @@ const MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 /** `path` lies strictly below `dir`. */
 function isInside(dir: string, path: string): boolean {
   const rel = relative(dir, path);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  return rel !== '' && !climbsOut(rel) && !isAbsolute(rel);
 }
 
 /**

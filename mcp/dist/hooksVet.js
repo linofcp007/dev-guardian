@@ -17,7 +17,7 @@ __export(hookDecision_exports, {
 });
 import { lstatSync as lstatSync3, statSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname3, join as join5, resolve as resolve3 } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join5, parse as parse4, relative as relative3, resolve as resolve3 } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
@@ -28,9 +28,16 @@ var MAX_LINK_HOPS = 32;
 function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
+function isNetworkPath(path) {
+  if (!/^(?:[\\/]{2}|\\\?\?\\)/.test(path)) return false;
+  return !/^(?:[\\/]{2}[?.]|\\\?\?)[\\/][A-Za-z]:(?:[\\/]|$)/.test(path);
+}
+function climbsOut(rel) {
+  return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\");
+}
 function walkLinksUnder(under, path) {
   const rel = relative(resolve(under), resolve(path));
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return { ok: true };
+  if (rel === "" || climbsOut(rel) || isAbsolute(rel)) return { ok: true };
   let current = resolve(under);
   const queue = rel.split(/[\\/]+/).filter((p) => p.length > 0);
   let hops = 0;
@@ -258,6 +265,17 @@ function parseRedirect(word) {
   const tail = word.value.slice(at);
   const op = /^[<>]+[|&]?/.exec(tail)?.[0] ?? tail.charAt(0);
   return { prefix: word.value.slice(0, at), op, inline: tail.slice(op.length) };
+}
+function psParam(args, names) {
+  for (let i = 0; i < args.length; i += 1) {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[i] ?? "");
+    if (m === null || !names.includes((m[1] ?? "").toLowerCase())) continue;
+    return m[2] !== void 0 ? m[2] : args[i + 1];
+  }
+  return void 0;
+}
+function commandName(word) {
+  return basename(word).toLowerCase().replace(/\.exe$/, "");
 }
 
 // src/hooks/shell/split.ts
@@ -585,6 +603,147 @@ function splitShell(command) {
   }
   endStatement();
   return { maskedCommand, interpolatedCommand: withInterpolations(maskedCommand, interpolations), statements };
+}
+
+// src/hooks/shell/paths.ts
+var CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+var CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
+function cdOperand(args) {
+  const named = psParam(args, ["path", "literalpath"]);
+  if (named !== void 0) return named;
+  const operands = [];
+  let ended = false;
+  for (const a of args) {
+    if (!ended && a === "--") ended = true;
+    else if (!ended && a !== "-" && (/^-[LPe@]+$/.test(a) || /^\/d$/i.test(a))) continue;
+    else operands.push(a);
+  }
+  return operands.length > 1 ? null : operands[0];
+}
+
+// src/hooks/shell/workdir.ts
+var UNREAD_TARGET = /[$`%*?[\]{}]|^~[^\\/]/;
+function cdMove(words) {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? "");
+  if (name === "cd..") return { kind: "cd", target: "..", push: false };
+  if (CD_RETURNS.has(name)) return { kind: "pop" };
+  if (!CD_COMMANDS.has(name)) return void 0;
+  const target = cdOperand(words.slice(at + 1).map((w) => w.value));
+  if (target === null) return { kind: "unknown" };
+  return { kind: "cd", target, push: name === "pushd" || name === "push-location" };
+}
+function setsCdpath(words) {
+  return words.some((w) => /^CDPATH=/.test(w.value));
+}
+var OPENERS = /* @__PURE__ */ new Set(["if", "while", "until", "for", "select", "case", "{", "function"]);
+var CLOSERS = /* @__PURE__ */ new Set(["fi", "done", "esac", "}"]);
+var INSIDE = /* @__PURE__ */ new Set(["then", "else", "elif", "do", "!", "time", "-p"]);
+function depthDelta(masked) {
+  let delta = 0;
+  for (const word of masked.trim().split(/\s+/)) {
+    if (OPENERS.has(word)) delta += 1;
+    else if (CLOSERS.has(word)) delta -= 1;
+    else if (!INSIDE.has(word)) break;
+  }
+  return delta;
+}
+var MAX_STEPS = 64;
+function moved(steps, target) {
+  const t = target ?? "~";
+  if (/^(?:[\\/]|~(?:[\\/]|$)|[A-Za-z]:[\\/])/.test(t)) return [t];
+  return steps === null || steps.length >= MAX_STEPS ? null : [...steps, t];
+}
+function workdirs(statements, opts = {}) {
+  const listEnd = new Array(statements.length);
+  for (let k = statements.length - 1; k >= 0; k -= 1) {
+    const end = statements[k]?.end;
+    listEnd[k] = end === "&&" || end === "||" ? listEnd[k + 1] : end;
+  }
+  let here = { may: [], sure: [], prevMay: null, prevSure: null, stack: [] };
+  let listStart = here;
+  let trusted = true;
+  let orElse = false;
+  let cdpath = opts.cdpath === true;
+  let depth = 0;
+  const outer = [];
+  let inBacktick = false;
+  const out = [];
+  for (let k = 0; k < statements.length; k += 1) {
+    const statement = statements[k];
+    if (statement === void 0) {
+      out.push([]);
+      continue;
+    }
+    const before = statements[k - 1]?.end;
+    if (before === "&&" || before === "||") {
+      if (before === "||") {
+        trusted = false;
+        orElse = true;
+      }
+    } else {
+      listStart = here;
+      trusted = before !== ")" && !(before === "`" && !inBacktick);
+      orElse = false;
+    }
+    const delta = depthDelta(statement.masked);
+    if (delta > 0) depth += delta;
+    const lone = statement.commands.length === 1;
+    const continued = statement.end === "(" || statement.end === "`" && !inBacktick;
+    const row = [];
+    statement.commands.forEach((words, c) => {
+      row.push({ may: here.may, sure: orElse ? null : here.sure });
+      const at = resolveCommand(words).index;
+      const prefixCdpath = setsCdpath(words.slice(0, at));
+      if (at >= words.length && prefixCdpath || commandName(words[at]?.value ?? "") === "export" && setsCdpath(words.slice(at + 1))) cdpath = true;
+      const found = cdMove(words);
+      const move = found !== void 0 && continued && c === statement.commands.length - 1 ? { kind: "unknown" } : found;
+      if (move === void 0) {
+        trusted = false;
+        return;
+      }
+      const surely = trusted && lone && depth === 0 && listEnd[k] !== "&";
+      if (move.kind === "unknown") {
+        here = { ...here, may: null, sure: null, prevMay: here.may, prevSure: here.sure };
+      } else if (move.kind === "pop") {
+        const top = here.stack[here.stack.length - 1];
+        here = {
+          may: top?.may ?? null,
+          sure: surely ? top?.sure ?? null : null,
+          prevMay: here.may,
+          prevSure: here.sure,
+          stack: here.stack.slice(0, -1)
+        };
+      } else {
+        const back = move.target === "-" || move.target !== void 0 && /^\$\{?OLDPWD\}?$/.test(move.target);
+        const unread = !back && move.target !== void 0 && UNREAD_TARGET.test(move.target);
+        const lookedUp = (cdpath || prefixCdpath) && move.target !== void 0 && !/^(?:\.\.?(?:[\\/]|$)|[\\/~]|[A-Za-z]:)/.test(move.target);
+        const nextMay = back ? here.prevMay : unread ? null : moved(here.may, move.target);
+        const nextSure = !surely || unread || lookedUp || move.target === void 0 ? null : back ? here.prevSure : moved(here.sure, move.target);
+        here = {
+          may: nextMay,
+          sure: nextSure,
+          prevMay: here.may,
+          prevSure: here.sure,
+          stack: !move.push ? here.stack : here.stack.length >= MAX_STEPS ? [] : [...here.stack, { may: here.may, sure: here.sure }]
+        };
+      }
+      if (!lone) here = { ...here, sure: null };
+    });
+    out.push(row);
+    if (delta < 0) depth = Math.max(0, depth + delta);
+    const end = statement.end;
+    if (end === "&") here = { ...listStart, may: here.may, prevMay: here.prevMay };
+    if (end === "(") outer.push(here);
+    else if (end === "`") {
+      if (!inBacktick) outer.push(here);
+      else here = outer.pop() ?? { ...here, may: null, sure: null };
+      inBacktick = !inBacktick;
+    } else if (end === ")") {
+      here = outer.pop() ?? { ...here, may: null, sure: null };
+    }
+  }
+  return out;
 }
 
 // src/hooks/powershellText.ts
@@ -1334,6 +1493,7 @@ var LAUNCH_FLAGS = {
       "--cache",
       "--userconfig",
       "--prefix",
+      "-C",
       "--workspace",
       "-w",
       "--loglevel",
@@ -1674,6 +1834,7 @@ function collectLaunch(d, launch, context) {
   if (registry !== void 0) out.customRegistry = registry;
   if (launch.localFirst === true) out.localFirst = true;
   if (byPackageFlag) out.byPackageFlag = true;
+  if (flags.some((f) => f.flag === "--prefix" || f.flag === "-C")) out.prefixed = true;
   return out;
 }
 function collect(d, context) {
@@ -1748,29 +1909,30 @@ function packageKey(p) {
   return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ""}`;
 }
 function parseInstallCommands(command, opts = {}) {
-  const out = readingsOf(command, opts.shell ?? "bash", null);
+  const cdpath = opts.cdpath === true;
+  const out = readingsOf(command, opts.shell ?? "bash", null, cdpath);
   if (opts.nested === void 0 || opts.nested.length === 0) return out;
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
-  const moved = movesDirectory(stripComments(command));
+  const moved2 = movesDirectory(stripComments(command));
   for (const script of opts.nested) {
-    for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT)) {
+    for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
       if (packages.length === 0) continue;
       for (const p of packages) seen.add(packageKey(p));
-      out.push({ ...c, packages, ...moved && c.localFirst === true ? { workdir: null } : {} });
+      out.push({ ...c, packages, ...moved2 && c.localFirst === true ? { workdir: null } : {} });
     }
   }
   return out;
 }
 var NESTED_SCRIPT = "found in a script the command hands a shell (bash -c, cmd /c, pwsh -c, a script piped to a shell) \u2014 vetted, never denied as missing";
-function readingsOf(command, shell, forced) {
+function readingsOf(command, shell, forced, cdpath) {
   const text = stripComments(command);
-  const out = parseReading(text, forced);
+  const out = parseReading(text, forced, cdpath);
   if (shell !== "powershell") return out;
   const asPowerShell = powershellAsPosix(text);
   if (asPowerShell === text) return out;
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
-  for (const c of parseReading(asPowerShell, POWERSHELL_READING)) {
+  for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     if (packages.length === 0) continue;
     for (const p of packages) seen.add(packageKey(p));
@@ -1785,7 +1947,7 @@ function movesDirectory(text) {
     return true;
   }
 }
-function parseReading(text, forced) {
+function parseReading(text, forced, cdpath) {
   const out = [];
   let split;
   try {
@@ -1795,11 +1957,10 @@ function parseReading(text, forced) {
   }
   const notConfident = forced ?? confidentShape(text);
   const envChange = changesEnvironment(text, split.statements);
+  const dirs = workdirs(split.statements, { cdpath });
   let dirChanged = false;
-  let workdir;
-  const outer = [];
-  for (const statement of split.statements) {
-    for (const words of statement.commands) {
+  split.statements.forEach((statement, s) => {
+    statement.commands.forEach((words, w) => {
       const d = detect(words);
       if (d !== null) {
         const context = [];
@@ -1807,19 +1968,26 @@ function parseReading(text, forced) {
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
         c.uncertain = notConfident === null ? [] : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
-        if (workdir !== void 0) c.workdir = workdir;
+        const sure = dirs[s]?.[w]?.sure ?? null;
+        if (runsElsewhere(words)) c.workdir = null;
+        else if (sure === null || sure.length > 0) c.workdir = sure;
         out.push(c);
       }
-      if (changesDirectory(words)) {
-        dirChanged = true;
-        workdir = statement.commands.length > 1 || statement.end === "&" ? null : directoryAfter(workdir, words);
-      }
-    }
-    if (statement.end === "(") outer.push(workdir);
-    else if (statement.end === ")") workdir = outer.length > 0 ? outer.pop() : workdir === void 0 ? void 0 : null;
-    else if (statement.end === "`") workdir = workdir === void 0 ? void 0 : null;
-  }
+      if (changesDirectory(words)) dirChanged = true;
+    });
+  });
   return out;
+}
+function runsElsewhere(words) {
+  const at = resolveCommand(words).index;
+  let runner = "";
+  for (const w of words.slice(0, at)) {
+    const name = base(w.value);
+    if (name === "env" || name === "sudo" || name === "doas") runner = name;
+    else if (runner === "env" && /^(?:-[A-Za-z]*C|--chdir(?:=|$))/.test(w.value)) return true;
+    else if (runner === "sudo" && /^(?:-[A-Za-z]*D|--chdir(?:=|$))/.test(w.value)) return true;
+  }
+  return false;
 }
 function stripComments(command) {
   let out = "";
@@ -2166,19 +2334,6 @@ function changesDirectory(words) {
   const head = words[commandStart(words)];
   return head !== void 0 && DIR_COMMANDS.has(base(head.value));
 }
-var UNREAD_TARGET = /[$`%*?[\]{}]/;
-function directoryAfter(prev, words) {
-  if (prev === null) return null;
-  const at = commandStart(words);
-  const name = base(words[at]?.value ?? "");
-  if (name === "popd" || name === "pop-location") return null;
-  const steps = prev ?? [];
-  if (name === "cd..") return [...steps, ".."];
-  const operands = words.slice(at + 1).map((w) => w.value).filter((v, _, all) => !/^-[LPe@]+$/.test(v) && !/^-(?:path|literalpath)$/i.test(v) && !(all.length > 1 && /^\/d$/i.test(v)));
-  const target = operands[0];
-  if (operands.length !== 1 || target === void 0 || target === "" || target === "-" || UNREAD_TARGET.test(target)) return null;
-  return [...steps, target];
-}
 var ENV_COMMANDS = /* @__PURE__ */ new Set(["export", "declare", "typeset", "local", "readonly", "set", "setx"]);
 function powershellSetsEnv(command) {
   if (/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|SetEnvironmentVariable/i.test(command)) return true;
@@ -2402,7 +2557,7 @@ function isPublicRegistryUrl(ecosystem, url) {
 var MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
 function isInside(dir, path) {
   const rel = relative2(dir, path);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute2(rel);
+  return rel !== "" && !climbsOut(rel) && !isAbsolute2(rel);
 }
 function walkRoot(path, ctx, under) {
   const abs = resolve2(path);
@@ -2635,10 +2790,10 @@ function npmRegistry(name, ctx) {
   const fromEnv = envRegistry("npm", ctx);
   if (fromEnv !== null) return fromEnv;
   let authSource;
-  for (const { path, parse: parse4 } of npmConfigFiles(ctx)) {
+  for (const { path, parse: parse5 } of npmConfigFiles(ctx)) {
     const text = read(path, ctx);
     if (text === void 0) continue;
-    const url = parse4(text, scope);
+    const url = parse5(text, scope);
     if (url !== void 0 && !isPublic("npm", url)) return { kind: "registry", source: path, url };
     if (authSource === void 0 && NPM_AUTH.test(text)) authSource = path;
   }
@@ -3824,7 +3979,7 @@ var MAX_DEADLINE_MS = 12e3;
 function vetDeadlineMs(env) {
   const raw = env["GUARDIAN_PKG_VET_DEADLINE_MS"]?.trim();
   if (raw === void 0 || !/^\d+$/.test(raw)) return DEFAULT_DEADLINE_MS;
-  return Math.min(Number(raw), MAX_DEADLINE_MS);
+  return Math.min(Math.max(Number(raw), HOOK_BUDGET_MS), MAX_DEADLINE_MS);
 }
 function label(r) {
   return r.version !== void 0 ? `${r.name}@${r.version}` : r.name;
@@ -3834,9 +3989,9 @@ function firstLine(r) {
 }
 var MAX_VETTED_PACKAGES = 50;
 var MAX_PARSED_LENGTH = 512 * 1024;
-function boundedInstalls(command, shell, isPopular, runsLocally, nested = []) {
+function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false) {
   const cut = command.length > MAX_PARSED_LENGTH;
-  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested }).map(
+  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map(
     (c) => (
       // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
       // fetch nothing: there is nothing to vet (review P1).
@@ -3894,17 +4049,35 @@ function fileBelow(under, path) {
     return false;
   }
 }
-function installedLocally(name, cwd, byPackageFlag = false, manager = "") {
-  const scoped = name.startsWith("@");
+var MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
+function npmPrefix(cwd) {
   let dir = resolve3(cwd);
+  for (let i = 0; i < 64; i += 1) {
+    if (presentBelow(dir, join5(dir, "package.json")) || presentBelow(dir, join5(dir, "node_modules"))) return dir;
+    const parent = dirname3(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return resolve3(cwd);
+}
+function packageNamed(dir, name) {
+  const r = readSmallText(join5(dir, "node_modules", name, "package.json"), MAX_PACKAGE_JSON_BYTES, dir);
+  if (r.status !== "ok") return false;
+  try {
+    const manifest = JSON.parse(r.text.charCodeAt(0) === 65279 ? r.text.slice(1) : r.text);
+    return manifest !== null && typeof manifest === "object" && manifest["name"] === name;
+  } catch {
+    return false;
+  }
+}
+function installedLocally(name, cwd, byPackageFlag = false, manager = "") {
+  const prefix = npmPrefix(cwd);
+  if (packageNamed(prefix, name)) return true;
+  if (name.startsWith("@") || byPackageFlag) return false;
+  let dir = prefix;
   for (let i = 0; i < 32; i += 1) {
-    const modules = join5(dir, "node_modules");
-    const candidates = [join5(modules, name, "package.json")];
-    if (!scoped && !byPackageFlag) {
-      candidates.push(join5(modules, ".bin", name));
-      if (manager === "bun") candidates.push(join5(modules, ".bin", `${name}.exe`));
-    }
-    for (const candidate of candidates) {
+    const bin = join5(dir, "node_modules", ".bin");
+    for (const candidate of manager === "bun" ? [join5(bin, name), join5(bin, `${name}.exe`)] : [join5(bin, name)]) {
       if (fileBelow(dir, candidate)) return true;
     }
     if (presentBelow(dir, join5(dir, ".git"))) return false;
@@ -3915,7 +4088,7 @@ function installedLocally(name, cwd, byPackageFlag = false, manager = "") {
   return false;
 }
 function runsInstalledCopy(pkg, c, opts) {
-  if (pkg.range !== void 0 || pkg.raw !== pkg.name) return false;
+  if (pkg.range !== void 0 || pkg.raw !== pkg.name || c.prefixed === true) return false;
   const dir = commandDir(c, opts);
   return dir !== null && installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
 }
@@ -3930,14 +4103,27 @@ function commandDir(c, opts) {
     if (target === "~" || /^~[\\/]/.test(target)) target = join5(home, target.slice(1));
     else if (target.startsWith("~")) return null;
     else if (windows) target = target.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`);
-    dir = resolve3(dir, target);
+    const next = resolve3(dir, target);
+    if (isNetworkPath(next) || !isDirectoryAt(dir, next)) return null;
+    dir = next;
   }
   return dir;
+}
+function isDirectoryAt(from, path) {
+  const rel = relative3(from, path);
+  const walked = rel !== "" && !climbsOut(rel) && !isAbsolute3(rel) ? walkLinksUnder(from, path) : walkLinksUnder(parse4(path).root, path);
+  if (!walked.ok) return false;
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 var CUT_NOTE = "dev-guardian: installs past the first 512 KB of this command were not looked for \u2014 not verified.";
 async function decideInstallCommand(command, opts) {
   const shell = opts.shell ?? "bash";
-  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts), opts.nested);
+  const cdpath = ((opts.env ?? process.env)["CDPATH"] ?? "").trim() !== "";
+  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts), opts.nested, cdpath);
   if (commands.length === 0) return cut ? { context: CUT_NOTE } : null;
   const env = opts.env ?? process.env;
   const offline = env["GUARDIAN_OFFLINE"] === "1";

@@ -10,8 +10,10 @@ import {
   applyEdit,
   hookLooseningSettings,
   isClaudeSettingsPath,
+  newlyAsked,
   newlyLoosened,
 } from '../../../src/hooks/settingsGuard.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 describe('isClaudeSettingsPath', () => {
   it.each([
@@ -82,7 +84,7 @@ describe('hookLooseningSettings', () => {
       hookLooseningSettings(
         JSON.stringify({
           disableAllHooks: false,
-          env: { GUARDIAN_HOOKS: 'on', GUARDIAN_HOOKS_BASH_BLOCK: '1', GUARDIAN_PKG_VET: '1', NODE_OPTIONS: 'x' },
+          env: { GUARDIAN_HOOKS: 'on', GUARDIAN_HOOKS_BASH_BLOCK: '1', GUARDIAN_PKG_VET: '1', NODE_ENV: 'x' },
           permissions: { allow: ['Bash(npm test)'] },
           hooks: { PostToolUse: [] },
         }),
@@ -143,6 +145,74 @@ describe('newlyLoosened', () => {
     expect(newlyLoosened(on, off)).toEqual(['enabledPlugins dev-guardian@dev-guardian=false']);
     expect(newlyLoosened(off, off.replace('}}', ',"x@y":true}}'))).toEqual([]);
   });
+});
+
+// Review of 3.4.0, finding 4: variables that switch the hooks off whatever
+// their value, the value forms another parser may read as the switch, and a
+// settings file that is JSONC, escapes a key or repeats one.
+describe('review of 3.4.0, finding 4: every form that may switch the hooks off', () => {
+  const key = ['disable', 'AllHooks'].join('');
+
+  it('NODE_OPTIONS and GUARDIAN_PKG_VET_DEADLINE_MS switch a hook off whatever their value — a new value is new', () => {
+    expect(hookLooseningSettings('{"env":{"NODE_OPTIONS":"--import=data:text/javascript,process.exit(0)"}}')).toEqual([
+      'env NODE_OPTIONS=--import=data:text/javascript,process.exit(0)',
+    ]);
+    expect(hookLooseningSettings('{"env":{"guardian_pkg_vet_deadline_ms":1}}')).toEqual(['env GUARDIAN_PKG_VET_DEADLINE_MS=1']);
+    const mine = '{"env":{"NODE_OPTIONS":"--max-old-space-size=4096"}}';
+    expect(newlyLoosened(mine, mine.replace('}}', ',"A":"b"}}'))).toEqual([]);
+    expect(newlyLoosened(mine, '{"env":{"NODE_OPTIONS":"--require ./x.js"}}')).toEqual(['env NODE_OPTIONS=--require ./x.js']);
+    expect(hookLooseningSettings('"NODE_OPTIONS": "--require x"')).toEqual(['env NODE_OPTIONS=--require x']);
+  });
+
+  it('PATH, HOME and USERPROFILE are asked about, not refused — in env only', () => {
+    expect(newlyLoosened(undefined, '{"env":{"PATH":"/tmp/fake:/usr/bin"}}')).toEqual([]);
+    expect(newlyAsked(undefined, '{"env":{"PATH":"/tmp/fake:/usr/bin"}}')).toEqual(['env PATH=/tmp/fake:/usr/bin']);
+    expect(newlyAsked('{"env":{"Path":"C:/x"}}', '{"env":{"Path":"C:/x"},"model":"m"}')).toEqual([]);
+    expect(newlyAsked(undefined, '{"env":{"HOME":"/tmp/h","USERPROFILE":"C:/h"}}')).toEqual(['env HOME=/tmp/h', 'env USERPROFILE=C:/h']);
+    expect(newlyAsked(undefined, '{"extraKnownMarketplaces":{"m":{"source":{"source":"directory","path":"/srv/m"}}}}')).toEqual([]);
+    expect(newlyAsked(undefined, '"source": "directory", "path": "/srv/m"')).toEqual([]);
+    expect(newlyAsked(undefined, '"PATH": "/tmp/fake"')).toEqual(['env PATH=/tmp/fake']);
+  });
+
+  it.each([
+    [`{"${key}": "true"}`, true],
+    [`{"${key}": 1}`, true],
+    [`{"${key}": "false"}`, true],
+    [`{"${key}": {}}`, true],
+    [`{"${key}": false}`, false],
+    [`{"${key}": 0}`, false],
+    [`{"${key}": null}`, false],
+    [`{"${key}": ""}`, false],
+  ])('disableAllHooks in %s switches the hooks off: %s', (text, off) => {
+    expect(hookLooseningSettings(text)).toEqual(off ? ['disableAllHooks: true'] : []);
+    expect(hookLooseningSettings(text.slice(1, -1))).toEqual(off ? ['disableAllHooks: true'] : []);
+  });
+
+  it.each(['"false"', '0', 'null', '"true"', '"no"'])('an enabledPlugins entry naming dev-guardian set to %s turns it off', (value) => {
+    expect(hookLooseningSettings(`{"enabledPlugins":{"dev-guardian@m":${value}}}`)).toEqual(['enabledPlugins dev-guardian@m=false']);
+    expect(hookLooseningSettings(`"dev-guardian@m": ${value}`)).toEqual(['enabledPlugins dev-guardian@m=false']);
+  });
+
+  it('a JSONC file, an escaped key and a repeated key are all read', () => {
+    const escaped = '"disable\\u0041llHooks"';
+    expect(hookLooseningSettings(`// mine\n{ ${escaped}: true, /* x */ "model": "m", }`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(`${escaped}: true`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(`{"${key}": true, "${key}": false}`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings('{"env":{"GUARDIAN_HOOKS":"off"},"env":{"GUARDIAN_HOOKS":"on"}}')).toEqual(['env GUARDIAN_HOOKS=off']);
+    expect(hookLooseningSettings('{"env":{"GUARDIAN_HOOKS":"off","GUARDIAN_HOOKS":"on"}}')).toEqual(['env GUARDIAN_HOOKS=off']);
+  });
+
+  it('a file nested past what is read, or that is no JSON, falls back to the patterns without throwing', () => {
+    expect(hookLooseningSettings(`${'['.repeat(100)}{"${key}": true}${']'.repeat(100)}`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings(`{"${key}": true`)).toEqual(['disableAllHooks: true']);
+    expect(hookLooseningSettings('/* unterminated')).toEqual([]);
+  });
+
+  it('a large settings file is read in linear time', () => {
+    const make = (n: number): string =>
+      JSON.stringify({ permissions: { allow: Array.from({ length: Math.ceil(n / 24) }, (_, k) => `Bash(npm run t${String(k)})`) } }, null, 1);
+    expectLinear('the lenient settings reader', (n) => hookLooseningSettings(`// c\n${make(n)}`), 16 * 1024);
+  }, 120_000);
 });
 
 describe('applyEdit', () => {

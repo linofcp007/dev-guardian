@@ -19,7 +19,7 @@
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { isNetworkPath, walkLinksUnder } from './configFile.js';
+import { climbsOut, isNetworkPath, walkLinksUnder } from './configFile.js';
 import { fileIdentity, guardedPath, hardLinkedTo } from './guardedPath.js';
 import { userDataDir as resolveUserDataDir, type DataDirContext } from './userDataDir.js';
 
@@ -50,7 +50,7 @@ export function registryDir(ctx: DataDirContext = {}): string {
 /** `path` is `dir` or lies below it (case-insensitively where the platform's paths are). */
 function atOrBelow(dir: string, path: string): boolean {
   const rel = relative(dir, path);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  return rel === '' || (!climbsOut(rel) && !isAbsolute(rel));
 }
 
 /** The most registry entries compared for a hard link: far more than one user's databases. */

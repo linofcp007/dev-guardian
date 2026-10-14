@@ -104,9 +104,10 @@ import { pushAll } from './shell/arrays.js';
 import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
 import { ASSIGNMENT, basename, cmdSwitch, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
 import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
-import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, RUN_WRAPPERS, tail } from './shell/interpreters.js';
+import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
 import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
 import { MASK, splitShell, type ShellStatement, type ShellWord } from './shell/split.js';
+import { type Steps, workdirs } from './shell/workdir.js';
 
 // How a command is READ lives in `shell/` — the tokenizer (`split.ts`), the
 // command-word resolution (`command.ts`), cmd.exe's line reader (`cmd.ts`),
@@ -711,10 +712,75 @@ function homeDirFor(home: string | undefined, platform: string): HomeDir | undef
 /**
  * The home directory named outright — `C:\Users\alice`, `/c/Users/alice/`,
  * `/home/alice/*` — compared with `os.homedir()`, case-insensitively on
- * Windows (review I2). A path below it is not the home directory.
+ * Windows (review I2), where its 8.3 name counts too (`C:\Users\ADMINI~1`, what
+ * `%TEMP%` is often spelled with — review of 3.4.0, finding 9). A path below it
+ * is not the home directory.
  */
 function isHomeTarget(raw: string, home: HomeDir | undefined): boolean {
-  return home !== undefined && targetKey(raw, home.fold) === home.key;
+  if (home === undefined) return false;
+  const key = targetKey(raw, home.fold);
+  if (key === home.key) return true;
+  if (!home.fold) return false;
+  const cut = key.lastIndexOf('/');
+  const homeCut = home.key.lastIndexOf('/');
+  if (cut < 0 || key.slice(0, cut) !== home.key.slice(0, homeCut)) return false;
+  const short = /^([^~/]{1,6})~\d+$/.exec(key.slice(cut + 1));
+  return short !== null && home.key.slice(homeCut + 1).replace(/[\s.]/g, '').startsWith(short[1] ?? '');
+}
+
+/**
+ * What a delete's target is read against beyond its own spelling (review of
+ * 3.4.0, finding 9: `rm -rf ..` from a child of the home directory, `cd / &&
+ * rm -rf *`, `"$TEMP/../../.."` and `Get-ChildItem C:\ | Remove-Item -Recurse`
+ * only warned — a relative target was never resolved).
+ */
+interface DeleteContext {
+  /** The directory the command runs in, absolute and with `/` separators, when it is known. */
+  dir?: string | undefined;
+  /** The values of the variables a target may start with, by lower-cased name: `temp`, `tmp`, `tmpdir`, `localappdata`, `appdata`. */
+  vars?: Readonly<Record<string, string>> | undefined;
+  /** A bare drive (`C:`) is that drive's root — Git Bash's reading, not cmd's or PowerShell's (the drive's current directory). */
+  bareDriveRoot?: boolean | undefined;
+  /** What the pipe hands a PowerShell delete with no path of its own. */
+  piped?: string | undefined;
+}
+
+/** `$PWD`, `${PWD}`, `$env:PWD`, `$(pwd)`, `` `pwd` `` at the start of a target. */
+const PWD_PREFIX = /^(?:\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{?PWD\}?|\$env:PWD)(?=[\\/]|$)/i;
+
+/**
+ * A delete target read against {@link DeleteContext}: a relative one joined
+ * to the directory the command runs in, one led by `$PWD` (and its spellings)
+ * or by `$TEMP`, `$TMP`, `$TMPDIR`, `$LOCALAPPDATA`, `$APPDATA` (in bash's,
+ * cmd's and PowerShell's spellings) with that value in its place — left to
+ * {@link catastrophicKind} and {@link isHomeTarget} to fold its `..`s. `undefined`
+ * when there is nothing to read it against.
+ */
+function resolvedTarget(raw: string, ctx: DeleteContext): string | undefined {
+  const t = stripQuotes(raw.trim());
+  if (t === '' || t.length > MAX_PLAIN_TARGET || t.includes('::')) return undefined;
+  const pwd = PWD_PREFIX.exec(t);
+  if (pwd !== null) return ctx.dir === undefined ? undefined : `${ctx.dir}${t.slice(pwd[0].length)}`;
+  const v = leadingVariable(t);
+  if (v !== undefined) {
+    const value = ctx.vars?.[v.name];
+    return value === undefined || value === '' ? undefined : `${value.replace(/\\/g, '/')}${v.rest.replace(/\\/g, '/')}`;
+  }
+  if (/^(?:[\\/~$%]|[A-Za-z]:)/.test(t) || ctx.dir === undefined) return undefined;
+  return `${ctx.dir}/${t}`;
+}
+
+/** The targets a delete is judged on: each as written, and as {@link resolvedTarget} reads it. */
+function judgedTargets(targets: readonly string[], ctx: DeleteContext): string[] {
+  return targets.flatMap((t) => {
+    const resolved = resolvedTarget(t, ctx);
+    return resolved === undefined ? [t] : [t, resolved];
+  });
+}
+
+/** Git Bash's bare drive: `C:`, `C:.`, `C:..` — the drive's root there. */
+function isBareDrive(raw: string): boolean {
+  return /^[A-Za-z]:\.{0,2}$/.test(stripQuotes(raw.trim()));
 }
 
 /** Remove-Item's path parameters and their abbreviations: `-Path`, `-LiteralPath`, `-LP`, `-PSPath`. */
@@ -734,7 +800,7 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
  * aliases in PowerShell, its dash flags too).
  */
-function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
+function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true, ctx: DeleteContext = {}): MatchedRule | null {
   const head = words[start];
   if (head === undefined) return null;
   const name = basename(head.value).toLowerCase();
@@ -797,8 +863,47 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
   // delete as much as their forced forms — measured: both removed a whole tree.
   if (!(recursive || noPreserve)) return null;
 
-  if (noPreserve || targets.some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) return { ...RULE_RM_ROOT };
+  // A PowerShell delete with no path of its own deletes what the pipe hands it.
+  if (targets.length === 0 && ctx.piped !== undefined) targets.push(ctx.piped);
+  if (
+    noPreserve ||
+    (ctx.bareDriveRoot === true && targets.some(isBareDrive)) ||
+    judgedTargets(targets, ctx).some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))
+  ) {
+    return { ...RULE_RM_ROOT };
+  }
   return { ...RULE_RM_BROAD };
+}
+
+/** PowerShell's listing cmdlets and their aliases: what they write down a pipe is items a `Remove-Item` after them deletes. */
+const LISTERS = new Set(['get-childitem', 'gci', 'ls', 'dir', 'get-item', 'gi']);
+
+/** `Get-ChildItem`'s parameters that narrow what it lists, and those that take a value. */
+const LIST_NARROWING = /^-(?:fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?|name)$/i;
+const LIST_VALUED = /^-(?:de(?:p(?:th?)?)?|fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?)$/i;
+
+/**
+ * What a PowerShell listing hands a delete down the pipe (review of 3.4.0,
+ * finding 9: `Get-ChildItem C:\ | Remove-Item -Recurse` only warned): the
+ * children of the path `Get-ChildItem` / `gci` / `ls` / `dir` lists (`-Path`,
+ * `-LiteralPath` or its first operand; `.` without one), the item `Get-Item`
+ * names. Nothing when a filter narrows the listing (`-Filter`, `-Include`,
+ * `-Exclude`, `-Attributes`, `-Name`): what it lists is then not all of it.
+ */
+function pipedItems(words: readonly ShellWord[]): string | undefined {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? '');
+  if (!LISTERS.has(name)) return undefined;
+  const args = withoutRedirections(words.slice(at + 1));
+  if (args.some((a) => LIST_NARROWING.test(a.split(':')[0] ?? a))) return undefined;
+  let path = psParam(args, ['path', 'literalpath', 'lp', 'pspath']);
+  for (let i = 0; path === undefined && i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (a.startsWith('-')) i += LIST_VALUED.test(a) ? 1 : 0;
+    else path = a;
+  }
+  if (name === 'get-item' || name === 'gi') return path ?? '.';
+  return `${(path ?? '.').replace(/[\\/]+$/, '')}/*`;
 }
 
 const RULE_RM_ROOT: MatchedRule = {
@@ -853,7 +958,7 @@ const RULE_FIND_BROAD: MatchedRule = {
  * first test; a value after a test (`-path /`) is not a start path. With none,
  * GNU find starts at `.`.
  */
-function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
+function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true, ctx: DeleteContext = {}): MatchedRule | null {
   const head = words[start];
   if (head === undefined || basename(head.value) !== 'find') return null;
 
@@ -861,7 +966,7 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
   const execs = findExecCommands(words, start);
   const viaExec = execs.some((cmd) => FIND_DELETERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? '')));
   // A delete inside an `-exec` is judged on its own targets too.
-  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers)).find((r) => r?.level === 'block');
+  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers, { ...ctx, piped: undefined })).find((r) => r?.level === 'block');
   if (inner !== undefined && inner !== null) return inner;
   if (!viaExec && !rest.some((w) => w.value === '-delete')) return null;
 
@@ -880,9 +985,11 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
   }
   if (targets.length === 0) targets.push('.');
   const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
+  // A relative start path is where the command runs (review of 3.4.0, finding 9: `cd / && find . -delete`).
+  const judged = judgedTargets(targets, ctx);
 
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'root')) return { ...RULE_FIND_ROOT };
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'home' || isHomeTarget(t, home))) {
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === 'root')) return { ...RULE_FIND_ROOT };
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === 'home' || isHomeTarget(t, home))) {
     return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
@@ -993,11 +1100,12 @@ function configDirNameOf(dir: string | undefined): string | undefined {
  * `enabledPlugins` when the same text names dev-guardian. The Write/Edit guard
  * (`settingsGuard.ts`) judges an edit of the settings by the value it sets; the
  * content a shell command writes cannot be read reliably, so here the key alone
- * decides, anywhere in the command's text.
+ * decides, anywhere in the command's text — `NODE_OPTIONS` and
+ * `GUARDIAN_PKG_VET_DEADLINE_MS` among them (review of 3.4.0, finding 4).
  */
 function namesLooseningKey(text: string): boolean {
   return (
-    /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET\b/i.test(text) ||
+    /\bdisableAllHooks\b|\bGUARDIAN_HOOKS(?:_BASH_BLOCK)?\b|\bGUARDIAN_PKG_VET(?:_DEADLINE_MS)?\b|\bNODE_OPTIONS\b/i.test(text) ||
     (/enabledPlugins/i.test(text) && /dev-guardian/i.test(text))
   );
 }
@@ -1865,6 +1973,18 @@ interface Scope {
   dirStack?: readonly string[];
   /** `CDPATH`, when the command set it. */
   cdpath?: readonly string[];
+  /**
+   * The directory these statements start in — absolute, `/`-separated — when
+   * it is known: the hook's working directory, then where a nested script is
+   * handed over. What a relative delete target is read against.
+   */
+  dir?: string | undefined;
+  /** The home directory's path, `/`-separated, for a `cd ~`. */
+  homePath?: string | undefined;
+  /** The variables a delete target may start with ({@link DeleteContext}). */
+  vars?: Readonly<Record<string, string>> | undefined;
+  /** Git Bash reads a bare drive (`C:`) as its root ({@link DeleteContext}). */
+  bareDriveRoot?: boolean;
 }
 
 /**
@@ -1920,6 +2040,8 @@ interface NestedScript {
   powershell: boolean;
   /** Handed to `Invoke-Expression` (`iex`), which runs it as PowerShell. */
   iex?: boolean;
+  /** What it runs is not on the command line: `iex $s`, `Invoke-Expression -Command $code`. */
+  unread?: true;
 }
 
 function shellScript(text: string): NestedScript {
@@ -1964,11 +2086,15 @@ function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
     return script === undefined || script.trim() === '' ? [] : [shellScript(script)];
   }
   if (launcher === 'iex' || launcher === 'invoke-expression') {
-    const script = words
-      .slice(start + 1)
+    const args = words.slice(start + 1).filter((w, k) => !(k === 0 && !w.quoted && /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(w.value)));
+    const script = args
       .map((w) => w.value)
       .join(' ')
       .trim();
+    // Only variables — `iex $s`, `iex $env:X` — run what the command line does not hold (review of 3.4.0, finding 6).
+    if (args.length > 0 && args.every((w) => !w.quoted && /^\$(?:\{[^}]*\}|[\w:?]+)$/.test(w.value))) {
+      return [{ text: script, powershell: true, iex: true, unread: true }];
+    }
     return script.length > 0 ? [{ text: script, powershell: true, iex: true }] : [];
   }
   let sawShell = false;
@@ -2017,17 +2143,74 @@ function scriptAfterDashC(words: readonly ShellWord[], from: number): string | u
   return undefined;
 }
 
+/** What reads its stdin as a script, and in which language: a POSIX shell, PowerShell, or cmd.exe. */
+type ReaderKind = 'shell' | 'powershell' | 'cmd';
+
+/** A POSIX shell's options that take the next word as their value. */
+const SHELL_VALUED = /^(?:[-+][oO]|--rcfile|--init-file)$/;
+
 /**
- * True when `words` is a bare shell invocation reading its script from
- * stdin — the shell name and, at most, flags after it; no `-c` script (that
- * is `nestedScripts`'s job) and no script-file argument. This is what
- * `bash <<EOF … EOF` and `… | bash` both hand a shell: the fed text IS the
- * script, executed exactly as if it were typed at an interactive prompt.
+ * Whether a command reads what it is fed as a script, and as which language
+ * — a shell given no script of its own, past the runners in front of it
+ * (`sudo`, `env`, `timeout 5`, `nice`, … and `busybox`): `bash`, `sh -`,
+ * `bash -s -- x` (`-s`: the words after are the script's arguments), `bash
+ * /dev/stdin`, `su root`; `source /dev/stdin`; PowerShell's `iex` /
+ * `Invoke-Expression` with no argument and its host with `-Command -` or no
+ * command at all; cmd.exe with no `/c` or `/k`. A shell with a `-c` script
+ * (`nestedScripts`'s) or a script file reads its stdin as data. Before review
+ * of 3.4.0, finding 6, only a shell's name followed by nothing but flags
+ * counted: `| bash -s -- x`, `| env bash`, `| timeout 5 bash`, `| bash
+ * /dev/stdin`, `| busybox sh`, `| iex` and `| cmd` were silent.
  */
-function isBareShellStdin(words: readonly ShellWord[]): boolean {
-  const head = words[0];
-  if (head === undefined || !SHELLS.has(basename(head.value))) return false;
-  return words.slice(1).every((w) => w.value.startsWith('-'));
+function scriptReader(words: readonly ShellWord[]): ReaderKind | undefined {
+  const plain = withoutRedirectWords(words);
+  let at = resolveCommand(plain, PIPE_RUNNERS).index;
+  if (commandName(plain[at]?.value ?? '') === 'busybox') at += 1;
+  const name = commandName(plain[at]?.value ?? '');
+  const args = plain.slice(at + 1);
+  if (name === 'iex' || name === 'invoke-expression') return args.length === 0 ? 'powershell' : undefined;
+  if (name === 'pwsh' || name === 'powershell') return powershellReadsStdin(args.map((w) => w.value)) ? 'powershell' : undefined;
+  if (name === 'cmd') return args.every((a) => /^\/[A-Za-z]+$/.test(cmdSwitch(a.value)) && !/^\/[ck]$/i.test(cmdSwitch(a.value))) ? 'cmd' : undefined;
+  if (name === 'source' || name === '.') return STDIN_PATHS.has(args[0]?.value ?? '') ? 'shell' : undefined;
+  if (!STDIN_SHELLS.has(name)) return undefined;
+  if (name === 'su') return args.some((a) => /^(?:-[A-Za-z]*c|--command|--session-command)(?:=|$)/.test(a.value)) ? undefined : 'shell';
+  for (let i = 0; i < args.length; i += 1) {
+    const w = args[i];
+    if (w === undefined) break;
+    const v = w.value;
+    if (w.quoted) return STDIN_PATHS.has(v) ? 'shell' : undefined;
+    if (v === '-') return 'shell';
+    if (v === '--') return args[i + 1] === undefined || STDIN_PATHS.has(args[i + 1]?.value ?? '') ? 'shell' : undefined;
+    if (SHELL_VALUED.test(v)) {
+      i += 1;
+      continue;
+    }
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(v)) return undefined;
+    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(v)) return 'shell';
+    if (/^[-+]/.test(v)) continue;
+    return STDIN_PATHS.has(v) ? 'shell' : undefined;
+  }
+  return 'shell';
+}
+
+/** Whether a command reads its stdin as a script ({@link scriptReader}). */
+function readsScript(words: readonly ShellWord[]): boolean {
+  return scriptReader(words) !== undefined;
+}
+
+/** A script fed to a reader: its text, or `opaque` (a decoder's output), or `unread` (any other output). */
+interface FedScript {
+  text: string;
+  reader: readonly ShellWord[];
+  opaque?: true;
+  unread?: true;
+  /** The language it is run as, when the reader's words do not say ({@link scriptReader}). */
+  kind?: ReaderKind;
+}
+
+/** Whether a pipeline member downloads: what it feeds a reader is `remote-pipe-to-shell`'s, not unread text. */
+function downloads(words: readonly ShellWord[]): boolean {
+  return DOWNLOADERS.has(commandName(words[resolveCommand(words).index]?.value ?? ''));
 }
 
 /**
@@ -2035,42 +2218,181 @@ function isBareShellStdin(words: readonly ShellWord[]): boolean {
  * finding 4: text is data only until something feeds it to a program as its
  * *script*, and the existing heredoc-is-data behaviour (`git commit -F -
  * <<'EOF'`) must not change for any command that is not itself such a reader
- * (`reads`: a bare shell, or a bare interpreter). Two shapes:
+ * (`reads`: a shell reading its stdin — {@link scriptReader} — or a bare
+ * interpreter). Two shapes:
  *
  *   - `bash <<EOF … EOF` — the heredoc IS the script. `splitShell` captures
  *     the body on the statement (`heredocBodies`) precisely so this can
  *     recognise it; every other command's heredoc stays inert, as before.
- *   - `echo '…' | bash` / `printf '…' | sh` — the reader is the LAST member
- *     of the pipeline and reads the PREVIOUS member's output as its script.
- *     `printf`'s own format-vs-arguments split is not modelled; the last
- *     argument is used, which is exactly right for the common single- or
- *     two-argument form (`printf '%s' 'rm -rf ~'`) and merely imprecise,
- *     not wrong, for anything fancier. What `cat` passes on counts too —
- *     `cat <<'EOF' | bash`, `cat <<< '…' | sh` — and, read as PowerShell
- *     (`powershell`), a string that begins the pipeline (`'…' | bash`).
+ *   - `echo '…' | bash` / `printf '…' | sh` — a reader in the pipeline reads
+ *     the output of the members before it as its script. `printf`'s own
+ *     format-vs-arguments split is not modelled; the last argument is used,
+ *     which is exactly right for the common single- or two-argument form
+ *     (`printf '%s' 'rm -rf ~'`) and merely imprecise, not wrong, for anything
+ *     fancier. What `cat` passes on counts too — `cat <<'EOF' | bash`, `cat
+ *     <<< '…' | sh` — and, read as PowerShell (`powershell`), a string that
+ *     begins the pipeline (`'…' | bash`). Output that cannot be read here
+ *     (`cat f | bash`, `gc x.ps1 | iex`) is `unread`: never a silent ok
+ *     (review of 3.4.0, finding 6).
  */
-function fedScripts(
-  statement: ShellStatement,
-  reads: (words: readonly ShellWord[]) => boolean,
-  powershell = false,
-): Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> {
-  const scripts: Array<{ text: string; reader: readonly ShellWord[]; opaque?: true }> = [];
-
-  if (statement.commands.length === 1 && statement.heredocBodies) {
-    const only = statement.commands[0];
-    if (only !== undefined && reads(only)) pushAll(scripts, statement.heredocBodies.map((text) => ({ text, reader: only })));
+function fedScripts(statement: ShellStatement, reads: (words: readonly ShellWord[]) => boolean, powershell = false): FedScript[] {
+  const scripts: FedScript[] = [];
+  const first = statement.commands[0];
+  if (statement.heredocBodies && first !== undefined && reads(first)) {
+    pushAll(scripts, statement.heredocBodies.map((text) => ({ text, reader: first })));
   }
-
-  if (statement.commands.length >= 2) {
-    const last = statement.commands[statement.commands.length - 1];
-    if (last !== undefined && reads(last)) {
-      const fed = textOutputOf(statement.commands.slice(0, -1), { heredocs: statement.heredocBodies, powershell });
-      if (fed === 'opaque') scripts.push({ text: '', reader: last, opaque: true });
-      else if (fed !== undefined && fed.trim().length > 0) scripts.push({ text: fed.trim(), reader: last });
-    }
+  let downloaded = false;
+  for (let c = 1; c < statement.commands.length; c += 1) {
+    downloaded ||= downloads(statement.commands[c - 1] ?? []);
+    const reader = statement.commands[c];
+    if (reader === undefined || !reads(reader)) continue;
+    const fed = textOutputOf(statement.commands, { heredocs: statement.heredocBodies, powershell }, c);
+    if (fed === 'opaque') scripts.push({ text: '', reader, opaque: true });
+    else if (fed === undefined) {
+      if (!downloaded) scripts.push({ text: '', reader, unread: true });
+    } else if (fed.trim().length > 0) scripts.push({ text: fed.trim(), reader });
   }
-
   return scripts;
+}
+
+const RULE_UNREAD_SCRIPT: MatchedRule = {
+  id: 'unread-script',
+  level: 'warn',
+  reason:
+    'Runs text it could not read as a script (… | bash, gc x | iex, iex (…), [scriptblock]::Create($x), … | cmd) — what it runs was not assessed',
+};
+
+/** A statement's closing word for the group a pipe after it reads from: `)`, or a reserved word that ends a compound command. */
+const GROUP_CLOSERS = /^(\}|done|fi|esac)\s*\|/;
+
+/**
+ * Scripts a reader takes from a group in front of its pipe (review of 3.4.0,
+ * finding 6): `(echo '…') | bash`, `{ echo '…'; } | bash` — the group's
+ * statements' output, as {@link textOutputOf} reads it; and any other
+ * compound (`done | bash`, `fi | bash`) or output it cannot read, `unread`.
+ * `(` at the start of the line leaves no statement, so a `)` group is the
+ * statements back to the last one that ended with `(`, or the line's start.
+ */
+function groupFedScripts(statements: readonly ShellStatement[], powershell: boolean): FedScript[] {
+  const out: FedScript[] = [];
+  // Where the group a pipe may read from begins — after the last statement
+  // that ended with `(`, at the last that began with `{` — never before the
+  // last group already read: one pass, each statement read once.
+  let afterOpen = 0;
+  let brace = 0;
+  let read = 0;
+  for (let k = 0; k < statements.length; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined) continue;
+    const reader = statement.commands[0];
+    const closer = GROUP_CLOSERS.exec(statement.masked)?.[1];
+    const paren = /^\|/.test(statement.masked) && k > 0 && statements[k - 1]?.end === ')';
+    if (reader !== undefined && (closer !== undefined || paren) && readsScript(reader)) {
+      if (closer !== undefined && closer !== '}') out.push({ text: '', reader, unread: true });
+      else {
+        const texts: string[] = [];
+        let unread = false;
+        for (let j = Math.max(paren ? afterOpen : brace, read); j < k; j += 1) {
+          const text = textOutputOf(statements[j]?.commands ?? [], { heredocs: statements[j]?.heredocBodies, powershell });
+          if (typeof text === 'string') texts.push(text);
+          else unread = true;
+        }
+        if (unread) out.push({ text: '', reader, unread: true });
+        else if (texts.join('').trim() !== '') out.push({ text: texts.join('\n').trim(), reader });
+      }
+      read = k + 1;
+    }
+    if (/^\{/.test(statement.masked)) brace = k;
+    if (statement.end === '(') afterOpen = k + 1;
+  }
+  return out;
+}
+
+/**
+ * Scripts an output process substitution reads (review of 3.4.0, finding 6):
+ * `… | tee >(bash)`, `echo '…' > >(bash)` — the `>(` ends statement `k` with
+ * its `>`, and a reader that is the substitution's first command reads what
+ * `tee` passes on or what the command writes there.
+ */
+function outputSubstitutionScripts(statements: readonly ShellStatement[], powershell: boolean): FedScript[] {
+  const out: FedScript[] = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined || statement.end !== '(' || !statement.masked.endsWith('>')) continue;
+    const reader = statements[k + 1]?.commands[0];
+    if (reader === undefined || !readsScript(reader)) continue;
+    const members = statement.commands.map((words, c) => {
+      if (c < statement.commands.length - 1) return words;
+      let end = words.length;
+      while (end > 0 && words[end - 1]?.value === '>') end -= 1;
+      return words.slice(0, end);
+    });
+    const text = textOutputOf(members, { heredocs: statement.heredocBodies, powershell });
+    if (text === 'opaque') out.push({ text: '', reader, opaque: true });
+    else if (text === undefined) out.push({ text: '', reader, unread: true });
+    else if (text.trim() !== '') out.push({ text: text.trim(), reader });
+  }
+  return out;
+}
+
+/**
+ * The program `iex (…)` / `Invoke-Expression $(…)` runs (review of 3.4.0,
+ * finding 6): the `(` ends statement `k` right after `iex` (or its
+ * `-Command`, or the `$` of `$(`), and the statements up to the one the `)`
+ * ends write it — a string there is the program; anything else (`gc x.ps1
+ * -Raw`) is `unread`.
+ */
+function iexSubexpressionScripts(statements: readonly ShellStatement[]): FedScript[] {
+  const out: FedScript[] = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    const words = statement?.commands[statement.commands.length - 1];
+    if (statement === undefined || words === undefined || statement.end !== '(') continue;
+    const at = resolveCommand(words).index;
+    const name = commandName(words[at]?.value ?? '');
+    if (name !== 'iex' && name !== 'invoke-expression') continue;
+    if (!words.slice(at + 1).every((w) => w.value === '$' || /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(w.value))) continue;
+    // One statement in the parentheses is read; more (`iex (a; b)`), or
+    // another `(` inside, is not — and is unread, never silent.
+    const body = statements[k + 1];
+    const text = body?.end === ')' ? textOutputOf(body.commands, { heredocs: body.heredocBodies, powershell: true }) : undefined;
+    if (typeof text === 'string') {
+      if (text.trim() !== '') out.push({ text: text.trim(), reader: words, kind: 'powershell' });
+    } else out.push({ text: '', reader: words, unread: true });
+  }
+  return out;
+}
+
+/** A script block made from text: `[scriptblock]::Create(`, and the engine's `InvokeScript(` / `NewScriptBlock(`. */
+const SCRIPT_BLOCK_CALL =
+  /\[\s*(?:System\s*\.\s*Management\s*\.\s*Automation\s*\.\s*)?scriptblock\s*\]\s*::\s*Create\s*\(|\$ExecutionContext\s*\.\s*InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)\s*\(/gi;
+
+/** The most script-block calls of one command read, and how far into each one's argument. */
+const MAX_SCRIPT_BLOCK_CALLS = 32;
+const MAX_SCRIPT_BLOCK_ARG = 16 * 1024;
+
+/**
+ * The program a PowerShell script block is made from (review of 3.4.0,
+ * finding 6: `& ([scriptblock]::Create('Remove-Item -Recurse -Force C:\'))`
+ * was silent): its argument when it is one string literal (`'…'` with `''`,
+ * or `"…"`), else `unread`. A download there is
+ * `powershell-iex-download`'s.
+ */
+function scriptBlockScripts(text: string): Array<string | 'unread'> {
+  const out: Array<string | 'unread'> = [];
+  let calls = 0;
+  for (const m of text.matchAll(SCRIPT_BLOCK_CALL)) {
+    if ((calls += 1) > MAX_SCRIPT_BLOCK_CALLS) {
+      out.push('unread');
+      break;
+    }
+    const from = m.index + m[0].length;
+    const window = text.slice(from, from + MAX_SCRIPT_BLOCK_ARG);
+    const literal = /^\s*(?:'((?:[^']|'')*)'|"((?:[^"`]|`.)*)")\s*\)/.exec(window);
+    if (literal === null) out.push('unread');
+    else out.push(literal[1] !== undefined ? literal[1].replace(/''/g, "'") : (literal[2] ?? '').replace(/`(.)/g, '$1'));
+  }
+  return out;
 }
 
 /** The most encoded text decoded to judge what it decodes to. */
@@ -2138,33 +2460,50 @@ function hereStringText(words: readonly ShellWord[]): string | undefined {
  * it — and `tee`, which copies its input to stdout. Read as PowerShell
  * (`feed.powershell`), a pipeline that begins with a string writes it:
  * `'rm -rf /' | bash`.
+ *
+ * Of the members before `end` (all of them by default) — a reader in the
+ * middle of a pipeline reads the members before it (review of 3.4.0, finding
+ * 6) — walked back from the last, never sliced or recursed into, so that a
+ * pipeline of any length costs one pass.
  */
 function textOutputOf(
   members: readonly ShellWord[][],
   feed: { heredocs?: readonly string[] | undefined; powershell?: boolean } = {},
+  end = members.length,
 ): string | 'opaque' | undefined {
-  const last = members[members.length - 1];
-  if (last === undefined) return undefined;
-  const lone = last.length === 1 ? last[0] : undefined;
-  if (feed.powershell === true && members.length === 1 && lone !== undefined && lone.quoted) return lone.value;
-  const at = resolveCommand(last).index;
-  const name = commandName(last[at]?.value ?? '');
-  const args = withoutRedirections(last.slice(at + 1));
-  if (name === 'echo') return args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(' ');
-  if (name === 'printf') return args[args.length - 1] ?? '';
-  const before = (): string | 'opaque' | undefined => {
-    const here = hereStringText(last);
-    if (here !== undefined) return here;
-    if (feed.heredocs !== undefined && feed.heredocs.length > 0) return feed.heredocs.join('\n');
-    return members.length > 1 ? textOutputOf(members.slice(0, -1), feed) : undefined;
+  // The base64 decoders met on the way back, the last member's first.
+  let decodes = 0;
+  const decoded = (text: string): string | 'opaque' => {
+    let t = text;
+    for (let k = 0; k < decodes; k += 1) {
+      const d = decodeBase64(t);
+      if (d === undefined) return 'opaque';
+      t = d;
+    }
+    return t;
   };
-  if ((name === 'cat' && args.every((a) => a === '-')) || name === 'tee') return before();
-  const decoder = decoderOf(last);
-  if (decoder === undefined) return undefined;
-  if (decoder === 'other') return 'opaque';
-  const input = before();
-  if (typeof input !== 'string') return 'opaque';
-  return decodeBase64(input) ?? 'opaque';
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const last = members[i];
+    if (last === undefined) return undefined;
+    const lone = last.length === 1 ? last[0] : undefined;
+    if (feed.powershell === true && i === 0 && lone !== undefined && lone.quoted) return decoded(lone.value);
+    const at = resolveCommand(last).index;
+    const name = commandName(last[at]?.value ?? '');
+    const args = withoutRedirections(last.slice(at + 1));
+    if (name === 'echo') return decoded(args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(' '));
+    if (name === 'printf') return decoded(args[args.length - 1] ?? '');
+    if (!((name === 'cat' && args.every((a) => a === '-')) || name === 'tee')) {
+      const decoder = decoderOf(last);
+      if (decoder === undefined) return decodes > 0 ? 'opaque' : undefined;
+      if (decoder === 'other') return 'opaque';
+      decodes += 1;
+    }
+    // What this member reads: its here-string, the statement's heredoc, or the member before it.
+    const here = hereStringText(last);
+    if (here !== undefined) return decoded(here);
+    if (feed.heredocs !== undefined && feed.heredocs.length > 0) return decoded(feed.heredocs.join('\n'));
+  }
+  return decodes > 0 ? 'opaque' : undefined;
 }
 
 /**
@@ -3463,6 +3802,67 @@ function wslScript(words: readonly ShellWord[], start: number): string | undefin
 
 const MAX_NESTING = 3;
 
+/** The longest directory followed: no real one is longer, and a line of long `cd`s must not cost its square. */
+const MAX_DIR = 4096;
+
+/** A `/`-separated path with its `.` and `..` segments folded — never above its root or drive. */
+function foldDots(path: string): string {
+  const drive = /^[A-Za-z]:/.exec(path)?.[0] ?? '';
+  const parts: string[] = [];
+  for (const seg of path.slice(drive.length).split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return `${drive}/${parts.join('/')}`;
+}
+
+/**
+ * The directory a command runs in ({@link workdirs}' `may`: what a deny must
+ * assume) — the moves applied to where the statements start, `~` the home
+ * directory. `undefined` when either is not known.
+ */
+function dirAfter(start: string | undefined, steps: Steps, homePath: string | undefined): string | undefined {
+  if (steps === null) return undefined;
+  let cur = start;
+  for (const step of steps) {
+    let target = step.replace(/\\/g, '/');
+    if (target === '~' || target.startsWith('~/')) {
+      if (homePath === undefined) return undefined;
+      target = `${homePath}${target.slice(1)}`;
+    }
+    if (/^(?:\/|[A-Za-z]:\/)/.test(target)) cur = foldDots(target);
+    else if (cur === undefined) return undefined;
+    else cur = foldDots(`${cur}/${target}`);
+    if (cur.length > MAX_DIR) return undefined;
+  }
+  return cur;
+}
+
+/** The variables a delete target may start with, from the environment ({@link DeleteContext.vars}). */
+function targetVariables(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const get = (...names: string[]): string | undefined => {
+    for (const name of names) {
+      const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+      const value = key === undefined ? undefined : env[key]?.trim();
+      if (value !== undefined && value !== '') return value;
+    }
+    return undefined;
+  };
+  const out: Record<string, string> = {};
+  for (const [name, from] of [
+    ['temp', ['TEMP', 'TMP']],
+    ['tmp', ['TMP', 'TEMP']],
+    ['tmpdir', ['TMPDIR']],
+    ['localappdata', ['LOCALAPPDATA']],
+    ['appdata', ['APPDATA']],
+  ] as const) {
+    const value = get(...from);
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+}
+
 /**
  * Every rule `command` breaks, into `out`. `scope` carries the whole command
  * as given (a loosening key for Claude Code's settings is looked for there)
@@ -3507,8 +3907,41 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   }
   // `bash <(echo 'rm -rf /')`: what the substitution writes is the script (review 8, item 8).
   if (commandText.includes('<(')) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  // Where each command runs, as the `cd`s before it moved it (review of
+  // 3.4.0, finding 9): a relative delete target is read against it.
+  const dirs = workdirs(statements);
+  const startDir = scope.dir;
+  // Worked out once per list of moves: the tracker hands every command up to
+  // the next move the same list, so a line of thousands of commands after
+  // dozens of `cd`s does not fold the same path thousands of times.
+  let memoSteps: Steps | undefined;
+  let memoDir: string | undefined;
+  const dirOf = (steps: Steps): string | undefined => {
+    if (steps !== memoSteps) {
+      memoSteps = steps;
+      memoDir = dirAfter(startDir, steps, scope.homePath);
+    }
+    return memoDir;
+  };
+  // What a reader is fed from outside one statement's pipeline (review of
+  // 3.4.0, finding 6): `tee >(bash)`, `(echo …) | bash`, `{ …; } | bash`,
+  // `iex (gc x.ps1 -Raw)`, and a script block made from text.
+  const powershellScope = scope.powershell === true;
+  collectFed(
+    [
+      ...(commandText.includes('>(') ? outputSubstitutionScripts(statements, powershellScope) : []),
+      ...groupFedScripts(statements, powershellScope),
+      ...iexSubexpressionScripts(statements),
+      ...(powershellScope && /scriptblock|InvokeCommand/i.test(cmd)
+        ? scriptBlockScripts(cmd).map((text): FedScript => (text === 'unread' ? { text: '', reader: [], unread: true } : { text, reader: [], kind: 'powershell' }))
+        : []),
+    ],
+    depth,
+    out,
+    scope,
+  );
 
-  for (const written of statements) {
+  for (const [s, written] of statements.entries()) {
     // The total time budget: a hook that outlives Claude Code's 15 s timeout
     // lets the command run unassessed, so what is left is reported instead.
     if (scope.notes.now() > scope.notes.deadline) {
@@ -3536,7 +3969,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     }
     const piped = pipesDownloadIntoShell(statement);
     if (piped !== null) out.push(piped);
-    for (const words of statement.commands) {
+    for (const [c, words] of statement.commands.entries()) {
       // The budget is checked per command too: one statement can hold a
       // pipeline of thousands of commands (fix round 3, I-2).
       if (scope.notes.now() > scope.notes.deadline) {
@@ -3545,16 +3978,24 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers);
+      const here = dirOf(dirs[s]?.[c]?.may ?? null);
+      const deleting: DeleteContext = {
+        dir: here,
+        vars: scope.vars,
+        bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true,
+        piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : undefined,
+      };
+      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (del !== null) out.push(del);
-      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers);
+      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (find !== null) out.push(find);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       // `bash <<< 'rm -rf /'`, `sh <<< "$(echo … | base64 -d)"`: the here-string is the script (review 8, item 8).
-      const here = hereStringText(words);
-      if (here !== undefined && isBareShellStdin(withoutRedirectWords(words.slice(resolved.index)))) {
-        const generated = substitutionOutput(here);
-        collectGenerated([generated ?? here], depth, out, scope);
+      const hereText = hereStringText(words);
+      const hereReader = hereText === undefined ? undefined : scriptReader(words);
+      if (hereText !== undefined && hereReader !== undefined) {
+        const generated = substitutionOutput(hereText) ?? hereText;
+        collectFed([generated === 'opaque' ? { text: '', reader: words, opaque: true } : { text: generated, reader: words, kind: hereReader }], depth, out, { ...scope, dir: here });
       }
       // `python3 -c "$(curl …)"`, `node -e "$(curl …)"`: the program IS a
       // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
@@ -3583,7 +4024,11 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       // warning, never a silent ok (fix round 3, I-4).
       if (depth >= MAX_NESTING && (scripts.length > 0 || line !== undefined)) scope.notes.depth = true;
       if (depth < MAX_NESTING) {
-        for (const { text: script, powershell, iex } of scripts) {
+        for (const { text: script, powershell, iex, unread } of scripts) {
+          if (unread === true) {
+            out.push({ ...RULE_UNREAD_SCRIPT });
+            continue;
+          }
           // `sh -c "$(curl …)"` / `bash -c "$(wget -qO- …)"` — the whole -c
           // script IS a download, executed without ever spelling `| sh`.
           // Recursing alone would not catch this: the extracted script is
@@ -3598,16 +4043,16 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
         // Every command of a `cmd /c` line gets the full assessment, like a
         // top-level statement: deletes, pattern rules, nested shells (fix
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
         if (line !== undefined) {
           noteScript(scope, line, false);
-          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
+          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false, dir: here });
         }
       }
       moveCwd(scope, words, resolved.index);
@@ -3616,26 +4061,44 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // EOF`, `echo '…' | bash`, `printf '…' | sh` — is assessed as a command
     // in its own right, the same way a `-c` script already is above. Scoped
     // to the STATEMENT rather than any one command in its pipeline, since
-    // both shapes this covers depend on more than one command
-    // (`isBareShellStdin` on the shell, plus either a heredoc on the same
-    // statement or the *preceding* pipeline member). A program an
-    // interpreter reads the same way (`python - <<EOF`) is judged as program
-    // text, like `python -c`.
-    const fed = fedScripts(statement, isBareShellStdin, scope.powershell === true);
-    if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
-    if (depth < MAX_NESTING) {
-      for (const { text, reader, opaque } of fed) {
-        if (opaque === true) continue;
-        // `echo '…' | pwsh` hands the text to PowerShell.
-        const powershell = /^(?:pwsh|powershell)$/.test(commandName(reader[0]?.value ?? ''));
-        noteScript(scope, text, powershell);
-        collect(text, depth + 1, out, { ...scope, cmdLine: false, powershell });
-      }
-    } else if (fed.length > 0) scope.notes.depth = true;
-    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
+    // both shapes this covers depend on more than one command (a reader —
+    // `scriptReader` — plus either a heredoc on the same statement or the
+    // members before it). A program an interpreter reads the same way
+    // (`python - <<EOF`) is judged as program text, like `python -c`.
+    const fed = fedScripts(statement, readsScript, scope.powershell === true);
+    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf(dirs[s]?.[0]?.may ?? null) });
+    for (const { text, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
+      if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
       else pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? '')), scope));
     }
+  }
+}
+
+/**
+ * Scripts fed to a reader ({@link FedScript}), each assessed as the language
+ * its reader runs — a POSIX shell's, PowerShell's (read both ways, as a `pwsh
+ * -c` script is), or a cmd.exe line's — and a warning for a decoder's output
+ * (`decoded-script`) or any other output (`unread-script`) that cannot be
+ * read here: never a silent ok.
+ */
+function collectFed(fed: readonly FedScript[], depth: number, out: MatchedRule[], scope: Scope): void {
+  if (fed.length === 0) return;
+  if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
+  if (fed.some((f) => f.unread === true)) out.push({ ...RULE_UNREAD_SCRIPT });
+  const readable = fed.filter((f) => f.opaque !== true && f.unread !== true);
+  if (readable.length === 0) return;
+  if (depth >= MAX_NESTING) {
+    scope.notes.depth = true;
+    return;
+  }
+  for (const f of readable) {
+    const kind = f.kind ?? scriptReader(f.reader) ?? 'shell';
+    const powershell = kind === 'powershell';
+    noteScript(scope, f.text, powershell);
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell });
+    const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
+    if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
   }
 }
 
@@ -3704,6 +4167,12 @@ export interface AssessOptions {
    */
   cwd?: string;
   projectDir?: string;
+  /**
+   * The environment the command runs with: `TEMP`, `TMP`, `TMPDIR`,
+   * `LOCALAPPDATA`, `APPDATA` are what a delete target led by them names
+   * (default: this process's; tests).
+   */
+  env?: Readonly<Record<string, string | undefined>>;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -3804,6 +4273,10 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
       opts.cwd === undefined && opts.projectDir === undefined
         ? undefined
         : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) },
+    dir: opts.cwd === undefined || opts.cwd.trim() === '' ? undefined : foldDots(opts.cwd.replace(/\\/g, '/')),
+    homePath: homeRaw === undefined ? undefined : homeRaw.replace(/\\/g, '/'),
+    vars: targetVariables(opts.env ?? process.env),
+    bareDriveRoot: platform === 'win32' && opts.shell !== 'powershell',
   };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
@@ -3827,6 +4300,11 @@ interface Where {
   powershell: boolean;
   /** Where the guarded paths are this session's, when the caller said where it runs. */
   places: Places | undefined;
+  /** The working directory, `/`-separated, when the caller said it. */
+  dir: string | undefined;
+  homePath: string | undefined;
+  vars: Readonly<Record<string, string>>;
+  bareDriveRoot: boolean;
 }
 
 /** {@link userDataDir}, or `''` when it cannot be worked out. */
