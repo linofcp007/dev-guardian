@@ -1682,24 +1682,34 @@ function aliasKey(raw: string, scope: Scope): string {
 }
 
 /**
+ * How much of a path {@link realPathOf} looks up: all of it (a directory a
+ * tree lands on, a link's target); all of it when its name could be a
+ * guarded file, else its directory (a write — `cp` of a hundred files into
+ * one directory looks that directory up once); only its directory (a remove,
+ * a new link or FIFO, a hard link: a link AT the path is what they act on).
+ */
+type Lookup = 'path' | 'name' | 'parent';
+
+/**
  * Where an absolute path really leads through the links already on disk
  * ({@link AssessOptions.realPath}), `/`-separated — `undefined` when as
  * written, unknown, or past {@link MAX_LOOKUPS} or the budget (each noted).
- * Without `follow`, only its directory is looked up: a link AT the path is
- * what a remove or a new link acts on. Asked once per path ({@link Notes.realPaths}).
  */
-function realPathOf(raw: string, scope: Scope, follow: boolean): string | undefined {
+function realPathOf(raw: string, scope: Scope, lookup: Lookup): string | undefined {
   const realPath = scope.realPath;
   if (realPath === undefined) return undefined;
   const whole = absoluteOf(raw, scope)?.replace(/(?<=.)\/+$/, '');
   if (whole === undefined || GLOB.test(whole) || /^\/dev\//.test(whole)) return undefined;
-  if (!follow) {
-    const cut = whole.lastIndexOf('/');
-    if (cut <= 0 || /^[A-Za-z]:$/.test(whole.slice(0, cut))) return undefined;
-    const dir = realPathOf(whole.slice(0, cut), scope, true);
-    return dir === undefined ? undefined : `${dir.replace(/\/+$/, '')}${whole.slice(cut)}`;
-  }
-  const abs = whole;
+  const cut = whole.lastIndexOf('/');
+  // A name that may be a guarded file: `….json` (a stream or trailing dots after it too), or an 8.3 short name.
+  if (lookup === 'path' || (lookup === 'name' && /\.json|~\d/i.test(whole.slice(cut + 1)))) return lookedUp(whole, realPath, scope);
+  if (cut <= 0 || /^[A-Za-z]:$/.test(whole.slice(0, cut))) return undefined;
+  const dir = lookedUp(whole.slice(0, cut), realPath, scope);
+  return dir === undefined ? undefined : `${dir.replace(/\/+$/, '')}${whole.slice(cut)}`;
+}
+
+/** {@link realPathOf}'s one lookup of `abs`, asked once per path ({@link Notes.realPaths}). */
+function lookedUp(abs: string, realPath: (path: string) => string | undefined, scope: Scope): string | undefined {
   const notes = scope.notes;
   if (notes.realPaths.has(abs)) return notes.realPaths.get(abs);
   if (notes.realPaths.size >= MAX_LOOKUPS) {
@@ -1734,20 +1744,20 @@ function realPathOf(raw: string, scope: Scope, follow: boolean): string | undefi
 function throughLinks(effects: Effects, scope: Scope): { effects: Effects; targets: string[] } {
   const notes = scope.notes;
   /**
-   * `paths`, and where each leads. `follow`: a link AT the path is followed
-   * too — a write goes through it, while a remove, a new link, a FIFO or a
-   * hard link acts on the link itself, so only the links above them count.
+   * `paths`, and where each leads ({@link Lookup}). A link AT the path is
+   * followed unless `lookup` is `parent` — a write goes through it, while a
+   * remove, a new link, a FIFO or a hard link acts on the link itself.
    */
-  const expand = (paths: readonly string[], follow: boolean): string[] => {
+  const expand = (paths: readonly string[], lookup: Lookup): string[] => {
     const out = [...paths];
     for (const p of paths) {
       if (notes.aliases.length > 0) {
         const key = aliasKey(p, scope);
         for (const [link, target] of notes.aliases) {
-          if ((follow && key === link) || key.startsWith(`${link}/`)) out.push(`${target}${key.slice(link.length)}`);
+          if ((lookup !== 'parent' && key === link) || key.startsWith(`${link}/`)) out.push(`${target}${key.slice(link.length)}`);
         }
       }
-      const real = realPathOf(p, scope, follow);
+      const real = realPathOf(p, scope, lookup);
       if (real !== undefined) out.push(real);
     }
     return out;
@@ -1756,9 +1766,9 @@ function throughLinks(effects: Effects, scope: Scope): { effects: Effects; targe
   // other path also through these — a `cmd /c` line's `mklink` and its write.
   const targets = expand(
     effects.aliases.map(([, target]) => target),
-    true,
+    'path',
   );
-  const links = expand(effects.links, false);
+  const links = expand(effects.links, 'parent');
   for (const [link, target] of effects.aliases) {
     if (notes.aliases.length >= MAX_ALIASES) {
       notes.links = true;
@@ -1768,13 +1778,13 @@ function throughLinks(effects: Effects, scope: Scope): { effects: Effects; targe
   }
   return {
     effects: {
-      writes: expand(effects.writes, true),
-      removes: expand(effects.removes, false),
-      dirs: expand(effects.dirs, true),
-      special: expand(effects.special, false),
+      writes: expand(effects.writes, 'name'),
+      removes: expand(effects.removes, 'parent'),
+      dirs: expand(effects.dirs, 'path'),
+      special: expand(effects.special, 'parent'),
       links,
-      hardLinkSources: expand(effects.hardLinkSources, false),
-      trees: expand(effects.trees, true),
+      hardLinkSources: expand(effects.hardLinkSources, 'parent'),
+      trees: expand(effects.trees, 'path'),
       aliases: effects.aliases,
     },
     targets,

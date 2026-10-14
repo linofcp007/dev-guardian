@@ -4279,12 +4279,25 @@ describe('assessBashCommand — links: a second name for a guarded file (review 
     const asked: string[] = [];
     const realPath = (p: string): string | undefined => {
       asked.push(p);
-      if (p.endsWith('boom')) throw new Error('boom');
+      if (p.endsWith('boom.json')) throw new Error('boom');
       return undefined;
     };
-    const a = assessBashCommand('echo a > out.txt; echo b > out.txt; echo c > "$X/y"; echo d > /dev/null; echo e > boom', { cwd: '/w', realPath, platform: 'linux' });
+    const command = 'echo a > out/a.txt; echo b > out/b.txt; echo c > "$X/y"; echo d > /dev/null; echo e > boom.json; echo f > boom.json';
+    expect(assessBashCommand(command, { cwd: '/w', realPath, platform: 'linux' }).level).toBe('ok');
+    // A name that cannot be a guarded file: its directory, once; a `.json`: the whole path.
+    expect(asked).toEqual(['/w/out', '/w/boom.json']);
+  });
+
+  it('a hundred files copied into one directory look it (and its parent, for `dist` itself) up once, and nothing is left unassessed', () => {
+    const asked: string[] = [];
+    const realPath = (p: string): string | undefined => {
+      asked.push(p);
+      return undefined;
+    };
+    const files = Array.from({ length: 100 }, (_, i) => `f${i}.txt`).join(' ');
+    const a = assessBashCommand(`cp ${files} dist/`, { cwd: '/w', realPath, platform: 'linux' });
     expect(a.level).toBe('ok');
-    expect(asked).toEqual(['/w/out.txt', '/w/boom']);
+    expect(asked.sort()).toEqual(['/w', '/w/dist']);
   });
 
   it.each([

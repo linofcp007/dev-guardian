@@ -3254,10 +3254,10 @@ function workdirs(statements, opts = {}) {
       } else {
         const back = move.target === "-" || move.target !== void 0 && /^\$\{?OLDPWD\}?$/.test(move.target);
         const unread = !back && move.target !== void 0 && UNREAD_TARGET.test(move.target);
-        const lookedUp = (cdpath || prefixCdpath) && move.target !== void 0 && !/^(?:\.\.?(?:[\\/]|$)|[\\/~]|[A-Za-z]:)/.test(move.target);
+        const lookedUp2 = (cdpath || prefixCdpath) && move.target !== void 0 && !/^(?:\.\.?(?:[\\/]|$)|[\\/~]|[A-Za-z]:)/.test(move.target);
         const variable = unread && move.target !== void 0 && VARIABLE_TARGET.test(move.target);
         const nextMay = back ? here.prevMay : unread && !variable ? null : moved(here.may, move.target);
-        const nextSure = !surely || unread || lookedUp || move.target === void 0 ? null : back ? here.prevSure : moved(here.sure, move.target);
+        const nextSure = !surely || unread || lookedUp2 || move.target === void 0 ? null : back ? here.prevSure : moved(here.sure, move.target);
         here = {
           may: nextMay,
           sure: nextSure,
@@ -98565,18 +98565,18 @@ function aliasKey(raw, scope) {
   const k = (absoluteOf(raw, scope) ?? stripQuotes(raw).replace(/\\/g, "/")).replace(/\/+$/, "");
   return scope.windows === true ? k.toLowerCase() : k;
 }
-function realPathOf(raw, scope, follow) {
+function realPathOf(raw, scope, lookup2) {
   const realPath = scope.realPath;
   if (realPath === void 0) return void 0;
   const whole = absoluteOf(raw, scope)?.replace(/(?<=.)\/+$/, "");
   if (whole === void 0 || GLOB.test(whole) || /^\/dev\//.test(whole)) return void 0;
-  if (!follow) {
-    const cut = whole.lastIndexOf("/");
-    if (cut <= 0 || /^[A-Za-z]:$/.test(whole.slice(0, cut))) return void 0;
-    const dir = realPathOf(whole.slice(0, cut), scope, true);
-    return dir === void 0 ? void 0 : `${dir.replace(/\/+$/, "")}${whole.slice(cut)}`;
-  }
-  const abs = whole;
+  const cut = whole.lastIndexOf("/");
+  if (lookup2 === "path" || lookup2 === "name" && /\.json|~\d/i.test(whole.slice(cut + 1))) return lookedUp(whole, realPath, scope);
+  if (cut <= 0 || /^[A-Za-z]:$/.test(whole.slice(0, cut))) return void 0;
+  const dir = lookedUp(whole.slice(0, cut), realPath, scope);
+  return dir === void 0 ? void 0 : `${dir.replace(/\/+$/, "")}${whole.slice(cut)}`;
+}
+function lookedUp(abs, realPath, scope) {
   const notes = scope.notes;
   if (notes.realPaths.has(abs)) return notes.realPaths.get(abs);
   if (notes.realPaths.size >= MAX_LOOKUPS) {
@@ -98600,25 +98600,25 @@ function realPathOf(raw, scope, follow) {
 }
 function throughLinks(effects, scope) {
   const notes = scope.notes;
-  const expand = (paths, follow) => {
+  const expand = (paths, lookup2) => {
     const out = [...paths];
     for (const p of paths) {
       if (notes.aliases.length > 0) {
         const key = aliasKey(p, scope);
         for (const [link, target] of notes.aliases) {
-          if (follow && key === link || key.startsWith(`${link}/`)) out.push(`${target}${key.slice(link.length)}`);
+          if (lookup2 !== "parent" && key === link || key.startsWith(`${link}/`)) out.push(`${target}${key.slice(link.length)}`);
         }
       }
-      const real = realPathOf(p, scope, follow);
+      const real = realPathOf(p, scope, lookup2);
       if (real !== void 0) out.push(real);
     }
     return out;
   };
   const targets = expand(
     effects.aliases.map(([, target]) => target),
-    true
+    "path"
   );
-  const links = expand(effects.links, false);
+  const links = expand(effects.links, "parent");
   for (const [link, target] of effects.aliases) {
     if (notes.aliases.length >= MAX_ALIASES) {
       notes.links = true;
@@ -98628,13 +98628,13 @@ function throughLinks(effects, scope) {
   }
   return {
     effects: {
-      writes: expand(effects.writes, true),
-      removes: expand(effects.removes, false),
-      dirs: expand(effects.dirs, true),
-      special: expand(effects.special, false),
+      writes: expand(effects.writes, "name"),
+      removes: expand(effects.removes, "parent"),
+      dirs: expand(effects.dirs, "path"),
+      special: expand(effects.special, "parent"),
       links,
-      hardLinkSources: expand(effects.hardLinkSources, false),
-      trees: expand(effects.trees, true),
+      hardLinkSources: expand(effects.hardLinkSources, "parent"),
+      trees: expand(effects.trees, "path"),
       aliases: effects.aliases
     },
     targets
