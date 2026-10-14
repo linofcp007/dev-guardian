@@ -154,11 +154,16 @@ function isBoundary(text, at) {
   return before !== after;
 }
 function runEnds(text, inClass) {
+  const cached = RUN_ENDS.get(inClass);
+  if (cached !== void 0 && cached.text === text) return cached.end;
   const ends = new Int32Array(text.length + 1);
   ends[text.length] = text.length;
   for (let i = text.length - 1; i >= 0; i -= 1) ends[i] = inClass(text.charCodeAt(i)) ? ends[i + 1] ?? i : i;
-  return (i) => i >= text.length ? text.length : ends[i] ?? i;
+  const end = (i) => i >= text.length ? text.length : ends[i] ?? i;
+  RUN_ENDS.set(inClass, { text, end });
+  return end;
 }
+var RUN_ENDS = /* @__PURE__ */ new Map();
 function findJwt(text, from) {
   if (!text.includes(".eyJ", from)) return null;
   const end = runEnds(text, isB64url);
@@ -328,15 +333,14 @@ function firstMatch(rule, re, w, start = 0) {
   }
   return null;
 }
-var MAX_SET_ASIDE = 16;
 function firstHit(rule, re, w, line, skipPlaceholders) {
   let start = 0;
-  for (let k = 0; k <= MAX_SET_ASIDE && start <= w.text.length; k += 1) {
+  while (start <= w.text.length) {
     const m = firstMatch(rule, re, w, start);
     if (m === null) return null;
     const hit = judge(rule, m, line, skipPlaceholders);
     if (hit !== null) return hit;
-    start = m.index + Math.max(1, m.text.length);
+    start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
   }
   return null;
 }

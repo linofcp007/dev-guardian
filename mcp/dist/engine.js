@@ -1954,10 +1954,14 @@ function isBoundary(text2, at) {
   return before !== after2;
 }
 function runEnds(text2, inClass) {
+  const cached2 = RUN_ENDS.get(inClass);
+  if (cached2 !== void 0 && cached2.text === text2) return cached2.end;
   const ends = new Int32Array(text2.length + 1);
   ends[text2.length] = text2.length;
   for (let i = text2.length - 1; i >= 0; i -= 1) ends[i] = inClass(text2.charCodeAt(i)) ? ends[i + 1] ?? i : i;
-  return (i) => i >= text2.length ? text2.length : ends[i] ?? i;
+  const end = (i) => i >= text2.length ? text2.length : ends[i] ?? i;
+  RUN_ENDS.set(inClass, { text: text2, end });
+  return end;
 }
 function findJwt(text2, from) {
   if (!text2.includes(".eyJ", from)) return null;
@@ -2074,12 +2078,12 @@ function firstMatch(rule, re, w, start = 0) {
 }
 function firstHit(rule, re, w, line, skipPlaceholders) {
   let start = 0;
-  for (let k = 0; k <= MAX_SET_ASIDE && start <= w.text.length; k += 1) {
+  while (start <= w.text.length) {
     const m = firstMatch(rule, re, w, start);
     if (m === null) return null;
     const hit = judge(rule, m, line, skipPlaceholders);
     if (hit !== null) return hit;
-    start = m.index + Math.max(1, m.text.length);
+    start = Math.max(start + 1, m.index + Math.max(1, m.text.length));
   }
   return null;
 }
@@ -2142,7 +2146,7 @@ function judge(rule, m, i, skipPlaceholders = true) {
     preview: redact(matched)
   };
 }
-var CONFIDENCE_RANK, SECRET_RULES, ENV_KEY, VALUE_CAPTURE_RULES, QUOTED_VALUE_RULES, TOKEN_PLACEHOLDER_MARKERS, MIXED_TOKEN_RULES, PLACEHOLDER_MARKERS, WINDOW, OVERLAP, MAX_SET_ASIDE;
+var CONFIDENCE_RANK, SECRET_RULES, RUN_ENDS, ENV_KEY, VALUE_CAPTURE_RULES, QUOTED_VALUE_RULES, TOKEN_PLACEHOLDER_MARKERS, MIXED_TOKEN_RULES, PLACEHOLDER_MARKERS, WINDOW, OVERLAP;
 var init_secretScan = __esm({
   "src/hooks/secretScan.ts"() {
     "use strict";
@@ -2275,6 +2279,7 @@ var init_secretScan = __esm({
         pattern: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]+:([^\s/:@]{3,})@[^\s/'"]+/i
       }
     ];
+    RUN_ENDS = /* @__PURE__ */ new Map();
     ENV_KEY = /(?<![A-Za-z0-9])(?:api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|auth[_-]?token|client[_-]?secret|passwd|password|private[_-]?key|token)\s*=\s*/gi;
     VALUE_CAPTURE_RULES = /* @__PURE__ */ new Set([
       "generic-assignment",
@@ -2331,7 +2336,6 @@ var init_secretScan = __esm({
     ];
     WINDOW = 16 * 1024;
     OVERLAP = 2 * 1024;
-    MAX_SET_ASIDE = 16;
   }
 });
 
