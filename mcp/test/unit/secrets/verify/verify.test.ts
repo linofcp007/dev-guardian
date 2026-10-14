@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { verifySecrets, type SecretCandidate } from '../../../../src/secrets/verify/verify.js';
+import { hangBound } from '../../../helpers/timing.js';
 
 type Handler = (url: string, init: RequestInit) => Promise<Response> | Response;
 
@@ -217,9 +218,10 @@ describe('verifySecrets — failures are unknown, with a reason', () => {
       offline: false,
       timeoutMs: 50,
     });
-    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(Date.now() - started).toBeLessThan(hangBound(5_000));
     expect(check?.verdict).toBe('unknown');
-    expect(check?.reason).toMatch(/no answer/);
+    // The 50 ms given, never the 5 s default: said in the reason.
+    expect(check?.reason).toMatch(/no answer .* within 0\.05 s/);
   });
 
   it('defaults to a 5 s timeout per request', async () => {

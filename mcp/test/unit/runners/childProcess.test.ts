@@ -16,6 +16,7 @@ import { startChild, stopTree } from '../../../src/runners/childProcess.js';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import { captureOutput, readText } from '../../../src/runners/spawn.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -49,7 +50,7 @@ describe('captureOutput — a one-process command, answered by its deadline', ()
     expect(r.timedOut).toBe(true);
     expect(r.exitCode).toBeNull();
     // The grandchild lives 20 s: an answer well before that was not a wait for it.
-    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(Date.now() - started).toBeLessThan(hangBound(15_000));
   }, 30_000);
 
   it('a command on no PATH entry is an answer, not a throw — and never one found in the working directory', async () => {

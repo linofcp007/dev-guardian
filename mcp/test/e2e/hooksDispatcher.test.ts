@@ -21,7 +21,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
-import { PERF_STRICT } from '../helpers/timing.js';
+import { hangBound, PERF_STRICT } from '../helpers/timing.js';
 
 /** A fake AWS key the scan reports: AWS's own `AKIAIOSFODNN7EXAMPLE` is a documented placeholder it skips (review 8). */
 const FAKE_AWS_KEY = ['AKIA', 'Q7XZ2M9KDP4RWT3B'].join('');
@@ -46,9 +46,9 @@ vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
  * shape, 64 KB of `-c`). So by default the bound is 12 s: under that kill,
  * far under every defect, and above what a machine at 100% CPU adds (a
  * 3 s bound measured 3.0 s there, review 3.0 R7 round 2). The tight number,
- * for a quiet machine, runs with GUARDIAN_PERF_STRICT=1.
+ * for a quiet machine, runs with GUARDIAN_PERF_STRICT=1 — `hangBound` of
+ * test/helpers/timing.ts (this file kept a copy of it, `answersWithin`).
  */
-const answersWithin = (strictMs: number): number => (PERF_STRICT ? strictMs : 12_000);
 
 /** Whether this account may create symlinks (Windows needs admin or Developer Mode). */
 const CAN_SYMLINK = ((): boolean => {
@@ -161,7 +161,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const command = `${Array.from({ length: 127 }, () => chmod).join('; ')}; rm -rf /`;
       const t0 = Date.now();
       const r = runHook(preToolUse('Bash', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
-      expect(Date.now() - t0).toBeLessThan(answersWithin(5000));
+      expect(Date.now() - t0).toBeLessThan(hangBound(5000));
       const out = (r.stdout as { hookSpecificOutput?: { additionalContext?: string } } | undefined)?.hookSpecificOutput;
       expect(out?.additionalContext).toMatch(/not assessed \(over 512 KB\)/);
     }, 30_000);
@@ -224,7 +224,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       const command = `${unit.repeat(Math.floor((512 * 1024 - 20) / unit.length))}; rm -rf /`;
       const t0 = Date.now();
       const r = runHook(preToolUse('Bash', { command }, projectDir), { cwd: projectDir, homeDir, env: { GUARDIAN_OFFLINE: '1' } });
-      expect(Date.now() - t0).toBeLessThan(answersWithin(3000));
+      expect(Date.now() - t0).toBeLessThan(hangBound(3000));
       expect(r.stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     }, 30_000);
 
@@ -741,14 +741,14 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(spawnSync('mkfifo', [join(guardianDir(), 'hooks.config.json')]).status).toBe(0);
       const { r, ms } = timedRmRf();
       expect(decision(r)).toBe('deny');
-      expect(ms).toBeLessThan(answersWithin(5000));
+      expect(ms).toBeLessThan(hangBound(5000));
     });
 
     it.skipIf(!POSIX)('a hooks.config.json linked to /dev/zero: denied at once (POSIX only: Windows has no /dev/zero)', () => {
       symlinkSync('/dev/zero', join(guardianDir(), 'hooks.config.json'));
       const { r, ms } = timedRmRf();
       expect(decision(r)).toBe('deny');
-      expect(ms).toBeLessThan(answersWithin(5000));
+      expect(ms).toBeLessThan(hangBound(5000));
     });
 
     it.skipIf(!POSIX)('a FIFO or /dev/zero allowlist: denied at once, and SessionStart names both (POSIX only)', () => {
@@ -756,7 +756,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       symlinkSync('/dev/zero', join(guardianDir(), 'hooks.config.json'));
       const { r, ms } = timedRmRf();
       expect(decision(r)).toBe('deny');
-      expect(ms).toBeLessThan(answersWithin(5000));
+      expect(ms).toBeLessThan(hangBound(5000));
       const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
       expect(ctx).toContain('.guardian/hooks.config.json');
       expect(ctx).toContain('.guardian/hooks-allowlist.json');
@@ -806,10 +806,10 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         symlinkSync(UNC, join(projectDir, '.guardian'), 'dir');
         const { r, ms } = timedRmRf();
         expect(decision(r)).toBe('deny');
-        expect(ms).toBeLessThan(answersWithin(5000));
+        expect(ms).toBeLessThan(hangBound(5000));
         const t0 = Date.now();
         const ctx = context(runHook({ hook_event_name: 'SessionStart', cwd: projectDir }, { cwd: projectDir, homeDir }));
-        expect(Date.now() - t0).toBeLessThan(answersWithin(5000));
+        expect(Date.now() - t0).toBeLessThan(hangBound(5000));
         expect(ctx).toMatch(
           /\.guardian\/hooks\.config\.json was not read \(reached through a link to a network or device path\)/,
         );
@@ -824,7 +824,7 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
         symlinkSync(UNC, join(homeDir, '.config', 'dev-guardian'), 'dir');
         const { r, ms } = timedRmRf();
         expect(decision(r)).toBe('deny');
-        expect(ms).toBeLessThan(answersWithin(5000));
+        expect(ms).toBeLessThan(hangBound(5000));
       },
       30_000,
     );
@@ -1962,10 +1962,10 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       const plain = timed(preToolUse('Write', { file_path: `${UNREACHABLE}\\notes\\a.txt`, content: 'x' }, projectDir));
       expect(plain.r.status).toBe(0);
       expect(plain.r.stdout).toBeUndefined();
-      expect(plain.ms).toBeLessThan(answersWithin(3000));
+      expect(plain.ms).toBeLessThan(hangBound(3000));
       const config = timed(preToolUse('Write', { file_path: `${UNREACHABLE}\\p\\.guardian\\hooks.config.json`, content: '{}' }, projectDir));
       expect(out(config.r).permissionDecision).toBe('deny');
-      expect(config.ms).toBeLessThan(answersWithin(3000));
+      expect(config.ms).toBeLessThan(hangBound(3000));
       const settings = timed(
         preToolUse('Edit', { file_path: `${UNREACHABLE}\\p\\.claude\\settings.json`, old_string: '{', new_string: '{"disableAllHooks": true,' }, projectDir),
       );

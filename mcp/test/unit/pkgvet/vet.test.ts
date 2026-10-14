@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { nugetSearchUrl } from '../../../src/pkgvet/registry.js';
 import type { PackageSpec, PkgEcosystem } from '../../../src/pkgvet/types.js';
 import { vetPackages, type VetOptions } from '../../../src/pkgvet/vet.js';
+import { hangBound } from '../../helpers/timing.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
 const DAY = 24 * 3600 * 1000;
@@ -317,7 +318,7 @@ describe('vetPackages — unknown is never ok', () => {
     const fake = fakeFetch({ 'https://registry.npmjs.org/left-pad': { hang: true }, [OSV]: { hang: true } });
     const t0 = Date.now();
     const [r] = await vetPackages([spec('npm', 'left-pad')], opts(fake, { budgetMs: 150 }));
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
     expect(r?.verdict).toBe('unknown');
     expect(r?.checks.exists.status).toBe('unknown');
     expect(r?.reasons.join(' ')).toMatch(/budget|timed out/i);
