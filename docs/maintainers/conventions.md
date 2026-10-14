@@ -113,9 +113,14 @@ Enforced by the compiler where possible, by review where not:
   and nothing else from the build — that entry loads its per-event parts: a
   detector it needs is a new `load*` there, its module re-exported by the
   part of the event that runs it (`src/hooksBash.ts`, …). `test/e2e/pluginInstall.test.ts` runs the CLI's
-  subcommands, the hooks and the server from a copy of the files git tracks —
-  so `git add` a new file the install needs (a build output too) before it
-  passes, as it must be committed to ship.
+  subcommands, the hooks and the server from a real `git archive` of the
+  index's tree (every tracked file at its working-tree content; a copy of the
+  index, never the index) extracted at a path with a space — so `git add` a
+  new file the install needs (a build output too) before it passes, as it
+  must be committed to ship. The hooks run exactly as `hooks/hooks.json`
+  declares them (exec form, `${CLAUDE_PLUGIN_ROOT}` the install), a damaged
+  `mcp/dist` beside it is the negative control, and outside a git checkout
+  the suite is skipped (3.4.1, review 11).
 - **Markdownlint stays clean** for `skills/`, `commands/`, the three READMEs
   and `docs/` (config: [`.markdownlint.jsonc`](../../.markdownlint.jsonc)):
   `npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "docs/**/*.md"`.
