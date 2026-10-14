@@ -345,7 +345,8 @@ a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher to
   a real MCP client); `batchArgumentTools.test.ts` puts the `"` before the `&` for every tool;
   `secretIdentityGitleaks.test.ts` and `secretFullContentGitleaks.test.ts` run the secret scenarios on real
   gitleaks output; `pluginInstall.test.ts` installs from a real `git archive` at a path with a space, runs the
-  hooks as `hooks.json` declares them and keeps a damaged-dist control.
+  hooks as `hooks.json` declares them and keeps a damaged-dist control; the git tests list processes from
+  `/proc` on Linux, where a slim container has no `ps`.
 - **No test asserts a bare number of milliseconds**: the last ones became `expectLinear` shapes or `hangBound`
   waits — `openSetCarryForward.test.ts`'s carry-forward timings assert a ratio (the history 8 or 10 times
   longer costs under factor^1.5 as much), its 2 s budget only with `GUARDIAN_PERF_STRICT=1`. The compile-cache
