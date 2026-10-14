@@ -857,6 +857,83 @@ describe('decideInstallCommand — the local-bin skip never drops a package npm 
     await denied('npx --package=zz-evil tool');
   });
 
+  // Review of 3.4.0, finding 5 — judged against npm's own resolution (libnpmexec):
+  // a `cd` that may not have run, a nearer `package.json` (npm's prefix), a
+  // package.json merely present, and `--prefix` all skipped a package npm fetched.
+  it.each([
+    'false && cd web; npx zz-evil',
+    '[ -d nope ] && cd web; npx zz-evil',
+    'if false; then cd web; fi; npx zz-evil',
+    'while false; do cd web; done; npx zz-evil',
+    'f() { cd web; }; npx zz-evil',
+    'function f { cd web; }; npx zz-evil',
+    '{ cd web; } & npx zz-evil',
+    '{ cd web; } | cat; npx zz-evil',
+    'cd web && true & npx zz-evil',
+    'cd web || npx zz-evil',
+    'CDPATH=other cd web && npx zz-evil',
+    'export CDPATH=other; cd web; npx zz-evil',
+    'cd web/node_modules/.bin/zz-evil; cd ../../..; npx zz-evil',
+  ])('%s — the `cd` may not have moved the shell there: vetted, and denied', async (command) => {
+    binFile(join(project, 'web'), 'zz-evil');
+    mkdirSync(join(project, 'other', 'web'), { recursive: true });
+    await denied(command);
+  });
+
+  it.each(['env -C other npx zz-evil', 'env --chdir=other npx zz-evil', 'sudo -D other npx zz-evil'])(
+    '%s — the launcher runs elsewhere than the line: vetted, and denied',
+    async (command) => {
+      binFile(project, 'zz-evil');
+      mkdirSync(join(project, 'other'), { recursive: true });
+      await denied(command);
+    },
+  );
+
+  it('CDPATH in the environment: a bare `cd name` is not taken as moving there', async () => {
+    binFile(join(project, 'web'), 'zz-evil');
+    const d = await decideInstallCommand('cd web && npx zz-evil', opts(maliciousRegistry().fetchImpl, { popular: {}, env: { CDPATH: '/elsewhere' } }));
+    expect(d?.deny).toMatch(/MAL-2026-33/);
+  });
+
+  it('a `cd` that surely ran — at the head of a list, or joined to it by && — still moves it', async () => {
+    binFile(join(project, 'web'), 'zz-evil');
+    const f = maliciousRegistry();
+    for (const command of ['cd web; npx zz-evil', 'cd web && npx zz-evil', 'cd -- web && npx zz-evil', 'cd ./web; true; npx zz-evil']) {
+      expect(await decideInstallCommand(command, opts(f.fetchImpl, { popular: {} })), command).toBeNull();
+    }
+    expect(f.calls).toEqual([]);
+  });
+
+  it.each([
+    ['{}', 'no name'],
+    ['{"name":"not-zz-evil","version":"1.0.0"}', 'another name'],
+    ['not json', 'no JSON'],
+  ])('a node_modules/<name>/package.json of %s (%s) is no installed package', async (manifest) => {
+    mkdirSync(join(project, 'node_modules', 'zz-evil'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'zz-evil', 'package.json'), manifest);
+    await denied('npx zz-evil');
+  });
+
+  it("a nearer package.json is npm's prefix: the package in a parent's node_modules is not in its tree", async () => {
+    mkdirSync(join(project, 'node_modules', 'zz-evil'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'zz-evil', 'package.json'), '{"name":"zz-evil"}');
+    mkdirSync(join(project, 'sub'), { recursive: true });
+    writeFileSync(join(project, 'sub', 'package.json'), '{"name":"sub"}');
+    await denied('cd sub && npx zz-evil');
+    // …while a bin in a parent's node_modules/.bin is one npm walks up to.
+    binFile(project, 'zz-evil');
+    const f = maliciousRegistry();
+    expect(await decideInstallCommand('cd sub && npx zz-evil', opts(f.fetchImpl, { popular: {} }))).toBeNull();
+  });
+
+  it.each(['npx --prefix ../elsewhere zz-evil', 'npx --prefix=/ zz-evil', 'npm --prefix .. exec zz-evil', 'npm -C .. exec zz-evil'])(
+    '%s — npm looks for the project elsewhere: vetted, and denied',
+    async (command) => {
+      binFile(project, 'zz-evil');
+      await denied(command);
+    },
+  );
+
   it('a package installed by name still runs locally, scoped or under -p', async () => {
     for (const name of ['@zz-evil/eslint', 'zz-evil']) {
       mkdirSync(join(project, 'node_modules', name), { recursive: true });

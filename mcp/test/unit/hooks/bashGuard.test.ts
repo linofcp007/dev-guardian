@@ -4072,3 +4072,83 @@ describe('assessBashCommand — every reader of a fed script (review of 3.4.0, f
     expectLinear('[scriptblock]::Create( …', (n) => assessBashCommand("[scriptblock]::Create('x'); ".repeat(n / 30), { shell: 'powershell' }), 2_000);
   }, 120_000);
 });
+
+// Review of 3.4.0, finding 9: a relative delete target was never read against
+// the directory the command runs in, nor `$PWD`, `$TEMP` or `$LOCALAPPDATA`
+// against what they name — each of these only warned.
+describe('assessBashCommand — a delete target read where the command runs (review of 3.4.0, finding 9)', () => {
+  const win = {
+    homeDir: 'C:\\Users\\Administrator',
+    platform: 'win32' as const,
+    cwd: 'C:\\Users\\Administrator\\proj',
+    env: { TEMP: 'C:\\Users\\ADMINI~1\\AppData\\Local\\Temp', LOCALAPPDATA: 'C:\\Users\\Administrator\\AppData\\Local' },
+  };
+  const linux = { homeDir: '/home/alice', platform: 'linux' as const, cwd: '/home/alice/proj', env: { TMPDIR: '/tmp' } };
+
+  it.each([
+    ['rm -rf ..', 'bash', win],
+    ['rm -rf ../', 'bash', win],
+    ['cd / && rm -rf *', 'bash', win],
+    ['cd ../../.. && rm -rf *', 'bash', win],
+    ['cd .. && rm -rf .', 'bash', win],
+    ['cd && rm -rf *', 'bash', win],
+    ['false && cd /; rm -rf *', 'bash', win],
+    ['rm -rf "$TEMP/../../.."', 'bash', win],
+    ['rm -rf "$LOCALAPPDATA/../.."', 'bash', win],
+    ['rm -rf "$PWD/.."', 'bash', win],
+    ['rm -rf "$(pwd)/../.."', 'bash', win],
+    ['rm -rf C:', 'bash', win],
+    ['bash -c "cd / && rm -rf *"', 'bash', win],
+    ['Remove-Item -Recurse -Force ..', 'powershell', win],
+    ['Remove-Item -Recurse -Force "$env:TEMP\\..\\..\\.."', 'powershell', win],
+    ['Get-ChildItem C:\\ | Remove-Item -Recurse', 'powershell', win],
+    ['gci C:\\Windows | ri -Recurse -Force', 'powershell', win],
+    ['Get-ChildItem ~ | Remove-Item -Recurse -Force', 'powershell', win],
+    ['Set-Location C:\\; Remove-Item * -Recurse -Force', 'powershell', win],
+    ['rm -rf ..', 'bash', linux],
+    ['rm -rf "$TMPDIR/.."', 'bash', linux],
+    ['cd / && rm -rf *', 'bash', linux],
+  ] as const)('%s (%s) is denied', (command, shell, opts) => {
+    expect(assessBashCommand(command, { shell, ...opts }).rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    ['rm -rf node_modules', 'bash', win],
+    ['rm -rf ../other-proj', 'bash', win],
+    ['rm -rf *', 'bash', win],
+    ['cd build && rm -rf *', 'bash', win],
+    ['rm -rf "$TEMP/build"', 'bash', win],
+    ['rm -rf "$PWD/dist"', 'bash', win],
+    ['Get-ChildItem .\\build | Remove-Item -Recurse -Force', 'powershell', win],
+    ['Get-ChildItem C:\\ -Filter *.tmp | Remove-Item -Recurse', 'powershell', win],
+    ['Remove-Item -Recurse -Force C:', 'powershell', win],
+    ['rm -rf C:', 'bash', linux],
+    ['rm -rf ../other', 'bash', linux],
+  ] as const)('%s (%s) only warns', (command, shell, opts) => {
+    expect(assessBashCommand(command, { shell, ...opts }).rules).toEqual(['rm-rf-broad']);
+  });
+
+  it('find reads its start path where it runs too', () => {
+    expect(assessBashCommand('cd .. && find . -delete', win).rules).toEqual(['find-delete-root']);
+    expect(assessBashCommand('find . -delete', win).rules).toEqual(['find-delete-broad']);
+  });
+
+  it('without a working directory a relative target is not read — a `cd` to an absolute one still is', () => {
+    expect(assessBashCommand('rm -rf ..', { homeDir: '/home/alice', platform: 'linux', env: {} }).rules).toEqual(['rm-rf-broad']);
+    expect(assessBashCommand('cd / && rm -rf *', { homeDir: '/home/alice', platform: 'linux', env: {} }).rules).toContain('rm-rf-root');
+  });
+
+  it("the home directory's 8.3 name is the home directory", () => {
+    expect(assessBashCommand('rm -rf C:/Users/ADMINI~1', { ...win }).rules).toContain('rm-rf-root');
+    expect(assessBashCommand('rm -rf C:/Users/ADMINI~1/proj', { ...win }).rules).toEqual(['rm-rf-broad']);
+    expect(assessBashCommand('rm -rf C:/Users/BOB~1', { ...win }).rules).toEqual(['rm-rf-broad']);
+  });
+
+  it.each([
+    ['cd cd cd … then a delete', (n: number): string => `${'cd a; '.repeat(n / 6)}rm -rf ..`],
+    ['a delete after each cd', (n: number): string => 'cd a; rm -rf x; '.repeat(n / 16)],
+    ['a long relative target', (n: number): string => `rm -rf ${'a/'.repeat(n / 2)}..`],
+  ])('%s: eight times the command costs well under 22.6 times as much', (label, make) => {
+    expectLinear(label, (n) => assessBashCommand(make(n), win), 2_000);
+  }, 120_000);
+});

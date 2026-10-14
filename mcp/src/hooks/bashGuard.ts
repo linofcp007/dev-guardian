@@ -107,6 +107,7 @@ import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffec
 import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
 import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
 import { MASK, splitShell, type ShellStatement, type ShellWord } from './shell/split.js';
+import { type Steps, workdirs } from './shell/workdir.js';
 
 // How a command is READ lives in `shell/` — the tokenizer (`split.ts`), the
 // command-word resolution (`command.ts`), cmd.exe's line reader (`cmd.ts`),
@@ -711,10 +712,75 @@ function homeDirFor(home: string | undefined, platform: string): HomeDir | undef
 /**
  * The home directory named outright — `C:\Users\alice`, `/c/Users/alice/`,
  * `/home/alice/*` — compared with `os.homedir()`, case-insensitively on
- * Windows (review I2). A path below it is not the home directory.
+ * Windows (review I2), where its 8.3 name counts too (`C:\Users\ADMINI~1`, what
+ * `%TEMP%` is often spelled with — review of 3.4.0, finding 9). A path below it
+ * is not the home directory.
  */
 function isHomeTarget(raw: string, home: HomeDir | undefined): boolean {
-  return home !== undefined && targetKey(raw, home.fold) === home.key;
+  if (home === undefined) return false;
+  const key = targetKey(raw, home.fold);
+  if (key === home.key) return true;
+  if (!home.fold) return false;
+  const cut = key.lastIndexOf('/');
+  const homeCut = home.key.lastIndexOf('/');
+  if (cut < 0 || key.slice(0, cut) !== home.key.slice(0, homeCut)) return false;
+  const short = /^([^~/]{1,6})~\d+$/.exec(key.slice(cut + 1));
+  return short !== null && home.key.slice(homeCut + 1).replace(/[\s.]/g, '').startsWith(short[1] ?? '');
+}
+
+/**
+ * What a delete's target is read against beyond its own spelling (review of
+ * 3.4.0, finding 9: `rm -rf ..` from a child of the home directory, `cd / &&
+ * rm -rf *`, `"$TEMP/../../.."` and `Get-ChildItem C:\ | Remove-Item -Recurse`
+ * only warned — a relative target was never resolved).
+ */
+interface DeleteContext {
+  /** The directory the command runs in, absolute and with `/` separators, when it is known. */
+  dir?: string | undefined;
+  /** The values of the variables a target may start with, by lower-cased name: `temp`, `tmp`, `tmpdir`, `localappdata`, `appdata`. */
+  vars?: Readonly<Record<string, string>> | undefined;
+  /** A bare drive (`C:`) is that drive's root — Git Bash's reading, not cmd's or PowerShell's (the drive's current directory). */
+  bareDriveRoot?: boolean | undefined;
+  /** What the pipe hands a PowerShell delete with no path of its own. */
+  piped?: string | undefined;
+}
+
+/** `$PWD`, `${PWD}`, `$env:PWD`, `$(pwd)`, `` `pwd` `` at the start of a target. */
+const PWD_PREFIX = /^(?:\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{?PWD\}?|\$env:PWD)(?=[\\/]|$)/i;
+
+/**
+ * A delete target read against {@link DeleteContext}: a relative one joined
+ * to the directory the command runs in, one led by `$PWD` (and its spellings)
+ * or by `$TEMP`, `$TMP`, `$TMPDIR`, `$LOCALAPPDATA`, `$APPDATA` (in bash's,
+ * cmd's and PowerShell's spellings) with that value in its place — left to
+ * {@link catastrophicKind} and {@link isHomeTarget} to fold its `..`s. `undefined`
+ * when there is nothing to read it against.
+ */
+function resolvedTarget(raw: string, ctx: DeleteContext): string | undefined {
+  const t = stripQuotes(raw.trim());
+  if (t === '' || t.length > MAX_PLAIN_TARGET || t.includes('::')) return undefined;
+  const pwd = PWD_PREFIX.exec(t);
+  if (pwd !== null) return ctx.dir === undefined ? undefined : `${ctx.dir}${t.slice(pwd[0].length)}`;
+  const v = leadingVariable(t);
+  if (v !== undefined) {
+    const value = ctx.vars?.[v.name];
+    return value === undefined || value === '' ? undefined : `${value.replace(/\\/g, '/')}${v.rest.replace(/\\/g, '/')}`;
+  }
+  if (/^(?:[\\/~$%]|[A-Za-z]:)/.test(t) || ctx.dir === undefined) return undefined;
+  return `${ctx.dir}/${t}`;
+}
+
+/** The targets a delete is judged on: each as written, and as {@link resolvedTarget} reads it. */
+function judgedTargets(targets: readonly string[], ctx: DeleteContext): string[] {
+  return targets.flatMap((t) => {
+    const resolved = resolvedTarget(t, ctx);
+    return resolved === undefined ? [t] : [t, resolved];
+  });
+}
+
+/** Git Bash's bare drive: `C:`, `C:.`, `C:..` — the drive's root there. */
+function isBareDrive(raw: string): boolean {
+  return /^[A-Za-z]:\.{0,2}$/.test(stripQuotes(raw.trim()));
 }
 
 /** Remove-Item's path parameters and their abbreviations: `-Path`, `-LiteralPath`, `-LP`, `-PSPath`. */
@@ -734,7 +800,7 @@ const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
  * style slash flags: `/s` recurse, `/q` quiet-force — and, being Remove-Item
  * aliases in PowerShell, its dash flags too).
  */
-function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
+function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true, ctx: DeleteContext = {}): MatchedRule | null {
   const head = words[start];
   if (head === undefined) return null;
   const name = basename(head.value).toLowerCase();
@@ -797,8 +863,47 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
   // delete as much as their forced forms — measured: both removed a whole tree.
   if (!(recursive || noPreserve)) return null;
 
-  if (noPreserve || targets.some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) return { ...RULE_RM_ROOT };
+  // A PowerShell delete with no path of its own deletes what the pipe hands it.
+  if (targets.length === 0 && ctx.piped !== undefined) targets.push(ctx.piped);
+  if (
+    noPreserve ||
+    (ctx.bareDriveRoot === true && targets.some(isBareDrive)) ||
+    judgedTargets(targets, ctx).some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))
+  ) {
+    return { ...RULE_RM_ROOT };
+  }
   return { ...RULE_RM_BROAD };
+}
+
+/** PowerShell's listing cmdlets and their aliases: what they write down a pipe is items a `Remove-Item` after them deletes. */
+const LISTERS = new Set(['get-childitem', 'gci', 'ls', 'dir', 'get-item', 'gi']);
+
+/** `Get-ChildItem`'s parameters that narrow what it lists, and those that take a value. */
+const LIST_NARROWING = /^-(?:fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?|name)$/i;
+const LIST_VALUED = /^-(?:de(?:p(?:th?)?)?|fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?)$/i;
+
+/**
+ * What a PowerShell listing hands a delete down the pipe (review of 3.4.0,
+ * finding 9: `Get-ChildItem C:\ | Remove-Item -Recurse` only warned): the
+ * children of the path `Get-ChildItem` / `gci` / `ls` / `dir` lists (`-Path`,
+ * `-LiteralPath` or its first operand; `.` without one), the item `Get-Item`
+ * names. Nothing when a filter narrows the listing (`-Filter`, `-Include`,
+ * `-Exclude`, `-Attributes`, `-Name`): what it lists is then not all of it.
+ */
+function pipedItems(words: readonly ShellWord[]): string | undefined {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? '');
+  if (!LISTERS.has(name)) return undefined;
+  const args = withoutRedirections(words.slice(at + 1));
+  if (args.some((a) => LIST_NARROWING.test(a.split(':')[0] ?? a))) return undefined;
+  let path = psParam(args, ['path', 'literalpath', 'lp', 'pspath']);
+  for (let i = 0; path === undefined && i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (a.startsWith('-')) i += LIST_VALUED.test(a) ? 1 : 0;
+    else path = a;
+  }
+  if (name === 'get-item' || name === 'gi') return path ?? '.';
+  return `${(path ?? '.').replace(/[\\/]+$/, '')}/*`;
 }
 
 const RULE_RM_ROOT: MatchedRule = {
@@ -853,7 +958,7 @@ const RULE_FIND_BROAD: MatchedRule = {
  * first test; a value after a test (`-path /`) is not a start path. With none,
  * GNU find starts at `.`.
  */
-function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true): MatchedRule | null {
+function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUsers = true, ctx: DeleteContext = {}): MatchedRule | null {
   const head = words[start];
   if (head === undefined || basename(head.value) !== 'find') return null;
 
@@ -861,7 +966,7 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
   const execs = findExecCommands(words, start);
   const viaExec = execs.some((cmd) => FIND_DELETERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? '')));
   // A delete inside an `-exec` is judged on its own targets too.
-  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers)).find((r) => r?.level === 'block');
+  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers, { ...ctx, piped: undefined })).find((r) => r?.level === 'block');
   if (inner !== undefined && inner !== null) return inner;
   if (!viaExec && !rest.some((w) => w.value === '-delete')) return null;
 
@@ -880,9 +985,11 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
   }
   if (targets.length === 0) targets.push('.');
   const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
+  // A relative start path is where the command runs (review of 3.4.0, finding 9: `cd / && find . -delete`).
+  const judged = judgedTargets(targets, ctx);
 
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'root')) return { ...RULE_FIND_ROOT };
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === 'home' || isHomeTarget(t, home))) {
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === 'root')) return { ...RULE_FIND_ROOT };
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === 'home' || isHomeTarget(t, home))) {
     return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
@@ -1866,6 +1973,18 @@ interface Scope {
   dirStack?: readonly string[];
   /** `CDPATH`, when the command set it. */
   cdpath?: readonly string[];
+  /**
+   * The directory these statements start in — absolute, `/`-separated — when
+   * it is known: the hook's working directory, then where a nested script is
+   * handed over. What a relative delete target is read against.
+   */
+  dir?: string | undefined;
+  /** The home directory's path, `/`-separated, for a `cd ~`. */
+  homePath?: string | undefined;
+  /** The variables a delete target may start with ({@link DeleteContext}). */
+  vars?: Readonly<Record<string, string>> | undefined;
+  /** Git Bash reads a bare drive (`C:`) as its root ({@link DeleteContext}). */
+  bareDriveRoot?: boolean;
 }
 
 /**
@@ -3683,6 +3802,67 @@ function wslScript(words: readonly ShellWord[], start: number): string | undefin
 
 const MAX_NESTING = 3;
 
+/** The longest directory followed: no real one is longer, and a line of long `cd`s must not cost its square. */
+const MAX_DIR = 4096;
+
+/** A `/`-separated path with its `.` and `..` segments folded — never above its root or drive. */
+function foldDots(path: string): string {
+  const drive = /^[A-Za-z]:/.exec(path)?.[0] ?? '';
+  const parts: string[] = [];
+  for (const seg of path.slice(drive.length).split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return `${drive}/${parts.join('/')}`;
+}
+
+/**
+ * The directory a command runs in ({@link workdirs}' `may`: what a deny must
+ * assume) — the moves applied to where the statements start, `~` the home
+ * directory. `undefined` when either is not known.
+ */
+function dirAfter(start: string | undefined, steps: Steps, homePath: string | undefined): string | undefined {
+  if (steps === null) return undefined;
+  let cur = start;
+  for (const step of steps) {
+    let target = step.replace(/\\/g, '/');
+    if (target === '~' || target.startsWith('~/')) {
+      if (homePath === undefined) return undefined;
+      target = `${homePath}${target.slice(1)}`;
+    }
+    if (/^(?:\/|[A-Za-z]:\/)/.test(target)) cur = foldDots(target);
+    else if (cur === undefined) return undefined;
+    else cur = foldDots(`${cur}/${target}`);
+    if (cur.length > MAX_DIR) return undefined;
+  }
+  return cur;
+}
+
+/** The variables a delete target may start with, from the environment ({@link DeleteContext.vars}). */
+function targetVariables(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const get = (...names: string[]): string | undefined => {
+    for (const name of names) {
+      const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+      const value = key === undefined ? undefined : env[key]?.trim();
+      if (value !== undefined && value !== '') return value;
+    }
+    return undefined;
+  };
+  const out: Record<string, string> = {};
+  for (const [name, from] of [
+    ['temp', ['TEMP', 'TMP']],
+    ['tmp', ['TMP', 'TEMP']],
+    ['tmpdir', ['TMPDIR']],
+    ['localappdata', ['LOCALAPPDATA']],
+    ['appdata', ['APPDATA']],
+  ] as const) {
+    const value = get(...from);
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+}
+
 /**
  * Every rule `command` breaks, into `out`. `scope` carries the whole command
  * as given (a loosening key for Claude Code's settings is looked for there)
@@ -3727,6 +3907,10 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   }
   // `bash <(echo 'rm -rf /')`: what the substitution writes is the script (review 8, item 8).
   if (commandText.includes('<(')) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  // Where each command runs, as the `cd`s before it moved it (review of
+  // 3.4.0, finding 9): a relative delete target is read against it.
+  const dirs = workdirs(statements);
+  const startDir = scope.dir;
   // What a reader is fed from outside one statement's pipeline (review of
   // 3.4.0, finding 6): `tee >(bash)`, `(echo …) | bash`, `{ …; } | bash`,
   // `iex (gc x.ps1 -Raw)`, and a script block made from text.
@@ -3745,7 +3929,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     scope,
   );
 
-  for (const written of statements) {
+  for (const [s, written] of statements.entries()) {
     // The total time budget: a hook that outlives Claude Code's 15 s timeout
     // lets the command run unassessed, so what is left is reported instead.
     if (scope.notes.now() > scope.notes.deadline) {
@@ -3773,7 +3957,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     }
     const piped = pipesDownloadIntoShell(statement);
     if (piped !== null) out.push(piped);
-    for (const words of statement.commands) {
+    for (const [c, words] of statement.commands.entries()) {
       // The budget is checked per command too: one statement can hold a
       // pipeline of thousands of commands (fix round 3, I-2).
       if (scope.notes.now() > scope.notes.deadline) {
@@ -3782,17 +3966,24 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers);
+      const here = dirAfter(startDir, dirs[s]?.[c]?.may ?? null, scope.homePath);
+      const deleting: DeleteContext = {
+        dir: here,
+        vars: scope.vars,
+        bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true,
+        piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : undefined,
+      };
+      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (del !== null) out.push(del);
-      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers);
+      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (find !== null) out.push(find);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       // `bash <<< 'rm -rf /'`, `sh <<< "$(echo … | base64 -d)"`: the here-string is the script (review 8, item 8).
-      const here = hereStringText(words);
-      const hereReader = here === undefined ? undefined : scriptReader(words);
-      if (here !== undefined && hereReader !== undefined) {
-        const generated = substitutionOutput(here) ?? here;
-        collectFed([generated === 'opaque' ? { text: '', reader: words, opaque: true } : { text: generated, reader: words, kind: hereReader }], depth, out, scope);
+      const hereText = hereStringText(words);
+      const hereReader = hereText === undefined ? undefined : scriptReader(words);
+      if (hereText !== undefined && hereReader !== undefined) {
+        const generated = substitutionOutput(hereText) ?? hereText;
+        collectFed([generated === 'opaque' ? { text: '', reader: words, opaque: true } : { text: generated, reader: words, kind: hereReader }], depth, out, { ...scope, dir: here });
       }
       // `python3 -c "$(curl …)"`, `node -e "$(curl …)"`: the program IS a
       // download, as `sh -c "$(curl …)"` is (round 2, ruling 2).
@@ -3840,16 +4031,16 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
         // Every command of a `cmd /c` line gets the full assessment, like a
         // top-level statement: deletes, pattern rules, nested shells (fix
         // round 2 — `cmd /c rd /s /q C:\` was ok, as it was at 166117a).
         if (line !== undefined) {
           noteScript(scope, line, false);
-          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
+          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false, dir: here });
         }
       }
       moveCwd(scope, words, resolved.index);
@@ -3862,7 +4053,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
     // `scriptReader` — plus either a heredoc on the same statement or the
     // members before it). A program an interpreter reads the same way
     // (`python - <<EOF`) is judged as program text, like `python -c`.
-    collectFed(fedScripts(statement, readsScript, scope.powershell === true), depth, out, scope);
+    collectFed(fedScripts(statement, readsScript, scope.powershell === true), depth, out, { ...scope, dir: dirAfter(startDir, dirs[s]?.[0]?.may ?? null, scope.homePath) });
     for (const { text, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
@@ -3963,6 +4154,12 @@ export interface AssessOptions {
    */
   cwd?: string;
   projectDir?: string;
+  /**
+   * The environment the command runs with: `TEMP`, `TMP`, `TMPDIR`,
+   * `LOCALAPPDATA`, `APPDATA` are what a delete target led by them names
+   * (default: this process's; tests).
+   */
+  env?: Readonly<Record<string, string | undefined>>;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -4063,6 +4260,10 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
       opts.cwd === undefined && opts.projectDir === undefined
         ? undefined
         : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) },
+    dir: opts.cwd === undefined || opts.cwd.trim() === '' ? undefined : foldDots(opts.cwd.replace(/\\/g, '/')),
+    homePath: homeRaw === undefined ? undefined : homeRaw.replace(/\\/g, '/'),
+    vars: targetVariables(opts.env ?? process.env),
+    bareDriveRoot: platform === 'win32' && opts.shell !== 'powershell',
   };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
@@ -4086,6 +4287,11 @@ interface Where {
   powershell: boolean;
   /** Where the guarded paths are this session's, when the caller said where it runs. */
   places: Places | undefined;
+  /** The working directory, `/`-separated, when the caller said it. */
+  dir: string | undefined;
+  homePath: string | undefined;
+  vars: Readonly<Record<string, string>>;
+  bareDriveRoot: boolean;
 }
 
 /** {@link userDataDir}, or `''` when it cannot be worked out. */

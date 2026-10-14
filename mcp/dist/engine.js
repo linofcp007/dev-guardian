@@ -2668,6 +2668,91 @@ var init_command = __esm({
   }
 });
 
+// src/hooks/shell/paths.ts
+function normalizedPath(path3) {
+  return path3.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+function isAbsolutePath(path3) {
+  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path3);
+}
+function resolveFrom(cwd, target) {
+  const joined = cwd === "" || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, "")}/${target}`;
+  const parts = joined.replace(/\\/g, "/").split("/");
+  const out = [];
+  parts.forEach((part, i) => {
+    if (part === "." || part === "" && i > 0 && i < parts.length - 1) return;
+    const prev = out[out.length - 1];
+    if (part === ".." && prev !== void 0 && prev !== ".." && prev !== "") {
+      out.pop();
+      return;
+    }
+    out.push(part);
+  });
+  return out.join("/");
+}
+function dirOf(path3) {
+  const cut = path3.lastIndexOf("/");
+  return cut < 0 ? "" : path3.slice(0, cut);
+}
+function cdOperand(args) {
+  const named2 = psParam(args, ["path", "literalpath"]);
+  if (named2 !== void 0) return named2;
+  const operands2 = [];
+  let ended = false;
+  for (const a of args) {
+    if (!ended && a === "--") ended = true;
+    else if (!ended && a !== "-" && (/^-[LPe@]+$/.test(a) || /^\/d$/i.test(a))) continue;
+    else operands2.push(a);
+  }
+  return operands2.length > 1 ? null : operands2[0];
+}
+function cwdAfter(name, args, cwd, dataDir) {
+  if (CD_RETURNS.has(name)) return "";
+  if (!CD_COMMANDS.has(name)) return void 0;
+  const dir = cdOperand(args);
+  if (dir === null) return "";
+  if (dir === void 0) return "~";
+  if (dir === "-") return "";
+  const next = resolveFrom(cwd, dir);
+  if (next.length > MAX_CWD) return "";
+  const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) || dataDir !== void 0 && normalizedPath(next).startsWith(dataDir);
+  return tracked ? next : "";
+}
+function wildcardMatch(pattern, name) {
+  const pat = pattern.replace(/\[[^\]]*\]/g, "?");
+  let pi = 0;
+  let ni = 0;
+  let star = -1;
+  let mark = 0;
+  while (ni < name.length) {
+    const c = pat.charAt(pi);
+    if (pi < pat.length && (c === "?" || c === name.charAt(ni))) {
+      pi += 1;
+      ni += 1;
+    } else if (pi < pat.length && c === "*") {
+      star = pi;
+      mark = ni;
+      pi += 1;
+    } else if (star >= 0) {
+      pi = star + 1;
+      mark += 1;
+      ni = mark;
+    } else return false;
+  }
+  while (pat.charAt(pi) === "*") pi += 1;
+  return pi === pat.length;
+}
+var MAX_CWD, CD_COMMANDS, CD_RETURNS;
+var init_paths = __esm({
+  "src/hooks/shell/paths.ts"() {
+    "use strict";
+    init_command();
+    MAX_CWD = 320;
+    CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+    CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
+  }
+});
+
 // src/hooks/shell/split.ts
 function scanQuote(source, start) {
   const quote = source.charAt(start);
@@ -2998,6 +3083,139 @@ var init_split = __esm({
     TOKEN_WORD = /^(?:iex|invoke-expression|irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|set-variable|new-variable|get-variable|sv|nv|gv|tee|tee-object)$/i;
     HEREDOC_WORD = /^[A-Za-z_][A-Za-z0-9_]*$/;
     COMPOUND_RESERVED = /* @__PURE__ */ new Set(["if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!"]);
+  }
+});
+
+// src/hooks/shell/workdir.ts
+function cdMove(words) {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? "");
+  if (name === "cd..") return { kind: "cd", target: "..", push: false };
+  if (CD_RETURNS.has(name)) return { kind: "pop" };
+  if (!CD_COMMANDS.has(name)) return void 0;
+  const target = cdOperand(words.slice(at + 1).map((w) => w.value));
+  if (target === null) return { kind: "unknown" };
+  return { kind: "cd", target, push: name === "pushd" || name === "push-location" };
+}
+function setsCdpath(words) {
+  return words.some((w) => /^CDPATH=/.test(w.value));
+}
+function depthDelta(masked) {
+  let delta = 0;
+  for (const word of masked.trim().split(/\s+/)) {
+    if (OPENERS.has(word)) delta += 1;
+    else if (CLOSERS.has(word)) delta -= 1;
+    else if (!INSIDE.has(word)) break;
+  }
+  return delta;
+}
+function moved(steps, target) {
+  const t = target ?? "~";
+  if (/^(?:[\\/]|~(?:[\\/]|$)|[A-Za-z]:[\\/])/.test(t)) return [t];
+  return steps === null || steps.length >= MAX_STEPS ? null : [...steps, t];
+}
+function workdirs(statements, opts = {}) {
+  const listEnd = new Array(statements.length);
+  for (let k = statements.length - 1; k >= 0; k -= 1) {
+    const end = statements[k]?.end;
+    listEnd[k] = end === "&&" || end === "||" ? listEnd[k + 1] : end;
+  }
+  let here = { may: [], sure: [], prevMay: null, prevSure: null, stack: [] };
+  let listStart = here;
+  let trusted = true;
+  let orElse = false;
+  let cdpath = opts.cdpath === true;
+  let depth = 0;
+  const outer = [];
+  let inBacktick = false;
+  const out = [];
+  for (let k = 0; k < statements.length; k += 1) {
+    const statement = statements[k];
+    if (statement === void 0) {
+      out.push([]);
+      continue;
+    }
+    const before = statements[k - 1]?.end;
+    if (before === "&&" || before === "||") {
+      if (before === "||") {
+        trusted = false;
+        orElse = true;
+      }
+    } else {
+      listStart = here;
+      trusted = before !== ")" && !(before === "`" && !inBacktick);
+      orElse = false;
+    }
+    const delta = depthDelta(statement.masked);
+    if (delta > 0) depth += delta;
+    const lone = statement.commands.length === 1;
+    const continued = statement.end === "(" || statement.end === "`" && !inBacktick;
+    const row = [];
+    statement.commands.forEach((words, c) => {
+      row.push({ may: here.may, sure: orElse ? null : here.sure });
+      const at = resolveCommand(words).index;
+      const prefixCdpath = setsCdpath(words.slice(0, at));
+      if (at >= words.length && prefixCdpath || commandName(words[at]?.value ?? "") === "export" && setsCdpath(words.slice(at + 1))) cdpath = true;
+      const found2 = cdMove(words);
+      const move = found2 !== void 0 && continued && c === statement.commands.length - 1 ? { kind: "unknown" } : found2;
+      if (move === void 0) {
+        trusted = false;
+        return;
+      }
+      const surely = trusted && lone && depth === 0 && listEnd[k] !== "&";
+      if (move.kind === "unknown") {
+        here = { ...here, may: null, sure: null, prevMay: here.may, prevSure: here.sure };
+      } else if (move.kind === "pop") {
+        const top = here.stack[here.stack.length - 1];
+        here = {
+          may: top?.may ?? null,
+          sure: surely ? top?.sure ?? null : null,
+          prevMay: here.may,
+          prevSure: here.sure,
+          stack: here.stack.slice(0, -1)
+        };
+      } else {
+        const back = move.target === "-" || move.target !== void 0 && /^\$\{?OLDPWD\}?$/.test(move.target);
+        const unread = !back && move.target !== void 0 && UNREAD_TARGET.test(move.target);
+        const lookedUp = (cdpath || prefixCdpath) && move.target !== void 0 && !/^(?:\.\.?(?:[\\/]|$)|[\\/~]|[A-Za-z]:)/.test(move.target);
+        const nextMay = back ? here.prevMay : unread ? null : moved(here.may, move.target);
+        const nextSure = !surely || unread || lookedUp || move.target === void 0 ? null : back ? here.prevSure : moved(here.sure, move.target);
+        here = {
+          may: nextMay,
+          sure: nextSure,
+          prevMay: here.may,
+          prevSure: here.sure,
+          stack: !move.push ? here.stack : here.stack.length >= MAX_STEPS ? [] : [...here.stack, { may: here.may, sure: here.sure }]
+        };
+      }
+      if (!lone) here = { ...here, sure: null };
+    });
+    out.push(row);
+    if (delta < 0) depth = Math.max(0, depth + delta);
+    const end = statement.end;
+    if (end === "&") here = { ...listStart, may: here.may, prevMay: here.prevMay };
+    if (end === "(") outer.push(here);
+    else if (end === "`") {
+      if (!inBacktick) outer.push(here);
+      else here = outer.pop() ?? { ...here, may: null, sure: null };
+      inBacktick = !inBacktick;
+    } else if (end === ")") {
+      here = outer.pop() ?? { ...here, may: null, sure: null };
+    }
+  }
+  return out;
+}
+var UNREAD_TARGET, OPENERS, CLOSERS, INSIDE, MAX_STEPS;
+var init_workdir = __esm({
+  "src/hooks/shell/workdir.ts"() {
+    "use strict";
+    init_command();
+    init_paths();
+    UNREAD_TARGET = /[$`%*?[\]{}]|^~[^\\/]/;
+    OPENERS = /* @__PURE__ */ new Set(["if", "while", "until", "for", "select", "case", "{", "function"]);
+    CLOSERS = /* @__PURE__ */ new Set(["fi", "done", "esac", "}"]);
+    INSIDE = /* @__PURE__ */ new Set(["then", "else", "elif", "do", "!", "time", "-p"]);
+    MAX_STEPS = 64;
   }
 });
 
@@ -3902,13 +4120,13 @@ function indexFindings(items) {
 function gateMatchKeys(findings, opts = {}) {
   const renamed = opts.renamedFrom ?? /* @__PURE__ */ new Map();
   const out = findings.map(() => ({}));
-  const moved = findings.flatMap((finding4, index) => {
+  const moved2 = findings.flatMap((finding4, index) => {
     const path3 = locate3(finding4.file_path, void 0).key;
     const from = renamed.get(path3);
     if (from === void 0 || finding4.content_key === void 0) return [];
     return [{ finding: finding4, index, tool: finding4.tool.toLowerCase(), rule: finding4.rule_id ?? "", path: from, contentKey: finding4.content_key }];
   });
-  for (const [index, identity] of identitiesOf(moved)) {
+  for (const [index, identity] of identitiesOf(moved2)) {
     const slot = out[index];
     if (slot !== void 0) slot.renamedIdentity = identity;
   }
@@ -13245,15 +13463,15 @@ function registerProjectDatabase(projectPath, opts = {}) {
 function rehomeProjectRows(db, canonical2, from) {
   if (from.length === 0) return { moved: 0, kept: 0 };
   return db.transaction(() => {
-    let moved = 0;
+    let moved2 = 0;
     let kept = 0;
     for (const table of PROJECT_KEYED_TABLES) {
       for (const path3 of from) {
-        moved += db.prepare(`UPDATE OR IGNORE "${table}" SET project_path = ? WHERE project_path = ?`).run(canonical2, path3).changes;
+        moved2 += db.prepare(`UPDATE OR IGNORE "${table}" SET project_path = ? WHERE project_path = ?`).run(canonical2, path3).changes;
         kept += db.prepare(`SELECT COUNT(*) AS n FROM "${table}" WHERE project_path = ?`).get(path3)?.n ?? 0;
       }
     }
-    return { moved, kept };
+    return { moved: moved2, kept };
   })();
 }
 function openProjectDatabase(projectPath, dbPath, verdict) {
@@ -15362,8 +15580,8 @@ function baselineMatcher(baseline, findings, renamedFrom) {
       if (direct !== void 0) return direct;
       const k = keys[index];
       if (k?.renamedIdentity !== void 0) {
-        const moved = known.find({ fingerprint: finding4.fingerprint, identity: k.renamedIdentity });
-        if (moved !== void 0) return moved;
+        const moved2 = known.find({ fingerprint: finding4.fingerprint, identity: k.renamedIdentity });
+        if (moved2 !== void 0) return moved2;
       }
       return k?.matchKey !== void 0 ? byMatchKey.get(k.matchKey) : void 0;
     }
@@ -76283,7 +76501,7 @@ function outermostCallOpener(span) {
       i = skipString(span, i);
       continue;
     }
-    if (CLOSERS[ch] === void 0) {
+    if (CLOSERS2[ch] === void 0) {
       i += 1;
       continue;
     }
@@ -76604,7 +76822,7 @@ function matchingClose(span, open) {
       i = skipString(span, i);
       continue;
     }
-    const closer = CLOSERS[ch];
+    const closer = CLOSERS2[ch];
     if (closer !== void 0) {
       stack.push(closer);
       i += 1;
@@ -76631,7 +76849,7 @@ function splitTopLevel(inner) {
       i = skipString(inner, i);
       continue;
     }
-    if (CLOSERS[ch] !== void 0) depth += 1;
+    if (CLOSERS2[ch] !== void 0) depth += 1;
     else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
     else if (ch === "," && depth === 0) {
       parts.push(inner.slice(start, i).trim());
@@ -76687,7 +76905,7 @@ function hasMetavars(extra) {
   if (!isRecord9(metavars)) return false;
   return Object.keys(metavars).length > 0;
 }
-var RECOVERABLE_KINDS, FOCUS_METADATA_KEY, FOCUS_PATH, IDENTIFIER, CLOSERS;
+var RECOVERABLE_KINDS, FOCUS_METADATA_KEY, FOCUS_PATH, IDENTIFIER, CLOSERS2;
 var init_recoverMetavars = __esm({
   "src/surface/recoverMetavars.ts"() {
     "use strict";
@@ -76696,7 +76914,7 @@ var init_recoverMetavars = __esm({
     FOCUS_METADATA_KEY = "guardian_focus";
     FOCUS_PATH = "path";
     IDENTIFIER = /([A-Za-z_$][\w$]*)/;
-    CLOSERS = { "(": ")", "[": "]", "{": "}" };
+    CLOSERS2 = { "(": ")", "[": "]", "{": "}" };
   }
 });
 
@@ -89178,6 +89396,7 @@ var init_parseCommand = __esm({
     "use strict";
     init_command();
     init_split();
+    init_workdir();
     init_powershellText();
     NAME_RE = {
       npm: /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._~-]*$/,
@@ -89699,6 +89918,7 @@ var init_parseCommand = __esm({
           "--cache",
           "--userconfig",
           "--prefix",
+          "-C",
           "--workspace",
           "-w",
           "--loglevel",
@@ -95937,74 +96157,7 @@ init_command();
 
 // src/hooks/shell/effects.ts
 init_command();
-
-// src/hooks/shell/paths.ts
-init_command();
-function normalizedPath(path3) {
-  return path3.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-function isAbsolutePath(path3) {
-  return /^(?:[\\/~$%]|[A-Za-z]:)/.test(path3);
-}
-function resolveFrom(cwd, target) {
-  const joined = cwd === "" || isAbsolutePath(target) ? target : `${cwd.replace(/[\\/]+$/, "")}/${target}`;
-  const parts = joined.replace(/\\/g, "/").split("/");
-  const out = [];
-  parts.forEach((part, i) => {
-    if (part === "." || part === "" && i > 0 && i < parts.length - 1) return;
-    const prev = out[out.length - 1];
-    if (part === ".." && prev !== void 0 && prev !== ".." && prev !== "") {
-      out.pop();
-      return;
-    }
-    out.push(part);
-  });
-  return out.join("/");
-}
-function dirOf(path3) {
-  const cut = path3.lastIndexOf("/");
-  return cut < 0 ? "" : path3.slice(0, cut);
-}
-var MAX_CWD = 320;
-var CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
-var CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
-function cwdAfter(name, args, cwd, dataDir) {
-  if (CD_RETURNS.has(name)) return "";
-  if (!CD_COMMANDS.has(name)) return void 0;
-  const dir = psParam(args, ["path", "literalpath"]) ?? args.find((a) => a === "-" || !(a.startsWith("-") || /^\/d$/i.test(a)));
-  if (dir === void 0) return "~";
-  if (dir === "-") return "";
-  const next = resolveFrom(cwd, dir);
-  if (next.length > MAX_CWD) return "";
-  const tracked = /\.guardian|dev-guardian|\.config|\.claude|registry|guardian_data_dir|localappdata|xdg_data_home|\.local/i.test(next) || dataDir !== void 0 && normalizedPath(next).startsWith(dataDir);
-  return tracked ? next : "";
-}
-function wildcardMatch(pattern, name) {
-  const pat = pattern.replace(/\[[^\]]*\]/g, "?");
-  let pi = 0;
-  let ni = 0;
-  let star = -1;
-  let mark = 0;
-  while (ni < name.length) {
-    const c = pat.charAt(pi);
-    if (pi < pat.length && (c === "?" || c === name.charAt(ni))) {
-      pi += 1;
-      ni += 1;
-    } else if (pi < pat.length && c === "*") {
-      star = pi;
-      mark = ni;
-      pi += 1;
-    } else if (star >= 0) {
-      pi = star + 1;
-      mark += 1;
-      ni = mark;
-    } else return false;
-  }
-  while (pat.charAt(pi) === "*") pi += 1;
-  return pi === pat.length;
-}
-
-// src/hooks/shell/effects.ts
+init_paths();
 function noEffects() {
   return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
 }
@@ -96894,7 +97047,9 @@ function asWindowsOpens(paths) {
 }
 
 // src/hooks/bashGuard.ts
+init_paths();
 init_split();
+init_workdir();
 init_command();
 init_split();
 var BASH_RULES = [
@@ -97258,12 +97413,43 @@ function homeDirFor(home, platform) {
   return key === "" || /^[a-z]:$/i.test(key) ? void 0 : { key, fold };
 }
 function isHomeTarget(raw, home) {
-  return home !== void 0 && targetKey(raw, home.fold) === home.key;
+  if (home === void 0) return false;
+  const key = targetKey(raw, home.fold);
+  if (key === home.key) return true;
+  if (!home.fold) return false;
+  const cut = key.lastIndexOf("/");
+  const homeCut = home.key.lastIndexOf("/");
+  if (cut < 0 || key.slice(0, cut) !== home.key.slice(0, homeCut)) return false;
+  const short2 = /^([^~/]{1,6})~\d+$/.exec(key.slice(cut + 1));
+  return short2 !== null && home.key.slice(homeCut + 1).replace(/[\s.]/g, "").startsWith(short2[1] ?? "");
+}
+var PWD_PREFIX = /^(?:\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{?PWD\}?|\$env:PWD)(?=[\\/]|$)/i;
+function resolvedTarget(raw, ctx) {
+  const t = stripQuotes(raw.trim());
+  if (t === "" || t.length > MAX_PLAIN_TARGET || t.includes("::")) return void 0;
+  const pwd = PWD_PREFIX.exec(t);
+  if (pwd !== null) return ctx.dir === void 0 ? void 0 : `${ctx.dir}${t.slice(pwd[0].length)}`;
+  const v = leadingVariable(t);
+  if (v !== void 0) {
+    const value = ctx.vars?.[v.name];
+    return value === void 0 || value === "" ? void 0 : `${value.replace(/\\/g, "/")}${v.rest.replace(/\\/g, "/")}`;
+  }
+  if (/^(?:[\\/~$%]|[A-Za-z]:)/.test(t) || ctx.dir === void 0) return void 0;
+  return `${ctx.dir}/${t}`;
+}
+function judgedTargets(targets, ctx) {
+  return targets.flatMap((t) => {
+    const resolved = resolvedTarget(t, ctx);
+    return resolved === void 0 ? [t] : [t, resolved];
+  });
+}
+function isBareDrive(raw) {
+  return /^[A-Za-z]:\.{0,2}$/.test(stripQuotes(raw.trim()));
 }
 var PS_PATH_PARAM = /^(?:pa(?:t|th)?|l(?:i(?:t(?:e(?:r(?:a(?:l(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)?)?)?|lp|pspath)$/;
 var DASH_DELETE_HEADS = /* @__PURE__ */ new Set(["rm", "ri", "remove-item"]);
 var SLASH_DELETE_HEADS = /* @__PURE__ */ new Set(["rd", "rmdir", "del", "erase"]);
-function assessRecursiveDelete(words, start, home, tildeUsers = true) {
+function assessRecursiveDelete(words, start, home, tildeUsers = true, ctx = {}) {
   const head = words[start];
   if (head === void 0) return null;
   const name = basename(head.value).toLowerCase();
@@ -97300,8 +97486,29 @@ function assessRecursiveDelete(words, start, home, tildeUsers = true) {
     } else targets.push(token);
   }
   if (!(recursive || noPreserve)) return null;
-  if (noPreserve || targets.some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) return { ...RULE_RM_ROOT };
+  if (targets.length === 0 && ctx.piped !== void 0) targets.push(ctx.piped);
+  if (noPreserve || ctx.bareDriveRoot === true && targets.some(isBareDrive) || judgedTargets(targets, ctx).some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) {
+    return { ...RULE_RM_ROOT };
+  }
   return { ...RULE_RM_BROAD };
+}
+var LISTERS = /* @__PURE__ */ new Set(["get-childitem", "gci", "ls", "dir", "get-item", "gi"]);
+var LIST_NARROWING = /^-(?:fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?|name)$/i;
+var LIST_VALUED = /^-(?:de(?:p(?:th?)?)?|fi(?:l(?:t(?:er?)?)?)?|inc(?:l(?:u(?:de?)?)?)?|ex(?:c(?:l(?:u(?:de?)?)?)?)?|at(?:t(?:r(?:i(?:b(?:u(?:t(?:es?)?)?)?)?)?)?)?)$/i;
+function pipedItems(words) {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? "");
+  if (!LISTERS.has(name)) return void 0;
+  const args = withoutRedirections(words.slice(at + 1));
+  if (args.some((a) => LIST_NARROWING.test(a.split(":")[0] ?? a))) return void 0;
+  let path3 = psParam(args, ["path", "literalpath", "lp", "pspath"]);
+  for (let i = 0; path3 === void 0 && i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a.startsWith("-")) i += LIST_VALUED.test(a) ? 1 : 0;
+    else path3 = a;
+  }
+  if (name === "get-item" || name === "gi") return path3 ?? ".";
+  return `${(path3 ?? ".").replace(/[\\/]+$/, "")}/*`;
 }
 var RULE_RM_ROOT = {
   id: "rm-rf-root",
@@ -97368,13 +97575,13 @@ var RULE_FIND_BROAD = {
   level: "warn",
   reason: "find . -delete with no test to narrow it deletes everything under the working directory \u2014 confirm this is intended"
 };
-function assessFind(words, start, home, tildeUsers = true) {
+function assessFind(words, start, home, tildeUsers = true, ctx = {}) {
   const head = words[start];
   if (head === void 0 || basename(head.value) !== "find") return null;
   const rest = words.slice(start + 1);
   const execs = findExecCommands(words, start);
   const viaExec = execs.some((cmd) => FIND_DELETERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? "")));
-  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers)).find((r) => r?.level === "block");
+  const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers, { ...ctx, piped: void 0 })).find((r) => r?.level === "block");
   if (inner !== void 0 && inner !== null) return inner;
   if (!viaExec && !rest.some((w) => w.value === "-delete")) return null;
   let k = 0;
@@ -97392,8 +97599,9 @@ function assessFind(words, start, home, tildeUsers = true) {
   }
   if (targets.length === 0) targets.push(".");
   const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === "root")) return { ...RULE_FIND_ROOT };
-  if (targets.some((t) => catastrophicKind(t, tildeUsers) === "home" || isHomeTarget(t, home))) {
+  const judged = judgedTargets(targets, ctx);
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === "root")) return { ...RULE_FIND_ROOT };
+  if (judged.some((t) => catastrophicKind(t, tildeUsers) === "home" || isHomeTarget(t, home))) {
     return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
@@ -98754,7 +98962,7 @@ function downloadFileCalls(text2) {
   return out;
 }
 var SCRIPT_SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "ash", "mksh", "fish", "csh", "tcsh"]);
-var OPENERS = /* @__PURE__ */ new Set(["start", "start-process", "saps", "invoke-item", "ii"]);
+var OPENERS2 = /* @__PURE__ */ new Set(["start", "start-process", "saps", "invoke-item", "ii"]);
 var RUNS_ARGUMENT = /* @__PURE__ */ new Set(["msiexec", "cscript", "wscript", "rundll32", "iex", "invoke-expression"]);
 var READERS = /* @__PURE__ */ new Set(["get-content", "gc", "cat", "type"]);
 var RUNNABLE_EXTENSIONS = /* @__PURE__ */ new Set([
@@ -98839,7 +99047,7 @@ function commandRuns(statement, c, heads, pipedIntoRunner) {
   } else if (SCRIPT_SHELLS.has(name) || isInterpreter(name)) {
     const script = scriptOperand(words, at, name);
     if (script !== void 0) out.push(script);
-  } else if (OPENERS.has(name)) {
+  } else if (OPENERS2.has(name)) {
     const files = [];
     for (let i = 0; i < rest.length; i += 1) {
       const v = rest[i] ?? "";
@@ -99319,6 +99527,55 @@ function wslScript(words, start) {
   return void 0;
 }
 var MAX_NESTING = 3;
+var MAX_DIR = 4096;
+function foldDots(path3) {
+  const drive = /^[A-Za-z]:/.exec(path3)?.[0] ?? "";
+  const parts = [];
+  for (const seg of path3.slice(drive.length).split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return `${drive}/${parts.join("/")}`;
+}
+function dirAfter(start, steps, homePath) {
+  if (steps === null) return void 0;
+  let cur = start;
+  for (const step of steps) {
+    let target = step.replace(/\\/g, "/");
+    if (target === "~" || target.startsWith("~/")) {
+      if (homePath === void 0) return void 0;
+      target = `${homePath}${target.slice(1)}`;
+    }
+    if (/^(?:\/|[A-Za-z]:\/)/.test(target)) cur = foldDots(target);
+    else if (cur === void 0) return void 0;
+    else cur = foldDots(`${cur}/${target}`);
+    if (cur.length > MAX_DIR) return void 0;
+  }
+  return cur;
+}
+function targetVariables(env) {
+  const get = (...names) => {
+    for (const name of names) {
+      const key = Object.keys(env).find((k) => k.toUpperCase() === name);
+      const value = key === void 0 ? void 0 : env[key]?.trim();
+      if (value !== void 0 && value !== "") return value;
+    }
+    return void 0;
+  };
+  const out = {};
+  for (const [name, from] of [
+    ["temp", ["TEMP", "TMP"]],
+    ["tmp", ["TMP", "TEMP"]],
+    ["tmpdir", ["TMPDIR"]],
+    ["localappdata", ["LOCALAPPDATA"]],
+    ["appdata", ["APPDATA"]]
+  ]) {
+    const value = get(...from);
+    if (value !== void 0) out[name] = value;
+  }
+  return out;
+}
 function collect(command, depth, out, scope) {
   const cmd = command.trim();
   if (cmd.length === 0) return;
@@ -99342,6 +99599,8 @@ function collect(command, depth, out, scope) {
     out.push(RULE_PROCESS_FETCH);
   }
   if (commandText.includes("<(")) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  const dirs = workdirs(statements);
+  const startDir = scope.dir;
   const powershellScope = scope.powershell === true;
   collectFed(
     [
@@ -99354,7 +99613,7 @@ function collect(command, depth, out, scope) {
     out,
     scope
   );
-  for (const written of statements) {
+  for (const [s, written] of statements.entries()) {
     if (scope.notes.now() > scope.notes.deadline) {
       scope.notes.budget = true;
       return;
@@ -99373,23 +99632,30 @@ function collect(command, depth, out, scope) {
     }
     const piped = pipesDownloadIntoShell(statement);
     if (piped !== null) out.push(piped);
-    for (const words of statement.commands) {
+    for (const [c, words] of statement.commands.entries()) {
       if (scope.notes.now() > scope.notes.deadline) {
         scope.notes.budget = true;
         return;
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers);
+      const here = dirAfter(startDir, dirs[s]?.[c]?.may ?? null, scope.homePath);
+      const deleting = {
+        dir: here,
+        vars: scope.vars,
+        bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true,
+        piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : void 0
+      };
+      const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (del !== null) out.push(del);
-      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers);
+      const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (find !== null) out.push(find);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
-      const here = hereStringText(words);
-      const hereReader = here === void 0 ? void 0 : scriptReader(words);
-      if (here !== void 0 && hereReader !== void 0) {
-        const generated = substitutionOutput(here) ?? here;
-        collectFed([generated === "opaque" ? { text: "", reader: words, opaque: true } : { text: generated, reader: words, kind: hereReader }], depth, out, scope);
+      const hereText = hereStringText(words);
+      const hereReader = hereText === void 0 ? void 0 : scriptReader(words);
+      if (hereText !== void 0 && hereReader !== void 0) {
+        const generated = substitutionOutput(hereText) ?? hereText;
+        collectFed([generated === "opaque" ? { text: "", reader: words, opaque: true } : { text: generated, reader: words, kind: hereReader }], depth, out, { ...scope, dir: here });
       }
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
@@ -99419,18 +99685,18 @@ function collect(command, depth, out, scope) {
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
-          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell });
+          if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
         if (line !== void 0) {
           noteScript(scope, line, false);
-          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false });
+          collect(line, depth + 1, out, { ...scope, cmdLine: true, powershell: false, dir: here });
         }
       }
       moveCwd(scope, words, resolved.index);
     }
-    collectFed(fedScripts(statement, readsScript, scope.powershell === true), depth, out, scope);
+    collectFed(fedScripts(statement, readsScript, scope.powershell === true), depth, out, { ...scope, dir: dirAfter(startDir, dirs[s]?.[0]?.may ?? null, scope.homePath) });
     for (const { text: text2, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
@@ -99526,7 +99792,11 @@ function assessBashCommand(command, opts = {}) {
     dataDir: dataDir === "" ? void 0 : dataDir,
     tildeUsers: opts.shell !== "powershell",
     powershell: opts.shell === "powershell",
-    places: opts.cwd === void 0 && opts.projectDir === void 0 ? void 0 : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) }
+    places: opts.cwd === void 0 && opts.projectDir === void 0 ? void 0 : { fold, home: placeKey(homeRaw), cwd: placeKey(opts.cwd), project: placeKey(opts.projectDir), configDir: placeKey(configDir) },
+    dir: opts.cwd === void 0 || opts.cwd.trim() === "" ? void 0 : foldDots(opts.cwd.replace(/\\/g, "/")),
+    homePath: homeRaw === void 0 ? void 0 : homeRaw.replace(/\\/g, "/"),
+    vars: targetVariables(opts.env ?? process.env),
+    bareDriveRoot: platform === "win32" && opts.shell !== "powershell"
   };
   if (opts.shell !== "powershell") return assessReadings([text2], cut, now, deadline, where);
   return assessReadings([powershellAsPosix(text2), powershellOpaque(text2)], cut, now, deadline, where);

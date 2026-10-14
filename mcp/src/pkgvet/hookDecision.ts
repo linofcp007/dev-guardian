@@ -31,8 +31,8 @@
 
 import { lstatSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { walkLinksUnder } from '../hooks/configFile.js';
+import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { climbsOut, isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { loadPopularIndex } from './popular.js';
 import { registryCache } from './privateRegistry.js';
@@ -137,9 +137,10 @@ function boundedInstalls(
   isPopular: (pkg: PackageSpec) => boolean,
   runsLocally: (pkg: PackageSpec, c: InstallCommand) => boolean,
   nested: ReadonlyArray<{ text: string; shell: CommandShell }> = [],
+  cdpath = false,
 ): { commands: InstallCommand[]; notVetted: number; cut: boolean } {
   const cut = command.length > MAX_PARSED_LENGTH;
-  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested }).map((c) =>
+  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) =>
     // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
     // fetch nothing: there is nothing to vet (review P1).
     c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c,
@@ -215,30 +216,59 @@ function fileBelow(under: string, path: string): boolean {
   }
 }
 
+/** The largest `package.json` read to see which package a `node_modules` folder holds. */
+const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
+
+/**
+ * npm's prefix for a command run in `cwd`: the nearest directory, from `cwd`
+ * up, that holds a `package.json` or a `node_modules` (`lstat`, behind the
+ * link walk), else `cwd` itself — what `npx` / `npm exec` load the project's
+ * tree from.
+ */
+function npmPrefix(cwd: string): string {
+  let dir = resolve(cwd);
+  for (let i = 0; i < 64; i += 1) {
+    if (presentBelow(dir, join(dir, 'package.json')) || presentBelow(dir, join(dir, 'node_modules'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return resolve(cwd);
+}
+
+/** Whether `<dir>/node_modules/<name>/package.json` is a regular file whose `name` is `name` — npm's own test of an installed package. */
+function packageNamed(dir: string, name: string): boolean {
+  const r = readSmallText(join(dir, 'node_modules', name, 'package.json'), MAX_PACKAGE_JSON_BYTES, dir);
+  if (r.status !== 'ok') return false;
+  try {
+    const manifest: unknown = JSON.parse(r.text.charCodeAt(0) === 0xfeff ? r.text.slice(1) : r.text);
+    return manifest !== null && typeof manifest === 'object' && (manifest as Record<string, unknown>)['name'] === name;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether `npx` / `npm exec` / `bunx` would run `name` from the project
- * rather than fetch it (review P1), in the working directory or an ancestor up
- * to the repository root: a `node_modules/<name>/package.json`, or — for the
- * unscoped program name a launcher runs (not a `-p` package, `byPackageFlag`)
- * — a `node_modules/.bin/<name>` (bun's `.exe` on Windows too). Each only as a
- * FILE, as npm checks it (review of 3.3.0: a directory at `.bin/<name>`, which
- * a repository can commit as `.bin/<name>/.keep`, a lone `<name>.cmd`, the
- * unscoped bin of a scoped name and the bin of a `-p` package all skipped the
- * vetting — the malicious-package deny included — while npm fetched).
- * Not found, or behind a link to a network path, means it would be fetched,
- * and is vetted.
+ * rather than fetch it (review P1), as npm resolves it: a
+ * `node_modules/.bin/<name>` FILE in npm's prefix or a directory above it —
+ * for the unscoped program name a launcher runs, not a `-p` package
+ * (`byPackageFlag`), bun's `.exe` too, walked up to the repository root — or
+ * the package itself in the prefix's own tree: `<prefix>/node_modules/<name>/
+ * package.json`, whose `name` is `name` (review of 3.4.0, finding 5: one that
+ * was `{}`, named another package or was no JSON at all skipped the vetting
+ * while npm fetched; so did one in a parent of a directory with its own
+ * `package.json`, which is npm's prefix). Not found, or behind a link to a
+ * network path, means it would be fetched, and is vetted.
  */
 function installedLocally(name: string, cwd: string, byPackageFlag = false, manager = ''): boolean {
-  const scoped = name.startsWith('@');
-  let dir = resolve(cwd);
+  const prefix = npmPrefix(cwd);
+  if (packageNamed(prefix, name)) return true;
+  if (name.startsWith('@') || byPackageFlag) return false;
+  let dir = prefix;
   for (let i = 0; i < 32; i += 1) {
-    const modules = join(dir, 'node_modules');
-    const candidates = [join(modules, name, 'package.json')];
-    if (!scoped && !byPackageFlag) {
-      candidates.push(join(modules, '.bin', name));
-      if (manager === 'bun') candidates.push(join(modules, '.bin', `${name}.exe`));
-    }
-    for (const candidate of candidates) {
+    const bin = join(dir, 'node_modules', '.bin');
+    for (const candidate of manager === 'bun' ? [join(bin, name), join(bin, `${name}.exe`)] : [join(bin, name)]) {
       if (fileBelow(dir, candidate)) return true;
     }
     if (presentBelow(dir, join(dir, '.git'))) return false;
@@ -259,7 +289,8 @@ function installedLocally(name: string, cwd: string, byPackageFlag = false, mana
  * `mcp`'s own vitest, and the hook warned about the registry's newest one.
  */
 function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions): boolean {
-  if (pkg.range !== undefined || pkg.raw !== pkg.name) return false;
+  // `--prefix` (`-C`) points npm at another project: where is not read here (review of 3.4.0, finding 5).
+  if (pkg.range !== undefined || pkg.raw !== pkg.name || c.prefixed === true) return false;
   const dir = commandDir(c, opts);
   return dir !== null && installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
 }
@@ -267,8 +298,13 @@ function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOpt
 /**
  * The directory an install command runs in: the hook's `cwd`, moved by every
  * `cd` before it on the line ({@link InstallCommand.workdir}) — a `~` read as the
- * home directory and, on Windows, an MSYS `/c/…` as `C:/…`. `null` when a move
- * cannot be read: nothing is then taken as installed.
+ * home directory and, on Windows, an MSYS `/c/…` as `C:/…`. Each move only
+ * when its directory is there (`lstat` behind the link walk, never on the
+ * network): a `cd` to one that is not there failed and moved nothing, and
+ * `cd web/node_modules/.bin/x; cd ../../..; npx x` ran `x` three levels above
+ * the line's start, not in `web` (review of 3.4.0, finding 5). `null` when a
+ * move cannot be read or did not surely happen: nothing is then taken as
+ * installed.
  */
 function commandDir(c: InstallCommand, opts: HookVetOptions): string | null {
   if (c.workdir === undefined) return resolve(opts.cwd);
@@ -281,9 +317,23 @@ function commandDir(c: InstallCommand, opts: HookVetOptions): string | null {
     if (target === '~' || /^~[\\/]/.test(target)) target = join(home, target.slice(1));
     else if (target.startsWith('~')) return null; // `~user`
     else if (windows) target = target.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`);
-    dir = resolve(dir, target);
+    const next = resolve(dir, target);
+    if (isNetworkPath(next) || !isDirectoryAt(dir, next)) return null;
+    dir = next;
   }
   return dir;
+}
+
+/** Whether `path` is a directory — `stat` behind the link walk from `from` (the directory before it) or, outside it, from its root. */
+function isDirectoryAt(from: string, path: string): boolean {
+  const rel = relative(from, path);
+  const walked = rel !== '' && !climbsOut(rel) && !isAbsolute(rel) ? walkLinksUnder(from, path) : walkLinksUnder(parse(path).root, path);
+  if (!walked.ok) return false;
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** The note for a command read only to its first 512 KB. */
@@ -295,7 +345,9 @@ const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command w
  */
 export async function decideInstallCommand(command: string, opts: HookVetOptions): Promise<HookDecision | null> {
   const shell = opts.shell ?? 'bash';
-  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts), opts.nested);
+  // A `CDPATH` in the environment: a bare `cd name` may go elsewhere.
+  const cdpath = ((opts.env ?? process.env)['CDPATH'] ?? '').trim() !== '';
+  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts), opts.nested, cdpath);
   // A cut command whose start installs nothing still says what was not read.
   if (commands.length === 0) return cut ? { context: CUT_NOTE } : null;
 
