@@ -1545,14 +1545,21 @@ function execGitSync(dir, args, opts = {}) {
   if (safety.refused !== null) return refusedResult(safety, "");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], {
+  const started = Date.now();
+  const options = {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer,
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32"
+  };
+  const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], options);
+  const code = r.error?.code;
+  if ((code === "ETIMEDOUT" || code === "ENOBUFS") && typeof r.pid === "number" && r.pid > 0) {
+    stopSyncTree(r.pid, Date.now() - started);
+  }
   return {
     status: r.error === void 0 ? r.status : null,
     stdout: typeof r.stdout === "string" ? r.stdout : "",
@@ -1560,6 +1567,23 @@ function execGitSync(dir, args, opts = {}) {
     failure: r.error === void 0 ? null : execFailure(r.error, timeoutMs, maxBuffer),
     notApplied: safety.notApplied
   };
+}
+function stopSyncTree(pid, elapsedMs) {
+  try {
+    if (process.platform !== "win32") {
+      process.kill(-pid, "SIGKILL");
+      return;
+    }
+    const root = envValue2(process.env, "SystemRoot") ?? "C:\\Windows";
+    const taskkill = join6(root, "System32", "taskkill.exe");
+    const script = `$since = (Get-Date).AddMilliseconds(-${Math.ceil(elapsedMs) + 1e3}); Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Where-Object { $_.CreationDate -ge $since } | ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
+    spawnSync(join6(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], {
+      windowsHide: true,
+      stdio: "ignore",
+      timeout: SYNC_SWEEP_TIMEOUT_MS
+    });
+  } catch {
+  }
 }
 function refusedResult(safety, empty) {
   const message2 = `dev-guardian did not run git: ${safety.refused ?? ""}`;
@@ -1585,6 +1609,7 @@ function spawnGitPlain(command, args, opts) {
     let errBytes = 0;
     let error2;
     let abandon;
+    let timer;
     const finish = (status) => {
       if (settled) return;
       settled = true;
@@ -1592,24 +1617,26 @@ function spawnGitPlain(command, args, opts) {
       clearTimeout(abandon);
       resolveRun({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err), ...error2 !== void 0 ? { error: error2 } : {} });
     };
+    let child;
+    try {
+      child = spawnPiped(command, args, opts.env);
+    } catch (e) {
+      error2 = e instanceof Error ? e : Object.assign(new Error(String(e)), { code: "EINVAL" });
+      finish(null);
+      return;
+    }
+    const started = child;
     const fail6 = (code, message2) => {
       if (error2 === void 0) error2 = Object.assign(new Error(message2), { code });
       if (abandon !== void 0) return;
-      stopPlainTree(child);
+      stopPlainTree(started);
       abandon = setTimeout(() => {
-        child.stdout.destroy();
-        child.stderr.destroy();
+        started.stdout.destroy();
+        started.stderr.destroy();
         finish(null);
       }, PLAIN_ABANDON_MS);
     };
-    const child = spawn(command, args, {
-      env: opts.env,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      // POSIX: a process group of its own, so that a stop reaches what git started.
-      detached: process.platform !== "win32"
-    });
-    const timer = setTimeout(() => fail6("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
+    timer = setTimeout(() => fail6("ETIMEDOUT", `timed out after ${opts.timeoutMs} ms`), opts.timeoutMs);
     child.stdout.on("data", (chunk) => {
       outBytes += chunk.length;
       if (outBytes > opts.maxBuffer) fail6("ENOBUFS", "stdout maxBuffer exceeded");
@@ -1624,6 +1651,15 @@ function spawnGitPlain(command, args, opts) {
       finish(null);
     });
     child.on("close", (code) => finish(error2 !== void 0 ? null : code));
+  });
+}
+function spawnPiped(command, args, env) {
+  return spawn(command, args, {
+    env,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    // POSIX: a process group of its own, so that a stop reaches what git started.
+    detached: process.platform !== "win32"
   });
 }
 function stopPlainTree(child) {
@@ -1662,7 +1698,7 @@ function sameName(a, b, platform) {
 function firstLine(text2) {
   return text2.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
 }
-var GIT_COMMAND, PROBE_TIMEOUT_MS, PROBE_MAX_BYTES, MAX_REPOSITORY_KEYS, STATIC_VARS, COMMAND_KEYS_REGEX, PROBE_KEY, TRUSTED_SCOPES, STRICT_UTF8, FILTER_KEY, CREDENTIAL_HELPER, STATIC_KEYS, HTTP_KEY, GIT_CANNOT_READ, MAX_SUBMODULES, MAX_SUBMODULE_DEPTH, GITLINK_LISTING_MAX_BYTES, gitlinkCache, PROBE_REUSE_MS, PROBE_CACHE_MAX, probeCache, DEFAULT_MAX_BUFFER, DEFAULT_TIMEOUT_MS, gitSpawner, PLAIN_ABANDON_MS;
+var GIT_COMMAND, PROBE_TIMEOUT_MS, PROBE_MAX_BYTES, MAX_REPOSITORY_KEYS, STATIC_VARS, COMMAND_KEYS_REGEX, PROBE_KEY, TRUSTED_SCOPES, STRICT_UTF8, FILTER_KEY, CREDENTIAL_HELPER, STATIC_KEYS, HTTP_KEY, GIT_CANNOT_READ, MAX_SUBMODULES, MAX_SUBMODULE_DEPTH, GITLINK_LISTING_MAX_BYTES, gitlinkCache, PROBE_REUSE_MS, PROBE_CACHE_MAX, probeCache, DEFAULT_MAX_BUFFER, DEFAULT_TIMEOUT_MS, SYNC_SWEEP_TIMEOUT_MS, gitSpawner, PLAIN_ABANDON_MS;
 var init_gitSafety = __esm({
   "src/platform/gitSafety.ts"() {
     "use strict";
@@ -1705,6 +1741,7 @@ var init_gitSafety = __esm({
     probeCache = /* @__PURE__ */ new Map();
     DEFAULT_MAX_BUFFER = 1e8;
     DEFAULT_TIMEOUT_MS = 6e4;
+    SYNC_SWEEP_TIMEOUT_MS = 15e3;
     gitSpawner = spawnGitPlain;
     PLAIN_ABANDON_MS = 2e3;
   }
@@ -4085,10 +4122,10 @@ var require_identity = __commonJS({
     var NODE_TYPE = /* @__PURE__ */ Symbol.for("yaml.node.type");
     var isAlias2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === ALIAS;
     var isDocument = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === DOC;
-    var isMap2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
+    var isMap3 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
     var isPair2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
-    var isScalar2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
-    var isSeq = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
+    var isScalar3 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
+    var isSeq2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
     function isCollection2(node) {
       if (node && typeof node === "object")
         switch (node[NODE_TYPE]) {
@@ -4109,7 +4146,7 @@ var require_identity = __commonJS({
         }
       return false;
     }
-    var hasAnchor = (node) => (isScalar2(node) || isCollection2(node)) && !!node.anchor;
+    var hasAnchor = (node) => (isScalar3(node) || isCollection2(node)) && !!node.anchor;
     exports.ALIAS = ALIAS;
     exports.DOC = DOC;
     exports.MAP = MAP;
@@ -4121,11 +4158,11 @@ var require_identity = __commonJS({
     exports.isAlias = isAlias2;
     exports.isCollection = isCollection2;
     exports.isDocument = isDocument;
-    exports.isMap = isMap2;
+    exports.isMap = isMap3;
     exports.isNode = isNode;
     exports.isPair = isPair2;
-    exports.isScalar = isScalar2;
-    exports.isSeq = isSeq;
+    exports.isScalar = isScalar3;
+    exports.isSeq = isSeq2;
   }
 });
 
@@ -8233,9 +8270,9 @@ var require_resolve_flow_collection = __commonJS({
     var blockMsg = "Block collections are not allowed within flow collections";
     var isBlock = (token) => token && (token.type === "block-map" || token.type === "block-seq");
     function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
-      const isMap2 = fc.start.source === "{";
-      const fcName = isMap2 ? "flow map" : "flow sequence";
-      const NodeClass = tag?.nodeClass ?? (isMap2 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
+      const isMap3 = fc.start.source === "{";
+      const fcName = isMap3 ? "flow map" : "flow sequence";
+      const NodeClass = tag?.nodeClass ?? (isMap3 ? YAMLMap.YAMLMap : YAMLSeq.YAMLSeq);
       const coll = new NodeClass(ctx.schema);
       coll.flow = true;
       const atRoot = ctx.atRoot;
@@ -8271,7 +8308,7 @@ var require_resolve_flow_collection = __commonJS({
             offset = props.end;
             continue;
           }
-          if (!isMap2 && ctx.options.strict && utilContainsNewline.containsNewline(key))
+          if (!isMap3 && ctx.options.strict && utilContainsNewline.containsNewline(key))
             onError(
               key,
               // checked by containsNewline()
@@ -8311,7 +8348,7 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap2 && !sep20 && !props.found) {
+        if (!isMap3 && !sep20 && !props.found) {
           const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep20, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
@@ -8334,7 +8371,7 @@ var require_resolve_flow_collection = __commonJS({
             startOnNewline: false
           });
           if (valueProps.found) {
-            if (!isMap2 && !props.found && ctx.options.strict) {
+            if (!isMap3 && !props.found && ctx.options.strict) {
               if (sep20)
                 for (const st of sep20) {
                   if (st === valueProps.found)
@@ -8366,7 +8403,7 @@ var require_resolve_flow_collection = __commonJS({
           const pair = new Pair.Pair(keyNode, valueNode);
           if (ctx.options.keepSourceTokens)
             pair.srcToken = collItem;
-          if (isMap2) {
+          if (isMap3) {
             const map = coll;
             if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
               onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
@@ -8382,7 +8419,7 @@ var require_resolve_flow_collection = __commonJS({
           offset = valueNode ? valueNode.range[2] : valueProps.end;
         }
       }
-      const expectedEnd = isMap2 ? "}" : "]";
+      const expectedEnd = isMap3 ? "}" : "]";
       const [ce, ...ee] = fc.end;
       let cePos = offset;
       if (ce?.source === expectedEnd)
@@ -9669,7 +9706,7 @@ var require_cst = __commonJS({
     var FLOW_END = "";
     var SCALAR = "";
     var isCollection2 = (token) => !!token && "items" in token;
-    var isScalar2 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
+    var isScalar3 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
         case BOM:
@@ -9753,7 +9790,7 @@ var require_cst = __commonJS({
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
     exports.isCollection = isCollection2;
-    exports.isScalar = isScalar2;
+    exports.isScalar = isScalar3;
     exports.prettyToken = prettyToken;
     exports.tokenType = tokenType;
   }
@@ -11535,9 +11572,31 @@ function parseYamlDocumentBounded(text2, limits = YAML_CONFIG_LIMITS) {
 function yamlDocumentValue(doc) {
   return doc.toJS({ maxAliasCount: -1 });
 }
-function parseYamlBounded(text2, limits = YAML_CONFIG_LIMITS) {
+function duplicateYamlKey(doc) {
+  const stack = [doc.contents];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if ((0, import_yaml.isMap)(node)) {
+      const seen = /* @__PURE__ */ new Set();
+      for (const pair of node.items) {
+        const key = (0, import_yaml.isScalar)(pair.key) ? String(pair.key.value) : String(pair.key);
+        if (seen.has(key)) return key;
+        seen.add(key);
+        stack.push(pair.value);
+      }
+    } else if ((0, import_yaml.isSeq)(node)) {
+      for (const item of node.items) stack.push(item);
+    }
+  }
+  return null;
+}
+function parseYamlBounded(text2, limits = YAML_CONFIG_LIMITS, opts = {}) {
   const parsed = parseYamlDocumentBounded(text2, limits);
   if (!parsed.ok) return parsed.detail === void 0 ? { ok: false, reason: parsed.reason } : { ok: false, reason: parsed.reason, detail: parsed.detail };
+  if (opts.uniqueKeys === true) {
+    const twice = duplicateYamlKey(parsed.doc);
+    if (twice !== null) return { ok: false, reason: "invalid", detail: `the key ${JSON.stringify(twice)} appears twice in one mapping` };
+  }
   try {
     return { ok: true, value: yamlDocumentValue(parsed.doc) };
   } catch (e) {
@@ -20354,7 +20413,7 @@ function loadScanSettings(root) {
   const invalid2 = (error2) => ({ kind: "invalid", path: path3, error: error2, settings: defaultScanSettings() });
   if (read3.status === "refused") return invalid2(`the file was not read: ${describeReadRefusal(read3.reason)}`);
   if (read3.text.trim() === "") return { kind: "loaded", path: path3, settings: defaultScanSettings() };
-  const parsed = parseYamlBounded(read3.text);
+  const parsed = parseYamlBounded(read3.text, YAML_CONFIG_LIMITS, { uniqueKeys: true });
   if (!parsed.ok) {
     return invalid2(parsed.reason === "invalid" ? `invalid YAML: ${(parsed.detail ?? "unparsable").split("\n")[0] ?? ""}` : describeYamlRefusal(parsed));
   }

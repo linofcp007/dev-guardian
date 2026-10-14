@@ -68,6 +68,11 @@ describe('loadScanSettings', () => {
       ['semgrep:\n  accept_timeouts:\n    - /etc/passwd\n', /absolute/],
       ['semgrep:\n  accept_timeouts:\n    - ../outside.js\n', /leaves the project/],
       ['semgrep:\n  acept_timeouts: []\n', /unrecognised semgrep setting "acept_timeouts"/],
+      // A key written twice: the reviewer read the first, the scan applied the
+      // last (review 11, finding 15e) — refused, the key named.
+      ['semgrep:\n  timeout: 30\n  timeout: 1\n', /invalid YAML: the key "timeout" appears twice/],
+      ['semgrep:\n  timeout: 30\nsemgrep:\n  timeout: 1\n', /the key "semgrep" appears twice/],
+      ['semgrep:\n  accept_timeouts: [a.js]\n  "accept_timeouts": [b.js]\n', /the key "accept_timeouts" appears twice/],
     ] as const) {
       const r = loadScanSettings(project(yaml));
       expect(r.kind, yaml).toBe('invalid');
