@@ -243,7 +243,7 @@ function attachHeredocBody(heredoc: PendingHeredoc, body: string): void {
  * skipped, because that stops being true for exactly one shape — `bash
  * <<EOF … EOF` hands the body to bash as the script it runs — and
  * `collect()` is what tells the two apart, by whether the statement's own
- * command is a bare shell reading stdin ({@link isBareShellStdin}); this
+ * command is a shell reading stdin (`scriptReader` in bashGuard.ts); this
  * function has no way to know that itself, since it only ever sees raw
  * source text, not resolved commands.
  *

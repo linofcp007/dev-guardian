@@ -1222,6 +1222,19 @@ function powershellCommand(args, name) {
   }
   return [];
 }
+function powershellReadsStdin(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a === "-") return true;
+    const m = /^[-/]([A-Za-z]+)$/.exec(a);
+    if (m === null) return false;
+    const p = (m[1] ?? "").toLowerCase();
+    if (p === "c" || p.length >= 3 && "command".startsWith(p) || p === "f" || p === "file") return args[i + 1] === void 0 || args[i + 1] === "-";
+    if (p === "e" || p.length >= 2 && "encodedcommand".startsWith(p)) return false;
+    if (PS_HOST_VALUED.has(p)) i += 1;
+  }
+  return true;
+}
 function inlineCode(words, start) {
   const at = interpreterIndex(words, start);
   if (at < 0) return [];
@@ -2902,7 +2915,11 @@ function nestedScripts(words, start) {
     return script === void 0 || script.trim() === "" ? [] : [shellScript(script)];
   }
   if (launcher === "iex" || launcher === "invoke-expression") {
-    const script = words.slice(start + 1).map((w) => w.value).join(" ").trim();
+    const args = words.slice(start + 1).filter((w, k) => !(k === 0 && !w.quoted && /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(w.value)));
+    const script = args.map((w) => w.value).join(" ").trim();
+    if (args.length > 0 && args.every((w) => !w.quoted && /^\$(?:\{[^}]*\}|[\w:?]+)$/.test(w.value))) {
+      return [{ text: script, powershell: true, iex: true, unread: true }];
+    }
     return script.length > 0 ? [{ text: script, powershell: true, iex: true }] : [];
   }
   let sawShell = false;
@@ -2938,26 +2955,155 @@ function scriptAfterDashC(words, from) {
   }
   return void 0;
 }
-function isBareShellStdin(words) {
-  const head = words[0];
-  if (head === void 0 || !SHELLS.has(basename(head.value))) return false;
-  return words.slice(1).every((w) => w.value.startsWith("-"));
+var SHELL_VALUED = /^(?:[-+][oO]|--rcfile|--init-file)$/;
+function scriptReader(words) {
+  const plain = withoutRedirectWords(words);
+  let at = resolveCommand(plain, PIPE_RUNNERS).index;
+  if (commandName(plain[at]?.value ?? "") === "busybox") at += 1;
+  const name = commandName(plain[at]?.value ?? "");
+  const args = plain.slice(at + 1);
+  if (name === "iex" || name === "invoke-expression") return args.length === 0 ? "powershell" : void 0;
+  if (name === "pwsh" || name === "powershell") return powershellReadsStdin(args.map((w) => w.value)) ? "powershell" : void 0;
+  if (name === "cmd") return args.every((a) => /^\/[A-Za-z]+$/.test(cmdSwitch(a.value)) && !/^\/[ck]$/i.test(cmdSwitch(a.value))) ? "cmd" : void 0;
+  if (name === "source" || name === ".") return STDIN_PATHS.has(args[0]?.value ?? "") ? "shell" : void 0;
+  if (!STDIN_SHELLS.has(name)) return void 0;
+  if (name === "su") return args.some((a) => /^(?:-[A-Za-z]*c|--command|--session-command)(?:=|$)/.test(a.value)) ? void 0 : "shell";
+  for (let i = 0; i < args.length; i += 1) {
+    const w = args[i];
+    if (w === void 0) break;
+    const v = w.value;
+    if (w.quoted) return STDIN_PATHS.has(v) ? "shell" : void 0;
+    if (v === "-") return "shell";
+    if (v === "--") return args[i + 1] === void 0 || STDIN_PATHS.has(args[i + 1]?.value ?? "") ? "shell" : void 0;
+    if (SHELL_VALUED.test(v)) {
+      i += 1;
+      continue;
+    }
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(v)) return void 0;
+    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(v)) return "shell";
+    if (/^[-+]/.test(v)) continue;
+    return STDIN_PATHS.has(v) ? "shell" : void 0;
+  }
+  return "shell";
+}
+function readsScript(words) {
+  return scriptReader(words) !== void 0;
+}
+function downloads(words) {
+  return DOWNLOADERS.has(commandName(words[resolveCommand(words).index]?.value ?? ""));
 }
 function fedScripts(statement, reads, powershell = false) {
   const scripts = [];
-  if (statement.commands.length === 1 && statement.heredocBodies) {
-    const only = statement.commands[0];
-    if (only !== void 0 && reads(only)) pushAll(scripts, statement.heredocBodies.map((text) => ({ text, reader: only })));
+  const first = statement.commands[0];
+  if (statement.heredocBodies && first !== void 0 && reads(first)) {
+    pushAll(scripts, statement.heredocBodies.map((text) => ({ text, reader: first })));
   }
-  if (statement.commands.length >= 2) {
-    const last = statement.commands[statement.commands.length - 1];
-    if (last !== void 0 && reads(last)) {
-      const fed = textOutputOf(statement.commands.slice(0, -1), { heredocs: statement.heredocBodies, powershell });
-      if (fed === "opaque") scripts.push({ text: "", reader: last, opaque: true });
-      else if (fed !== void 0 && fed.trim().length > 0) scripts.push({ text: fed.trim(), reader: last });
-    }
+  let downloaded = false;
+  for (let c = 1; c < statement.commands.length; c += 1) {
+    downloaded ||= downloads(statement.commands[c - 1] ?? []);
+    const reader = statement.commands[c];
+    if (reader === void 0 || !reads(reader)) continue;
+    const fed = textOutputOf(statement.commands, { heredocs: statement.heredocBodies, powershell }, c);
+    if (fed === "opaque") scripts.push({ text: "", reader, opaque: true });
+    else if (fed === void 0) {
+      if (!downloaded) scripts.push({ text: "", reader, unread: true });
+    } else if (fed.trim().length > 0) scripts.push({ text: fed.trim(), reader });
   }
   return scripts;
+}
+var RULE_UNREAD_SCRIPT = {
+  id: "unread-script",
+  level: "warn",
+  reason: "Runs text it could not read as a script (\u2026 | bash, gc x | iex, iex (\u2026), [scriptblock]::Create($x), \u2026 | cmd) \u2014 what it runs was not assessed"
+};
+var GROUP_CLOSERS = /^(\}|done|fi|esac)\s*\|/;
+function groupFedScripts(statements, powershell) {
+  const out = [];
+  let afterOpen = 0;
+  let brace = 0;
+  let read = 0;
+  for (let k = 0; k < statements.length; k += 1) {
+    const statement = statements[k];
+    if (statement === void 0) continue;
+    const reader = statement.commands[0];
+    const closer = GROUP_CLOSERS.exec(statement.masked)?.[1];
+    const paren = /^\|/.test(statement.masked) && k > 0 && statements[k - 1]?.end === ")";
+    if (reader !== void 0 && (closer !== void 0 || paren) && readsScript(reader)) {
+      if (closer !== void 0 && closer !== "}") out.push({ text: "", reader, unread: true });
+      else {
+        const texts = [];
+        let unread = false;
+        for (let j = Math.max(paren ? afterOpen : brace, read); j < k; j += 1) {
+          const text = textOutputOf(statements[j]?.commands ?? [], { heredocs: statements[j]?.heredocBodies, powershell });
+          if (typeof text === "string") texts.push(text);
+          else unread = true;
+        }
+        if (unread) out.push({ text: "", reader, unread: true });
+        else if (texts.join("").trim() !== "") out.push({ text: texts.join("\n").trim(), reader });
+      }
+      read = k + 1;
+    }
+    if (/^\{/.test(statement.masked)) brace = k;
+    if (statement.end === "(") afterOpen = k + 1;
+  }
+  return out;
+}
+function outputSubstitutionScripts(statements, powershell) {
+  const out = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === void 0 || statement.end !== "(" || !statement.masked.endsWith(">")) continue;
+    const reader = statements[k + 1]?.commands[0];
+    if (reader === void 0 || !readsScript(reader)) continue;
+    const members = statement.commands.map((words, c) => {
+      if (c < statement.commands.length - 1) return words;
+      let end = words.length;
+      while (end > 0 && words[end - 1]?.value === ">") end -= 1;
+      return words.slice(0, end);
+    });
+    const text = textOutputOf(members, { heredocs: statement.heredocBodies, powershell });
+    if (text === "opaque") out.push({ text: "", reader, opaque: true });
+    else if (text === void 0) out.push({ text: "", reader, unread: true });
+    else if (text.trim() !== "") out.push({ text: text.trim(), reader });
+  }
+  return out;
+}
+function iexSubexpressionScripts(statements) {
+  const out = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    const words = statement?.commands[statement.commands.length - 1];
+    if (statement === void 0 || words === void 0 || statement.end !== "(") continue;
+    const at = resolveCommand(words).index;
+    const name = commandName(words[at]?.value ?? "");
+    if (name !== "iex" && name !== "invoke-expression") continue;
+    if (!words.slice(at + 1).every((w) => w.value === "$" || /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(w.value))) continue;
+    const body = statements[k + 1];
+    const text = body?.end === ")" ? textOutputOf(body.commands, { heredocs: body.heredocBodies, powershell: true }) : void 0;
+    if (typeof text === "string") {
+      if (text.trim() !== "") out.push({ text: text.trim(), reader: words, kind: "powershell" });
+    } else out.push({ text: "", reader: words, unread: true });
+  }
+  return out;
+}
+var SCRIPT_BLOCK_CALL = /\[\s*(?:System\s*\.\s*Management\s*\.\s*Automation\s*\.\s*)?scriptblock\s*\]\s*::\s*Create\s*\(|\$ExecutionContext\s*\.\s*InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)\s*\(/gi;
+var MAX_SCRIPT_BLOCK_CALLS = 32;
+var MAX_SCRIPT_BLOCK_ARG = 16 * 1024;
+function scriptBlockScripts(text) {
+  const out = [];
+  let calls = 0;
+  for (const m of text.matchAll(SCRIPT_BLOCK_CALL)) {
+    if ((calls += 1) > MAX_SCRIPT_BLOCK_CALLS) {
+      out.push("unread");
+      break;
+    }
+    const from = m.index + m[0].length;
+    const window = text.slice(from, from + MAX_SCRIPT_BLOCK_ARG);
+    const literal = /^\s*(?:'((?:[^']|'')*)'|"((?:[^"`]|`.)*)")\s*\)/.exec(window);
+    if (literal === null) out.push("unread");
+    else out.push(literal[1] !== void 0 ? literal[1].replace(/''/g, "'") : (literal[2] ?? "").replace(/`(.)/g, "$1"));
+  }
+  return out;
 }
 var MAX_DECODED = 64 * 1024;
 var RULE_DECODED_SCRIPT = {
@@ -2997,29 +3143,38 @@ function hereStringText(words) {
   }
   return void 0;
 }
-function textOutputOf(members, feed = {}) {
-  const last = members[members.length - 1];
-  if (last === void 0) return void 0;
-  const lone = last.length === 1 ? last[0] : void 0;
-  if (feed.powershell === true && members.length === 1 && lone !== void 0 && lone.quoted) return lone.value;
-  const at = resolveCommand(last).index;
-  const name = commandName(last[at]?.value ?? "");
-  const args = withoutRedirections(last.slice(at + 1));
-  if (name === "echo") return args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(" ");
-  if (name === "printf") return args[args.length - 1] ?? "";
-  const before = () => {
-    const here = hereStringText(last);
-    if (here !== void 0) return here;
-    if (feed.heredocs !== void 0 && feed.heredocs.length > 0) return feed.heredocs.join("\n");
-    return members.length > 1 ? textOutputOf(members.slice(0, -1), feed) : void 0;
+function textOutputOf(members, feed = {}, end = members.length) {
+  let decodes = 0;
+  const decoded = (text) => {
+    let t = text;
+    for (let k = 0; k < decodes; k += 1) {
+      const d = decodeBase64(t);
+      if (d === void 0) return "opaque";
+      t = d;
+    }
+    return t;
   };
-  if (name === "cat" && args.every((a) => a === "-") || name === "tee") return before();
-  const decoder = decoderOf(last);
-  if (decoder === void 0) return void 0;
-  if (decoder === "other") return "opaque";
-  const input = before();
-  if (typeof input !== "string") return "opaque";
-  return decodeBase64(input) ?? "opaque";
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const last = members[i];
+    if (last === void 0) return void 0;
+    const lone = last.length === 1 ? last[0] : void 0;
+    if (feed.powershell === true && i === 0 && lone !== void 0 && lone.quoted) return decoded(lone.value);
+    const at = resolveCommand(last).index;
+    const name = commandName(last[at]?.value ?? "");
+    const args = withoutRedirections(last.slice(at + 1));
+    if (name === "echo") return decoded(args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(" "));
+    if (name === "printf") return decoded(args[args.length - 1] ?? "");
+    if (!(name === "cat" && args.every((a) => a === "-") || name === "tee")) {
+      const decoder = decoderOf(last);
+      if (decoder === void 0) return decodes > 0 ? "opaque" : void 0;
+      if (decoder === "other") return "opaque";
+      decodes += 1;
+    }
+    const here = hereStringText(last);
+    if (here !== void 0) return decoded(here);
+    if (feed.heredocs !== void 0 && feed.heredocs.length > 0) return decoded(feed.heredocs.join("\n"));
+  }
+  return decodes > 0 ? "opaque" : void 0;
 }
 function substitutionOutput(script) {
   const s = script.trim();
@@ -3824,8 +3979,8 @@ var NOT_FROM_ARCHIVE = /* @__PURE__ */ new Set([
 ]);
 function downloadsThenRuns(text, statements, bareRunsCwd) {
   if (!MAY_DOWNLOAD.test(text)) return null;
-  const downloads = /* @__PURE__ */ new Map();
-  for (const dest of downloadFileCalls(text)) downloads.set(runKey(resolveFrom("", dest)), { at: -1, kind: "powershell" });
+  const downloads2 = /* @__PURE__ */ new Map();
+  for (const dest of downloadFileCalls(text)) downloads2.set(runKey(resolveFrom("", dest)), { at: -1, kind: "powershell" });
   const pathBins = /* @__PURE__ */ new Map();
   const verified = /* @__PURE__ */ new Map();
   let listAt = -2;
@@ -3837,14 +3992,14 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
     const heads = statement.commands.map((words) => resolveCommand(words).index);
     const ran = [];
     const saved = [];
-    const reading = downloads.size > 0 || extracted.size > 0;
+    const reading = downloads2.size > 0 || extracted.size > 0;
     const piped = reading ? pipedIntoRunners(statement, heads) : [];
     let streaming;
     let fromArchive;
     const downloadedArchive = (archive) => {
       if (archive === void 0 || archive === "-") return streaming;
       const key = runKey(resolveFrom(cwd, archive));
-      const d = downloads.get(key);
+      const d = downloads2.get(key);
       return d !== void 0 && !((verified.get(key) ?? -3) > d.at) && !(listAt > d.at) ? d.kind : void 0;
     };
     statement.commands.forEach((words, c) => {
@@ -3885,11 +4040,11 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
         }
         for (const { from, to } of transfersOf(name, words, at)) {
           const src = runKey(resolveFrom(cwd, from));
-          const mark = downloads.get(src);
+          const mark = downloads2.get(src);
           if (mark === void 0) continue;
           for (const dest of to) {
             const key = runKey(resolveFrom(cwd, dest));
-            downloads.set(key, mark);
+            downloads2.set(key, mark);
             const check2 = verified.get(src);
             if (check2 !== void 0) verified.set(key, check2);
             const bin = lastSegment(key);
@@ -3906,23 +4061,23 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
       for (const w of next.slice(1)) if (!w.value.startsWith("-")) ran.push(runKey(resolveFrom(cwd, w.value)));
     }
     for (const file of ran) {
-      const d = downloads.get(file);
+      const d = downloads2.get(file);
       if (d !== void 0 && d.at < k && !((verified.get(file) ?? -3) > d.at) && !(listAt > d.at)) return d.kind;
       const e = extracted.get(dirOf(file));
       if (e !== void 0 && e.at < k) return e.kind;
     }
     if (fromArchive !== void 0) return fromArchive;
     for (const { key, kind } of saved) {
-      downloads.set(key, { at: k, kind });
+      downloads2.set(key, { at: k, kind });
       verified.delete(key);
       const bin = lastSegment(key);
       if (PATH_DIRS.test(dirOf(key)) && bin !== "") pathBins.set(bin, key);
     }
     const check = integrityCheckOf(statement, heads, cwd);
     if (check !== void 0) {
-      for (const name of check.names) if (downloads.has(name)) verified.set(name, k);
+      for (const name of check.names) if (downloads2.has(name)) verified.set(name, k);
       for (const name of check.implied) verified.set(name, k);
-      if (check.lists.some((list) => downloads.has(list))) listAt = k;
+      if (check.lists.some((list) => downloads2.has(list))) listAt = k;
     }
     if (statement.end !== "&&") {
       verified.clear();
@@ -4062,6 +4217,18 @@ function collect(command, depth, out, scope) {
     out.push(RULE_PROCESS_FETCH);
   }
   if (commandText.includes("<(")) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  const powershellScope = scope.powershell === true;
+  collectFed(
+    [
+      ...commandText.includes(">(") ? outputSubstitutionScripts(statements, powershellScope) : [],
+      ...groupFedScripts(statements, powershellScope),
+      ...iexSubexpressionScripts(statements),
+      ...powershellScope && /scriptblock|InvokeCommand/i.test(cmd) ? scriptBlockScripts(cmd).map((text) => text === "unread" ? { text: "", reader: [], unread: true } : { text, reader: [], kind: "powershell" }) : []
+    ],
+    depth,
+    out,
+    scope
+  );
   for (const written of statements) {
     if (scope.notes.now() > scope.notes.deadline) {
       scope.notes.budget = true;
@@ -4094,9 +4261,10 @@ function collect(command, depth, out, scope) {
       if (find !== null) out.push(find);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       const here = hereStringText(words);
-      if (here !== void 0 && isBareShellStdin(withoutRedirectWords(words.slice(resolved.index)))) {
-        const generated = substitutionOutput(here);
-        collectGenerated([generated ?? here], depth, out, scope);
+      const hereReader = here === void 0 ? void 0 : scriptReader(words);
+      if (here !== void 0 && hereReader !== void 0) {
+        const generated = substitutionOutput(here) ?? here;
+        collectFed([generated === "opaque" ? { text: "", reader: words, opaque: true } : { text: generated, reader: words, kind: hereReader }], depth, out, scope);
       }
       if (inlineCode(words, resolved.index).some(isBareRemoteFetch)) out.push(RULE_FETCH_EXEC);
       pushAll(out, assessGuardConfig(words, resolved.index, scope));
@@ -4117,7 +4285,11 @@ function collect(command, depth, out, scope) {
       const line = cmdHead !== void 0 && commandName(cmdHead.value) === "cmd" ? cmdLineText(withoutRedirections(words.slice(resolved.index + 1))) : void 0;
       if (depth >= MAX_NESTING && (scripts.length > 0 || line !== void 0)) scope.notes.depth = true;
       if (depth < MAX_NESTING) {
-        for (const { text: script, powershell, iex } of scripts) {
+        for (const { text: script, powershell, iex, unread } of scripts) {
+          if (unread === true) {
+            out.push({ ...RULE_UNREAD_SCRIPT });
+            continue;
+          }
           if (isBareRemoteFetch(script)) out.push(RULE_FETCH_EXEC);
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
@@ -4133,20 +4305,31 @@ function collect(command, depth, out, scope) {
       }
       moveCwd(scope, words, resolved.index);
     }
-    const fed = fedScripts(statement, isBareShellStdin, scope.powershell === true);
-    if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
-    if (depth < MAX_NESTING) {
-      for (const { text, reader, opaque } of fed) {
-        if (opaque === true) continue;
-        const powershell = /^(?:pwsh|powershell)$/.test(commandName(reader[0]?.value ?? ""));
-        noteScript(scope, text, powershell);
-        collect(text, depth + 1, out, { ...scope, cmdLine: false, powershell });
-      }
-    } else if (fed.length > 0) scope.notes.depth = true;
-    for (const { text, reader, opaque } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
+    collectFed(fedScripts(statement, readsScript, scope.powershell === true), depth, out, scope);
+    for (const { text, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
+      if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });
       else pushAll(out, judgeCode(text, codeLang(commandName(reader[0]?.value ?? "")), scope));
     }
+  }
+}
+function collectFed(fed, depth, out, scope) {
+  if (fed.length === 0) return;
+  if (fed.some((f) => f.opaque === true)) out.push({ ...RULE_DECODED_SCRIPT });
+  if (fed.some((f) => f.unread === true)) out.push({ ...RULE_UNREAD_SCRIPT });
+  const readable = fed.filter((f) => f.opaque !== true && f.unread !== true);
+  if (readable.length === 0) return;
+  if (depth >= MAX_NESTING) {
+    scope.notes.depth = true;
+    return;
+  }
+  for (const f of readable) {
+    const kind = f.kind ?? scriptReader(f.reader) ?? "shell";
+    const powershell = kind === "powershell";
+    noteScript(scope, f.text, powershell);
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === "cmd", powershell });
+    const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
+    if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
   }
 }
 function collectGenerated(texts, depth, out, scope) {
