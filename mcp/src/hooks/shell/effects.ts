@@ -45,10 +45,19 @@ export interface Effects {
    * recursive `[IO.Directory]::Delete`.
    */
   trees: string[];
+  /**
+   * The symbolic links and junctions created, each `[link, target]` — a second
+   * name for the target, through which a later write of the line reaches it
+   * unnamed (review 12, finding 1): `mklink /J z .claude` makes
+   * `z/settings.local.json` Claude Code's settings. The target is resolved the
+   * way the link reads it: from the link's directory, or — a junction's — from
+   * the command's.
+   */
+  aliases: Array<readonly [string, string]>;
 }
 
 export function noEffects(): Effects {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [], aliases: [] };
 }
 
 function mergeEffects(into: Effects, from: Effects): void {
@@ -59,6 +68,7 @@ function mergeEffects(into: Effects, from: Effects): void {
   pushAll(into.links, from.links);
   pushAll(into.hardLinkSources, from.hardLinkSources);
   pushAll(into.trees, from.trees);
+  pushAll(into.aliases, from.aliases);
 }
 
 /** `a/b/c` → `c`, for either separator. */
@@ -85,42 +95,69 @@ function operands(args: readonly string[], valued: ReadonlySet<string>): string[
   return out;
 }
 
-/** `ln [opts] TARGET… LINK`, `ln [opts] TARGET`, `ln -t DIR TARGET…`: the paths it creates. */
-function lnDestinations(args: readonly string[]): string[] {
+/** `ln`'s operands past its options, and its `-t DIR` (`--target-directory`): `hasDir` even when DIR is missing. */
+function lnOperands(args: readonly string[]): { names: string[]; dir: string | undefined; hasDir: boolean } {
   let dir: string | undefined;
+  let hasDir = false;
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i] ?? '';
-    const long = /^--target-directory=(.+)$/.exec(a);
-    if (long !== null) dir = long[1];
-    else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) dir = args[++i];
-    else if (/^-t./.test(a)) dir = a.slice(2);
-    else if (a === '-S' || a === '--suffix') i++;
+    const long = /^--target-directory=(.*)$/.exec(a);
+    if (long !== null) {
+      hasDir = true;
+      if (long[1] !== '') dir = long[1];
+    } else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) {
+      hasDir = true;
+      dir = args[++i];
+    } else if (/^-t./.test(a)) {
+      hasDir = true;
+      dir = a.slice(2);
+    } else if (a === '-S' || a === '--suffix') i++;
     else rest.push(a);
   }
-  const targets = operands(rest, new Set());
+  return { names: operands(rest, new Set()), dir, hasDir };
+}
+
+/** `ln [opts] TARGET… LINK`, `ln [opts] TARGET`, `ln -t DIR TARGET…`: the paths it creates. */
+function lnDestinations(args: readonly string[]): string[] {
+  const { names: targets, dir } = lnOperands(args);
   if (dir !== undefined) return targets.map((t) => `${dir}/${lastSegment(t)}`);
   if (targets.length >= 2) return [targets[targets.length - 1] ?? ''];
   return targets.length === 1 ? [lastSegment(targets[0] ?? '')] : [];
 }
 
+/** `-s` / `--symbolic`: `ln` makes symbolic links. */
+function lnSymbolic(args: readonly string[]): boolean {
+  return args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a));
+}
+
 /** The files `ln` hard-links to — every source operand, unless `-s` / `--symbolic` makes the links symbolic. */
 function lnHardSources(args: readonly string[]): string[] {
-  if (args.some((a) => a === '--symbolic' || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
-  let dir = false;
-  const rest: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? '';
-    if (/^--target-directory=/.test(a)) dir = true;
-    else if (a === '--target-directory' || /^-[a-zA-Z]*t$/.test(a)) {
-      dir = true;
-      i += 1;
-    } else if (/^-t./.test(a)) dir = true;
-    else if (a === '-S' || a === '--suffix') i += 1;
-    else rest.push(a);
-  }
-  const names = operands(rest, new Set());
-  return dir || names.length < 2 ? names : names.slice(0, -1);
+  if (lnSymbolic(args)) return [];
+  const { names, hasDir } = lnOperands(args);
+  return hasDir || names.length < 2 ? names : names.slice(0, -1);
+}
+
+/**
+ * `ln -s`'s links, each with what it points at ({@link Effects.aliases}), the
+ * target as written. With two names the second is the link, or — when it is a
+ * directory — the directory the link is made in: both are listed.
+ */
+function lnAliases(args: readonly string[]): Array<readonly [string, string]> {
+  if (!lnSymbolic(args)) return [];
+  const { names, dir } = lnOperands(args);
+  if (dir !== undefined) return names.map((t) => [`${dir}/${lastSegment(t)}`, t] as const);
+  if (names.length === 1) return [[lastSegment(names[0] ?? ''), names[0] ?? ''] as const];
+  const link = names[names.length - 1] ?? '';
+  const sources = names.slice(0, -1);
+  return sources.flatMap((t) =>
+    sources.length === 1 ? [[link, t] as const, [`${link}/${lastSegment(t)}`, t] as const] : [[`${link}/${lastSegment(t)}`, t] as const],
+  );
+}
+
+/** A link's target as the link reads it: a relative one from the link's own directory. */
+function fromLink(link: string, target: string): string {
+  return resolveFrom(dirOf(link.replace(/\\/g, '/')), target);
 }
 
 /**
@@ -536,8 +573,9 @@ const CMD_SWITCHED = new Set(['copy', 'move', 'xcopy', 'robocopy', 'mklink', 'de
  * removes its sources; a rename removes its source and writes its new name; a
  * delete removes; `ln`, `mklink` and `New-Item -ItemType SymbolicLink` create
  * links, `mkfifo` and `mknod` special files; `cmd /c` is assessed command by
- * command ({@link cmdEffects}). Never a link's SOURCE: `ln -s
- * ~/.config/dev-guardian/hooks.json backup.json` reads the config.
+ * command ({@link cmdEffects}). A symbolic link's or a junction's target is
+ * never a write: it is recorded with its link in `aliases`, which the guard
+ * judges as a second name for it (review 12, finding 1).
  */
 export function effectsOf(name: string, rawArgs: readonly string[], cwd: string, depth = 0): Effects {
   if (name === 'cmd') return cmdEffects(rawArgs, cwd, depth);
@@ -555,6 +593,7 @@ export function effectsOf(name: string, rawArgs: readonly string[], cwd: string,
     case 'ln':
       pushAll(e.links, lnDestinations(args).map(at));
       pushAll(e.hardLinkSources, lnHardSources(args).map(at));
+      for (const [link, target] of lnAliases(args)) e.aliases.push([at(link), at(fromLink(link, target))]);
       return e;
     case 'link':
       pushAll(e.hardLinkSources, operands(args, new Set()).slice(0, 1).map(at));
@@ -570,7 +609,13 @@ export function effectsOf(name: string, rawArgs: readonly string[], cwd: string,
       pushAll(e.links, mklinkDestinations(args).map(at));
       // `mklink /H <link> <target>`: a hard link to the target.
       const names = args.filter((a) => !a.startsWith('/'));
-      if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== undefined) e.hardLinkSources.push(at(names[1]));
+      const [link, target] = names;
+      if (args.some((a) => /^\/h$/i.test(a))) {
+        if (target !== undefined) e.hardLinkSources.push(at(target));
+      } else if (link !== undefined && target !== undefined) {
+        // A junction's target is resolved from the command's directory; a symbolic link's from its own.
+        e.aliases.push([at(link), at(args.some((a) => /^\/j$/i.test(a)) ? target : fromLink(link, target))]);
+      }
       return e;
     }
     case 'new-item':
@@ -579,6 +624,10 @@ export function effectsOf(name: string, rawArgs: readonly string[], cwd: string,
       if (['symboliclink', 'hardlink', 'junction'].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
       if (item.itemType === 'hardlink' && item.target !== undefined) e.hardLinkSources.push(at(item.target));
       else if (item.itemType === 'file') pushAll(e.writes, item.paths.map(at));
+      const target = item.target;
+      if (target !== undefined && (item.itemType === 'symboliclink' || item.itemType === 'junction')) {
+        for (const p of item.paths) e.aliases.push([at(p), at(item.itemType === 'junction' ? target : fromLink(p, target))]);
+      }
       return e;
     }
     case 'cp':

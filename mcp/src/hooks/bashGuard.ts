@@ -1433,7 +1433,10 @@ function dotNetEffects(text: string, cwd: string, notes?: Notes): Effects {
       e.removes.push(first);
       // `[IO.Directory]::Delete('C:\', $true)`: the whole tree (review 8, item 9).
       if (kind === 'directory' && /^\$?true$/i.test(call.args[1] ?? '')) e.trees.push(first);
-    } else if (method === 'createsymboliclink') e.links.push(first);
+    } else if (method === 'createsymboliclink') {
+      e.links.push(first);
+      if (second !== undefined) e.aliases.push([first, second]);
+    }
     else if (method === 'move' || method === 'replace') {
       e.removes.push(first);
       if (second !== undefined) (kind === 'directory' ? e.dirs : e.writes).push(second);
@@ -1487,6 +1490,17 @@ const RULE_HARD_LINK: MatchedRule = {
 
 /** The directory that holds Claude Code's project or user settings; separators optional as in `HOOK_CONFIG_PATH`. */
 const CLAUDE_DIR = /\.claude\/?$/i;
+
+/** The directory that holds Claude Code's managed settings ({@link MANAGED_SETTINGS_PATH}). */
+const MANAGED_SETTINGS_DIR = /(?:^|\/)(?:etc\/?claude-code|ClaudeCode)\/?$/i;
+
+const RULE_LINK: MatchedRule = {
+  id: 'guard-config-link',
+  level: 'block',
+  reason:
+    "Makes a symbolic link or a junction to the guardrail hooks' own configuration, to Claude Code's settings or to " +
+    'the directory that holds them — a second name through which a later command rewrites them without naming them',
+};
 
 /**
  * dev-guardian's registry of trusted databases written from the shell (review
@@ -1637,6 +1651,136 @@ const RULE_DISK_WRITE: MatchedRule = {
   reason: 'Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/…)',
 };
 
+/** The most links one command's lines may make that later paths are read through ({@link throughLinks}). */
+const MAX_ALIASES = 64;
+/** The most paths one command may have looked up on disk ({@link AssessOptions.realPath}). */
+const MAX_LOOKUPS = 64;
+
+/**
+ * A path the command names, absolute and `/`-separated — `~` read as the home
+ * directory, on Windows an MSYS `/c/…` as `C:/…`, a relative one from the
+ * directory the statements start in — or `undefined` when that cannot be told
+ * (a variable, `~user`, a drive-relative `C:x`, an unknown start).
+ */
+function absoluteOf(raw: string, scope: Scope): string | undefined {
+  const t = stripQuotes(raw).replace(/\\/g, '/');
+  if (/^~(?=\/|$)/.test(t)) return scope.homePath === undefined ? undefined : `${scope.homePath.replace(/\/+$/, '')}${t.slice(1)}`;
+  if (/^[~$%]/.test(t)) return undefined;
+  if (scope.windows === true) {
+    const msys = /^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/.exec(t);
+    if (msys !== null) return `${(msys[1] ?? '').toUpperCase()}:${t.slice(msys[0].length) || '/'}`;
+    if (/^[A-Za-z]:(?!\/)/.test(t)) return undefined;
+  }
+  if (/^(?:\/|[A-Za-z]:\/)/.test(t)) return t;
+  return scope.dir === undefined ? undefined : resolveFrom(scope.dir, t);
+}
+
+/** How a link and a path under it are compared: absolute when it can be told, no trailing `/`, lower-cased on Windows. */
+function aliasKey(raw: string, scope: Scope): string {
+  const k = (absoluteOf(raw, scope) ?? stripQuotes(raw).replace(/\\/g, '/')).replace(/\/+$/, '');
+  return scope.windows === true ? k.toLowerCase() : k;
+}
+
+/**
+ * Where an absolute path really leads through the links already on disk
+ * ({@link AssessOptions.realPath}), `/`-separated — `undefined` when as
+ * written, unknown, or past {@link MAX_LOOKUPS} or the budget (each noted).
+ * Without `follow`, only its directory is looked up: a link AT the path is
+ * what a remove or a new link acts on. Asked once per path ({@link Notes.realPaths}).
+ */
+function realPathOf(raw: string, scope: Scope, follow: boolean): string | undefined {
+  const realPath = scope.realPath;
+  if (realPath === undefined) return undefined;
+  const whole = absoluteOf(raw, scope)?.replace(/(?<=.)\/+$/, '');
+  if (whole === undefined || GLOB.test(whole) || /^\/dev\//.test(whole)) return undefined;
+  if (!follow) {
+    const cut = whole.lastIndexOf('/');
+    if (cut <= 0 || /^[A-Za-z]:$/.test(whole.slice(0, cut))) return undefined;
+    const dir = realPathOf(whole.slice(0, cut), scope, true);
+    return dir === undefined ? undefined : `${dir.replace(/\/+$/, '')}${whole.slice(cut)}`;
+  }
+  const abs = whole;
+  const notes = scope.notes;
+  if (notes.realPaths.has(abs)) return notes.realPaths.get(abs);
+  if (notes.realPaths.size >= MAX_LOOKUPS) {
+    notes.links = true;
+    return undefined;
+  }
+  if (notes.now() > notes.deadline) {
+    notes.budget = true;
+    return undefined;
+  }
+  let real: string | undefined;
+  try {
+    real = realPath(abs)?.replace(/\\/g, '/');
+  } catch {
+    real = undefined;
+  }
+  const differs = real !== undefined && (scope.windows === true ? real.toLowerCase() !== abs.toLowerCase() : real !== abs);
+  const found = differs ? real : undefined;
+  notes.realPaths.set(abs, found);
+  return found;
+}
+
+/**
+ * `effects` with every path also as it really leads (review 12, finding 1):
+ * through a link this command made before it — `mklink /J z .claude &&
+ * echo … > z/settings.local.json` writes `.claude/settings.local.json`; the
+ * links are kept, up to {@link MAX_ALIASES}, in {@link Notes.aliases} — and
+ * through one already on disk ({@link realPathOf}). Paths are only added, so
+ * each is still judged as written. `targets`: what the links made here point
+ * at, read the same way.
+ */
+function throughLinks(effects: Effects, scope: Scope): { effects: Effects; targets: string[] } {
+  const notes = scope.notes;
+  /**
+   * `paths`, and where each leads. `follow`: a link AT the path is followed
+   * too — a write goes through it, while a remove, a new link, a FIFO or a
+   * hard link acts on the link itself, so only the links above them count.
+   */
+  const expand = (paths: readonly string[], follow: boolean): string[] => {
+    const out = [...paths];
+    for (const p of paths) {
+      if (notes.aliases.length > 0) {
+        const key = aliasKey(p, scope);
+        for (const [link, target] of notes.aliases) {
+          if ((follow && key === link) || key.startsWith(`${link}/`)) out.push(`${target}${key.slice(link.length)}`);
+        }
+      }
+      const real = realPathOf(p, scope, follow);
+      if (real !== undefined) out.push(real);
+    }
+    return out;
+  };
+  // The links and their targets through the links made BEFORE them; every
+  // other path also through these — a `cmd /c` line's `mklink` and its write.
+  const targets = expand(
+    effects.aliases.map(([, target]) => target),
+    true,
+  );
+  const links = expand(effects.links, false);
+  for (const [link, target] of effects.aliases) {
+    if (notes.aliases.length >= MAX_ALIASES) {
+      notes.links = true;
+      break;
+    }
+    notes.aliases.push([aliasKey(link, scope), aliasKey(target, scope)]);
+  }
+  return {
+    effects: {
+      writes: expand(effects.writes, true),
+      removes: expand(effects.removes, false),
+      dirs: expand(effects.dirs, true),
+      special: expand(effects.special, false),
+      links,
+      hardLinkSources: expand(effects.hardLinkSources, false),
+      trees: expand(effects.trees, true),
+      aliases: effects.aliases,
+    },
+    targets,
+  };
+}
+
 /**
  * The rules a command's filesystem effects break. The guard's own
  * configuration: a FIFO, device node or link created at a config file (a link
@@ -1644,18 +1788,23 @@ const RULE_DISK_WRITE: MatchedRule = {
  * onto a config file (M5); its removal, or the user-level directory's; a
  * directory moved or copied onto a config directory. Claude Code's settings: a
  * write of `.claude/settings*.json` whose command names a loosening key
- * anywhere (`raw`).
+ * anywhere (`raw`). Each path is judged as written and as it really leads
+ * ({@link throughLinks}); a symbolic link or a junction made to any of those
+ * files or directories is a second name for it (review 12, finding 1).
  */
 function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
+  const { effects: named, targets: linkTargets } = throughLinks(effects, scope);
   const e: Effects = {
-    writes: asWindowsOpens(effects.writes.map(tail)),
-    removes: asWindowsOpens(effects.removes.map(tail)),
-    dirs: asWindowsOpens(effects.dirs.map(tail)),
-    special: asWindowsOpens(effects.special.map(tail)),
-    links: asWindowsOpens(effects.links.map(tail)),
-    hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
-    trees: effects.trees.map(tail),
+    writes: asWindowsOpens(named.writes.map(tail)),
+    removes: asWindowsOpens(named.removes.map(tail)),
+    dirs: asWindowsOpens(named.dirs.map(tail)),
+    special: asWindowsOpens(named.special.map(tail)),
+    links: asWindowsOpens(named.links.map(tail)),
+    hardLinkSources: asWindowsOpens(named.hardLinkSources.map(tail)),
+    trees: named.trees.map(tail),
+    aliases: [],
   };
+  const targets = asWindowsOpens(linkTargets.map(tail));
   const out: MatchedRule[] = [];
   // Each guarded path is this session's only where the hooks read it; one
   // elsewhere — another project's, a test fixture's HOME — warns (review 8, item 14).
@@ -1677,6 +1826,7 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   const linksGuarded = (p: string): boolean =>
     isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
   judged(RULE_HARD_LINK, locate(e.hardLinkSources, linksGuarded, scope));
+  judged(RULE_LINK, locate(targets, (p) => linksGuarded(p) || MANAGED_SETTINGS_DIR.test(p), scope));
   // A whole tree deleted by a copy or a .NET call (review 8, item 9), and a
   // block device written by `tee` or `cp` (`cat /dev/zero | tee /dev/sda`).
   if (e.trees.some((p) => isCatastrophicTarget(p, scope.tildeUsers) || isHomeTarget(p, scope.home))) out.push({ ...RULE_RM_ROOT });
@@ -1691,7 +1841,8 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
     e.special.some(inRegistry) ||
     e.hardLinkSources.some(inRegistry) ||
     e.links.some(registryOrData) ||
-    e.dirs.some(registryOrData)
+    e.dirs.some(registryOrData) ||
+    targets.some(registryOrData)
   ) {
     out.push({ ...RULE_REGISTRY });
   }
@@ -1993,6 +2144,10 @@ interface Scope {
   vars?: Readonly<Record<string, string>> | undefined;
   /** Git Bash reads a bare drive (`C:`) as its root ({@link DeleteContext}). */
   bareDriveRoot?: boolean;
+  /** The command runs on Windows: paths compare case-insensitively, an MSYS `/c/…` is `C:/…`. */
+  windows?: boolean;
+  /** {@link AssessOptions.realPath}. */
+  realPath?: ((path: string) => string | undefined) | undefined;
 }
 
 /**
@@ -4227,6 +4382,16 @@ export interface AssessOptions {
    * (default: this process's; tests).
    */
   env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Where an absolute path really leads through the links already on disk —
+   * a symbolic link, a junction, an 8.3 name on the way — or `undefined` when
+   * as written or unknown. A redirect into `z/` with `z` a junction to
+   * `.claude` writes Claude Code's settings (review 12, finding 1). The
+   * dispatcher passes one that never asks the network; without it (the CLI's
+   * `check`, the tests) paths are judged as written, and through the links
+   * the command itself makes.
+   */
+  realPath?: (path: string) => string | undefined;
 }
 
 /** `os.homedir()`, or none when it cannot be determined (it throws without a passwd entry). */
@@ -4247,6 +4412,7 @@ function partialRule(notes: Notes): MatchedRule | null {
     ...(notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : []),
     ...(notes.calls ? [`an [IO.File] call's arguments over ${MAX_CALL_ARGS} characters`] : []),
     ...(notes.failed ? ['the assessment failed'] : []),
+    ...(notes.links ? [`more than ${MAX_ALIASES} links made, or ${MAX_LOOKUPS} paths looked up through links`] : []),
   ];
   return causes.length === 0
     ? null
@@ -4275,6 +4441,12 @@ interface Notes {
   now: () => number;
   /** The scripts handed to a shell so far ({@link BashAssessment.scripts}), by `shell\0text`. */
   scripts: Map<string, { text: string; shell: 'bash' | 'powershell' }>;
+  /** The links the command made so far, `[link, target]` as {@link aliasKey} spells them ({@link throughLinks}). */
+  aliases: Array<readonly [string, string]>;
+  /** The paths looked up on disk so far, with where each really leads ({@link realPathOf}). */
+  realPaths: Map<string, string | undefined>;
+  /** More links, or lookups, than {@link MAX_ALIASES} / {@link MAX_LOOKUPS}. */
+  links: boolean;
 }
 
 /** The most nested scripts {@link BashAssessment.scripts} lists. */
@@ -4331,6 +4503,8 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
     homePath: homeRaw === undefined ? undefined : homeRaw.replace(/\\/g, '/'),
     vars: targetVariables(opts.env ?? process.env),
     bareDriveRoot: platform === 'win32' && opts.shell !== 'powershell',
+    windows: platform === 'win32',
+    realPath: opts.realPath,
   };
   if (opts.shell !== 'powershell') return assessReadings([text], cut, now, deadline, where);
   // Under POSIX quoting, PowerShell's ordinary `"C:\Users\"` escapes its
@@ -4359,6 +4533,8 @@ interface Where {
   homePath: string | undefined;
   vars: Readonly<Record<string, string>>;
   bareDriveRoot: boolean;
+  windows: boolean;
+  realPath: ((path: string) => string | undefined) | undefined;
 }
 
 /** {@link userDataDir}, or `''` when it cannot be worked out. */
@@ -4393,6 +4569,9 @@ function assessReadings(
     deadline,
     now,
     scripts: new Map(),
+    aliases: [],
+    realPaths: new Map(),
+    links: false,
   };
 
   const matched: MatchedRule[] = [];

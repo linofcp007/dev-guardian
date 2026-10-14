@@ -2739,8 +2739,9 @@ describe('assessBashCommand — download then run: which check, which file (revi
 
 // Review round 3, item 5: a HARD link to the hook configuration is a second
 // name for the same file, and a Write through it rewrote the configuration.
-// Creating one is refused; a symbolic link stays allowed, since the Write
-// guard resolves it.
+// Creating one is refused. A symbolic link was left allowed, since the Write
+// guard resolves it — but a shell write through one names neither, and since
+// review 12 (finding 1) it is refused too, as `guard-config-link`.
 describe('assessBashCommand — a hard link to the hook configuration (review round 3, item 5)', () => {
   it.each([
     ['ln .guardian/hooks.config.json notes.json', 'bash'],
@@ -3025,7 +3026,6 @@ describe('assessBashCommand — hard links the Write guard catches, refused by t
   });
 
   it.each([
-    ['ln -s .claude/settings.json s.json', 'bash'],
     ['cp .claude/settings.json backup.json', 'bash'],
     ['cp -a .guardian backup', 'bash'],
     ['cp -r .guardian /tmp/g', 'bash'],
@@ -3034,10 +3034,17 @@ describe('assessBashCommand — hard links the Write guard catches, refused by t
     ['ni -it Directory -Path build', 'powershell'],
     ['ni -it d build', 'powershell'],
     ['New-Item -it File -Path notes.txt', 'powershell'],
-    ['ni -ItemType SymbolicLink -Path b.json -Target .guardian\\hooks.config.json', 'powershell'],
     ['New-Item -ItemType HardLink -Path b.txt -Target a.txt', 'powershell'],
   ] as const)('%s stays ok', (command, shell) => {
     expect(verdict(command, shell)).toEqual({ command, level: 'ok' });
+  });
+
+  // Review 12, finding 1: these two were ok — a symbolic link to them is a second name too.
+  it.each([
+    ['ln -s .claude/settings.json s.json', 'bash'],
+    ['ni -ItemType SymbolicLink -Path b.json -Target .guardian\\hooks.config.json', 'powershell'],
+  ] as const)('%s is a symbolic link to it: refused', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).rules).toEqual(['guard-config-link']);
   });
 });
 
@@ -4217,4 +4224,86 @@ describe('assessBashCommand — review 12: the tracker, managed settings, more r
   ] as const)('%s stays ok', (command, shell) => {
     expect(assessBashCommand(command, { shell }).level).toBe('ok');
   });
+});
+
+// Review 12, finding 1: a symbolic link or a junction is a second name. One
+// made to `.claude` (or a hook configuration directory) and a write through
+// it named neither, and a write through a link already on disk was judged as
+// the link's own path.
+describe('assessBashCommand — links: a second name for a guarded file (review 12, finding 1)', () => {
+  it.each([
+    ["cmd //c 'mklink /J z .claude' && echo '{\"disableAllHooks\":true}' > z/settings.local.json", 'bash'],
+    ["ln -s .claude z && echo '{\"disableAllHooks\":true}' > z/settings.local.json", 'bash'],
+    ["New-Item -ItemType Junction -Path z -Target .claude; Set-Content z\\settings.local.json '{\"disableAllHooks\":true}'", 'powershell'],
+    ["ln -s /etc/claude-code e && echo '{\"disableAllHooks\":true}' > e/managed-settings.json", 'bash'],
+  ] as const)('%s: the link is refused, and so is the write through it', (command, shell) => {
+    const a = assessBashCommand(command, { shell });
+    expect(a.level).toBe('block');
+    expect(a.rules).toEqual(expect.arrayContaining(['guard-config-link', 'claude-settings-loosen']));
+  });
+
+  it.each([
+    ['ln -s .claude z', 'bash'],
+    ['ln -sfn ~/.claude ~/claude-alias', 'bash'],
+    ['ln -s .guardian g', 'bash'],
+    ['ln -s .guardian/hooks.config.json backup.json', 'bash'],
+    ['ln -s -t links .claude', 'bash'],
+    ['cmd /c mklink /D cfg %USERPROFILE%\\.config\\dev-guardian', 'powershell'],
+    ['New-Item -ItemType Junction -Path cfg -Target "$HOME\\.config\\dev-guardian"', 'powershell'],
+    ['New-Item -ItemType SymbolicLink -Path s.json -Value .claude\\settings.json', 'powershell'],
+    ["[IO.Directory]::CreateSymbolicLink('z', '.claude')", 'powershell'],
+  ] as const)('%s makes a link to a guarded file or directory: refused', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).rules).toContain('guard-config-link');
+  });
+
+  it('a link to a directory above a guarded one is followed by the writes after it', () => {
+    const a = assessBashCommand("ln -s ~/.config c && echo '{}' > c/dev-guardian/hooks.json");
+    expect(a.rules).toContain('guard-config-shell-write');
+    expect(a.rules).not.toContain('guard-config-link');
+    const b = assessBashCommand("ln -s . p; cd sub; echo '{}' > ../p/.guardian/hooks.config.json");
+    expect(b.rules).toContain('guard-config-shell-write');
+  });
+
+  it('a link already on disk: the write is judged where it really leads (the dispatcher’s realPath)', () => {
+    const realPath = (p: string): string | undefined =>
+      p.toLowerCase().startsWith('c:/work/proj/z/') ? `C:\\work\\proj\\.claude\\${p.slice('c:/work/proj/z/'.length)}` : undefined;
+    const opts = { cwd: 'C:\\work\\proj', projectDir: 'C:\\work\\proj', homeDir: 'C:\\Users\\alice', platform: 'win32' as const };
+    const command = "echo '{\"disableAllHooks\":true}' > z/settings.local.json";
+    expect(assessBashCommand(command, { ...opts, realPath }).rules).toContain('claude-settings-loosen');
+    expect(assessBashCommand(command, opts).level).toBe('ok');
+    // Through an MSYS spelling and from the home directory too.
+    expect(assessBashCommand("echo '{\"disableAllHooks\":true}' > /c/work/proj/z/settings.json", { ...opts, realPath }).rules).toContain('claude-settings-loosen');
+  });
+
+  it('realPath is asked once per path, never for a variable or a device, and a throw is no answer', () => {
+    const asked: string[] = [];
+    const realPath = (p: string): string | undefined => {
+      asked.push(p);
+      if (p.endsWith('boom')) throw new Error('boom');
+      return undefined;
+    };
+    const a = assessBashCommand('echo a > out.txt; echo b > out.txt; echo c > "$X/y"; echo d > /dev/null; echo e > boom', { cwd: '/w', realPath, platform: 'linux' });
+    expect(a.level).toBe('ok');
+    expect(asked).toEqual(['/w/out.txt', '/w/boom']);
+  });
+
+  it.each([
+    ['ln -s ../shared/config.json config.json', 'bash'],
+    ['ln -s dist/app latest', 'bash'],
+    ['New-Item -ItemType SymbolicLink -Path latest -Target builds\\v2', 'powershell'],
+    ['cmd /c mklink /J node_modules ..\\shared\\node_modules', 'powershell'],
+    ['ln -s /usr/lib/node_modules/@anthropic-ai/claude-code cc', 'bash'],
+    ['ln -s build out && echo hi > out/log.txt', 'bash'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+
+  it('past 64 links the rest is noted, never silently passed', () => {
+    const command = `${Array.from({ length: 70 }, (_, i) => `ln -s a b${i}`).join('; ')}; echo x > b69/y`;
+    expect(assessBashCommand(command).rules).toContain('partially-assessed');
+  });
+
+  it('ln -s a b; echo > b/c, repeated: eight times the line costs well under 22.6 times as much', () => {
+    expectLinear('ln -s … echo >', (n) => assessBashCommand('ln -s a b; echo x > b/c; '.repeat(Math.max(1, Math.floor(n / 26)))), 20_000);
+  }, 120_000);
 });

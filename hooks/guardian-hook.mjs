@@ -1297,6 +1297,22 @@ async function vetInstallCommand(command, cwd, toolName, nested = []) {
 }
 
 /**
+ * Where an absolute path a shell command names really leads through the links
+ * already on disk — a symbolic link, a junction, an 8.3 name — or `undefined`
+ * when as written (review 12, finding 1). `guardedPath`, which follows no link
+ * to a network or device path; a network path itself is never asked.
+ *
+ * @param {string} path
+ * @returns {string | undefined}
+ */
+function linkedPath(path) {
+  const abs = resolve(path);
+  if (isNetworkPath(abs)) return undefined;
+  const real = guardedPath(abs);
+  return samePath(real, abs) ? undefined : real;
+}
+
+/**
  * @param {ToolInput} input
  * @param {HookConfig} cfg
  * @param {string} cwd
@@ -1315,11 +1331,13 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   // A shell guard that cannot be loaded fails open alone: package vetting,
   // in a part of its own, still runs (review of 3.4.0, finding 12 — a damaged
   // `hooksBash.js` took it down too, and SessionStart named only the shell guard).
+  // A path the command writes is also judged where it really leads, through a
+  // link already on disk (review 12, finding 1).
   /** @type {ReturnType<Awaited<ReturnType<typeof loadBashGuard>>>} */
   let a = { level: 'ok', reasons: [], rules: [] };
   try {
     const assessBashCommand = await loadBashGuard();
-    a = assessBashCommand(command, { shell: toolName === 'PowerShell' ? 'powershell' : 'bash', cwd, projectDir: root });
+    a = assessBashCommand(command, { shell: toolName === 'PowerShell' ? 'powershell' : 'bash', cwd, projectDir: root, realPath: linkedPath });
   } catch (err) {
     debug(`shell guard unavailable (fail-open): ${err instanceof Error ? err.message : String(err)}`);
   }

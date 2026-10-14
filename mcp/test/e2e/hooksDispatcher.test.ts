@@ -1026,6 +1026,21 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(decision(hook('Write', { file_path: managed, content: '{"disableAllHooks": true}' }))).toBe('deny');
     });
 
+    // Review 12, finding 1: a junction (or symlink) already on disk made a shell
+    // write into Claude Code's settings look like a write of `z/…`.
+    it.each(['Bash', 'PowerShell'])('%s: a write through a link already on disk to .claude is judged as .claude’s', (tool) => {
+      mkdirSync(join(projectDir, '.claude'), { recursive: true });
+      symlinkSync(join(projectDir, '.claude'), join(projectDir, 'z'), process.platform === 'win32' ? 'junction' : 'dir');
+      const command =
+        tool === 'Bash'
+          ? `echo '{"disableAllHooks":true}' > z/settings.local.json`
+          : `Set-Content -Path z\\settings.local.json -Value '{"disableAllHooks":true}'`;
+      expect(decision(hook(tool, { command }))).toBe('deny');
+      // The same write into a plain directory says nothing.
+      mkdirSync(join(projectDir, 'plain'), { recursive: true });
+      expect(decision(hook(tool, { command: command.replace('z', 'plain') }))).toBeUndefined();
+    });
+
     it('env PATH is asked about; the same PATH again is not', () => {
       const r = hook('Write', { file_path: settingsPath('settings.local.json'), content: JSON.stringify({ env: { PATH: '/tmp/fake-node' } }) });
       expect(decision(r)).toBe('ask');
@@ -1683,11 +1698,12 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
     ])('%s: %s is denied', (tool, command) => {
       expect(hook(tool, command).stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     });
-    it.each([
-      ['Bash', 'cp -a .guardian backup'],
-      ['Bash', 'ln -s .claude/settings.json s.json'],
-    ])('%s: %s is not', (tool, command) => {
+    it.each([['Bash', 'cp -a .guardian backup']])('%s: %s is not', (tool, command) => {
       expect(hook(tool, command).stdout).toBeUndefined();
+    });
+    // Review 12, finding 1: a symbolic link is a second name too — a shell write through it names neither.
+    it('Bash: ln -s .claude/settings.json s.json is denied too', () => {
+      expect(hook('Bash', 'ln -s .claude/settings.json s.json').stdout).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     });
   });
 

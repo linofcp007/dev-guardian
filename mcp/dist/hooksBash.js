@@ -571,7 +571,7 @@ function wildcardMatch(pattern, name) {
 
 // src/hooks/shell/effects.ts
 function noEffects() {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [] };
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [], aliases: [] };
 }
 function mergeEffects(into, from) {
   pushAll(into.writes, from.writes);
@@ -581,6 +581,7 @@ function mergeEffects(into, from) {
   pushAll(into.links, from.links);
   pushAll(into.hardLinkSources, from.hardLinkSources);
   pushAll(into.trees, from.trees);
+  pushAll(into.aliases, from.aliases);
 }
 function lastSegment(path) {
   return path.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path;
@@ -602,39 +603,54 @@ function operands(args, valued) {
   }
   return out;
 }
-function lnDestinations(args) {
+function lnOperands(args) {
   let dir;
+  let hasDir = false;
   const rest = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i] ?? "";
-    const long = /^--target-directory=(.+)$/.exec(a);
-    if (long !== null) dir = long[1];
-    else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) dir = args[++i];
-    else if (/^-t./.test(a)) dir = a.slice(2);
-    else if (a === "-S" || a === "--suffix") i++;
+    const long = /^--target-directory=(.*)$/.exec(a);
+    if (long !== null) {
+      hasDir = true;
+      if (long[1] !== "") dir = long[1];
+    } else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) {
+      hasDir = true;
+      dir = args[++i];
+    } else if (/^-t./.test(a)) {
+      hasDir = true;
+      dir = a.slice(2);
+    } else if (a === "-S" || a === "--suffix") i++;
     else rest.push(a);
   }
-  const targets = operands(rest, /* @__PURE__ */ new Set());
+  return { names: operands(rest, /* @__PURE__ */ new Set()), dir, hasDir };
+}
+function lnDestinations(args) {
+  const { names: targets, dir } = lnOperands(args);
   if (dir !== void 0) return targets.map((t) => `${dir}/${lastSegment(t)}`);
   if (targets.length >= 2) return [targets[targets.length - 1] ?? ""];
   return targets.length === 1 ? [lastSegment(targets[0] ?? "")] : [];
 }
+function lnSymbolic(args) {
+  return args.some((a) => a === "--symbolic" || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a));
+}
 function lnHardSources(args) {
-  if (args.some((a) => a === "--symbolic" || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a))) return [];
-  let dir = false;
-  const rest = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    if (/^--target-directory=/.test(a)) dir = true;
-    else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) {
-      dir = true;
-      i += 1;
-    } else if (/^-t./.test(a)) dir = true;
-    else if (a === "-S" || a === "--suffix") i += 1;
-    else rest.push(a);
-  }
-  const names = operands(rest, /* @__PURE__ */ new Set());
-  return dir || names.length < 2 ? names : names.slice(0, -1);
+  if (lnSymbolic(args)) return [];
+  const { names, hasDir } = lnOperands(args);
+  return hasDir || names.length < 2 ? names : names.slice(0, -1);
+}
+function lnAliases(args) {
+  if (!lnSymbolic(args)) return [];
+  const { names, dir } = lnOperands(args);
+  if (dir !== void 0) return names.map((t) => [`${dir}/${lastSegment(t)}`, t]);
+  if (names.length === 1) return [[lastSegment(names[0] ?? ""), names[0] ?? ""]];
+  const link = names[names.length - 1] ?? "";
+  const sources = names.slice(0, -1);
+  return sources.flatMap(
+    (t) => sources.length === 1 ? [[link, t], [`${link}/${lastSegment(t)}`, t]] : [[`${link}/${lastSegment(t)}`, t]]
+  );
+}
+function fromLink(link, target) {
+  return resolveFrom(dirOf(link.replace(/\\/g, "/")), target);
 }
 var NEW_ITEM_VALUED = [
   ["type", ["itemtype", "type"]],
@@ -980,6 +996,7 @@ function effectsOf(name, rawArgs, cwd, depth = 0) {
     case "ln":
       pushAll(e.links, lnDestinations(args).map(at));
       pushAll(e.hardLinkSources, lnHardSources(args).map(at));
+      for (const [link, target] of lnAliases(args)) e.aliases.push([at(link), at(fromLink(link, target))]);
       return e;
     case "link":
       pushAll(e.hardLinkSources, operands(args, /* @__PURE__ */ new Set()).slice(0, 1).map(at));
@@ -993,7 +1010,12 @@ function effectsOf(name, rawArgs, cwd, depth = 0) {
     case "mklink": {
       pushAll(e.links, mklinkDestinations(args).map(at));
       const names = args.filter((a) => !a.startsWith("/"));
-      if (args.some((a) => /^\/h$/i.test(a)) && names[1] !== void 0) e.hardLinkSources.push(at(names[1]));
+      const [link, target] = names;
+      if (args.some((a) => /^\/h$/i.test(a))) {
+        if (target !== void 0) e.hardLinkSources.push(at(target));
+      } else if (link !== void 0 && target !== void 0) {
+        e.aliases.push([at(link), at(args.some((a) => /^\/j$/i.test(a)) ? target : fromLink(link, target))]);
+      }
       return e;
     }
     case "new-item":
@@ -1002,6 +1024,10 @@ function effectsOf(name, rawArgs, cwd, depth = 0) {
       if (["symboliclink", "hardlink", "junction"].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
       if (item.itemType === "hardlink" && item.target !== void 0) e.hardLinkSources.push(at(item.target));
       else if (item.itemType === "file") pushAll(e.writes, item.paths.map(at));
+      const target = item.target;
+      if (target !== void 0 && (item.itemType === "symboliclink" || item.itemType === "junction")) {
+        for (const p of item.paths) e.aliases.push([at(p), at(item.itemType === "junction" ? target : fromLink(p, target))]);
+      }
       return e;
     }
     case "cp":
@@ -2758,8 +2784,10 @@ function dotNetEffects(text, cwd, notes) {
     if (method === "delete") {
       e.removes.push(first);
       if (kind === "directory" && /^\$?true$/i.test(call.args[1] ?? "")) e.trees.push(first);
-    } else if (method === "createsymboliclink") e.links.push(first);
-    else if (method === "move" || method === "replace") {
+    } else if (method === "createsymboliclink") {
+      e.links.push(first);
+      if (second !== void 0) e.aliases.push([first, second]);
+    } else if (method === "move" || method === "replace") {
       e.removes.push(first);
       if (second !== void 0) (kind === "directory" ? e.dirs : e.writes).push(second);
     } else if (kind === "file" && method === "copy") {
@@ -2799,6 +2827,12 @@ var RULE_HARD_LINK = {
   reason: "Makes a hard link to the guardrail hooks' own configuration or to Claude Code's settings \u2014 a second name through which it can be rewritten"
 };
 var CLAUDE_DIR = /\.claude\/?$/i;
+var MANAGED_SETTINGS_DIR = /(?:^|\/)(?:etc\/?claude-code|ClaudeCode)\/?$/i;
+var RULE_LINK = {
+  id: "guard-config-link",
+  level: "block",
+  reason: "Makes a symbolic link or a junction to the guardrail hooks' own configuration, to Claude Code's settings or to the directory that holds them \u2014 a second name through which a later command rewrites them without naming them"
+};
 var RULE_REGISTRY = {
   id: "guardian-registry-write",
   level: "block",
@@ -2892,16 +2926,112 @@ var RULE_DISK_WRITE = {
   level: "block",
   reason: "Writes raw bytes to a block device (dd/mkfs/wipefs/shred on /dev/\u2026)"
 };
-function judgeEffects(effects, scope) {
-  const e = {
-    writes: asWindowsOpens(effects.writes.map(tail)),
-    removes: asWindowsOpens(effects.removes.map(tail)),
-    dirs: asWindowsOpens(effects.dirs.map(tail)),
-    special: asWindowsOpens(effects.special.map(tail)),
-    links: asWindowsOpens(effects.links.map(tail)),
-    hardLinkSources: asWindowsOpens(effects.hardLinkSources.map(tail)),
-    trees: effects.trees.map(tail)
+var MAX_ALIASES = 64;
+var MAX_LOOKUPS = 64;
+function absoluteOf(raw, scope) {
+  const t = stripQuotes(raw).replace(/\\/g, "/");
+  if (/^~(?=\/|$)/.test(t)) return scope.homePath === void 0 ? void 0 : `${scope.homePath.replace(/\/+$/, "")}${t.slice(1)}`;
+  if (/^[~$%]/.test(t)) return void 0;
+  if (scope.windows === true) {
+    const msys = /^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/.exec(t);
+    if (msys !== null) return `${(msys[1] ?? "").toUpperCase()}:${t.slice(msys[0].length) || "/"}`;
+    if (/^[A-Za-z]:(?!\/)/.test(t)) return void 0;
+  }
+  if (/^(?:\/|[A-Za-z]:\/)/.test(t)) return t;
+  return scope.dir === void 0 ? void 0 : resolveFrom(scope.dir, t);
+}
+function aliasKey(raw, scope) {
+  const k = (absoluteOf(raw, scope) ?? stripQuotes(raw).replace(/\\/g, "/")).replace(/\/+$/, "");
+  return scope.windows === true ? k.toLowerCase() : k;
+}
+function realPathOf(raw, scope, follow) {
+  const realPath = scope.realPath;
+  if (realPath === void 0) return void 0;
+  const whole = absoluteOf(raw, scope)?.replace(/(?<=.)\/+$/, "");
+  if (whole === void 0 || GLOB.test(whole) || /^\/dev\//.test(whole)) return void 0;
+  if (!follow) {
+    const cut = whole.lastIndexOf("/");
+    if (cut <= 0 || /^[A-Za-z]:$/.test(whole.slice(0, cut))) return void 0;
+    const dir = realPathOf(whole.slice(0, cut), scope, true);
+    return dir === void 0 ? void 0 : `${dir.replace(/\/+$/, "")}${whole.slice(cut)}`;
+  }
+  const abs = whole;
+  const notes = scope.notes;
+  if (notes.realPaths.has(abs)) return notes.realPaths.get(abs);
+  if (notes.realPaths.size >= MAX_LOOKUPS) {
+    notes.links = true;
+    return void 0;
+  }
+  if (notes.now() > notes.deadline) {
+    notes.budget = true;
+    return void 0;
+  }
+  let real;
+  try {
+    real = realPath(abs)?.replace(/\\/g, "/");
+  } catch {
+    real = void 0;
+  }
+  const differs = real !== void 0 && (scope.windows === true ? real.toLowerCase() !== abs.toLowerCase() : real !== abs);
+  const found = differs ? real : void 0;
+  notes.realPaths.set(abs, found);
+  return found;
+}
+function throughLinks(effects, scope) {
+  const notes = scope.notes;
+  const expand = (paths, follow) => {
+    const out = [...paths];
+    for (const p of paths) {
+      if (notes.aliases.length > 0) {
+        const key = aliasKey(p, scope);
+        for (const [link, target] of notes.aliases) {
+          if (follow && key === link || key.startsWith(`${link}/`)) out.push(`${target}${key.slice(link.length)}`);
+        }
+      }
+      const real = realPathOf(p, scope, follow);
+      if (real !== void 0) out.push(real);
+    }
+    return out;
   };
+  const targets = expand(
+    effects.aliases.map(([, target]) => target),
+    true
+  );
+  const links = expand(effects.links, false);
+  for (const [link, target] of effects.aliases) {
+    if (notes.aliases.length >= MAX_ALIASES) {
+      notes.links = true;
+      break;
+    }
+    notes.aliases.push([aliasKey(link, scope), aliasKey(target, scope)]);
+  }
+  return {
+    effects: {
+      writes: expand(effects.writes, true),
+      removes: expand(effects.removes, false),
+      dirs: expand(effects.dirs, true),
+      special: expand(effects.special, false),
+      links,
+      hardLinkSources: expand(effects.hardLinkSources, false),
+      trees: expand(effects.trees, true),
+      aliases: effects.aliases
+    },
+    targets
+  };
+}
+function judgeEffects(effects, scope) {
+  const { effects: named, targets: linkTargets } = throughLinks(effects, scope);
+  const e = {
+    writes: asWindowsOpens(named.writes.map(tail)),
+    removes: asWindowsOpens(named.removes.map(tail)),
+    dirs: asWindowsOpens(named.dirs.map(tail)),
+    special: asWindowsOpens(named.special.map(tail)),
+    links: asWindowsOpens(named.links.map(tail)),
+    hardLinkSources: asWindowsOpens(named.hardLinkSources.map(tail)),
+    trees: named.trees.map(tail),
+    aliases: []
+  };
+  const targets = asWindowsOpens(linkTargets.map(tail));
   const out = [];
   const judged = (rule, where) => {
     if (where === "inside") out.push({ ...rule });
@@ -2915,11 +3045,12 @@ function judgeEffects(effects, scope) {
   judged(RULE_DIR, locate(e.dirs, isHookConfigDir, scope));
   const linksGuarded = (p) => isHookConfigPath(p) || isHookConfigDir(p) || isSettingsPath(p, scope.configDirName) || CLAUDE_DIR.test(p);
   judged(RULE_HARD_LINK, locate(e.hardLinkSources, linksGuarded, scope));
+  judged(RULE_LINK, locate(targets, (p) => linksGuarded(p) || MANAGED_SETTINGS_DIR.test(p), scope));
   if (e.trees.some((p) => isCatastrophicTarget(p, scope.tildeUsers) || isHomeTarget(p, scope.home))) out.push({ ...RULE_RM_ROOT });
   if (e.writes.some((p) => BLOCK_DEVICE.test(p))) out.push({ ...RULE_DISK_WRITE });
   const inRegistry = (p) => isRegistryPath(p, scope.dataDir);
   const registryOrData = (p) => inRegistry(p) || isDataDirPath(p, scope.dataDir);
-  if (e.writes.some(inRegistry) || e.special.some(inRegistry) || e.hardLinkSources.some(inRegistry) || e.links.some(registryOrData) || e.dirs.some(registryOrData)) {
+  if (e.writes.some(inRegistry) || e.special.some(inRegistry) || e.hardLinkSources.some(inRegistry) || e.links.some(registryOrData) || e.dirs.some(registryOrData) || targets.some(registryOrData)) {
     out.push({ ...RULE_REGISTRY });
   }
   const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
@@ -4684,7 +4815,8 @@ function partialRule(notes) {
     ...notes.budget ? ["assessment time budget exhausted"] : [],
     ...notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : [],
     ...notes.calls ? [`an [IO.File] call's arguments over ${MAX_CALL_ARGS} characters`] : [],
-    ...notes.failed ? ["the assessment failed"] : []
+    ...notes.failed ? ["the assessment failed"] : [],
+    ...notes.links ? [`more than ${MAX_ALIASES} links made, or ${MAX_LOOKUPS} paths looked up through links`] : []
   ];
   return causes.length === 0 ? null : { id: "partially-assessed", level: "warn", reason: `part of this command was not assessed (${causes.join("; ")})` };
 }
@@ -4729,7 +4861,9 @@ function assessBashCommand(command, opts = {}) {
     dir: opts.cwd === void 0 || opts.cwd.trim() === "" ? void 0 : foldDots(opts.cwd.replace(/\\/g, "/")),
     homePath: homeRaw === void 0 ? void 0 : homeRaw.replace(/\\/g, "/"),
     vars: targetVariables(opts.env ?? process.env),
-    bareDriveRoot: platform === "win32" && opts.shell !== "powershell"
+    bareDriveRoot: platform === "win32" && opts.shell !== "powershell",
+    windows: platform === "win32",
+    realPath: opts.realPath
   };
   if (opts.shell !== "powershell") return assessReadings([text], cut, now, deadline, where);
   return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
@@ -4752,7 +4886,10 @@ function assessReadings(readings, cut, now, deadline, where) {
     calls: false,
     deadline,
     now,
-    scripts: /* @__PURE__ */ new Map()
+    scripts: /* @__PURE__ */ new Map(),
+    aliases: [],
+    realPaths: /* @__PURE__ */ new Map(),
+    links: false
   };
   const matched = [];
   for (const [n, cmd] of readings.entries()) {
