@@ -23,7 +23,7 @@
     "test:coverage": "vitest run --coverage",
     "test:docker": "node scripts/test-docker.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "tsc -p tsconfig.test.json && node scripts/unusedExports.mjs"
+    "lint": "tsc -p tsconfig.test.json && tsc -p tsconfig.js.json && node scripts/unusedExports.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",

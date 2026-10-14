@@ -27,6 +27,21 @@ Enforced by the compiler where possible, by review where not:
   type-checked `test/` — `tsconfig.json` excludes it and vitest's esbuild
   strips types without checking them. It excludes `test/fixtures`, which is
   deliberately broken sample code fed to scanners as input.
+- **Type-check the JavaScript too** (3.4.0). `npm run lint` then runs
+  `tsconfig.js.json` (`allowJs` + `checkJs`, the same strictness) over
+  `cli/dev-guardian.mjs`, `hooks/guardian-hook.mjs` and `mcp/scripts/*.mjs`,
+  typed with JSDoc (`@param`, `@typedef`, `@type` casts). The bundles they
+  import are typed by their sources: `npm run build` writes
+  `dist/engine.d.ts` and `dist/hooks.d.ts`, one `export *` each of
+  `src/engine.ts` / `src/hooksEntry.ts` (`bundleOptions.mjs#DECLARATIONS`,
+  held by `distSync.test.ts`), so the checker stops at the bundle boundary and
+  a call the engine would not accept fails the lint. No checked file may say
+  `@ts-nocheck` (`jsTypeCheck.test.ts`). Turning it on found three real bugs —
+  the hooks merged the settings files without looking at their types (a
+  string `"ignorePaths"` threw on every write, and the secret warning was
+  lost), `mcp-config --scope <anything else>` silently meant `project`, and
+  `scan` read a falsy value thrown by the pipeline as "no error" — and a
+  Docker script that would have downloaded from a URL holding `undefined`.
 - **No export that nothing imports.** `noUnusedLocals` cannot see an export,
   so `npm run lint` also runs `scripts/unusedExports.mjs`: an export of
   `src/` no other module of `src/` or `test/` imports, re-exports or reaches

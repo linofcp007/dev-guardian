@@ -572,6 +572,53 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       expect(context(sessionStart())).not.toMatch(/ignored/i);
     });
 
+    // Found by the 3.4.0 type check of this file: the settings files were
+    // merged as they were. A user `"ignorePaths": "/"` (a string, not a list)
+    // threw in every write's path check — the hook failed open, and the
+    // warning for a secret just written was never given; `"enabled": "no"`
+    // was a truthy string. A value of the wrong type is left out now (the
+    // default applies) and SessionStart names it.
+    describe('a setting of the wrong type is left out, and named', () => {
+      const secretWritten = (): HookResult =>
+        runHook(
+          {
+            hook_event_name: 'PostToolUse',
+            tool_name: 'Write',
+            tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: `const k = "${FAKE_AWS_KEY}";` },
+            cwd: projectDir,
+          },
+          { cwd: projectDir, homeDir },
+        );
+
+      it('a user "ignorePaths" that is not a list does not silence the secret warning', () => {
+        userConfig({ ignorePaths: '/' });
+        expect(context(secretWritten())).toMatch(/AWS/);
+      });
+
+      it('nor does a project one; and a user "secrets.block": "yes" does not turn a block on', () => {
+        userConfig({ secrets: { block: 'yes' } });
+        projectConfig({ ignorePaths: '/' });
+        expect(context(secretWritten())).toMatch(/AWS/);
+        expect(decision(tokenWriteTo('src/k.ts'))).toBeUndefined();
+      });
+
+      it('a user "enabled": "no" is not "enabled": the hooks still run', () => {
+        userConfig({ enabled: 'no' });
+        expect(decision(runHook(preToolUse('Bash', { command: 'rm -rf /' }, projectDir), { cwd: projectDir, homeDir }))).toBe('deny');
+      });
+
+      it('SessionStart names each one, by file — and a well-typed file is not named', () => {
+        userConfig({ ignorePaths: '/', bash: 'off' });
+        projectConfig({ secrets: { warn: 0 } });
+        const ctx = context(sessionStart());
+        expect(ctx).toContain('in .guardian/hooks.config.json, "secrets.warn" was ignored (not of the type the hooks read)');
+        expect(ctx).toContain('in ~/.config/dev-guardian/hooks.json, "bash", "ignorePaths" were ignored (not of the type the hooks read)');
+        userConfig({ ignorePaths: ['/generated/'] });
+        projectConfig({ secrets: { warn: true } });
+        expect(context(sessionStart())).not.toMatch(/not of the type/);
+      });
+    });
+
     // Final review M4: `ignorePaths` is advisory, but it also exempted a path
     // from the opt-in secret BLOCK — so a project file with
     // `"ignorePaths": ["/"]` switched off a block the USER had enabled. It now

@@ -1,0 +1,27 @@
+{
+  // Type-checks the hand-written JavaScript (review of 3.3.0): the CLI
+  // (`cli/dev-guardian.mjs`), the hook dispatcher (`hooks/guardian-hook.mjs`)
+  // and the build and maintenance scripts (`scripts/*.mjs`), with JSDoc for
+  // the types — strict, like the TypeScript (it extends tsconfig.test.json).
+  //
+  // The bundles they import are typed by their sources: `dist/engine.d.ts` and
+  // `dist/hooks.d.ts` (written by `scripts/bundle.mjs`, held to it by
+  // distSync.test.ts) re-export `src/engine.ts` and `src/hooksEntry.ts`, so the
+  // checker never reads a 4 MB bundle and a caller that passes the wrong
+  // thing to the engine fails here. The `src/` modules that reach are part of
+  // the program (tsconfig.test.json checks them all anyway), with the ambient
+  // declarations of `src/types/`.
+  //
+  // `test/helpers/fetchMockPreload.mjs` is left out: it assigns
+  // `globalThis.fetch`, which in a checked JavaScript file widens the global
+  // `fetch` for the whole program.
+  "extends": "./tsconfig.test.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "include": ["scripts/*.mjs", "../cli/*.mjs", "../hooks/*.mjs", "src/types/*.d.ts"],
+  "exclude": ["node_modules", "dist", "test/fixtures", "test/helpers/fetchMockPreload.mjs"]
+}

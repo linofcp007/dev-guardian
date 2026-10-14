@@ -25,7 +25,7 @@ const pairs = [
     // Directories by stat, not by "has no dot in it": `src` is the FULL path,
     // so the old test rejected the root directory itself — and with it every
     // file — in any checkout whose path contains a '.' (e.g. `.claude/`).
-    filter: (path) => path.endsWith('.sql') || statSync(path).isDirectory(),
+    filter: (/** @type {string} */ path) => path.endsWith('.sql') || statSync(path).isDirectory(),
   },
   {
     from: resolve(root, 'src', 'hostsetup', 'legacyRulesTemplates'),

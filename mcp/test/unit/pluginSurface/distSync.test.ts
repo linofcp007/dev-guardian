@@ -57,6 +57,7 @@ function walk(dir: string): string[] {
 }
 
 interface BundleOptionsModule {
+  DECLARATIONS: Map<string, string>;
   HOOK_PARTS: string[];
   SERVER_JS: string;
   buildDist: (root: string) => Promise<{ outputs: Map<string, string>; metafiles: { engine: Metafile; hooks: Metafile } }>;
@@ -65,6 +66,8 @@ interface BundleOptionsModule {
 const options = (await import(pathToFileURL(join(MCP_ROOT, 'scripts', 'bundleOptions.mjs')).href)) as BundleOptionsModule;
 
 const SERVER_PATH = join(DIST, 'server.js');
+/** The bundles' type declarations, by their absolute path in `dist/`. */
+const DECLARATION_PATHS = new Map([...options.DECLARATIONS].map(([name, text]) => [join(DIST, name), text]));
 /** Every bundle the build writes, by its name in `dist/`. */
 const BUNDLE_NAMES = ['engine.js', 'hooks.js', ...options.HOOK_PARTS.map((p) => `${p}.js`)].sort();
 
@@ -149,6 +152,13 @@ describe('the committed mcp/dist is the build of mcp/src', () => {
     expect(['yaml', 'execa', '@modelcontextprotocol/sdk/server/mcp.js'].filter((s) => !isBuiltin(s))).toHaveLength(3);
   });
 
+  it('the declarations: dist/engine.d.ts and dist/hooks.d.ts re-export their sources’ types, as scripts/bundle.mjs writes them', () => {
+    expect([...options.DECLARATIONS.keys()].sort()).toEqual(['engine.d.ts', 'hooks.d.ts']);
+    expect(options.DECLARATIONS.get('engine.d.ts')?.split('\n')).toContain("export * from '../src/engine.js';");
+    expect(options.DECLARATIONS.get('hooks.d.ts')?.split('\n')).toContain("export * from '../src/hooksEntry.js';");
+    expect(drift(DECLARATION_PATHS)).toEqual([]);
+  });
+
   it('no source map ships, and the bundles name none', async () => {
     const { texts } = await bundles();
     expect(walk(DIST).filter((abs) => abs.endsWith('.map')).map(rel)).toEqual([]);
@@ -179,7 +189,7 @@ describe('the committed mcp/dist is the build of mcp/src', () => {
     );
     const built = new Set(texts.keys());
     const stale = walk(DIST)
-      .filter((abs) => !built.has(abs) && abs !== SERVER_PATH && !assets.has(abs))
+      .filter((abs) => !built.has(abs) && abs !== SERVER_PATH && !DECLARATION_PATHS.has(abs) && !assets.has(abs))
       .map(rel);
     expect(stale).toEqual([]);
   });

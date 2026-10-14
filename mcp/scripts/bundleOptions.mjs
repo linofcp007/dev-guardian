@@ -19,6 +19,8 @@
  *   probe in `src/` expects of one.
  * - `dist/server.js` — {@link SERVER_JS}: two lines that start the server in
  *   `engine.js`, at the path `plugin.json` and every host configuration name.
+ * - `dist/engine.d.ts`, `dist/hooks.d.ts` — {@link DECLARATIONS}: the two
+ *   bundles' types, their sources', for the type check of the CLI and the hook.
  *
  * Two esbuild builds, the engine first: the hooks bundle carries the engine's
  * size and SHA-256 ({@link ENGINE_DIGEST}), so SessionStart can say that a
@@ -40,6 +42,21 @@ export const BUNDLES = [
 
 /** The hooks bundle's parts: `dist/<part>.js` from `src/<part>.ts`, each loaded by `src/hooksEntry.ts`. */
 export const HOOK_PARTS = ['hooksBash', 'hooksVet', 'hooksWrite', 'hooksSession'];
+
+/**
+ * The type declarations of the bundles the hand-written JavaScript imports —
+ * `dist/engine.js` (`cli/dev-guardian.mjs`) and `dist/hooks.js`
+ * (`hooks/guardian-hook.mjs`) — by their name in `dist/`. Each re-exports its
+ * source's types, so `tsconfig.js.json` checks a caller against `src/` and
+ * never reads a bundle. Written by `bundle.mjs`; `distSync.test.ts` holds the
+ * committed ones to these.
+ */
+export const DECLARATIONS = new Map(
+  BUNDLES.map((b) => [
+    `${b.out}.d.ts`,
+    `// Written by mcp/scripts/bundle.mjs: the types of dist/${b.out}.js are those of its source, src/${b.in}.ts.\nexport * from '../src/${b.in}.js';\n`,
+  ]),
+);
 
 /** How `src/hooksEntry.ts` imports a part: left to the runtime, which finds it beside `dist/hooks.js`. */
 export const HOOK_PART_IMPORT = new RegExp(`^\\./(?:${HOOK_PARTS.join('|')})\\.js$`);

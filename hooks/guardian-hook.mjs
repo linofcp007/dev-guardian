@@ -93,11 +93,55 @@ const DEBUG = process.env.GUARDIAN_HOOKS_DEBUG === '1';
  */
 const HOOK_STARTED = Date.now();
 
+/**
+ * Types — the file is type-checked (`mcp/tsconfig.js.json`, `npm run lint`).
+ * The bundle's are its source's: `mcp/dist/hooks.d.ts` re-exports
+ * `mcp/src/hooksEntry.ts`'s, so the checker never reads the bundle itself.
+ *
+ * @typedef {import('../mcp/dist/hooks.js')} HooksBundle
+ * @typedef {Exclude<keyof HooksBundle, never>} Loader
+ * @typedef {Awaited<ReturnType<HooksBundle['loadConfigFile']>>} ConfigFileModule
+ * @typedef {Awaited<ReturnType<HooksBundle['loadGuardedPath']>>} GuardedPathModule
+ * @typedef {{ permissionDecision?: 'deny' | 'ask', permissionDecisionReason?: string, additionalContext?: string }} HookAnswer
+ * @typedef {{ warn: boolean, block: boolean }} SecretsConfig
+ * @typedef {{ block: boolean, warn: boolean }} BashConfig
+ * @typedef {{
+ *   enabled: boolean,
+ *   sessionStart: boolean,
+ *   secrets: SecretsConfig,
+ *   bash: BashConfig,
+ *   ignorePaths: string[],
+ *   blockIgnorePaths: string[],
+ *   userSecretBlock: boolean,
+ *   ignoredProjectSettings: string[],
+ *   invalidSettings: string[],
+ *   unreadConfigFiles?: string[],
+ * }} HookConfig
+ * @typedef {{ old_string?: unknown, new_string?: unknown, replace_all?: boolean }} SettingsEdit
+ * @typedef {{ old_string: string, new_string: string, replace_all?: boolean }} TextEdit
+ * @typedef {{ content: string, edits?: undefined } | { edits: SettingsEdit[], content?: undefined }} SettingsChange
+ * @typedef {{
+ *   path: string,
+ *   text: string,
+ *   config: string[],
+ *   registry: string[],
+ *   settings: Array<{ path: string, change: SettingsChange | null }>,
+ * }} WriteDescription
+ * @typedef {Record<string, unknown>} ToolInput
+ */
+
+/** @param {string} msg */
 function debug(msg) {
   if (DEBUG) process.stderr.write(`[guardian-hook] ${msg}\n`);
 }
 
-/** Emit hookSpecificOutput JSON and exit 0. */
+/**
+ * Emit hookSpecificOutput JSON and exit 0.
+ *
+ * @param {string} eventName
+ * @param {HookAnswer} extra
+ * @returns {never}
+ */
 function emit(eventName, extra) {
   process.stdout.write(
     JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, ...extra } }),
@@ -105,7 +149,11 @@ function emit(eventName, extra) {
   process.exit(0);
 }
 
-/** Exit cleanly with no output (no-op / fail-open). */
+/**
+ * Exit cleanly with no output (no-op / fail-open).
+ *
+ * @returns {never}
+ */
 function noop() {
   process.exit(0);
 }
@@ -133,6 +181,10 @@ function noop() {
  */
 const EXIT_GRACE_MS = 250;
 
+/**
+ * @param {string} eventName
+ * @param {HookAnswer | undefined} extra
+ */
 function respond(eventName, extra) {
   process.exitCode = 0;
   const backstop = () => setTimeout(() => process.exit(0), EXIT_GRACE_MS).unref();
@@ -141,13 +193,16 @@ function respond(eventName, extra) {
   } else backstop();
 }
 
+/** @returns {Promise<Record<string, unknown>>} the payload, or `{}` when there is none or it is not a JSON object */
 async function readStdin() {
+  /** @type {Buffer[]} */
   const chunks = [];
   for await (const c of process.stdin) chunks.push(c);
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   if (!raw) return {};
   try {
-    return JSON.parse(raw);
+    const payload = JSON.parse(raw);
+    return isPlainObject(payload) ? payload : {};
   } catch {
     return {};
   }
@@ -163,14 +218,22 @@ async function readStdin() {
  * missing or damaged bundle rejects every {@link detector} call: each guard
  * then fails open, and SessionStart names the ones that are off.
  */
+/** @type {Promise<HooksBundle> | undefined} */
 let hooksBundle;
 
-/** The exports of one detector module, by its loader in the bundle (`loadBashGuard`, …). */
+/**
+ * The exports of one detector module, by its loader in the bundle (`loadBashGuard`, …).
+ *
+ * @template {Loader} L
+ * @param {L} loader
+ * @returns {Promise<Awaited<ReturnType<HooksBundle[L]>>>}
+ */
 async function detector(loader) {
   hooksBundle ??= import(pathToFileURL(HOOKS_BUNDLE).href);
   const bundle = await hooksBundle;
-  if (typeof bundle[loader] !== 'function') throw new Error(`${loader} is missing from mcp/dist/hooks.js`);
-  return bundle[loader]();
+  const load = bundle[loader];
+  if (typeof load !== 'function') throw new Error(`${loader} is missing from mcp/dist/hooks.js`);
+  return /** @type {Promise<Awaited<ReturnType<HooksBundle[L]>>>} */ (load());
 }
 
 /**
@@ -190,24 +253,41 @@ async function detector(loader) {
  * Until it is loaded, and if it cannot be (no built `mcp/dist/hooks.js`),
  * every file reads as absent: the protective defaults.
  */
+/** @type {ConfigFileModule['readSmallJsonFile']} */
 let readSmallJsonFile = () => ({ status: 'absent' });
-/** `walkLinksUnder` from the same module — see `handleSessionStart`. */
+/**
+ * `walkLinksUnder` from the same module — see `handleSessionStart`.
+ *
+ * @type {ConfigFileModule['walkLinksUnder']}
+ */
 let walkLinksUnder = () => ({ ok: true });
-/** `readSmallTextFile` from the same module — see `claudeSettingsWriteGuard`. */
+/**
+ * `readSmallTextFile` from the same module — see `claudeSettingsWriteGuard`.
+ *
+ * @type {ConfigFileModule['readSmallTextFile']}
+ */
 let readSmallTextFile = () => undefined;
 /**
  * `guardedPath` from `mcp/src/hooks/guardedPath.ts`: the file a write really
  * reaches — on Windows without an NTFS stream suffix or trailing dots and
  * spaces, and everywhere resolved through 8.3 names and links (review M1).
  * Until it is loaded, a path is taken as written.
+ *
+ * @type {GuardedPathModule['guardedPath']}
  */
 let guardedPath = (p) => p;
-/** `hardLinkedTo` from the same module: which guarded file a path is a hard link to (review round 3, item 5). */
+/**
+ * `hardLinkedTo` from the same module: which guarded file a path is a hard link to (review round 3, item 5).
+ *
+ * @type {GuardedPathModule['hardLinkedTo']}
+ */
 let hardLinkedTo = () => undefined;
 /**
  * `isNetworkPath` from the same module: a path on the network or a device,
  * which no guard asks the filesystem about (review 8, item 13). Until it is
  * loaded, a `\\…` or `//…` path is one.
+ *
+ * @type {ConfigFileModule['isNetworkPath']}
  */
 let isNetworkPath = (p) => /^[\\/]{2}/.test(String(p));
 /**
@@ -216,6 +296,8 @@ let isNetworkPath = (p) => /^[\\/]{2}/.test(String(p));
  * round 2). Loaded by the write guards only ({@link loadRegistryGuard}); until
  * it is, and if it cannot be, nothing does (fail-open, and SessionStart says
  * the guard is off).
+ *
+ * @type {(abs: string) => boolean}
  */
 let writesRegistry = () => false;
 
@@ -253,6 +335,8 @@ async function loadRegistryGuard() {
  * project's `.guardian/guardian.db` is registered as the user's, read from
  * the user's own registry — the database itself is never opened here. Loaded
  * for SessionStart only; until then, and if it cannot be, `unknown` (no line).
+ *
+ * @type {(dbPath: string) => 'registered' | 'unregistered' | 'none' | 'unknown'}
  */
 let databaseRegistration = () => 'unknown';
 
@@ -265,6 +349,7 @@ async function loadRegistryReader() {
   }
 }
 
+/** @type {Readonly<Record<string, string>>} */
 const UNREAD_REASON = {
   'not-a-regular-file': 'not a regular file',
   'too-large': 'larger than 64 KiB',
@@ -272,6 +357,10 @@ const UNREAD_REASON = {
   'remote-link': 'reached through a link to a network or device path',
 };
 
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -281,17 +370,22 @@ function isPlainObject(value) {
  * that exists but was refused or is not JSON is recorded in `unread`, which
  * SessionStart reports. `under` is the directory whose components below it
  * are checked for a network link first (see `readSmallJsonFile` above).
+ *
+ * @param {string} path
+ * @param {string} label
+ * @param {string[]} unread
+ * @param {string} under
+ * @returns {unknown}
  */
 function readJsonFile(path, label, unread, under) {
   const r = readSmallJsonFile(path, undefined, under);
   if (r.status === 'ok') return r.value;
-  if (label !== undefined && unread !== undefined) {
-    if (r.status === 'refused') unread.push(`${label} was not read (${UNREAD_REASON[r.reason] ?? r.reason})`);
-    else if (r.status === 'invalid') unread.push(`${label} was ignored (not valid JSON)`);
-  }
+  if (r.status === 'refused') unread.push(`${label} was not read (${UNREAD_REASON[r.reason] ?? r.reason})`);
+  else if (r.status === 'invalid') unread.push(`${label} was ignored (not valid JSON)`);
   return undefined;
 }
 
+/** @type {Readonly<Omit<HookConfig, 'blockIgnorePaths' | 'userSecretBlock' | 'ignoredProjectSettings' | 'invalidSettings'>>} */
 const DEFAULT_CONFIG = {
   enabled: true,
   sessionStart: true,
@@ -311,6 +405,74 @@ const DEFAULT_CONFIG = {
 /** `~/.config/dev-guardian/hooks.json` — see `loadConfig`'s own doc. */
 function userConfigPath() {
   return join(homedir(), '.config', 'dev-guardian', 'hooks.json');
+}
+
+/**
+ * The settings a configuration file may give, each only when it has the type
+ * the hooks read it as — a boolean, or a list of strings for `ignorePaths`.
+ *
+ * @typedef {{
+ *   enabled?: boolean,
+ *   sessionStart?: boolean,
+ *   secrets: Partial<SecretsConfig>,
+ *   bash: Partial<BashConfig>,
+ *   ignorePaths?: string[],
+ * }} FileSettings
+ */
+
+/**
+ * A configuration file's settings, read by type: a value of another type is
+ * left out and named in `invalid`. The user-level file was merged in as it
+ * was (review of 3.4.0's type check): `"ignorePaths": "/"` made every write's
+ * `ignorePaths.some` throw, and the hook — failing open — said nothing of a
+ * secret just written; `"enabled": "no"` was a truthy string.
+ *
+ * @param {Record<string, unknown>} file
+ * @param {string[]} invalid the keys left out, as `"bash.block"`
+ * @returns {FileSettings}
+ */
+function settingsOf(file, invalid) {
+  /** @type {FileSettings} */
+  const out = { secrets: {}, bash: {} };
+  /**
+   * @param {unknown} value
+   * @param {string} key
+   * @returns {boolean | undefined}
+   */
+  const bool = (value, key) => {
+    if (value === undefined) return undefined;
+    if (typeof value === 'boolean') return value;
+    invalid.push(`"${key}"`);
+    return undefined;
+  };
+  /**
+   * @param {unknown} value
+   * @param {string} key
+   * @returns {Record<string, unknown>}
+   */
+  const section = (value, key) => {
+    if (value === undefined || isPlainObject(value)) return value ?? {};
+    invalid.push(`"${key}"`);
+    return {};
+  };
+  const enabled = bool(file['enabled'], 'enabled');
+  if (enabled !== undefined) out.enabled = enabled;
+  const sessionStart = bool(file['sessionStart'], 'sessionStart');
+  if (sessionStart !== undefined) out.sessionStart = sessionStart;
+  const secrets = section(file['secrets'], 'secrets');
+  const warn = bool(secrets['warn'], 'secrets.warn');
+  if (warn !== undefined) out.secrets.warn = warn;
+  const block = bool(secrets['block'], 'secrets.block');
+  if (block !== undefined) out.secrets.block = block;
+  const bash = section(file['bash'], 'bash');
+  const bashBlock = bool(bash['block'], 'bash.block');
+  if (bashBlock !== undefined) out.bash.block = bashBlock;
+  const bashWarn = bool(bash['warn'], 'bash.warn');
+  if (bashWarn !== undefined) out.bash.warn = bashWarn;
+  const ignorePaths = file['ignorePaths'];
+  if (Array.isArray(ignorePaths) && ignorePaths.every((p) => typeof p === 'string')) out.ignorePaths = ignorePaths;
+  else if (ignorePaths !== undefined) invalid.push('"ignorePaths"');
+  return out;
 }
 
 /**
@@ -339,10 +501,19 @@ function userConfigPath() {
  * the project's), `GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0` or
  * `GUARDIAN_PKG_VET=0`. Each ignored setting gets a debug-only stderr note
  * here, and SessionStart tells the model, once, that it was ignored.
+ *
+ * @param {FileSettings} project the project file's settings ({@link settingsOf})
+ * @returns {{ overrides: FileSettings, ignored: string[] }}
  */
-function projectOverrides(projectFile) {
-  const out = {};
+function projectOverrides(project) {
+  /** @type {FileSettings} */
+  const out = { secrets: { ...project.secrets }, bash: {} };
+  /** @type {string[]} */
   const ignored = [];
+  /**
+   * @param {string} label
+   * @param {string} debugLabel
+   */
   const ignore = (label, debugLabel) => {
     ignored.push(label);
     debug(
@@ -352,66 +523,69 @@ function projectOverrides(projectFile) {
     );
   };
 
-  if (projectFile.enabled === false) ignore('"enabled": false', '"enabled":false');
-  else if (projectFile.enabled === true) out.enabled = true;
+  if (project.enabled === false) ignore('"enabled": false', '"enabled":false');
+  else if (project.enabled === true) out.enabled = true;
 
-  const bash = projectFile.bash && typeof projectFile.bash === 'object' ? projectFile.bash : {};
-  out.bash = {};
-  if (bash.block === false) ignore('"bash.block": false', '"bash":{"block":false}');
-  else if (bash.block === true) out.bash.block = true;
-  if (bash.warn === false) ignore('"bash.warn": false', '"bash":{"warn":false}');
-  else if (bash.warn === true) out.bash.warn = true;
+  if (project.bash.block === false) ignore('"bash.block": false', '"bash":{"block":false}');
+  else if (project.bash.block === true) out.bash.block = true;
+  if (project.bash.warn === false) ignore('"bash.warn": false', '"bash":{"warn":false}');
+  else if (project.bash.warn === true) out.bash.warn = true;
 
-  const secrets = projectFile.secrets && typeof projectFile.secrets === 'object' ? projectFile.secrets : {};
-  out.secrets = {};
-  if (typeof secrets.warn === 'boolean') out.secrets.warn = secrets.warn;
-  if (typeof secrets.block === 'boolean') out.secrets.block = secrets.block;
-  if (typeof projectFile.sessionStart === 'boolean') out.sessionStart = projectFile.sessionStart;
-  if (Array.isArray(projectFile.ignorePaths)) out.ignorePaths = projectFile.ignorePaths;
+  if (project.sessionStart !== undefined) out.sessionStart = project.sessionStart;
+  if (project.ignorePaths !== undefined) out.ignorePaths = project.ignorePaths;
 
   return { overrides: out, ignored };
 }
 
-/** Whether the user-level config itself switches the secret block on. */
-function userEnablesSecretBlock(userFile) {
-  return isPlainObject(userFile.secrets) && userFile.secrets.block === true;
-}
-
+/**
+ * @param {string} root
+ * @param {string[]} unread files that could not be read, for SessionStart
+ * @returns {HookConfig}
+ */
 function loadConfig(root, unread) {
-  const projectRaw = readJsonFile(
-    join(root, '.guardian', 'hooks.config.json'),
-    '.guardian/hooks.config.json',
-    unread,
-    root,
-  );
+  const projectRaw = readJsonFile(join(root, '.guardian', 'hooks.config.json'), '.guardian/hooks.config.json', unread, root);
   const userRaw = readJsonFile(userConfigPath(), '~/.config/dev-guardian/hooks.json', unread, homedir());
-  const projectFile = isPlainObject(projectRaw) ? projectRaw : {};
-  const userFile = isPlainObject(userRaw) ? userRaw : {};
+  /** @type {string[]} */
+  const projectInvalid = [];
+  /** @type {string[]} */
+  const userInvalid = [];
+  const projectFile = settingsOf(isPlainObject(projectRaw) ? projectRaw : {}, projectInvalid);
+  const user = settingsOf(isPlainObject(userRaw) ? userRaw : {}, userInvalid);
+  /** @type {string[]} */
+  const invalidSettings = [];
+  /**
+   * @param {string} file
+   * @param {string[]} keys
+   */
+  const named = (file, keys) => {
+    if (keys.length > 0) invalidSettings.push(`in ${file}, ${keys.join(', ')} ${keys.length === 1 ? 'was' : 'were'} ignored (not of the type the hooks read)`);
+  };
+  named('.guardian/hooks.config.json', projectInvalid);
+  named('~/.config/dev-guardian/hooks.json', userInvalid);
   const { overrides: project, ignored } = projectOverrides(projectFile);
+  const userSecretBlock = user.secrets.block === true;
 
+  /** @type {HookConfig} */
   const merged = {
-    ...DEFAULT_CONFIG,
-    ...(project.enabled !== undefined ? { enabled: project.enabled } : {}),
-    ...(project.sessionStart !== undefined ? { sessionStart: project.sessionStart } : {}),
-    ...userFile,
-    secrets: { ...DEFAULT_CONFIG.secrets, ...project.secrets, ...(userFile.secrets ?? {}) },
-    bash: { ...DEFAULT_CONFIG.bash, ...project.bash, ...(userFile.bash ?? {}) },
-    ignorePaths: userFile.ignorePaths ?? project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
+    enabled: user.enabled ?? project.enabled ?? DEFAULT_CONFIG.enabled,
+    sessionStart: user.sessionStart ?? project.sessionStart ?? DEFAULT_CONFIG.sessionStart,
+    secrets: { ...DEFAULT_CONFIG.secrets, ...project.secrets, ...user.secrets },
+    bash: { ...DEFAULT_CONFIG.bash, ...project.bash, ...user.bash },
+    ignorePaths: user.ignorePaths ?? project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths,
     // The paths the opt-in secret BLOCK skips. A project's `ignorePaths` is
     // advisory — it narrows the warning — and once also exempted paths from a
     // block the USER had enabled: `"ignorePaths": ["/"]` in a project file
     // switched that block off (final review M4). A user-enabled block now
     // honours only the user's own list, or the defaults; a block the project
     // itself enabled may still be narrowed by the same project's list.
-    blockIgnorePaths:
-      userFile.ignorePaths ??
-      (userEnablesSecretBlock(userFile) ? DEFAULT_CONFIG.ignorePaths : (project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths)),
+    blockIgnorePaths: user.ignorePaths ?? (userSecretBlock ? DEFAULT_CONFIG.ignorePaths : (project.ignorePaths ?? DEFAULT_CONFIG.ignorePaths)),
     // The same rule for the project's `.guardian/hooks-allowlist.json`: it
     // silences the warning, but a block the USER enabled ignores it — `["AKIA"]`
     // there used to exempt every AWS key from that block (follow-up Part Y).
     // There is no user-level allowlist; a user-enabled block has none.
-    userSecretBlock: userEnablesSecretBlock(userFile),
+    userSecretBlock,
     ignoredProjectSettings: ignored,
+    invalidSettings,
   };
 
   // Highest precedence: an explicit env var, checked last so it always wins.
@@ -422,15 +596,17 @@ function loadConfig(root, unread) {
   return merged;
 }
 
+/**
+ * @param {string} root
+ * @param {string[]} unread
+ * @returns {string[]}
+ */
 function loadAllowlist(root, unread) {
-  const data = readJsonFile(
-    join(root, '.guardian', 'hooks-allowlist.json'),
-    '.guardian/hooks-allowlist.json',
-    unread,
-    root,
-  );
-  if (Array.isArray(data)) return data.filter((x) => typeof x === 'string');
-  if (data && Array.isArray(data.secrets)) return data.secrets.filter((x) => typeof x === 'string');
+  const data = readJsonFile(join(root, '.guardian', 'hooks-allowlist.json'), '.guardian/hooks-allowlist.json', unread, root);
+  /** @param {unknown[]} list */
+  const strings = (list) => list.filter((x) => typeof x === 'string');
+  if (Array.isArray(data)) return strings(data);
+  if (isPlainObject(data) && Array.isArray(data['secrets'])) return strings(data['secrets']);
   return [];
 }
 
@@ -448,6 +624,7 @@ function pluginVersion() {
   }
 }
 
+/** @param {number} ms */
 function relativeTime(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return 'just now';
@@ -469,6 +646,10 @@ function relativeTime(ms) {
  * briefing loses its branch line, never its safety. Asynchronous (3.4.0), so
  * that its processes — the configuration read and the submodule listing side
  * by side, then the command — run while the guards' modules load.
+ *
+ * @param {string} cwd
+ * @param {string[]} args
+ * @returns {Promise<string>}
  */
 async function git(cwd, args) {
   try {
@@ -489,6 +670,8 @@ async function git(cwd, args) {
  * `git status` fails anyway: SessionStart starts no git process for nothing
  * (3.4.0 — three of them, about 190 ms on Windows, in every folder that is not
  * a repository).
+ *
+ * @param {string} dir
  */
 function inGitRepository(dir) {
   if (process.env.GIT_DIR || process.env.GIT_WORK_TREE) return true;
@@ -502,25 +685,33 @@ function inGitRepository(dir) {
   return true;
 }
 
-/** Text inserted by a Write/Edit/MultiEdit/NotebookEdit tool call. */
+/**
+ * Text inserted by a Write/Edit/MultiEdit/NotebookEdit tool call.
+ *
+ * @param {string} toolName
+ * @param {ToolInput} input
+ * @returns {string}
+ */
 function extractInsertedText(toolName, input) {
-  if (!input || typeof input !== 'object') return '';
+  /** @param {unknown} v */
+  const text = (v) => (typeof v === 'string' ? v : '');
   switch (toolName) {
     case 'Write':
-      return typeof input.content === 'string' ? input.content : '';
+      return text(input['content']);
     case 'Edit':
-      return typeof input.new_string === 'string' ? input.new_string : '';
-    case 'MultiEdit':
-      return Array.isArray(input.edits)
-        ? input.edits.map((e) => (e && typeof e.new_string === 'string' ? e.new_string : '')).join('\n')
-        : '';
+      return text(input['new_string']);
+    case 'MultiEdit': {
+      const edits = input['edits'];
+      return Array.isArray(edits) ? edits.map((e) => (isPlainObject(e) ? text(e['new_string']) : '')).join('\n') : '';
+    }
     case 'NotebookEdit':
-      return typeof input.new_source === 'string' ? input.new_source : '';
+      return text(input['new_source']);
     default:
       return '';
   }
 }
 
+/** @param {unknown} p */
 function normalizePath(p) {
   return String(p ?? '').replace(/\\/g, '/');
 }
@@ -533,6 +724,10 @@ function normalizePath(p) {
  * project-relative, like `/test/fixtures/`) will not match — this only
  * matters for the plugin's own files, and those are covered separately by
  * `isPluginOwnFile`, not by this function.
+ *
+ * @param {string} absolutePath
+ * @param {string} root
+ * @param {readonly string[]} ignorePaths
  */
 function isIgnoredPath(absolutePath, root, ignorePaths) {
   if (!absolutePath) return false;
@@ -548,6 +743,8 @@ function isIgnoredPath(absolutePath, root, ignorePaths) {
  * project simply cloned under a directory called `hooks`) in every project.
  * Hardcoded, not part of `ignorePaths`: this is not something a project or
  * user config should be able to widen or narrow.
+ *
+ * @param {string} absolutePath
  */
 function isPluginOwnFile(absolutePath) {
   if (!absolutePath) return false;
@@ -562,6 +759,9 @@ function isPluginOwnFile(absolutePath) {
  * case-insensitive and this repo's own path has a space in it
  * (`CLAUDE SKILLS`), so this compares normalized, lower-cased absolute forms
  * rather than doing anything fancier.
+ *
+ * @param {string} a
+ * @param {string} b
  */
 function samePath(a, b) {
   return normalizePath(resolve(a)).toLowerCase() === normalizePath(resolve(b)).toLowerCase();
@@ -579,6 +779,10 @@ function samePath(a, b) {
  * A project file matches by its absolute path, at any depth under the project
  * root or the cwd (review I5) — not only as `.guardian/hooks*.json` relative
  * to the cwd, which a session in a subdirectory stepped around.
+ *
+ * @param {string} filePath
+ * @param {string} cwd
+ * @param {string} root
  */
 function isGuardianOwnConfigFile(filePath, cwd, root) {
   if (!filePath) return false;
@@ -607,6 +811,8 @@ function isGuardianOwnConfigFile(filePath, cwd, root) {
 /**
  * Claude Code's settings files a Write could be a hard link to: the project's,
  * the user's (`~/.claude`), and `CLAUDE_CONFIG_DIR`'s.
+ *
+ * @param {string} root
  */
 function claudeSettingsFiles(root) {
   const dirs = [join(resolve(root), '.claude'), join(homedir(), '.claude')];
@@ -614,13 +820,22 @@ function claudeSettingsFiles(root) {
   return dirs.flatMap((d) => [join(d, 'settings.json'), join(d, 'settings.local.json')]);
 }
 
-/** `path` lies strictly below `dir`. */
+/**
+ * `path` lies strictly below `dir`.
+ *
+ * @param {string} dir
+ * @param {string} path
+ */
 function isBelow(dir, path) {
   const rel = relative(dir, path);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
-/** Whether `path` exists, without following a link at it (`.git` linked to a share must not be opened). */
+/**
+ * Whether `path` exists, without following a link at it (`.git` linked to a share must not be opened).
+ *
+ * @param {string} path
+ */
 function presentNoFollow(path) {
   try {
     lstatSync(path);
@@ -639,6 +854,8 @@ function presentNoFollow(path) {
  * relative to it, let `Write <proj>/.guardian/hooks-allowlist.json` through
  * from `<proj>/packages/api`, and switched a project-enabled `secrets.block`
  * off there.
+ *
+ * @param {string} cwd
  */
 function projectRootOf(cwd) {
   const fromEnv = process.env.CLAUDE_PROJECT_DIR;
@@ -651,8 +868,11 @@ function projectRootOf(cwd) {
   // Resolved only for a directory that has a marker (3.4.0): each is a
   // `realpath` and an 8.3 lookup, and a walk from a deep cwd with no marker
   // above it paid them at every level.
+  /** @type {string | undefined} */
   let home;
+  /** @type {string | undefined} */
   let temp;
+  /** @param {string} dir */
   const excluded = (dir) => {
     home ??= guardedPath(resolve(homedir()));
     temp ??= guardedPath(resolve(tmpdir()));
@@ -683,7 +903,11 @@ async function loadBashGuard() {
   return (await detector('loadBashGuard')).assessBashCommand;
 }
 
-/** The guards the hooks load from the bundle, by loader, and what each one is called in a notice. */
+/**
+ * The guards the hooks load from the bundle, by loader, and what each one is called in a notice.
+ *
+ * @type {ReadonlyArray<{ loader: Loader, name: string, export: string }>}
+ */
 const GUARD_MODULES = [
   { loader: 'loadBashGuard', name: 'the shell guard', export: 'assessBashCommand' },
   { loader: 'loadSecretScan', name: 'the secret scan', export: 'scanForSecrets' },
@@ -696,21 +920,25 @@ const GUARD_MODULES = [
  * SessionStart's check that every guard can actually run (review M2): each
  * one fails open when its module cannot be loaded, and until now the briefing
  * said "active" all the same. `null` when all load.
+ *
+ * @returns {Promise<string | null>}
  */
 async function unloadableGuardsNotice() {
+  /** @type {string[]} */
   const broken = [];
   let reason = '';
   const loaded = await Promise.allSettled(
     GUARD_MODULES.map(async (g) => {
-      const mod = await detector(g.loader);
+      const mod = /** @type {Record<string, unknown>} */ (await detector(g.loader));
       if (typeof mod[g.export] !== 'function') throw new Error(`${g.export} missing`);
     }),
   );
   loaded.forEach((r, k) => {
     if (r.status === 'fulfilled') return;
-    broken.push(GUARD_MODULES[k].name);
+    broken.push(GUARD_MODULES[k]?.name ?? 'a guard');
+    /** @type {unknown} */
     const err = r.reason;
-    reason = reason || (err instanceof Error ? (err.code ?? err.message) : String(err));
+    reason = reason || (err instanceof Error ? (/** @type {NodeJS.ErrnoException} */ (err).code ?? err.message) : String(err));
   });
   if (broken.length === 0) return null;
   const list = broken.length === 1 ? broken[0] : `${broken.slice(0, -1).join(', ')} and ${broken[broken.length - 1]}`;
@@ -727,10 +955,14 @@ async function unloadableGuardsNotice() {
  * The one place the model hears that a project file tried to loosen the
  * guardrails (see `projectOverrides`). Deliberately does not say how to switch
  * them off — the same rule as every deny message.
+ *
+ * @param {HookConfig} cfg
+ * @returns {string | null}
  */
 function ignoredSettingsNotice(cfg) {
+  /** @type {string[]} */
   const lines = [];
-  const ignored = cfg.ignoredProjectSettings ?? [];
+  const ignored = cfg.ignoredProjectSettings;
   if (ignored.length > 0) {
     lines.push(
       `⚠️ .guardian/hooks.config.json asks to relax the guardrails (${ignored.join(', ')}) — ` +
@@ -743,6 +975,9 @@ function ignoredSettingsNotice(cfg) {
       `⚠️ dev-guardian: ${unread.join('; ')} — none of its settings apply, and the guardrails keep their ` +
         'protective defaults.',
     );
+  }
+  if (cfg.invalidSettings.length > 0) {
+    lines.push(`⚠️ dev-guardian: ${cfg.invalidSettings.join('; ')} — the default applies to each.`);
   }
   return lines.length > 0 ? lines.join('\n') : null;
 }
@@ -769,6 +1004,11 @@ async function engineNotice() {
   );
 }
 
+/**
+ * @param {string} root
+ * @param {HookConfig} cfg
+ * @returns {Promise<never>}
+ */
 async function handleSessionStart(root, cfg) {
   // git runs in processes of its own: started first, its three — the
   // configuration read and the submodule listing side by side, then `status`
@@ -794,6 +1034,7 @@ async function handleSessionStart(root, cfg) {
     if (notice) emit('SessionStart', { additionalContext: notice });
     noop();
   }
+  /** @type {string[]} */
   const lines = [];
   const guardianDir = join(root, '.guardian');
   const dbPath = join(guardianDir, 'guardian.db');
@@ -845,7 +1086,11 @@ async function handleSessionStart(root, cfg) {
   emit('SessionStart', { additionalContext: lines.join('\n') });
 }
 
-/** `git status --porcelain=v2 --branch`'s branch (none when detached or unknown) and number of changed entries. */
+/**
+ * `git status --porcelain=v2 --branch`'s branch (none when detached or unknown) and number of changed entries.
+ *
+ * @param {string} status
+ */
 function branchAndChanges(status) {
   let branch = '';
   let changed = 0;
@@ -867,6 +1112,8 @@ const CODE_MARKERS = [
 /**
  * Whether `root` holds one of {@link CODE_MARKERS} — `lstat` only, a link is
  * never followed — or a .NET solution or project file (their names vary).
+ *
+ * @param {string} root
  */
 function looksLikeCode(root) {
   if (CODE_MARKERS.some((name) => presentNoFollow(join(root, name)))) return true;
@@ -879,6 +1126,14 @@ function looksLikeCode(root) {
   }
 }
 
+/**
+ * @param {WriteDescription} write
+ * @param {string} cwd
+ * @param {string} root
+ * @param {HookConfig} cfg
+ * @param {string[]} allowlist
+ * @returns {Promise<never>}
+ */
 async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
   if (!cfg.secrets.warn) noop();
   const text = write.text;
@@ -924,6 +1179,12 @@ async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
  * with the user-level config's `"enabled": false` or `GUARDIAN_HOOKS=off` —
  * never from a project file, for the same reason the bash block cannot be
  * downgraded from one (see `projectOverrides`).
+ *
+ * @param {string} command
+ * @param {string} cwd
+ * @param {string} toolName
+ * @param {ReadonlyArray<{ text: string, shell: 'bash' | 'powershell' }>} [nested]
+ * @returns {Promise<{ deny?: string, context?: string } | null>}
  */
 async function vetInstallCommand(command, cwd, toolName, nested = []) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
@@ -934,7 +1195,8 @@ async function vetInstallCommand(command, cwd, toolName, nested = []) {
   // shell guard's reading) count too: one of them may be base64 the command
   // line does not spell (review of 3.3.0).
   const gate = await detector('loadInstallGate').catch(() => undefined);
-  if (typeof gate?.mayInstall === 'function' && !gate.mayInstall(command) && !nested.some((s) => gate.mayInstall(s.text))) return null;
+  const mayInstall = typeof gate?.mayInstall === 'function' ? gate.mayInstall : undefined;
+  if (mayInstall !== undefined && !mayInstall(command) && !nested.some((s) => mayInstall(s.text))) return null;
   try {
     const mod = await detector('loadInstallVetting');
     // The PowerShell tool's commands are also read the way PowerShell reads
@@ -947,8 +1209,15 @@ async function vetInstallCommand(command, cwd, toolName, nested = []) {
   }
 }
 
+/**
+ * @param {ToolInput} input
+ * @param {HookConfig} cfg
+ * @param {string} cwd
+ * @param {string} root
+ * @param {string} toolName
+ */
 async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
-  const command = input?.command;
+  const command = input['command'];
   if (typeof command !== 'string' || !command) noop();
 
   const assessBashCommand = await loadBashGuard();
@@ -1018,26 +1287,33 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
  * the name: {@link isMcpWriteTool}): `mcp__filesystem__write_file` wrote the
  * hook configuration, Claude Code's settings or a provider token past every
  * guard. Every string argument is read ({@link describeMcpWrite}).
+ *
+ * @param {string} toolName
+ * @param {ToolInput} input
+ * @returns {WriteDescription | null}
  */
 function describeWrite(toolName, input) {
-  if (!input || typeof input !== 'object') return null;
+  /** @param {unknown} v */
   const str = (v) => (typeof v === 'string' && v !== '' ? v : undefined);
   switch (toolName) {
     case 'Write':
     case 'Edit':
     case 'MultiEdit': {
-      const path = str(input.file_path);
+      const path = str(input['file_path']);
       if (path === undefined) return null;
+      const content = input['content'];
+      const edits = input['edits'];
+      /** @type {SettingsChange | null} */
       const change =
         toolName === 'Write'
-          ? typeof input.content === 'string'
-            ? { content: input.content }
+          ? typeof content === 'string'
+            ? { content }
             : null
-          : { edits: toolName === 'Edit' ? [input] : Array.isArray(input.edits) ? input.edits : [] };
+          : { edits: toolName === 'Edit' ? [input] : Array.isArray(edits) ? edits.filter(isPlainObject) : [] };
       return { path, text: extractInsertedText(toolName, input), config: [path], registry: [path], settings: change ? [{ path, change }] : [] };
     }
     case 'NotebookEdit': {
-      const path = str(input.notebook_path);
+      const path = str(input['notebook_path']);
       return path === undefined ? null : { path, text: extractInsertedText(toolName, input), config: [], registry: [path], settings: [] };
     }
     default:
@@ -1055,7 +1331,11 @@ const MCP_DEST_KEYS = new Set([
 const MCP_SOURCE_KEYS = new Set(['source', 'src', 'from', 'old_path', 'oldPath', 'sourcePath', 'source_path']);
 /** …and the text it writes, whole. */
 const MCP_TEXT_KEYS = ['content', 'contents', 'text', 'data', 'body', 'file_text', 'fileText', 'new_source', 'newContent', 'new_content'];
-/** …or as one edit: the text replaced and its replacement, at the top level (`str_replace_editor`, JetBrains, desktop-commander). */
+/**
+ * …or as one edit: the text replaced and its replacement, at the top level (`str_replace_editor`, JetBrains, desktop-commander).
+ *
+ * @type {ReadonlyArray<readonly [string, string]>}
+ */
 const MCP_EDIT_PAIRS = [
   ['old_string', 'new_string'], ['old_str', 'new_str'], ['oldText', 'newText'], ['old_text', 'new_text'], ['oldString', 'newString'],
   ['search', 'replace'],
@@ -1077,7 +1357,11 @@ const MCP_WRITE_VERB = /write|edit|create|move|rename|copy|append|patch|replace|
 const MCP_WORD_VERB =
   /(?:^|[_-])(?:update|modify|apply|set|push|UPDATE|MODIFY|APPLY|SET|PUSH|Update|Modify|Apply|Set|Push)(?=$|[A-Z_-])|[a-z0-9](?:Update|Modify|Apply|Set|Push)(?=$|[A-Z_-])/;
 
-/** Whether `toolName` is a third-party MCP tool that writes files, by the verbs of its own name. */
+/**
+ * Whether `toolName` is a third-party MCP tool that writes files, by the verbs of its own name.
+ *
+ * @param {string} toolName
+ */
 function isMcpWriteTool(toolName) {
   if (!toolName.startsWith('mcp__')) return false;
   const verb = toolName.slice(toolName.lastIndexOf('__') + 2);
@@ -1090,16 +1374,27 @@ const MCP_ARG_STRINGS = 256;
 /** The longest string read as a path; a longer one, or one with a line break, is only text. */
 const MCP_PATH_MAX = 4096;
 
-/** Every string in an MCP tool's arguments with the name of the key it is under, to {@link MCP_ARG_DEPTH} levels. */
+/**
+ * Every string in an MCP tool's arguments with the name of the key it is under, to {@link MCP_ARG_DEPTH} levels.
+ *
+ * @param {ToolInput} input
+ * @returns {Array<{ key: string, value: string }>}
+ */
 function mcpStrings(input) {
+  /** @type {Array<{ key: string, value: string }>} */
   const out = [];
+  /**
+   * @param {unknown} value
+   * @param {string} key
+   * @param {number} depth
+   */
   const visit = (value, key, depth) => {
     if (out.length >= MCP_ARG_STRINGS || depth > MCP_ARG_DEPTH) return;
     if (typeof value === 'string') {
       if (value !== '') out.push({ key, value });
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item, key, depth + 1);
-    } else if (value !== null && typeof value === 'object') {
+    } else if (isPlainObject(value)) {
       for (const [k, v] of Object.entries(value)) visit(v, k, depth + 1);
     }
   };
@@ -1113,14 +1408,19 @@ function mcpStrings(input) {
  * JetBrains' `pathInProject` and `str_replace_editor`'s `file_text` / `new_str`
  * went unread, so their writes of Claude Code's settings or the hook
  * configuration passed). A known path key (`path`, `relative_path`, …, a
- * `file://` URI too) is a path it writes; a move's or a rename's source one it
- * takes away; any other short, single-line string is judged as a path it may
- * write too, and as text. The text is the known content key, or the edits, or
- * else every string that is not a known path.
+ * `file://` URI too) is a path it writes; the source of anything but a copy a
+ * path it takes away; any other short, single-line string is judged as a path
+ * it may write too, and as text. The text is the known content key, or the
+ * edits, or else every string that is not a known path.
+ *
+ * @param {string} toolName
+ * @param {ToolInput} input
+ * @returns {WriteDescription | null}
  */
 function describeMcpWrite(toolName, input) {
   if (!isMcpWriteTool(toolName)) return null;
   const verb = toolName.slice(toolName.lastIndexOf('__') + 2);
+  /** @param {string} v */
   const asPath = (v) => {
     if (!/^file:\/\//i.test(v)) return v;
     try {
@@ -1129,12 +1429,15 @@ function describeMcpWrite(toolName, input) {
       return undefined;
     }
   };
-  const moves = /move|rename/i.test(verb);
   const copies = /copy/i.test(verb);
   const removes = /delete|remove|unlink/i.test(verb);
+  /** @type {string[]} */
   const dests = [];
+  /** @type {string[]} */
   const sources = [];
+  /** @type {string[]} */
   const others = [];
+  /** @type {string[]} */
   const loose = [];
   for (const { key, value } of mcpStrings(input)) {
     const path = value.length <= MCP_PATH_MAX && !/[\r\n]/.test(value) ? asPath(value) : undefined;
@@ -1148,22 +1451,27 @@ function describeMcpWrite(toolName, input) {
     }
   }
   if (dests.length === 0 && sources.length === 0 && others.length === 0) return null;
+  /** @type {string | undefined} */
   const content = MCP_TEXT_KEYS.map((k) => input[k]).find((v) => typeof v === 'string');
-  const listed = Array.isArray(input.edits)
-    ? input.edits.map((e) => ({
-        old_string: e?.old_string ?? e?.oldText ?? e?.old_text,
-        new_string: e?.new_string ?? e?.newText ?? e?.new_text,
-        replace_all: e?.replace_all === true,
-      }))
-    : MCP_EDIT_PAIRS.filter(([o, n]) => typeof input[o] === 'string' && typeof input[n] === 'string').map(([o, n]) => ({
-        old_string: input[o],
-        new_string: input[n],
-        replace_all: input.replace_all === true || input.replaceAll === true,
-      }));
-  const edits = listed.filter((e) => typeof e.old_string === 'string' && typeof e.new_string === 'string');
+  const listed = input['edits'];
+  /** @type {SettingsEdit[]} */
+  const edits = (
+    Array.isArray(listed)
+      ? listed.filter(isPlainObject).map((e) => ({
+          old_string: e['old_string'] ?? e['oldText'] ?? e['old_text'],
+          new_string: e['new_string'] ?? e['newText'] ?? e['new_text'],
+          replace_all: e['replace_all'] === true,
+        }))
+      : MCP_EDIT_PAIRS.map(([o, n]) => ({
+          old_string: input[o],
+          new_string: input[n],
+          replace_all: input['replace_all'] === true || input['replaceAll'] === true,
+        }))
+  ).filter((e) => typeof e.old_string === 'string' && typeof e.new_string === 'string');
   // What no known key says is judged on all the call's other strings.
+  /** @type {SettingsChange} */
   const change = content !== undefined ? { content } : edits.length > 0 ? { edits } : { content: loose.join('\n') };
-  const text = content ?? (edits.length > 0 ? edits.map((e) => e.new_string).join('\n') : loose.join('\n'));
+  const text = content ?? (edits.length > 0 ? edits.map((e) => String(e.new_string)).join('\n') : loose.join('\n'));
   const written = [...dests, ...others];
   return {
     path: dests[0] ?? others[0] ?? '',
@@ -1189,6 +1497,10 @@ function describeMcpWrite(toolName, input) {
  * the shell guard's (`guard-config-shell-write` in `bashGuard.ts`). Emits and
  * exits (via `emit`) when it applies; returns normally (so the caller
  * proceeds to the ordinary write handling) when it does not.
+ *
+ * @param {string} rawPath
+ * @param {string} cwd
+ * @param {string} root
  */
 function guardianConfigWriteGuard(rawPath, cwd, root) {
   if (!rawPath || !isGuardianOwnConfigFile(rawPath, cwd, root)) return;
@@ -1208,6 +1520,9 @@ function guardianConfigWriteGuard(rawPath, cwd, root) {
  * path is compared as the filesystem opens it (NTFS stream suffixes, trailing
  * dots, 8.3 names, links) and a hard link to an entry by device and inode — see
  * `mcp/src/hooks/dataRegistry.ts`. Gated like `guardianConfigWriteGuard`.
+ *
+ * @param {string} rawPath
+ * @param {string} cwd
  */
 function guardianRegistryWriteGuard(rawPath, cwd) {
   if (!rawPath) return;
@@ -1229,7 +1544,14 @@ function guardianRegistryWriteGuard(rawPath, cwd) {
 /** The largest Claude Code settings file read to judge an edit of it. */
 const SETTINGS_MAX_BYTES = 1024 * 1024;
 
-/** The directory whose components are walked before reading `abs` (see `readSmallJsonFile`). */
+/**
+ * The directory whose components are walked before reading `abs` (see `readSmallJsonFile`).
+ *
+ * @param {string} abs
+ * @param {string} cwd
+ * @param {string} root
+ * @returns {string | undefined}
+ */
 function walkRootFor(abs, cwd, root) {
   for (const base of [root, cwd, homedir()]) {
     const rel = relative(base, abs);
@@ -1252,6 +1574,11 @@ function walkRootFor(abs, cwd, root) {
  * the network is not read (review 8, item 13): its edit is judged on its own
  * strings. Emits and exits when it applies; any failure lets the call through
  * (fail-open).
+ *
+ * @param {string} rawPath
+ * @param {SettingsChange | null} change
+ * @param {string} cwd
+ * @param {string} root
  */
 async function claudeSettingsWriteGuard(rawPath, change, cwd, root) {
   if (!rawPath || !change) return;
@@ -1261,6 +1588,7 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root) {
   const written = guardedPath(resolve(cwd, rawPath));
   const abs = hardLinkedTo(written, claudeSettingsFiles(root)) ?? written;
   if (!/settings(?:\.local)?\.json$/i.test(abs)) return;
+  /** @type {string[]} */
   let added = [];
   try {
     const guard = await detector('loadSettingsGuard');
@@ -1273,7 +1601,13 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root) {
     if (typeof change.content === 'string') {
       added = guard.newlyLoosened(before, change.content);
     } else {
-      const edits = (change.edits ?? []).filter((e) => e && typeof e.old_string === 'string' && typeof e.new_string === 'string');
+      const edits = (change.edits ?? []).filter(
+        /**
+         * @param {SettingsEdit} e
+         * @returns {e is TextEdit}
+         */
+        (e) => e && typeof e.old_string === 'string' && typeof e.new_string === 'string',
+      );
       let after = before;
       for (const e of edits) {
         if (after === undefined) break;
@@ -1300,6 +1634,14 @@ async function claudeSettingsWriteGuard(rawPath, change, cwd, root) {
   });
 }
 
+/**
+ * @param {WriteDescription} write
+ * @param {string} cwd
+ * @param {string} root
+ * @param {HookConfig} cfg
+ * @param {string[]} allowlist
+ * @returns {Promise<never>}
+ */
 async function handlePreToolUseWrite(write, cwd, root, cfg, allowlist) {
   // Blocking on write is opt-in (secrets.block). Default path does nothing here
   // — PostToolUse already warns.
@@ -1342,12 +1684,15 @@ async function main() {
   if (process.env.GUARDIAN_HOOKS === 'off') noop();
 
   const payload = await readStdin();
-  const event = payload.hook_event_name ?? process.argv[2] ?? '';
+  const named = payload.hook_event_name ?? process.argv[2] ?? '';
+  const event = typeof named === 'string' ? named : '';
   const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : '';
-  const input = payload.tool_input ?? {};
-  const cwd = payload.cwd && existsSync(payload.cwd) ? payload.cwd : process.cwd();
+  /** @type {ToolInput} */
+  const input = isPlainObject(payload.tool_input) ? payload.tool_input : {};
+  const cwd = typeof payload.cwd === 'string' && payload.cwd !== '' && existsSync(payload.cwd) ? payload.cwd : process.cwd();
 
   await loadConfigReader();
+  /** @type {string[]} */
   const unread = [];
   // The project is its root, not wherever the session has cd-ed to (review I5).
   const root = projectRootOf(cwd);

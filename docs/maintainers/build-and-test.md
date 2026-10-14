@@ -8,7 +8,7 @@
 ```bash
 cd mcp
 npm ci               # first time only — Node >= 22.13; no native modules, storage is node:sqlite
-npm run lint         # tsc over src/ AND test/ (tsconfig.test.json, which includes src/)
+npm run lint         # tsc over src/ AND test/ (tsconfig.test.json), then the hand-written JS (tsconfig.js.json)
 npm run build        # tsc type-check, esbuild bundles -> mcp/dist, copy-assets, host-rules, docs
 npm test             # vitest run (full suite) — the gate before a commit
 npm run test:fast    # unit + docs minus the 15 slowest unit files (vitest.fast.config.ts) — the inner loop
@@ -65,6 +65,10 @@ of it committed:
   each event to its own part).
 - `storage/migrations/*.sql` and `hostsetup/legacyRulesTemplates/*` —
   `copy-assets.mjs`, one level below the bundles, where their probes look.
+- `engine.d.ts`, `hooks.d.ts` — one line each, `export * from
+  '../src/engine.js'` / `'../src/hooksEntry.js'`: the types the CLI and the
+  hook dispatcher are checked against (`tsconfig.js.json`), so the checker
+  never reads a bundle (`DECLARATIONS` in `bundleOptions.mjs`, 3.4.0).
 
 Nothing else: `tsconfig.json` is `noEmit` (tsc only type-checks), no source
 map ships, and `scripts/bundle.mjs` empties `dist/` before it writes — 743

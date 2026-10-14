@@ -48,6 +48,11 @@ child.stdout.on('data', (chunk) => {
   }
 });
 
+/**
+ * @param {string} method
+ * @param {Record<string, unknown>} [params]
+ * @returns {Promise<any>}
+ */
 function send(method, params = {}) {
   const id = nextId++;
   const message = { jsonrpc: '2.0', id, method, params };
@@ -82,7 +87,7 @@ try {
   const resourceCount = resources.result?.resources?.length ?? -1;
   console.log(`OK tools=${toolCount} resources=${resourceCount} server=${init.result?.serverInfo?.name ?? '?'}`);
 } catch (e) {
-  console.error('FAIL', e.message);
+  console.error('FAIL', e instanceof Error ? e.message : String(e));
   exitCode = 1;
 } finally {
   child.kill();

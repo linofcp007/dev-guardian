@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * Build `mcp/dist/`: the two self-contained bundles — the engine, and the
- * code-split hooks bundle with its chunks — and the server's entry file
- * (`scripts/bundleOptions.mjs` says what each is). It empties `dist/` first,
- * so it holds only what this build makes — then `copy-assets.mjs` adds the
- * files the code reads at run time (the SQL migrations, the legacy rules
- * templates).
+ * hooks bundle with its four per-event parts — the server's entry file and
+ * the two bundles' type declarations (`scripts/bundleOptions.mjs` says what
+ * each is). It empties `dist/` first, so it holds only what this build makes
+ * — then `copy-assets.mjs` adds the files the code reads at run time (the SQL
+ * migrations, the legacy rules templates).
  *
  * Why bundles: the plugin is distributed by git clone, and `mcp/node_modules`
  * is git-ignored. Code that imports an npm package by name crashes in an
@@ -24,7 +24,7 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SERVER_JS, buildDist } from './bundleOptions.mjs';
+import { DECLARATIONS, SERVER_JS, buildDist } from './bundleOptions.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = resolve(root, 'dist');
@@ -41,6 +41,10 @@ const server = resolve(dist, 'server.js');
 writeFileSync(server, SERVER_JS);
 chmodSync(server, 0o755);
 
+for (const [name, text] of DECLARATIONS) writeFileSync(resolve(dist, name), text);
+
 const names = [...outputs.keys()].map((p) => relative(dist, p).split('\\').join('/'));
 const parts = names.filter((n) => /^hooks[A-Z]/.test(n)).length;
-console.log(`bundled dist/engine.js, dist/hooks.js and its ${parts} parts, and dist/server.js (self-contained, no runtime node_modules)`);
+console.log(
+  `bundled dist/engine.js, dist/hooks.js and its ${parts} parts, dist/server.js (self-contained, no runtime node_modules) and the bundles' declarations`,
+);

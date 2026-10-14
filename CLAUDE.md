@@ -56,7 +56,7 @@ performance and compliance:
 
 ```bash
 npm ci                # first time only — no native modules
-npm run lint          # tsc over src/ AND test/ (one pass)
+npm run lint          # tsc over src/ AND test/ (one pass), then the CLI, hook and scripts JS (tsconfig.js.json)
 npm run build         # type-check, esbuild bundles -> dist, copy-assets, host-rules, docs
 npm test              # vitest (full suite) — the gate before a commit
 npm run test:fast     # unit tests minus the slowest files — the inner loop
