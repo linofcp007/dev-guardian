@@ -98,12 +98,13 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "the plugin's own mcp/dist/engine.js, hashed against the digest the build wrote; never a project file",
   },
   'src/pkgvet/hookDecision.ts': {
-    apis: { statSync: 2 },
+    apis: { statSync: 1, realpathSync: 1 },
     kind: 'repo-safe',
     reason:
-      'whether node_modules/.bin/<name> is a FILE (npm runs only a file), and whether a cd target is a directory (a ' +
-      'cd to one that is not there moved nothing), each after walkLinksUnder refused any link to a network or ' +
-      'device path on the way (a network path is never asked); a stat opens nothing',
+      'whether node_modules/.bin/<name> is a FILE (npm runs only a file), after walkLinksUnder refused any link to a ' +
+      'network or device path on the way; and the real path of the hook\'s working directory (where the shell already ' +
+      'is) and of a cd target once lstat found no link on the way the cd names (review 12, finding 4) — never of a ' +
+      'network path; a stat opens nothing',
   },
   'src/hostsetup/setup.ts': {
     apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2 },

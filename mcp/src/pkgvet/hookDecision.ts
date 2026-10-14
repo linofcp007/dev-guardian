@@ -29,10 +29,10 @@
  * install commands of a compound line are vetted in parallel under it.
  */
 
-import { lstatSync, statSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { climbsOut, isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
+import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { loadPopularIndex } from './popular.js';
 import { registryCache } from './privateRegistry.js';
@@ -302,9 +302,9 @@ function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOpt
  * when its directory is there (`lstat` behind the link walk, never on the
  * network): a `cd` to one that is not there failed and moved nothing, and
  * `cd web/node_modules/.bin/x; cd ../../..; npx x` ran `x` three levels above
- * the line's start, not in `web` (review of 3.4.0, finding 5). `null` when a
- * move cannot be read or did not surely happen: nothing is then taken as
- * installed.
+ * the line's start, not in `web` (review of 3.4.0, finding 5). A move through
+ * a link is not followed either ({@link plainMove}). `null` when a move cannot
+ * be read or did not surely happen: nothing is then taken as installed.
  */
 function commandDir(c: InstallCommand, opts: HookVetOptions): string | null {
   if (c.workdir === undefined) return resolve(opts.cwd);
@@ -312,28 +312,67 @@ function commandDir(c: InstallCommand, opts: HookVetOptions): string | null {
   const home = opts.homeDir ?? homedir();
   const windows = (opts.platform ?? process.platform) === 'win32';
   let dir = resolve(opts.cwd);
+  if (isNetworkPath(dir)) return null;
+  let real = realDir(dir);
   for (const step of c.workdir) {
     let target = step;
     if (target === '~' || /^~[\\/]/.test(target)) target = join(home, target.slice(1));
     else if (target.startsWith('~')) return null; // `~user`
     else if (windows) target = target.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`);
-    const next = resolve(dir, target);
-    if (isNetworkPath(next) || !isDirectoryAt(dir, next)) return null;
-    dir = next;
+    if (real === null) return null;
+    const moved = plainMove(dir, real, target, windows);
+    if (moved === null) return null;
+    [dir, real] = moved;
   }
   return dir;
 }
 
-/** Whether `path` is a directory — `stat` behind the link walk from `from` (the directory before it) or, outside it, from its root. */
-function isDirectoryAt(from: string, path: string): boolean {
-  const rel = relative(from, path);
-  const walked = rel !== '' && !climbsOut(rel) && !isAbsolute(rel) ? walkLinksUnder(from, path) : walkLinksUnder(parse(path).root, path);
-  if (!walked.ok) return false;
+/** The real path of a directory (`realpathSync.native`), or `null` when it cannot be had. Never asked of a network path. */
+function realDir(path: string): string | null {
   try {
-    return statSync(path).isDirectory();
+    return realpathSync.native(path);
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Where `cd target` from `dir` (whose real path is `real`) goes, and its real
+ * path — when it goes to a directory that is there through no link. The shell
+ * keeps the path as typed, while npx looks for its project from the directory
+ * it runs in, the link's target: a `cd` through a symlink or a junction made
+ * the walk up for an installed bin answer for another directory than npx's
+ * (review 12, finding 4). So each component the `cd` names is `lstat`ed (a
+ * link, or one that is not a directory or not there: `null`), and the real
+ * path of where it lands must be the real path of `dir` plus the step — any
+ * other reparse point, or a `realpath` that fails, is `null` too. A drive
+ * with no slash after it (`C:`, `C:x`), whose meaning depends on the shell,
+ * is `null`. Never on the network.
+ */
+function plainMove(dir: string, real: string, target: string, windows: boolean): [string, string] | null {
+  if (windows && /^[A-Za-z]:(?![\\/])/.test(target)) return null;
+  const next = resolve(dir, target);
+  if (isNetworkPath(next)) return null;
+  const root = isAbsolute(target) ? parse(target).root : '';
+  let at = root === '' ? dir : resolve(dir, root);
+  for (const part of target.slice(root.length).split(windows ? /[\\/]+/ : /\/+/)) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      at = dirname(at);
+      continue;
+    }
+    at = join(at, part);
+    try {
+      const kind = lstatSync(at);
+      if (kind.isSymbolicLink() || !kind.isDirectory()) return null;
+    } catch {
+      return null;
+    }
+  }
+  const landed = realDir(next);
+  if (landed === null) return null;
+  const expected = resolve(real, target);
+  return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
 }
 
 /** The note for a command read only to its first 512 KB. */

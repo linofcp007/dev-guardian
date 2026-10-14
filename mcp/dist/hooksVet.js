@@ -15,9 +15,9 @@ __export(hookDecision_exports, {
   escapeHatch: () => escapeHatch,
   vetDeadlineMs: () => vetDeadlineMs
 });
-import { lstatSync as lstatSync3, statSync } from "node:fs";
+import { lstatSync as lstatSync3, realpathSync, statSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname3, isAbsolute as isAbsolute3, join as join5, parse as parse4, relative as relative3, resolve as resolve3 } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join5, parse as parse4, resolve as resolve3 } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
@@ -4130,26 +4130,51 @@ function commandDir(c, opts) {
   const home = opts.homeDir ?? homedir2();
   const windows = (opts.platform ?? process.platform) === "win32";
   let dir = resolve3(opts.cwd);
+  if (isNetworkPath(dir)) return null;
+  let real = realDir(dir);
   for (const step of c.workdir) {
     let target = step;
     if (target === "~" || /^~[\\/]/.test(target)) target = join5(home, target.slice(1));
     else if (target.startsWith("~")) return null;
     else if (windows) target = target.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`);
-    const next = resolve3(dir, target);
-    if (isNetworkPath(next) || !isDirectoryAt(dir, next)) return null;
-    dir = next;
+    if (real === null) return null;
+    const moved2 = plainMove(dir, real, target, windows);
+    if (moved2 === null) return null;
+    [dir, real] = moved2;
   }
   return dir;
 }
-function isDirectoryAt(from, path) {
-  const rel = relative3(from, path);
-  const walked = rel !== "" && !climbsOut(rel) && !isAbsolute3(rel) ? walkLinksUnder(from, path) : walkLinksUnder(parse4(path).root, path);
-  if (!walked.ok) return false;
+function realDir(path) {
   try {
-    return statSync(path).isDirectory();
+    return realpathSync.native(path);
   } catch {
-    return false;
+    return null;
   }
+}
+function plainMove(dir, real, target, windows) {
+  if (windows && /^[A-Za-z]:(?![\\/])/.test(target)) return null;
+  const next = resolve3(dir, target);
+  if (isNetworkPath(next)) return null;
+  const root = isAbsolute3(target) ? parse4(target).root : "";
+  let at = root === "" ? dir : resolve3(dir, root);
+  for (const part of target.slice(root.length).split(windows ? /[\\/]+/ : /\/+/)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      at = dirname3(at);
+      continue;
+    }
+    at = join5(at, part);
+    try {
+      const kind = lstatSync3(at);
+      if (kind.isSymbolicLink() || !kind.isDirectory()) return null;
+    } catch {
+      return null;
+    }
+  }
+  const landed = realDir(next);
+  if (landed === null) return null;
+  const expected = resolve3(real, target);
+  return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
 }
 var CUT_NOTE = "dev-guardian: installs past the first 512 KB of this command were not looked for \u2014 not verified.";
 async function decideInstallCommand(command, opts) {

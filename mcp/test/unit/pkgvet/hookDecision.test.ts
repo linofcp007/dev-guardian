@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -903,6 +903,25 @@ describe('decideInstallCommand — the local-bin skip never drops a package npm 
     }
     expect(f.calls).toEqual([]);
   });
+
+  // Review 12, finding 4: `cd` through a link (a symlink, a Windows junction)
+  // left the line's logical directory, which the walk up for an installed bin
+  // followed — to the project's own bin — while npx, run in the link's target,
+  // found none there and fetched the package.
+  it.each(['cd jweb && npx zz-evil', 'cd jweb/deep && npx zz-evil', 'cd ./jweb; npx zz-evil'])(
+    '%s — a cd through a link: vetted, and denied',
+    async (command) => {
+      binFile(project, 'zz-evil');
+      const outside = mkdtempSync(join(tmpdir(), 'pkgvet-hookout-'));
+      try {
+        mkdirSync(join(outside, 'deep'), { recursive: true });
+        symlinkSync(outside, join(project, 'jweb'), process.platform === 'win32' ? 'junction' : 'dir');
+        await denied(command);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     ['{}', 'no name'],
