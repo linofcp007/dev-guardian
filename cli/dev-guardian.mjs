@@ -1688,6 +1688,7 @@ async function cmdScan(argv) {
     loadScanSettings,
     SCAN_SETTINGS_RELATIVE_PATH,
     filesChangedSince,
+    scanSettingsCommit,
   } = ci;
 
   const failOn = SEVERITIES.find((s) => s === opts.failOn);
@@ -1826,25 +1827,37 @@ async function cmdScan(argv) {
   // (review 8, finding 6; mcp/src/ci/renames.ts).
   const renamedFrom = await renamesSince(projectPath, baselineRef !== null ? baselineRef.commit : null);
 
-  // Under --baseline-ref / --rules-ref, an accepted timeout covers a file only
-  // as it was at the ref: a pull request appended a command injection to an
-  // accepted file and passed (review 11, finding 1; mcp/src/ci/changedSince.ts).
+  // An accepted timeout covers a file only as it was when the acceptance was
+  // reviewed: under --baseline-ref / --rules-ref the ref, without one the last
+  // commit of .guardian/scan.yml — a pull request appended a command injection
+  // to an accepted file and passed (review 11 finding 1, review 12 finding 10:
+  // dev-spec-driven runs this gate without a ref; mcp/src/ci/changedSince.ts).
   const acceptTimeouts = result.scanSettings.settings.semgrep.acceptTimeouts;
   /** @type {GateInput['timeoutAcceptanceRef']} */
   let timeoutAcceptanceRef;
   const refs = [baselineRef, rulesRef].filter((r) => r !== null);
-  if (refs.length > 0 && acceptTimeouts.length > 0) {
+  if (acceptTimeouts.length > 0) {
     /** @type {Set<string>} */
     const changed = new Set();
     /** @type {string | undefined} */
     let error;
-    for (const commit of new Set(refs.map((r) => r.commit))) {
+    /** @type {{ ref: string, commit: string }[]} */
+    let against = refs.map((r) => ({ ref: r.ref, commit: r.commit }));
+    if (against.length === 0) {
+      const last = await scanSettingsCommit(projectPath);
+      if ('commit' in last) against = [{ ref: `the last commit of ${SCAN_SETTINGS_RELATIVE_PATH} (${last.commit.slice(0, 12)})`, commit: last.commit }];
+      else if ('error' in last) error = last.error;
+      // not a git repository: nothing to compare with, the entries stand as written
+    }
+    for (const commit of new Set(against.map((r) => r.commit))) {
       const r = await filesChangedSince(projectPath, commit, acceptTimeouts);
       if ('error' in r) error ??= r.error;
       else for (const path of r.changed) changed.add(path);
     }
-    const ref = [...new Set(refs.map((r) => r.ref))].join(' and ');
-    timeoutAcceptanceRef = error !== undefined ? { ref, changed, error } : { ref, changed };
+    const ref = against.length > 0 ? [...new Set(against.map((r) => r.ref))].join(' and ') : `a commit of ${SCAN_SETTINGS_RELATIVE_PATH}`;
+    if (against.length > 0 || error !== undefined) {
+      timeoutAcceptanceRef = error !== undefined ? { ref, changed, error } : { ref, changed };
+    }
   }
 
   const verdict = evaluateGate({

@@ -90,6 +90,15 @@ describe('a per-file Timeout: accepted by the committed .guardian/scan.yml, noth
     expect(changed.acceptedGapDetails).toEqual([]);
     expect(changed.coverageGaps[0]).toMatch(/not accepted: Timeout on src\/huge\.js, listed in \.guardian\/scan\.yml semgrep\.accept_timeouts, but changed since BASE/);
     expect(changed.coverageGapDetails[0]).toMatchObject({ kind: 'file_timeout', gating: true });
+    // Its own cause and remedy (review 12, finding 10): "list it under
+    // accept_timeouts" said nothing to someone who had.
+    expect(changed.coverageGapDetails[0]?.cause).toBe('accepted_file_changed');
+    expect(changed.coverageGapDetails[0]?.remedy).toMatch(/^The file is listed in \.guardian\/scan\.yml semgrep\.accept_timeouts, but it changed/);
+    expect(changed.coverageGapDetails[0]?.remedy).not.toMatch(/list the file under/);
+    // An unlisted file's timeout keeps the usual remedy, and no cause.
+    const unlisted = evaluateGate(input({ steps, timeoutAcceptanceRef: { ref: 'BASE', changed: new Set() } }));
+    expect(unlisted.coverageGapDetails[0]?.cause).toBeUndefined();
+    expect(unlisted.coverageGapDetails[0]?.remedy).toMatch(/list the file under semgrep\.accept_timeouts/);
     // Listed and timed out: used, never "unused".
     expect(changed.unusedTimeoutAcceptances).toEqual([]);
 

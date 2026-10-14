@@ -141,10 +141,23 @@ export interface CoverageGapDetail {
   remedy: string;
   /** Whether it forces exit 2 (an accepted gap and a note do not). */
   gating: boolean;
+  /**
+   * Present only when the gap has a cause its kind does not say (3.4.0), so a
+   * reader can say the right thing — {@link GapCause}.
+   */
+  cause?: GapCause;
 }
 
 /**
- * One accepted gap as data — one per `accepted_gaps` line, same order (3.4.1,
+ * Why a gap gates, when its `kind` alone would mislead (3.4.0):
+ * `accepted_file_changed` — a `file_timeout` on a file `semgrep.accept_timeouts`
+ * lists, refused because the file changed since the acceptance was reviewed
+ * (review 12, finding 10); "list it under accept_timeouts" is not the remedy.
+ */
+export type GapCause = 'accepted_file_changed';
+
+/**
+ * One accepted gap as data — one per `accepted_gaps` line, same order (3.4.0,
  * for dev-spec-driven, which counted them by parsing the English lines). An
  * accepted gap is one file: a step with several accepted files has a line,
  * and an entry, for each.
@@ -161,15 +174,16 @@ export interface AcceptedGapDetail {
 }
 
 /**
- * Under `--baseline-ref` / `--rules-ref`: the `semgrep.accept_timeouts` files
- * whose content is not what it was at that commit (`ci/changedSince.ts`). An
- * acceptance covers a file as it was reviewed, so a timeout on one of these
- * is not accepted (review 11, finding 1: a pull request appended a command
- * injection to an accepted file and passed). `error`: the comparison could
- * not be made, and no timeout is accepted.
+ * The `semgrep.accept_timeouts` files whose content is not what it was when
+ * the acceptance was reviewed (`ci/changedSince.ts`): at the `--baseline-ref`
+ * / `--rules-ref` ref, or without one at the last commit of
+ * `.guardian/scan.yml`. A timeout on one of these is not accepted (review 11
+ * finding 1: a pull request appended a command injection to an accepted file
+ * and passed; review 12 finding 10: without a ref too). `error`: the
+ * comparison could not be made, and no timeout is accepted.
  */
 export interface TimeoutAcceptanceRef {
-  /** The ref(s) compared with, as given (`BASE`, `origin/main`). */
+  /** What was compared with, as said in a gap line (`BASE`, `the last commit of .guardian/scan.yml (…)`). */
   ref: string;
   changed: ReadonlySet<string>;
   error?: string;

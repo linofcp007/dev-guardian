@@ -288,7 +288,7 @@ export interface JsonVerdict {
   accepted_gaps: string[];
   /**
    * One per `accepted_gaps` line, same order: `tool`, `kind` (`file_timeout`
-   * or `partial_parse`), `file`, `reason` (3.4.1 and later) — what a reader
+   * or `partial_parse`), `file`, `reason` (3.4.0 and later) — what a reader
    * counts accepted files by, never by parsing the lines.
    */
   accepted_gap_details: AcceptedGapDetail[];

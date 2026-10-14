@@ -20133,6 +20133,9 @@ function judgeMissing(step, name, refs, toolsRun, accept) {
   if (gatingRefs.length > 0) {
     out.kind = kindOfRefs(gatingRefs);
     out.note = notAcceptedNote(gatingRefs, accept);
+    if (accept.timeoutRef !== void 0 && gatingRefs.every((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && accept.timeouts.has(r.file))) {
+      out.cause = "accepted_file_changed";
+    }
   } else if (blocker !== void 0) {
     out.note = ` \u2014 its partial parse is accepted, but ${name} also ${blocker.status} in this step`;
   }
@@ -20156,7 +20159,7 @@ function notAcceptedNote(refs, accept) {
   const listed2 = refs.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && accept.timeouts.has(r.file));
   if (at !== void 0 && listed2.length === refs.length) {
     const files = uniqueFiles(listed2).join(", ");
-    return at.error !== void 0 ? ` \u2014 not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but whether it changed since ${at.ref} could not be told (${at.error}), and an acceptance covers a file only as it was at the ref` : ` \u2014 not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but changed since ${at.ref}: an acceptance covers a file only as it was at the ref \u2014 review the change as if no SAST ran on it, or raise semgrep.timeout`;
+    return at.error !== void 0 ? ` \u2014 not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but whether it changed since ${at.ref} could not be told (${at.error}), and an acceptance covers a file only as it was when it was reviewed` : ` \u2014 not accepted: Timeout on ${files}, listed in ${ACCEPT_TIMEOUTS_SOURCE}, but changed since ${at.ref}: an acceptance covers a file only as it was when it was reviewed \u2014 review the change as if no SAST ran on it, or raise semgrep.timeout`;
   }
   const named2 = refs.map((r) => `${r.type} on ${r.file}`);
   const hints2 = [`--accept-partial-parse accepts parse errors only: ${ACCEPTABLE_PARSE_TYPES.join(", ")}`];
@@ -20187,8 +20190,11 @@ function kindOfRefusal(reason) {
   if (/^scanner_failed\b/.test(reason)) return "scanner_failed";
   return "other";
 }
-function remedyFor(kind, tool54, detail) {
+function remedyFor(kind, tool54, detail, cause) {
   const scanner2 = tool54.split(":")[0] ?? tool54;
+  if (cause === "accepted_file_changed") {
+    return "The file is listed in .guardian/scan.yml semgrep.accept_timeouts, but it changed since that acceptance was reviewed (the --baseline-ref / --rules-ref ref, or without one the last commit of .guardian/scan.yml): review the change as if no SAST ran on it, then raise semgrep.timeout so the file is analysed \u2014 or, after review, commit .guardian/scan.yml again (on the base branch, under --rules-ref) to accept the file as it is now.";
+  }
   switch (kind) {
     case "missing_tool": {
       const hint = INSTALL_HINT[scanner2];
@@ -20205,7 +20211,10 @@ function remedyFor(kind, tool54, detail) {
     case "path_too_long":
       return "Enable Windows long paths (LongPathsEnabled=1 under HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem, then restart) or move the project to a shorter path.";
     case "scanner_failed":
-      if (/SEMGREP_SEND_METRICS=off/.test(detail)) {
+      if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {
+        return "Unset SEMGREP_SEND_METRICS, or set it to on, off or auto (Semgrep refuses any other value, in any case), then rerun the scan.";
+      }
+      if (/SEMGREP_SEND_METRICS=/.test(detail)) {
         return "Unset SEMGREP_SEND_METRICS for the scan (Semgrep cannot build --config=auto with metrics off), or scan with --local-only.";
       }
       return /did not load|rule/i.test(detail) ? "Fix or remove the rule the detail names, then rerun the scan." : "Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.";
@@ -20223,12 +20232,12 @@ function remedyFor(kind, tool54, detail) {
       return "Read the detail; docs/ci.md says what each gap means and what clears it.";
   }
 }
-function detailOf(tool54, kind, detail, gating) {
-  return { tool: tool54, kind, detail, remedy: remedyFor(kind, tool54, detail), gating };
+function detailOf(tool54, kind, detail, gating, cause) {
+  return { tool: tool54, kind, detail, remedy: remedyFor(kind, tool54, detail, cause), gating, ...cause !== void 0 ? { cause } : {} };
 }
-function pushGap(t, line, tool54, kind, gating) {
+function pushGap(t, line, tool54, kind, gating, cause) {
   t.coverageGaps.push(line);
-  t.gapDetails.push(detailOf(tool54, kind, line, gating));
+  t.gapDetails.push(detailOf(tool54, kind, line, gating, cause));
 }
 function pushNote(t, note, tool54, kind) {
   t.coverageNotes.push(note);
@@ -20292,7 +20301,7 @@ function tallyMissing(t, step, missing, accept) {
   t.gatingMissingTools.push(missing);
   const described = describeMissing(missing, step.tools_run);
   if (described.line !== null) {
-    pushGap(t, `${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true);
+    pushGap(t, `${step.tool}: ${described.line}${judged.note}`, missing, judged.kind ?? kindOfMissing(described.shape, described.reason), true, judged.cause);
   }
 }
 function evaluateGate(input) {
@@ -94806,32 +94815,61 @@ var init_renames = __esm({
 // src/ci/changedSince.ts
 var changedSince_exports = {};
 __export(changedSince_exports, {
-  filesChangedSince: () => filesChangedSince
+  filesChangedSince: () => filesChangedSince,
+  scanSettingsCommit: () => scanSettingsCommit
 });
+import { join as join101 } from "node:path";
 async function filesChangedSince(projectPath, commit, paths) {
   const changed = /* @__PURE__ */ new Set();
   const wanted = [...new Set(paths)];
   for (let i = 0; i < wanted.length; i += BATCH) {
     const batch = wanted.slice(i, i + BATCH);
-    const listed2 = await git(projectPath, ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", commit, "--", ...batch]);
+    const listed2 = await git(projectPath, ["--literal-pathspecs", "ls-tree", "-r", "-z", commit, "--", ...batch]);
     if (listed2.exitCode !== 0) return { error: firstLine8(listed2.stderr) || `git ls-tree exited ${listed2.exitCode}` };
-    const atCommit = new Set(splitNul(listed2.stdout));
-    for (const path3 of batch) if (!atCommit.has(path3)) changed.add(path3);
-    const diff = await git(projectPath, ["--literal-pathspecs", "diff", "--name-only", "--relative", "--no-renames", "-z", commit, "--", ...batch]);
-    if (diff.exitCode !== 0) return { error: firstLine8(diff.stderr) || `git diff exited ${diff.exitCode}` };
-    for (const path3 of splitNul(diff.stdout)) changed.add(path3);
+    const atCommit = /* @__PURE__ */ new Map();
+    for (const entry of splitNul(listed2.stdout)) {
+      const m = /^\d+ blob ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(entry);
+      if (m?.[1] !== void 0 && m[2] !== void 0) atCommit.set(m[2], m[1]);
+    }
+    const toHash = [];
+    for (const path3 of batch) {
+      const regular = projectPathKind(projectPath, path3) === "file" && projectEntryKind(join101(projectPath, path3)) === "file";
+      if (!atCommit.has(path3) || !regular) changed.add(path3);
+      else toHash.push(path3);
+    }
+    if (toHash.length === 0) continue;
+    const hashed = await git(projectPath, ["hash-object", "--", ...toHash]);
+    if (hashed.exitCode !== 0) return { error: firstLine8(hashed.stderr) || `git hash-object exited ${hashed.exitCode}` };
+    const shas = hashed.stdout.split(/\r?\n/).filter((l) => l.trim() !== "");
+    if (shas.length !== toHash.length) return { error: "git hash-object did not hash every file" };
+    toHash.forEach((path3, n) => {
+      if (shas[n]?.trim() !== atCommit.get(path3)) changed.add(path3);
+    });
   }
   return { changed };
+}
+async function scanSettingsCommit(projectPath) {
+  const state = await repoState(projectPath);
+  if (state.kind === "not_git") return { none: true };
+  const uncommitted = `no commit holds ${SCAN_SETTINGS_PATH} yet: an acceptance is reviewed by committing it`;
+  if (state.kind === "no_commits") return { error: uncommitted };
+  if (state.kind === "error") return { error: state.message };
+  const log = await git(projectPath, ["--literal-pathspecs", "log", "-1", "--format=%H", "--", SCAN_SETTINGS_PATH]);
+  if (log.exitCode !== 0) return { error: firstLine8(log.stderr) || `git log exited ${log.exitCode}` };
+  const commit = log.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(commit) ? { commit } : { error: uncommitted };
 }
 function firstLine8(text2) {
   return text2.split(/\r?\n/).find((l) => l.trim() !== "")?.trim() ?? "";
 }
-var BATCH;
+var BATCH, SCAN_SETTINGS_PATH;
 var init_changedSince = __esm({
   "src/ci/changedSince.ts"() {
     "use strict";
+    init_projectFs();
     init_git();
     BATCH = 100;
+    SCAN_SETTINGS_PATH = ".guardian/scan.yml";
   }
 });
 
@@ -100472,6 +100510,7 @@ async function loadCiModules() {
   return {
     CI_EXIT: ciTypes.CI_EXIT,
     filesChangedSince: changedSince.filesChangedSince,
+    scanSettingsCommit: changedSince.scanSettingsCommit,
     BASELINE_RELATIVE_PATH: baseline.BASELINE_RELATIVE_PATH,
     parseBaseline: baseline.parseBaseline,
     readBaselineText: baseline.readBaselineText,

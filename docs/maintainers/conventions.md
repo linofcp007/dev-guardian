@@ -83,7 +83,7 @@ Enforced by the compiler where possible, by review where not:
   bundle are `.bat` / `.cmd` files, which `cmd.exe` parses twice; a `"` before
   an `&` in a slug or a URL ran a second command. `runners/spawn.ts` refuses,
   for every caller, an argument with `"`, `%`, CR, LF or NUL — or ending in
-  two or more backslashes, which cross-spawn escapes wrong (3.4.1) — when the
+  two or more backslashes, which cross-spawn escapes wrong (3.4.0) — when the
   command runs through `cmd.exe` (`notRun.code: 'batch_argument_refused'`); a tool
   parses a URL and hands over its `href` (`platform/toolArgs.ts#httpUrl`,
   `schemas.ts#httpUrlField`), takes a slug or a token by its alphabet, refuses
@@ -98,7 +98,7 @@ Enforced by the compiler where possible, by review where not:
   repository text to a program does the same, with a test that puts the `"`
   BEFORE the `&` (`test/integration/batchArgumentTools.test.ts`).
 - **Every path-shaped tool argument is held to the `project_path` rule for
-  the network** (3.4.1, review 11): `platform/projectPath.ts#networkPathOf`
+  the network** (3.4.0, review 11): `platform/projectPath.ts#networkPathOf`
   — a UNC spelling, `//host`, `\\?\UNC\…` or a local spelling a link leads to
   a share — refused before any file call, which on Windows authenticates to
   the host the path names. `toolProjectPath` applies it; `wp_install_path`,
@@ -133,7 +133,7 @@ Enforced by the compiler where possible, by review where not:
   must be committed to ship. The hooks run exactly as `hooks/hooks.json`
   declares them (exec form, `${CLAUDE_PLUGIN_ROOT}` the install), a damaged
   `mcp/dist` beside it is the negative control, and outside a git checkout
-  the suite is skipped (3.4.1, review 11).
+  the suite is skipped (3.4.0, review 11).
 - **Markdownlint stays clean** for `skills/`, `commands/`, the three READMEs
   and `docs/` (config: [`.markdownlint.jsonc`](../../.markdownlint.jsonc)):
   `npx --yes markdownlint-cli2 "skills/**/*.md" "commands/**/*.md" "README*.md" "docs/**/*.md"`.

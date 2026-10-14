@@ -153,7 +153,7 @@ describe('the JSON verdict dev-spec-driven parses (contract)', () => {
     }
   });
 
-  it('accepted_gap_details: one per accepted_gaps line, same order — tool, kind, file, reason (3.4.1)', () => {
+  it('accepted_gap_details: one per accepted_gaps line, same order — tool, kind, file, reason (3.4.0)', () => {
     expect(json['accepted_gap_details']).toEqual([]);
     const step: ScanStepResult = {
       tool: 'security_scan_full',

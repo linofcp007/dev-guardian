@@ -77,6 +77,7 @@ export async function loadCiModules() {
   return {
     CI_EXIT: ciTypes.CI_EXIT,
     filesChangedSince: changedSince.filesChangedSince,
+    scanSettingsCommit: changedSince.scanSettingsCommit,
     BASELINE_RELATIVE_PATH: baseline.BASELINE_RELATIVE_PATH,
     parseBaseline: baseline.parseBaseline,
     readBaselineText: baseline.readBaselineText,

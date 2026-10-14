@@ -417,7 +417,7 @@ export interface GateKeys {
    *     secret added above a baselined one, in a later commit, takes a new
    *     occurrence instead of the baselined one's. Without values (a caller
    *     that read none): counted per pass (history, files) by line, a secret
-   *     found twice on one line of history once — the pre-3.4.1 rule;
+   *     found twice on one line of history once — the 3.3.0 rule;
    *   - the path as the baseline recorded it, when the file was renamed
    *     since (`renamedFrom`, from `git diff -M`: `ci/renames.ts`).
    *
