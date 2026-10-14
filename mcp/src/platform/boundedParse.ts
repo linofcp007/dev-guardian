@@ -291,17 +291,24 @@ export function yamlDocumentValue(doc: Document.Parsed): unknown {
  * The first key a mapping of `doc` holds twice, or null — in one pass over
  * the composed document, a set per mapping: linear, where `yaml`'s own
  * `uniqueKeys` compares each key with every earlier one (the module doc).
- * A key is compared by its scalar value (`a` and `"a"` are one key); an
- * alias is not followed (what it names is checked where it is written).
+ * A key is compared by its scalar value (`a` and `"a"` are one key), and a
+ * key written as an alias by what it names (`&k timeout: 30` then `*k : 1`
+ * held `timeout` twice, the last one winning — review 12, finding 13). A
+ * value that is an alias is not followed (what it names is checked where it
+ * is written).
  */
 function duplicateYamlKey(doc: Document.Parsed): string | null {
+  const keyOf = (key: unknown): string => {
+    const node = isAlias(key) ? key.resolve(doc) : key;
+    return isScalar(node) ? String(node.value) : String(node);
+  };
   const stack: unknown[] = [doc.contents];
   while (stack.length > 0) {
     const node = stack.pop();
     if (isMap(node)) {
       const seen = new Set<string>();
       for (const pair of node.items) {
-        const key = isScalar(pair.key) ? String(pair.key.value) : String(pair.key);
+        const key = keyOf(pair.key);
         if (seen.has(key)) return key;
         seen.add(key);
         stack.push(pair.value);

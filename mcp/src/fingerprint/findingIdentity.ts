@@ -417,7 +417,7 @@ export interface GateKeys {
    *     secret added above a baselined one, in a later commit, takes a new
    *     occurrence instead of the baselined one's. Without values (a caller
    *     that read none): counted per pass (history, files) by line, a secret
-   *     found twice on one line of history once — the pre-3.4.1 rule;
+   *     found twice on one line of history once — the 3.3.0 rule;
    *   - the path as the baseline recorded it, when the file was renamed
    *     since (`renamedFrom`, from `git diff -M`: `ci/renames.ts`).
    *
@@ -539,7 +539,11 @@ export function gateMatchKeys(
  * The occurrence of each gitleaks finding of one (rule, path) whose value is
  * known — finding index → occurrence (review 11, finding 2). One occurrence
  * per distinct VALUE, so every commit that touched a secret's line, the
- * working-tree copy and a move to another line all share the secret's key.
+ * working-tree copy and a move to another line all share the secret's key —
+ * and so does another copy of the value in the same file, which is not new
+ * (decided in review 12, finding 12: a move must pass, telling a copy from a
+ * move would take tracking deletions, and a copy exposes nothing the baseline
+ * did not accept; in another file it is new, the path being in the key).
  * The values are numbered in the order they were introduced: by the earliest
  * commit holding each (`introducedAt`; the working tree after every commit),
  * then line. Counted by line alone, a new secret added ABOVE a baselined one

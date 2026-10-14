@@ -53,6 +53,7 @@ import {
   yamlFilesUnder,
 } from '../platform/customRules.js';
 import { expandGlob, hasGlobMagic } from '../platform/glob.js';
+import { networkPathProblem } from '../platform/projectPath.js';
 import { validateRuleFiles } from '../runners/semgrepValidate.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
@@ -212,6 +213,13 @@ async function compileWithSemgrep(
 /** A directory counts when at least one YAML file in it validates; each
  *  invalid one is reported. A file counts when it validates. */
 function consider(path: string, registered: string[], rejected: Rejected[]): void {
+  // A share, or a link to one, is never stat'ed, never stored: every later
+  // scan would re-read it, authenticating to that host (review 12, finding 9).
+  const share = networkPathProblem('the path', path);
+  if (share !== null) {
+    rejected.push({ path, reason: share });
+    return;
+  }
   let isDir: boolean;
   try {
     isDir = statSync(path).isDirectory();

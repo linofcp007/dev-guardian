@@ -4,8 +4,8 @@
  * entropy (`ci/secretValues.ts`) — and the gate's one-to-one matching
  * (`ci/baseline.ts`).
  *
- * 3.4.0 numbered a file's secrets by line and let a `match_id` match take no
- * entry, and its value was the whole line:
+ * Before review 11, the gate numbered a file's secrets by line and let a
+ * `match_id` match take no entry, and its value was the whole line:
  *
  *   - a new key added on line 1, above the baselined one, took the baselined
  *     one's occurrence and passed (exit 0) — so did removing the baselined
@@ -15,7 +15,7 @@
  *
  * Each case is a commit on top of the base (with a later committer date, as
  * a pull request's is), scanned like the CI history pass: `gitleaks detect
- * --redact` over the repository. A baseline written before 3.4.1 (keys
+ * --redact` over the repository. A baseline written by 3.3.0 (keys
  * computed without values) still matches the unchanged secrets.
  *
  * The keys are generated (no credential-shaped literal in this file).
@@ -105,6 +105,9 @@ const SCENARIOS: Record<string, (lines: readonly string[]) => string[]> = {
   'move-same-value': (l) => [l[0] ?? '', l[2] ?? '', l[3] ?? '', `const AWS_KEY = "${K1}";`],
   whitespace: (l) => l.map((line, i) => (i === 1 ? `   ${line.replace(' = ', '=')}` : line)),
   'swap-two': (l) => l.map((line, i) => (i === 2 ? `const B = "${K2}"; const C = "${K3}";` : line)),
+  // Review 12, finding 12 — decided: another copy of a baselined value in the
+  // same file is not new (docs/ci.md, `valueSlots`).
+  'copy-same-value': (l) => [...l, `const AGAIN = "${K1}";`],
 };
 
 /** The scenarios whose pull request adds a secret: the gate must call it new. */
@@ -136,7 +139,7 @@ describe.skipIf(!GITLEAKS)('a baselined secret, judged on real gitleaks output (
     expect(newFindings(await scan(dir), baseline).length).toBeGreaterThan(0);
   });
 
-  it('a baseline written before 3.4.1 (no values) still matches the unchanged secrets', async () => {
+  it('a baseline written by 3.3.0 (no values) still matches the unchanged secrets', async () => {
     const dir = project();
     const reports = makeTempDir('secret-identity-old-');
     const report = join(reports, 'secrets-history.json');

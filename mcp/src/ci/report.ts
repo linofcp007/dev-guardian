@@ -255,10 +255,12 @@ function describeFinding(f: Finding): string {
  * `severity`, `rule_id`, `title`, `tool`), and since 1.30 reads
  * `tool_version`, `baseline_absent` / `baseline_status`,
  * `new_findings_count` and the gating `coverage_gap_details` (`tool`, `kind`,
- * `remedy`) when they are there. dev-spec-driven 1.30.x reads neither
- * `coverage` nor `accepted_gaps`; both are documented keys (docs/ci.md) and
- * `test/unit/ci/verdictContract.test.ts` freezes them with the rest. Keys are
- * only ever added.
+ * `remedy`) when they are there; since 1.30.2 `accepted_gaps` with
+ * `accepted_gap_details` (`tool`, `kind`, `file`, `reason`),
+ * `unused_timeout_acceptances` and `coverage_notes`. It does not read
+ * `coverage`, a documented key (docs/ci.md) that
+ * `test/unit/ci/verdictContract.test.ts` freezes with the rest — that file
+ * says what each dev-spec-driven version reads. Keys are only ever added.
  */
 export interface JsonVerdict {
   /** The dev-guardian version that judged — dev-spec warns below the one it needs. */
@@ -288,7 +290,7 @@ export interface JsonVerdict {
   accepted_gaps: string[];
   /**
    * One per `accepted_gaps` line, same order: `tool`, `kind` (`file_timeout`
-   * or `partial_parse`), `file`, `reason` (3.4.1 and later) — what a reader
+   * or `partial_parse`), `file`, `reason` (3.4.0 and later) — what a reader
    * counts accepted files by, never by parsing the lines.
    */
   accepted_gap_details: AcceptedGapDetail[];

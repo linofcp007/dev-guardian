@@ -105,7 +105,7 @@ import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerPar
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { nameRepoConfig } from '../runners/repoConfig.js';
-import { metricsOffConflict, runSemgrep as spawnSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
+import { metricsEnvProblem, runSemgrep as spawnSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
   mayHoldTaintRules,
@@ -561,7 +561,7 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
   const errorLine = semgrepErrorLine(result.stderr);
   const said = check.reason ?? errorLine ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? 'semgrep failed';
   // The container fallback does not inherit the variable: only Semgrep run here.
-  const metrics = via === null ? metricsOffConflict(configs, ctx.scriptEnv) : null;
+  const metrics = via === null ? metricsEnvProblem(configs, ctx.scriptEnv) : null;
   const detail = [
     said,
     ...(check.reason !== undefined && errorLine !== null ? [`semgrep said: ${errorLine}`] : []),

@@ -280,6 +280,28 @@ describe.runIf(process.platform === 'win32')('an npm cmd-shim runs as node <scri
       expect(r.notRun?.code, name).toBe('batch_argument_refused');
     }
   });
+
+  // Review 12, finding 14: pnpm's shim is npm's template plus NODE_PATH (the
+  // store its package resolves from). Run as `node <script>` it lost that.
+  it('a pnpm shim (it sets NODE_PATH) is still a batch file — never run without the variable it sets', async () => {
+    const dir = makeTempDir('child-shim-pnpm-');
+    mkdirSync(join(dir, 'node_modules', 'lh', 'cli'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules', 'lh', 'cli', 'index.js'), 'console.log(process.env.NODE_PATH ?? "unset");\n');
+    const nodePath = [
+      '@SETLOCAL',
+      '@IF NOT DEFINED NODE_PATH (',
+      `  @SET "NODE_PATH=${dir}\\node_modules\\.pnpm\\node_modules"`,
+      ') ELSE (',
+      `  @SET "NODE_PATH=%NODE_PATH%;${dir}\\node_modules\\.pnpm\\node_modules"`,
+      ')',
+    ].join('\r\n');
+    writeFileSync(join(dir, 'pnpm-older.cmd'), `${nodePath}\r\n${OLDER('node_modules\\lh\\cli\\index.js')}`);
+    writeFileSync(join(dir, 'pnpm-current.cmd'), CURRENT('node_modules\\lh\\cli\\index.js').replace('SETLOCAL\r\n', `SETLOCAL\r\nSET "NODE_PATH=${dir}\\store"\r\n`));
+    for (const name of ['pnpm-older.cmd', 'pnpm-current.cmd']) {
+      const r = await runProcess({ command: join(dir, name), args: ['a%20b'], cwd: dir, gitHardening: false, timeoutMs: 30_000 });
+      expect(r.notRun?.code, name).toBe('batch_argument_refused');
+    }
+  });
 });
 
 describe('readText — UTF-8 across chunk boundaries', () => {

@@ -73,6 +73,10 @@ describe('loadScanSettings', () => {
       ['semgrep:\n  timeout: 30\n  timeout: 1\n', /invalid YAML: the key "timeout" appears twice/],
       ['semgrep:\n  timeout: 30\nsemgrep:\n  timeout: 1\n', /the key "semgrep" appears twice/],
       ['semgrep:\n  accept_timeouts: [a.js]\n  "accept_timeouts": [b.js]\n', /the key "accept_timeouts" appears twice/],
+      // …and written again through an alias (review 12, finding 13).
+      ['semgrep:\n  &k timeout: 30\n  *k : 1\n', /the key "timeout" appears twice/],
+      ['&s semgrep:\n  timeout: 30\n*s :\n  timeout: 1\n', /the key "semgrep" appears twice/],
+      ['semgrep:\n  &k accept_timeouts:\n    - a.js\n  *k :\n    - b.js\n', /the key "accept_timeouts" appears twice/],
     ] as const) {
       const r = loadScanSettings(project(yaml));
       expect(r.kind, yaml).toBe('invalid');

@@ -215,9 +215,31 @@ try {
 //   - one that loads but lacks what this CLI uses — `cli/` and `mcp/dist/`
 //     from two builds — the names it lacks: it was a TypeError and exit 1 on
 //     every command, `--help` included;
-//   - one that never settles: Node exits 13 when nothing else is pending
-//     (an unsettled top-level await) — rewritten to 3 by the `exit` listener
-//     below — and the deadline catches one that keeps the process busy.
+//   - one that never settles: when nothing else is pending, `beforeExit`
+//     says so before Node would exit 13 with its unsettled-top-level-await
+//     warning, and the deadline catches one that keeps the process busy;
+//   - one that exits while it loads (`process.exit(0)` in it): the `exit`
+//     listener makes that 3.
+// One message each, never two (review 12, finding 14). What the engine prints
+// while it loads goes to stderr: it must not corrupt `--format json`. And
+// `--help` still prints the usage (the hosts it cannot name aside), then the
+// message, exit 3.
+const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
+const ROOT = resolve(HERE, '..'); // <plugin>
+const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
+// Item 6a: the absolute path this project's own CLI substitutes into every
+// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
+// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
+// file installed into ANOTHER project told the agent to run
+// `node cli/dev-guardian.mjs`, a path that exists only inside the
+// dev-guardian repo itself.
+const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
+// How every command this CLI tells a reader to run is spelled: a plugin
+// install puts no `dev-guardian` on PATH, so a bare `dev-guardian baseline
+// update` was "command not found" (review 8, C7). Forward slashes read the
+// same in cmd, PowerShell and every POSIX shell.
+const CLI_COMMAND = `node "${CLI_JS.split(sep).join('/')}"`;
+
 /** The engine's exports this file destructures below — the same names (cliEngineExports.test.ts holds them equal). */
 const ENGINE_EXPORTS = [
   'ALL_HOSTS',
@@ -250,8 +272,16 @@ const ENGINE_EXPORTS = [
 const engineDamaged = (why) =>
   `dev-guardian: its engine, mcp/dist/engine.js, ${why} — the plugin install is incomplete or damaged. ` +
   'Reinstall the plugin, or rebuild it: cd mcp && npm ci && npm run build.\n';
+/** Whether this run asked only for the usage (`--help`, `-h`, `help`, or nothing). */
+const asksOnlyForHelp = (() => {
+  const first = process.argv[2];
+  return first === undefined || first === '--help' || first === '-h' || first === 'help';
+})();
 /** @param {string} why @returns {Promise<never>} */
 const engineExit = async (why) => {
+  engineLoading = false;
+  restoreStdout();
+  if (asksOnlyForHelp) usage(null);
   await new Promise((done) => process.stderr.write(engineDamaged(why), () => done(undefined)));
   return process.exit(3);
 };
@@ -264,14 +294,31 @@ const ENGINE_LOAD_DEADLINE_MS = (() => {
   return Number.isInteger(set) && set >= 1000 ? set : 60_000;
 })();
 let engineLoading = true;
+// Whatever the engine prints while it loads goes to stderr (see above).
+const stdoutWrite = process.stdout.write;
+process.stdout.write = /** @type {typeof process.stdout.write} */ (
+  /** @type {unknown} */ ((/** @type {unknown[]} */ ...args) => Reflect.apply(process.stderr.write, process.stderr, args))
+);
+function restoreStdout() {
+  process.stdout.write = stdoutWrite;
+}
 /** @param {number} code */
 const exitWhileLoading = (code) => {
   if (!engineLoading) return;
+  engineLoading = false;
+  restoreStdout();
   // Synchronous: an `exit` listener's asynchronous write is never flushed.
-  writeSync(2, engineDamaged(`never finished loading (Node was about to exit ${code})`));
+  writeSync(2, engineDamaged(`exited while it was loading (exit ${code})`));
   process.exitCode = 3;
 };
 process.on('exit', exitWhileLoading);
+// Nothing left to wait for, the import still pending: said here, before Node's
+// own unsettled-top-level-await warning and exit 13.
+const drainedWhileLoading = () => {
+  if (!engineLoading) return;
+  void engineExit('never finished loading (it waits on something that never comes)');
+};
+process.once('beforeExit', drainedWhileLoading);
 const engineDeadline = setTimeout(() => {
   void engineExit(`did not finish loading in ${ENGINE_LOAD_DEADLINE_MS / 1000} s`);
 }, ENGINE_LOAD_DEADLINE_MS);
@@ -282,8 +329,10 @@ const engine = await import('../mcp/dist/engine.js').catch(async (/** @type {unk
   return engineExit(`could not be loaded (${why})`);
 });
 engineLoading = false;
+restoreStdout();
 clearTimeout(engineDeadline);
 process.off('exit', exitWhileLoading);
+process.off('beforeExit', drainedWhileLoading);
 {
   // What this file takes from the engine, below: each must be there.
   const engineExports = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (engine));
@@ -344,21 +393,6 @@ const {
 // there (mcp/src/platform/binaryPath.ts). Pure — node:fs and node:path only.
 hardenCommandSearch();
 
-const HERE = dirname(fileURLToPath(import.meta.url)); // <plugin>/cli
-const ROOT = resolve(HERE, '..'); // <plugin>
-const SERVER_JS = resolve(ROOT, 'mcp', 'dist', 'server.js');
-// Item 6a: the absolute path this project's own CLI substitutes into every
-// `{{DEV_GUARDIAN_CLI}}` placeholder in an installed rules file — see
-// `installRulesOne` in `mcp/src/hostsetup/setup.ts`. Without this, a rules
-// file installed into ANOTHER project told the agent to run
-// `node cli/dev-guardian.mjs`, a path that exists only inside the
-// dev-guardian repo itself.
-const CLI_JS = resolve(HERE, 'dev-guardian.mjs');
-// How every command this CLI tells a reader to run is spelled: a plugin
-// install puts no `dev-guardian` on PATH, so a bare `dev-guardian baseline
-// update` was "command not found" (review 8, C7). Forward slashes read the
-// same in cmd, PowerShell and every POSIX shell.
-const CLI_COMMAND = `node "${CLI_JS.split(sep).join('/')}"`;
 const HOST_RULES_DIR = resolve(ROOT, 'host-rules');
 /** @type {ReadonlySet<string>} */
 const VALID_HOSTS = new Set([...ALL_HOSTS, 'all']);
@@ -412,7 +446,13 @@ process.on('warning', (warning) => {
   process.stderr.write(`${warning.stack ?? `${warning.name}: ${warning.message}`}\n`);
 });
 
-function usage() {
+/**
+ * The usage, on stdout. `hosts`: what `mcp-config` takes — null when the engine
+ * that knows them did not load (the usage still prints; review 12, finding 14).
+ *
+ * @param {readonly string[] | null} [hosts]
+ */
+function usage(hosts = ALL_HOSTS) {
   process.stdout.write(`dev-guardian — CLI (no MCP connection needed)
 
 A plugin install puts no \`dev-guardian\` on PATH. Run this CLI as:
@@ -432,7 +472,7 @@ Usage:
   node cli/dev-guardian.mjs --version
 
 mcp-config — wire the MCP server into an AI host
-  Hosts: ${[...ALL_HOSTS].join(', ')}, all
+  Hosts: ${hosts === null ? '(not listed: the engine did not load)' : [...hosts].join(', ')}, all
   --write              Write/merge into the project (+ drop the rules file)
   --scope project|global   MCP scope (default project)
   --global             Shorthand for --scope global. Also required to include a
@@ -1688,6 +1728,7 @@ async function cmdScan(argv) {
     loadScanSettings,
     SCAN_SETTINGS_RELATIVE_PATH,
     filesChangedSince,
+    scanSettingsCommit,
   } = ci;
 
   const failOn = SEVERITIES.find((s) => s === opts.failOn);
@@ -1797,6 +1838,10 @@ async function cmdScan(argv) {
       authorizedTarget: opts.authorizedTarget ? true : undefined,
       localOnly: opts.localOnly ? true : undefined,
       ...(rulesRef !== null ? { rulesRef } : {}),
+      // Under a ref, the files changed since it are scanned for secrets whole
+      // (a private key's BEGIN / END lines fall outside gitleaks' -U0 hunks;
+      // review 12, finding 11).
+      ...(baselineRef !== null ? { changedSince: baselineRef } : rulesRef !== null ? { changedSince: rulesRef } : {}),
     });
   } catch (e) {
     pipelineFailure = { error: e };
@@ -1826,25 +1871,37 @@ async function cmdScan(argv) {
   // (review 8, finding 6; mcp/src/ci/renames.ts).
   const renamedFrom = await renamesSince(projectPath, baselineRef !== null ? baselineRef.commit : null);
 
-  // Under --baseline-ref / --rules-ref, an accepted timeout covers a file only
-  // as it was at the ref: a pull request appended a command injection to an
-  // accepted file and passed (review 11, finding 1; mcp/src/ci/changedSince.ts).
+  // An accepted timeout covers a file only as it was when the acceptance was
+  // reviewed: under --baseline-ref / --rules-ref the ref, without one the last
+  // commit of .guardian/scan.yml — a pull request appended a command injection
+  // to an accepted file and passed (review 11 finding 1, review 12 finding 10:
+  // dev-spec-driven runs this gate without a ref; mcp/src/ci/changedSince.ts).
   const acceptTimeouts = result.scanSettings.settings.semgrep.acceptTimeouts;
   /** @type {GateInput['timeoutAcceptanceRef']} */
   let timeoutAcceptanceRef;
   const refs = [baselineRef, rulesRef].filter((r) => r !== null);
-  if (refs.length > 0 && acceptTimeouts.length > 0) {
+  if (acceptTimeouts.length > 0) {
     /** @type {Set<string>} */
     const changed = new Set();
     /** @type {string | undefined} */
     let error;
-    for (const commit of new Set(refs.map((r) => r.commit))) {
+    /** @type {{ ref: string, commit: string }[]} */
+    let against = refs.map((r) => ({ ref: r.ref, commit: r.commit }));
+    if (against.length === 0) {
+      const last = await scanSettingsCommit(projectPath);
+      if ('commit' in last) against = [{ ref: `the last commit of ${SCAN_SETTINGS_RELATIVE_PATH} (${last.commit.slice(0, 12)})`, commit: last.commit }];
+      else if ('error' in last) error = last.error;
+      // not a git repository: nothing to compare with, the entries stand as written
+    }
+    for (const commit of new Set(against.map((r) => r.commit))) {
       const r = await filesChangedSince(projectPath, commit, acceptTimeouts);
       if ('error' in r) error ??= r.error;
       else for (const path of r.changed) changed.add(path);
     }
-    const ref = [...new Set(refs.map((r) => r.ref))].join(' and ');
-    timeoutAcceptanceRef = error !== undefined ? { ref, changed, error } : { ref, changed };
+    const ref = against.length > 0 ? [...new Set(against.map((r) => r.ref))].join(' and ') : `a commit of ${SCAN_SETTINGS_RELATIVE_PATH}`;
+    if (against.length > 0 || error !== undefined) {
+      timeoutAcceptanceRef = error !== undefined ? { ref, changed, error } : { ref, changed };
+    }
   }
 
   const verdict = evaluateGate({

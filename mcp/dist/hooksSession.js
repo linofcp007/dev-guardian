@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3948994, sha256: "00685b49f2d6376972c70227ddfbf1721adc010254e2b47f3d6f4d0749d97f68" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3964150, sha256: "18c5b6c4c6220ec53d2bfbf2b8d121e20bef0e0d12b0aba5e90e7d83f86d893a" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -767,7 +767,7 @@ function execGitSync(dir, args, opts = {}) {
   const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], options);
   const code = r.error?.code;
   if ((code === "ETIMEDOUT" || code === "ENOBUFS") && typeof r.pid === "number" && r.pid > 0) {
-    stopSyncTree(r.pid, Date.now() - started);
+    stopSyncTree(r.pid, started);
   }
   return {
     status: r.error === void 0 ? r.status : null,
@@ -778,7 +778,7 @@ function execGitSync(dir, args, opts = {}) {
   };
 }
 var SYNC_SWEEP_TIMEOUT_MS = 15e3;
-function stopSyncTree(pid, elapsedMs) {
+function stopSyncTree(pid, startedAt) {
   try {
     if (process.platform !== "win32") {
       process.kill(-pid, "SIGKILL");
@@ -786,7 +786,7 @@ function stopSyncTree(pid, elapsedMs) {
     }
     const root = envValue2(process.env, "SystemRoot") ?? "C:\\Windows";
     const taskkill = join4(root, "System32", "taskkill.exe");
-    const script = `$since = (Get-Date).AddMilliseconds(-${Math.ceil(elapsedMs) + 1e3}); Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Where-Object { $_.CreationDate -ge $since } | ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
+    const script = `$since = [DateTimeOffset]::FromUnixTimeMilliseconds(${Math.floor(startedAt) - 1e3}).LocalDateTime; Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | Where-Object { $_.CreationDate -ge $since } | ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
     spawnSync(join4(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], {
       windowsHide: true,
       stdio: "ignore",

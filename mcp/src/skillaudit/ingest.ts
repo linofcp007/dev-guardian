@@ -37,7 +37,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { describeReadRefusal, entryKindAnywhere, readProjectBytes } from '../platform/projectFs.js';
 import { execGit } from '../platform/gitSafety.js';
-import { networkPathProblem } from '../platform/projectPath.js';
+import { networkPathOf, networkPathProblem } from '../platform/projectPath.js';
+import { readSmallText } from '../hooks/configFile.js';
 // A clone that stalls is stopped with its remote helper (review 10, finding 12).
 import '../runners/gitExec.js';
 
@@ -124,22 +125,99 @@ function extOf(name: string): string {
   return dot === -1 ? '' : name.slice(dot).toLowerCase();
 }
 
+/**
+ * The local path a `file:` URL names, or null when `target` is not one:
+ * `file:///C:/x`, `file:/C:/x` and `file://localhost/x` are local;
+ * `file://host/x` names a host (returned as `\\host\x`, a network path) and
+ * `file:////host/x` a share.
+ */
+function fileUrlPath(target: string): string | null {
+  if (!/^file:/i.test(target)) return null;
+  let rest = target.slice('file:'.length);
+  try {
+    rest = decodeURIComponent(rest);
+  } catch {
+    /* read as written */
+  }
+  if (rest.startsWith('//')) {
+    const authority = rest.slice(2).split('/')[0] ?? '';
+    const path = rest.slice(2 + authority.length);
+    if (authority !== '' && authority.toLowerCase() !== 'localhost' && !/^[a-z]:$/i.test(authority)) {
+      return `\\\\${authority}${path.split('/').join('\\')}`;
+    }
+    rest = /^[a-z]:$/i.test(authority) ? `${authority}${path}` : path;
+  }
+  // `/C:/x` is the drive path `C:/x`; `//host/x` stays a network path.
+  return /^\/[a-z]:/i.test(rest) ? rest.slice(1) : rest;
+}
+
+/** The objects directories whose `info/alternates` a clone of the local repository `dir` follows. */
+function objectsDirsOf(dir: string): string[] {
+  const out = [join(dir, 'objects'), join(dir, '.git', 'objects')];
+  // A `.git` FILE (`gitdir: <path>`): the repository is elsewhere.
+  const gitFile = readSmallText(join(dir, '.git'), 4096, dir);
+  if (gitFile.status === 'ok') {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(gitFile.text);
+    if (m?.[1] !== undefined) out.push(join(resolve(dir, m[1]), 'objects'));
+  }
+  return out;
+}
+
+/**
+ * Why a local repository cannot be cloned without reaching a share: its
+ * `.git` file points at one, or an `objects/info/alternates` entry — followed
+ * as git follows them, a few levels deep — names one. Null when none does.
+ */
+function alternatesProblem(dir: string, depth = 0): string | null {
+  if (depth > 5) return null;
+  for (const objects of objectsDirsOf(dir)) {
+    if (networkPathOf(objects) !== null) return `the repository's objects are on a network path (${objects})`;
+    // Read by lstat-walked links only: an alternates file that is itself a link to a share is not opened.
+    const alternates = readSmallText(join(objects, 'info', 'alternates'), 64 * 1024, dirname(objects));
+    if (alternates.status !== 'ok') continue;
+    for (const raw of alternates.text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line === '' || line.startsWith('#')) continue;
+      const alternate = resolve(objects, line);
+      if (networkPathOf(line) !== null || networkPathOf(alternate) !== null) {
+        return `the repository borrows objects from a network path (${line}, in ${join(objects, 'info', 'alternates')})`;
+      }
+      const deeper = alternatesProblem(dirname(alternate), depth + 1);
+      if (deeper !== null) return deeper;
+    }
+  }
+  return null;
+}
+
+/**
+ * Why `target` would reach a share, or null (see `ingestTarget`): a UNC
+ * spelling, a link to one, a `file:` URL naming a host or a share, a local
+ * repository whose objects are borrowed from one. A remote URL (`https://`,
+ * `git@`) goes over the network by design and is not judged here.
+ */
+function shareProblem(target: string): string | null {
+  const fromUrl = fileUrlPath(target);
+  if (fromUrl === null && (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) || /^git@/.test(target))) return null;
+  const local = fromUrl ?? target;
+  const network = networkPathProblem('target', local);
+  if (network !== null) return network;
+  if (/\.git$/i.test(local) || fromUrl !== null) {
+    const problem = alternatesProblem(resolve(local));
+    if (problem !== null) return `target ${JSON.stringify(target)}: ${problem}`;
+  }
+  return null;
+}
+
 export async function ingestTarget(targetRaw: string): Promise<IngestResult> {
   const target = targetRaw.trim();
   if (!target) return { ok: false, code: 'target_not_found', message: 'Empty target.' };
 
   // A network path is never touched, whether it names a folder or a `.git`
   // to clone — on Windows either is an SMB authentication to the host the
-  // caller chose (review 11, finding 8) — nor a `file://` URL naming a host,
-  // which git turns into one.
-  const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(target) || /^git@/.test(target);
-  const fileHost = /^file:\/\/([^/]*)/i.exec(target)?.[1] ?? '';
-  const share =
-    fileHost !== '' && fileHost.toLowerCase() !== 'localhost' && !/^[a-z]:$/i.test(fileHost)
-      ? `target ${JSON.stringify(target)} names a host (a file:// URL of a share)`
-      : isUrl
-        ? null
-        : networkPathProblem('target', target);
+  // caller chose (review 11, finding 8) — nor a `file:` URL that leads to
+  // one (`file://host/…`, `file:////host/…`), nor a local repository whose
+  // objects git would fetch from a share (review 12, finding 9).
+  const share = shareProblem(target);
   if (share !== null) {
     return { ok: false, code: 'unsupported_target', message: `${share}. Vet a local copy, or an https:// URL.` };
   }

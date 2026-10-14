@@ -1079,7 +1079,7 @@ export function execGitSync(dir: string, args: readonly string[], opts: GitExecO
   const r = spawnSync(opts.git ?? gitExecutable(opts.env ?? process.env), ['-C', dir, ...args], options);
   const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
   if ((code === 'ETIMEDOUT' || code === 'ENOBUFS') && typeof r.pid === 'number' && r.pid > 0) {
-    stopSyncTree(r.pid, Date.now() - started);
+    stopSyncTree(r.pid, started);
   }
   return {
     status: r.error === undefined ? r.status : null,
@@ -1102,16 +1102,20 @@ const SYNC_SWEEP_TIMEOUT_MS = 15_000;
  *     helpers joined; the whole group is killed.
  *   - Windows: there are no groups, and `taskkill /T` walks from a living
  *     parent — git is gone. The processes whose parent was git's pid and
- *     that were created since it started (`elapsedMs` ago, plus a second:
- *     never an older process that happened to get that pid) are listed with
- *     CIM and each stopped with its own tree (`taskkill /T /F`), System32's
+ *     that were created since it started (`startedAt`, less a second: never
+ *     an older process that happened to get that pid) are listed with CIM
+ *     and each stopped with its own tree (`taskkill /T /F`), System32's
  *     PowerShell and taskkill by their full paths. Only on this path: a
- *     timeout has already cost its seconds.
+ *     timeout has already cost its seconds. The cut-off is that instant,
+ *     written into the script — not "now, less the time git took" counted
+ *     when PowerShell has started: on a loaded machine its start took
+ *     seconds, the cut-off fell after git's helper was created, and the
+ *     helper was left running.
  *
  * Best effort and never throws: a sweep that fails leaves what the kill of
  * git alone left.
  */
-function stopSyncTree(pid: number, elapsedMs: number): void {
+function stopSyncTree(pid: number, startedAt: number): void {
   try {
     if (process.platform !== 'win32') {
       process.kill(-pid, 'SIGKILL');
@@ -1120,7 +1124,7 @@ function stopSyncTree(pid: number, elapsedMs: number): void {
     const root = envValue(process.env, 'SystemRoot') ?? 'C:\\Windows';
     const taskkill = join(root, 'System32', 'taskkill.exe');
     const script =
-      `$since = (Get-Date).AddMilliseconds(-${Math.ceil(elapsedMs) + 1000}); ` +
+      `$since = [DateTimeOffset]::FromUnixTimeMilliseconds(${Math.floor(startedAt) - 1000}).LocalDateTime; ` +
       `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | ` +
       'Where-Object { $_.CreationDate -ge $since } | ' +
       `ForEach-Object { & '${taskkill.replace(/'/g, "''")}' /T /F /PID $_.ProcessId | Out-Null }`;
