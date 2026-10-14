@@ -22,7 +22,7 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { runSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
+import { metricsEnvProblem, runSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
@@ -320,6 +320,9 @@ function recordSemgrepWp(args: {
     missing_tools.push('semgrep-wp');
     return;
   }
-  const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  tools_run.push({ name: 'semgrep-wp', status: 'failed', reason: check.reason ?? stderr ?? 'semgrep failed' });
+  // Semgrep's own message, and a SEMGREP_SEND_METRICS it refuses (review 12, finding 13).
+  const stderr = semgrepErrorLine(run.stderr) ?? run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const metrics = metricsEnvProblem([], undefined);
+  const said = [check.reason, stderr].filter((s): s is string => s !== undefined && s !== null).join(' — semgrep said: ');
+  tools_run.push({ name: 'semgrep-wp', status: 'failed', reason: [said === '' ? 'semgrep failed' : said, ...(metrics !== null ? [metrics] : [])].join(' — ') });
 }

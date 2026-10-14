@@ -11,7 +11,7 @@ import { git, splitNul } from '../runners/git.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
 import { checkSemgrepReport, describePartialParse, type SemgrepVerdict } from '../runners/semgrepReport.js';
-import { runSemgrep } from '../runners/semgrepRun.js';
+import { metricsEnvProblem, runSemgrep, semgrepErrorLine } from '../runners/semgrepRun.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
 import type { PartialParse, ToolRun } from '../types.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
@@ -114,9 +114,21 @@ export function buildToolRun(run: ProcessRunResult, via?: string): ToolRun {
   if (ok) {
     return via ? { name: 'semgrep', status: 'ok', reason: `ran via ${via}` } : { name: 'semgrep', status: 'ok' };
   }
-  const firstLine = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const firstLine = failureCause(run.stderr) ?? undefined;
   const reason = via ? `${via}: ${firstLine ?? 'fallback failed'}` : (firstLine ?? 'unknown');
   return { name: 'semgrep', status: 'failed', reason };
+}
+
+/**
+ * Why a Semgrep run failed, from its stderr: Semgrep's own message where it
+ * printed one (`[ERROR]`, a command-line error, a network error — the first
+ * line is often only `Usage: …`), and a `SEMGREP_SEND_METRICS` it refuses
+ * (review 12, finding 13); else the first line, as before.
+ */
+function failureCause(stderr: string): string | null {
+  const said = semgrepErrorLine(stderr) ?? stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? null;
+  const metrics = metricsEnvProblem([], undefined);
+  return said === null ? metrics : metrics === null ? said : `${said} — ${metrics}`;
 }
 
 /**
@@ -304,7 +316,7 @@ export function judgeSurfaceReport(args: {
       },
     };
   }
-  const stderr = run.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const detail = [check.reason ?? 'semgrep failed', ...(stderr !== undefined ? [stderr] : [])].join('; ');
+  const stderr = failureCause(run.stderr);
+  const detail = [check.reason ?? 'semgrep failed', ...(stderr !== null ? [stderr] : [])].join('; ');
   return { verdict: 'failed', toolRun: { name: 'semgrep', status: 'failed', reason: `${prefix}${detail}` } };
 }

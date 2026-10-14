@@ -11836,13 +11836,17 @@ function yamlDocumentValue(doc) {
   return doc.toJS({ maxAliasCount: -1 });
 }
 function duplicateYamlKey(doc) {
+  const keyOf = (key) => {
+    const node = (0, import_yaml.isAlias)(key) ? key.resolve(doc) : key;
+    return (0, import_yaml.isScalar)(node) ? String(node.value) : String(node);
+  };
   const stack = [doc.contents];
   while (stack.length > 0) {
     const node = stack.pop();
     if ((0, import_yaml.isMap)(node)) {
       const seen = /* @__PURE__ */ new Set();
       for (const pair of node.items) {
-        const key = (0, import_yaml.isScalar)(pair.key) ? String(pair.key.value) : String(pair.key);
+        const key = keyOf(pair.key);
         if (seen.has(key)) return key;
         seen.add(key);
         stack.push(pair.value);
@@ -38238,29 +38242,66 @@ function semgrepScanFlags(configRoot) {
     warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD})` : null
   };
 }
-function semgrepSpawn(env) {
-  return { command: SEMGREP_COMMAND, env: { ...pythonUtf8Env(env), ...SEMGREP_NO_VERSION_CHECK_ENV } };
+function metricsSetting(env) {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === METRICS_VAR);
+  const value = key !== void 0 ? env[key] : void 0;
+  return key !== void 0 && value !== void 0 && value !== "" ? { key, value } : null;
 }
-function semgrepErrorLine(stderr) {
-  for (const line of stderr.split(/\r?\n/)) {
-    const m = /\[ERROR\]:?\s*(\S.*)$/.exec(line);
-    const message2 = m?.[1]?.trim();
-    if (message2 !== void 0 && message2 !== "") return message2.length > 500 ? `${message2.slice(0, 500)}\u2026` : message2;
-  }
+function readMetrics(value) {
+  const v = value.trim().toLowerCase();
+  if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+  if (v === "on" || v === "1" || v === "true" || v === "yes") return "on";
+  if (v === "auto") return "auto";
   return null;
 }
-function metricsOffConflict(configs, env) {
-  if (!configs.some((c) => c === "auto" || c === "--config=auto")) return null;
-  const source = env ?? process.env;
-  const key = Object.keys(source).find((k) => k.toUpperCase() === "SEMGREP_SEND_METRICS");
-  const value = key !== void 0 ? source[key] : void 0;
-  if (value === void 0 || value.trim().toLowerCase() !== "off") return null;
-  return "SEMGREP_SEND_METRICS=off is set in the environment, and Semgrep cannot build its registry rules (--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI's --local-only)";
+function semgrepSpawn(env) {
+  const out = { ...pythonUtf8Env(env), ...SEMGREP_NO_VERSION_CHECK_ENV };
+  const metrics = metricsSetting(out);
+  const meant = metrics !== null ? readMetrics(metrics.value) : null;
+  if (metrics !== null && meant !== null && metrics.value !== meant) {
+    delete out[metrics.key];
+    out[METRICS_VAR] = meant;
+  }
+  return { command: SEMGREP_COMMAND, env: out };
+}
+function semgrepErrorLine(stderr) {
+  const clip5 = (text2) => {
+    const one = text2.replace(/\s+/g, " ").trim();
+    return one.length > 500 ? `${one.slice(0, 500)}\u2026` : one;
+  };
+  const lines = stderr.split(/\r?\n/);
+  for (const line of lines) {
+    const message2 = /\[ERROR\]:?\s*(\S.*)$/.exec(line)?.[1]?.trim();
+    if (message2 !== void 0 && message2 !== "") return clip5(message2);
+  }
+  for (const [i, line] of lines.entries()) {
+    const m = /^semgrep(?: [a-z-]+)?: (\S.*)$/.exec(line.trim());
+    if (m?.[1] === void 0) continue;
+    const continued = [m[1]];
+    for (const next of lines.slice(i + 1)) {
+      if (!/^\s+\S/.test(next)) break;
+      continued.push(next.trim());
+    }
+    return clip5(continued.join(" "));
+  }
+  const network = lines.find((l) => /ProxyError|Max retries exceeded|SSLError|NewConnectionError|ConnectionError|Name or service not known|getaddrinfo/.test(l));
+  return network !== void 0 ? clip5(network) : null;
+}
+function metricsEnvProblem(configs, env) {
+  const metrics = metricsSetting(env ?? process.env);
+  if (metrics === null) return null;
+  const meant = readMetrics(metrics.value);
+  const shown = `${METRICS_VAR}=${metrics.value}`;
+  if (meant === null) {
+    return `${shown} is set in the environment, a value Semgrep refuses (it takes on, off or auto) \u2014 every Semgrep run fails: unset it, or set it to one of those`;
+  }
+  if (meant !== "off" || !configs.some((c) => c === "auto" || c === "--config=auto")) return null;
+  return `${shown} is set in the environment (metrics off), and Semgrep cannot build its registry rules (--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI's --local-only)`;
 }
 function runSemgrep(opts, run2 = runProcess) {
   return run2({ ...opts, ...semgrepSpawn(opts.env) });
 }
-var SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV;
+var SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV, METRICS_VAR;
 var init_semgrepRun = __esm({
   "src/runners/semgrepRun.ts"() {
     "use strict";
@@ -38270,6 +38311,7 @@ var init_semgrepRun = __esm({
     init_semgrepReport();
     SEMGREP_COMMAND = "semgrep";
     SEMGREP_NO_VERSION_CHECK_ENV = { SEMGREP_ENABLE_VERSION_CHECK: "0" };
+    METRICS_VAR = "SEMGREP_SEND_METRICS";
   }
 });
 
@@ -39091,7 +39133,7 @@ function judgeSemgrepRun(args) {
   }
   const errorLine = semgrepErrorLine(result.stderr);
   const said = check2.reason ?? errorLine ?? result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "semgrep failed";
-  const metrics = via === null ? metricsOffConflict(configs, ctx.scriptEnv) : null;
+  const metrics = via === null ? metricsEnvProblem(configs, ctx.scriptEnv) : null;
   const detail = [
     said,
     ...check2.reason !== void 0 && errorLine !== null ? [`semgrep said: ${errorLine}`] : [],
@@ -69853,8 +69895,10 @@ function recordSemgrepWp(args) {
     missing_tools.push("semgrep-wp");
     return;
   }
-  const stderr = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  tools_run.push({ name: "semgrep-wp", status: "failed", reason: check2.reason ?? stderr ?? "semgrep failed" });
+  const stderr = semgrepErrorLine(run2.stderr) ?? run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const metrics = metricsEnvProblem([], void 0);
+  const said = [check2.reason, stderr].filter((s) => s !== void 0 && s !== null).join(" \u2014 semgrep said: ");
+  tools_run.push({ name: "semgrep-wp", status: "failed", reason: [said === "" ? "semgrep failed" : said, ...metrics !== null ? [metrics] : []].join(" \u2014 ") });
 }
 var WP_STANDARDS;
 var init_scanWordpress = __esm({
@@ -77556,9 +77600,14 @@ function buildToolRun(run2, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine9 = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  const firstLine9 = failureCause(run2.stderr) ?? void 0;
   const reason = via ? `${via}: ${firstLine9 ?? "fallback failed"}` : firstLine9 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
+}
+function failureCause(stderr) {
+  const said = semgrepErrorLine(stderr) ?? stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? null;
+  const metrics = metricsEnvProblem([], void 0);
+  return said === null ? metrics : metrics === null ? said : `${said} \u2014 ${metrics}`;
 }
 async function countRouteTargets(projectPath) {
   const ownIgnore = presentInProject(projectPath, ".semgrepignore");
@@ -77630,8 +77679,8 @@ function judgeSurfaceReport(args) {
       }
     };
   }
-  const stderr = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  const detail = [check2.reason ?? "semgrep failed", ...stderr !== void 0 ? [stderr] : []].join("; ");
+  const stderr = failureCause(run2.stderr);
+  const detail = [check2.reason ?? "semgrep failed", ...stderr !== null ? [stderr] : []].join("; ");
   return { verdict: "failed", toolRun: { name: "semgrep", status: "failed", reason: `${prefix}${detail}` } };
 }
 var SEMGREP_DEFAULT_IGNORED_DIRS, SEMGREP_DEFAULT_IGNORED_SUFFIXES;
