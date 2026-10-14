@@ -52,6 +52,17 @@ export interface ShellStatement {
   heredocBodies?: string[];
   /** The separator that ended this statement; absent for the last one. */
   end?: StatementEnd;
+  /**
+   * Subshells `(` opened right before this statement that left no statement of
+   * their own — a `(` at a statement's start (`(cd web); …`, PowerShell `(1);`).
+   * Absent when none. What a tracker of the working directory needs to know
+   * where a subshell began (review 12, finding 5).
+   */
+  opens?: number;
+  /** Closing `)`s right after this statement that left none of their own (`(cd web; )`). */
+  closes?: number;
+  /** This statement's `)` ends a `case` pattern (`x)`), not a subshell. */
+  casePattern?: true;
 }
 
 /** What ends a statement: a list operator, a line end, or a subshell / substitution boundary. */
@@ -385,14 +396,24 @@ export function splitShell(command: string): ShellSplit {
     words = [];
     dashTail = true;
   };
-  const endStatement = (end?: StatementEnd): void => {
+  /** Subshells opened with no statement of their own, for the next statement's `opens`. */
+  let pendingOpens = 0;
+  const endStatement = (end?: StatementEnd, group?: 'open' | 'close' | 'case'): void => {
     endCommand();
     const text = masked.trim();
     if (text.length > 0 || commands.length > 0) {
       currentStatement.masked = text;
       currentStatement.commands = commands;
       if (end !== undefined) currentStatement.end = end;
+      if (pendingOpens > 0) currentStatement.opens = pendingOpens;
+      if (group === 'case') currentStatement.casePattern = true;
+      pendingOpens = 0;
       statements.push(currentStatement);
+    } else if (group === 'open') pendingOpens += 1;
+    else if (group === 'close') {
+      const last = statements[statements.length - 1];
+      if (pendingOpens > 0) pendingOpens -= 1; // `()`: opened and closed with nothing in it
+      else if (last !== undefined) last.closes = (last.closes ?? 0) + 1;
     }
     masked = '';
     commands = [];
@@ -494,18 +515,31 @@ export function splitShell(command: string): ShellSplit {
     // Subshells, groups and command substitution: whatever is inside runs as
     // its own command, so the boundary is a statement boundary.
     if (ch === '(' || ch === ')' || ch === '`') {
-      if (ch === '(') parens.push(/[$<>=@(]/.test(command.charAt(i - 1)) ? 'word' : 'group');
+      /** What the paren is to a tracker of the working directory (review 12, finding 5). */
+      let group: 'open' | 'close' | 'case' | undefined;
+      if (ch === '(') {
+        const kind = /[$<>=@(]/.test(command.charAt(i - 1)) ? 'word' : 'group';
+        parens.push(kind);
+        if (kind === 'group') group = 'open';
+      }
       // A `case` pattern's `)` has no `(` of its own (fix round 6); an `esac`
       // right before this `)` has closed its `case` already.
       else if (ch === ')') {
         if (buf === 'esac' && !bufQuoted && words.length === 0 && parens[parens.length - 1] === 'case') parens.pop();
-        closedWord = parens[parens.length - 1] === 'case' ? false : parens.pop() === 'word';
+        if (parens[parens.length - 1] === 'case') {
+          closedWord = false;
+          group = 'case';
+        } else {
+          const closed = parens.pop();
+          closedWord = closed === 'word';
+          if (closed === 'group') group = 'close';
+        }
       }
       else {
         closedWord = inBacktick;
         inBacktick = !inBacktick;
       }
-      endStatement(ch === '(' ? '(' : ch === ')' ? ')' : '`');
+      endStatement(ch === '(' ? '(' : ch === ')' ? ')' : '`', group);
       maskedCommand += ch;
       i += 1;
       continue;

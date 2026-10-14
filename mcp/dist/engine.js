@@ -2963,14 +2963,23 @@ function splitShell(command) {
     words = [];
     dashTail = true;
   };
-  const endStatement = (end) => {
+  let pendingOpens = 0;
+  const endStatement = (end, group) => {
     endCommand();
     const text2 = masked.trim();
     if (text2.length > 0 || commands.length > 0) {
       currentStatement.masked = text2;
       currentStatement.commands = commands;
       if (end !== void 0) currentStatement.end = end;
+      if (pendingOpens > 0) currentStatement.opens = pendingOpens;
+      if (group === "case") currentStatement.casePattern = true;
+      pendingOpens = 0;
       statements.push(currentStatement);
+    } else if (group === "open") pendingOpens += 1;
+    else if (group === "close") {
+      const last = statements[statements.length - 1];
+      if (pendingOpens > 0) pendingOpens -= 1;
+      else if (last !== void 0) last.closes = (last.closes ?? 0) + 1;
     }
     masked = "";
     commands = [];
@@ -3045,15 +3054,26 @@ function splitShell(command) {
       continue;
     }
     if (ch === "(" || ch === ")" || ch === "`") {
-      if (ch === "(") parens.push(/[$<>=@(]/.test(command.charAt(i - 1)) ? "word" : "group");
-      else if (ch === ")") {
+      let group;
+      if (ch === "(") {
+        const kind = /[$<>=@(]/.test(command.charAt(i - 1)) ? "word" : "group";
+        parens.push(kind);
+        if (kind === "group") group = "open";
+      } else if (ch === ")") {
         if (buf === "esac" && !bufQuoted && words.length === 0 && parens[parens.length - 1] === "case") parens.pop();
-        closedWord = parens[parens.length - 1] === "case" ? false : parens.pop() === "word";
+        if (parens[parens.length - 1] === "case") {
+          closedWord = false;
+          group = "case";
+        } else {
+          const closed = parens.pop();
+          closedWord = closed === "word";
+          if (closed === "group") group = "close";
+        }
       } else {
         closedWord = inBacktick;
         inBacktick = !inBacktick;
       }
-      endStatement(ch === "(" ? "(" : ch === ")" ? ")" : "`");
+      endStatement(ch === "(" ? "(" : ch === ")" ? ")" : "`", group);
       maskedCommand += ch;
       i += 1;
       continue;
@@ -3136,9 +3156,16 @@ var init_split = __esm({
 });
 
 // src/hooks/shell/workdir.ts
-function cdMove(words) {
+function cdMove(words, evalDepth = 0) {
   const at = resolveCommand(words).index;
   const name = commandName(words[at]?.value ?? "");
+  if (name === "eval" && evalDepth < MAX_EVAL_DEPTH) {
+    const text2 = words.slice(at + 1).map((w) => w.value).join(" ");
+    if (text2.length > 4096) return void 0;
+    const inner = splitShell(text2).statements;
+    const only = inner.length === 1 && inner[0]?.commands.length === 1 ? inner[0]?.commands[0] : void 0;
+    return only === void 0 ? void 0 : cdMove(only, evalDepth + 1);
+  }
   if (name === "cd..") return { kind: "cd", target: "..", push: false };
   if (CD_RETURNS.has(name)) return { kind: "pop" };
   if (!CD_COMMANDS.has(name)) return void 0;
@@ -3184,7 +3211,8 @@ function workdirs(statements, opts = {}) {
       out.push([]);
       continue;
     }
-    const before = statements[k - 1]?.end;
+    for (let o = 0; o < (statement.opens ?? 0); o += 1) outer.push(here);
+    const before = (statement.opens ?? 0) > 0 ? "(" : statements[k - 1]?.end;
     if (before === "&&" || before === "||") {
       if (before === "||") {
         trusted = false;
@@ -3227,7 +3255,8 @@ function workdirs(statements, opts = {}) {
         const back = move.target === "-" || move.target !== void 0 && /^\$\{?OLDPWD\}?$/.test(move.target);
         const unread = !back && move.target !== void 0 && UNREAD_TARGET.test(move.target);
         const lookedUp = (cdpath || prefixCdpath) && move.target !== void 0 && !/^(?:\.\.?(?:[\\/]|$)|[\\/~]|[A-Za-z]:)/.test(move.target);
-        const nextMay = back ? here.prevMay : unread ? null : moved(here.may, move.target);
+        const variable = unread && move.target !== void 0 && VARIABLE_TARGET.test(move.target);
+        const nextMay = back ? here.prevMay : unread && !variable ? null : moved(here.may, move.target);
         const nextSure = !surely || unread || lookedUp || move.target === void 0 ? null : back ? here.prevSure : moved(here.sure, move.target);
         here = {
           may: nextMay,
@@ -3248,19 +3277,23 @@ function workdirs(statements, opts = {}) {
       if (!inBacktick) outer.push(here);
       else here = outer.pop() ?? { ...here, may: null, sure: null };
       inBacktick = !inBacktick;
-    } else if (end === ")") {
-      here = outer.pop() ?? { ...here, may: null, sure: null };
+    } else if (end === ")" && statement.casePattern !== true) {
+      here = outer.pop() ?? { ...here, sure: null };
     }
+    for (let c = 0; c < (statement.closes ?? 0); c += 1) here = outer.pop() ?? { ...here, sure: null };
   }
   return out;
 }
-var UNREAD_TARGET, OPENERS, CLOSERS, INSIDE, MAX_STEPS;
+var UNREAD_TARGET, VARIABLE_TARGET, MAX_EVAL_DEPTH, OPENERS, CLOSERS, INSIDE, MAX_STEPS;
 var init_workdir = __esm({
   "src/hooks/shell/workdir.ts"() {
     "use strict";
     init_command();
     init_paths();
+    init_split();
     UNREAD_TARGET = /[$`%*?[\]{}]|^~[^\\/]/;
+    VARIABLE_TARGET = /^(?:\$\{(?:env:)?\w+\}|\$(?:env:)?\w+|%\w+%)(?:[\\/][^$`%*?[\]{}]*)?$/i;
+    MAX_EVAL_DEPTH = 3;
     OPENERS = /* @__PURE__ */ new Set(["if", "while", "until", "for", "select", "case", "{", "function"]);
     CLOSERS = /* @__PURE__ */ new Set(["fi", "done", "esac", "}"]);
     INSIDE = /* @__PURE__ */ new Set(["then", "else", "elif", "do", "!", "time", "-p"]);
@@ -98095,9 +98128,10 @@ function isHookConfigDir(arg) {
 }
 var USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
 var CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
+var MANAGED_SETTINGS_PATH = /(?:ClaudeCode|claude-code)\/?managed-settings\.json$/i;
 var CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
 function isSettingsPath(path3, configDirName) {
-  if (CLAUDE_SETTINGS_PATH.test(path3) || CONFIG_DIR_VARIABLE_SETTINGS.test(path3)) return true;
+  if (CLAUDE_SETTINGS_PATH.test(path3) || CONFIG_DIR_VARIABLE_SETTINGS.test(path3) || MANAGED_SETTINGS_PATH.test(path3)) return true;
   if (configDirName === void 0) return false;
   const lower = path3.toLowerCase();
   for (const file of ["settings.json", "settings.local.json"]) {
@@ -98462,6 +98496,7 @@ function placeOf(raw, scope) {
     if (places.home === void 0) return "inside";
     return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? "inside" : "outside";
   }
+  if (MANAGED_SETTINGS_PATH.test(key)) return "inside";
   if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
     return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? "inside" : "outside";
   }
@@ -98775,8 +98810,31 @@ function scriptReader(words) {
   const args = plain.slice(at + 1);
   if (name === "iex" || name === "invoke-expression") return args.length === 0 ? "powershell" : void 0;
   if (name === "pwsh" || name === "powershell") return powershellReadsStdin(args.map((w) => w.value)) ? "powershell" : void 0;
-  if (name === "cmd") return args.every((a) => /^\/[A-Za-z]+$/.test(cmdSwitch(a.value)) && !/^\/[ck]$/i.test(cmdSwitch(a.value))) ? "cmd" : void 0;
+  if (name === "cmd") {
+    const run2 = args.findIndex((a) => /^\/[ck]$/i.test(cmdSwitch(a.value)));
+    if (run2 >= 0 && run2 < args.length - 1) return void 0;
+    return args.every((a) => /^\/[A-Za-z]+$/.test(cmdSwitch(a.value))) ? "cmd" : void 0;
+  }
   if (name === "source" || name === ".") return STDIN_PATHS.has(args[0]?.value ?? "") ? "shell" : void 0;
+  if (name === "xargs") {
+    const rest = plain.slice(at);
+    const p = resolveCommand(rest).index;
+    const program = commandName(rest[p]?.value ?? "");
+    if (!SCRIPT_SHELLS.has(program) && program !== "su") return void 0;
+    const c = rest.findIndex((w, k) => k > p && !w.quoted && DASH_C.test(w.value));
+    if (c < 0) return void 0;
+    const script = rest[c + 1]?.value;
+    const replace = xargsReplacement(rest.slice(1, p).map((w) => w.value));
+    return script === void 0 || replace !== void 0 && script.trim() === replace ? "shell" : void 0;
+  }
+  if (name === "script") {
+    const c = args.findIndex((a) => /^(?:-[A-Za-z]*c|--command)$/.test(a.value) || a.value.startsWith("--command="));
+    if (c < 0) return "shell";
+    const program = args[c]?.value.startsWith("--command=") ? args[c]?.value.slice("--command=".length) : args[c + 1]?.value;
+    const inner = program === void 0 ? void 0 : splitShell(program).statements;
+    const only = inner?.length === 1 && inner[0]?.commands.length === 1 ? inner[0]?.commands[0] : void 0;
+    return only === void 0 ? void 0 : scriptReader(only);
+  }
   if (!STDIN_SHELLS.has(name)) return void 0;
   if (name === "su") return args.some((a) => /^(?:-[A-Za-z]*c|--command|--session-command)(?:=|$)/.test(a.value)) ? void 0 : "shell";
   for (let i = 0; i < args.length; i += 1) {
@@ -98897,7 +98955,7 @@ function iexSubexpressionScripts(statements) {
   }
   return out;
 }
-var SCRIPT_BLOCK_CALL = /\[\s*(?:System\s*\.\s*Management\s*\.\s*Automation\s*\.\s*)?scriptblock\s*\]\s*::\s*Create\s*\(|\$ExecutionContext\s*\.\s*InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)\s*\(/gi;
+var SCRIPT_BLOCK_CALL = /\[\s*(?:System\s*\.\s*Management\s*\.\s*Automation\s*\.\s*)?scriptblock\s*\]\s*::\s*Create\s*\(|\$ExecutionContext\s*\.\s*(?:SessionState\s*\.\s*)?InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)\s*\(|\.\s*AddScript\s*\(/gi;
 var MAX_SCRIPT_BLOCK_CALLS = 32;
 var MAX_SCRIPT_BLOCK_ARG = 16 * 1024;
 function scriptBlockScripts(text2) {
@@ -100016,14 +100074,22 @@ function foldDots(path3) {
   }
   return `${drive}/${parts.join("/")}`;
 }
-function dirAfter(start, steps, homePath) {
+function dirAfter(start, steps, ctx) {
   if (steps === null) return void 0;
   let cur = start;
   for (const step of steps) {
     let target = step.replace(/\\/g, "/");
     if (target === "~" || target.startsWith("~/")) {
-      if (homePath === void 0) return void 0;
-      target = `${homePath}${target.slice(1)}`;
+      if (ctx.homePath === void 0) return void 0;
+      target = `${ctx.homePath}${target.slice(1)}`;
+    } else if (/^[$%]/.test(target)) {
+      const v = leadingVariable(target);
+      const value = v === void 0 ? void 0 : HOME_VARIABLES.has(v.name) ? ctx.homePath : v.name === "pwd" ? cur : ctx.vars?.[v.name];
+      if (v === void 0 || value === void 0) return void 0;
+      target = `${value.replace(/\\/g, "/")}${v.rest.replace(/\\/g, "/")}`;
+    } else if (/^[A-Za-z]:\.?$/.test(target)) {
+      if (ctx.bareDriveRoot !== true) return void 0;
+      target = `${target.charAt(0)}:/`;
     }
     if (/^(?:\/|[A-Za-z]:\/)/.test(target)) cur = foldDots(target);
     else if (cur === void 0) return void 0;
@@ -100084,7 +100150,7 @@ function collect(command, depth, out, scope) {
   const dirOf5 = (steps) => {
     if (steps !== memoSteps) {
       memoSteps = steps;
-      memoDir = dirAfter(startDir, steps, scope.homePath);
+      memoDir = dirAfter(startDir, steps, { homePath: scope.homePath, vars: scope.vars, bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true });
     }
     return memoDir;
   };
@@ -100094,7 +100160,7 @@ function collect(command, depth, out, scope) {
       ...commandText.includes(">(") ? outputSubstitutionScripts(statements, powershellScope) : [],
       ...groupFedScripts(statements, powershellScope),
       ...iexSubexpressionScripts(statements),
-      ...powershellScope && /scriptblock|InvokeCommand/i.test(cmd) ? scriptBlockScripts(cmd).map((text2) => text2 === "unread" ? { text: "", reader: [], unread: true } : { text: text2, reader: [], kind: "powershell" }) : []
+      ...powershellScope && /scriptblock|InvokeCommand|AddScript/i.test(cmd) ? scriptBlockScripts(cmd).map((text2) => text2 === "unread" ? { text: "", reader: [], unread: true } : { text: text2, reader: [], kind: "powershell" }) : []
     ],
     depth,
     out,

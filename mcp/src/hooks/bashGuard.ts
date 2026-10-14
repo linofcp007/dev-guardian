@@ -1036,6 +1036,13 @@ const USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
 /** Claude Code's own settings, project or user level; separators optional as in `HOOK_CONFIG_PATH`. */
 const CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
 
+/**
+ * Claude Code's managed settings — `ClaudeCode/managed-settings.json` under Program Files, ProgramData or
+ * `/Library/Application Support`, `/etc/claude-code/managed-settings.json` — which win over every other
+ * settings file (review 12, finding 7). Always this machine's: never "elsewhere".
+ */
+const MANAGED_SETTINGS_PATH = /(?:ClaudeCode|claude-code)\/?managed-settings\.json$/i;
+
 /** The same files through Claude Code's `CLAUDE_CONFIG_DIR`, spelled as a variable (bash, cmd, PowerShell). */
 const CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
 
@@ -1046,7 +1053,7 @@ const CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLA
  * name, separators optional as in `HOOK_CONFIG_PATH` (`~/.claude-conta2/settings.json`).
  */
 function isSettingsPath(path: string, configDirName: string | undefined): boolean {
-  if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path)) return true;
+  if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path) || MANAGED_SETTINGS_PATH.test(path)) return true;
   if (configDirName === undefined) return false;
   const lower = path.toLowerCase();
   for (const file of ['settings.json', 'settings.local.json']) {
@@ -1605,6 +1612,7 @@ function placeOf(raw: string, scope: Scope): Placement {
     if (places.home === undefined) return 'inside';
     return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? 'inside' : 'outside';
   }
+  if (MANAGED_SETTINGS_PATH.test(key)) return 'inside';
   if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
     return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
   }
@@ -2170,8 +2178,36 @@ function scriptReader(words: readonly ShellWord[]): ReaderKind | undefined {
   const args = plain.slice(at + 1);
   if (name === 'iex' || name === 'invoke-expression') return args.length === 0 ? 'powershell' : undefined;
   if (name === 'pwsh' || name === 'powershell') return powershellReadsStdin(args.map((w) => w.value)) ? 'powershell' : undefined;
-  if (name === 'cmd') return args.every((a) => /^\/[A-Za-z]+$/.test(cmdSwitch(a.value)) && !/^\/[ck]$/i.test(cmdSwitch(a.value))) ? 'cmd' : undefined;
+  if (name === 'cmd') {
+    // `cmd /k` (or `/c`) with no command after it runs what it reads, as a bare `cmd` does (review 12, finding 8).
+    const run = args.findIndex((a) => /^\/[ck]$/i.test(cmdSwitch(a.value)));
+    if (run >= 0 && run < args.length - 1) return undefined;
+    return args.every((a) => /^\/[A-Za-z]+$/.test(cmdSwitch(a.value))) ? 'cmd' : undefined;
+  }
   if (name === 'source' || name === '.') return STDIN_PATHS.has(args[0]?.value ?? '') ? 'shell' : undefined;
+  // `xargs -I{} bash -c {}`, `xargs sh -c`: each line it reads IS a shell's
+  // script (review 12, finding 8) — not `xargs -I{} sh -c 'gcc -c {}'`, where
+  // the line is a word of a script the command line holds.
+  if (name === 'xargs') {
+    const rest = plain.slice(at);
+    const p = resolveCommand(rest).index;
+    const program = commandName(rest[p]?.value ?? '');
+    if (!SCRIPT_SHELLS.has(program) && program !== 'su') return undefined;
+    const c = rest.findIndex((w, k) => k > p && !w.quoted && DASH_C.test(w.value));
+    if (c < 0) return undefined;
+    const script = rest[c + 1]?.value;
+    const replace = xargsReplacement(rest.slice(1, p).map((w) => w.value));
+    return script === undefined || (replace !== undefined && script.trim() === replace) ? 'shell' : undefined;
+  }
+  // `script -q -c bash` runs a shell that reads the pipe; without `-c`, `script` runs the user's shell.
+  if (name === 'script') {
+    const c = args.findIndex((a) => /^(?:-[A-Za-z]*c|--command)$/.test(a.value) || a.value.startsWith('--command='));
+    if (c < 0) return 'shell';
+    const program = args[c]?.value.startsWith('--command=') ? args[c]?.value.slice('--command='.length) : args[c + 1]?.value;
+    const inner = program === undefined ? undefined : splitShell(program).statements;
+    const only = inner?.length === 1 && inner[0]?.commands.length === 1 ? inner[0]?.commands[0] : undefined;
+    return only === undefined ? undefined : scriptReader(only);
+  }
   if (!STDIN_SHELLS.has(name)) return undefined;
   if (name === 'su') return args.some((a) => /^(?:-[A-Za-z]*c|--command|--session-command)(?:=|$)/.test(a.value)) ? undefined : 'shell';
   for (let i = 0; i < args.length; i += 1) {
@@ -2365,7 +2401,7 @@ function iexSubexpressionScripts(statements: readonly ShellStatement[]): FedScri
 
 /** A script block made from text: `[scriptblock]::Create(`, and the engine's `InvokeScript(` / `NewScriptBlock(`. */
 const SCRIPT_BLOCK_CALL =
-  /\[\s*(?:System\s*\.\s*Management\s*\.\s*Automation\s*\.\s*)?scriptblock\s*\]\s*::\s*Create\s*\(|\$ExecutionContext\s*\.\s*InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)\s*\(/gi;
+  /\[\s*(?:System\s*\.\s*Management\s*\.\s*Automation\s*\.\s*)?scriptblock\s*\]\s*::\s*Create\s*\(|\$ExecutionContext\s*\.\s*(?:SessionState\s*\.\s*)?InvokeCommand\s*\.\s*(?:InvokeScript|NewScriptBlock)\s*\(|\.\s*AddScript\s*\(/gi;
 
 /** The most script-block calls of one command read, and how far into each one's argument. */
 const MAX_SCRIPT_BLOCK_CALLS = 32;
@@ -3819,17 +3855,35 @@ function foldDots(path: string): string {
 
 /**
  * The directory a command runs in ({@link workdirs}' `may`: what a deny must
- * assume) — the moves applied to where the statements start, `~` the home
- * directory. `undefined` when either is not known.
+ * assume) — the moves applied to where the statements start: `~`, `$HOME`,
+ * `$USERPROFILE` (and `$env:` / `%…%`) the home directory, `$PWD` where the
+ * command is, `$TEMP`, `$TMP`, `$TMPDIR`, `$LOCALAPPDATA`, `$APPDATA` what they
+ * name, and Git Bash's bare `C:` the drive's root (review 12, finding 16:
+ * `cd "$HOME"`, `cd $env:TEMP\..\..\..`, `cd C:` were not followed). `undefined`
+ * when any of it is not known.
  */
-function dirAfter(start: string | undefined, steps: Steps, homePath: string | undefined): string | undefined {
+function dirAfter(
+  start: string | undefined,
+  steps: Steps,
+  ctx: { homePath?: string | undefined; vars?: Readonly<Record<string, string>> | undefined; bareDriveRoot?: boolean },
+): string | undefined {
   if (steps === null) return undefined;
   let cur = start;
   for (const step of steps) {
     let target = step.replace(/\\/g, '/');
     if (target === '~' || target.startsWith('~/')) {
-      if (homePath === undefined) return undefined;
-      target = `${homePath}${target.slice(1)}`;
+      if (ctx.homePath === undefined) return undefined;
+      target = `${ctx.homePath}${target.slice(1)}`;
+    } else if (/^[$%]/.test(target)) {
+      const v = leadingVariable(target);
+      const value =
+        v === undefined ? undefined : HOME_VARIABLES.has(v.name) ? ctx.homePath : v.name === 'pwd' ? cur : ctx.vars?.[v.name];
+      if (v === undefined || value === undefined) return undefined;
+      target = `${value.replace(/\\/g, '/')}${v.rest.replace(/\\/g, '/')}`;
+    } else if (/^[A-Za-z]:\.?$/.test(target)) {
+      // `cd C:` — the drive's root in Git Bash; in cmd and PowerShell, the drive's own current directory.
+      if (ctx.bareDriveRoot !== true) return undefined;
+      target = `${target.charAt(0)}:/`;
     }
     if (/^(?:\/|[A-Za-z]:\/)/.test(target)) cur = foldDots(target);
     else if (cur === undefined) return undefined;
@@ -3919,7 +3973,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   const dirOf = (steps: Steps): string | undefined => {
     if (steps !== memoSteps) {
       memoSteps = steps;
-      memoDir = dirAfter(startDir, steps, scope.homePath);
+      memoDir = dirAfter(startDir, steps, { homePath: scope.homePath, vars: scope.vars, bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true });
     }
     return memoDir;
   };
@@ -3932,7 +3986,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       ...(commandText.includes('>(') ? outputSubstitutionScripts(statements, powershellScope) : []),
       ...groupFedScripts(statements, powershellScope),
       ...iexSubexpressionScripts(statements),
-      ...(powershellScope && /scriptblock|InvokeCommand/i.test(cmd)
+      ...(powershellScope && /scriptblock|InvokeCommand|AddScript/i.test(cmd)
         ? scriptBlockScripts(cmd).map((text): FedScript => (text === 'unread' ? { text: '', reader: [], unread: true } : { text, reader: [], kind: 'powershell' }))
         : []),
     ],

@@ -31,7 +31,7 @@
 
 import { commandName, resolveCommand } from './command.js';
 import { CD_COMMANDS, CD_RETURNS, cdOperand } from './paths.js';
-import type { ShellStatement, ShellWord } from './split.js';
+import { splitShell, type ShellStatement, type ShellWord } from './split.js';
 
 /** The moves to a command's working directory, from where the line began; `null`: not known. */
 export type Steps = readonly string[] | null;
@@ -48,10 +48,31 @@ type Move = { kind: 'cd'; target: string | undefined; push: boolean } | { kind: 
 /** A `cd` target this cannot read literally: an expansion, a glob, a cmd.exe `%VAR%`, another account's `~name`. */
 const UNREAD_TARGET = /[$`%*?[\]{}]|^~[^\\/]/;
 
-/** The move one simple command makes, if it is a directory change. */
-function cdMove(words: readonly ShellWord[]): Move | undefined {
+/**
+ * A target that is one variable and a plain path after it — `"$HOME"`,
+ * `"$TEMP/../../.."`, `$env:TEMP\..\..`, `%USERPROFILE%` — kept for `may`: the
+ * shell guard reads the variables it knows (review 12, finding 16); `sure`
+ * never takes it.
+ */
+const VARIABLE_TARGET = /^(?:\$\{(?:env:)?\w+\}|\$(?:env:)?\w+|%\w+%)(?:[\\/][^$`%*?[\]{}]*)?$/i;
+
+/** The most nested `eval cd …` read for its move. */
+const MAX_EVAL_DEPTH = 3;
+
+/** The move one simple command makes, if it is a directory change — `eval cd /` too. */
+function cdMove(words: readonly ShellWord[], evalDepth = 0): Move | undefined {
   const at = resolveCommand(words).index;
   const name = commandName(words[at]?.value ?? '');
+  if (name === 'eval' && evalDepth < MAX_EVAL_DEPTH) {
+    const text = words
+      .slice(at + 1)
+      .map((w) => w.value)
+      .join(' ');
+    if (text.length > 4096) return undefined;
+    const inner = splitShell(text).statements;
+    const only = inner.length === 1 && inner[0]?.commands.length === 1 ? inner[0]?.commands[0] : undefined;
+    return only === undefined ? undefined : cdMove(only, evalDepth + 1);
+  }
   if (name === 'cd..') return { kind: 'cd', target: '..', push: false };
   if (CD_RETURNS.has(name)) return { kind: 'pop' };
   if (!CD_COMMANDS.has(name)) return undefined;
@@ -139,7 +160,11 @@ export function workdirs(statements: readonly ShellStatement[], opts: { cdpath?:
       out.push([]);
       continue;
     }
-    const before = statements[k - 1]?.end;
+    // A subshell that opened right before this statement (`(cd web); …`,
+    // PowerShell's `(1);`) — the split leaves it no statement of its own, and
+    // its end used to pop a place that was never pushed (review 12, finding 5).
+    for (let o = 0; o < (statement.opens ?? 0); o += 1) outer.push(here);
+    const before = (statement.opens ?? 0) > 0 ? '(' : statements[k - 1]?.end;
     if (before === '&&' || before === '||') {
       if (before === '||') {
         trusted = false;
@@ -188,7 +213,8 @@ export function workdirs(statements: readonly ShellStatement[], opts: { cdpath?:
         const unread = !back && move.target !== undefined && UNREAD_TARGET.test(move.target);
         // Under CDPATH a bare name may be found elsewhere: `./x`, `../x` and absolute paths are not looked up.
         const lookedUp = (cdpath || prefixCdpath) && move.target !== undefined && !/^(?:\.\.?(?:[\\/]|$)|[\\/~]|[A-Za-z]:)/.test(move.target);
-        const nextMay = back ? here.prevMay : unread ? null : moved(here.may, move.target);
+        const variable = unread && move.target !== undefined && VARIABLE_TARGET.test(move.target);
+        const nextMay = back ? here.prevMay : unread && !variable ? null : moved(here.may, move.target);
         // A bare `cd` goes home — what a deny assumes; where `$HOME` points is not what the vetting skips on.
         const nextSure = !surely || unread || lookedUp || move.target === undefined ? null : back ? here.prevSure : moved(here.sure, move.target);
         here = {
@@ -213,10 +239,13 @@ export function workdirs(statements: readonly ShellStatement[], opts: { cdpath?:
       if (!inBacktick) outer.push(here);
       else here = outer.pop() ?? { ...here, may: null, sure: null };
       inBacktick = !inBacktick;
-    } else if (end === ')') {
-      // A `(` at the start of the line leaves no statement: where it began is not known.
-      here = outer.pop() ?? { ...here, may: null, sure: null };
+    } else if (end === ')' && statement.casePattern !== true) {
+      // A `case` pattern's `)` closes no subshell (review 12, finding 5). One
+      // whose `(` was never seen: where it began is not known — `sure` drops,
+      // and `may` keeps the moves, the direction a deny reads them in.
+      here = outer.pop() ?? { ...here, sure: null };
     }
+    for (let c = 0; c < (statement.closes ?? 0); c += 1) here = outer.pop() ?? { ...here, sure: null };
   }
   return out;
 }

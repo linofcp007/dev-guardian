@@ -4153,3 +4153,68 @@ describe('assessBashCommand — a delete target read where the command runs (rev
     expectLinear(label, (n) => assessBashCommand(make(n), win), 2_000);
   }, 120_000);
 });
+
+// Review 12, findings 5, 7, 8 and 16.
+describe('assessBashCommand — review 12: the tracker, managed settings, more readers', () => {
+  const win = {
+    homeDir: 'C:\\Users\\Administrator',
+    platform: 'win32' as const,
+    cwd: 'C:\\Users\\Administrator\\proj',
+    env: { TEMP: 'C:\\Users\\ADMINI~1\\AppData\\Local\\Temp' },
+  };
+
+  it.each([
+    ['(true); rm -rf ..', 'bash'],
+    ['case x in x) ;; esac; rm -rf ..', 'bash'],
+    ['(1); Remove-Item -Recurse -Force ..', 'powershell'],
+    ['(cd web; ); rm -rf ..', 'bash'],
+  ] as const)('%s: the tracker keeps its place after a subshell or a case pattern (finding 5)', (command, shell) => {
+    expect(assessBashCommand(command, { shell, ...win }).rules).toContain('rm-rf-root');
+  });
+
+  it('(true); find .. -delete is denied too (finding 5)', () => {
+    expect(assessBashCommand('(true); find .. -delete', win).rules).toContain('find-delete-root');
+  });
+
+  it.each([
+    ['cd C: && rm -rf *', 'bash'],
+    ['cd "$HOME" && rm -rf *', 'bash'],
+    ['cd "$TEMP/../../.." && rm -rf *', 'bash'],
+    ['cd $env:TEMP\\..\\..\\..; Remove-Item -Recurse -Force *', 'powershell'],
+    ['eval cd / && rm -rf *', 'bash'],
+  ] as const)('%s: the cd is followed (finding 16)', (command, shell) => {
+    expect(assessBashCommand(command, { shell, ...win }).rules).toContain('rm-rf-root');
+  });
+
+  it('a cd to a variable it does not know is not followed, and a bare drive is no root outside Git Bash', () => {
+    expect(assessBashCommand('cd "$UNKNOWN" && rm -rf *', win).rules).toEqual(['rm-rf-broad']);
+    expect(assessBashCommand('cd C:; Remove-Item -Recurse -Force *', { shell: 'powershell', ...win }).rules).toEqual(['rm-rf-broad']);
+  });
+
+  it.each([
+    ['echo \'{"disableAllHooks":true}\' > "C:/Program Files/ClaudeCode/managed-settings.json"', 'bash'],
+    ['echo \'{"disableAllHooks":true}\' > /etc/claude-code/managed-settings.json', 'bash'],
+    ["Set-Content -Path 'C:\\ProgramData\\ClaudeCode\\managed-settings.json' -Value '{\"disableAllHooks\": true}'", 'powershell'],
+  ] as const)('%s: managed settings are settings, never "elsewhere" (finding 7)', (command, shell) => {
+    expect(assessBashCommand(command, { shell, ...win }).rules).toContain('claude-settings-loosen');
+  });
+
+  it.each([
+    ["echo 'rd /s /q C:\\' | cmd /k", 'bash'],
+    ["echo 'rm -rf /' | xargs -I{} bash -c {}", 'bash'],
+    ["echo 'rm -rf /' | script -q -c bash /dev/null", 'bash'],
+    ["[powershell]::Create().AddScript('Remove-Item -Recurse -Force C:\\').Invoke()", 'powershell'],
+    ["$ExecutionContext.SessionState.InvokeCommand.InvokeScript('Remove-Item -Recurse -Force C:\\')", 'powershell'],
+  ] as const)('%s is read and blocked (finding 8)', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    ["echo 'rd /s /q C:\\' | cmd /c more", 'bash'],
+    ["find . -name '*.c' | xargs -I{} sh -c 'gcc -c {}'", 'bash'],
+    ["echo hello | script -q -c 'cat' /dev/null", 'bash'],
+    ["$ps.AddScript('Get-Date')", 'powershell'],
+  ] as const)('%s stays ok', (command, shell) => {
+    expect(assessBashCommand(command, { shell }).level).toBe('ok');
+  });
+});

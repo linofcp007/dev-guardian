@@ -446,14 +446,23 @@ function splitShell(command) {
     words = [];
     dashTail = true;
   };
-  const endStatement = (end) => {
+  let pendingOpens = 0;
+  const endStatement = (end, group) => {
     endCommand();
     const text = masked.trim();
     if (text.length > 0 || commands.length > 0) {
       currentStatement.masked = text;
       currentStatement.commands = commands;
       if (end !== void 0) currentStatement.end = end;
+      if (pendingOpens > 0) currentStatement.opens = pendingOpens;
+      if (group === "case") currentStatement.casePattern = true;
+      pendingOpens = 0;
       statements.push(currentStatement);
+    } else if (group === "open") pendingOpens += 1;
+    else if (group === "close") {
+      const last = statements[statements.length - 1];
+      if (pendingOpens > 0) pendingOpens -= 1;
+      else if (last !== void 0) last.closes = (last.closes ?? 0) + 1;
     }
     masked = "";
     commands = [];
@@ -528,15 +537,26 @@ function splitShell(command) {
       continue;
     }
     if (ch === "(" || ch === ")" || ch === "`") {
-      if (ch === "(") parens.push(/[$<>=@(]/.test(command.charAt(i - 1)) ? "word" : "group");
-      else if (ch === ")") {
+      let group;
+      if (ch === "(") {
+        const kind = /[$<>=@(]/.test(command.charAt(i - 1)) ? "word" : "group";
+        parens.push(kind);
+        if (kind === "group") group = "open";
+      } else if (ch === ")") {
         if (buf === "esac" && !bufQuoted && words.length === 0 && parens[parens.length - 1] === "case") parens.pop();
-        closedWord = parens[parens.length - 1] === "case" ? false : parens.pop() === "word";
+        if (parens[parens.length - 1] === "case") {
+          closedWord = false;
+          group = "case";
+        } else {
+          const closed = parens.pop();
+          closedWord = closed === "word";
+          if (closed === "group") group = "close";
+        }
       } else {
         closedWord = inBacktick;
         inBacktick = !inBacktick;
       }
-      endStatement(ch === "(" ? "(" : ch === ")" ? ")" : "`");
+      endStatement(ch === "(" ? "(" : ch === ")" ? ")" : "`", group);
       maskedCommand += ch;
       i += 1;
       continue;
@@ -623,9 +643,18 @@ function cdOperand(args) {
 
 // src/hooks/shell/workdir.ts
 var UNREAD_TARGET = /[$`%*?[\]{}]|^~[^\\/]/;
-function cdMove(words) {
+var VARIABLE_TARGET = /^(?:\$\{(?:env:)?\w+\}|\$(?:env:)?\w+|%\w+%)(?:[\\/][^$`%*?[\]{}]*)?$/i;
+var MAX_EVAL_DEPTH = 3;
+function cdMove(words, evalDepth = 0) {
   const at = resolveCommand(words).index;
   const name = commandName(words[at]?.value ?? "");
+  if (name === "eval" && evalDepth < MAX_EVAL_DEPTH) {
+    const text = words.slice(at + 1).map((w) => w.value).join(" ");
+    if (text.length > 4096) return void 0;
+    const inner = splitShell(text).statements;
+    const only = inner.length === 1 && inner[0]?.commands.length === 1 ? inner[0]?.commands[0] : void 0;
+    return only === void 0 ? void 0 : cdMove(only, evalDepth + 1);
+  }
   if (name === "cd..") return { kind: "cd", target: "..", push: false };
   if (CD_RETURNS.has(name)) return { kind: "pop" };
   if (!CD_COMMANDS.has(name)) return void 0;
@@ -675,7 +704,8 @@ function workdirs(statements, opts = {}) {
       out.push([]);
       continue;
     }
-    const before = statements[k - 1]?.end;
+    for (let o = 0; o < (statement.opens ?? 0); o += 1) outer.push(here);
+    const before = (statement.opens ?? 0) > 0 ? "(" : statements[k - 1]?.end;
     if (before === "&&" || before === "||") {
       if (before === "||") {
         trusted = false;
@@ -718,7 +748,8 @@ function workdirs(statements, opts = {}) {
         const back = move.target === "-" || move.target !== void 0 && /^\$\{?OLDPWD\}?$/.test(move.target);
         const unread = !back && move.target !== void 0 && UNREAD_TARGET.test(move.target);
         const lookedUp = (cdpath || prefixCdpath) && move.target !== void 0 && !/^(?:\.\.?(?:[\\/]|$)|[\\/~]|[A-Za-z]:)/.test(move.target);
-        const nextMay = back ? here.prevMay : unread ? null : moved(here.may, move.target);
+        const variable = unread && move.target !== void 0 && VARIABLE_TARGET.test(move.target);
+        const nextMay = back ? here.prevMay : unread && !variable ? null : moved(here.may, move.target);
         const nextSure = !surely || unread || lookedUp || move.target === void 0 ? null : back ? here.prevSure : moved(here.sure, move.target);
         here = {
           may: nextMay,
@@ -739,9 +770,10 @@ function workdirs(statements, opts = {}) {
       if (!inBacktick) outer.push(here);
       else here = outer.pop() ?? { ...here, may: null, sure: null };
       inBacktick = !inBacktick;
-    } else if (end === ")") {
-      here = outer.pop() ?? { ...here, may: null, sure: null };
+    } else if (end === ")" && statement.casePattern !== true) {
+      here = outer.pop() ?? { ...here, sure: null };
     }
+    for (let c = 0; c < (statement.closes ?? 0); c += 1) here = outer.pop() ?? { ...here, sure: null };
   }
   return out;
 }

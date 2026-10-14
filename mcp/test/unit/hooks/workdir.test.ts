@@ -62,15 +62,47 @@ describe('workdirs — where a command runs', () => {
   it('a subshell’s moves end with it; inside it they count', () => {
     const rows = workdirs(splitShell('echo $(cd web && pwd); npx x').statements);
     expect(rows[rows.length - 1]?.[0]).toEqual({ may: [], sure: [] });
-    expect(last('(cd web && npm ci) && npx x')).toEqual({ may: null, sure: null });
+    // A `(` at a statement's start is seen now (review 12, finding 5): its moves end with it.
+    expect(last('(cd web && npm ci) && npx x')).toEqual({ may: [], sure: [] });
     const inside = workdirs(splitShell('x; (cd web && npx y)').statements);
     expect(inside[2]?.[0]).toEqual({ may: ['web'], sure: ['web'] });
   });
 
+  // Review 12, finding 5: a statement-leading subshell, a `case` pattern and
+  // PowerShell's `(1);` lost track of where the line was.
+  it.each([
+    ['(true); npx x', [], []],
+    ['(cd web; ); npx x', [], []],
+    ['case x in x) ;; esac; npx x', [], []],
+    ['(1); npx x', [], []],
+    ['(cd /; npx x)', ['/'], ['/']],
+  ] as const)('%s → may %j, sure %j', (command, may, sure) => {
+    expect(last(command)).toEqual({ may, sure });
+  });
+
+  it('splitShell marks the subshells a statement opens and closes, and a case pattern', () => {
+    const fields = (command: string): unknown[] =>
+      splitShell(command).statements.map((s) => [s.masked, s.opens, s.closes, s.casePattern]);
+    const none = undefined;
+    expect(fields('(true); x')).toEqual([['true', 1, none, none], ['x', none, none, none]]);
+    expect(fields('(cd web; ); x')).toEqual([['cd web', 1, 1, none], ['x', none, none, none]]);
+    expect(fields('x; (cd /tmp); y')).toEqual([['x', none, none, none], ['cd /tmp', 1, none, none], ['y', none, none, none]]);
+    expect(fields('case x in x) ;; esac')).toEqual([['case x in x', none, none, true], ['esac', none, none, none]]);
+  });
+
+  it('a `)` whose `(` was never seen keeps the moves for a deny, and drops them for the vetting', () => {
+    expect(last('cd web; x ) ; npx y')).toEqual({ may: ['web'], sure: null });
+  });
+
   it('a target this cannot read is not known; a bare cd goes home — what a deny assumes', () => {
-    for (const command of ['cd "$DIR" && npx x', 'cd `pwd` && npx x', 'cd $(pwd) && npx x', 'cd %TEMP% && npx x', 'cd ~bob && npx x', 'cd a b && npx x', 'popd && npx x']) {
+    for (const command of ['cd `pwd` && npx x', 'cd $(pwd) && npx x', 'cd ~bob && npx x', 'cd a b && npx x', 'popd && npx x']) {
       expect(last(command), command).toEqual({ may: null, sure: null });
     }
+    // One variable and a plain path is kept for the shell guard to read (review 12, finding 16); never surely.
+    for (const [command, step] of [['cd "$DIR" && npx x', '$DIR'], ['cd %TEMP% && npx x', '%TEMP%'], ['cd "$TEMP/../.." && npx x', '$TEMP/../..']] as const) {
+      expect(last(command), command).toEqual({ may: [step], sure: null });
+    }
+    expect(last('eval cd / && npx x')).toEqual({ may: ['/'], sure: ['/'] });
     expect(last('cd && rm -rf *')).toEqual({ may: ['~'], sure: null });
     expect(last('cd - && npx x')).toEqual({ may: null, sure: null });
   });
