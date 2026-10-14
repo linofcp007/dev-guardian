@@ -26,16 +26,19 @@
  *     file, reason}` (one per `accepted_gaps` line, same order, every accepted
  *     line naming one file — so the reader counts accepted files without
  *     parsing the lines; it parses them only for a report without the details),
- *     `unused_timeout_acceptances` (a warning) and `coverage_notes` (a count).
+ *     `unused_timeout_acceptances` (a warning), `coverage_notes` (a count) and
+ *     a gating `coverage_gap_details[].cause` — `"accepted_file_changed"`: a
+ *     `file_timeout` on a file `semgrep.accept_timeouts` lists, refused because
+ *     it changed since the acceptance was reviewed, whose fix is not "list it"
+ *     (only a report without `cause` is read for that by its `detail`).
  *
- * dev-spec-driven reads neither `coverage` (nor a gap's `detail`,
- * `new_findings_by_severity` or `compact`): it takes the verdict from
- * `exit_code` and the gaps from `coverage_gaps` / `coverage_gap_details`.
- * This file freezes those keys too — they are the
- * documented verdict (docs/ci.md) other callers read — so it holds more than
- * dev-spec-driven needs, never less. Keys are only ever added. Change one of
- * these and this test fails before dev-spec-driven's gate quietly stops
- * reading the verdict.
+ * dev-spec-driven reads neither `coverage` nor `new_findings_by_severity` nor
+ * `compact`: it takes the verdict from `exit_code` and the gaps from
+ * `coverage_gaps` / `coverage_gap_details`. This file freezes those keys too —
+ * they are the documented verdict (docs/ci.md) other callers read — so it
+ * holds more than dev-spec-driven needs, never less. Keys are only ever added.
+ * Change one of these and this test fails before dev-spec-driven's gate
+ * quietly stops reading the verdict.
  */
 import { describe, expect, it } from 'vitest';
 import { evaluateGate } from '../../../src/ci/gate.js';
@@ -199,6 +202,42 @@ describe('the JSON verdict dev-spec-driven parses (contract)', () => {
       ['file_timeout', 'src/big.js'],
       ['file_timeout', 'src/gen.js'],
     ]);
+  });
+
+  it('what dev-spec-driven 1.30.2 reads besides: coverage_notes, unused_timeout_acceptances, cause "accepted_file_changed" (3.4.0)', () => {
+    // Notes and stale acceptances: string arrays, always there.
+    expect((json['coverage_notes'] as unknown[]).every((n) => typeof n === 'string')).toBe(true);
+    expect(json['coverage_notes']).not.toEqual([]);
+    expect(json['unused_timeout_acceptances']).toEqual([]);
+    const timedOut: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: [{ name: 'semgrep', status: 'ok' }],
+      missing_tools: ['semgrep'],
+      partial_parses: { semgrep: [{ file: 'src/big.js', type: 'Timeout' }] },
+    };
+    const changed = JSON.parse(
+      renderJson(
+        evaluateGate({
+          findings: [],
+          baseline: null,
+          failOn: 'high',
+          steps: [timedOut],
+          droppedBaselineEntries: 0,
+          acceptedTimeouts: ['src/big.js', 'src/gone.js'],
+          timeoutAcceptanceRef: { ref: 'BASE', changed: new Set(['src/big.js']) },
+        }),
+      ),
+    ) as Record<string, unknown>;
+    // A listed file that changed since its acceptance: a gap that gates, with its cause — never accepted.
+    expect(changed['exit_code']).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(changed['accepted_gap_details']).toEqual([]);
+    const gating = (changed['coverage_gap_details'] as Array<Record<string, unknown>>).filter((d) => d['gating'] === true);
+    expect(gating).toHaveLength(1);
+    expect(Object.keys(gating[0] ?? {}).sort()).toEqual(['cause', 'detail', 'gating', 'kind', 'remedy', 'tool']);
+    expect(gating[0]).toMatchObject({ tool: 'semgrep', kind: 'file_timeout', cause: 'accepted_file_changed' });
+    // The other listed file had no timeout to accept: named, a warning there.
+    expect(changed['unused_timeout_acceptances']).toEqual(['src/gone.js']);
   });
 
   it('the GapKind set is exactly the contract’s', () => {

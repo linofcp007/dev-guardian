@@ -10,18 +10,19 @@ version bump.
 
 ## [3.4.0] - 2026-10-14
 
-Review 10 — the combined review of 3.3.0 — and what it found. Its three HIGH findings are fixed: a `.guardian`
-folder below the project root is scanned again (3.3.0 left every folder of that name out, so a pull request
-could hide code from the CI gate in one); the npx local-bin skip, which took the malicious-package deny with
-it, no longer skips vetting in the forms the review reported; and on Windows no batch file (`wp.bat`,
-`wpscan.bat`, `lighthouse.cmd`, `npm.cmd`, …) is handed an argument `cmd.exe` can misread, so a `"` before an
-`&` in a slug or a URL no longer runs a second command. Of its medium findings, a placeholder no longer hides
-a real secret on the same line, a secret replaced on its own line is new to the baseline (partly fixed), and
-the hook guards read more MCP write tools, delete spellings and scripts handed to a shell. The LLM-assisted
-scan is one listed tool, `llm_scan { step }` (50 listed tools, 16 hidden aliases), and new plans use prompts
-v6. The hooks bundle is split by event, SessionStart outside a repository runs no git (541 → 174 ms), and the
-MCP server writes Node's compile cache and probes its shell during start-up (`initialize` 510 → 403 ms; medians
-on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher too, which found three bugs.
+Reviews 10, 11 and 12 — the combined review of 3.3.0, and two reviews of this release before it shipped. Review
+10's three HIGH findings are fixed: a `.guardian` folder below the project root is scanned again (3.3.0 left
+every folder of that name out, so a pull request could hide code from the CI gate in one); the npx local-bin
+skip, which took the malicious-package deny with it, is judged as npm resolves the bin; and on Windows no batch
+file (`wp.bat`, `wpscan.bat`, `npm.cmd`, …) is handed an argument `cmd.exe` can misread. The CI gate judges an
+accepted Semgrep timeout by the file's content and a baselined secret by its value, so a change to an accepted
+file gates again, and a secret replaced in place or added above a baselined one is new. The guardrail hooks
+guard links to the settings and the hook configuration, more environment switches, the managed settings, every
+reader of a script fed to a shell, relative delete targets and MCP writes in more shapes. The LLM-assisted scan
+is one listed tool, `llm_scan { step }` (50 listed tools, 16 hidden aliases), and new plans use prompts v6. The
+hooks bundle is split by event, SessionStart outside a repository runs no git (541 → 174 ms), and the MCP
+server writes Node's compile cache and probes its shell during start-up (`initialize` 510 → 403 ms; medians on
+a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher too, which found three bugs.
 
 ### Upgrading from 3.3.x
 
@@ -31,13 +32,13 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
 - **Prompts v6.** A plan created by 3.4.0 renders v6 briefs, which tell a subagent to answer through `llm_scan`
   with `step: "submit"` only, the answer object alone as `payload`. A plan made before keeps its version: v5
   briefs still name `llm_scan_submit`, which still takes the answer. v1–v5 are unchanged.
-- **Windows: a URL with a `%` no longer reaches a batch-file Lighthouse or WPScan.** dev-guardian does not
-  start a `.cmd` / `.bat` with an argument holding `"`, `%`, a carriage return, a line feed or NUL: the
-  scanner is reported as not run (`batch_argument_refused`), with the reason. A URL with an encoded character
-  (`%20`) is such an argument for an npm-installed `lighthouse.cmd` (`perf_check`) or a gem's `wpscan.bat`
-  (`wp_vuln_check`): run those where the tool is not a batch file (WSL, Linux, macOS). An `.exe` is never
-  judged. A batch-file `gh` (`gh.cmd`) cannot run `create_github_issues`, whose own search for existing issues
-  holds a `"`; the usual `gh.exe` is not affected.
+- **Windows: a batch file never gets an argument `cmd.exe` can misread.** dev-guardian does not start a `.cmd`
+  / `.bat` with an argument holding `"`, `%`, a carriage return, a line feed or NUL, or ending in two or more
+  backslashes: the scanner is reported as not run (`batch_argument_refused`), with the reason. An npm cmd-shim
+  (an npm-installed `lighthouse.cmd`) is run as `node <script>`, with no `cmd.exe`, so `perf_check` takes a
+  percent-escaped URL as before. A gem's `wpscan.bat` or a pnpm shim is a batch file: a URL with an encoded
+  character (`%20`) no longer reaches it — run `wp_vuln_check` where WPScan is not a batch file (WSL, Linux,
+  macOS). An `.exe` is never judged.
 - **`wp_report` is open-world** (`openWorldHint: true`), and so are the hidden aliases `wp_cron_audit` and
   `wp_plugin_check`: WP-CLI boots the site — its PHP runs, it connects to the site's database host, and `wp
   plugin list` asks api.wordpress.org for updates. A host that asks before an open-world tool now asks for
@@ -51,9 +52,46 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
 - **CLI exit codes.** Every usage error is 3, now also `mcp-config` with a missing or unknown host and
   `ci-init` with a missing or unknown target (both exited 1; `ci-init`'s 1 is now only "an existing file
   refused", `mcp-config`'s only "the MCP server is not built"). `mcp-config --scope` with anything but
-  `project` or `global` is a usage error — it silently meant `project`. A missing, truncated or throwing
-  engine bundle is 3 with one line saying how to repair it (a stack trace and exit 1, `scan`'s "the gate
-  failed", before). `--version` (and `-V`) prints the release and exits 0; it was "Unknown command", exit 3.
+  `project` or `global` is a usage error — it silently meant `project`. A damaged engine bundle — missing, cut
+  short, throwing, from another build, or a load that never settles (`GUARDIAN_ENGINE_LOAD_DEADLINE_MS`) — is
+  exit 3 with one line saying how to repair it, where it was a stack trace and exit 1, `scan`'s "the gate
+  failed"; `--help` still prints the usage. `--version` (and `-V`) prints the release and exits 0; it was
+  "Unknown command", exit 3.
+- **A link to the settings or the hook configuration is denied.** A symbolic link or junction whose target is
+  Claude Code's settings, `.claude`, the managed-settings directory, the hook configuration (a file or its
+  directory) or dev-guardian's registry is refused (`guard-config-link`): `ln -s .claude/settings.json s.json`
+  and `New-Item -ItemType SymbolicLink -Path b.json -Target .guardian\hooks.config.json` were allowed. Make
+  such a link yourself if you want one.
+- **New environment keys in Claude Code's settings ask.** A settings `env` that adds `NODE_OPTIONS`,
+  `GUARDIAN_PKG_VET_DEADLINE_MS` or `GUARDIAN_OFFLINE` (any value), or `NODE_TLS_REJECT_UNAUTHORIZED=0`, is
+  denied like `GUARDIAN_HOOKS=off`; one that adds `PATH`, `HOME`, `USERPROFILE`, any other `NODE_*` /
+  `GUARDIAN_*` variable or a proxy (`NODE_USE_ENV_PROXY`, `NODE_EXTRA_CA_CERTS`, `HTTP(S)_PROXY`, `ALL_PROXY`,
+  `NO_PROXY`) is asked about — not `NODE_ENV`, nor a known switch at a harmless value.
+- **More MCP calls ask.** A tool whose name names no file (`save`, `write`, a GitHub `create_issue`) passing a
+  string that names a guarded file, a settings change the guard cannot work out (a regex replace, an edit
+  that does not apply as plain text) and a file tool's arguments past the read limits are asked about, never
+  denied.
+- **An unread script warns.** `cat x.sh | bash`, `Get-Content x.ps1 | iex`, `iex $var` and
+  `[scriptblock]::Create($code)` — text a shell or `iex` runs that the hook cannot read — warn "unread script"
+  instead of passing silently.
+- **An accepted timeout covers a file only as it was reviewed.** A `.guardian/scan.yml`
+  `semgrep.accept_timeouts` entry accepts a file whose content is what it was under `--baseline-ref` /
+  `--rules-ref`, or, without a ref (a local scan, dev-spec-driven's finish gate), at the last commit that
+  changed `.guardian/scan.yml` — committing the acceptance is what reviews it; with no such commit nothing is
+  accepted, and outside git the entries apply as written. A listed file that changed since is a gap that gates
+  (exit 2, `cause: "accepted_file_changed"`, its own remedy): review the change, then commit `scan.yml` again to
+  accept the file as it is now.
+- **Under a ref, the changed files are read whole for secrets.** With `--baseline-ref` (else `--rules-ref`) the
+  gate adds a `scan_secrets` step over every file not what it was at the ref (at most 1,000 per step), for the
+  multi-line secrets a diff hunk cuts. A multi-line secret already in such a file that no pass could see when
+  the baseline was written is reported once a pull request touches the file. A `.gitleaks.toml` commit
+  allowlist does not apply to this pass; when git cannot list the changed files, the step fails (exit 2).
+- **A baselined secret is matched by its value.** A secret added above a baselined one or replacing it is new;
+  a comment appended to its line, a move, and another copy of the same value in the same file are not. In
+  another file, a copy is new.
+- **Pairs with dev-spec-driven 1.30.2**, which reads `accepted_gap_details`, `unused_timeout_acceptances`,
+  `coverage_notes` and `cause: "accepted_file_changed"`. Keys are only added: 1.30.0 and 1.30.1 read this
+  verdict as before.
 - **Other hosts**: re-run `mcp-config <host> --write` (`--update-mcp` for a shared file) for the rules file
   that names `llm_scan`.
 
@@ -67,68 +105,98 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
   `last-grill.md`, its `.gitignore`) is left out now, by exact path; scopes and the scan cache's tree hash read
   a nested `.guardian` too. A file git tracks among those generated paths is a gap (exit 2, kind `other`) that
   no flag accepts: dev-guardian never commits its output, so `git rm --cached` it.
-- **The npx local-bin skip no longer drops a package npm fetches, in the forms review 10 reported** (HIGH).
-  `npx`, `npm exec` and `bunx` of an installed bin are not vetted, and the skip took the malicious-package
-  deny — which has no escape hatch — with it when a `cd` never moved the shell (`(cd web && npm ci) && npx x`,
-  `cd web & npx x`, `cd web | cat; npx x`, `echo $(cd web) && npx x`), when `.bin/<name>` was a directory (a
-  repository can commit `.bin/<name>/.keep`), when only `.bin/<name>.cmd` existed, when a scoped name matched
-  an unscoped bin (`npx @x/eslint` with `.bin/eslint`), and when a `-p` package matched a bin of its name. Only
-  `node_modules/<name>/package.json` counts now — or, for an unscoped program name not given by `-p`, a
-  `.bin/<name>` that is a file (bun's `.exe` too) — and a subshell's `cd` ends with it. The skip is narrowed,
-  not closed: it still takes a `package.json` it finds on trust and a `cd` that may not run, and those shapes
-  are open.
+- **The npx local-bin skip is judged as npm resolves the bin** (review 10, HIGH; reviews 11 and 12). `npx`,
+  `npm exec` and `bunx` of an installed bin are not vetted, and the skip took the malicious-package deny —
+  which has no escape hatch — with it where npm still fetched the package: after a `cd` that never moved the
+  shell, a `.bin/<name>` that was a directory or only a `.cmd`, a scoped name matched against an unscoped bin.
+  Only a `node_modules/<name>/package.json` whose `name` is the package, in npm's prefix (the nearest directory,
+  from where the command runs up, with a `package.json` or a `node_modules`), or — for an unscoped program name
+  not given by `-p` — a `node_modules/.bin/<name>` that is a file, from the prefix up, counts. Where the
+  command runs is the directory the `cd`s that surely ran lead to, through no symbolic link or junction;
+  `--prefix` / `-C`, `env -C` and `sudo -D` leave it unknown, so nothing is taken as installed.
 - **No command injection through a Windows batch file** ("BatBadBut", review 10, HIGH; 3.3.0 claimed it
   fixed, and its test never put a `"` before a metacharacter). WP-CLI (`wp.bat`), WPScan (a gem's
-  `wpscan.bat`), an npm-installed Lighthouse (`lighthouse.cmd`), `npm.cmd`, `composer.bat` and `bundle.bat`
-  run through `cmd.exe`, which reads the command line twice: a `"` before an `&` in a plugin slug, a URL, an
-  install path or a WordPress site's own `home` option ran a second command (`wp_report { kind: "plugin",
-  slug }`, `wp_vuln_check` with `target_url`, `wp_install_path` or a hostile `home`, `perf_check`). Fixed for
-  injection, at two layers: no `.cmd` / `.bat` is started with an argument (or a command path) holding `"`,
-  `%`, CR, LF or NUL — refused rather than escaped, since what survives the second parse depends on how the
-  batch file uses its arguments; and each tool takes only what its value can be — a plugin slug is letters,
-  digits, `_` and `-`, a URL is http or https, parsed and handed over re-serialised (the one a site names
-  itself too), a WPScan token is a token, an install path or a k6 script path holds no `"`, an image reference
-  no `"` or `%`, and `create_fix_pr` refuses an upgrade step whose package identifier holds `"` or `%`.
-  `create_fix_pr` and `create_github_issues` hand `gh` the body in a file (`--body-file`): a body is text the
-  scanned repository wrote, and a batch-file `gh` would have split it at its first line break. Still to do: an
-  argument ending in two or more backslashes is not escaped for a batch file (no current caller is
-  exploitable through it).
+  `wpscan.bat`), `npm.cmd`, `composer.bat` and `bundle.bat` run through `cmd.exe`, which reads the command line
+  twice: a `"` before an `&` in a plugin slug, a URL, an install path or a WordPress site's own `home` option
+  ran a second command (`wp_report { kind: "plugin", slug }`, `wp_vuln_check` with `target_url`,
+  `wp_install_path` or a hostile `home`, `perf_check`). Fixed at two layers: no `.cmd` / `.bat` is started with
+  an argument (or a command path) holding `"`, `%`, CR, LF or NUL, or ending in two or more backslashes —
+  refused rather than escaped, since what survives the second parse depends on how the batch file uses its
+  arguments — and an npm cmd-shim is run as `node <script>`; and each tool takes only what its value can be — a
+  plugin slug is letters, digits, `_` and `-`, a URL is http or https, parsed and handed over re-serialised
+  (the one a site names itself too), a WPScan token is a token, an install path or a k6 script path holds no
+  `"`, an image reference no `"` or `%`, and `create_fix_pr` refuses an upgrade step whose package identifier
+  holds `"` or `%`. `create_fix_pr` and `create_github_issues` hand `gh` the body in a file (`--body-file`): a
+  body is text the scanned repository wrote, and a batch-file `gh` would have split it at its first line break.
+- **A network path is refused before any file call, on every path argument.** `vet_packages` resolved its
+  `project_path` on its own and read `.npmrc` / `nuget.config` from wherever it led: a share, or a local link
+  to one, made Windows authenticate to a host the caller chose. It takes the rule every tool takes now, and so
+  do `wp_install_path`, `scan_skill`'s target (a share, a `file:` URL naming a host, a repository whose
+  `objects/info/alternates` point at a share), `map_attack_surface`'s `spec_paths`, `register_custom_rules`
+  (an entry already stored as one is listed as unusable and never re-read) and `import_sarif` with
+  `allow_outside_project`. A project path that is a local link to a share is refused at once (`network_path`,
+  naming the link) instead of hanging 42 s and then saying it does not exist.
 - **A placeholder no longer hides a real secret on the same line** (review 10, MEDIUM; a 3.3.0 regression).
   AWS's documented example key (or `ghp_xxxx…`) before a real key in one statement gave no finding at all —
-  nothing for the warning, nothing for `secrets.block`. A rule now reads past a set-aside match, up to 16 per
-  16 KB window so the cost stays bounded; a real key behind more placeholders than that on one line is still
-  missed.
-- **A secret replaced on its own line is new** (review 10, MEDIUM; a 3.3.0 regression, partly fixed). A pull
-  request that swapped a baselined key for another on the same line — or an uncommitted edit doing so —
-  matched the baseline's `match_id` and passed. The gate now reads each such finding's line in memory, from
-  the commit or the working tree, and compares the lines under a key the run draws and never writes; a slot
-  holding two values matches by exact identity only. An unchanged secret, a whitespace commit and an
-  unrelated edit still match; anything else changed on a secret's line reads as a new value (the safe
-  direction). Not fixed: a new secret of the same rule added above a baselined one in the same file can still
-  match the baselined one's entry (occurrences are numbered by line), and so can a replacement whose base
-  commit a force-push removed (the baseline stores no value to compare with).
-- **The MCP write guard reads every argument of the common file servers** (review 10, MEDIUM). Serena's
+  nothing for the warning, nothing for `secrets.block`. A rule now reads past every set-aside match, any number
+  of them, at the cost of a benign line.
+- **A baselined secret is matched by its value, one to one** (review 10, MEDIUM; a 3.3.0 regression; review
+  11). A pull request that swapped a baselined key for another on the same line, or put a new one above it,
+  matched the baseline and passed. The gate reads each secret's value — cut from its line where gitleaks'
+  redacted report locates it, HMAC'd in memory under a key the run draws and never writes — and numbers a
+  file's secrets by value, in the order they came in; exact identities take their baseline entries first, and
+  a `match_id` claims only an entry no other slot took. Under a ref, the files changed since are read whole,
+  so a private key replaced or added inside its `BEGIN … END` block — which a diff hunk cuts — is new too,
+  and a key `.gitleaksignore` accepts by its history fingerprint stays accepted beside an edit. A renamed file with
+  an edit on a baselined secret's line is no longer new (its hunks are read with rename pairing). Old
+  baselines still match unchanged secrets.
+- **The MCP write guard reads every argument** (review 10, MEDIUM; reviews 11 and 12). Serena's
   `create_text_file` / `replace_regex` (`relative_path`), JetBrains' `create_new_file` /
   `replace_text_in_file` (`pathInProject`) and `str_replace_editor` (`file_text`, `new_str`) wrote Claude
   Code's settings or the hook configuration past every guard, and `update_file`, `modify_file`, `apply_diff`,
   `set_file_contents` and `WRITE_FILE` never reached the hook. Every string argument, four levels deep, is now
-  judged as a path and as text, and update, modify, apply, set and push are write verbs when they are a word
-  of the tool name (not `get_settings`). Still open: a path argument spelled with `~`, and a regex
-  replacement whose result the guard cannot compute.
-- **A catastrophic delete is judged in any spelling of its path** (review 10, MEDIUM). `rm -rf /usr/..`,
-  `/./`, `//`, `~/..`, `/c/Users/<you>/..`, `C:/Windows/.`, `"C:/Windows//"`, `/c/./Windows`, `"$WINDIR"`,
-  `"$SYSTEMROOT"`, `"${PROGRAMFILES}"`, `\\?\C:\Windows`, `\\.\C:\Windows`, `\\localhost\c$\Windows` (an admin
-  share of any host), `FileSystem::C:\`, `'C:\Windows.'` and `$env:USERPROFILE\..` only warned; they are
-  denied. A relative path (`..`, `C:` and `C:dir` too) is still not judged.
+  judged as a path and as text; update, modify, apply, set and push are write verbs when they are a word of
+  the tool name (not `get_settings`); a `~` path is judged as the home directory's too (also for `Write`,
+  `Edit`, `MultiEdit` and `NotebookEdit`, and on Windows a Git Bash `/c/…` as `C:/…`); a settings change whose
+  result cannot be worked out (a regex replace, a regex, glob or case flag in any form, an edit that does not
+  apply as plain text, a move onto the file) asks; a non-file tool's strings that name a guarded file ask; and
+  arguments past the read limits ask for a file tool and get a note for another.
+- **Claude Code's settings guard knows the variables that switch the hooks off** (reviews 11 and 12).
+  `NODE_OPTIONS` (it runs code in every hook before it starts), `GUARDIAN_PKG_VET_DEADLINE_MS`,
+  `GUARDIAN_OFFLINE` and `NODE_TLS_REJECT_UNAUTHORIZED=0` in a settings `env` are denied, and a shell write of
+  the settings naming `NODE_OPTIONS` or `GUARDIAN_PKG_VET_DEADLINE_MS` too; new `PATH`, `HOME`, `USERPROFILE`,
+  other `NODE_*` / `GUARDIAN_*` and proxy variables ask (see Upgrading). `GUARDIAN_PKG_VET_DEADLINE_MS` is
+  never below the 3 s network budget. Every form of a switch counts: `disableAllHooks` with any value that may
+  read as true, an `enabledPlugins` entry naming dev-guardian with any value but `true`, JSONC comments,
+  escaped keys and a repeated key. The managed-settings files (Program Files / ProgramData `ClaudeCode`,
+  `/Library/Application Support/ClaudeCode`, `/etc/claude-code`) are settings to the write guards and the
+  shell guard. A settings file is read once, linearly, and a reading past 4 s asks.
+- **A link is a second name** (review 12). A symbolic link or junction (`ln -s`, `mklink /D` / `/J`,
+  `New-Item -ItemType SymbolicLink|Junction`, `[IO.File]::CreateSymbolicLink`) to the hook configuration,
+  Claude Code's settings, `.claude`, the managed-settings directory or dev-guardian's registry is denied, and
+  every later path of the command is judged through the links it made — and, from a hook call, through the
+  links already on disk — so a write through a junction to `.claude` is a write of the settings.
+- **A catastrophic delete is judged in any spelling of its path, and where the command runs** (review 10,
+  MEDIUM; reviews 11 and 12). `rm -rf /usr/..`, `/./`, `//`, `~/..`, `/c/Users/<you>/..`, `C:/Windows/.`,
+  `"C:/Windows//"`, `/c/./Windows`, `"$WINDIR"`, `"$SYSTEMROOT"`, `"${PROGRAMFILES}"`, `\\?\C:\Windows`,
+  `\\.\C:\Windows`, `\\localhost\c$\Windows` (an admin share of any host), `FileSystem::C:\`, `'C:\Windows.'`
+  and `$env:USERPROFILE\..` only warned; they are denied. A relative target is read against the hook's working
+  directory moved by the `cd`s before it — one tracker of where each command runs, `hooks/shell/workdir.ts`:
+  `rm -rf ..` from a child of the home directory, `cd / && rm -rf *`, `"$TEMP/../../.."`, `$PWD`, the home
+  directory's 8.3 name, Git Bash's bare `C:`, `cd "$HOME"`, `eval cd /` and `Get-ChildItem C:\ | Remove-Item
+  -Recurse` are denied.
 - **Install vetting reads the scripts a command hands a shell** (review 10, MEDIUM). `bash -c 'npm i x'`,
   `cmd //c npm i x`, `pwsh -c 'npm i x'`, `echo 'npx x' | sh`, `cat <<EOF | bash` and base64 decoded into a
   shell are vetted as the command's own installs: a malicious version is denied, a missing name there only
-  warns. `xargs npm i`, `npm i $(…)` and `node -e` are not read.
-- **The shell guard reads a script handed to a shell through `cat`, `tee` or a PowerShell string** (review 10,
-  MEDIUM-LOW). `cat <<'EOF' | bash` with `rm -rf /` in the body, `cat <<< 'rm -rf /' | bash`,
-  `echo … | tee log | sh` and, from the PowerShell tool, `'rm -rf /' | bash` were ok; they are denied. A
-  heredoc fed to anything else (`git commit -F -`) stays data. PowerShell's `| iex` and a shell behind a
-  wrapper (`| env bash`) are not read yet.
+  warns.
+- **The shell guard reads every reader of a fed script** (review 10, MEDIUM-LOW; reviews 11 and 12): what
+  `cat`, `tee` or a PowerShell string passes on to a shell; PowerShell's `iex` / `Invoke-Expression`, a script
+  block made from a string (`[scriptblock]::Create`, `InvokeScript`, a runspace's `AddScript`) and the
+  PowerShell host reading stdin; `cmd` with no command or `/k`; a shell behind a runner (`sudo`, `env`,
+  `timeout`, `busybox`), `bash -s`, `bash /dev/stdin`, `xargs -I{} bash -c {}`, `script -c bash`; fed from a
+  group or through an output substitution (`tee >(bash)`). `cat <<'EOF' | bash` with `rm -rf /` in the body
+  was ok; it is denied. A heredoc fed to anything else (`git commit -F -`) stays data, and text a reader runs
+  that cannot be read here warns (see Upgrading).
 - **`scan` never writes `.guardian/.gitignore` through a `.guardian` link** (review 10): with `.guardian` a
   junction to `.`, it wrote a root `.gitignore` holding `*`, and a new untracked file with a critical finding
   then passed a local scan.
@@ -140,13 +208,21 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
 - **The hooks read a setting only when it has the right type.** A user-level `"ignorePaths": "/"` (a string,
   not a list) broke the path check of every write: the hook failed open, and a secret just written got no
   warning; `"enabled": "no"` counted as on. A value of the wrong type is left out (its default applies), and
-  SessionStart names it with its file.
+  SessionStart names it with its file, as it names an `ignorePaths` entry that silences every secret warning
+  (`""`, `"/"`, `"."`).
 
 ### Added
 
 - **`--version`** (and `-V`) prints the release — the `plugin.json` version a verdict's `tool_version` names.
-- **`unused_timeout_acceptances`** in the JSON verdict, and a note on every run: the
-  `.guardian/scan.yml` `accept_timeouts` entries no step reported a Timeout on.
+- **`accepted_gap_details`** in the JSON verdict: `[{ tool, kind, file, reason }]`, one per `accepted_gaps`
+  line, in the same order, every accepted line naming one file — count accepted files from it, never by
+  parsing the lines. The human report's second line says `N file(s) not analysed (accepted), M file(s) only
+  partly parsed (accepted)`.
+- **`cause`** on a `coverage_gap_details` entry, only where the kind alone would mislead:
+  `accepted_file_changed`, a `file_timeout` on a file `semgrep.accept_timeouts` lists that changed since its
+  acceptance was reviewed.
+- **`unused_timeout_acceptances`** in the JSON verdict, and a note on every run: the `.guardian/scan.yml`
+  `accept_timeouts` entries no step reported a Timeout on.
 - `audit_executive`'s `sub_scans` carry `call`, the listed call that runs each child again (`dotnet_check {
   check: "secrets" }`). `check --bash --json` prints `scripts`, the scripts the command hands a shell.
 
@@ -171,11 +247,10 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
 - **`coverage_gaps` holds only gaps that gate.** The "baseline: N entries could not be read" line moved to
   `coverage_notes`; it is still a `coverage_gap_details` entry (`gating: false`) and a SARIF notification.
 - **`.guardian/scan.yml`**: `semgrep.timeout` must be whole seconds (Semgrep refused `--timeout 1.5`, and every
-  scan exited 2 without naming the file — now exit 3, naming it); an `accept_timeouts` entry with `*`, `?` or a
-  trailing `/` is refused (it matched nothing, silently); an unused entry is named on every run. `docs/ci.md`
-  states the exact scope — one file, every rule, until removed: code added to an accepted file can go
-  unanalysed by the rules that time out on it and still pass, so review a change to an accepted file as if no
-  SAST ran on it.
+  scan exited 2 without naming the file — now exit 3, naming it); a key written twice, directly or through a
+  YAML alias, is refused (the last one won); an `accept_timeouts` entry with `*`, `?` or a trailing `/` is
+  refused (it matched nothing, silently); an unused entry is named on every run; an entry covers a file as it
+  was reviewed (see Upgrading). `docs/ci.md` states the exact scope.
 - The README requirements say the guardrail hooks need Claude Code 2.1.139 or later: an older Claude Code
   does not pass the exec-form `"args"`, no hook starts, and nothing can say so.
 - `docs/env.md`: a `wp_vuln_check` run against a URL alone writes its report under `GUARDIAN_CACHE_DIR`, not
@@ -188,7 +263,14 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
   a URL that stalls answers at its 120 s timeout (it ran past 330 s on Windows, `git remote-https`
   surviving), and SessionStart's git stops git's whole tree (POSIX: its process group; Windows: `taskkill /T
   /F`) and answers at most 2 s after its stop — a stand-in git with a helper held it 60 s against the 2 s
-  timeout. The synchronous git calls still stop git alone.
+  timeout. The synchronous git stops its helpers at its timeout too (POSIX: git's process group; Windows: the
+  processes git started since it began, each stopped with its tree), and a `.cmd` git is a failure, never a
+  rejected promise.
+- **Semgrep's own reason is kept.** A run that wrote no report carries Semgrep's `[ERROR]` line, and its
+  command-line and network errors (`ProxyError`, `SSLError`, …). `SEMGREP_SEND_METRICS=off` with the registry
+  rules — every full scan exited 2 with no cause named — is said, with its remedy; the plainly-meant spellings
+  (`0`, `false`, `no` / `1`, `true`, `yes`) are normalized for the spawned Semgrep, and another value Semgrep
+  refuses is named.
 - **MCP sampling (`execute: "sampling"`) takes the answer the brief asks for.** Since prompts v5 the brief
   asks for a few lines of working, then the JSON object; the sampling path refused any prose before the
   object, spending a try on every answer that followed the brief. It takes the working and then the object at
@@ -199,21 +281,22 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
 - **`scan --format json --sarif <path>`**: when the SARIF could not be written, a passing scan printed
   `"exit_code": 0` and then exited 3. The SARIF is written first; the verdict printed carries the exit the run
   ends with (3 for a pass; a gate verdict of 1 or 2 stays), on stdout whatever the write did. A falsy value
-  thrown by the scan pipeline read as "no error" and crashed: any throw is "scan failed to run", exit 3.
+  thrown by the scan pipeline read as "no error" and crashed: any throw is "scan failed to run", exit 3. What a
+  damaged engine prints while it loads goes to stderr, so `--format json` stays JSON.
 - **SessionStart names a damaged install.** With the hooks bundle damaged it said `v0.0.0`; it reads the
   version from `plugin.json` now. A missing or damaged `mcp/dist/engine.js` (size and SHA-256 against the
-  build's) is named — "its MCP tools and CLI cannot run" — where it said "active". A damaged hooks part takes
-  down only its own guards, and SessionStart names them, with two gaps left: a damaged `hooksBash.js` is
-  named as the shell guard though install vetting goes with it, and a damaged `hooksSession.js` is not named.
+  build's) is named — "its MCP tools and CLI cannot run" — where it said "active". A damaged part of the hooks
+  bundle fails open alone — package vetting, in its own part, still runs when the shell guard's part is
+  damaged — and SessionStart names it, and says when vetting is off.
 - **`import-sarif` and `import_sarif` read a log inside the project spelt through an 8.3 short name** (a
   3.3.0 regression: `C:\Users\ADMINI~1\…` from the CLI's working directory was refused as outside the
   project).
-- **A project path that is a local link to a network share** is refused at once (`network_path`, naming the
-  link) instead of hanging 42 s and then saying it does not exist — on every tool but `vet_packages`, which
-  does not check its `project_path` that way yet.
 - **Scan history keeps its order across a small step back of the clock**: a scan's `started_at` is held at
   the last stamp + 1 ms while the wall clock is behind it by less than 5 s; a larger step is trusted (a real
   correction) and logged on the server's stderr.
+- **The temp-directory fallback for `.guardian/reports` is pruned** (when `.guardian/reports` is a link or not
+  a directory): the newest `GUARDIAN_KEEP_REPORTS` of a kind, like the project's, and only the folders holding
+  this account's owner marker.
 
 ### Performance
 
@@ -242,28 +325,40 @@ on a shared machine). `npm run lint` type-checks the CLI and the hook dispatcher
   holding `undefined`.
 - **A tool's input is typed by its schema**: `defineTool({ inputSchema, handler })`, the handler taking
   `ToolInput<typeof inputSchema>`; `makeScanTool` types its callbacks the same way. No `input as` cast is left
-  in a handler. `toolProjectPath()` resolves a tool's `project_path` for 38 tools.
+  in a handler. A tool's `project_path` is `toolProjectPath()`, and `platform/projectPath.ts#networkPathOf` is
+  the one network-path rule for every path argument.
 - **The shell guard is split by concern**: `hooks/shell/cmd.ts` (cmd.exe's line reader), `paths.ts`,
-  `effects.ts`, `interpreters.ts`, `arrays.ts`; `bashGuard.ts` 5057 → 3718 lines, no export changed. Large
-  handlers in phases: `scan_dast` 465 → 324 lines, `wp_audit` 240 → 93, `audit_executive` 234 → 138,
-  `wp_vuln_check` 209 → 139; `evaluateGate`, gitleaks' working-tree pass and `scanFileBatches` too.
+  `effects.ts` (the effects model, links and their targets included), `interpreters.ts`, `arrays.ts`, and
+  `workdir.ts` — the one tracker of where each command runs, which package vetting reads too (pkgvet's own cd
+  tracker is gone); the split took `bashGuard.ts` from 5057 to 3718 lines, no export changed. Large handlers in
+  phases: `scan_dast` 465 → 324 lines, `wp_audit` 240 → 93, `audit_executive` 234 → 138, `wp_vuln_check`
+  209 → 139; `evaluateGate`, gitleaks' working-tree pass and `scanFileBatches` too.
 - New modules: `platform/guardianOutput.ts` (the one list of generated paths), `runners/gitExec.ts` (async git
-  on `startChild` / `stopTree`), `ci/secretValues.ts` (per-run HMACs of gitleaks lines), `platform/toolArgs.ts`
-  and `schemas.ts#httpUrlField` (the values a tool hands a program), `runners/argFile.ts` (`--body-file`),
+  on `startChild` / `stopTree`), `ci/secretValues.ts` (per-run HMACs of secret values), `ci/changedSince.ts`
+  (which accepted files changed, against a ref or `scan.yml`'s last commit), `ci/gitleaksIgnore.ts`
+  (`.gitleaksignore`'s history fingerprints), `platform/toolArgs.ts` and `schemas.ts#httpUrlField` (the values
+  a tool hands a program), `runners/argFile.ts` (`--body-file`), `runners/npmCmdShim.ts`,
   `llmscan/answerText.ts` (the sampled answer's object). `runners/spawn.ts` throws `BatchArgumentRefused`
   (`batch_argument_refused`) and `Child.process` is nullable.
 - `schemas.ts`' 8 dead exports are gone: `unusedExports.baseline.json` 19 → 11 entries.
   `responseToolNames.test.ts` fails on prose in `src/` naming a hidden alias; `llmScanFold.test.ts` (14 tests,
   a real MCP client); `batchArgumentTools.test.ts` puts the `"` before the `&` for every tool;
-  `gitSafetyPlainSpawn.test.ts` holds SessionStart's tree kill.
-- `openSetCarryForward.test.ts`'s carry-forward timings assert a ratio (the history 8 or 10 times longer
-  costs under factor^1.5 as much), not a 2 s budget that failed under load; the budget runs only with
-  `GUARDIAN_PERF_STRICT=1`. The dev-spec-driven mirror fixture is at 1.30.1 (its lists unchanged since
-  1.28.0), and the verdict contract's comments say what dev-spec-driven 1.30.x reads: neither `coverage` nor
-  `accepted_gaps`.
-- The compile-cache tests start their hook without `NODE_DISABLE_COMPILE_CACHE`: a coverage run (v8) sets it
-  for every process its workers spawn, and Node reads it, even empty, as "no cache" — the floor container's
-  run failed on that alone, and the tests expecting no cache passed for that reason.
+  `secretIdentityGitleaks.test.ts` and `secretFullContentGitleaks.test.ts` run the secret scenarios on real
+  gitleaks output; `pluginInstall.test.ts` installs from a real `git archive` at a path with a space, runs the
+  hooks as `hooks.json` declares them and keeps a damaged-dist control.
+- **No test asserts a bare number of milliseconds**: the last ones became `expectLinear` shapes or `hangBound`
+  waits — `openSetCarryForward.test.ts`'s carry-forward timings assert a ratio (the history 8 or 10 times
+  longer costs under factor^1.5 as much), its 2 s budget only with `GUARDIAN_PERF_STRICT=1`. The compile-cache
+  tests start their hook without `NODE_DISABLE_COMPILE_CACHE`: a coverage run (v8) sets it for every process
+  its workers spawn, and Node reads it, even empty, as "no cache".
+- The dev-spec-driven mirror fixture is at 1.30.2 (its lists unchanged since 1.28.0), and the verdict
+  contract (`verdictContract.test.ts`, `ci/report.ts`, `docs/ci.md`) says what dev-spec-driven reads: since
+  1.30.2 `accepted_gap_details`, `unused_timeout_acceptances`, `coverage_notes` and `cause`, never `coverage`.
+
+### Known limits
+
+- The guardrail hooks judge what a command line and a tool call say, not what a program they start does
+  later; what they do not see is listed in `docs/hooks.md` (Configuration → Known limits).
 
 ## [3.3.0] - 2026-10-13
 

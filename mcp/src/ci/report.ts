@@ -257,8 +257,9 @@ function describeFinding(f: Finding): string {
  * `new_findings_count` and the gating `coverage_gap_details` (`tool`, `kind`,
  * `remedy`) when they are there; since 1.30.2 `accepted_gaps` with
  * `accepted_gap_details` (`tool`, `kind`, `file`, `reason`),
- * `unused_timeout_acceptances` and `coverage_notes`. It does not read
- * `coverage`, a documented key (docs/ci.md) that
+ * `unused_timeout_acceptances`, `coverage_notes` and a gating gap's `cause`
+ * (`accepted_file_changed`). It does not read `coverage`,
+ * `new_findings_by_severity` or `compact`, documented keys (docs/ci.md) that
  * `test/unit/ci/verdictContract.test.ts` freezes with the rest — that file
  * says what each dev-spec-driven version reads. Keys are only ever added.
  */
