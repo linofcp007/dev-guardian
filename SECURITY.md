@@ -337,6 +337,17 @@ their respective projects.
   empty or relative entry (a script that relied on `.` in PATH no longer
   finds what it ran from there). **Not converted**: the `.guardian/guardian.db`
   the storage layer opens.
+- **A batch file is never handed text `cmd.exe` could run.** On Windows a
+  `.cmd` / `.bat` (WP-CLI's `wp.bat`, a gem's `wpscan.bat`, npm's
+  `lighthouse.cmd`, `npm.cmd`) runs through `cmd.exe`, which reads its command
+  line twice; a `"` before an `&` in a plugin slug or a URL ran a second
+  command. dev-guardian refuses to start one with an argument holding `"`,
+  `%`, a carriage return, a line feed or NUL (the tool reports it as a
+  scanner that did not run), the tools take a slug, a token or a URL only in
+  their own shape (a URL re-serialised, http or https), and a pull request's
+  or an issue's body goes to `gh` in a file. A URL with a `%` (an encoded
+  character) therefore cannot reach a `.cmd` Lighthouse or a `.bat` WPScan on
+  Windows; run that check where the tool is not a batch file (WSL, Linux, macOS).
 - **A scanned repository's own git configuration runs nothing.** A repository
   delivered with its own `.git/` (an archive, a ZIP download, a shared folder)
   names programs git runs: `core.fsmonitor` on `status` and `ls-files`; hooks in

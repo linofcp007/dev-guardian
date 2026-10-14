@@ -410,7 +410,9 @@ export interface GateKeys {
    *     an unrelated uncommitted edit to the file, a squash merge (a new
    *     commit) or a whitespace commit touching the line each made a
    *     baselined secret new. The occurrence is counted per pass (history,
-   *     files), a secret found twice on one line of history once;
+   *     files), a secret found twice on one line of history once — and a
+   *     slot whose findings hold different values (a secret replaced in
+   *     place) is keyed by nothing ({@link mixedSlot}, review 10 finding 5);
    *   - the path as the baseline recorded it, when the file was renamed
    *     since (`renamedFrom`, from `git diff -M`: `ci/renames.ts`).
    *
@@ -426,7 +428,15 @@ export interface GateKeys {
  */
 export function gateMatchKeys(
   findings: readonly GateKeySubject[],
-  opts: { renamedFrom?: ReadonlyMap<string, string> } = {},
+  opts: {
+    renamedFrom?: ReadonlyMap<string, string>;
+    /**
+     * A gitleaks finding's secret as a per-run HMAC, or undefined when it
+     * could not be read (`ci/secretValues.ts`). Absent: values are not
+     * compared, and a slot is keyed whatever it holds (the pre-3.4 rule).
+     */
+    secretValue?: (finding: GateKeySubject) => string | undefined;
+  } = {},
 ): GateKeys[] {
   const renamed = opts.renamedFrom ?? new Map<string, string>();
   const out: GateKeys[] = findings.map(() => ({}));
@@ -459,6 +469,9 @@ export function gateMatchKeys(
     if (members === undefined) groups.set(key, [member]);
     else members.push(member);
   });
+  // Each (head, occurrence) is one slot — the same secret in every pass that
+  // saw it. A slot is keyed only when what its members hold is one value.
+  const slots = new Map<string, Array<{ index: number; finding: GateKeySubject }>>();
   for (const members of groups.values()) {
     members.sort(
       (a, b) =>
@@ -472,15 +485,45 @@ export function gateMatchKeys(
     let lastLine: number | undefined;
     for (const m of members) {
       // A secret found on the same line by two commits (a whitespace commit
-      // touching it) is one secret.
-      const sameSecret = m.pass === 'history' && m.finding.line_start !== undefined && m.finding.line_start === lastLine;
-      if (!sameSecret) occurrence += 1;
+      // touching it) is one occurrence — {@link mixedSlot} says whether it
+      // is one secret.
+      const sameLine = m.pass === 'history' && m.finding.line_start !== undefined && m.finding.line_start === lastLine;
+      if (!sameLine) occurrence += 1;
       lastLine = m.finding.line_start;
+      const slotKey = `${m.head}\n${occurrence}`;
+      const slot = slots.get(slotKey);
+      if (slot === undefined) slots.set(slotKey, [m]);
+      else slot.push(m);
+    }
+  }
+  for (const [slotKey, members] of slots) {
+    if (opts.secretValue !== undefined && mixedSlot(members.map((m) => m.finding), opts.secretValue)) continue;
+    const matchKey = sha256(slotKey);
+    for (const m of members) {
       const slot = out[m.index];
-      if (slot !== undefined) slot.matchKey = sha256(`${m.head}\n${occurrence}`);
+      if (slot !== undefined) slot.matchKey = matchKey;
     }
   }
   return out;
+}
+
+/**
+ * Whether the gitleaks findings of one slot hold more than one secret
+ * (review 10, finding 5). The slot's tolerance — one key for every commit
+ * and pass that saw "the secret on that line" — made a secret REPLACED in
+ * place match the baselined one: the old commit's finding and the new one
+ * collapsed into one occurrence, and an uncommitted replacement keyed like
+ * the committed value. `secretValue` gives each finding's value as a per-run
+ * HMAC (`ci/secretValues.ts` — never the secret, never stored); a slot of two
+ * or more whose values are not all known and equal is mixed, and keyed by
+ * nothing: each member then matches the baseline by its exact identity only,
+ * so the old value's commit is still known and the new value is new. One
+ * member, or anything but a gitleaks secret, is never mixed.
+ */
+function mixedSlot(findings: readonly GateKeySubject[], secretValue: (f: GateKeySubject) => string | undefined): boolean {
+  if (findings.length < 2 || !findings.every(isGitleaksSecret)) return false;
+  const values = findings.map((f) => secretValue(f));
+  return values.some((v) => v === undefined) || new Set(values).size > 1;
 }
 
 /** The content a match key hashes (see {@link GateKeys.matchKey}), or null when there is none to key on. */

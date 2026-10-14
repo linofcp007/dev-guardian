@@ -53,6 +53,7 @@ import { NODE_SQLITE_REQUIRED, nodeSqliteAvailable } from './storage/db.js';
 import { openDatabase, Storage } from './storage/index.js';
 import { SESSION_BUSY_TIMEOUT_MS } from './storage/db.js';
 import { canonicalizeProjectPathsAtStartup, reapOrphanedScans, scheduleRetention } from './storage/maintenance.js';
+import { setScanClockLog } from './storage/scanClock.js';
 import { attachAllResources } from './resources/index.js';
 import { attachAllTools, listedTools, TOOLS } from './tools/index.js';
 import { SERVER_INSTRUCTIONS } from './tools/instructions.js';
@@ -91,6 +92,8 @@ async function main(): Promise<void> {
   const storage = new Storage(db);
   logErr(`db opened: ${dbPath}`);
   if (storageWarning) logErr(`db warning: ${storageWarning}`);
+  // A wall clock that stepped back past the hold, said where diagnostics go (storage/scanClock.ts).
+  setScanClockLog((line) => logErr(`clock: ${line}`));
 
   // Reap dead processes' scans. Never fatal. (Retention runs after connect.)
   reapOrphanedScans(storage, logErr);

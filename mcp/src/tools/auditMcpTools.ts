@@ -71,7 +71,7 @@ import { resolveVersion } from '../platform/version.js';
 import type { McpPin } from '../storage/mcpToolPinsRepo.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
-import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput } from './index.js';
 import { countBySeverity } from '../severity/counts.js';
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -120,7 +120,7 @@ const inputSchema = {
     .describe('Per-server time budget, in ms.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'audit_mcp_tools',
   title: 'Audit what MCP servers serve (poisoning, rug pulls)',
   // Worded so this description does not trip the checks it lists: measured,
@@ -134,7 +134,7 @@ const tool: ToolModule = {
     'never a clean pass.',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
@@ -158,17 +158,10 @@ interface ServerReport {
 }
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    servers?: unknown;
-    include_user_config?: boolean;
-    allow_remote?: boolean;
-    timeout_ms?: number;
-  };
 
   // The schema already requires this; checked again because nothing may be
   // started on an input that bypassed it.

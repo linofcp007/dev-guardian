@@ -74,12 +74,11 @@ registerToolModule(
         .optional()
         .describe('PHPCS standard to apply. Default: WordPress.'),
     },
-    invoke: async (input, ctx): Promise<ScannerInvocation> => {
+    invoke: async (inp, ctx): Promise<ScannerInvocation> => {
       const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'wordpress');
       const tools_run: ToolRun[] = [];
       const missing_tools: string[] = [];
       const parser_inputs: ScannerInvocation['parser_inputs'] = [];
-      const inp = input as { standard?: typeof WP_STANDARDS[number]; auto_fix?: boolean };
       const standard = inp.standard ?? 'WordPress';
 
       const looksWp =

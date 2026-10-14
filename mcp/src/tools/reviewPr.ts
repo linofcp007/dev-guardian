@@ -70,7 +70,7 @@ import { semgrepEngineOf } from '../runners/semgrepReport.js';
 import { mayHoldTaintRules, pluginPackCheckIds } from '../runners/semgrepRuleIds.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
 import {
   makeScanTool,
@@ -89,7 +89,25 @@ type ReviewPrInput = ScanToolBaseInput & {
 const MANIFEST_RE =
   /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|composer\.(json|lock)|Gemfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|.*\.csproj|packages\.lock\.json|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile)$/;
 
-const reviewPr = makeScanTool<ReviewPrInput>({
+const inputSchema = {
+  project_path: ProjectPath,
+  base_ref: z
+    .string()
+    .optional()
+    .describe('Base ref for the diff. Defaults to origin/HEAD, then main, then master.'),
+  head_ref: z.string().optional().describe('Head ref. Defaults to HEAD.'),
+  local_only: z
+    .boolean()
+    .optional()
+    .describe(
+      "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). " +
+        'Trivy may still go out.',
+    ),
+  severity_min: SeverityMin,
+  force: Force,
+};
+
+const reviewPr = makeScanTool({
   name: 'review_pr',
   title: 'Pre-PR diff review',
   description:
@@ -103,23 +121,7 @@ const reviewPr = makeScanTool<ReviewPrInput>({
   supportsAutoFix: false,
   rulePacks: (input, { projectPath, plugin }) =>
     planSemgrepConfigs(projectPath, plugin, input.local_only === true).rulePacks,
-  inputSchema: {
-    project_path: ProjectPath,
-    base_ref: z
-      .string()
-      .optional()
-      .describe('Base ref for the diff. Defaults to origin/HEAD, then main, then master.'),
-    head_ref: z.string().optional().describe('Head ref. Defaults to HEAD.'),
-    local_only: z
-      .boolean()
-      .optional()
-      .describe(
-        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). " +
-          'Trivy may still go out.',
-      ),
-    severity_min: SeverityMin,
-    force: Force,
-  },
+  inputSchema,
   invoke: async (input, ctx): Promise<ScannerInvocation> => {
     // The handler below resolved both refs to commit ids; re-resolved here so
     // no other caller of `invoke` can pass an unchecked ref to git.
@@ -543,16 +545,16 @@ function refused(code: DomainError['code'], message: string): ToolResult<Record<
   return { ok: false, error: { code, message } };
 }
 
-const tool: ToolModule = {
+const tool = defineTool({
   ...reviewPr,
-  handler: async (input, plugin, callMeta): Promise<ToolResult<Record<string, unknown>>> => {
-    const inp = input as { project_path?: string; base_ref?: unknown; head_ref?: unknown };
+  inputSchema,
+  handler: async (inp, plugin, callMeta): Promise<ToolResult<Record<string, unknown>>> => {
     let projectPath: string;
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
     } catch (e) {
       // The pipeline reports an invalid project_path itself.
-      if (e instanceof InvalidProjectPathError) return reviewPr.handler(input, plugin, callMeta);
+      if (e instanceof InvalidProjectPathError) return reviewPr.handler(inp, plugin, callMeta);
       throw e;
     }
 
@@ -585,9 +587,9 @@ const tool: ToolModule = {
     const headSha = await resolveCommit(projectPath, headLabel);
     if (headSha === null) return refused('target_not_found', `head_ref "${headLabel}" does not name a commit.`);
 
-    const result = await reviewPr.handler({ ...input, base_ref: baseSha, head_ref: headSha }, plugin, callMeta);
+    const result = await reviewPr.handler({ ...inp, base_ref: baseSha, head_ref: headSha }, plugin, callMeta);
     return result.ok ? { ...result, base_ref: baseLabel, head_ref: headLabel } : result;
   },
-};
+});
 
 registerToolModule(tool);

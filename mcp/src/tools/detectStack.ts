@@ -21,40 +21,33 @@
 import { listProjectDir, presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { detectStack } from '../runners/stackDetect.js';
 import { ProjectPath } from '../schemas.js';
-import type {
-  DomainError,
-  StackSnapshot,
-  ToolResult,
-} from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import type { StackSnapshot, ToolResult } from '../types.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'detect_stack',
   title: 'Detect the project stack',
   description:
     'Detect languages, package managers, frameworks, existing tools, IaC and CI, in-process. Manifests ' +
     'are read up to 3 directories deep (each also in `projects`); PHP and WordPress are detected without ' +
     'a composer.json. The snapshot is stored for the stack-aware tools.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const parsed: StackSnapshot = detectStack(projectPath);
 
@@ -72,13 +65,6 @@ async function handler(
     captured_at: persisted.captured_at,
     snapshot_id: persisted.id,
   };
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }
 
 /**

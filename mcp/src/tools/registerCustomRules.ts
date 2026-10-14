@@ -53,11 +53,11 @@ import {
   yamlFilesUnder,
 } from '../platform/customRules.js';
 import { expandGlob, hasGlobMagic } from '../platform/glob.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { validateRuleFiles } from '../runners/semgrepValidate.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import type { ToolResult } from '../types.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 import { scannerAvailable } from './scanHelpers.js';
 
 const inputSchema = {
@@ -74,7 +74,7 @@ const inputSchema = {
     .describe("Remove this project's registered rules."),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'register_custom_rules',
   title: 'Register custom Semgrep rules',
   description:
@@ -85,7 +85,7 @@ const tool: ToolModule = {
     'the registration.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
@@ -95,16 +95,11 @@ interface Rejected {
 }
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; paths?: string[]; clear?: boolean };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   if (inp.clear) {
     ctx.storage.runtimeMeta.delete(customRulesMetaKey(projectPath));
@@ -280,11 +275,4 @@ function collectDiscovered(projectPath: string): { registered: string[]; rejecte
     consider(abs, registered, rejected);
   }
   return { registered, rejected };
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

@@ -74,11 +74,12 @@ const EXIT_LABEL: Record<CiExitCode, string> = {
  * scan) — a reader must be able to tell that apart from a genuine, clean
  * PASS at a glance, not by cross-referencing the coverage line themselves.
  *
- * `coverageGaps` is printed in full whenever non-empty. That is also how the
- * dropped-baseline-entries line (carried forward from Task 2's review)
- * reaches human output: it is just another entry in `coverageGaps`, so it
- * needs no special case here — contrast `renderSarif`, which does need one,
- * because SARIF has no general-purpose home for free text.
+ * `coverageGaps` is printed in full whenever non-empty, and `coverageNotes`
+ * under `notes (not gating):`. That is also how the dropped-baseline-entries
+ * line (carried forward from Task 2's review) reaches human output: a note
+ * since 3.4 (it never gated, and `coverage_gaps` holds the gaps that do —
+ * review 10), so it needs no special case here — contrast `renderSarif`,
+ * which does need one, because SARIF has no general-purpose home for free text.
  *
  * `baselineAbsent` (added on review of this task) gets its own line, printed
  * plainly rather than folded into `coverageGaps`: the design of record requires the
@@ -140,6 +141,9 @@ export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
   }
   for (const path of v.unusedPartialParseAcceptances) {
     lines.push(`note: --accept-partial-parse ${path}: no step reported it partly parsed (unused)`);
+  }
+  for (const path of v.unusedTimeoutAcceptances) {
+    lines.push(`note: .guardian/scan.yml semgrep.accept_timeouts ${path}: no step reported a Timeout on it (unused — remove it)`);
   }
 
   if (v.blocking.length > 0) {
@@ -259,6 +263,8 @@ export interface JsonVerdict {
   baseline_status: 'present' | 'absent';
   accepted_gaps: string[];
   unused_partial_parse_acceptances: string[];
+  /** `.guardian/scan.yml` `semgrep.accept_timeouts` entries no step reported a Timeout on (3.4.0 and later). */
+  unused_timeout_acceptances: string[];
   suppressed_by_repo_config: RepoSuppressionEntry[];
   baseline_source: BaselineSource;
   rules_source: RulesSource;
@@ -304,6 +310,7 @@ export function renderJson(v: GateVerdict, opts: JsonOptions = {}): string {
     baseline_status: v.baselineAbsent ? 'absent' : 'present',
     accepted_gaps: v.acceptedGaps,
     unused_partial_parse_acceptances: v.unusedPartialParseAcceptances,
+    unused_timeout_acceptances: v.unusedTimeoutAcceptances,
     suppressed_by_repo_config: v.suppressedByRepoConfig,
     baseline_source: v.baselineSource,
     rules_source: v.rulesSource,
@@ -317,8 +324,8 @@ export function renderJson(v: GateVerdict, opts: JsonOptions = {}): string {
 // ---------------------------------------------------------------------------
 
 /**
- * `gate.ts#evaluateGate` always builds the dropped-baseline-entries gap with
- * this exact prefix, and no other `coverageGaps` line starts with it — every
+ * `gate.ts#evaluateGate` always builds the dropped-baseline-entries note with
+ * this exact prefix, and no other `coverageNotes` line starts with it — every
  * other line is `${step.tool}: ...`, and no scan step is named "baseline".
  * Matching the prefix (rather than owning a second copy of gate.ts's
  * wording) is what lets `renderSarif` single that one line out from the
@@ -417,7 +424,7 @@ export function renderSarif(v: GateVerdict, projectPath: string, opts: SarifOpti
   // belongs in the schema-validation test, not here.
   const doc = parsed as SarifDocument;
 
-  const baselineGaps = v.coverageGaps.filter((gap) => gap.startsWith(BASELINE_GAP_PREFIX));
+  const baselineGaps = v.coverageNotes.filter((note) => note.startsWith(BASELINE_GAP_PREFIX));
   const run = doc.runs[0];
   if (run !== undefined) {
     const invocation: SarifInvocation = { executionSuccessful: v.coverage === 'full' };

@@ -24,9 +24,12 @@
  * `--exclude=<dir>/` applies to UNTRACKED files only (git ls-files docs), so a
  * project with no `.gitignore` for `node_modules/` does not hash its whole
  * dependency tree, while a deliberately committed `dist/` still counts.
- * `.guardian/` is dropped from the listing even when tracked: it is this
- * tool's own output directory, and a hash that moved every time a scan wrote
- * its report would never produce a cache hit.
+ * The project's ROOT `.guardian/` is dropped from the listing even when
+ * tracked: it is this tool's own output directory, and a hash that moved
+ * every time a scan wrote its report would never produce a cache hit. A
+ * `.guardian` folder below the root is the project's code like any other and
+ * counts (review 10, finding 1: dropped at any depth, an edit of a
+ * `lib/.guardian/handler.js` served the cached scan of the tree before it).
  *
  * The hash is order-independent: file paths are sorted before being joined.
  * Two identical project trees on different machines produce the same hash.
@@ -36,6 +39,7 @@ import { createHash } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { execGit } from '../platform/gitSafety.js';
+import '../runners/gitExec.js';
 import { hashProjectFile } from '../platform/projectFs.js';
 
 export interface TreeHashOptions {
@@ -96,11 +100,12 @@ export async function computeTreeHash(
   return hash.digest('hex');
 }
 
-/** This tool's own output directory; never part of the hash, tracked or not. */
+/** This tool's own output directory AT THE ROOT; never part of the hash, tracked or not. */
 const TOOL_OUTPUT_DIR = '.guardian';
 
 async function tryGitListFiles(root: string): Promise<string[] | null> {
-  const excludes = [...FS_EXCLUDE].map((dir) => `--exclude=${dir}/`);
+  // `--exclude` is any-depth: not for `.guardian`, whose root alone is left out below.
+  const excludes = [...FS_EXCLUDE].filter((dir) => dir !== TOOL_OUTPUT_DIR).map((dir) => `--exclude=${dir}/`);
   // Hardened (`platform/gitSafety.ts`): `ls-files` is where a repository's own
   // core.fsmonitor runs. Refused or failed, the walk below lists the files.
   const result = await execGit(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', ...excludes], {
@@ -111,7 +116,7 @@ async function tryGitListFiles(root: string): Promise<string[] | null> {
   const files = new Set<string>();
   for (const entry of result.stdout.split('\0')) {
     if (entry.length === 0) continue;
-    if (entry.split('/').includes(TOOL_OUTPUT_DIR)) continue;
+    if (entry.startsWith(`${TOOL_OUTPUT_DIR}/`)) continue;
     files.add(entry);
   }
   return [...files];
@@ -131,8 +136,8 @@ async function walk(root: string, dir: string, out: string[]): Promise<void> {
     return;
   }
   for (const entry of entries) {
-    if (entry.name.startsWith('.') && FS_EXCLUDE.has(entry.name)) continue;
-    if (FS_EXCLUDE.has(entry.name)) continue;
+    // `.guardian` is left out at the root only (see the module comment).
+    if (entry.name === TOOL_OUTPUT_DIR ? dir === root : FS_EXCLUDE.has(entry.name)) continue;
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) {
       await walk(root, abs, out);

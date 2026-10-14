@@ -16,8 +16,9 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
+import { httpUrlField } from '../schemas.js';
 import type { ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 interface ProbeResult {
   endpoint: string;
@@ -27,10 +28,7 @@ interface ProbeResult {
 }
 
 const inputSchema = {
-  target_url: z
-    .string()
-    .url()
-    .describe('Base URL of the WordPress site (e.g. https://example.com).'),
+  target_url: httpUrlField().describe('Base URL of the WordPress site (e.g. https://example.com).'),
   timeout_ms: z
     .number()
     .int()
@@ -40,7 +38,7 @@ const inputSchema = {
     .describe('Per-request timeout in milliseconds, 1000-60000. Default: 15000.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'wp_rest_audit',
   title: 'WordPress REST API exposure audit',
   description:
@@ -49,15 +47,14 @@ const tool: ToolModule = {
     'endpoint with `exposed: yes/no`.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { target_url: string; timeout_ms?: number };
   const url = inp.target_url.replace(/\/$/, '');
   const timeoutMs = inp.timeout_ms ?? 15_000;
 

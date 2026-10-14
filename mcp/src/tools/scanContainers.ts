@@ -81,7 +81,7 @@ import { judgeTrivyConfig } from '../runners/trivyConfig.js';
 import { runTrivy, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule } from './index.js';
 import {
   ensureReportDir,
   readJsonSafe,
@@ -117,9 +117,11 @@ const cosignParser: ScannerParser = {
  * none of `UNSAFE_CHARS` (`runners/cosignCheck.ts`: control, zero-width,
  * line-separator and bidi characters) — JavaScript's `\S` lets ESC, U+0085
  * and the zero-width characters through, and the reference flows into
- * cosign's reasons, notes and findings.
+ * cosign's reasons, notes and findings. No `"` and no `%` either: no
+ * reference holds one, and on Windows a scanner installed as a batch file
+ * would hand them to `cmd.exe` (review 10, finding 3; `runners/spawn.ts`).
  */
-const IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
+const IMAGE_REF = new RegExp(`^(?!-)[^\\s"%${UNSAFE_CHAR_CLASS}]+$`);
 
 /**
  * A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character.
@@ -129,6 +131,33 @@ const IMAGE_REF = new RegExp(`^(?!-)[^\\s${UNSAFE_CHAR_CLASS}]+$`);
  * (review 3.0 M2).
  */
 const signerValue = (): z.ZodString => z.string().min(1).max(1024);
+
+const inputSchema = {
+  project_path: ProjectPath,
+  severity_min: SeverityMin,
+  dockerfile_path: z
+    .string()
+    .optional()
+    .describe('Path to a Dockerfile to scan with `trivy config`.'),
+  image: z
+    .string()
+    .regex(IMAGE_REF, 'image must be an image reference: no whitespace, control character, " or %, not starting with "-"')
+    .optional()
+    .describe('Container image reference to scan with `trivy image`.'),
+  signer_identity: signerValue().optional().describe(
+    'The identity `image` must be signed by (a workflow URL or an e-mail). Needs signer_issuer.',
+  ),
+  signer_identity_regexp: signerValue().optional().describe(
+    'signer_identity as an RE2 regular expression.',
+  ),
+  signer_issuer: signerValue().optional().describe(
+    'The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com.',
+  ),
+  signer_issuer_regexp: signerValue().optional().describe(
+    'signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer.',
+  ),
+  force: Force,
+};
 
 const scanContainers = makeScanTool({
     name: 'scan_containers',
@@ -142,33 +171,8 @@ const scanContainers = makeScanTool({
     scan_type: 'containers',
     category: 'security',
     supportsAutoFix: false,
-    inputSchema: {
-      project_path: ProjectPath,
-      severity_min: SeverityMin,
-      dockerfile_path: z
-        .string()
-        .optional()
-        .describe('Path to a Dockerfile to scan with `trivy config`.'),
-      image: z
-        .string()
-        .regex(IMAGE_REF, 'image must be an image reference: no whitespace or control characters, not starting with "-"')
-        .optional()
-        .describe('Container image reference to scan with `trivy image`.'),
-      signer_identity: signerValue().optional().describe(
-        'The identity `image` must be signed by (a workflow URL or an e-mail). Needs signer_issuer.',
-      ),
-      signer_identity_regexp: signerValue().optional().describe(
-        'signer_identity as an RE2 regular expression.',
-      ),
-      signer_issuer: signerValue().optional().describe(
-        'The OIDC issuer of that identity, e.g. https://token.actions.githubusercontent.com.',
-      ),
-      signer_issuer_regexp: signerValue().optional().describe(
-        'signer_issuer as a regular expression (Go RE2 syntax). Not with signer_issuer.',
-      ),
-      force: Force,
-    },
-    invoke: async (input, ctx): Promise<ScannerInvocation> => {
+    inputSchema,
+    invoke: async (inp, ctx): Promise<ScannerInvocation> => {
       const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'containers');
       const tools_run: ToolRun[] = [];
       const missing_tools: string[] = [];
@@ -176,7 +180,6 @@ const scanContainers = makeScanTool({
       const parser_inputs: ScannerInvocation['parser_inputs'] = [];
       let anyOutcome: ScannerInvocation['outcome'] = 'completed';
 
-      const inp = input as ContainersInput;
       let imageSignature: ImageSignatureSummary | undefined;
       // Validated by the handler below before this runs; re-checked here so
       // no other caller of `invoke` can bypass it.
@@ -401,10 +404,10 @@ const scanContainers = makeScanTool({
  * also covers in-process callers, and `dockerfile_path` needs the project
  * path, which no schema knows.
  */
-const tool: ToolModule = {
+const tool = defineTool({
   ...scanContainers,
-  handler: async (input, plugin, callMeta): Promise<ToolResult<Record<string, unknown>>> => {
-    const inp = input as ContainersInput & { project_path?: string };
+  inputSchema,
+  handler: async (inp, plugin, callMeta): Promise<ToolResult<Record<string, unknown>>> => {
     let projectPath: string | null = null;
     try {
       projectPath = resolveProjectPath(inp.project_path).path;
@@ -414,9 +417,9 @@ const tool: ToolModule = {
     }
     const invalid = projectPath !== null ? invalidInput(projectPath, inp) : null;
     if (invalid) return { ok: false, error: { code: 'unsupported_target', message: invalid } };
-    return scanContainers.handler(input, plugin, callMeta);
+    return scanContainers.handler(inp, plugin, callMeta);
   },
-};
+});
 
 registerToolModule(tool);
 
@@ -457,7 +460,7 @@ function signerPolicy(inp: ContainersInput): SignerPolicy | null {
 /** Why the input cannot be scanned, or null when it can. */
 function invalidInput(projectPath: string, inp: ContainersInput): string | null {
   if (inp.image !== undefined && !IMAGE_REF.test(inp.image)) {
-    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, or start with "-".`;
+    return `image ${escapeUnsafe(JSON.stringify(inp.image))} is not an image reference: it must not contain whitespace, control, zero-width or bidi characters, " or %, or start with "-".`;
   }
   if (inp.dockerfile_path !== undefined && !isInside(projectPath, inp.dockerfile_path)) {
     return `dockerfile_path ${escapeUnsafe(JSON.stringify(inp.dockerfile_path))} resolves outside the project (${projectPath}); scan_containers only reads files inside it.`;

@@ -48,7 +48,7 @@ import { hostname } from 'node:os';
 import type { DB, Statement } from './db.js';
 import type { ScanRecord, ScanStatus, ScanType, ToolRun } from '../types.js';
 import { nowIso, parseJsonArray } from './repoUtil.js';
-import { datedInFutureSql, notInFutureSql } from './scanClock.js';
+import { datedInFutureSql, notInFutureSql, scanStartedAt } from './scanClock.js';
 
 /** Every history reader's filter: never a scan dated in the future (`scanClock.ts`). */
 const READABLE = notInFutureSql();
@@ -263,7 +263,8 @@ export class ScansRepo {
   }
 
   insert(input: InsertScanInput): ScanRecord {
-    const started = nowIso();
+    // Held in order across a small step back of the wall clock (`scanClock.ts`).
+    const started = scanStartedAt();
     this.insertStmt.run(
       input.scan_id,
       input.scan_type,

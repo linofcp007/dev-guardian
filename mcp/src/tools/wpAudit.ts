@@ -40,7 +40,7 @@ import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { computeCoverage } from './scanCoverage.js';
 import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const RETRY_DELAYS_MS = [1000, 3000, 9000] as const;
 const DEFAULT_RISKY_LOGINS = ['admin', 'administrator', 'root', 'wpadmin'];
@@ -95,7 +95,7 @@ interface AuditMeta {
   warnings: string[];
 }
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'wp_audit',
   title: 'Live WordPress install audit',
   description:
@@ -104,20 +104,14 @@ const tool: ToolModule = {
     'on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    wp_install_path: string;
-    include_users?: boolean;
-    include_options?: boolean;
-    risky_login_names?: string[];
-  };
   if (!inp.wp_install_path) {
     return failDomain('not_a_wordpress_install', 'wp_install_path is required.');
   }
@@ -165,21 +159,73 @@ async function handler(
   /** Subsections that did not answer: each a named gap. */
   const gaps: string[] = [];
 
-  // Parallelise the independent WP-CLI subcommands. Each call goes through
-  // the same retry policy (3 attempts, exp. backoff). Worst case improves
-  // from 9 × ~10s sequential to ~10s wall-clock when ALL of them retry.
   const configFlags = includeOptions
     ? ['DISALLOW_FILE_EDIT', 'WP_DEBUG', 'WP_DEBUG_LOG', 'FORCE_SSL_ADMIN']
     : [];
+  const answers = await askWpCli(installPath, ctx, includeUsers, configFlags);
+  readAnswers(answers, { includeUsers, riskyLogins, configFlags }, meta, gaps);
 
-  const [
-    versionResult,
-    coreVerify,
-    pluginVerify,
-    adminResult,
-    pluginListResult,
-    ...configResults
-  ] = await Promise.all([
+  // -------- Bookkeeping: what did not answer is named, never `ok` in silence.
+  const { version, coreVerify, pluginVerify, pluginList, config } = answers;
+  const answered = [version, coreVerify, pluginVerify, pluginList, ...config].some((r) => r.ok);
+  const toolRun: ToolRun =
+    gaps.length === 0
+      ? { name: 'wp-cli', status: 'ok' }
+      : { name: 'wp-cli', status: answered ? 'ok' : 'failed', reason: gaps.join('; ') };
+  const tools_run = [toolRun];
+  const missing_tools = gaps.length > 0 ? ['wp-cli'] : [];
+  const coverage = computeCoverage(tools_run, missing_tools);
+
+  // -------- Persist scan row with meta
+  const scanId = randomUUID();
+  ctx.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: 'wp_audit',
+    project_path: installPath,
+    tree_hash: '',
+  });
+  ctx.storage.scans.finalize({
+    scan_id: scanId,
+    status: answered ? 'completed' : 'failed',
+    tools_run,
+    missing_tools,
+    meta: meta as unknown as Record<string, unknown>,
+  });
+
+  return {
+    ok: true,
+    scan_id: scanId,
+    coverage,
+    tools_run,
+    missing_tools,
+    ...meta,
+  };
+}
+
+/** What each WP-CLI subcommand of the audit answered. */
+interface WpAnswers {
+  version: WpResult;
+  coreVerify: WpResult;
+  pluginVerify: WpResult;
+  /** `ok` with `[]` when the administrators were not asked for. */
+  admins: WpResult;
+  pluginList: WpResult;
+  /** One per flag asked for, in that order. */
+  config: WpResult[];
+}
+
+/**
+ * The audit's WP-CLI subcommands, in parallel. Each call goes through the
+ * same retry policy (3 attempts, exp. backoff): worst case ~10 s wall-clock
+ * when ALL of them retry, not 9 × ~10 s one after the other.
+ */
+async function askWpCli(
+  installPath: string,
+  ctx: PluginContext,
+  includeUsers: boolean,
+  configFlags: readonly string[],
+): Promise<WpAnswers> {
+  const [version, coreVerify, pluginVerify, admins, pluginList, ...config] = await Promise.all([
     retry(() => wpCall(['core', 'version', `--path=${installPath}`], installPath, ctx)),
     retry(() =>
       wpCall(
@@ -230,25 +276,33 @@ async function handler(
       retry(() => wpCall(['config', 'get', flag, `--path=${installPath}`], installPath, ctx)),
     ),
   ]);
+  return { version, coreVerify, pluginVerify, admins, pluginList, config };
+}
 
-  // -------- Apply results
-  if (versionResult.ok) {
-    meta.wp_version = versionResult.stdout.trim() || null;
+/** The answers into `meta`; each subsection that did not answer is a named gap. */
+function readAnswers(
+  a: WpAnswers,
+  opts: { includeUsers: boolean; riskyLogins: ReadonlySet<string>; configFlags: readonly string[] },
+  meta: AuditMeta,
+  gaps: string[],
+): void {
+  if (a.version.ok) {
+    meta.wp_version = a.version.stdout.trim() || null;
   } else {
-    meta.warnings.push(`core version: ${versionResult.reason}`);
+    meta.warnings.push(`core version: ${a.version.reason}`);
     gaps.push('core version not read');
   }
 
-  if (coreVerify.ok) {
-    meta.checksum_mismatches.core = parseChecksumOutput(coreVerify);
+  if (a.coreVerify.ok) {
+    meta.checksum_mismatches.core = parseChecksumOutput(a.coreVerify);
   } else {
-    meta.warnings.push(`core verify-checksums: ${coreVerify.reason}`);
+    meta.warnings.push(`core verify-checksums: ${a.coreVerify.reason}`);
     gaps.push('core checksums not verified');
   }
 
-  if (pluginVerify.ok) {
-    meta.checksum_mismatches.plugins = groupByComponent(pluginVerify);
-    meta.checksums_not_checked.plugins = skippedPlugins(pluginVerify.stderr);
+  if (a.pluginVerify.ok) {
+    meta.checksum_mismatches.plugins = groupByComponent(a.pluginVerify);
+    meta.checksums_not_checked.plugins = skippedPlugins(a.pluginVerify.stderr);
     if (meta.checksums_not_checked.plugins.length > 0) {
       gaps.push(
         `${meta.checksums_not_checked.plugins.length} plugin(s) not verified: ` +
@@ -256,36 +310,36 @@ async function handler(
       );
     }
   } else {
-    meta.warnings.push(`plugin verify-checksums: ${pluginVerify.reason}`);
+    meta.warnings.push(`plugin verify-checksums: ${a.pluginVerify.reason}`);
     gaps.push('plugin checksums not verified');
   }
   meta.warnings.push(`theme checksums: ${THEMES_NOT_CHECKED} — theme files were not verified`);
 
-  if (includeUsers) {
-    if (adminResult.ok) {
+  if (opts.includeUsers) {
+    if (a.admins.ok) {
       try {
-        const arr = JSON.parse(adminResult.stdout) as Array<{
+        const arr = JSON.parse(a.admins.stdout) as Array<{
           user_login: string;
           user_email: string;
         }>;
         meta.admins = arr.map((u) => ({
           user_login: u.user_login,
           user_email: u.user_email,
-          risky: riskyLogins.has((u.user_login ?? '').toLowerCase()),
+          risky: opts.riskyLogins.has((u.user_login ?? '').toLowerCase()),
         }));
       } catch {
         meta.warnings.push('user list: stdout not JSON');
         gaps.push('admin users not read');
       }
     } else {
-      meta.warnings.push(`user list: ${adminResult.reason}`);
+      meta.warnings.push(`user list: ${a.admins.reason}`);
       gaps.push('admin users not read');
     }
   }
 
-  if (pluginListResult.ok) {
+  if (a.pluginList.ok) {
     try {
-      const arr = JSON.parse(pluginListResult.stdout) as Array<{
+      const arr = JSON.parse(a.pluginList.stdout) as Array<{
         name: string;
         auto_update: string;
       }>;
@@ -297,12 +351,12 @@ async function handler(
       gaps.push('plugin list not read');
     }
   } else {
-    meta.warnings.push(`plugin list: ${pluginListResult.reason}`);
+    meta.warnings.push(`plugin list: ${a.pluginList.reason}`);
     gaps.push('plugin list not read');
   }
 
-  configFlags.forEach((flag, i) => {
-    const r = configResults[i];
+  opts.configFlags.forEach((flag, i) => {
+    const r = a.config[i];
     if (!r) return;
     if (r.ok) {
       const val = r.stdout.trim().toLowerCase();
@@ -312,41 +366,6 @@ async function handler(
       gaps.push(`config ${flag} not read`);
     }
   });
-
-  // -------- Bookkeeping: what did not answer is named, never `ok` in silence.
-  const answered = [versionResult, coreVerify, pluginVerify, pluginListResult, ...configResults].some((r) => r.ok);
-  const toolRun: ToolRun =
-    gaps.length === 0
-      ? { name: 'wp-cli', status: 'ok' }
-      : { name: 'wp-cli', status: answered ? 'ok' : 'failed', reason: gaps.join('; ') };
-  const tools_run = [toolRun];
-  const missing_tools = gaps.length > 0 ? ['wp-cli'] : [];
-  const coverage = computeCoverage(tools_run, missing_tools);
-
-  // -------- Persist scan row with meta
-  const scanId = randomUUID();
-  ctx.storage.scans.insert({
-    scan_id: scanId,
-    scan_type: 'wp_audit',
-    project_path: installPath,
-    tree_hash: '',
-  });
-  ctx.storage.scans.finalize({
-    scan_id: scanId,
-    status: answered ? 'completed' : 'failed',
-    tools_run,
-    missing_tools,
-    meta: meta as unknown as Record<string, unknown>,
-  });
-
-  return {
-    ok: true,
-    scan_id: scanId,
-    coverage,
-    tools_run,
-    missing_tools,
-    ...meta,
-  };
 }
 
 interface WpResult {

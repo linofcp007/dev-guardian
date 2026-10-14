@@ -177,6 +177,11 @@ const ALLOWED: Record<string, Allowed> = {
       'registered): Dirent-typed, never descends a link; each rule file is read with readSmallText (bounded, ' +
       'non-blocking, regular files only)',
   },
+  'src/runners/argFile.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "a pull request's or an issue's body, into its own mkdtemp directory for gh --body-file",
+  },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },

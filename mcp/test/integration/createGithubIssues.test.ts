@@ -11,6 +11,7 @@
  *   - and when every plan failed, the tool still answered `ok: true`.
  */
 
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/tools/scanHelpers.js', async () => {
@@ -62,7 +63,8 @@ function fakeGh(repo: FakeRepo): void {
   vi.mocked(scannerAvailable).mockResolvedValue('gh');
   vi.mocked(runProcess).mockImplementation(async (opts: ProcessRunOptions) => {
     const args = opts.args ?? [];
-    repo.calls.push(args);
+    // The body comes in a file (runners/argFile.ts), removed after the call: recorded as its text.
+    repo.calls.push(args.map((a, i) => (args[i - 1] === '--body-file' ? readFileSync(a, 'utf8') : a)));
     const [noun, verb] = args;
     if (noun === 'issue' && verb === 'list') {
       const stateIdx = args.indexOf('--state');
@@ -213,7 +215,7 @@ describe('create_github_issues', () => {
     expect(r.plans).toHaveLength(1);
     expect(r.plans[0]?.body).not.toContain('hunter2');
     const create = repo.calls.find((c) => c[0] === 'issue' && c[1] === 'create') ?? [];
-    const bodyIdx = create.indexOf('--body');
+    const bodyIdx = create.indexOf('--body-file');
     expect(bodyIdx).toBeGreaterThanOrEqual(0);
     expect(create[bodyIdx + 1] ?? '').not.toContain('hunter2');
   });

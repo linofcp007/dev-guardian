@@ -34,8 +34,8 @@ import {
   type Recommendation,
 } from '../skillaudit/taxonomy.js';
 import { SeverityMin } from '../schemas.js';
-import type { Finding, ToolResult, ToolRun } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import type { ToolResult, ToolRun } from '../types.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { topFindings } from '../severity/counts.js';
 
 const inputSchema = {
@@ -81,7 +81,7 @@ const RECOMMENDATION_RANK: Record<Recommendation, number> = {
   DO_NOT_INSTALL: 3,
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'scan_skill',
   title: 'Vet an AI skill, MCP server or plugin before install',
   description:
@@ -92,22 +92,15 @@ const tool: ToolModule = {
     'SAFE, REVIEW, CAUTION or DO_NOT_INSTALL.',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    target?: string;
-    check_deps?: boolean;
-    write_reports?: boolean;
-    severity_min?: Finding['severity'];
-    fail_on?: Recommendation;
-  };
 
   // Resolve where reports + the DB live (current project / cwd).
   let basePath: string;

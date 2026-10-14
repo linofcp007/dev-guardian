@@ -109,26 +109,38 @@ interface FileBatchScanResult {
   failedRules: FailedRule[];
 }
 
-export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileBatchScanResult> {
-  const probeReport = join(opts.reportDir, `${opts.reportPrefix}-000.json`);
-  const batches = batchArgs(opts.files, {
-    command: opts.command,
-    fixedArgs: [...opts.args, ...opts.reportArgs(probeReport), '--'],
-  });
-  const reports: string[] = [];
-  const reportFiles: string[] = [];
-  const failures: string[] = [];
-  let configFailures = 0;
-  const partial: PartialParse[] = [];
-  const failedRules: FailedRule[] = [];
-  const packFiles: PartialParse[] = [];
-  let packFunctions = 0;
-  let cancelled = false;
-  let scanned = 0;
+/** What every batch of one {@link scanFileBatches} run said, gathered ({@link runBatches}). */
+interface BatchTally {
+  reports: string[];
+  reportFiles: string[];
+  failures: string[];
+  /** Failed batches whose rules were the problem. */
+  configFailures: number;
+  partial: PartialParse[];
+  failedRules: FailedRule[];
+  packFiles: PartialParse[];
+  packFunctions: number;
+  cancelled: boolean;
+  scanned: number;
+}
 
+/** Runs each batch in turn — stopping at a cancel — and gathers what each one's check said. */
+async function runBatches(opts: FileBatchScanOptions, batches: readonly string[][]): Promise<BatchTally> {
+  const t: BatchTally = {
+    reports: [],
+    reportFiles: [],
+    failures: [],
+    configFailures: 0,
+    partial: [],
+    failedRules: [],
+    packFiles: [],
+    packFunctions: 0,
+    cancelled: false,
+    scanned: 0,
+  };
   for (const [i, batch] of batches.entries()) {
     if (opts.signal.aborted) {
-      cancelled = true;
+      t.cancelled = true;
       break;
     }
     const reportFile = join(opts.reportDir, `${opts.reportPrefix}-${String(i + 1).padStart(3, '0')}.json`);
@@ -141,11 +153,11 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
       signal: opts.signal,
       onLog: opts.onLog,
     });
-    if (run.outcome === 'cancelled') cancelled = true;
+    if (run.outcome === 'cancelled') t.cancelled = true;
     const raw = readJsonSafe(reportFile);
     if (raw !== null && parseInputAsJson(raw) !== null) {
-      reports.push(raw);
-      reportFiles.push(reportFile);
+      t.reports.push(raw);
+      t.reportFiles.push(reportFile);
     }
     const verdict = opts.check({
       raw,
@@ -154,24 +166,35 @@ export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileB
       // With requireScanned the count is judged below, over every batch.
       targets: opts.requireScanned === true ? 0 : batch.length,
     });
-    scanned += verdict.scanned ?? 0;
+    t.scanned += verdict.scanned ?? 0;
     for (const p of verdict.partial ?? []) {
       const file = toRelativeIfPossible(p.file, opts.cwd);
-      if (!partial.some((q) => q.file === file && q.type === p.type)) partial.push({ ...p, file });
+      if (!t.partial.some((q) => q.file === file && q.type === p.type)) t.partial.push({ ...p, file });
     }
     // The plugin's pack's own gap: one file is in one batch, so no two batches name it.
     if (verdict.packFixpoint !== undefined) {
-      packFunctions += verdict.packFixpoint.functions;
-      for (const p of verdict.packFixpoint.files) packFiles.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
+      t.packFunctions += verdict.packFixpoint.functions;
+      for (const p of verdict.packFixpoint.files) t.packFiles.push({ ...p, file: toRelativeIfPossible(p.file, opts.cwd) });
     }
-    for (const r of verdict.failedRules ?? []) if (!failedRules.some((q) => q.rule_id === r.rule_id)) failedRules.push(r);
+    for (const r of verdict.failedRules ?? []) if (!t.failedRules.some((q) => q.rule_id === r.rule_id)) t.failedRules.push(r);
     if (!verdict.ok) {
       const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : '';
-      failures.push(`${label}${verdict.reason ?? 'failed'}`);
-      if (verdict.ruleConfigError === true) configFailures += 1;
+      t.failures.push(`${label}${verdict.reason ?? 'failed'}`);
+      if (verdict.ruleConfigError === true) t.configFailures += 1;
     }
-    if (cancelled) break;
+    if (t.cancelled) break;
   }
+  return t;
+}
+
+export async function scanFileBatches(opts: FileBatchScanOptions): Promise<FileBatchScanResult> {
+  const probeReport = join(opts.reportDir, `${opts.reportPrefix}-000.json`);
+  const batches = batchArgs(opts.files, {
+    command: opts.command,
+    fixedArgs: [...opts.args, ...opts.reportArgs(probeReport), '--'],
+  });
+  const { reports, reportFiles, failures, configFailures, partial, failedRules, packFiles, packFunctions, cancelled, scanned } =
+    await runBatches(opts, batches);
 
   const described = `${opts.files.length} file(s)${batches.length > 1 ? ` in ${batches.length} batches` : ''}`;
   if (failures.length === 0 && !cancelled && failedRules.length > 0 && opts.noRuleLoaded?.(failedRules) === true) {

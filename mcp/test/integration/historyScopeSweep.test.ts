@@ -436,4 +436,29 @@ describe('audit_executive answers for one project', () => {
     );
     expect(second.deltas?.since_audit_scan_id).toBe(first.scan_id);
   });
+
+  it('names each .NET sub-scan by the call a model makes, keeping the member name it is recorded under (review 10)', async () => {
+    const { s, a } = twoProjects();
+    s.storage.stack.insert({
+      project_path: a,
+      snapshot: {
+        os: 'linux', arch: 'x64', languages: ['csharp'], package_managers: [], frameworks: [], existing_tools: [],
+        has_docker: false, has_compose: false, has_terraform: false, has_kubernetes: false,
+        has_ansible: false, has_github_actions: false, has_gitlab_ci: false, has_iac: false, projects: [],
+      },
+    });
+    const secrets = tool('scan_dotnet_secrets');
+    const calls: string[] = [];
+    const r = await withMockedSubTools(calls, async () => {
+      secrets.handler = async (): Promise<ToolResult<Record<string, unknown>>> => ({ ok: true, coverage: 'partial' });
+      return okResult<{
+        sub_scans: Record<string, { tool: string; call?: string }>;
+        coverage_warnings?: string[];
+      }>(await tool('audit_executive').handler({ project_path: a }, s.plugin));
+    });
+    expect(r.sub_scans['scan_dotnet_secrets']).toMatchObject({ tool: 'scan_dotnet_secrets', call: 'dotnet_check { check: "secrets" }' });
+    expect(r.sub_scans['dotnet_target_framework_check']?.call).toBe('dotnet_check { check: "target_framework" }');
+    expect(r.sub_scans['deps_audit']?.call).toBe('deps_audit');
+    expect(r.coverage_warnings).toEqual(['dotnet_check { check: "secrets" }: coverage=partial.']);
+  });
 });

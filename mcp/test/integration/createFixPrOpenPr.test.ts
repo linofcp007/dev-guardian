@@ -78,10 +78,9 @@ describe('create_fix_pr', () => {
     // covers the negative (wpscan) side.
     expect(group).toMatchObject({ outcome: 'pr_created', pr: { status: 'created' } });
     // A real gh pr create call happened — the stub's own `echo %*`
-    // re-quotes each argv token (`"pr" "create" …`), and its capture of a
-    // multi-line --body argument truncates at the first embedded newline (a
-    // real limitation of that mechanism) — see buildPrBody's own test for
-    // why the verbatim not_run phrase (M7) is verified there instead.
+    // re-quotes each argv token (`"pr" "create" …`). The body goes in a file
+    // (`--body-file`, runners/argFile.ts) removed after the call — see
+    // buildPrBody's own test for the verbatim not_run phrase (M7).
     expect(ghLogContents()).toMatch(/"pr"\s+"create"/);
 
     // C1: the pushed commit's diff must be the real fix — never

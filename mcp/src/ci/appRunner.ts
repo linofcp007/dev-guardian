@@ -330,8 +330,8 @@ function attachOutputTail(child: Child): () => string {
       tail = tail.slice(tail.length - OUTPUT_TAIL_BYTES);
     }
   };
-  readText(child.process.stdout, onText);
-  readText(child.process.stderr, onText);
+  readText(child.process?.stdout, onText);
+  readText(child.process?.stderr, onText);
   return () => tail;
 }
 

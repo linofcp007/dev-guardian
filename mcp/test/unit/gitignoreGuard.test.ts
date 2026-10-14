@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { ensureGuardianDirIgnored, ensureGuardianIgnored, SHARED_GUARDIAN_FILES } from '../../src/gitignoreGuard.js';
@@ -295,6 +295,19 @@ describe('ensureGuardianDirIgnored', () => {
     const ignored = (path: string): boolean => git('check-ignore', '-q', '--no-index', path).status === 0;
     expect(ignored('.guardian/.gitignore')).toBe(true);
     for (const shared of SHARED_GUARDIAN_FILES) expect(ignored(`.guardian/${shared}`), shared).toBe(false);
+  });
+
+  it('never writes through a .guardian that is a link, even one inside the project (review 10, finding 10)', () => {
+    // `.guardian` → `.`: the file landed as the ROOT .gitignore, `*` in it,
+    // and a new untracked file with a critical finding passed locally.
+    for (const target of ['.', 'sub']) {
+      const dir = makeTempDir('guard-dir-link-');
+      mkdirSync(join(dir, 'sub'));
+      symlinkSync(join(dir, target), join(dir, '.guardian'), process.platform === 'win32' ? 'junction' : 'dir');
+      expect(ensureGuardianDirIgnored(dir), target).toBe(false);
+      expect(existsSync(join(dir, '.gitignore')), target).toBe(false);
+      expect(existsSync(join(dir, 'sub', '.gitignore')), target).toBe(false);
+    }
   });
 
   it('never overwrites a .guardian/.gitignore that is there', () => {

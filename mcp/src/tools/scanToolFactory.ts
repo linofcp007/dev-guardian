@@ -126,7 +126,7 @@ import {
 import { workingTreeState } from './gitState.js';
 import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
-import type { ToolCallMeta, ToolModule } from './index.js';
+import type { ToolCallMeta, ToolInput, ToolModule } from './index.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 /**
@@ -212,6 +212,12 @@ export interface ScanToolBaseInput {
   scope?: ScanScope;
 }
 
+/**
+ * A scan tool's input: what its schema parses (`./index.ts#ToolInput`), with
+ * the fields the factory itself reads.
+ */
+type ScanToolInput<S extends ZodRawShape> = ToolInput<S> & ScanToolBaseInput;
+
 /** What `rulePacks` gets to decide which packs a call would load. */
 export interface RulePackContext {
   /** Canonical project path. */
@@ -235,13 +241,13 @@ export interface ResponseView {
   warning: string | null;
 }
 
-export interface ScanToolConfig<TInput extends ScanToolBaseInput> {
+export interface ScanToolConfig<TInput extends ScanToolBaseInput, S extends ZodRawShape = ZodRawShape> {
   name: string;
   description: string;
   title?: string;
   scan_type: ScanType;
   category: Category;
-  inputSchema: ZodRawShape;
+  inputSchema: S;
   /**
    * How long a freshly completed scan of this type is considered "still
    * valid" for cache reuse. Defaults to 5 minutes per US-8 AC-2.
@@ -325,16 +331,20 @@ const FACTORY_META_KEYS: ReadonlySet<string> = new Set([
 /** Longest scanner stderr line forwarded into a progress message. */
 const MAX_LOG_LINE = 200;
 
-export function makeScanTool<TInput extends ScanToolBaseInput>(
-  config: ScanToolConfig<TInput>,
-): ToolModule {
+/**
+ * A scan tool from its configuration, every callback typed from its schema
+ * (`ScanToolInput`). The registry's untyped input meets that type here, once —
+ * as in `./index.ts#defineTool`: a caller hands the handler the parse of
+ * exactly this schema.
+ */
+export function makeScanTool<S extends ZodRawShape>(config: ScanToolConfig<ScanToolInput<S>, S>): ToolModule {
   return {
     name: config.name,
     description: config.description,
     ...(config.title ? { title: config.title } : {}),
     inputSchema: config.inputSchema,
     handler: (rawInput, plugin, callMeta) =>
-      runScanPipeline(config, rawInput as TInput, plugin, callMeta),
+      runScanPipeline(config, rawInput as ScanToolInput<S>, plugin, callMeta),
   };
 }
 

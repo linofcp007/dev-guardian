@@ -9,6 +9,7 @@ import {
   resolveProjectPath,
 } from '../../../src/platform/projectPath.js';
 import { makeTempDir, cleanupTempDirs, rmDirOrDefer } from '../../helpers/tempDir.js';
+import { hangBound } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -146,6 +147,31 @@ describe('a network (UNC) project_path is refused before any file-system call', 
       expect(projectPathErrorCode(error)).toBe('unsupported_target');
     }
   }, 5_000);
+
+  // Review 10: a local link to an unreachable share held the call 42 s
+  // (existsSync, then statSync, ~21 s each) and then said "does not exist".
+  it.runIf(isWindows)('refuses a local path whose link leads to a share — the link read, never followed', () => {
+    const dir = tempProject();
+    const link = join(dir, 'unc-link');
+    try {
+      symlinkSync('\\\\10.255.255.7\\share\\', link, 'dir');
+    } catch {
+      return; // creating a directory symlink needs the privilege; nothing to measure here
+    }
+    for (const p of [link, join(link, 'proj')]) {
+      const started = Date.now();
+      let error: unknown;
+      try {
+        resolveProjectPath(p);
+      } catch (e) {
+        error = e;
+      }
+      expect(Date.now() - started).toBeLessThan(hangBound(2_000));
+      expect(error).toBeInstanceOf(InvalidProjectPathError);
+      expect((error as InvalidProjectPathError).reason).toBe('network_path');
+      expect((error as Error).message).toContain(`through the link ${link}`);
+    }
+  }, 60_000);
 });
 
 // Review 8, finding 16: every tool answered a refused project_path with

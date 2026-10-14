@@ -51,7 +51,25 @@ Enforced by the compiler where possible, by review where not:
   entries left when the check began (the tool modules' and `schemas.ts`',
   whose surface was being reworked) — an entry that is imported again, or
   gone, must leave it too (review 8, finding 15: 438 such exports, 9 of them
-  dead code).
+  dead code; `schemas.ts`' eight went in review 10).
+- **A tool's input is typed by its schema, never cast.** A tool module is
+  `defineTool({ inputSchema, handler })` (`tools/index.ts`): the handler
+  takes `ToolInput<typeof inputSchema>` — the schema's parse, defaults
+  applied. A scan tool's `makeScanTool` callbacks (`invoke`, `rulePacks`,
+  `cacheState`, …) are typed the same way from its `inputSchema`. The one
+  cast from the registry's `Record<string, unknown>` is inside those two
+  helpers: the SDK and a fold hand a handler the strict parse of exactly that
+  schema (dg-maint finding 12 found 51 hand-written `input as {…}` casts).
+  The LLM scan's three tools also parse their input again in the handler
+  (a step's own refusal is `invalid_input`); `check_toolchain` takes none.
+- **A tool's `project_path` is `toolProjectPath(inp.project_path)`**
+  (`tools/projectArg.ts`): the resolved path, or the `{ ok: false, error }`
+  refusal (`projectPathErrorCode`'s code) a handler returns as it is — not a
+  `resolveProjectPath` try / catch per tool (dg-maint finding 14). A tool that
+  answers an unusable path otherwise keeps its own: the WordPress install
+  audits (`not_a_wordpress_install`), the wrappers that let the scan pipeline
+  report it (`review_pr`, `scan_secrets`, `scan_containers`), and the two
+  agent-config audits, which rethrow anything but an invalid path.
 - Note what `tsc` does **not** catch: interpolating a non-string into a
   template (`` `--config=${someArray}` ``) types as `string` at any
   strictness. That needs `@typescript-eslint/restrict-template-expressions`,
@@ -59,6 +77,19 @@ Enforced by the compiler where possible, by review where not:
 
 ## Conventions that bite if ignored
 
+- **Text a tool hands a program is validated where it enters, and a batch file
+  never gets an argument `cmd.exe` can misread** (review 10, finding 3,
+  "BatBadBut"). On Windows WP-CLI, WPScan, Lighthouse, npm, composer and
+  bundle are `.bat` / `.cmd` files, which `cmd.exe` parses twice; a `"` before
+  an `&` in a slug or a URL ran a second command. `runners/spawn.ts` refuses,
+  for every caller, an argument with `"`, `%`, CR, LF or NUL when the command
+  runs through `cmd.exe` (`notRun.code: 'batch_argument_refused'`); a tool
+  parses a URL and hands over its `href` (`platform/toolArgs.ts#httpUrl`,
+  `schemas.ts#httpUrlField`), takes a slug or a token by its alphabet, refuses
+  a `"` in a path, and passes a body (`gh … --body-file`, `runners/argFile.ts`)
+  in a file, never on the command line. A new tool that passes user or
+  repository text to a program does the same, with a test that puts the `"`
+  BEFORE the `&` (`test/integration/batchArgumentTools.test.ts`).
 - **Commit the compiled `mcp/dist/`.** The repo *is* the distribution — Claude
   Code runs `mcp/dist/server.js` directly, with no install-time build. `dist/` is
   gitignored globally *except* `mcp/dist/` (see [`.gitignore`](../../.gitignore)).

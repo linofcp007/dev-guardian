@@ -58,13 +58,10 @@ import {
   type InvokeContext,
   type ResponseView,
   type ScannerInvocation,
-  type ScanToolBaseInput,
 } from './scanToolFactory.js';
 
 export const QUALITY_CATEGORIES = ['duplicate', 'complexity', 'smell', 'naming'] as const;
 export type QualityCategory = (typeof QUALITY_CATEGORIES)[number];
-
-type QualityInput = ScanToolBaseInput & { categories?: QualityCategory[] };
 
 const ESLINT_CONFIGS = [
   'eslint.config.js',
@@ -111,7 +108,7 @@ interface Collected {
 }
 
 registerToolModule(
-  makeScanTool<QualityInput>({
+  makeScanTool({
     name: 'quality_check',
     title: 'Code quality scan',
     description:

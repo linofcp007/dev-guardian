@@ -14,10 +14,10 @@
 import { listProjectDir, readProjectJson, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
-import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import type { ToolResult } from '../types.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 interface LicenseEntry {
   license: string;
@@ -51,7 +51,9 @@ interface UndeterminedRow {
   reason: string;
 }
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'license_compatibility',
   title: 'Licence compatibility',
   description:
@@ -59,23 +61,18 @@ const tool: ToolModule = {
     "against its dependencies' licences from this project's latest compliance_check. No declared licence, " +
     'or a proprietary label, counts as proprietary and still flags copyleft; an unrecognised or compound ' +
     'SPDX expression on either side is `undetermined`, never compatible. Reads history only.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const projectLicense = detectProjectLicense(projectPath);
   // No declared license (the normal case for proprietary client work) and a
@@ -698,11 +695,4 @@ function groupByLicense(rows: IncompatibilityRow[]): Record<string, number> {
     out[r.dep_license] = (out[r.dep_license] ?? 0) + r.packages.length;
   }
   return out;
-}
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

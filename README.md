@@ -9,7 +9,7 @@ Trilingual: the skills and commands answer in English, Portuguese or Spanish, wh
 ## What's inside
 
 - **13 skills** and **10 slash commands** for Claude Code / Cowork (below).
-- An **MCP server** with **52 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md). The 13 tool names that 3.3.0 folded into `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` and `prioritize_findings` still answer calls; they are no longer listed.
+- An **MCP server** with **50 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md). The 13 tool names that 3.3.0 folded into `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` and `prioritize_findings`, and the three LLM-scan steps 3.4.0 folded into `llm_scan`, still answer calls; they are no longer listed.
 - **154 Semgrep rules in 12 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, a route-inventory pack for nine languages, a Node/Express pack (SQL built by interpolation, request path to a file API, request URL fetched), and an LLM-application pack (model output reaching eval/shell/SQL, remote code in a model load, prompt injection surface, no token cap) that `scan_sast` runs — see [docs/rule-packs.md](docs/rule-packs.md).
 - **Guardrail hooks** that deny catastrophic shell commands, vet packages at install time and warn on secrets as they are written — see [docs/hooks.md](docs/hooks.md).
 - A **CLI** (`cli/dev-guardian.mjs`) for CI gating, host setup, a terminal status view and an HTML dashboard.
@@ -85,7 +85,7 @@ Version 2.0.0 had 48 of them; `CHANGELOG.md` maps every old name to its replacem
 | Bugs and quality | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
 | Dependencies and supply chain | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Attack surface | `map_attack_surface`, `scan_dast`, `validate_finding` |
-| LLM-assisted scan | `llm_scan_start`, `llm_scan_task`, `llm_scan_submit` — your host's model verifies the findings and hunts what scanners miss; the server calls no model ([docs/llm-scan.md](docs/llm-scan.md)) |
+| LLM-assisted scan | `llm_scan` (`step`: start, task, submit) — your host's model verifies the findings and hunts what scanners miss; the server calls no model ([docs/llm-scan.md](docs/llm-scan.md)) |
 | History and triage | `diff_scans`, `set_baseline`, `suppress_finding`, `risk_score`, `prioritize_findings`, `health_status` |
 | Reports | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
 | Setup and ops | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |

@@ -9,7 +9,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../src/platform/gitSafety.js', () => ({ execGit: vi.fn() }));
+// useGitSpawner: runners/gitExec.ts installs the tree kill when ingest.ts loads it.
+vi.mock('../../../src/platform/gitSafety.js', () => ({ execGit: vi.fn(), useGitSpawner: vi.fn() }));
 
 import { execGit, type GitExecResult } from '../../../src/platform/gitSafety.js';
 import { ingestTarget } from '../../../src/skillaudit/ingest.js';

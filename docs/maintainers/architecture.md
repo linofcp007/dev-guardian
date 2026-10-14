@@ -10,7 +10,7 @@ quality, deps, observability, performance and compliance. Two halves:
 
 - **Plugin front-end** — `skills/` (13 skills) + `commands/` (10 slash commands),
   declared in [`.claude-plugin/plugin.json`](../../.claude-plugin/plugin.json).
-- **MCP server** — `mcp/` (TypeScript on `node:sqlite`), the real engine: 52 tools (and 13 hidden aliases),
+- **MCP server** — `mcp/` (TypeScript on `node:sqlite`), the real engine: 50 tools (and 16 hidden aliases),
   18 resources, registered by the import list in `mcp/src/registerAll.ts` (the folds,
   `mcp/src/tools/folds.ts`, decide which names `tools/list` shows — see prose.md). Built
   into one bundle, `mcp/dist/engine.js`, which the CLI runs too (`dist/server.js`
@@ -59,3 +59,27 @@ quality, deps, observability, performance and compliance. Two halves:
   shell guard can also return `ask` (`BashAssessment.ask`, an agent-run
   `baseline update`), which the hook sends as `permissionDecision: "ask"`.
   User-facing detail: [`docs/hooks.md`](../../docs/hooks.md).
+
+## What a scan of the project's own files leaves out
+
+Only the ROOT `.guardian/`'s generated output — `reports/`, the database,
+`dashboard.html`, `last-grill.md`, the CLI's `.gitignore` — listed once in
+`mcp/src/platform/guardianOutput.ts` and matched by exact project-relative
+path (Semgrep's flags, gitleaks' working tree and in-place config, scopes,
+the `.guardianignore` listing, the tree hash). A `.guardian` folder below the
+root is the project's code: 3.3.0 left out every folder of that name and a
+pull request hid a command injection in `lib/.guardian/` (review 10, finding
+1). Never add `.guardian` to an any-depth exclusion; walks that only look for
+manifests or languages may keep `PROJECT_WALK_EXCLUDE`, listings that stand
+for what a scanner reads use `SCANNED_WALK_EXCLUDE`. A Semgrep `--exclude`
+with a slash is anchored at the GIT ROOT; measure one from Git Bash only with
+`MSYS_NO_PATHCONV=1` (MSYS rewrites a leading `/`).
+
+## Async git and the tree kill
+
+`platform/gitSafety.ts` is loaded by the hook bundle, which may hold no npm
+package, so it never imports `runners/childProcess.ts`. Its async runs
+(`execGit`, `execGitBuffer`, the probes) go through an installable spawner;
+`runners/gitExec.ts` installs the one on the shared tree kill, and
+`runners/git.ts` (and every module calling `execGit` itself) imports it — a
+new direct caller of `execGit` imports `runners/gitExec.js` too.

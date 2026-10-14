@@ -19,11 +19,11 @@ import type { PluginContext } from '../context.js';
 import { latestStateScan } from '../history/openSet.js';
 import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
 import { isScopedScan } from '../history/scanRoles.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
-import { SCAN_TYPES, type DomainError, type ScanType, type ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const inputSchema = {
   project_path: ProjectPath,
@@ -40,7 +40,7 @@ const inputSchema = {
   note: z.string().max(500).optional().describe('Free-form note attached to the baseline row.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'set_baseline',
   title: 'Set the regression baseline',
   description:
@@ -50,15 +50,14 @@ const tool: ToolModule = {
     'accept one reviewed finding, suppress it instead.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; scan_id?: string; scan_type?: ScanType; source_tool?: string; note?: string };
 
   if (inp.scan_id && inp.source_tool !== undefined) return failDomain('unsupported_target', SOURCE_TOOL_WITH_SCAN_ID);
   let targetScanId: string;
@@ -85,12 +84,8 @@ async function handler(
     }
     targetScanId = inp.scan_id;
   } else {
-    let projectPath: string;
-    try {
-      projectPath = resolveProjectPath(inp.project_path).path;
-    } catch (e) {
-      return failDomain(projectPathErrorCode(e), (e as Error).message);
-    }
+    const projectPath = toolProjectPath(inp.project_path);
+    if (typeof projectPath !== 'string') return projectPath;
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
     if (!choice.ok) return failDomain('unsupported_target', choice.message);
     const latest = latestStateScan(ctx.storage, projectPath, inp.scan_type, choice.sourceTool !== undefined ? { sourceTool: choice.sourceTool } : {});

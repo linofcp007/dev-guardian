@@ -111,8 +111,11 @@ export function parseSettings(doc: unknown): ScanSettings | string {
   if (!isRecord(semgrep)) return '"semgrep:" must be a mapping';
   for (const [key, value] of Object.entries(semgrep)) {
     if (key === 'timeout') {
-      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 3600) {
-        return `semgrep.timeout must be a number of seconds from 0 to 3600, got ${JSON.stringify(value)}`;
+      // A whole number: Semgrep 1.176.1 refuses `--timeout 1.5` ("is not a
+      // valid integer"), and every scan then failed on a setting nobody saw
+      // named (review 10) — refused here, where the error names the file.
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 3600) {
+        return `semgrep.timeout must be a whole number of seconds from 0 to 3600, got ${JSON.stringify(value)}`;
       }
       out.semgrep.timeout = value;
     } else if (key === 'timeout_threshold') {
@@ -127,7 +130,7 @@ export function parseSettings(doc: unknown): ScanSettings | string {
         if (typeof entry !== 'string' || entry.trim() === '') {
           return `semgrep.accept_timeouts holds ${JSON.stringify(entry)}, which is not a file path`;
         }
-        const problem = relativePathProblem(entry);
+        const problem = relativePathProblem(entry) ?? notOneFile(entry);
         if (problem !== null) return `semgrep.accept_timeouts: ${problem}`;
         const normal = normalizeRelative(entry);
         if (!out.semgrep.acceptTimeouts.includes(normal)) out.semgrep.acceptTimeouts.push(normal);
@@ -149,6 +152,19 @@ export function normalizeRelative(path: string): string {
   let out = path.trim().replace(/\\/g, '/');
   while (out.startsWith('./')) out = out.slice(2);
   return out;
+}
+
+/**
+ * Why `path` is not ONE file, matched exactly — or null. An entry is compared
+ * with the file a Timeout names, as is: `src/gen/*.js` or `src/gen/` matched
+ * nothing, in silence (review 10). `*` and `?` are refused — no file name on
+ * Windows holds them, and an exact match was never what they meant; `[` and
+ * `{` are read as written, since `pages/[id].js` is a file.
+ */
+function notOneFile(path: string): string | null {
+  if (/[*?]/.test(path)) return `'${path}' is a glob; name each file exactly (globs are not read)`;
+  if (/[\\/]$/.test(path.trim())) return `'${path}' is a directory; name each file exactly`;
+  return null;
 }
 
 /** Why `path` cannot name a file inside the project (absolute, or climbing out), or null. */

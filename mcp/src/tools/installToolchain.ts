@@ -48,7 +48,7 @@ import {
   type InstallSpec,
 } from '../runners/installCatalog.js';
 import type { ToolResult } from '../types.js';
-import { registerToolModule, TOOLS, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput, TOOLS } from './index.js';
 import { resetScannerCache } from './scanHelpers.js';
 
 const inputSchema = {
@@ -91,7 +91,7 @@ interface InstallResult {
   manual_steps: Array<{ tool: string; instructions: string }>;
 }
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'install_toolchain',
   title: 'Install missing scanners',
   description:
@@ -101,19 +101,14 @@ const tool: ToolModule = {
     'This changes the system: run dry_run first, which only lists the commands.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    tools?: string[];
-    dry_run?: boolean;
-    elevation_allowed?: boolean;
-  };
   const dryRun = inp.dry_run === true;
   const elevation = inp.elevation_allowed === true;
   const os = detectOs();

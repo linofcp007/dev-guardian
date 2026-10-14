@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3875314, sha256: "37911bb7ca3f4dbbe9d3aa23bd731d888628588d45e2ad3db3359af34d63a15a" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 3896380, sha256: "5d7eb6ef4578a7ea79739f9f3023c85f7cb48cd33e2c26c78f4d1b7ffdc29c63" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -30,6 +30,7 @@ __export(gitSafety_exports, {
   parseConfigListing: () => parseConfigListing,
   safetyFromListing: () => safetyFromListing,
   staticGitSafety: () => staticGitSafety,
+  useGitSpawner: () => useGitSpawner,
   withoutHooksPath: () => withoutHooksPath
 });
 import { spawn, spawnSync } from "node:child_process";
@@ -615,7 +616,7 @@ async function gitlinksAsync(git, dir, env, timeoutMs, reuseMs) {
   const key = probeCacheKey(git, dir, env);
   const hit = cachedGitlinks(key, reuseMs);
   if (hit !== null) return hit;
-  const r = await collect(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
+  const r = await gitSpawner(git, gitlinkArgs(dir), { env, timeoutMs, maxBuffer: GITLINK_LISTING_MAX_BYTES });
   if (r.error !== void 0) return gitlinksError(r.error, dir, timeoutMs);
   return rememberGitlinks(key, parseGitlinks(dir, r.status, r.stdout));
 }
@@ -665,7 +666,7 @@ function probeSyncUncached(git, dir, env, timeoutMs) {
   return interpretExit(r.status, Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.alloc(0), String(r.stderr ?? ""), dir);
 }
 async function probeAsyncUncached(git, dir, env, timeoutMs) {
-  const r = await collect(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
+  const r = await gitSpawner(git, probeArgs(dir), { env, timeoutMs, maxBuffer: PROBE_MAX_BYTES });
   if (r.error !== void 0) return probeError(r.error, dir, timeoutMs);
   return interpretExit(r.status, r.stdout, r.stderr.toString("utf8"), dir);
 }
@@ -731,7 +732,7 @@ async function execGitBuffer(dir, args, opts = {}) {
   if (safety.refused !== null) return refusedResult(safety, Buffer.alloc(0));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
-  const r = await collect(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], {
+  const r = await gitSpawner(opts.git ?? gitExecutable(opts.env ?? process.env), ["-C", dir, ...args], {
     env: applyGitSafety(safety, opts.env ?? process.env, opts.platform ?? process.platform),
     timeoutMs,
     maxBuffer
@@ -774,6 +775,12 @@ function execFailure(error, timeoutMs, maxBuffer) {
   if (error.code === "ETIMEDOUT") return { code: "timeout", message: `git took longer than ${timeoutMs} ms` };
   if (error.code === "ENOBUFS") return { code: "too-large", message: `git printed more than ${maxBuffer} bytes` };
   return { code: "spawn", message: `git failed to run (${error.code ?? error.message})` };
+}
+var gitSpawner = collect;
+function useGitSpawner(spawner) {
+  const previous = gitSpawner;
+  gitSpawner = spawner;
+  return previous;
 }
 function collect(command, args, opts) {
   return new Promise((resolveRun) => {

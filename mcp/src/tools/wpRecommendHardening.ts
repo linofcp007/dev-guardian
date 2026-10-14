@@ -14,10 +14,10 @@
 
 import type { PluginContext } from '../context.js';
 import { findLatestUsable } from '../history/openSet.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { ScanRecord, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 interface ChecklistItem {
   priority: 'critical' | 'high' | 'medium' | 'low';
@@ -26,30 +26,27 @@ interface ChecklistItem {
   rationale: string;
 }
 
-const tool: ToolModule = {
+const inputSchema = { project_path: ProjectPath };
+
+const tool = defineTool({
   name: 'wp_recommend_hardening',
   title: 'WordPress hardening checklist',
   description:
     "Generate a prioritised hardening checklist (Markdown) from one install's latest wp_audit " +
     "(project_path = the install root, default: the server's working directory). Pure read — " +
     'inspects scans.meta of that wp_audit, applies heuristics, returns recommendations.',
-  inputSchema: { project_path: ProjectPath },
+  inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return { ok: false, error: { code: projectPathErrorCode(e), message: (e as Error).message } };
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
   const audit = findLatestWpAudit(ctx, projectPath);
   if (!audit) {
     return {

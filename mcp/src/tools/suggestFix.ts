@@ -27,10 +27,10 @@ import { z } from 'zod';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 const ROTATION_GUIDANCE =
   'This finding flags a credential (a password, key or token), not a code-shape bug — suggest_fix ' +
@@ -54,7 +54,7 @@ const inputSchema = {
     .describe('How many lines of source context to include around the finding. Default 20.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'suggest_fix',
   title: 'Gather fix context',
   description:
@@ -62,26 +62,17 @@ const tool: ToolModule = {
     "rule — from project_path's newest scan that reported it, so you can write the patch. Calls no LLM.",
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    finding_fingerprint: string;
-    context_lines?: number;
-  };
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
   const contextLines = inp.context_lines ?? 20;
 
   // Locate the finding in this project's newest scan that carries it.

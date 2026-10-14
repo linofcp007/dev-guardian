@@ -487,7 +487,7 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
 
   function countingTool(name: string, extraSchema: Record<string, z.ZodTypeAny> = {}) {
     const calls: Array<Record<string, unknown>> = [];
-    const tool = makeScanTool<{ project_path?: string; [k: string]: unknown }>({
+    const tool = makeScanTool({
       name,
       scan_type: 'containers',
       category: 'security',

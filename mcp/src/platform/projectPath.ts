@@ -21,6 +21,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { parse, resolve } from 'node:path';
+import { walkLinksUnder } from '../hooks/configFile.js';
 
 type InvalidProjectPathReason = 'not_found' | 'not_a_directory' | 'root_or_home' | 'network_path';
 
@@ -37,8 +38,10 @@ export class InvalidProjectPathError extends Error {
   constructor(
     public readonly reason: InvalidProjectPathReason,
     public readonly path: string,
+    /** The link on the way that leads to the network, when the path itself is spelled locally. */
+    via?: string,
   ) {
-    super(`Invalid project_path (${reason}): ${path}${REASON_HINT[reason]}`);
+    super(`Invalid project_path (${reason}): ${path}${via !== undefined ? ` (through the link ${via})` : ''}${REASON_HINT[reason]}`);
     this.name = 'InvalidProjectPathError';
   }
 }
@@ -80,6 +83,15 @@ export function resolveProjectPath(input?: string): ResolvedProjectPath {
   if (isNetworkPath(raw)) throw new InvalidProjectPathError('network_path', raw);
   const candidate = resolve(raw);
   if (isNetworkPath(candidate)) throw new InvalidProjectPathError('network_path', candidate);
+  // A local spelling can still lead there: a link (a directory symlink, a
+  // junction) on the way to a share. `existsSync` and `statSync` follow it,
+  // and on a share that does not answer each blocked ~21 s — 42 s, then
+  // "does not exist" (review 10). Decided on the links' own text, read with
+  // lstat and readlink only, like the UNC spelling above.
+  if (process.platform === 'win32') {
+    const walk = walkLinksUnder(parse(candidate).root, candidate);
+    if (!walk.ok && walk.reason === 'remote-link') throw new InvalidProjectPathError('network_path', candidate, walk.at);
+  }
 
   if (!existsSync(candidate)) {
     throw new InvalidProjectPathError('not_found', candidate);

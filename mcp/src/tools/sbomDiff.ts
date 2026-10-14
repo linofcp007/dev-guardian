@@ -67,10 +67,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 /** Response arrays are capped here; `summary` counts are never capped on a
  *  `full_file` comparison (see the module comment for the fallback case). */
@@ -99,7 +99,7 @@ const inputSchema = {
     ),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'sbom_diff',
   title: 'Compare two SBOMs',
   description:
@@ -108,7 +108,7 @@ const tool: ToolModule = {
     'with a capped summary; the response arrays are capped, `summary` has the true totals.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
@@ -126,22 +126,12 @@ interface LoadResult {
 }
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    project_path?: string;
-    from_scan_id?: string;
-    to_scan_id?: string;
-    use_full_file?: boolean;
-  };
 
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
   const sboms = needsDefaultPair

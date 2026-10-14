@@ -9,7 +9,7 @@ Trilingue: as skills e os comandos respondem em inglês, português ou espanhol,
 ## O que inclui
 
 - **13 skills** e **10 comandos** slash para o Claude Code / Cowork (abaixo).
-- Um **servidor MCP** com **52 ferramentas** e **18 recursos**, em TypeScript sobre `node:sqlite`, entregue já compilado — referência completa em [docs/tools.md](docs/tools.md) (em inglês). Os 13 nomes de ferramentas que a 3.3.0 juntou em `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` e `prioritize_findings` continuam a responder a chamadas; já não são listados.
+- Um **servidor MCP** com **50 ferramentas** e **18 recursos**, em TypeScript sobre `node:sqlite`, entregue já compilado — referência completa em [docs/tools.md](docs/tools.md) (em inglês). Os 13 nomes de ferramentas que a 3.3.0 juntou em `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` e `prioritize_findings`, e os três passos do scan com LLM que a 3.4.0 juntou em `llm_scan`, continuam a responder a chamadas; já não são listados.
 - **154 regras Semgrep em 12 packs** escritas para este projeto: classes de bugs para sete linguagens, um pack RGPD, um pack de inventário de rotas para nove linguagens, um pack Node/Express (SQL montado por interpolação, caminho do pedido numa API de ficheiros, URL do pedido a ser pedido) e um pack para aplicações com LLM (saída do modelo em eval/shell/SQL, código remoto ao carregar um modelo, superfície de injeção de prompt, chamadas sem limite de tokens) que o `scan_sast` corre — ver [docs/rule-packs.md](docs/rule-packs.md).
 - **Hooks de proteção** que bloqueiam comandos de shell catastróficos, verificam pacotes no momento da instalação e avisam quando um segredo é escrito num ficheiro — ver [docs/hooks.md](docs/hooks.md).
 - Uma **CLI** (`cli/dev-guardian.mjs`) para gates de CI, configuração de hosts, um resumo no terminal e um dashboard HTML.
@@ -85,7 +85,7 @@ A versão 2.0.0 tinha 48; o `CHANGELOG.md` indica, para cada nome antigo, o que 
 | Bugs e qualidade | `bug_hunt`, `quality_check`, `suggest_fix`, `create_fix_pr` |
 | Dependências e cadeia de fornecimento | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Superfície de ataque | `map_attack_surface`, `scan_dast`, `validate_finding` |
-| Scan assistido por LLM | `llm_scan_start`, `llm_scan_task`, `llm_scan_submit` — o modelo do teu host verifica os findings e procura o que os scanners não veem; o servidor não chama nenhum modelo ([docs/llm-scan.md](docs/llm-scan.md), em inglês) |
+| Scan assistido por LLM | `llm_scan` (`step`: start, task, submit) — o modelo do teu host verifica os findings e procura o que os scanners não veem; o servidor não chama nenhum modelo ([docs/llm-scan.md](docs/llm-scan.md), em inglês) |
 | Histórico e triagem | `diff_scans`, `set_baseline`, `suppress_finding`, `risk_score`, `prioritize_findings`, `health_status` |
 | Relatórios | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
 | Configuração e operação | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |

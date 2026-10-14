@@ -13,6 +13,7 @@ import {
   addUsage,
   childEnv,
   claudeArgs,
+  costSummary,
   driveTask,
   extractAnswer,
   extractAnswerDetailed,
@@ -242,6 +243,24 @@ describe('review round 1: isolation is verified on every session', () => {
     const f = await driveTask('brief', '/tmp/x', opts, accept([]), other.runner);
     expect(f.failure).toBe('error');
     expect(other.calls()).toBe(1);
+  });
+
+  it('the cost the CLI reports is summed over a task\'s attempts, refused ones included; null when no attempt reported one', async () => {
+    const answers = ['{"verdict":"maybe"}', '{"verdict":"real"}'];
+    let calls = 0;
+    const priced = await driveTask(
+      'brief',
+      '/tmp/x',
+      opts,
+      (a) => ((a as { verdict?: string }).verdict === 'real' ? { ok: true, value: a } : { ok: false, schema: true, errors: ['verdict: must be one of real, not_real, undetermined'] }),
+      async () => ({ ...run(['Glob', 'Grep', 'Read'], answers[calls] ?? ''), cost_usd: [0.0125, 0.02][calls++] ?? null }),
+    );
+    expect(priced.attempts).toHaveLength(2);
+    expect(priced.cost_usd).toBeCloseTo(0.0325, 10);
+    const unpriced = await driveTask('brief', '/tmp/x', opts, accept([]), async () => ({ ...run(['Glob', 'Grep', 'Read'], '{"verdict":"real"}'), cost_usd: null }));
+    expect(unpriced.cost_usd).toBeNull();
+    expect(costSummary([{ cost_usd: 0.0325 }, { cost_usd: 1.5 }])).toBe("$1.53 by the CLI's own estimate");
+    expect(costSummary([{ cost_usd: 0.5 }, { cost_usd: null }])).toBe("$0.50 by the CLI's own estimate (1 of 2 runs gave none)");
   });
 
   it('an isolated session is read as before, and a lenient answer is counted', async () => {

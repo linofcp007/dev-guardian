@@ -147,9 +147,9 @@ import {
 } from '../deps/versionCompare.js';
 import { findLatestUsable } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
-import { CVE_SOURCE_SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
-import { projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
-import { registerToolModule, type ToolCallMeta, type ToolModule } from './index.js';
+import { CVE_SOURCE_SCAN_TYPES, type ToolResult } from '../types.js';
+import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput } from './index.js';
+import { toolProjectPath } from './projectArg.js';
 
 type Classification = 'security' | 'patch' | 'minor' | 'major';
 
@@ -189,7 +189,7 @@ interface UpgradeStep {
   /** The SAME command as `upgrade_command`, shell-quoted for a human to
    *  paste into a terminal (a shell that globs by default, e.g. zsh, reads
    *  an unquoted `overrides[...]` as a filename pattern) — never used by
-   *  `create_fix_pr`'s own unquoted, non-shell `execa` invocation. Set only
+   *  `create_fix_pr`'s own unquoted, non-shell invocation (runProcess). Set only
    *  where quoting would otherwise matter (an npm `overrides` step); absent
    *  when `upgrade_command` is already shell-safe as written. */
   shell_command?: string;
@@ -282,7 +282,7 @@ const inputSchema = {
     .describe('Sort entries so this classification appears first. Default: security.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'deps_update_plan',
   title: 'Dependency upgrade plan',
   description:
@@ -293,22 +293,17 @@ const tool: ToolModule = {
     'hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.',
   inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
   callMeta?: ToolCallMeta,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as { project_path?: string; prefer?: Classification };
-  let projectPath: string;
-  try {
-    projectPath = resolveProjectPath(inp.project_path).path;
-  } catch (e) {
-    return failDomain(projectPathErrorCode(e), (e as Error).message);
-  }
+  const projectPath = toolProjectPath(inp.project_path);
+  if (typeof projectPath !== 'string') return projectPath;
 
   // create_fix_pr plans on a disposable checkout of HEAD (Task 11): the
   // files are the checkout's, the CVE history is the origin project's.
@@ -2287,13 +2282,4 @@ function summarize(plan: UpgradeStep[]): Summary {
     by_classification,
     has_security_updates: by_classification.security > 0,
   };
-}
-
-// ---------------------------------------------------------------------- domain error
-
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
-  return { ok: false, error: { code, message } };
 }

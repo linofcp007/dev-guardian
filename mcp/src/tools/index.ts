@@ -125,6 +125,32 @@ export interface ToolModule {
 }
 
 /**
+ * A tool's input as its schema parses it — every key typed, defaults applied
+ * (dg-maint finding 12: 51 hand-written `input as {…}` casts, nothing tying
+ * one to its schema).
+ */
+export type ToolInput<S extends ZodRawShape> = z.output<z.ZodObject<S>>;
+
+/** A {@link ToolModule} whose handler takes its own schema's {@link ToolInput}. */
+interface ToolSpec<S extends ZodRawShape> extends Omit<ToolModule, 'inputSchema' | 'handler'> {
+  inputSchema: S;
+  handler: (input: ToolInput<S>, ctx: PluginContext, callMeta?: ToolCallMeta) => Promise<ToolResult<Record<string, unknown>>>;
+}
+
+/**
+ * A tool module with its handler typed from its schema. The one place the
+ * registry's untyped input meets that type: every caller hands a handler the
+ * parse of exactly this schema — the SDK (`attachAllTools`, strict) or a fold
+ * (`./fold.ts`, the member's strict schema). Nothing parses it again: an
+ * in-process caller (`audit_executive`, a test) passes what the schema
+ * would have produced.
+ */
+export function defineTool<S extends ZodRawShape>(spec: ToolSpec<S>): ToolModule {
+  const { handler, ...rest } = spec;
+  return { ...rest, handler: (input, ctx, callMeta) => handler(input as ToolInput<S>, ctx, callMeta) };
+}
+
+/**
  * Mutable global registry. Modules append themselves at import time via
  * `registerToolModule`, which lets us keep additions localized to each
  * tool's file rather than threading a list through the bootstrap.

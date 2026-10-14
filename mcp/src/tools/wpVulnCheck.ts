@@ -31,6 +31,16 @@
  *     every other scan tool;
  *   - the report goes under the install, or the per-user cache for a URL —
  *     never the server's working directory.
+ *
+ * ---- What WPScan and WP-CLI are handed (review 10, finding 3) ----------
+ *
+ * On Windows both are batch files (a gem's `wpscan.bat`, `wp.bat`), and a
+ * `"` in an argument closed the quotes `cmd.exe` wraps it in: a payload in
+ * `target_url`, in `wp_install_path` or in the site's own `home` option ran
+ * a second command. WPScan gets the URL parsed and re-serialised — http or
+ * https only, the one WordPress names itself included — and the token only
+ * when it is a token (`platform/toolArgs.ts`); the row is still filed under
+ * the URL as given (`wpSiteKey`), where the readers look for it.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -40,6 +50,8 @@ import { resolveRetentionLimit } from '../storage/maintenance.js';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { canonicalPath } from '../platform/projectPath.js';
+import { API_TOKEN, httpUrl } from '../platform/toolArgs.js';
+import { httpUrlField } from '../schemas.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { wpscanParser } from '../runners/scannerParsers/wpscan.js';
 import { computeCoverage } from './scanCoverage.js';
@@ -47,7 +59,7 @@ import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { wpInstallPathProblem, wpSiteKey } from '../wordpress/siteKeys.js';
 import { defaultWordfenceCacheDir } from '../wordpress/vulnFeed.js';
-import { registerToolModule, type ToolModule } from './index.js';
+import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
   wp_install_path: z
@@ -56,18 +68,17 @@ const inputSchema = {
     .describe(
       'Path to the WP install (must contain wp-config.php to infer the URL). Absolute, or existing on this machine.',
     ),
-  target_url: z
-    .string()
-    .url()
+  target_url: httpUrlField()
     .optional()
     .describe('Live URL of the WordPress site to scan. Preferred when both inputs are present.'),
   api_token: z
     .string()
+    .regex(API_TOKEN, 'api_token must be a WPScan API token: letters and digits')
     .optional()
     .describe('WPScan API token. Falls back to WPSCAN_API_TOKEN env var.'),
 };
 
-const tool: ToolModule = {
+const tool = defineTool({
   name: 'wp_vuln_check',
   title: 'WordPress vuln-DB lookup (WPScan)',
   description:
@@ -77,19 +88,14 @@ const tool: ToolModule = {
     'database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
-};
+});
 
 registerToolModule(tool);
 
 async function handler(
-  input: Record<string, unknown>,
+  inp: ToolInput<typeof inputSchema>,
   ctx: PluginContext,
 ): Promise<ToolResult<Record<string, unknown>>> {
-  const inp = input as {
-    wp_install_path?: string;
-    target_url?: string;
-    api_token?: string;
-  };
 
   if (!inp.target_url && !inp.wp_install_path) {
     return failDomain(
@@ -115,39 +121,17 @@ async function handler(
     );
   }
 
-  // Resolve URL. When only the install path is given, ask WP-CLI for the home_url.
-  let url = inp.target_url;
-  if (!url && inp.wp_install_path) {
-    const wpBin = await scannerAvailable('wp');
-    if (!wpBin) {
-      return failDomain(
-        'missing_scanner',
-        'wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url.',
-      );
-    }
-    const r = await runProcess({
-      command: 'wp',
-      args: ['option', 'get', 'home', `--path=${inp.wp_install_path}`],
-      cwd: localInstall ?? process.cwd(),
-      timeoutMs: 30_000,
-    });
-    if (r.outcome === 'completed') {
-      url = r.stdout.trim();
-    } else {
-      return failDomain(
-        'scanner_failed',
-        `wp option get home failed: ${r.stderr.split(/\r?\n/)[0] ?? r.outcome}`,
-      );
-    }
-  }
-
-  // WP-CLI can succeed and still print nothing, which left `url` undefined
-  // while two later call sites asserted it was not. Checked once, here.
-  if (!url) {
-    return failDomain('scanner_failed', 'Could not resolve a target URL for WPScan.');
-  }
+  const resolved = await resolveScanUrl(inp, localInstall);
+  if (!resolved.ok) return resolved;
+  const { url, scanUrl } = resolved;
 
   const token = inp.api_token ?? process.env['WPSCAN_API_TOKEN'] ?? '';
+  if (token !== '' && !API_TOKEN.test(token)) {
+    return failDomain(
+      'invalid_input',
+      `${inp.api_token !== undefined ? 'api_token' : 'WPSCAN_API_TOKEN'} is not a WPScan API token (letters and digits only).`,
+    );
+  }
 
   // The report goes under the install when it is on this machine, else the
   // per-user dev-guardian cache — never the server's working directory,
@@ -173,7 +157,7 @@ async function handler(
     report_dir: reportDir,
   });
 
-  const args = ['--no-update', '--no-banner', '--format', 'json', '--output', outFile, '--enumerate', 'vp,vt', '--url', url];
+  const args = ['--no-update', '--no-banner', '--format', 'json', '--output', outFile, '--enumerate', 'vp,vt', '--url', scanUrl];
   if (token) args.push('--api-token', token);
   const scan = async (): Promise<WpscanAttempt> => {
     rmSync(outFile, { force: true });
@@ -182,32 +166,7 @@ async function handler(
     return { run, raw, report: readWpscanReport(raw) };
   };
 
-  let attempt = await scan();
-  let failure: string | null = null;
-  let dbNote: string | null = null;
-  if (attempt.report.aborted !== null && MISSING_DB.test(attempt.report.aborted)) {
-    if (process.env['GUARDIAN_OFFLINE'] === '1') {
-      failure =
-        'WPScan has no local database, and GUARDIAN_OFFLINE=1 forbids downloading one: run `wpscan --update` ' +
-        'once (it downloads the database from data.wpscan.org), or unset GUARDIAN_OFFLINE, and re-run — nothing was scanned';
-    } else {
-      // Once. The update is its own run: no target, no token.
-      const update = await runProcess({
-        command: 'wpscan',
-        args: ['--update', '--no-banner'],
-        cwd: reportDir,
-        timeoutMs: 10 * 60_000,
-      });
-      if (update.outcome !== 'completed') {
-        failure =
-          `WPScan has no local database and \`wpscan --update\` failed (${whyLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) ` +
-          '— nothing was scanned; run `wpscan --update` by hand and re-run';
-      } else {
-        dbNote = 'database downloaded (wpscan --update)';
-        attempt = await scan();
-      }
-    }
-  }
+  const { attempt, failure, dbNote } = await scanWithDatabase(scan, reportDir);
 
   // Findings the report holds are real whatever the verdict.
   let findingsCount = 0;
@@ -252,14 +211,14 @@ async function handler(
     tools_run,
     missing_tools,
     report_dir: reportDir,
-    meta: { url, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked },
+    meta: { url: scanUrl, rate_limited: rateLimited, has_token: token.length > 0, vulnerabilities_checked: verdict.checked },
   });
 
   return {
     ok: true,
     scan_id: scanId,
     status,
-    url,
+    url: scanUrl,
     has_token: token.length > 0,
     rate_limited: rateLimited,
     vulnerabilities_checked: verdict.checked,
@@ -271,6 +230,99 @@ async function handler(
     report_path: outFile,
     warnings,
   };
+}
+
+/**
+ * The site's URL — `target_url`, else the install's `home` option, which
+ * WP-CLI reads — and what WPScan is handed: that URL parsed and
+ * re-serialised, http(s) only, the one the site names itself as much as the
+ * caller's (see the module comment). The row stays filed under the URL as
+ * given.
+ */
+async function resolveScanUrl(
+  inp: { target_url?: string | undefined; wp_install_path?: string | undefined },
+  localInstall: string | undefined,
+): Promise<{ ok: true; url: string; scanUrl: string } | { ok: false; error: DomainError }> {
+  // When only the install path is given, ask WP-CLI for the home_url.
+  let url = inp.target_url;
+  if (!url && inp.wp_install_path) {
+    const wpBin = await scannerAvailable('wp');
+    if (!wpBin) {
+      return failDomain(
+        'missing_scanner',
+        'wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url.',
+      );
+    }
+    const r = await runProcess({
+      command: 'wp',
+      args: ['option', 'get', 'home', `--path=${inp.wp_install_path}`],
+      cwd: localInstall ?? process.cwd(),
+      timeoutMs: 30_000,
+    });
+    if (r.outcome === 'completed') {
+      url = r.stdout.trim();
+    } else {
+      return failDomain(
+        'scanner_failed',
+        `wp option get home failed: ${r.stderr.split(/\r?\n/)[0] ?? r.outcome}`,
+      );
+    }
+  }
+
+  // WP-CLI can succeed and still print nothing, which left `url` undefined
+  // while two later call sites asserted it was not. Checked once, here.
+  if (!url) {
+    return failDomain('scanner_failed', 'Could not resolve a target URL for WPScan.');
+  }
+  const scanUrl = httpUrl(url);
+  if (scanUrl === null) {
+    return inp.target_url
+      ? failDomain('invalid_input', 'target_url must be an http:// or https:// URL.')
+      : failDomain(
+          'scanner_failed',
+          `The site's home option is not an http:// or https:// URL (WP-CLI read ${JSON.stringify(url.slice(0, 200))}); pass target_url.`,
+        );
+  }
+  return { ok: true, url, scanUrl };
+}
+
+/**
+ * One WPScan run — and, when WPScan has no database, one `wpscan --update`
+ * (egress to data.wpscan.org; refused under GUARDIAN_OFFLINE=1) and the run
+ * again. `failure` says why nothing was scanned; `dbNote` that the database
+ * was downloaded.
+ */
+async function scanWithDatabase(
+  scan: () => Promise<WpscanAttempt>,
+  reportDir: string,
+): Promise<{ attempt: WpscanAttempt; failure: string | null; dbNote: string | null }> {
+  let attempt = await scan();
+  let failure: string | null = null;
+  let dbNote: string | null = null;
+  if (attempt.report.aborted !== null && MISSING_DB.test(attempt.report.aborted)) {
+    if (process.env['GUARDIAN_OFFLINE'] === '1') {
+      failure =
+        'WPScan has no local database, and GUARDIAN_OFFLINE=1 forbids downloading one: run `wpscan --update` ' +
+        'once (it downloads the database from data.wpscan.org), or unset GUARDIAN_OFFLINE, and re-run — nothing was scanned';
+    } else {
+      // Once. The update is its own run: no target, no token.
+      const update = await runProcess({
+        command: 'wpscan',
+        args: ['--update', '--no-banner'],
+        cwd: reportDir,
+        timeoutMs: 10 * 60_000,
+      });
+      if (update.outcome !== 'completed') {
+        failure =
+          `WPScan has no local database and \`wpscan --update\` failed (${whyLine(update) ?? `${update.outcome}, exit ${String(update.exitCode)}`}) ` +
+          '— nothing was scanned; run `wpscan --update` by hand and re-run';
+      } else {
+        dbNote = 'database downloaded (wpscan --update)';
+        attempt = await scan();
+      }
+    }
+  }
+  return { attempt, failure, dbNote };
 }
 
 // ---------------------------------------------------------------- URL-only reports in the user cache
@@ -475,9 +527,6 @@ function whyLine(r: Pick<ProcessRunResult, 'stderr' | 'stdout'>): string | null 
   return pick === undefined ? null : pick.slice(0, 300);
 }
 
-function failDomain(
-  code: DomainError['code'],
-  message: string,
-): ToolResult<Record<string, unknown>> {
+function failDomain(code: DomainError['code'], message: string): { ok: false; error: DomainError } {
   return { ok: false, error: { code, message } };
 }

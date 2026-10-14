@@ -7,7 +7,8 @@
  */
 
 import { z } from 'zod';
-import { SEVERITIES, CATEGORIES, DOMAIN_ERROR_CODES } from './types.js';
+import { httpUrl } from './platform/toolArgs.js';
+import { SEVERITIES } from './types.js';
 
 export const ProjectPath = z
   .string()
@@ -40,29 +41,14 @@ export const AllowDirty = z
   .default(false)
   .describe('With auto_fix: allow uncommitted changes in the tree.');
 
-export const Categories = z
-  .array(z.enum(CATEGORIES))
-  .optional()
-  .describe('Restrict the run to these categories only.');
-
-export const SeverityEnum = z.enum(SEVERITIES);
-export const CategoryEnum = z.enum(CATEGORIES);
-export const DomainErrorCodeEnum = z.enum(DOMAIN_ERROR_CODES);
-
 /**
- * Common scan-tool input shape. Individual tools extend this with
- * tool-specific fields (e.g. `dockerfile_path`, `target_url`).
+ * An http or https URL (`platform/toolArgs.ts#httpUrl`): a tool hands the
+ * program it runs the RE-SERIALISED URL, never the text. A FACTORY, not one
+ * shared instance: the JSON-schema converter emits a reused zod instance as a
+ * `$ref` to its first use.
  */
-export const BaseScanInput = z.object({
-  project_path: ProjectPath,
-  severity_min: SeverityMin,
-  force: Force,
-});
-
-export const BaseScanWithFixInput = BaseScanInput.extend({
-  auto_fix: AutoFix,
-  allow_dirty: AllowDirty,
-});
-
-export type BaseScanInputT = z.infer<typeof BaseScanInput>;
-export type BaseScanWithFixInputT = z.infer<typeof BaseScanWithFixInput>;
+export const httpUrlField = (): z.ZodEffects<z.ZodString, string, string> =>
+  z
+    .string()
+    .url()
+    .refine((text) => httpUrl(text) !== null, { message: 'must be an http:// or https:// URL' });

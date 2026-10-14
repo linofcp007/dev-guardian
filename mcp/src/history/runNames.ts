@@ -271,7 +271,7 @@ export const RUN_NAMES = {
   // it started (`runNameEntry` reads each as a pass of this base); a server
   // that failed or was skipped leaves the audit's findings unmeasured.
   'mcp-tool-audit': scanner('mcp-tool-audit'),
-  // llm_scan: the hunt's findings (tool `llm-hunt`); written by llm_scan_submit.
+  // llm_scan: the hunt's findings (tool `llm-hunt`); written by the submit step of llm_scan.
   'llm-hunt': scanner('llm-hunt'),
 
   // import_sarif: the importer's own pass. It speaks for no key: an import's
