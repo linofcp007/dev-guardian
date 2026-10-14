@@ -38197,8 +38197,9 @@ var init_dotnetRestore = __esm({
 });
 
 // src/tools/scanHelpers.ts
-import { lstatSync as lstatSync10, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, rmSync as rmSync4 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
+import { createHash as createHash11 } from "node:crypto";
+import { lstatSync as lstatSync10, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { homedir as homedir6, tmpdir as tmpdir3, userInfo } from "node:os";
 import { dirname as dirname16, join as join38 } from "node:path";
 async function scannerAvailable(name) {
   const hit = scannerPathCache.get(name);
@@ -38226,14 +38227,31 @@ function ensureReportDir(projectPath, scanId, prefix) {
 `
   );
   const fallback = mkdtempSync2(join38(tmpdir3(), `${TEMP_REPORTS_PREFIX}${prefix}-`));
-  pruneReports(tmpdir3(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`);
+  try {
+    writeFileSync6(join38(fallback, OWNER_MARKER), accountToken(), { flag: "wx" });
+  } catch {
+  }
+  pruneReports(tmpdir3(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`, { markedOnly: true });
   return fallback;
+}
+function accountToken() {
+  let user = "";
+  try {
+    user = userInfo().username;
+  } catch {
+  }
+  return createHash11("sha256").update(`dev-guardian-owner
+${user}
+${homedir6()}`).digest("hex");
+}
+function markedByThisAccount(dir) {
+  return readSmallTextFile(join38(dir, OWNER_MARKER), 256)?.trim() === accountToken();
 }
 function keptReports() {
   const n = Number(process.env["GUARDIAN_KEEP_REPORTS"]);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_KEPT_REPORTS;
 }
-function pruneReports(reportsDir, prefix, current, name = prefix) {
+function pruneReports(reportsDir, prefix, current, name = prefix, opts = {}) {
   if (!PRUNED_REPORT_PREFIXES.has(prefix)) return;
   let entries2;
   try {
@@ -38250,7 +38268,8 @@ function pruneReports(reportsDir, prefix, current, name = prefix) {
     if (path3 === current) continue;
     try {
       const st = lstatSync10(path3);
-      if (st.isDirectory() && !st.isSymbolicLink() && (uid === void 0 || st.uid === uid)) {
+      if (!st.isDirectory() || st.isSymbolicLink() || uid !== void 0 && st.uid !== uid) continue;
+      if (opts.markedOnly !== true || markedByThisAccount(path3)) {
         others.push({ path: path3, mtime: st.mtimeMs });
       }
     } catch {
@@ -38267,7 +38286,7 @@ function pruneReports(reportsDir, prefix, current, name = prefix) {
 function readJsonSafe(path3) {
   return readSmallTextFile(path3, MAX_REPORT_BYTES2) ?? null;
 }
-var NEGATIVE_SCANNER_CACHE_TTL_MS, scannerPathCache, TEMP_REPORTS_PREFIX, DEFAULT_KEPT_REPORTS, PRUNED_REPORT_PREFIXES, MAX_REPORT_BYTES2;
+var NEGATIVE_SCANNER_CACHE_TTL_MS, scannerPathCache, TEMP_REPORTS_PREFIX, OWNER_MARKER, DEFAULT_KEPT_REPORTS, PRUNED_REPORT_PREFIXES, MAX_REPORT_BYTES2;
 var init_scanHelpers = __esm({
   "src/tools/scanHelpers.ts"() {
     "use strict";
@@ -38279,6 +38298,7 @@ var init_scanHelpers = __esm({
     NEGATIVE_SCANNER_CACHE_TTL_MS = 6e4;
     scannerPathCache = /* @__PURE__ */ new Map();
     TEMP_REPORTS_PREFIX = "guardian-reports-";
+    OWNER_MARKER = ".dev-guardian-owner";
     DEFAULT_KEPT_REPORTS = 3;
     PRUNED_REPORT_PREFIXES = /* @__PURE__ */ new Set([
       "sast",
@@ -39004,7 +39024,7 @@ var init_semgrep = __esm({
 });
 
 // src/tools/scanSast.ts
-import { lstatSync as lstatSync11, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readdirSync as readdirSync12, readFileSync as readFileSync5, rmSync as rmSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { lstatSync as lstatSync11, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync3, readdirSync as readdirSync12, readFileSync as readFileSync5, rmSync as rmSync6, writeFileSync as writeFileSync7 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename6, dirname as dirname17, join as join41, relative as relative13, resolve as resolve17, sep as sep10 } from "node:path";
 async function runSemgrep2(args) {
@@ -39329,7 +39349,7 @@ function banditIni(projectPath, reportDir) {
   }
   const neutral = join41(reportDir, NEUTRAL_BANDIT_INI);
   try {
-    writeFileSync6(neutral, "[bandit]\n", "utf8");
+    writeFileSync7(neutral, "[bandit]\n", "utf8");
   } catch (e) {
     return { error: `could not write the neutral Bandit configuration ${neutral}: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -39447,7 +39467,7 @@ async function runDotnetAnalyzers(args) {
   const sarifDir = join41(work, "sarif");
   mkdirSync7(sarifDir);
   const targetsFile = join41(work, "dev-guardian-sarif.targets");
-  writeFileSync6(targetsFile, SARIF_TARGETS, "utf8");
+  writeFileSync7(targetsFile, SARIF_TARGETS, "utf8");
   const failures = [];
   const sarifs = [];
   let reports = 0;
@@ -40053,7 +40073,7 @@ var init_gitleaks = __esm({
 });
 
 // src/runners/gitleaksScan.ts
-import { lstatSync as lstatSync13, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync5, rmSync as rmSync8, writeFileSync as writeFileSync7 } from "node:fs";
+import { lstatSync as lstatSync13, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync5, rmSync as rmSync8, writeFileSync as writeFileSync8 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
 import { basename as basename7, dirname as dirname18, join as join43, relative as relative14, resolve as resolve18 } from "node:path";
 async function runGitleaksScan(opts) {
@@ -40322,7 +40342,7 @@ function copyForScan(opts, candidates2, tmp, limits) {
     try {
       const to = join43(tmp, rel2);
       mkdirSync8(dirname18(to), { recursive: true });
-      writeFileSync7(to, read3.bytes);
+      writeFileSync8(to, read3.bytes);
       copied += 1;
       total += read3.bytes.length;
     } catch (e) {
@@ -40404,7 +40424,7 @@ async function directoryPass(opts, result, name) {
   let config2;
   try {
     config2 = join43(opts.reportDir, "gitleaks-directory.toml");
-    writeFileSync7(config2, directoryConfig(opts.projectPath));
+    writeFileSync8(config2, directoryConfig(opts.projectPath));
   } catch (e) {
     result.tools_run.push({ name, status: "failed", reason: `${prefix}: could not write its config: ${message(e)}` });
     return;
@@ -40485,7 +40505,7 @@ function takeReport(opts, written, outFile) {
   const clean = sanitizeGitleaksReport(rawText, opts.captureSecrets ?? (() => false));
   if (clean === null) return { text: WITHHELD_REPORT, secrets: null };
   try {
-    writeFileSync7(outFile, clean.text);
+    writeFileSync8(outFile, clean.text);
   } catch {
   }
   return { text: clean.text, secrets: clean.secrets };
@@ -41850,7 +41870,7 @@ var init_trivyConfig = __esm({
 });
 
 // src/tools/scanIac.ts
-import { writeFileSync as writeFileSync8 } from "node:fs";
+import { writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join46, relative as relative15 } from "node:path";
 function listWorkflowFiles(projectPath, exclusions) {
   const dir = join46(projectPath, WORKFLOWS_DIR);
@@ -41886,7 +41906,7 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
   });
   if (result.stdout.length > 0) {
     try {
-      writeFileSync8(join46(reportDir, `${spec.name}.json`), result.stdout, "utf8");
+      writeFileSync9(join46(reportDir, `${spec.name}.json`), result.stdout, "utf8");
     } catch {
     }
   }
@@ -46760,7 +46780,7 @@ var init_pythonProject = __esm({
 });
 
 // src/tools/depsAudit.ts
-import { writeFileSync as writeFileSync9 } from "node:fs";
+import { writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join54, relative as relative19 } from "node:path";
 function packageFromSnippet(snippet) {
   if (!snippet) return null;
@@ -46835,7 +46855,7 @@ async function tryNativeAudit(opts) {
   });
   if (isNpmStdout && result.stdout.length > 0) {
     try {
-      writeFileSync9(opts.outFile, result.stdout, "utf8");
+      writeFileSync10(opts.outFile, result.stdout, "utf8");
     } catch {
     }
   }
@@ -47057,7 +47077,7 @@ async function runDotnetSca(opts) {
     anyOk = true;
     parser_inputs.push({ parser: dotnetScaParser, input: list2.stdout });
     try {
-      writeFileSync9(join54(reportDir, `dotnet-list-${i}.json`), list2.stdout, "utf8");
+      writeFileSync10(join54(reportDir, `dotnet-list-${i}.json`), list2.stdout, "utf8");
     } catch {
     }
   }
@@ -50402,7 +50422,7 @@ var init_complianceCheck = __esm({
 });
 
 // src/runners/syftRun.ts
-import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync10 } from "node:fs";
+import { mkdirSync as mkdirSync9, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join58 } from "node:path";
 function syftArgv(inv, configPath) {
   return [inv.target, "-o", `${inv.format}=${inv.outFile}`, "--quiet", "-c", configPath];
@@ -50411,7 +50431,7 @@ async function runSyft(inv) {
   const configPath = join58(inv.workDir, NEUTRAL_SYFT_CONFIG);
   try {
     mkdirSync9(inv.workDir, { recursive: true });
-    writeFileSync10(configPath, NEUTRAL_CONFIG_TEXT2, "utf8");
+    writeFileSync11(configPath, NEUTRAL_CONFIG_TEXT2, "utf8");
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
     return {
@@ -51927,7 +51947,7 @@ public static class Metrics
 });
 
 // src/tools/perfCheck.ts
-import { existsSync as existsSync17, readFileSync as readFileSync7, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync7, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join64, relative as relative22 } from "node:path";
 import { randomUUID as randomUUID5 } from "node:crypto";
 async function handler6(inp, ctx) {
@@ -52117,7 +52137,7 @@ async function runK6(opts) {
     timeoutMs: 30 * 6e4
   });
   if (!existsSync17(summaryFile)) {
-    writeFileSync11(summaryFile, result.stdout || "{}", "utf8");
+    writeFileSync12(summaryFile, result.stdout || "{}", "utf8");
   }
   const raw = readFileSync7(summaryFile, "utf8");
   let parsed;
@@ -68609,7 +68629,7 @@ var init_reportExport = __esm({
 });
 
 // src/sarif/importSarif.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { isAbsolute as isAbsolute16, relative as relative23, resolve as resolve23 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 function importSarif(text2, ctx) {
@@ -68709,7 +68729,7 @@ function separateSharedFingerprints(findings, keys) {
   for (const f of findings) uses.set(f.fingerprint, (uses.get(f.fingerprint) ?? 0) + 1);
   findings.forEach((f, i) => {
     if ((uses.get(f.fingerprint) ?? 0) < 2) return;
-    f.fingerprint = createHash11("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
+    f.fingerprint = createHash12("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
   });
 }
 function resolveRule(result, rc) {
@@ -68855,7 +68875,7 @@ function identityOf(result, tool54, ruleId) {
   let key = usableFingerprints(partial3);
   if (key.length === 0) key = usableFingerprints(getProp(result, "fingerprints"));
   if (key.length === 0) return void 0;
-  return createHash11("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
+  return createHash12("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
 }
 function locate5(result, rc) {
   const physical = getProp(asArray(getProp(result, "locations"))[0], "physicalLocation");
@@ -69580,14 +69600,14 @@ var init_complianceEvidence = __esm({
 });
 
 // src/runners/argFile.ts
-import { mkdtempSync as mkdtempSync6, rmSync as rmSync9, writeFileSync as writeFileSync12 } from "node:fs";
+import { mkdtempSync as mkdtempSync6, rmSync as rmSync9, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { join as join71 } from "node:path";
 async function withTextFile(text2, use) {
   const dir = mkdtempSync6(join71(tmpdir7(), "dev-guardian-body-"));
   try {
     const file = join71(dir, "body.md");
-    writeFileSync12(file, text2, "utf8");
+    writeFileSync13(file, text2, "utf8");
     return await use(file);
   } finally {
     rmSync9(dir, { recursive: true, force: true });
@@ -70984,9 +71004,9 @@ var init_siteKeys = __esm({
 });
 
 // src/wordpress/vulnFeed.ts
-import { mkdirSync as mkdirSync10, renameSync as renameSync3, writeFileSync as writeFileSync13 } from "node:fs";
+import { mkdirSync as mkdirSync10, renameSync as renameSync3, writeFileSync as writeFileSync14 } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir as homedir6 } from "node:os";
+import { homedir as homedir7 } from "node:os";
 import { join as join73 } from "node:path";
 import { randomUUID as randomUUID9 } from "node:crypto";
 function comparePhpVersions(a, b) {
@@ -71072,14 +71092,14 @@ function defaultWordfenceCacheDir(env = process.env) {
   const override = env["GUARDIAN_CACHE_DIR"];
   if (override !== void 0 && override.length > 0) return override;
   if (process.platform === "win32") {
-    const base3 = env["LOCALAPPDATA"] ?? join73(homedir6(), "AppData", "Local");
+    const base3 = env["LOCALAPPDATA"] ?? join73(homedir7(), "AppData", "Local");
     return join73(base3, "dev-guardian", "cache");
   }
   if (process.platform === "darwin") {
-    const base3 = env["XDG_CACHE_HOME"] ?? join73(homedir6(), "Library", "Caches");
+    const base3 = env["XDG_CACHE_HOME"] ?? join73(homedir7(), "Library", "Caches");
     return join73(base3, "dev-guardian");
   }
-  const base2 = env["XDG_CACHE_HOME"] ?? join73(homedir6(), ".cache");
+  const base2 = env["XDG_CACHE_HOME"] ?? join73(homedir7(), ".cache");
   return join73(base2, "dev-guardian");
 }
 async function getWordfenceFeed(opts = {}) {
@@ -71138,7 +71158,7 @@ async function readCachedFeed(cachePath) {
 async function writeCachedFeed(cachePath, payload) {
   mkdirSync10(join73(cachePath, ".."), { recursive: true });
   const tmpPath = `${cachePath}.${randomUUID9()}.tmp`;
-  writeFileSync13(tmpPath, JSON.stringify(payload), "utf8");
+  writeFileSync14(tmpPath, JSON.stringify(payload), "utf8");
   renameSync3(tmpPath, cachePath);
 }
 function allComponents(inventory) {
@@ -71252,8 +71272,8 @@ var init_vulnFeed = __esm({
 });
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync21, mkdirSync as mkdirSync11, readdirSync as readdirSync14, readFileSync as readFileSync9, rmSync as rmSync10, writeFileSync as writeFileSync14 } from "node:fs";
-import { createHash as createHash12, randomUUID as randomUUID10 } from "node:crypto";
+import { existsSync as existsSync21, mkdirSync as mkdirSync11, readdirSync as readdirSync14, readFileSync as readFileSync9, rmSync as rmSync10, writeFileSync as writeFileSync15 } from "node:fs";
+import { createHash as createHash13, randomUUID as randomUUID10 } from "node:crypto";
 import { dirname as dirname24, join as join74 } from "node:path";
 async function handler27(inp, ctx) {
   if (!inp.target_url && !inp.wp_install_path) {
@@ -71429,7 +71449,7 @@ function urlReportsDir(url2) {
     host = new URL(key).host.replace(/[^A-Za-z0-9.-]/g, "_") || "site";
   } catch {
   }
-  const hash = createHash12("sha256").update(key).digest("hex").slice(0, 12);
+  const hash = createHash13("sha256").update(key).digest("hex").slice(0, 12);
   return join74(defaultWordfenceCacheDir(), "wp-vuln-check", `${host}-${hash}`);
 }
 function pruneUrlReports(siteDir, current) {
@@ -71461,7 +71481,7 @@ function readReport(outFile, stdout) {
   }
   if (stdout.trim().startsWith("{")) {
     try {
-      writeFileSync14(outFile, stdout, "utf8");
+      writeFileSync15(outFile, stdout, "utf8");
     } catch {
     }
     return stdout;
@@ -76243,7 +76263,7 @@ import {
   realpathSync as realpathSync5,
   rmSync as rmSync11,
   statSync as statSync12,
-  writeFileSync as writeFileSync15
+  writeFileSync as writeFileSync16
 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
 import { basename as basename10, dirname as dirname25, isAbsolute as isAbsolute18, join as join81, relative as relative29, resolve as resolve26 } from "node:path";
@@ -76400,7 +76420,7 @@ async function ingestUrl(url2) {
       const res = await fetch(url2, { signal: controller.signal });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      writeFileSync15(dest, buf);
+      writeFileSync16(dest, buf);
     } finally {
       clearTimeout(timeout);
     }
@@ -76732,8 +76752,8 @@ var init_ingest = __esm({
 });
 
 // src/tools/scanSkill.ts
-import { createHash as createHash13, randomUUID as randomUUID17 } from "node:crypto";
-import { writeFileSync as writeFileSync16 } from "node:fs";
+import { createHash as createHash14, randomUUID as randomUUID17 } from "node:crypto";
+import { writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join82 } from "node:path";
 async function handler39(inp, ctx, callMeta) {
   let basePath;
@@ -76776,8 +76796,8 @@ async function handler39(inp, ctx, callMeta) {
         const outDir = ensureReportDir(basePath, scanId, "skill-audit");
         const sarifPath = join82(outDir, "report.sarif");
         const jsonPath = join82(outDir, "report.json");
-        writeFileSync16(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
-        writeFileSync16(
+        writeFileSync17(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
+        writeFileSync17(
           jsonPath,
           JSON.stringify(
             {
@@ -76871,7 +76891,7 @@ function nonZeroBreakdown(breakdown) {
   return out.sort((a, b) => b.count - a.count);
 }
 function hashFiles(parts) {
-  const h = createHash13("sha256");
+  const h = createHash14("sha256");
   for (const p of [...parts].sort()) h.update(p).update("\n");
   return h.digest("hex").slice(0, 32);
 }
@@ -79466,7 +79486,7 @@ var init_deadline = __esm({
 });
 
 // src/dast/evidence.ts
-import { writeFileSync as writeFileSync17 } from "node:fs";
+import { writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join87 } from "node:path";
 function toExchange(result) {
   return { ...requestPart(result.request), response: responsePart(result) };
@@ -79541,7 +79561,7 @@ function writeEvidenceFiles(dir, records2, redact2) {
       continue;
     }
     try {
-      writeFileSync17(
+      writeFileSync18(
         join87(dir, `${record8.fingerprint}.json`),
         redact2(JSON.stringify(record8, null, 2)),
         "utf8"
@@ -79803,7 +79823,7 @@ var init_normalizeNuclei = __esm({
 });
 
 // src/dast/probe.ts
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 async function executeProbe(req, opts) {
   const started = Date.now();
   const controller = new AbortController();
@@ -79836,7 +79856,7 @@ async function executeProbe(req, opts) {
       status: res.status,
       headers,
       body_prefix: text2.slice(0, BODY_PREFIX_BYTES),
-      body_hash: createHash14("sha256").update(text2).digest("hex"),
+      body_hash: createHash15("sha256").update(text2).digest("hex"),
       elapsed_ms: Date.now() - started,
       error: null
     };
@@ -81126,7 +81146,7 @@ var init_validateFinding = __esm({
 });
 
 // src/fixpr/testCommandEnv.ts
-import { homedir as homedir7 } from "node:os";
+import { homedir as homedir8 } from "node:os";
 import { join as join90 } from "node:path";
 function testEnvAllows(name) {
   const upper = name.toUpperCase();
@@ -81153,7 +81173,7 @@ function lookup(source, name) {
   for (const [k, v] of Object.entries(source)) if (k.toUpperCase() === upper && v !== void 0) return [k, v];
   return void 0;
 }
-function userPackageManagerConfigFiles(source = process.env, home = homedir7()) {
+function userPackageManagerConfigFiles(source = process.env, home = homedir8()) {
   const userconfig = lookup(source, "NPM_CONFIG_USERCONFIG")?.[1] ?? lookup(source, "npm_config_userconfig")?.[1];
   const npmrc = userconfig !== void 0 && userconfig !== "" ? userconfig : join90(home, ".npmrc");
   return [npmrc, join90(home, ".yarnrc"), join90(home, ".yarnrc.yml")];
@@ -81167,7 +81187,7 @@ function userConfigReferences(files) {
   }
   return [...names].sort();
 }
-function packageManagerEnv(source = process.env, home = homedir7()) {
+function packageManagerEnv(source = process.env, home = homedir8()) {
   const out = testCommandEnv(source);
   for (const [name, value] of Object.entries(source)) {
     if (value !== void 0 && isPackageManagerConfigVar(name)) out[name] = value;
@@ -81480,7 +81500,7 @@ var init_apply2 = __esm({
 });
 
 // src/fixpr/candidates.ts
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 function buildGroups(input) {
   const rescannable = input.rescannable ?? (() => true);
   const eligible = input.findings.filter(
@@ -81618,7 +81638,7 @@ function makeGroup(source, key, candidates2) {
     if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
   }
   const fingerprints = candidates2.flatMap((candidate) => candidate.fingerprints);
-  const hash = createHash15("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
+  const hash = createHash16("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
   return { source, key, candidates: candidates2, severity, hash };
 }
 function countFingerprints(group) {
@@ -81979,7 +81999,7 @@ var init_pr = __esm({
 });
 
 // src/fixpr/semgrepFix.ts
-import { mkdirSync as mkdirSync12, mkdtempSync as mkdtempSync8, rmSync as rmSync13, statSync as statSync13, writeFileSync as writeFileSync18 } from "node:fs";
+import { mkdirSync as mkdirSync12, mkdtempSync as mkdtempSync8, rmSync as rmSync13, statSync as statSync13, writeFileSync as writeFileSync19 } from "node:fs";
 import { tmpdir as tmpdir9 } from "node:os";
 import { basename as basename12, dirname as dirname27, join as join92 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
@@ -82029,7 +82049,7 @@ function planSemgrepFix(sources, tmpRoot = tmpdir9()) {
     const sub = join92(dir, `rules-${String(n++).padStart(3, "0")}`);
     mkdirSync12(sub);
     const copy = join92(sub, basename12(file));
-    writeFileSync18(copy, (0, import_yaml3.stringify)({ rules: [...picked.values()] }), "utf8");
+    writeFileSync19(copy, (0, import_yaml3.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
     configLabels.push(`${[...picked.keys()].join(", ")} from ${basename12(file)}`);
   }
@@ -83501,7 +83521,7 @@ var init_createFixPr = __esm({
 });
 
 // src/agentaudit/hash.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 function omitted(v) {
   return v === void 0 || typeof v === "function" || typeof v === "symbol";
 }
@@ -83542,7 +83562,7 @@ function stableStringify2(value) {
   return parts.join("");
 }
 function hashConfigValue(value) {
-  return createHash16("sha256").update(stableStringify2(value)).digest("hex");
+  return createHash17("sha256").update(stableStringify2(value)).digest("hex");
 }
 var Literal;
 var init_hash2 = __esm({
@@ -84200,10 +84220,10 @@ var init_jsonc = __esm({
 });
 
 // src/agentaudit/configSources.ts
-import { homedir as homedir8 } from "node:os";
+import { homedir as homedir9 } from "node:os";
 import { dirname as dirname29, isAbsolute as isAbsolute22, join as join96, relative as relative34 } from "node:path";
 function hostPathEnv() {
-  return { os: detectOs(), home: homedir8(), appData: process.env["APPDATA"], projectPath: "" };
+  return { os: detectOs(), home: homedir9(), appData: process.env["APPDATA"], projectPath: "" };
 }
 function hostConfigPath(host) {
   return resolveMcpConfigPath(host, "global", hostPathEnv()) ?? "";
@@ -84216,7 +84236,7 @@ function claudeCodeDescriptors() {
       label: custom3 ? "$CLAUDE_CONFIG_DIR/.claude.json" : "~/.claude.json",
       kind: "user",
       mcpServersField: "mcpServers",
-      resolve: () => custom3 ? join96(dir, ".claude.json") : join96(homedir8(), ".claude.json"),
+      resolve: () => custom3 ? join96(dir, ".claude.json") : join96(homedir9(), ".claude.json"),
       maxBytes: MAX_CLAUDE_JSON_BYTES,
       nestedProjects: true
     },
@@ -84224,7 +84244,7 @@ function claudeCodeDescriptors() {
       label: custom3 ? "$CLAUDE_CONFIG_DIR/settings.json" : "~/.claude/settings.json",
       kind: "user",
       mcpServersField: null,
-      resolve: () => custom3 ? join96(dir, "settings.json") : join96(homedir8(), ".claude", "settings.json")
+      resolve: () => custom3 ? join96(dir, "settings.json") : join96(homedir9(), ".claude", "settings.json")
     }
   ];
 }
@@ -84259,7 +84279,7 @@ function isWithin(root, path3) {
 }
 function walkRoot(kind, projectPath, path3) {
   if (kind === "project") return projectPath;
-  const home = homedir8();
+  const home = homedir9();
   return isWithin(home, path3) ? home : dirname29(dirname29(path3));
 }
 function readOne2(descriptor, projectPath) {
@@ -90995,7 +91015,7 @@ var init_popular = __esm({
 
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync18, readdirSync as readdirSync17 } from "node:fs";
-import { homedir as homedir9 } from "node:os";
+import { homedir as homedir10 } from "node:os";
 import { dirname as dirname30, isAbsolute as isAbsolute24, join as join98, parse as parse10, relative as relative35, resolve as resolve34 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
@@ -91076,7 +91096,7 @@ function samePath3(a, b) {
 }
 function ancestors(ctx) {
   if (ctx.projectDir === void 0) return [];
-  const stops = [ctx.homeDir, homedir9()].filter((x) => typeof x === "string");
+  const stops = [ctx.homeDir, homedir10()].filter((x) => typeof x === "string");
   const out = [];
   let dir = resolve34(ctx.projectDir);
   for (let i = 0; i < 16; i += 1) {
@@ -91093,7 +91113,7 @@ function envOf(ctx) {
   return ctx.env ?? process.env;
 }
 function homeOf(ctx) {
-  return ctx.homeDir ?? homedir9();
+  return ctx.homeDir ?? homedir10();
 }
 function envValue4(env, name) {
   const v = env[name] ?? env[name.toLowerCase()];
@@ -92301,7 +92321,7 @@ var init_render = __esm({
 
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
-import { existsSync as existsSync24, readFileSync as readFileSync11, writeFileSync as writeFileSync19 } from "node:fs";
+import { existsSync as existsSync24, readFileSync as readFileSync11, writeFileSync as writeFileSync20 } from "node:fs";
 import { basename as basename13, join as join99, posix as posix4, win32 as win322 } from "node:path";
 async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
@@ -92371,7 +92391,7 @@ async function handler47(inp, ctx) {
   const document = format === "openvex" ? renderOpenVex(statements, meta) : renderCycloneDxVex(statements, meta);
   const dir = ensureReportDir(projectPath, documentId, "vex");
   const filePath = join99(dir, format === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
-  writeFileSync19(filePath, `${JSON.stringify(document, null, 2)}
+  writeFileSync20(filePath, `${JSON.stringify(document, null, 2)}
 `, "utf8");
   return {
     ok: true,
@@ -93095,7 +93115,7 @@ var init_report2 = __esm({
 });
 
 // src/llmscan/service.ts
-import { createHash as createHash17, randomUUID as randomUUID22 } from "node:crypto";
+import { createHash as createHash18, randomUUID as randomUUID22 } from "node:crypto";
 import { posix as posix5, relative as relative37, isAbsolute as isAbsolute26 } from "node:path";
 function listed(items) {
   return { items: items.slice(0, MAX_LISTED2), total: items.length };
@@ -93106,7 +93126,7 @@ function relPosix(project, file) {
 }
 function fileHash(project, rel2) {
   const read3 = readProjectBytes(project, rel2);
-  return read3.status === "ok" ? createHash17("sha256").update(read3.bytes).digest("hex") : "unreadable";
+  return read3.status === "ok" ? createHash18("sha256").update(read3.bytes).digest("hex") : "unreadable";
 }
 function isStale(project, task) {
   return Object.entries(task.file_hashes).some(([file, hash]) => fileHash(project, file) !== hash);
