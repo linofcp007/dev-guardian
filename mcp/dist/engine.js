@@ -37876,13 +37876,15 @@ function ensureReportDir(projectPath, scanId, prefix) {
     `[dev-guardian] ${join37(projectPath, ".guardian", "reports")} is a link or not a directory; this scan's reports go to the temp directory instead
 `
   );
-  return mkdtempSync2(join37(tmpdir3(), `guardian-reports-${prefix}-`));
+  const fallback = mkdtempSync2(join37(tmpdir3(), `${TEMP_REPORTS_PREFIX}${prefix}-`));
+  pruneReports(tmpdir3(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`);
+  return fallback;
 }
 function keptReports() {
   const n = Number(process.env["GUARDIAN_KEEP_REPORTS"]);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_KEPT_REPORTS;
 }
-function pruneReports(reportsDir, prefix, current) {
+function pruneReports(reportsDir, prefix, current, name = prefix) {
   if (!PRUNED_REPORT_PREFIXES.has(prefix)) return;
   let entries2;
   try {
@@ -37890,15 +37892,18 @@ function pruneReports(reportsDir, prefix, current) {
   } catch {
     return;
   }
+  const uid = process.getuid?.();
   const others = [];
   for (const e of entries2) {
-    if (!e.isDirectory() || !e.name.startsWith(`${prefix}-`)) continue;
-    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(prefix.length + 1))) continue;
+    if (!e.isDirectory() || !e.name.startsWith(`${name}-`)) continue;
+    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(name.length + 1))) continue;
     const path3 = join37(reportsDir, e.name);
     if (path3 === current) continue;
     try {
       const st = lstatSync10(path3);
-      if (st.isDirectory() && !st.isSymbolicLink()) others.push({ path: path3, mtime: st.mtimeMs });
+      if (st.isDirectory() && !st.isSymbolicLink() && (uid === void 0 || st.uid === uid)) {
+        others.push({ path: path3, mtime: st.mtimeMs });
+      }
     } catch {
     }
   }
@@ -37913,7 +37918,7 @@ function pruneReports(reportsDir, prefix, current) {
 function readJsonSafe(path3) {
   return readSmallTextFile(path3, MAX_REPORT_BYTES2) ?? null;
 }
-var NEGATIVE_SCANNER_CACHE_TTL_MS, scannerPathCache, DEFAULT_KEPT_REPORTS, PRUNED_REPORT_PREFIXES, MAX_REPORT_BYTES2;
+var NEGATIVE_SCANNER_CACHE_TTL_MS, scannerPathCache, TEMP_REPORTS_PREFIX, DEFAULT_KEPT_REPORTS, PRUNED_REPORT_PREFIXES, MAX_REPORT_BYTES2;
 var init_scanHelpers = __esm({
   "src/tools/scanHelpers.ts"() {
     "use strict";
@@ -37924,6 +37929,7 @@ var init_scanHelpers = __esm({
     init_trivyRun();
     NEGATIVE_SCANNER_CACHE_TTL_MS = 6e4;
     scannerPathCache = /* @__PURE__ */ new Map();
+    TEMP_REPORTS_PREFIX = "guardian-reports-";
     DEFAULT_KEPT_REPORTS = 3;
     PRUNED_REPORT_PREFIXES = /* @__PURE__ */ new Set([
       "sast",
