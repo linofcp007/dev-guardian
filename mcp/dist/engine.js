@@ -796,8 +796,8 @@ function findAllOwnTomlSpans(existing) {
 function removeTomlSpans(existing, spans) {
   let result = existing;
   const byDescendingStart = [...spans].sort((a, b) => b.start - a.start);
-  for (const span of byDescendingStart) {
-    result = result.slice(0, span.start) + result.slice(span.end);
+  for (const span2 of byDescendingStart) {
+    result = result.slice(0, span2.start) + result.slice(span2.end);
   }
   return result;
 }
@@ -18481,8 +18481,8 @@ function rulesNotLoaded(errors, ruleIdOf, projectPath) {
 function targetFileOf(entry, rawType) {
   const path3 = getString(entry, "path");
   if (path3 !== void 0 && path3.length > 0) return path3;
-  const span = asArray(getProp(entry, "spans"))[0];
-  const spanFile = span === void 0 ? void 0 : getString(span, "file");
+  const span2 = asArray(getProp(entry, "spans"))[0];
+  const spanFile = span2 === void 0 ? void 0 : getString(span2, "file");
   if (spanFile !== void 0 && spanFile.length > 0) return spanFile;
   if (Array.isArray(rawType)) {
     const location = asArray(rawType[1])[0];
@@ -36097,6 +36097,78 @@ var init_changedSince = __esm({
   }
 });
 
+// src/ci/gitleaksIgnore.ts
+function parseHistoryIgnores(text2) {
+  const out = [];
+  for (const raw of text2.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const m = /^([0-9a-f]{7,64}):(.+):([^:\s]+):(\d+)$/i.exec(line);
+    if (m?.[1] === void 0 || m[2] === void 0 || m[3] === void 0 || m[4] === void 0) continue;
+    out.push({ commit: m[1].toLowerCase(), file: m[2].split("\\").join("/"), rule: m[3], line: Number(m[4]) });
+  }
+  return out;
+}
+function span(text2, from, count) {
+  const lines = text2.split(/\r?\n/);
+  if (from < 1 || from + count - 1 > lines.length) return null;
+  return lines.slice(from - 1, from - 1 + count).join("\n").replace(/\s+/g, "");
+}
+async function acceptedByHistoryIgnores(projectPath, findings) {
+  const out = /* @__PURE__ */ new Set();
+  if (findings.length === 0) return out;
+  const text2 = readProjectTextOrUndefined(projectPath, ".gitleaksignore", MAX_IGNORE_BYTES);
+  const entries2 = text2 === void 0 ? [] : parseHistoryIgnores(text2);
+  if (entries2.length === 0) return out;
+  const shown = await git(projectPath, ["rev-parse", "--show-prefix"]);
+  if (shown.exitCode !== 0) return out;
+  const prefix = shown.stdout.trim();
+  const blobs = /* @__PURE__ */ new Map();
+  const blob = (commit, file) => {
+    const key = `${commit}
+${file}`;
+    let read3 = blobs.get(key);
+    if (read3 === void 0) {
+      if (blobs.size >= MAX_BLOBS2) return Promise.resolve(null);
+      read3 = git(projectPath, ["cat-file", "blob", `${commit}:${file}`]).then(
+        (r) => r.exitCode === 0 && r.stdout.length <= MAX_FILE_BYTES ? r.stdout : null
+      );
+      blobs.set(key, read3);
+    }
+    return read3;
+  };
+  for (const f of findings) {
+    const start = f.line_start;
+    if (start === void 0) continue;
+    const count = Math.max(1, (f.line_end ?? start) - start + 1);
+    const path3 = (f.file_path ?? "").split("\\").join("/");
+    const candidates2 = entries2.filter((e) => e.rule === f.rule_id && e.file === `${prefix}${path3}`);
+    if (candidates2.length === 0) continue;
+    const here = readProjectTextOrUndefined(projectPath, path3, MAX_FILE_BYTES);
+    const lines = here === void 0 ? null : span(here, start, count);
+    if (lines === null) continue;
+    for (const e of candidates2) {
+      const then = await blob(e.commit, e.file);
+      if (then !== null && span(then, e.line, count) === lines) {
+        out.add(f);
+        break;
+      }
+    }
+  }
+  return out;
+}
+var MAX_IGNORE_BYTES, MAX_FILE_BYTES, MAX_BLOBS2;
+var init_gitleaksIgnore = __esm({
+  "src/ci/gitleaksIgnore.ts"() {
+    "use strict";
+    init_projectFs();
+    init_git();
+    MAX_IGNORE_BYTES = 4 * 1024 * 1024;
+    MAX_FILE_BYTES = 16 * 1024 * 1024;
+    MAX_BLOBS2 = 500;
+  }
+});
+
 // src/platform/customRules.ts
 import { statSync as statSync7 } from "node:fs";
 import { isAbsolute as isAbsolute10, join as join32, relative as relative8, sep as sep7 } from "node:path";
@@ -39807,8 +39879,8 @@ function sanitizeGitleaksReport(text2, keep) {
   for (const [key, members] of groups) {
     if (unplaceable.has(key)) continue;
     const placed = members.flatMap((n) => {
-      const span = spanOf(items[n]);
-      return span === null ? [] : [{ n, span }];
+      const span2 = spanOf(items[n]);
+      return span2 === null ? [] : [{ n, span: span2 }];
     });
     placed.sort((a, b) => a.span.startLine - b.span.startLine || a.span.startCol - b.span.startCol);
     let run2 = [];
@@ -40389,7 +40461,7 @@ async function filesPass(opts, result, files, labels = {
     result.tools_run.push({ name, status: "skipped", reason: labels.none });
     return;
   }
-  const maxFile = opts.limits?.maxFileBytes ?? MAX_FILE_BYTES;
+  const maxFile = opts.limits?.maxFileBytes ?? MAX_FILE_BYTES2;
   const maxTotal = opts.limits?.maxTotalBytes ?? MAX_TOTAL_BYTES;
   let tmp;
   try {
@@ -40625,7 +40697,7 @@ async function resolveLogOpts(cwd, raw) {
   }
   return out.join(" ");
 }
-var GITLEAKS_HISTORY, GITLEAKS_WORKING_TREE, MAX_FILE_BYTES, MAX_TOTAL_BYTES, EXCLUDED_DIRS, WITHHELD_REPORT, ANSI, REF, SINCE, LogOptsError;
+var GITLEAKS_HISTORY, GITLEAKS_WORKING_TREE, MAX_FILE_BYTES2, MAX_TOTAL_BYTES, EXCLUDED_DIRS, WITHHELD_REPORT, ANSI, REF, SINCE, LogOptsError;
 var init_gitleaksScan = __esm({
   "src/runners/gitleaksScan.ts"() {
     "use strict";
@@ -40643,7 +40715,7 @@ var init_gitleaksScan = __esm({
     init_scannerParsers();
     GITLEAKS_HISTORY = "gitleaks";
     GITLEAKS_WORKING_TREE = "gitleaks-working-tree";
-    MAX_FILE_BYTES = 25 * 1024 * 1024;
+    MAX_FILE_BYTES2 = 25 * 1024 * 1024;
     MAX_TOTAL_BYTES = 512 * 1024 * 1024;
     EXCLUDED_DIRS = [...SCANNED_WALK_EXCLUDE];
     WITHHELD_REPORT = JSON.stringify("gitleaks report withheld: not a JSON array, and it may hold unredacted values");
@@ -73019,7 +73091,7 @@ async function handler34(inp, ctx) {
   let scanned = 0;
   const rel2 = (file) => relative26(projectPath, file).replace(/\\/g, "/");
   for (const file of files) {
-    const read3 = readProjectText(projectPath, file, MAX_FILE_BYTES2);
+    const read3 = readProjectText(projectPath, file, MAX_FILE_BYTES3);
     if (read3.status === "absent") {
       notScanned2.push({ file: rel2(file), reason: "could not be read (ENOENT)" });
       continue;
@@ -73114,7 +73186,7 @@ function collectConfigFiles(root, maxDepth) {
   walk5(root, 0);
   return out;
 }
-var PATTERNS, TARGET_FILES, SKIP_DIRS3, inputSchema36, tool37, MAX_FILE_BYTES2;
+var PATTERNS, TARGET_FILES, SKIP_DIRS3, inputSchema36, tool37, MAX_FILE_BYTES3;
 var init_scanDotnetSecrets = __esm({
   "src/tools/scanDotnetSecrets.ts"() {
     "use strict";
@@ -73221,7 +73293,7 @@ var init_scanDotnetSecrets = __esm({
       handler: async (input, ctx) => handler34(input, ctx)
     });
     registerToolModule(tool37);
-    MAX_FILE_BYTES2 = 2e6;
+    MAX_FILE_BYTES3 = 2e6;
   }
 });
 
@@ -75041,8 +75113,8 @@ function isPlaceholder(text2) {
   DOC_HOST_RE.lastIndex = 0;
   return PLACEHOLDER_TOKEN_RE.test(text2) || docHost;
 }
-function isWholeCommand(span) {
-  const t = span.trim();
+function isWholeCommand(span2) {
+  const t = span2.trim();
   return (/\s/.test(t) || hasRealTarget(t)) && !isPlaceholder(t);
 }
 function downloadsIn(unit) {
@@ -76556,7 +76628,7 @@ function collectDir(root) {
         skipped2 += 1;
         continue;
       }
-      if (s.size > MAX_FILE_BYTES3) {
+      if (s.size > MAX_FILE_BYTES4) {
         skipped2 += 1;
         warnings.push(`skipped large file: ${rel(root, abs)} (${Math.round(s.size / 1024)} KB)`);
         continue;
@@ -76597,7 +76669,7 @@ function rel(root, abs) {
   return r || basename10(abs);
 }
 function readOne(root, abs, relPath) {
-  const read3 = readProjectBytes(root, resolve26(abs), MAX_FILE_BYTES3);
+  const read3 = readProjectBytes(root, resolve26(abs), MAX_FILE_BYTES4);
   if (read3.status === "absent") return { kind: "refused", reason: "unreadable" };
   if (read3.status === "refused") return { kind: "refused", reason: read3.reason };
   const raw = read3.bytes;
@@ -76634,7 +76706,7 @@ function safeRm(dir) {
   } catch {
   }
 }
-var MAX_FILES, MAX_TOTAL_BYTES2, MAX_FILE_BYTES3, CODE_EXT, EXECUTABLE_EXT, DOC_EXT, CONFIG_EXT, SKIP_DIRS5, BINARY_EXT, EXTRACT_TIMEOUT_MS;
+var MAX_FILES, MAX_TOTAL_BYTES2, MAX_FILE_BYTES4, CODE_EXT, EXECUTABLE_EXT, DOC_EXT, CONFIG_EXT, SKIP_DIRS5, BINARY_EXT, EXTRACT_TIMEOUT_MS;
 var init_ingest = __esm({
   "src/skillaudit/ingest.ts"() {
     "use strict";
@@ -76646,7 +76718,7 @@ var init_ingest = __esm({
     init_gitExec();
     MAX_FILES = 4e3;
     MAX_TOTAL_BYTES2 = 25 * 1024 * 1024;
-    MAX_FILE_BYTES3 = 2 * 1024 * 1024;
+    MAX_FILE_BYTES4 = 2 * 1024 * 1024;
     CODE_EXT = /* @__PURE__ */ new Set([
       ".sh",
       ".bash",
@@ -77090,8 +77162,8 @@ function recoverMetavars(semgrepJson, sources) {
       intact += 1;
       return raw;
     }
-    const span = sliceSpan(raw, sources, buffers);
-    const metavars = span === void 0 ? void 0 : synthesize(kind, span, metadata);
+    const span2 = sliceSpan(raw, sources, buffers);
+    const metavars = span2 === void 0 ? void 0 : synthesize(kind, span2, metadata);
     if (metavars === void 0 || !isRecord9(raw)) {
       unrecoverable += 1;
       if (kind === "import" || kind === "env") lostEdges += 1;
@@ -77128,78 +77200,78 @@ function sliceSpan(raw, sources, buffers) {
     buffers.set(path3, buffer);
   }
   if (end > buffer.length) return void 0;
-  const span = buffer.subarray(start, end).toString("utf8");
-  return span.trim().length === 0 ? void 0 : span;
+  const span2 = buffer.subarray(start, end).toString("utf8");
+  return span2.trim().length === 0 ? void 0 : span2;
 }
-function synthesize(kind, span, metadata) {
+function synthesize(kind, span2, metadata) {
   switch (kind) {
     case "route":
-      return synthesizeRoute(span, metadata);
+      return synthesizeRoute(span2, metadata);
     case "mount":
-      return synthesizeMount(span);
+      return synthesizeMount(span2);
     case "import":
-      return synthesizeImport(span, metadata);
+      return synthesizeImport(span2, metadata);
     case "env":
-      return synthesizeEnv(span);
+      return synthesizeEnv(span2);
     default:
       return void 0;
   }
 }
-function synthesizeRoute(span, metadata) {
+function synthesizeRoute(span2, metadata) {
   if (str5(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
-    return { $PATH: { abstract_content: span } };
+    return { $PATH: { abstract_content: span2 } };
   }
   const framework = str5(metadata, "framework");
-  if (framework === "wp-rest") return synthesizeNamespacedRoute(span);
+  if (framework === "wp-rest") return synthesizeNamespacedRoute(span2);
   const declaredMethod = str5(metadata, "method");
-  const path3 = routePath(span);
+  const path3 = routePath(span2);
   if (path3 === void 0) return void 0;
   const metavars = { $PATH: { abstract_content: path3 } };
   if (declaredMethod === void 0) {
-    const verb = calleeIdentifier(span);
+    const verb = calleeIdentifier(span2);
     if (verb !== void 0) metavars["$METHOD"] = { abstract_content: verb };
   }
   return metavars;
 }
-function routePath(span) {
-  const open = callOpener(span);
-  if (open !== void 0) return argumentsAt(span, open)?.[0];
-  return firstStringLiteral(span);
+function routePath(span2) {
+  const open = callOpener(span2);
+  if (open !== void 0) return argumentsAt(span2, open)?.[0];
+  return firstStringLiteral(span2);
 }
-function callOpener(span) {
-  return outermostCallOpener(span) ?? findOpener(span);
+function callOpener(span2) {
+  return outermostCallOpener(span2) ?? findOpener(span2);
 }
-function outermostCallOpener(span) {
-  const end = lastNonSpaceIndex(span);
+function outermostCallOpener(span2) {
+  const end = lastNonSpaceIndex(span2);
   if (end === void 0) return void 0;
   let i = 0;
-  while (i < span.length) {
-    const ch = span[i];
+  while (i < span2.length) {
+    const ch = span2[i];
     if (ch === void 0) break;
     if (isQuote(ch)) {
-      i = skipString(span, i);
+      i = skipString(span2, i);
       continue;
     }
     if (CLOSERS2[ch] === void 0) {
       i += 1;
       continue;
     }
-    const close = matchingClose(span, i);
+    const close = matchingClose(span2, i);
     if (close === void 0) return void 0;
     if (close === end && ch === "(") return i;
     i = close + 1;
   }
   return void 0;
 }
-function lastNonSpaceIndex(span) {
-  for (let i = span.length - 1; i >= 0; i -= 1) {
-    const ch = span[i];
+function lastNonSpaceIndex(span2) {
+  for (let i = span2.length - 1; i >= 0; i -= 1) {
+    const ch = span2[i];
     if (ch !== void 0 && !/\s/.test(ch)) return i;
   }
   return void 0;
 }
-function synthesizeNamespacedRoute(span) {
-  const args = argumentList(span);
+function synthesizeNamespacedRoute(span2) {
+  const args = argumentList(span2);
   if (args === void 0) return void 0;
   const namespace = args[0];
   const route = args[1];
@@ -77209,9 +77281,9 @@ function synthesizeNamespacedRoute(span) {
     $ROUTE: { abstract_content: route }
   };
 }
-function synthesizeMount(span) {
-  const open = callOpener(span);
-  const args = open === void 0 ? void 0 : argumentsAt(span, open);
+function synthesizeMount(span2) {
+  const open = callOpener(span2);
+  const args = open === void 0 ? void 0 : argumentsAt(span2, open);
   if (args === void 0) return void 0;
   const prefix = args[0];
   const last = args[args.length - 1];
@@ -77223,33 +77295,33 @@ function synthesizeMount(span) {
     $ROUTER: { abstract_content: router }
   };
 }
-function synthesizeImport(span, metadata) {
+function synthesizeImport(span2, metadata) {
   switch (str5(metadata, "framework")) {
     case "python":
-      return synthesizePythonImport(span);
+      return synthesizePythonImport(span2);
     case "go":
-      return synthesizeGoImport(span);
+      return synthesizeGoImport(span2);
     case "rust":
-      return synthesizeRustImport(span);
+      return synthesizeRustImport(span2);
     case "php":
-      return synthesizePhpImport(span);
+      return synthesizePhpImport(span2);
     case "java":
-      return synthesizeJavaImport(span);
+      return synthesizeJavaImport(span2);
     case "csharp":
-      return synthesizeCsharpImport(span);
+      return synthesizeCsharpImport(span2);
     case "ruby":
-      return synthesizeRubyImport(span);
+      return synthesizeRubyImport(span2);
     case "esm":
     default:
-      return synthesizeEsmImport(span);
+      return synthesizeEsmImport(span2);
   }
 }
-function synthesizeEsmImport(span) {
-  const literal3 = findStringLiteral(span);
+function synthesizeEsmImport(span2) {
+  const literal3 = findStringLiteral(span2);
   if (literal3 === void 0) return void 0;
   const module = stripQuotes4(literal3.text);
   if (module.length === 0) return void 0;
-  const symbol = /\bimport\s*(?:type\s+)?\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\bimport\s*(?:type\s*)?\{\s*(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? // `import def, { helperA } from './helpers.js'` — the DEFAULT half of a
+  const symbol = /\bimport\s*(?:type\s+)?\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\b/.exec(span2)?.[1] ?? /\bimport\s*(?:type\s*)?\{\s*(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(span2)?.[1] ?? // `import def, { helperA } from './helpers.js'` — the DEFAULT half of a
   // mixed import. None of the other four accepted it: the bare-default
   // regex below needs `from` immediately after the name and finds a comma,
   // and the named regex above needs `{` immediately after `import`. Semgrep
@@ -77257,7 +77329,7 @@ function synthesizeEsmImport(span) {
   // rule's own comment in routes.yml describes), so the match was arriving
   // with a real capture on one Semgrep version and none at all on the
   // shipped one — the exact version-dependence the pack header rules out.
-  /\bimport\s+([A-Za-z_$][\w$]*)\s*,/.exec(span)?.[1] ?? /\bimport\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\b/.exec(span)?.[1] ?? /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span)?.[1] ?? // A re-export, `export { thing } from './thing.js'`. Semgrep matches it
+  /\bimport\s+([A-Za-z_$][\w$]*)\s*,/.exec(span2)?.[1] ?? /\bimport\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\b/.exec(span2)?.[1] ?? /\b(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span2)?.[1] ?? /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(span2)?.[1] ?? // A re-export, `export { thing } from './thing.js'`. Semgrep matches it
   // with the named-import alternative and reports a span that begins INSIDE
   // the statement — measured as `thing } from './thing.js'`, with no
   // `export` or `import` keyword in it at all, which is why every regex
@@ -77277,15 +77349,15 @@ function synthesizeEsmImport(span) {
   // `second,\n} from './m'` (measured, 1.176.1) — so the name may be followed
   // by a comma, an `as` alias or the brace, with `} from` somewhere after it
   // (review 8, finding 1: 16 such spans on `mcp/src` were unrecoverable).
-  (/\}\s*from\b/.test(span) ? /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:as\s+[A-Za-z_$][\w$]*\s*)?[,}]/.exec(span)?.[1] : void 0);
+  (/\}\s*from\b/.test(span2) ? /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:as\s+[A-Za-z_$][\w$]*\s*)?[,}]/.exec(span2)?.[1] : void 0);
   if (symbol === void 0) return void 0;
   return {
     $SYMBOL: { abstract_content: symbol },
     $MODULE: { abstract_content: module }
   };
 }
-function synthesizePythonImport(span) {
-  const trimmed = span.trim();
+function synthesizePythonImport(span2) {
+  const trimmed = span2.trim();
   const fromMatch = /^from\s+(\.*[\w.]*)\s+import\s+([A-Za-z_]\w*)/.exec(trimmed);
   const fromModule = fromMatch?.[1];
   const fromSymbol = fromMatch?.[2];
@@ -77303,22 +77375,22 @@ function joinPythonModule(module) {
   if (module.startsWith(".")) return module;
   return module.replace(/\./g, " ");
 }
-function synthesizeGoImport(span) {
-  const literals = allStringLiterals(span);
+function synthesizeGoImport(span2) {
+  const literals = allStringLiterals(span2);
   const last = literals[literals.length - 1];
   if (last === void 0) return void 0;
   const module = stripQuotes4(last.text);
   if (module.length === 0) return void 0;
   const metavars = { $MODULE: { abstract_content: module } };
-  const before = span.slice(0, last.start);
+  const before = span2.slice(0, last.start);
   const alias = /([A-Za-z_]\w*)\s*$/.exec(before)?.[1];
   if (alias !== void 0 && alias !== "import") {
     metavars["$SYMBOL"] = { abstract_content: alias };
   }
   return metavars;
 }
-function synthesizeRustImport(span) {
-  const trimmed = span.replace(/;\s*$/, "").trim();
+function synthesizeRustImport(span2) {
+  const trimmed = span2.replace(/;\s*$/, "").trim();
   const braceIdx = trimmed.indexOf("{");
   if (braceIdx !== -1) {
     const prefix = trimmed.slice(0, braceIdx).replace(/^use\s+/, "").replace(/::\s*$/, "");
@@ -77352,8 +77424,8 @@ function splitRustPath(path3) {
   if (symbol.length === 0) return void 0;
   return { module, symbol };
 }
-function synthesizePhpImport(span) {
-  const trimmed = span.replace(/;\s*$/, "").trim();
+function synthesizePhpImport(span2) {
+  const trimmed = span2.replace(/;\s*$/, "").trim();
   const braceIdx = trimmed.indexOf("{");
   if (braceIdx !== -1) {
     const prefix = trimmed.slice(0, braceIdx).replace(/^use\s+/, "").replace(/\\\s*$/, "");
@@ -77390,8 +77462,8 @@ function synthesizePhpImport(span) {
     $SYMBOL: { abstract_content: symbol }
   };
 }
-function synthesizeJavaImport(span) {
-  const trimmed = span.replace(/;\s*$/, "").trim();
+function synthesizeJavaImport(span2) {
+  const trimmed = span2.replace(/;\s*$/, "").trim();
   const match = /^import\s+(static\s+)?(.+)$/.exec(trimmed);
   const path3 = match?.[2];
   if (path3 === void 0) return void 0;
@@ -77399,8 +77471,8 @@ function synthesizeJavaImport(span) {
   if (qualifiedName2.length === 0) return void 0;
   return { $MODULE: { abstract_content: qualifiedName2.replace(/\./g, " ") } };
 }
-function synthesizeCsharpImport(span) {
-  const trimmed = span.replace(/;\s*$/, "").trim();
+function synthesizeCsharpImport(span2) {
+  const trimmed = span2.replace(/;\s*$/, "").trim();
   const aliasMatch = /^using\s+([A-Za-z_]\w*)\s*=\s*(.+)$/.exec(trimmed);
   const aliasSymbol = aliasMatch?.[1];
   const aliasModule = aliasMatch?.[2];
@@ -77414,19 +77486,19 @@ function synthesizeCsharpImport(span) {
   if (plainModule === void 0 || plainModule.length === 0) return void 0;
   return { $MODULE: { abstract_content: plainModule.replace(/\./g, " ") } };
 }
-function synthesizeRubyImport(span) {
-  const literal3 = findStringLiteral(span);
+function synthesizeRubyImport(span2) {
+  const literal3 = findStringLiteral(span2);
   if (literal3 === void 0) return void 0;
   const module = stripQuotes4(literal3.text);
   if (module.length === 0) return void 0;
   return { $MODULE: { abstract_content: module } };
 }
-function synthesizeEnv(span) {
-  const destructured = /^(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span.trim())?.[1];
+function synthesizeEnv(span2) {
+  const destructured = /^(?:const|let|var)\s*\{\s*([A-Za-z_$][\w$]*)/.exec(span2.trim())?.[1];
   if (destructured !== void 0) return { $NAME: { abstract_content: destructured } };
-  const arg = firstArgument(span);
+  const arg = firstArgument(span2);
   if (arg !== void 0) return { $NAME: { abstract_content: arg } };
-  const member = /\.([A-Za-z_$][\w$]*)\s*$/.exec(span.trim())?.[1];
+  const member = /\.([A-Za-z_$][\w$]*)\s*$/.exec(span2.trim())?.[1];
   if (member === void 0) return void 0;
   return { $NAME: { abstract_content: member } };
 }
@@ -77448,41 +77520,41 @@ function skipString(text2, start) {
   }
   return text2.length;
 }
-function findStringLiteral(span, from = 0) {
+function findStringLiteral(span2, from = 0) {
   let i = from;
-  while (i < span.length) {
-    const ch = span[i];
+  while (i < span2.length) {
+    const ch = span2[i];
     if (ch === void 0) break;
     if (isQuote(ch)) {
-      const end = skipString(span, i);
-      return { text: span.slice(i, end), end };
+      const end = skipString(span2, i);
+      return { text: span2.slice(i, end), end };
     }
     i += 1;
   }
   return void 0;
 }
-function firstStringLiteral(span) {
-  return findStringLiteral(span)?.text;
+function firstStringLiteral(span2) {
+  return findStringLiteral(span2)?.text;
 }
-function allStringLiterals(span) {
+function allStringLiterals(span2) {
   const out = [];
   let from = 0;
-  while (from < span.length) {
-    const found2 = findStringLiteral(span, from);
+  while (from < span2.length) {
+    const found2 = findStringLiteral(span2, from);
     if (found2 === void 0) break;
     out.push({ ...found2, start: found2.end - found2.text.length });
     from = found2.end;
   }
   return out;
 }
-function findOpener(span) {
+function findOpener(span2) {
   let bracket = -1;
   let i = 0;
-  while (i < span.length) {
-    const ch = span[i];
+  while (i < span2.length) {
+    const ch = span2[i];
     if (ch === void 0) break;
     if (isQuote(ch)) {
-      i = skipString(span, i);
+      i = skipString(span2, i);
       continue;
     }
     if (ch === "(") return i;
@@ -77491,14 +77563,14 @@ function findOpener(span) {
   }
   return bracket >= 0 ? bracket : void 0;
 }
-function matchingClose(span, open) {
+function matchingClose(span2, open) {
   const stack = [];
   let i = open;
-  while (i < span.length) {
-    const ch = span[i];
+  while (i < span2.length) {
+    const ch = span2[i];
     if (ch === void 0) break;
     if (isQuote(ch)) {
-      i = skipString(span, i);
+      i = skipString(span2, i);
       continue;
     }
     const closer = CLOSERS2[ch];
@@ -77539,27 +77611,27 @@ function splitTopLevel(inner) {
   parts.push(inner.slice(start).trim());
   return parts.filter((part) => part.length > 0);
 }
-function argumentsAt(span, open) {
-  const close = matchingClose(span, open);
+function argumentsAt(span2, open) {
+  const close = matchingClose(span2, open);
   if (close === void 0) return void 0;
-  const args = splitTopLevel(span.slice(open + 1, close));
+  const args = splitTopLevel(span2.slice(open + 1, close));
   return args.length > 0 ? args : void 0;
 }
-function argumentList(span) {
-  const open = findOpener(span);
+function argumentList(span2) {
+  const open = findOpener(span2);
   if (open === void 0) return void 0;
-  return argumentsAt(span, open);
+  return argumentsAt(span2, open);
 }
-function firstArgument(span) {
-  return argumentList(span)?.[0];
+function firstArgument(span2) {
+  return argumentList(span2)?.[0];
 }
-function calleeIdentifier(span) {
-  const open = callOpener(span);
-  if (open !== void 0 && span[open] === "(") {
-    const callee = /([A-Za-z_$][\w$]*)\s*$/.exec(span.slice(0, open))?.[1];
+function calleeIdentifier(span2) {
+  const open = callOpener(span2);
+  if (open !== void 0 && span2[open] === "(") {
+    const callee = /([A-Za-z_$][\w$]*)\s*$/.exec(span2.slice(0, open))?.[1];
     if (callee !== void 0) return callee;
   }
-  return /^\s*([A-Za-z_][\w]*)\s+['"`]/.exec(span)?.[1];
+  return /^\s*([A-Za-z_][\w]*)\s+['"`]/.exec(span2)?.[1];
 }
 function stripQuotes4(value) {
   return value.replace(/^['"`]|['"`]$/g, "");
@@ -94653,7 +94725,9 @@ async function runScans(opts) {
           steps.push(...await fullContentSteps(opts.projectPath, opts.changedSince, ctx));
         }
       }
-      const wholeFiles = fullContentFindings(storage, opts.projectPath);
+      const read3 = fullContentFindings(storage, opts.projectPath);
+      const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read3);
+      const wholeFiles = read3.filter((f) => !accepted.has(f));
       const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles]);
       await rememberSecretValues(scannedProject(opts.projectPath), all, {
         reportDirs: reportDirsOf(storage, opts.projectPath)
@@ -94783,7 +94857,7 @@ function collectFindings(storage, projectPath) {
 function fullContentFindings(storage, projectPath) {
   const project = scannedProject(projectPath);
   const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
-  return rows.filter((scan2) => isScopedScan(scan2) && scan2.scan_type === "secrets").flatMap((scan2) => storage.findings.listByScan(scan2.scan_id)).filter((f) => f.tool.toLowerCase() === "gitleaks" && !/;commit=[0-9a-f]+$/i.test(f.snippet ?? ""));
+  return rows.filter((scan2) => isScopedScan(scan2) && scan2.scan_type === "secrets").flatMap((scan2) => storage.findings.listByScan(scan2.scan_id)).filter((f) => f.tool.toLowerCase() === "gitleaks" && !/;commit=[0-9a-f]+$/i.test(f.snippet ?? "")).filter((f) => f.line_start !== void 0 && f.line_end !== void 0 && f.line_end > f.line_start);
 }
 function withoutRepeats(findings, wholeFiles) {
   const seen = /* @__PURE__ */ new Set();
@@ -94827,6 +94901,7 @@ var init_runScans = __esm({
     init_tools();
     init_refConfig();
     init_changedSince();
+    init_gitleaksIgnore();
     init_secretValues();
     init_registerAll();
     SCAN_SEQUENCE = [

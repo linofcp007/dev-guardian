@@ -604,8 +604,12 @@ describe('runScans', () => {
       order.push('scan_secrets');
       inputs.push(input);
       ctx.storage.scans.insert({ scan_id: 'whole', scan_type: 'secrets', project_path: projectPath, tree_hash: 't', meta: { scope: { kind: 'paths' } } });
+      const leak = { tool: 'gitleaks', severity: 'high' as const, category: 'security' as const, title: 'key', fix_available: false, scan_id: 'whole' };
       ctx.storage.findings.bulkInsert([
-        { fingerprint: 'fp-key', tool: 'gitleaks', severity: 'high', category: 'security', title: 'key', file_path: 'key.pem', line_start: 1, snippet: 'rule=private-key', fix_available: false, scan_id: 'whole' },
+        { ...leak, fingerprint: 'fp-key', file_path: 'key.pem', line_start: 1, line_end: 6, snippet: 'rule=private-key' },
+        // One line: whole in the hunk that added it, so the history pass judged
+        // it (with what applies only to history) — never taken from here.
+        { ...leak, fingerprint: 'fp-one-line', file_path: 'key.pem', line_start: 1, line_end: 1, snippet: 'rule=aws-access-token' },
       ]);
       ctx.storage.scans.finalize({ scan_id: 'whole', status: 'completed', tools_run: [{ name: 'gitleaks-working-tree', status: 'ok' }], missing_tools: [] });
       return ok({ tools_run: [{ name: 'gitleaks-working-tree', status: 'ok' }], missing_tools: [] });

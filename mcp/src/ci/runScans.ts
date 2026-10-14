@@ -61,6 +61,7 @@ import { TOOLS } from '../tools/index.js';
 import type { Finding, ToolRun } from '../types.js';
 import { configDifferences, copyConfigFromRef, type ResolvedRef } from './refConfig.js';
 import { filesChangedFrom } from './changedSince.js';
+import { acceptedByHistoryIgnores } from './gitleaksIgnore.js';
 import { rememberSecretValues, secretValueOf } from './secretValues.js';
 import type { PartialParseRef, RulesSource, ScanStepResult } from './types.js';
 
@@ -122,6 +123,9 @@ export interface RunScansOptions {
  * that reads the commits only, as `-U0` hunks again. A step lists at most
  * {@link FULL_CONTENT_BATCH} files (`scope.paths`' limit); more take more
  * steps. A listing git cannot make is a failed step — a gap, never a pass.
+ * Only its matches over several lines are taken ({@link fullContentFindings}),
+ * less those the project's `.gitleaksignore` accepts by their history
+ * fingerprint (`ci/gitleaksIgnore.ts`).
  */
 const FULL_CONTENT_STEP = 'scan_secrets';
 const FULL_CONTENT_BATCH = 1000;
@@ -183,7 +187,9 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
         }
       }
 
-      const wholeFiles = fullContentFindings(storage, opts.projectPath);
+      const read = fullContentFindings(storage, opts.projectPath);
+      const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read);
+      const wholeFiles = read.filter((f) => !accepted.has(f));
       const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles]);
       // The gate keys secrets by their values, read in memory from where
       // gitleaks' reports of this run locate them (ci/secretValues.ts): a
@@ -400,9 +406,14 @@ function collectFindings(storage: Storage, projectPath: string): Finding[] {
 }
 
 /**
- * The findings of {@link FULL_CONTENT_STEP}'s scoped secrets scans — every
- * secret in the full content of the files changed since the ref, read from
- * the working tree (no `;commit=` in the locator). Empty when no step ran.
+ * The findings of {@link FULL_CONTENT_STEP}'s scoped secrets scans that span
+ * more than one line — every such secret in the full content of the files
+ * changed since the ref, read from the working tree (no `;commit=` in the
+ * locator). Empty when no step ran. A one-line secret is whole in the hunk
+ * that adds it, so the history pass already judged it, with what applies
+ * only to history (`.gitleaksignore`'s `<commit>:…` entries, a `.gitleaks.toml`
+ * allowlist of commits): taken from here as well, an accepted fixture key
+ * came back as new whenever its file changed.
  */
 function fullContentFindings(storage: Storage, projectPath: string): Finding[] {
   const project = scannedProject(projectPath);
@@ -410,7 +421,8 @@ function fullContentFindings(storage: Storage, projectPath: string): Finding[] {
   return rows
     .filter((scan) => isScopedScan(scan) && scan.scan_type === 'secrets')
     .flatMap((scan) => storage.findings.listByScan(scan.scan_id))
-    .filter((f) => f.tool.toLowerCase() === 'gitleaks' && !/;commit=[0-9a-f]+$/i.test(f.snippet ?? ''));
+    .filter((f) => f.tool.toLowerCase() === 'gitleaks' && !/;commit=[0-9a-f]+$/i.test(f.snippet ?? ''))
+    .filter((f) => f.line_start !== undefined && f.line_end !== undefined && f.line_end > f.line_start);
 }
 
 /**

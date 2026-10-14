@@ -114,13 +114,23 @@ async function gate(dir: string, changedSince?: ResolvedRef): Promise<Awaited<Re
  * The base (committed, baselined as `baseline update` does: no ref), then the
  * pull request `change`, judged under `--baseline-ref` at the base.
  */
-async function judge(base: Record<string, string[]>, change: (dir: string) => void): Promise<{ fresh: Finding[]; failed: string[] }> {
+async function judge(
+  base: Record<string, string[]>,
+  change: (dir: string) => void,
+  /** Files the base commits next, from the first base commit's sha (a `.gitleaksignore` naming it). */
+  then?: (first: string) => Record<string, string[]>,
+): Promise<{ fresh: Finding[]; failed: string[] }> {
   const dir = resolveProjectPath(makeTempDir('secret-full-content-')).path;
   mkdirSync(dir, { recursive: true });
   git(dir, 'init', '-q');
   for (const [path, lines] of Object.entries(base)) write(dir, path, lines);
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', 'base');
+  if (then !== undefined) {
+    for (const [path, lines] of Object.entries(then(git(dir, 'rev-parse', 'HEAD')))) write(dir, path, lines);
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'base, then');
+  }
   const commit = git(dir, 'rev-parse', 'HEAD');
   const baseline = buildBaseline((await gate(dir)).findings, null, '2026-01-02');
   expect(baseline.entries.length, 'the base has its secret baselined').toBeGreaterThan(0);
@@ -159,6 +169,18 @@ describe.skipIf(!GITLEAKS)('under a ref, the files a pull request changed are re
     const { fresh, failed } = await judge({ 'config.js': CONFIG }, (dir) => git(dir, 'mv', 'config.js', 'settings.js'));
     expect(where(fresh)).toEqual([]);
     expect(failed).toEqual([]);
+  });
+
+  // The full suite's ciRefGateExclusions control: the files pass reads only
+  // `.gitleaksignore`'s file form, so a key accepted by its history
+  // fingerprint came back as new whenever its file changed.
+  it('a fixture key .gitleaksignore accepts by its commit: an edit beside it is not new, the key replaced in place is', async () => {
+    const BASE_IGNORED = { 'fixture.pem': pem('f1'), 'config.js': CONFIG };
+    const ignore = (first: string): Record<string, string[]> => ({ '.gitleaksignore': [`${first}:fixture.pem:private-key:1`] });
+    const beside = await judge(BASE_IGNORED, (dir) => write(dir, 'fixture.pem', ['# test fixture, not a real key', ...pem('f1')]), ignore);
+    expect(where(beside.fresh)).toEqual([]);
+    const replaced = await judge(BASE_IGNORED, (dir) => write(dir, 'fixture.pem', pem('f2')), ignore);
+    expect(where(replaced.fresh)).toEqual([['private-key', 'fixture.pem', 1, expect.not.stringContaining(';commit=')]]);
   });
 });
 
