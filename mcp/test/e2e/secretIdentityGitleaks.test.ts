@@ -38,7 +38,11 @@ afterAll(cleanupTempDirs);
 vi.setConfig({ testTimeout: 120_000 });
 
 const GITLEAKS = await isInstalled('gitleaks');
-if (!GITLEAKS && process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1') throw new Error('gitleaks is not on PATH');
+
+// A missing gitleaks is a visible skip — a failure where the toolchain is required.
+it.runIf(process.env['GUARDIAN_REQUIRE_GITLEAKS'] === '1')('GUARDIAN_REQUIRE_GITLEAKS=1 — gitleaks must be on PATH', () => {
+  expect(GITLEAKS).toBe(true);
+});
 
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 /** An AWS-access-key-shaped value from a seed: `AKIA` + 16 of [A-Z2-7]. */
