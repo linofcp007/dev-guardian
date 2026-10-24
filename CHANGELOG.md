@@ -8,9 +8,13 @@ version bump.
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-10-24
+
 gosec joins `scan_sast` and `review_pr` for Go, cppcheck joins them for C and C++, Psalm's taint analysis joins
 `scan_sast` and `scan_wordpress` for PHP, govulncheck joins `deps_audit`, shellcheck joins `quality_check`, a mobile
-pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
+pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF is a tested import. On Windows,
+Semgrep now reads a project with paths too long for Windows: a long directory no longer fails the whole scan, and a
+file at 260 characters or more is read, where the long-path setting the scans advised never helped Semgrep.
 
 ### Upgrading from 3.4.0
 
