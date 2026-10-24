@@ -529,7 +529,11 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
     case 'taint_timeout':
       return 'Nothing to do for the gate (not gating): taint findings in the named functions may be missing — splitting very large functions helps Semgrep.';
     case 'path_too_long':
-      return 'Enable Windows long paths (LongPathsEnabled=1 under HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem, then restart) or move the project to a shorter path.';
+      return (
+        'Move the project to a shorter path. Windows long paths (LongPathsEnabled=1 under ' +
+        'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem, then restart) help Bandit, which is long-path aware, ' +
+        "but not Semgrep, whose engine is not: dev-guardian already reads Semgrep's files as extended-length paths."
+      );
     case 'scanner_failed':
       // Before the rule test: the line says "registry rules" (review 11, finding 10).
       if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {

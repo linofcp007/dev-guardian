@@ -209,8 +209,8 @@ export const PATH_TOO_LONG_TYPE = 'Path too long';
 export function describeTooLong(files: readonly string[]): string {
   return (
     `${files.length} file(s) at a path of ${WINDOWS_MAX_PATH} characters or more, or in a directory of ` +
-    `${WINDOWS_DIR_MAX} or more, were not scanned (Windows MAX_PATH): ${nameAFew(files)} — enable long paths ` +
-    '(LongPathsEnabled=1) or move the project to a shorter path'
+    `${WINDOWS_DIR_MAX} or more, were not scanned (Windows MAX_PATH): ${nameAFew(files)} — move the project to a ` +
+    "shorter path (Semgrep's engine is not long-path aware: LongPathsEnabled does not lift the limit for it)"
   );
 }
 

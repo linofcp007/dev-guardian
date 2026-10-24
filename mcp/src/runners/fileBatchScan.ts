@@ -21,7 +21,7 @@
  */
 
 import { rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import type { FailedRule, PartialParse, ToolRun } from '../types.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
 import { batchArgs } from './argBatches.js';
@@ -38,6 +38,7 @@ import {
   type PluginPackFixpoint,
 } from './semgrepReport.js';
 import { localRuleIdNormalizer, noRuleLoaded, type RuleIdContext } from './semgrepRuleIds.js';
+import { extendedLengthPath, rewriteReportPaths, tooLongForWindows, windowsBase } from './semgrepLongDirs.js';
 import { toRelativeIfPossible } from './scannerParsers/index.js';
 
 interface BatchCheck {
@@ -89,6 +90,12 @@ interface FileBatchScanOptions {
    * scanned for — never `ok` with a gap (fix round 3, M-1).
    */
   noRuleLoaded?: (failedRules: readonly FailedRule[]) => boolean;
+  /**
+   * A batch's report text with its files named as the caller named them —
+   * semgrepOnFiles: an extended-length target (`\\?\C:\…`, a path too long
+   * for Windows) back to its project path. Absent: as written.
+   */
+  mapReport?: (raw: string) => string;
 }
 
 interface FileBatchScanResult {
@@ -154,7 +161,8 @@ async function runBatches(opts: FileBatchScanOptions, batches: readonly string[]
       onLog: opts.onLog,
     });
     if (run.outcome === 'cancelled') t.cancelled = true;
-    const raw = readJsonSafe(reportFile);
+    const written = readJsonSafe(reportFile);
+    const raw = written !== null && opts.mapReport !== undefined ? opts.mapReport(written) : written;
     if (raw !== null && parseInputAsJson(raw) !== null) {
       t.reports.push(raw);
       t.reportFiles.push(reportFile);
@@ -295,13 +303,17 @@ export function semgrepOnFiles(args: {
   // Semgrep runs in the project: a YAML file under it is a target, one
   // outside it a rule file (`semgrepReport.ts`, the module comment).
   const projectPath = args.cwd;
+  // Windows: a file too long for Semgrep to open by path is handed as an
+  // extended-length one, and named back (runners/semgrepLongDirs.ts).
+  const long = extendedTargets(args.files, args.cwd);
   return scanFileBatches({
     name: 'semgrep',
     // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
     ...semgrepSpawn(args.env),
     args: [...args.configArgs, '--json', '--quiet'],
     reportArgs: (f) => ['--output', f],
-    files: args.files,
+    files: long.files,
+    ...(long.mapReport !== undefined ? { mapReport: long.mapReport } : {}),
     cwd: args.cwd,
     reportDir: args.reportDir,
     reportPrefix: 'sast',
@@ -335,6 +347,40 @@ export function semgrepOnFiles(args: {
       ? { noRuleLoaded: (failed: readonly FailedRule[]) => noRuleLoaded(rules.loadedFrom ?? rules.configs, failed, rules.ctx) }
       : {}),
   });
+}
+
+/**
+ * `files` (relative to `cwd`) with each one too long for Windows replaced by
+ * its extended-length form, and the report rewrite that names it back; on
+ * another system, or with none too long, `files` as they are.
+ */
+function extendedTargets(
+  files: readonly string[],
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): { files: readonly string[]; mapReport?: (raw: string) => string } {
+  if (platform !== 'win32') return { files };
+  const base = windowsBase(cwd);
+  const norm = (p: string): string => p.replace(/^\\\\\?\\/, '').split('/').join('\\').toLowerCase();
+  const back = new Map<string, string>();
+  const out = files.map((f) => {
+    const rel = f.split('\\').join('/');
+    if (!tooLongForWindows(base, rel)) return f;
+    const abs = win32.join(base, ...rel.split('/'));
+    back.set(norm(abs), f);
+    return extendedLengthPath(abs);
+  });
+  if (back.size === 0) return { files };
+  return {
+    files: out,
+    mapReport: (raw) => {
+      try {
+        return JSON.stringify(rewriteReportPaths(JSON.parse(raw), (p) => back.get(norm(p)) ?? null));
+      } catch {
+        return raw;
+      }
+    },
+  };
 }
 
 /**

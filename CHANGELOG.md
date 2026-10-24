@@ -8,9 +8,13 @@ version bump.
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-10-24
+
 gosec joins `scan_sast` and `review_pr` for Go, cppcheck joins them for C and C++, Psalm's taint analysis joins
 `scan_sast` and `scan_wordpress` for PHP, govulncheck joins `deps_audit`, shellcheck joins `quality_check`, a mobile
-pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
+pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF is a tested import. On Windows,
+Semgrep now reads a project with paths too long for Windows: a long directory no longer fails the whole scan, and a
+file at 260 characters or more is read, where the long-path setting the scans advised never helped Semgrep.
 
 ### Upgrading from 3.4.0
 
@@ -137,9 +141,18 @@ pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF 
   root's files included, the run `failed`. Every Semgrep run over a directory (`scan_sast`, `scan_wordpress`,
   `bug_hunt`, `compliance_check`, `map_attack_surface`) is now repeated once, when its walk failed that way, with
   each directory at 248 characters or more excluded (`--exclude`, so every `.semgrepignore` is still honoured): the
-  rest is scanned, the reason says which directories were left out, and their files are named `Path too long`,
-  as a file at 260 characters or more already was. The length is measured on the real path, so a short (8.3) name
-  in the project's path no longer hides it.
+  rest is scanned and the reason says which directories were left out. The length is measured on the real path,
+  so a short (8.3) name in the project's path no longer hides it.
+- **On Windows, Semgrep reads files at a path of 260 characters or more.** Its engine, `semgrep-core.exe`, has a
+  manifest without `longPathAware`, so `LongPathsEnabled=1` — the remedy the scans gave — never lifted the limit
+  for it. The same file handed as an extended-length path (`\\?\C:\…`) is read (measured: a 305-character file).
+  After a run over a directory, every source file its walk did not read for its length — those in the excluded
+  directories too — is read in a second run as an extended-length explicit target, never one the run's
+  `--exclude`s or a `.semgrepignore` leave out, and its findings are merged into the run's report under the
+  project path; a scope's or a review's long files are handed that way directly. A file at such a path is no
+  longer a `Path too long` gap for Semgrep; the remedy for one that still is (and for Bandit's) says to move the
+  project to a shorter path, and that the long-path setting helps Bandit, not Semgrep. `bug_hunt` and
+  `compliance_check` read their reports for it, as `scan_sast` did.
 
 ## [3.4.0] - 2026-10-14
 

@@ -195,9 +195,11 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "Psalm's configuration into the temp directory mkdtemp just made, and its JSON report back from the verified report directory",
   },
   'src/runners/semgrepRun.ts': {
-    apis: { readFileSync: 1 },
+    apis: { readFileSync: 1, writeFileSync: 1 },
     kind: 'own',
-    reason: "the --output report of a Semgrep run that failed, for its error messages: the caller's own report directory",
+    reason:
+      "a Semgrep run's --output report, read for its error messages and its scanned paths and written back with the " +
+      "findings of the files too long for Windows read on their own: the caller's own report directory",
   },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
