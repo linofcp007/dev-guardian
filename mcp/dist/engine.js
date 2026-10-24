@@ -2589,6 +2589,16 @@ var init_powershellText = __esm({
   }
 });
 
+// src/hooks/shell/arrays.ts
+function pushAll(into, from) {
+  for (const x of from) into.push(x);
+}
+var init_arrays = __esm({
+  "src/hooks/shell/arrays.ts"() {
+    "use strict";
+  }
+});
+
 // src/hooks/shell/command.ts
 function basename(value) {
   const parts = value.split(/[\\/]/);
@@ -2732,6 +2742,134 @@ var init_command = __esm({
   }
 });
 
+// src/hooks/shell/cmd.ts
+function splitCmdLine(line) {
+  const commands = [];
+  let words = [];
+  let redirects = [];
+  let cur = "";
+  let inQuote = false;
+  let has = false;
+  let role = "arg";
+  const endWord = () => {
+    if (has) {
+      if (role === "write") redirects.push(cur);
+      else if (role === "arg") words.push(cur);
+      role = "arg";
+    }
+    cur = "";
+    has = false;
+  };
+  const endCommand = () => {
+    endWord();
+    role = "arg";
+    if (words.length > 0 || redirects.length > 0) commands.push({ words, redirects });
+    words = [];
+    redirects = [];
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
+    if (ch === '"') {
+      inQuote = !inQuote;
+      has = true;
+    } else if (!inQuote && ch === "^" && i + 1 < line.length) {
+      i += 1;
+      cur += line.charAt(i);
+      has = true;
+    } else if (!inQuote && (ch === "&" || ch === "|")) {
+      endCommand();
+      if (line.charAt(i + 1) === ch) i += 1;
+    } else if (!inQuote && (ch === ">" || ch === "<")) {
+      if (has && /^\d$/.test(cur)) {
+        cur = "";
+        has = false;
+      } else endWord();
+      if (ch === ">" && line.charAt(i + 1) === ">") i += 1;
+      if (line.charAt(i + 1) === "&") {
+        i += 1;
+        while (/\d/.test(line.charAt(i + 1))) i += 1;
+        continue;
+      }
+      role = ch === ">" ? "write" : "read";
+    } else if (!inQuote && /\s/.test(ch)) {
+      if (has) endWord();
+    } else {
+      cur += ch;
+      has = true;
+    }
+  }
+  endCommand();
+  return commands;
+}
+function cmdCommandWords(words) {
+  const out = [...words];
+  const first = out[0];
+  if (first !== void 0 && first.startsWith("@")) {
+    if (first.length > 1) out[0] = first.slice(1);
+    else out.shift();
+  }
+  while (out.length > 0 && (out[0] ?? "").toLowerCase() === "call") out.shift();
+  return out;
+}
+function posixWord(word) {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+}
+function cmdLineText(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return void 0;
+  const [first, ...more] = args.slice(at + 1);
+  if (first === void 0) return void 0;
+  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
+  return [head, ...more.map(posixWord)].join(" ");
+}
+function cmdTextAsPosix(line) {
+  let out = "";
+  let inQuote = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line.charAt(i);
+    if (ch === '"') inQuote = !inQuote;
+    if (ch === "\\") out += "\\\\";
+    else if (ch === "^" && !inQuote && i + 1 < line.length) {
+      i += 1;
+      out += `\\${line.charAt(i)}`;
+    } else out += ch;
+  }
+  return out;
+}
+function cmdLine(rawArgs) {
+  const args = rawArgs.map(cmdSwitch);
+  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
+  if (at < 0) return [];
+  const first = args[at + 1];
+  if (first === void 0) return [];
+  const head = first.trim();
+  const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
+  const last = commands[commands.length - 1];
+  if (last !== void 0) pushAll(last.words, args.slice(at + 2));
+  return commands;
+}
+function cmdInnerCommands(args, depth = 0) {
+  if (depth > MAX_CMD_NESTING) return [];
+  const out = [];
+  for (const command of cmdLine(args)) {
+    const words = cmdCommandWords(command.words);
+    const name = (words[0] ?? "").toLowerCase().replace(/\.exe$/, "");
+    if (name === "cmd") pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
+    else out.push(words.map((value) => ({ value, quoted: false })));
+  }
+  return out;
+}
+var MAX_CMD_NESTING;
+var init_cmd = __esm({
+  "src/hooks/shell/cmd.ts"() {
+    "use strict";
+    init_arrays();
+    init_command();
+    MAX_CMD_NESTING = 8;
+  }
+});
+
 // src/hooks/shell/paths.ts
 function normalizedPath(path3) {
   return path3.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -2814,6 +2952,557 @@ var init_paths = __esm({
     MAX_CWD = 320;
     CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
     CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
+  }
+});
+
+// src/hooks/shell/effects.ts
+function noEffects() {
+  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [], aliases: [] };
+}
+function mergeEffects(into, from) {
+  pushAll(into.writes, from.writes);
+  pushAll(into.removes, from.removes);
+  pushAll(into.dirs, from.dirs);
+  pushAll(into.special, from.special);
+  pushAll(into.links, from.links);
+  pushAll(into.hardLinkSources, from.hardLinkSources);
+  pushAll(into.trees, from.trees);
+  pushAll(into.aliases, from.aliases);
+}
+function lastSegment(path3) {
+  return path3.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path3;
+}
+function operands(args, valued) {
+  const out = [];
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (!optionsDone && a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    if (!optionsDone && a.startsWith("-") && a.length > 1) {
+      if (valued.has(a)) i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+function lnOperands(args) {
+  let dir;
+  let hasDir = false;
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    const long = /^--target-directory=(.*)$/.exec(a);
+    if (long !== null) {
+      hasDir = true;
+      if (long[1] !== "") dir = long[1];
+    } else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) {
+      hasDir = true;
+      dir = args[++i];
+    } else if (/^-t./.test(a)) {
+      hasDir = true;
+      dir = a.slice(2);
+    } else if (a === "-S" || a === "--suffix") i++;
+    else rest.push(a);
+  }
+  return { names: operands(rest, /* @__PURE__ */ new Set()), dir, hasDir };
+}
+function lnDestinations(args) {
+  const { names: targets, dir } = lnOperands(args);
+  if (dir !== void 0) return targets.map((t) => `${dir}/${lastSegment(t)}`);
+  if (targets.length >= 2) return [targets[targets.length - 1] ?? ""];
+  return targets.length === 1 ? [lastSegment(targets[0] ?? "")] : [];
+}
+function lnSymbolic(args) {
+  return args.some((a) => a === "--symbolic" || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a));
+}
+function lnHardSources(args) {
+  if (lnSymbolic(args)) return [];
+  const { names, hasDir } = lnOperands(args);
+  return hasDir || names.length < 2 ? names : names.slice(0, -1);
+}
+function lnAliases(args) {
+  if (!lnSymbolic(args)) return [];
+  const { names, dir } = lnOperands(args);
+  if (dir !== void 0) return names.map((t) => [`${dir}/${lastSegment(t)}`, t]);
+  if (names.length === 1) return [[lastSegment(names[0] ?? ""), names[0] ?? ""]];
+  const link = names[names.length - 1] ?? "";
+  const sources = names.slice(0, -1);
+  return sources.flatMap(
+    (t) => sources.length === 1 ? [[link, t], [`${link}/${lastSegment(t)}`, t]] : [[`${link}/${lastSegment(t)}`, t]]
+  );
+}
+function fromLink(link, target) {
+  return resolveFrom(dirOf(link.replace(/\\/g, "/")), target);
+}
+function newItemParam(spelled) {
+  const exact = NEW_ITEM_VALUED.find(([, names]) => names.includes(spelled));
+  if (exact !== void 0) return exact[0];
+  const matches3 = NEW_ITEM_VALUED.filter(([, names]) => names.some((n) => n.startsWith(spelled)));
+  return matches3.length === 1 ? matches3[0]?.[0] : void 0;
+}
+function itemTypeOf(value) {
+  if (value === "") return "file";
+  const pattern = `${value.toLowerCase()}*`;
+  if (wildcardMatch(pattern, "directory") || wildcardMatch(pattern, "container")) return "directory";
+  return ["file", "symboliclink", "junction", "hardlink"].find((t) => wildcardMatch(pattern, t)) ?? "unknown";
+}
+function newItemArgs(args) {
+  let spelledType = "";
+  let target;
+  const paths = [];
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+    if (param === null) {
+      positional.push(a);
+      continue;
+    }
+    const name = newItemParam((param[1] ?? "").toLowerCase());
+    const inline2 = param[2];
+    const value = inline2 !== void 0 ? inline2 : name !== void 0 ? args[++i] ?? "" : void 0;
+    if (value === void 0) continue;
+    if (name === "type") spelledType = value;
+    else if (name === "path" || name === "name") paths.push(value);
+    else if (name === "target") target = value;
+  }
+  if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? "");
+  const itemType = itemTypeOf(spelledType);
+  return target === void 0 ? { itemType, paths } : { itemType, paths, target };
+}
+function mklinkDestinations(args) {
+  const link = args.find((a) => !a.startsWith("/"));
+  return link === void 0 ? [] : [link];
+}
+function cmdEffects(args, cwd, depth = 0) {
+  const e = noEffects();
+  if (depth > MAX_CMD_NESTING) return e;
+  const commands = cmdLine(args);
+  let dir = cwd;
+  for (const command of commands) {
+    const [raw, ...rest] = cmdCommandWords(command.words);
+    const name = (raw ?? "").toLowerCase().replace(/\.exe$/, "");
+    pushAll(e.writes, command.redirects.map((r) => resolveFrom(dir, r)));
+    mergeEffects(e, effectsOf(name, rest, dir, depth + 1));
+    dir = cwdAfter(name, rest, dir) ?? dir;
+  }
+  return e;
+}
+function redirectTargets(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    const r = word === void 0 ? null : parseRedirect(word);
+    if (r === null || !r.op.startsWith(">")) continue;
+    const next = words[i + 1]?.value;
+    if (r.op.endsWith("&")) {
+      const fd = r.inline !== "" ? r.inline : next ?? "";
+      if (/^\d*-?$/.test(fd)) continue;
+    }
+    const target = r.inline !== "" ? r.inline : next;
+    if (target !== void 0) out.push(target);
+  }
+  return out;
+}
+function withoutRedirections(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === void 0) continue;
+    const r = parseRedirect(word);
+    if (r === null) {
+      out.push(word.value);
+      continue;
+    }
+    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
+    if (r.inline === "") i += 1;
+  }
+  return out;
+}
+function intoDir(dir, src) {
+  return `${dir.replace(/[\\/]+$/, "")}/${lastSegment(src)}`;
+}
+function optionValues(args, short2, long) {
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a === short2 || a === long) {
+      const v = args[i + 1];
+      if (v !== void 0) out.push(v);
+    } else if (a.startsWith(`${long}=`)) out.push(a.slice(long.length + 1));
+    else if (a.startsWith(short2) && a.length > short2.length && !a.startsWith("--")) out.push(a.slice(short2.length));
+  }
+  return out;
+}
+function psName(spelled) {
+  const lower = spelled.toLowerCase();
+  const all = [...PS_PATH_PARAMS, ...PS_VALUE_PARAMS, ...PS_SWITCHES];
+  if (all.includes(lower)) return lower;
+  return lower.length >= 3 ? all.find((n) => n.startsWith(lower)) : void 0;
+}
+function parseTransfer(args, slashSwitches) {
+  const named2 = [];
+  const positional = [];
+  let dest;
+  let into = false;
+  let recursive = false;
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (slashSwitches && /^\/[A-Za-z]/.test(a)) continue;
+    if (optionsDone || a === "-" || !a.startsWith("-")) {
+      positional.push(a);
+      continue;
+    }
+    if (a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    const target = /^--target-directory(?:=(.*))?$/.exec(a);
+    if (target !== null) {
+      dest = target[1] ?? args[++i];
+      into = true;
+      continue;
+    }
+    if (a === "--recursive" || a === "--archive") {
+      recursive = true;
+      continue;
+    }
+    const ps = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+    const param = ps === null ? void 0 : psName(ps[1] ?? "");
+    if (ps !== null && param !== void 0) {
+      const value = PS_PATH_PARAMS.includes(param) || PS_VALUE_PARAMS.includes(param) ? ps[2] ?? args[++i] : void 0;
+      if (param === "recurse") recursive = true;
+      else if (param === "destination") dest = value;
+      else if ((param === "path" || param === "literalpath") && value !== void 0) named2.push(value);
+      continue;
+    }
+    if (COPY_VALUED.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (/^-[a-zA-Z]*t$/.test(a)) {
+      dest = args[++i];
+      into = true;
+    } else if (/^-t./.test(a)) {
+      dest = a.slice(2);
+      into = true;
+    }
+    if (!a.startsWith("--") && /[rRa]/.test(a.slice(1))) recursive = true;
+  }
+  const sources = [...named2, ...positional];
+  if (dest === void 0 && sources.length >= 2) dest = sources.pop();
+  return dest === void 0 ? { sources, into, recursive } : { sources, dest, into, recursive };
+}
+function perlLike(args, codeLetters, valueLetters) {
+  const code = [];
+  const operandsSeen = [];
+  let inPlace = false;
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (!optionsDone && a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    if (optionsDone || !a.startsWith("-") || a.length === 1 || a.startsWith("--")) {
+      if (optionsDone || !a.startsWith("--")) operandsSeen.push(a);
+      continue;
+    }
+    for (let k = 1; k < a.length; k += 1) {
+      const c = a.charAt(k);
+      if (codeLetters.includes(c)) {
+        const rest = a.slice(k + 1);
+        code.push(rest !== "" ? rest : args[++i] ?? "");
+        break;
+      }
+      if (c === "i") {
+        inPlace = true;
+        break;
+      }
+      if (valueLetters.includes(c)) {
+        if (k === a.length - 1) i += 1;
+        break;
+      }
+      if (c === "0") while (/[0-9a-fA-Fx]/.test(a.charAt(k + 1))) k += 1;
+      if (c === "l") while (/[0-9]/.test(a.charAt(k + 1))) k += 1;
+    }
+  }
+  const files = code.length > 0 ? operandsSeen : operandsSeen.slice(1);
+  return { code, inPlace, files };
+}
+function editorFiles(args) {
+  const out = [];
+  let optionsDone = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (!optionsDone && a === "--") {
+      optionsDone = true;
+      continue;
+    }
+    if (!optionsDone && a === "--cmd") {
+      i += 1;
+      continue;
+    }
+    if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
+      if (EDITOR_VALUED_LETTERS.includes(a.charAt(a.length - 1))) i += 1;
+      continue;
+    }
+    if (!optionsDone && (a.startsWith("-") || a.startsWith("+"))) continue;
+    out.push(a);
+  }
+  return out;
+}
+function commandWriteDestinations(name, args) {
+  switch (name) {
+    case "tee":
+    case "sponge":
+      return operands(args, /* @__PURE__ */ new Set());
+    case "sed":
+      return args.some((a) => SED_IN_PLACE.test(a)) ? operands(args, /* @__PURE__ */ new Set(["-e", "-f", "--expression", "--file", "-l", "--line-length"])) : [];
+    case "dd":
+      return args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3));
+    case "curl":
+      return optionValues(args, "-o", "--output");
+    case "wget":
+      return optionValues(args, "-O", "--output-document");
+    case "sort":
+      return optionValues(args, "-o", "--output");
+    case "truncate":
+      return operands(args, /* @__PURE__ */ new Set(["-s", "--size", "-r", "--reference"]));
+    case "shred":
+      return operands(args, /* @__PURE__ */ new Set(["-n", "--iterations", "-s", "--size", "--random-source"]));
+    case "perl": {
+      const p = perlLike(args, "eE", "IMm");
+      return p.inPlace ? p.files : [];
+    }
+    case "ruby": {
+      const p = perlLike(args, "e", "IrCEFx");
+      return p.inPlace ? p.files : [];
+    }
+    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
+    // `vim -es -c '…' -c wq f` write the files they open.
+    case "ed":
+    case "red":
+      return operands(args, /* @__PURE__ */ new Set(["-p", "--prompt"]));
+    case "ex":
+    case "vi":
+    case "vim":
+    case "nvim":
+    case "gvim":
+      return editorFiles(args);
+    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
+    case "sc":
+    case "set-content":
+    case "add-content":
+    case "ac":
+    case "clear-content":
+    case "clc":
+    case "out-file":
+    case "tee-object":
+      return args.map((a) => a.replace(/^-[A-Za-z]+:/, ""));
+    default:
+      return [];
+  }
+}
+function effectsOf(name, rawArgs, cwd, depth = 0) {
+  if (name === "cmd") return cmdEffects(rawArgs, cwd, depth);
+  const args = CMD_SWITCHED.has(name) ? rawArgs.map(cmdSwitch) : rawArgs;
+  const at = (p) => resolveFrom(cwd, p);
+  const e = noEffects();
+  switch (name) {
+    case "mkfifo":
+      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).map(at));
+      return e;
+    case "mknod":
+      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).slice(0, 1).map(at));
+      return e;
+    case "ln":
+      pushAll(e.links, lnDestinations(args).map(at));
+      pushAll(e.hardLinkSources, lnHardSources(args).map(at));
+      for (const [link, target] of lnAliases(args)) e.aliases.push([at(link), at(fromLink(link, target))]);
+      return e;
+    case "link":
+      pushAll(e.hardLinkSources, operands(args, /* @__PURE__ */ new Set()).slice(0, 1).map(at));
+      return e;
+    case "fsutil":
+      if (/^hardlink$/i.test(args[0] ?? "") && /^create$/i.test(args[1] ?? "")) {
+        if (args[2] !== void 0) e.links.push(at(args[2]));
+        if (args[3] !== void 0) e.hardLinkSources.push(at(args[3]));
+      }
+      return e;
+    case "mklink": {
+      pushAll(e.links, mklinkDestinations(args).map(at));
+      const names = args.filter((a) => !a.startsWith("/"));
+      const [link, target] = names;
+      if (args.some((a) => /^\/h$/i.test(a))) {
+        if (target !== void 0) e.hardLinkSources.push(at(target));
+      } else if (link !== void 0 && target !== void 0) {
+        e.aliases.push([at(link), at(args.some((a) => /^\/j$/i.test(a)) ? target : fromLink(link, target))]);
+      }
+      return e;
+    }
+    case "new-item":
+    case "ni": {
+      const item = newItemArgs(args);
+      if (["symboliclink", "hardlink", "junction"].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
+      if (item.itemType === "hardlink" && item.target !== void 0) e.hardLinkSources.push(at(item.target));
+      else if (item.itemType === "file") pushAll(e.writes, item.paths.map(at));
+      const target = item.target;
+      if (target !== void 0 && (item.itemType === "symboliclink" || item.itemType === "junction")) {
+        for (const p of item.paths) e.aliases.push([at(p), at(item.itemType === "junction" ? target : fromLink(p, target))]);
+      }
+      return e;
+    }
+    case "cp":
+    case "install":
+    case "copy-item":
+    case "cpi":
+    case "copy":
+    case "mv":
+    case "move-item":
+    case "mi":
+    case "move": {
+      const t = parseTransfer(args, name === "copy" || name === "move");
+      const moves = name === "mv" || name === "move-item" || name === "mi" || name === "move";
+      if (moves) pushAll(e.removes, t.sources.map(at));
+      if (name === "cp" && args.some((a) => a === "--link" || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a))) pushAll(e.hardLinkSources, t.sources.map(at));
+      if (t.dest === void 0) return e;
+      const dest = t.dest;
+      if (!t.into) e.writes.push(at(dest));
+      pushAll(e.writes, t.sources.map((s) => at(intoDir(dest, s))));
+      if (!t.into && (moves || t.recursive)) e.dirs.push(at(dest));
+      return e;
+    }
+    case "xcopy":
+    case "robocopy": {
+      const [, dest, ...files] = args.filter((a) => !/^\/[A-Za-z]/.test(a));
+      if (dest !== void 0) {
+        e.dirs.push(at(dest));
+        e.writes.push(at(dest));
+        pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
+        if (name === "robocopy" && args.some((a) => /^\/(?:mir|purge)$/i.test(a))) e.trees.push(at(dest));
+      }
+      return e;
+    }
+    case "rsync": {
+      const paths = operands(args, RSYNC_VALUED);
+      const dest = paths.pop();
+      if (dest === void 0 || paths.length === 0) return e;
+      e.writes.push(at(dest));
+      pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
+      if (args.some((a) => a === "--recursive" || a === "--archive" || /^-[a-zA-Z]*[ra]/.test(a))) e.dirs.push(at(dest));
+      if (args.some((a) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a))) e.trees.push(at(dest));
+      return e;
+    }
+    case "ren":
+    case "rename":
+    case "rename-item":
+    case "rni": {
+      const positional = args.filter((a) => !a.startsWith("-") && !/^\/[A-Za-z]$/.test(a));
+      const src = psParam(args, ["path", "literalpath"]) ?? positional.shift();
+      const newName = psParam(args, ["newname"]) ?? positional.shift();
+      if (src === void 0) return e;
+      e.removes.push(at(src));
+      if (newName !== void 0) {
+        const dest = /[\\/]/.test(newName) ? newName : `${dirOf(src.replace(/\\/g, "/")) || "."}/${newName}`;
+        e.writes.push(at(dest));
+        e.dirs.push(at(dest));
+      }
+      return e;
+    }
+    default:
+      break;
+  }
+  if (REMOVERS.has(name)) pushAll(e.removes, operands(args, /* @__PURE__ */ new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
+  const written = commandWriteDestinations(name, args).map(at);
+  pushAll(e.writes, written);
+  if (name === "shred" && args.some((a) => a === "--remove" || a.startsWith("--remove=") || /^-[a-zA-Z]*u/.test(a))) {
+    pushAll(e.removes, written);
+  }
+  return e;
+}
+function withoutRedirectWords(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === void 0) continue;
+    const r = parseRedirect(word);
+    if (r === null) out.push(word);
+    else if (r.inline === "") i += 1;
+  }
+  return out;
+}
+var NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, REMOVERS, CMD_SWITCHED;
+var init_effects = __esm({
+  "src/hooks/shell/effects.ts"() {
+    "use strict";
+    init_arrays();
+    init_cmd();
+    init_command();
+    init_paths();
+    NEW_ITEM_VALUED = [
+      ["type", ["itemtype", "type"]],
+      ["path", ["path", "literalpath", "pspath", "lp"]],
+      ["name", ["name"]],
+      ["target", ["value", "target"]],
+      ["credential", ["credential"]]
+    ];
+    COPY_VALUED = /* @__PURE__ */ new Set(["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"]);
+    PS_PATH_PARAMS = ["path", "literalpath", "destination"];
+    PS_VALUE_PARAMS = ["filter", "include", "exclude", "credential", "fromsession", "tosession"];
+    PS_SWITCHES = ["recurse", "force", "container", "passthru", "whatif", "confirm"];
+    RSYNC_VALUED = /* @__PURE__ */ new Set([
+      "-e",
+      "--rsh",
+      "-f",
+      "--filter",
+      "--exclude",
+      "--include",
+      "--exclude-from",
+      "--include-from",
+      "--files-from",
+      "-T",
+      "--temp-dir",
+      "-B",
+      "--block-size",
+      "--chmod",
+      "--chown",
+      "--log-file",
+      "--password-file",
+      "--partial-dir",
+      "--backup-dir",
+      "--suffix",
+      "--compare-dest",
+      "--copy-dest",
+      "--link-dest",
+      "--rsync-path",
+      "-M",
+      "--remote-option",
+      "--port",
+      "--timeout",
+      "--contimeout",
+      "--bwlimit",
+      "--max-size",
+      "--min-size",
+      "--out-format",
+      "--info",
+      "--debug",
+      "--iconv",
+      "--usermap",
+      "--groupmap",
+      "--address",
+      "--sockopts",
+      "--max-delete"
+    ]);
+    SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
+    EDITOR_VALUED_LETTERS = "cSuUiTwWtq";
+    REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
+    CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
   }
 });
 
@@ -31787,7 +32476,7 @@ var init_default = __esm({
 function parseEffectsDef(_def, refs) {
   return refs.effectStrategy === "input" ? parseDef(_def.schema._def, refs) : parseAnyDef(refs);
 }
-var init_effects = __esm({
+var init_effects2 = __esm({
   "node_modules/zod-to-json-schema/dist/esm/parsers/effects.js"() {
     init_parseDef();
     init_any();
@@ -32757,7 +33446,7 @@ var init_selectParser = __esm({
     init_catch();
     init_date();
     init_default();
-    init_effects();
+    init_effects2();
     init_enum();
     init_intersection();
     init_literal();
@@ -33014,7 +33703,7 @@ var init_esm = __esm({
     init_catch();
     init_date();
     init_default();
-    init_effects();
+    init_effects2();
     init_enum();
     init_intersection();
     init_literal();
@@ -92385,6 +93074,7 @@ var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
     init_command();
+    init_effects();
     init_split();
     init_workdir();
     init_powershellText();
@@ -99060,681 +99750,14 @@ function userDataDir2(ctx = {}) {
 
 // src/hooks/bashGuard.ts
 init_powershellText();
-
-// src/hooks/shell/arrays.ts
-function pushAll(into, from) {
-  for (const x of from) into.push(x);
-}
-
-// src/hooks/shell/cmd.ts
+init_arrays();
+init_cmd();
 init_command();
-function splitCmdLine(line) {
-  const commands = [];
-  let words = [];
-  let redirects = [];
-  let cur = "";
-  let inQuote = false;
-  let has = false;
-  let role = "arg";
-  const endWord = () => {
-    if (has) {
-      if (role === "write") redirects.push(cur);
-      else if (role === "arg") words.push(cur);
-      role = "arg";
-    }
-    cur = "";
-    has = false;
-  };
-  const endCommand = () => {
-    endWord();
-    role = "arg";
-    if (words.length > 0 || redirects.length > 0) commands.push({ words, redirects });
-    words = [];
-    redirects = [];
-  };
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') {
-      inQuote = !inQuote;
-      has = true;
-    } else if (!inQuote && ch === "^" && i + 1 < line.length) {
-      i += 1;
-      cur += line.charAt(i);
-      has = true;
-    } else if (!inQuote && (ch === "&" || ch === "|")) {
-      endCommand();
-      if (line.charAt(i + 1) === ch) i += 1;
-    } else if (!inQuote && (ch === ">" || ch === "<")) {
-      if (has && /^\d$/.test(cur)) {
-        cur = "";
-        has = false;
-      } else endWord();
-      if (ch === ">" && line.charAt(i + 1) === ">") i += 1;
-      if (line.charAt(i + 1) === "&") {
-        i += 1;
-        while (/\d/.test(line.charAt(i + 1))) i += 1;
-        continue;
-      }
-      role = ch === ">" ? "write" : "read";
-    } else if (!inQuote && /\s/.test(ch)) {
-      if (has) endWord();
-    } else {
-      cur += ch;
-      has = true;
-    }
-  }
-  endCommand();
-  return commands;
-}
-function cmdCommandWords(words) {
-  const out = [...words];
-  const first = out[0];
-  if (first !== void 0 && first.startsWith("@")) {
-    if (first.length > 1) out[0] = first.slice(1);
-    else out.shift();
-  }
-  while (out.length > 0 && (out[0] ?? "").toLowerCase() === "call") out.shift();
-  return out;
-}
-var MAX_CMD_NESTING = 8;
-function posixWord(word) {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
-}
-function cmdLineText(rawArgs) {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return void 0;
-  const [first, ...more] = args.slice(at + 1);
-  if (first === void 0) return void 0;
-  const head = /[\s&|^<>]/.test(first.trim()) ? cmdTextAsPosix(first) : posixWord(first);
-  return [head, ...more.map(posixWord)].join(" ");
-}
-function cmdTextAsPosix(line) {
-  let out = "";
-  let inQuote = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line.charAt(i);
-    if (ch === '"') inQuote = !inQuote;
-    if (ch === "\\") out += "\\\\";
-    else if (ch === "^" && !inQuote && i + 1 < line.length) {
-      i += 1;
-      out += `\\${line.charAt(i)}`;
-    } else out += ch;
-  }
-  return out;
-}
-function cmdLine(rawArgs) {
-  const args = rawArgs.map(cmdSwitch);
-  const at = args.findIndex((a) => /^\/[ck]$/i.test(a));
-  if (at < 0) return [];
-  const first = args[at + 1];
-  if (first === void 0) return [];
-  const head = first.trim();
-  const commands = /[\s&|^<>]/.test(head) ? splitCmdLine(head) : [{ words: [head], redirects: [] }];
-  const last = commands[commands.length - 1];
-  if (last !== void 0) pushAll(last.words, args.slice(at + 2));
-  return commands;
-}
-function cmdInnerCommands(args, depth = 0) {
-  if (depth > MAX_CMD_NESTING) return [];
-  const out = [];
-  for (const command of cmdLine(args)) {
-    const words = cmdCommandWords(command.words);
-    const name = (words[0] ?? "").toLowerCase().replace(/\.exe$/, "");
-    if (name === "cmd") pushAll(out, cmdInnerCommands(words.slice(1), depth + 1));
-    else out.push(words.map((value) => ({ value, quoted: false })));
-  }
-  return out;
-}
-
-// src/hooks/bashGuard.ts
-init_command();
-
-// src/hooks/shell/effects.ts
-init_command();
-init_paths();
-function noEffects() {
-  return { writes: [], removes: [], dirs: [], special: [], links: [], hardLinkSources: [], trees: [], aliases: [] };
-}
-function mergeEffects(into, from) {
-  pushAll(into.writes, from.writes);
-  pushAll(into.removes, from.removes);
-  pushAll(into.dirs, from.dirs);
-  pushAll(into.special, from.special);
-  pushAll(into.links, from.links);
-  pushAll(into.hardLinkSources, from.hardLinkSources);
-  pushAll(into.trees, from.trees);
-  pushAll(into.aliases, from.aliases);
-}
-function lastSegment(path3) {
-  return path3.split(/[\\/]/).filter((s) => s.length > 0).pop() ?? path3;
-}
-function operands(args, valued) {
-  const out = [];
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    if (!optionsDone && a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    if (!optionsDone && a.startsWith("-") && a.length > 1) {
-      if (valued.has(a)) i++;
-      continue;
-    }
-    out.push(a);
-  }
-  return out;
-}
-function lnOperands(args) {
-  let dir;
-  let hasDir = false;
-  const rest = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    const long = /^--target-directory=(.*)$/.exec(a);
-    if (long !== null) {
-      hasDir = true;
-      if (long[1] !== "") dir = long[1];
-    } else if (a === "--target-directory" || /^-[a-zA-Z]*t$/.test(a)) {
-      hasDir = true;
-      dir = args[++i];
-    } else if (/^-t./.test(a)) {
-      hasDir = true;
-      dir = a.slice(2);
-    } else if (a === "-S" || a === "--suffix") i++;
-    else rest.push(a);
-  }
-  return { names: operands(rest, /* @__PURE__ */ new Set()), dir, hasDir };
-}
-function lnDestinations(args) {
-  const { names: targets, dir } = lnOperands(args);
-  if (dir !== void 0) return targets.map((t) => `${dir}/${lastSegment(t)}`);
-  if (targets.length >= 2) return [targets[targets.length - 1] ?? ""];
-  return targets.length === 1 ? [lastSegment(targets[0] ?? "")] : [];
-}
-function lnSymbolic(args) {
-  return args.some((a) => a === "--symbolic" || /^-[a-zA-Z]*s[a-zA-Z]*$/.test(a));
-}
-function lnHardSources(args) {
-  if (lnSymbolic(args)) return [];
-  const { names, hasDir } = lnOperands(args);
-  return hasDir || names.length < 2 ? names : names.slice(0, -1);
-}
-function lnAliases(args) {
-  if (!lnSymbolic(args)) return [];
-  const { names, dir } = lnOperands(args);
-  if (dir !== void 0) return names.map((t) => [`${dir}/${lastSegment(t)}`, t]);
-  if (names.length === 1) return [[lastSegment(names[0] ?? ""), names[0] ?? ""]];
-  const link = names[names.length - 1] ?? "";
-  const sources = names.slice(0, -1);
-  return sources.flatMap(
-    (t) => sources.length === 1 ? [[link, t], [`${link}/${lastSegment(t)}`, t]] : [[`${link}/${lastSegment(t)}`, t]]
-  );
-}
-function fromLink(link, target) {
-  return resolveFrom(dirOf(link.replace(/\\/g, "/")), target);
-}
-var NEW_ITEM_VALUED = [
-  ["type", ["itemtype", "type"]],
-  ["path", ["path", "literalpath", "pspath", "lp"]],
-  ["name", ["name"]],
-  ["target", ["value", "target"]],
-  ["credential", ["credential"]]
-];
-function newItemParam(spelled) {
-  const exact = NEW_ITEM_VALUED.find(([, names]) => names.includes(spelled));
-  if (exact !== void 0) return exact[0];
-  const matches3 = NEW_ITEM_VALUED.filter(([, names]) => names.some((n) => n.startsWith(spelled)));
-  return matches3.length === 1 ? matches3[0]?.[0] : void 0;
-}
-function itemTypeOf(value) {
-  if (value === "") return "file";
-  const pattern = `${value.toLowerCase()}*`;
-  if (wildcardMatch(pattern, "directory") || wildcardMatch(pattern, "container")) return "directory";
-  return ["file", "symboliclink", "junction", "hardlink"].find((t) => wildcardMatch(pattern, t)) ?? "unknown";
-}
-function newItemArgs(args) {
-  let spelledType = "";
-  let target;
-  const paths = [];
-  const positional = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] ?? "";
-    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
-    if (param === null) {
-      positional.push(a);
-      continue;
-    }
-    const name = newItemParam((param[1] ?? "").toLowerCase());
-    const inline2 = param[2];
-    const value = inline2 !== void 0 ? inline2 : name !== void 0 ? args[++i] ?? "" : void 0;
-    if (value === void 0) continue;
-    if (name === "type") spelledType = value;
-    else if (name === "path" || name === "name") paths.push(value);
-    else if (name === "target") target = value;
-  }
-  if (paths.length === 0 && positional.length > 0) paths.push(positional[0] ?? "");
-  const itemType = itemTypeOf(spelledType);
-  return target === void 0 ? { itemType, paths } : { itemType, paths, target };
-}
-function mklinkDestinations(args) {
-  const link = args.find((a) => !a.startsWith("/"));
-  return link === void 0 ? [] : [link];
-}
-function cmdEffects(args, cwd, depth = 0) {
-  const e = noEffects();
-  if (depth > MAX_CMD_NESTING) return e;
-  const commands = cmdLine(args);
-  let dir = cwd;
-  for (const command of commands) {
-    const [raw, ...rest] = cmdCommandWords(command.words);
-    const name = (raw ?? "").toLowerCase().replace(/\.exe$/, "");
-    pushAll(e.writes, command.redirects.map((r) => resolveFrom(dir, r)));
-    mergeEffects(e, effectsOf(name, rest, dir, depth + 1));
-    dir = cwdAfter(name, rest, dir) ?? dir;
-  }
-  return e;
-}
-function redirectTargets(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    const r = word === void 0 ? null : parseRedirect(word);
-    if (r === null || !r.op.startsWith(">")) continue;
-    const next = words[i + 1]?.value;
-    if (r.op.endsWith("&")) {
-      const fd = r.inline !== "" ? r.inline : next ?? "";
-      if (/^\d*-?$/.test(fd)) continue;
-    }
-    const target = r.inline !== "" ? r.inline : next;
-    if (target !== void 0) out.push(target);
-  }
-  return out;
-}
-function withoutRedirections(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === void 0) continue;
-    const r = parseRedirect(word);
-    if (r === null) {
-      out.push(word.value);
-      continue;
-    }
-    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
-    if (r.inline === "") i += 1;
-  }
-  return out;
-}
-function intoDir(dir, src) {
-  return `${dir.replace(/[\\/]+$/, "")}/${lastSegment(src)}`;
-}
-function optionValues(args, short2, long) {
-  const out = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (a === short2 || a === long) {
-      const v = args[i + 1];
-      if (v !== void 0) out.push(v);
-    } else if (a.startsWith(`${long}=`)) out.push(a.slice(long.length + 1));
-    else if (a.startsWith(short2) && a.length > short2.length && !a.startsWith("--")) out.push(a.slice(short2.length));
-  }
-  return out;
-}
-var COPY_VALUED = /* @__PURE__ */ new Set(["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"]);
-var PS_PATH_PARAMS = ["path", "literalpath", "destination"];
-var PS_VALUE_PARAMS = ["filter", "include", "exclude", "credential", "fromsession", "tosession"];
-var PS_SWITCHES = ["recurse", "force", "container", "passthru", "whatif", "confirm"];
-function psName(spelled) {
-  const lower = spelled.toLowerCase();
-  const all = [...PS_PATH_PARAMS, ...PS_VALUE_PARAMS, ...PS_SWITCHES];
-  if (all.includes(lower)) return lower;
-  return lower.length >= 3 ? all.find((n) => n.startsWith(lower)) : void 0;
-}
-function parseTransfer(args, slashSwitches) {
-  const named2 = [];
-  const positional = [];
-  let dest;
-  let into = false;
-  let recursive = false;
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (slashSwitches && /^\/[A-Za-z]/.test(a)) continue;
-    if (optionsDone || a === "-" || !a.startsWith("-")) {
-      positional.push(a);
-      continue;
-    }
-    if (a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    const target = /^--target-directory(?:=(.*))?$/.exec(a);
-    if (target !== null) {
-      dest = target[1] ?? args[++i];
-      into = true;
-      continue;
-    }
-    if (a === "--recursive" || a === "--archive") {
-      recursive = true;
-      continue;
-    }
-    const ps = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
-    const param = ps === null ? void 0 : psName(ps[1] ?? "");
-    if (ps !== null && param !== void 0) {
-      const value = PS_PATH_PARAMS.includes(param) || PS_VALUE_PARAMS.includes(param) ? ps[2] ?? args[++i] : void 0;
-      if (param === "recurse") recursive = true;
-      else if (param === "destination") dest = value;
-      else if ((param === "path" || param === "literalpath") && value !== void 0) named2.push(value);
-      continue;
-    }
-    if (COPY_VALUED.has(a)) {
-      i += 1;
-      continue;
-    }
-    if (/^-[a-zA-Z]*t$/.test(a)) {
-      dest = args[++i];
-      into = true;
-    } else if (/^-t./.test(a)) {
-      dest = a.slice(2);
-      into = true;
-    }
-    if (!a.startsWith("--") && /[rRa]/.test(a.slice(1))) recursive = true;
-  }
-  const sources = [...named2, ...positional];
-  if (dest === void 0 && sources.length >= 2) dest = sources.pop();
-  return dest === void 0 ? { sources, into, recursive } : { sources, dest, into, recursive };
-}
-var RSYNC_VALUED = /* @__PURE__ */ new Set([
-  "-e",
-  "--rsh",
-  "-f",
-  "--filter",
-  "--exclude",
-  "--include",
-  "--exclude-from",
-  "--include-from",
-  "--files-from",
-  "-T",
-  "--temp-dir",
-  "-B",
-  "--block-size",
-  "--chmod",
-  "--chown",
-  "--log-file",
-  "--password-file",
-  "--partial-dir",
-  "--backup-dir",
-  "--suffix",
-  "--compare-dest",
-  "--copy-dest",
-  "--link-dest",
-  "--rsync-path",
-  "-M",
-  "--remote-option",
-  "--port",
-  "--timeout",
-  "--contimeout",
-  "--bwlimit",
-  "--max-size",
-  "--min-size",
-  "--out-format",
-  "--info",
-  "--debug",
-  "--iconv",
-  "--usermap",
-  "--groupmap",
-  "--address",
-  "--sockopts",
-  "--max-delete"
-]);
-function perlLike(args, codeLetters, valueLetters) {
-  const code = [];
-  const operandsSeen = [];
-  let inPlace = false;
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (!optionsDone && a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    if (optionsDone || !a.startsWith("-") || a.length === 1 || a.startsWith("--")) {
-      if (optionsDone || !a.startsWith("--")) operandsSeen.push(a);
-      continue;
-    }
-    for (let k = 1; k < a.length; k += 1) {
-      const c = a.charAt(k);
-      if (codeLetters.includes(c)) {
-        const rest = a.slice(k + 1);
-        code.push(rest !== "" ? rest : args[++i] ?? "");
-        break;
-      }
-      if (c === "i") {
-        inPlace = true;
-        break;
-      }
-      if (valueLetters.includes(c)) {
-        if (k === a.length - 1) i += 1;
-        break;
-      }
-      if (c === "0") while (/[0-9a-fA-Fx]/.test(a.charAt(k + 1))) k += 1;
-      if (c === "l") while (/[0-9]/.test(a.charAt(k + 1))) k += 1;
-    }
-  }
-  const files = code.length > 0 ? operandsSeen : operandsSeen.slice(1);
-  return { code, inPlace, files };
-}
-var SED_IN_PLACE = /^(?:-[a-zA-Z]*i.*|--in-place(?:=.*)?)$/;
-var EDITOR_VALUED_LETTERS = "cSuUiTwWtq";
-function editorFiles(args) {
-  const out = [];
-  let optionsDone = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i] ?? "";
-    if (!optionsDone && a === "--") {
-      optionsDone = true;
-      continue;
-    }
-    if (!optionsDone && a === "--cmd") {
-      i += 1;
-      continue;
-    }
-    if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
-      if (EDITOR_VALUED_LETTERS.includes(a.charAt(a.length - 1))) i += 1;
-      continue;
-    }
-    if (!optionsDone && (a.startsWith("-") || a.startsWith("+"))) continue;
-    out.push(a);
-  }
-  return out;
-}
-function commandWriteDestinations(name, args) {
-  switch (name) {
-    case "tee":
-    case "sponge":
-      return operands(args, /* @__PURE__ */ new Set());
-    case "sed":
-      return args.some((a) => SED_IN_PLACE.test(a)) ? operands(args, /* @__PURE__ */ new Set(["-e", "-f", "--expression", "--file", "-l", "--line-length"])) : [];
-    case "dd":
-      return args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3));
-    case "curl":
-      return optionValues(args, "-o", "--output");
-    case "wget":
-      return optionValues(args, "-O", "--output-document");
-    case "sort":
-      return optionValues(args, "-o", "--output");
-    case "truncate":
-      return operands(args, /* @__PURE__ */ new Set(["-s", "--size", "-r", "--reference"]));
-    case "shred":
-      return operands(args, /* @__PURE__ */ new Set(["-n", "--iterations", "-s", "--size", "--random-source"]));
-    case "perl": {
-      const p = perlLike(args, "eE", "IMm");
-      return p.inPlace ? p.files : [];
-    }
-    case "ruby": {
-      const p = perlLike(args, "e", "IrCEFx");
-      return p.inPlace ? p.files : [];
-    }
-    // In-place editors, scripted (review 8, item 15): `ed f`, `ex -sc '…|x' f`,
-    // `vim -es -c '…' -c wq f` write the files they open.
-    case "ed":
-    case "red":
-      return operands(args, /* @__PURE__ */ new Set(["-p", "--prompt"]));
-    case "ex":
-    case "vi":
-    case "vim":
-    case "nvim":
-    case "gvim":
-      return editorFiles(args);
-    // `sc` is Windows PowerShell 5.1's alias of Set-Content (review 8, item 15).
-    case "sc":
-    case "set-content":
-    case "add-content":
-    case "ac":
-    case "clear-content":
-    case "clc":
-    case "out-file":
-    case "tee-object":
-      return args.map((a) => a.replace(/^-[A-Za-z]+:/, ""));
-    default:
-      return [];
-  }
-}
-var REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
-var CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
-function effectsOf(name, rawArgs, cwd, depth = 0) {
-  if (name === "cmd") return cmdEffects(rawArgs, cwd, depth);
-  const args = CMD_SWITCHED.has(name) ? rawArgs.map(cmdSwitch) : rawArgs;
-  const at = (p) => resolveFrom(cwd, p);
-  const e = noEffects();
-  switch (name) {
-    case "mkfifo":
-      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).map(at));
-      return e;
-    case "mknod":
-      pushAll(e.special, operands(args, /* @__PURE__ */ new Set(["-m", "--mode"])).slice(0, 1).map(at));
-      return e;
-    case "ln":
-      pushAll(e.links, lnDestinations(args).map(at));
-      pushAll(e.hardLinkSources, lnHardSources(args).map(at));
-      for (const [link, target] of lnAliases(args)) e.aliases.push([at(link), at(fromLink(link, target))]);
-      return e;
-    case "link":
-      pushAll(e.hardLinkSources, operands(args, /* @__PURE__ */ new Set()).slice(0, 1).map(at));
-      return e;
-    case "fsutil":
-      if (/^hardlink$/i.test(args[0] ?? "") && /^create$/i.test(args[1] ?? "")) {
-        if (args[2] !== void 0) e.links.push(at(args[2]));
-        if (args[3] !== void 0) e.hardLinkSources.push(at(args[3]));
-      }
-      return e;
-    case "mklink": {
-      pushAll(e.links, mklinkDestinations(args).map(at));
-      const names = args.filter((a) => !a.startsWith("/"));
-      const [link, target] = names;
-      if (args.some((a) => /^\/h$/i.test(a))) {
-        if (target !== void 0) e.hardLinkSources.push(at(target));
-      } else if (link !== void 0 && target !== void 0) {
-        e.aliases.push([at(link), at(args.some((a) => /^\/j$/i.test(a)) ? target : fromLink(link, target))]);
-      }
-      return e;
-    }
-    case "new-item":
-    case "ni": {
-      const item = newItemArgs(args);
-      if (["symboliclink", "hardlink", "junction"].includes(item.itemType)) pushAll(e.links, item.paths.map(at));
-      if (item.itemType === "hardlink" && item.target !== void 0) e.hardLinkSources.push(at(item.target));
-      else if (item.itemType === "file") pushAll(e.writes, item.paths.map(at));
-      const target = item.target;
-      if (target !== void 0 && (item.itemType === "symboliclink" || item.itemType === "junction")) {
-        for (const p of item.paths) e.aliases.push([at(p), at(item.itemType === "junction" ? target : fromLink(p, target))]);
-      }
-      return e;
-    }
-    case "cp":
-    case "install":
-    case "copy-item":
-    case "cpi":
-    case "copy":
-    case "mv":
-    case "move-item":
-    case "mi":
-    case "move": {
-      const t = parseTransfer(args, name === "copy" || name === "move");
-      const moves = name === "mv" || name === "move-item" || name === "mi" || name === "move";
-      if (moves) pushAll(e.removes, t.sources.map(at));
-      if (name === "cp" && args.some((a) => a === "--link" || /^-[a-zA-Z]*l[a-zA-Z]*$/.test(a))) pushAll(e.hardLinkSources, t.sources.map(at));
-      if (t.dest === void 0) return e;
-      const dest = t.dest;
-      if (!t.into) e.writes.push(at(dest));
-      pushAll(e.writes, t.sources.map((s) => at(intoDir(dest, s))));
-      if (!t.into && (moves || t.recursive)) e.dirs.push(at(dest));
-      return e;
-    }
-    case "xcopy":
-    case "robocopy": {
-      const [, dest, ...files] = args.filter((a) => !/^\/[A-Za-z]/.test(a));
-      if (dest !== void 0) {
-        e.dirs.push(at(dest));
-        e.writes.push(at(dest));
-        pushAll(e.writes, files.map((f) => at(intoDir(dest, f))));
-        if (name === "robocopy" && args.some((a) => /^\/(?:mir|purge)$/i.test(a))) e.trees.push(at(dest));
-      }
-      return e;
-    }
-    case "rsync": {
-      const paths = operands(args, RSYNC_VALUED);
-      const dest = paths.pop();
-      if (dest === void 0 || paths.length === 0) return e;
-      e.writes.push(at(dest));
-      pushAll(e.writes, paths.map((s) => at(intoDir(dest, s))));
-      if (args.some((a) => a === "--recursive" || a === "--archive" || /^-[a-zA-Z]*[ra]/.test(a))) e.dirs.push(at(dest));
-      if (args.some((a) => /^--del(?:ete(?:-[a-z]+)?)?$/.test(a))) e.trees.push(at(dest));
-      return e;
-    }
-    case "ren":
-    case "rename":
-    case "rename-item":
-    case "rni": {
-      const positional = args.filter((a) => !a.startsWith("-") && !/^\/[A-Za-z]$/.test(a));
-      const src = psParam(args, ["path", "literalpath"]) ?? positional.shift();
-      const newName = psParam(args, ["newname"]) ?? positional.shift();
-      if (src === void 0) return e;
-      e.removes.push(at(src));
-      if (newName !== void 0) {
-        const dest = /[\\/]/.test(newName) ? newName : `${dirOf(src.replace(/\\/g, "/")) || "."}/${newName}`;
-        e.writes.push(at(dest));
-        e.dirs.push(at(dest));
-      }
-      return e;
-    }
-    default:
-      break;
-  }
-  if (REMOVERS.has(name)) pushAll(e.removes, operands(args, /* @__PURE__ */ new Set()).filter((a) => !/^\/[A-Za-z]$/.test(a)).map(at));
-  const written = commandWriteDestinations(name, args).map(at);
-  pushAll(e.writes, written);
-  if (name === "shred" && args.some((a) => a === "--remove" || a.startsWith("--remove=") || /^-[a-zA-Z]*u/.test(a))) {
-    pushAll(e.removes, written);
-  }
-  return e;
-}
-function withoutRedirectWords(words) {
-  const out = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    if (word === void 0) continue;
-    const r = parseRedirect(word);
-    if (r === null) out.push(word);
-    else if (r.inline === "") i += 1;
-  }
-  return out;
-}
+init_effects();
 
 // src/hooks/shell/interpreters.ts
 init_command();
+init_effects();
 var PYTHON = /^(?:python[0-9.]*|py|pypy[0-9.]*)$/;
 var INTERPRETERS = /* @__PURE__ */ new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node", "perl", "ruby", "php", "pwsh", "powershell"]);
 var RUN_WRAPPERS = /* @__PURE__ */ new Set(["uv", "poetry", "pipenv", "pdm", "rye", "hatch", "conda", "mamba", "micromamba", "pixi"]);
@@ -102508,6 +102531,8 @@ function downloadsThenRuns(text2, statements, bareRunsCwd) {
   const pathBins = /* @__PURE__ */ new Map();
   const verified = /* @__PURE__ */ new Map();
   let listAt = -2;
+  let errexit = false;
+  let errexitHolds = true;
   let cwd = "";
   const extracted = /* @__PURE__ */ new Map();
   for (let k = 0; k < statements.length; k += 1) {
@@ -102597,18 +102622,63 @@ function downloadsThenRuns(text2, statements, bareRunsCwd) {
       const bin = lastSegment(key);
       if (PATH_DIRS.test(dirOf(key)) && bin !== "") pathBins.set(bin, key);
     }
-    const check2 = integrityCheckOf(statement, heads, cwd);
+    const lead = /^\s*(\S+)/.exec(statement.masked)?.[1] ?? "";
+    if (COMPOUND_WORDS.has(lead) || statement.end === "(" || statement.end === ")" || statement.end === "`") errexitHolds = false;
+    const setting = statement.end !== "&" ? errexitSetting(statement) : void 0;
+    if (setting !== void 0) errexit = setting;
+    const check2 = statements[k - 1]?.end === "||" ? void 0 : integrityCheckOf(statement, heads, cwd);
     if (check2 !== void 0) {
       for (const name of check2.names) if (downloads2.has(name)) verified.set(name, k);
       for (const name of check2.implied) verified.set(name, k);
       if (check2.lists.some((list2) => downloads2.has(list2))) listAt = k;
     }
-    if (statement.end !== "&&") {
+    const carried = statement.end === "&&" || errexit && errexitHolds && (statement.end === ";" || statement.end === "\n");
+    if (!carried) {
       verified.clear();
       listAt = -2;
     }
   }
   return null;
+}
+var COMPOUND_WORDS = /* @__PURE__ */ new Set([
+  "if",
+  "then",
+  "else",
+  "elif",
+  "fi",
+  "for",
+  "while",
+  "until",
+  "do",
+  "done",
+  "case",
+  "esac",
+  "select",
+  "function",
+  "{",
+  "}",
+  "!",
+  "[[",
+  "]]",
+  "coproc"
+]);
+function errexitSetting(statement) {
+  if (statement.commands.length !== 1) return void 0;
+  const words = statement.commands[0] ?? [];
+  if (words[0]?.value !== "set") return void 0;
+  let out;
+  for (let i = 1; i < words.length; i += 1) {
+    const m = /^([-+])([A-Za-z]+)$/.exec(words[i]?.value ?? "");
+    if (m === null) break;
+    const on = m[1] === "-";
+    const letters = m[2] ?? "";
+    if (letters.includes("e")) out = on;
+    if (letters.endsWith("o")) {
+      if (words[i + 1]?.value === "errexit") out = on;
+      i += 1;
+    }
+  }
+  return out;
 }
 function cdpathValue(word) {
   const m = /^CDPATH=(.*)$/.exec(word);

@@ -160,6 +160,21 @@ describe('parseInstallCommands — Python specs and flags', () => {
   });
 });
 
+// 2026-10-24: `pip install -q "semgrep==1.182.0" 2>&1 | tail -5` warned that a package `2`
+// was not on the registry — PEP 508 reads `2>&1` as `2` at a version `>&1`.
+describe('parseInstallCommands — a redirection is never a package', () => {
+  it.each([
+    ['pip install -q "semgrep==1.182.0" 2>&1 | tail -5', [['semgrep', '==1.182.0']]],
+    ['pipx install "zizmor==1.31.1" >/dev/null 2>&1', [['zizmor', '==1.31.1']]],
+    ['pip install requests 2> err.log', [['requests', undefined]]],
+    ['pip install requests > out.log', [['requests', undefined]]],
+    ['pip install requests &>all.log', [['requests', undefined]]],
+    ['npm install left-pad 2>/dev/null', [['left-pad', undefined]]],
+    ['pip install requests < /dev/null', [['requests', undefined]]],
+    ['pip install "flask>2"', [['flask', '>2']]],
+  ])('%j vets %j', (command, expected) => expect(vetted(command)).toEqual(expected));
+});
+
 describe('parseInstallCommands — Composer and NuGet', () => {
   it('composer: vendor/pkg with :, = or a separate constraint word; platform packages skipped', () => {
     expect(vetted('composer require monolog/monolog:^3.0 guzzlehttp/guzzle "^7.0" --dev php ext-json symfony/console=6.4.*')).toEqual([

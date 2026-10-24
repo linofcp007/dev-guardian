@@ -26,6 +26,7 @@
  */
 
 import { commandWordIndex, resolveCommand } from '../hooks/shell/command.js';
+import { withoutRedirectWords } from '../hooks/shell/effects.js';
 import { splitShell, type ShellWord } from '../hooks/shell/split.js';
 import { workdirs } from '../hooks/shell/workdir.js';
 import { powershellAsPosix } from '../hooks/powershellText.js';
@@ -1014,7 +1015,9 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
   let dirChanged = false;
   split.statements.forEach((statement, s) => {
     statement.commands.forEach((words, w) => {
-      const d = detect(words);
+      // A redirection is no package: `pip install x 2>&1` named a package `2`
+      // (PEP 508 reads `2>&1` as `2` at a version `>&1`), `2> err.log` two.
+      const d = detect(withoutRedirectWords(words));
       if (d !== null) {
         const context: string[] = [];
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
