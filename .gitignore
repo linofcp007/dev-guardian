@@ -51,6 +51,10 @@ build/
 # CI baseline stays committable. The MCP server's own form (gitignoreGuard.ts).
 **/.guardian/*
 !**/.guardian/baseline.json
+!**/.guardian/budgets.yml
+!**/.guardian/hooks.config.json
+!**/.guardian/hooks-allowlist.json
+!**/.guardian/scan.yml
 
 # superpowers process scratch (briefs, reports, review packages)
 .superpowers/
