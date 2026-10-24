@@ -82,7 +82,9 @@ describe('applySemgrepCoverageGaps', () => {
     it('a long path the report does not list is a gap: named, partial, typed Path too long', () => {
       const r = applySemgrepCoverageGaps({ name: 'semgrep', status: 'ok' }, GAPS, { reports: [report(['short.js'])] });
       expect(r.missing).toBe(true);
-      expect(r.toolRun.reason).toMatch(/1 file\(s\) at a path of 260 characters or more were not scanned \(Windows MAX_PATH\): deep\/nested\/app\.js/);
+      expect(r.toolRun.reason).toMatch(
+        /1 file\(s\) at a path of 260 characters or more, or in a directory of 248 or more, were not scanned \(Windows MAX_PATH\): deep\/nested\/app\.js/,
+      );
       expect(r.toolRun.partially_parsed).toEqual([expect.objectContaining({ file: LONG, type: PATH_TOO_LONG_TYPE })]);
       expect(r.toolRun.unscanned).toBeUndefined();
     });

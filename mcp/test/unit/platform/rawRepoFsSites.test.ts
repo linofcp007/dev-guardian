@@ -184,6 +184,21 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "a pull request's or an issue's body, into its own mkdtemp directory for gh --body-file",
   },
+  'src/runners/cppcheckRun.ts': {
+    apis: { writeFileSync: 1, readFileSync: 1 },
+    kind: 'own',
+    reason: "cppcheck's file list into, and its XML report and its build directory's files.txt back from, the report directory ensureReportDir verified",
+  },
+  'src/runners/psalmRun.ts': {
+    apis: { writeFileSync: 1, readFileSync: 1 },
+    kind: 'own',
+    reason: "Psalm's configuration into the temp directory mkdtemp just made, and its JSON report back from the verified report directory",
+  },
+  'src/runners/semgrepRun.ts': {
+    apis: { readFileSync: 1 },
+    kind: 'own',
+    reason: "the --output report of a Semgrep run that failed, for its error messages: the caller's own report directory",
+  },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },
@@ -321,9 +336,11 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "fixpr/ (another reviewer's): the fix worktree dev-guardian created, and a path git listed for it, compared by real spelling",
   },
   'src/platform/binaryPath.ts': {
-    apis: { statSync: 1, accessSync: 1 },
+    apis: { statSync: 2, accessSync: 1 },
     kind: 'host',
-    reason: 'candidates on the PATH entries a bare command name is looked up in — absolute, local entries only, never the current directory',
+    reason:
+      'candidates on the PATH entries a bare command name (or a PHAR, by its exact name) is looked up in — absolute, local entries only, ' +
+      'never the current directory',
   },
   'src/runners/npmCmdShim.ts': {
     apis: { statSync: 1 },
@@ -341,9 +358,9 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "which of the plugin's two install layouts holds its scripts/",
   },
   'src/platform/userBin.ts': {
-    apis: { existsSync: 1 },
+    apis: { existsSync: 2 },
     kind: 'user',
-    reason: "the per-user tools directory in the user's own home",
+    reason: "the per-user tools directory in the user's own home, and cppcheck.exe where its installer puts it (%ProgramFiles%\\Cppcheck)",
   },
   'src/runners/git.ts': {
     apis: { existsSync: 1 },

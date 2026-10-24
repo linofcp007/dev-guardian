@@ -7,8 +7,22 @@ do the same work:
 - the MCP tool `import_sarif`;
 - the CLI subcommand `import-sarif <file>` (see [Exit codes](#exit-codes-of-import-sarif)).
 
-The log must be SARIF 2.1.0. CodeQL, Snyk, Trivy, Semgrep, gitleaks and a dev-guardian export
+The log must be SARIF 2.1.0. CodeQL, Snyk, Trivy, Semgrep, gitleaks, Brakeman and a dev-guardian export
 (`scan --sarif`, `report_export`) have been imported from real logs.
+
+## Tools dev-guardian does not run
+
+Two analysers worth having are deliberately not run by dev-guardian, and reach the history only through an
+import of the log you make:
+
+- **CodeQL** (cross-file taint for C/C++, C#, Go, Java/Kotlin, JavaScript/TypeScript, Python, Ruby, Swift).
+  The CodeQL CLI is free for open-source code and research only; private code needs GitHub Code Security.
+  Import the SARIF its GitHub workflow or `codeql database analyze --format=sarif-latest` writes.
+- **Brakeman** (Ruby on Rails: SQL and command injection, mass assignment, unsafe redirects and renders,
+  CSRF settings). It is not open-source software — the Brakeman Public Use License lets you analyse your own
+  applications, and needs a commercial licence to offer it as a service or inside a product. Run it yourself,
+  `brakeman --no-pager -q -f sarif -o brakeman.sarif .` at the application's root (Brakeman exits 3 when it
+  reports warnings), then import `brakeman.sarif`.
 
 ## Inputs
 

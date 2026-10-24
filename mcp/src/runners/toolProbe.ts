@@ -15,6 +15,7 @@
  * and the version is read by one tolerant parser.
  */
 
+import { findFileOnPath } from '../platform/binaryPath.js';
 import { resolveBinary } from '../platform/pkgManagerDetect.js';
 import { compareSemver } from '../platform/semverCompare.js';
 import { ensureUserBinOnPath } from '../platform/userBin.js';
@@ -37,6 +38,12 @@ export interface VersionProbe {
    * `semgrep --version` asks Semgrep's servers for a newer release too.
    */
   env?: Readonly<Record<string, string>>;
+  /**
+   * `command` is a PHAR (`psalm.phar`): a file found by its exact name on the
+   * PATH (`platform/binaryPath.ts#findFileOnPath`), run by `php` — Windows
+   * runs no `.phar` itself.
+   */
+  phar?: boolean;
 }
 
 export interface ProbeResult {
@@ -89,6 +96,14 @@ export async function runVersionProbe(probe: VersionProbe, cwd: string): Promise
   // check_toolchain sees what the scans will: the per-user tools directory
   // the pinned installers write to is on the PATH (`platform/userBin.ts`).
   ensureUserBinOnPath();
+  if (probe.phar === true) {
+    const phar = findFileOnPath(probe.command);
+    if (phar === null) return { installed: false, version: '' };
+    if ((await resolveBinary('php')) === null) {
+      return { installed: false, version: '', error: `found at ${phar}, but php is not on PATH to run it` };
+    }
+    return runVersionProbe({ ...probe, command: 'php', args: [phar, ...probe.args], phar: false }, cwd);
+  }
   const r = await runProcess({
     command: probe.command,
     args: probe.args,

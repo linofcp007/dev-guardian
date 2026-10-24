@@ -28,6 +28,7 @@ import type { PluginContext } from '../../src/context.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
+import { pluginPacksDir, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolRun } from '../../src/types.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
@@ -138,5 +139,38 @@ describe('scan_wordpress: semgrep-wp judged by the shared Semgrep judge', () => 
     const { run } = await scan(dir);
     expect(run?.status).toBe('failed');
     expect(run?.reason).toMatch(/Rule parse error/);
+  });
+});
+
+describe("scan_wordpress: the plugin's WordPress pack (configs/semgrep/wordpress.yml)", () => {
+  it('is passed beside the registry packs, and its rule id is stored bare, as scan_sast stores it', async () => {
+    const dir = wpProject(true);
+    const file = join(dir, 'includes', 'rest-controller.php');
+    const pack = join(pluginPacksDir(), 'wordpress.yml');
+    const checkId = `${semgrepConfigPrefix(pack)}.wordpress-esc-sql-unquoted`;
+    semgrepWrites(
+      {
+        paths: { scanned: [file] },
+        results: [
+          {
+            check_id: checkId,
+            path: file,
+            start: { line: 2, col: 1 },
+            end: { line: 2, col: 40 },
+            extra: { severity: 'WARNING', message: 'm', lines: 'x', metadata: { cwe: ['CWE-89: SQL Injection'] } },
+          },
+        ],
+      },
+      1,
+    );
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const p: PluginContext = { storage: new Storage(db), shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
+    const tool = TOOLS.find((t) => t.name === 'scan_wordpress');
+    if (!tool) throw new Error('scan_wordpress not registered');
+    const r = (await tool.handler({ project_path: dir, force: true }, p)) as unknown as Result & { scan_id: string };
+    const semgrepCall = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'semgrep')?.[0];
+    expect(semgrepCall?.args).toEqual(expect.arrayContaining(['--config=p/php', '--config=p/wordpress', `--config=${pack}`]));
+    expect(p.storage.findings.listByScan(r.scan_id).map((f) => f.rule_id)).toEqual(['wordpress-esc-sql-unquoted']);
   });
 });

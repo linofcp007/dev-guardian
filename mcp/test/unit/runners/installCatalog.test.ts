@@ -10,6 +10,8 @@ import {
   COSIGN_RELEASE_SHA256,
   COSIGN_VERSION,
   PINNED_RELEASES,
+  PSALM_PHAR_SHA256,
+  PSALM_VERSION,
   TOOL_CATALOG,
   TRIVY_INSTALL_TAG,
   knownCompromise,
@@ -17,6 +19,8 @@ import {
   suggestedInstallCommandString,
 } from '../../../src/runners/installCatalog.js';
 import { COSIGN_MIN_VERSION } from '../../../src/runners/cosignCheck.js';
+import { CPPCHECK_MIN_VERSION } from '../../../src/runners/cppcheckRun.js';
+import { PHP_MIN_VERSION } from '../../../src/runners/psalmRun.js';
 
 describe('install hints', () => {
   it('suggests the current .NET LTS SDK, not .NET 6 (out of support since 2024-11)', () => {
@@ -371,5 +375,176 @@ describe('bandit install', () => {
     expect(meta?.install.win32.scoop?.args).toContain('bandit[toml]');
     expect(meta?.install.linux.pipx?.args).toContain('bandit[toml]');
     expect(meta?.install.darwin.pipx?.args).toContain('bandit[toml]');
+  });
+});
+
+describe('gosec: the pinned release archive everywhere, Windows’ own tar.exe for its .tar.gz', () => {
+  const r = PINNED_RELEASES.gosec;
+
+  it('every sum is a sha256 of an asset of the pinned version', () => {
+    expect(r.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(r.base).toBe(`https://github.com/securego/gosec/releases/download/v${r.version}`);
+    for (const a of Object.values(r.assets)) {
+      expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(a.file).toContain(`gosec_${r.version}_`);
+      expect(a.file.endsWith('.tar.gz')).toBe(true);
+    }
+  });
+
+  it.each([
+    ['linux', 'sha256sum -c -'],
+    ['darwin', 'shasum -a 256 -c -'],
+  ] as const)('on %s: the archive for each CPU, checked before it is unpacked', (os, checker) => {
+    const script = TOOL_CATALOG['gosec']?.install[os].curl?.args[1] ?? '';
+    for (const arch of ['amd64', 'arm64'] as const) {
+      const a = r.assets[`${os}-${arch}`];
+      expect(script).toContain(`asset=${a.file}; sum=${a.sha256}`);
+    }
+    expect(script.indexOf(checker)).toBeLessThan(script.indexOf('tar -xzf'));
+    expect(script).toContain('tar -xzf "$tmp/gosec.tar.gz" -C "$tmp" gosec');
+    expect(script).not.toMatch(/\/main\/|latest|install\.sh|\|\s*sh\b/);
+  });
+
+  it('go install names the same tag, never @latest', () => {
+    for (const os of ['linux', 'darwin'] as const) {
+      expect(TOOL_CATALOG['gosec']?.install[os].go?.args).toEqual(['install', `github.com/securego/gosec/v2/cmd/gosec@v${r.version}`]);
+    }
+  });
+
+  it("on Windows: Get-FileHash, then System32's tar.exe unpacks gosec.exe alone, its exit code checked", () => {
+    const win = TOOL_CATALOG['gosec']?.install.win32;
+    expect(Object.keys(win ?? {})).toEqual(['release']);
+    const script = win?.release?.args.at(-1) ?? '';
+    const a = r.assets['windows-amd64'];
+    expect(script).toContain(`'${r.base}/${a.file}'`);
+    expect(script).toContain(`'${a.sha256}'`);
+    expect(script).toContain("$zip = Join-Path $tmp 'gosec.tar.gz'");
+    expect(script).toContain("& (Join-Path $env:SystemRoot 'System32\\tar.exe') -xzf $zip -C (Join-Path $tmp 'x') gosec.exe");
+    expect(script).toContain('if ($LASTEXITCODE -ne 0) { throw');
+    expect(script).not.toContain('Expand-Archive');
+    expect(script.indexOf('Get-FileHash')).toBeLessThan(script.indexOf('tar.exe'));
+    expect(script.indexOf('tar.exe')).toBeLessThan(script.indexOf('Copy-Item'));
+    expect(script).not.toContain('"');
+  });
+
+  it('the ZIP releases keep Expand-Archive, and never reach for tar.exe', () => {
+    for (const tool of ['syft', 'trivy', 'gitleaks']) {
+      const script = TOOL_CATALOG[tool]?.install.win32.release?.args.at(-1) ?? '';
+      expect(script, tool).toContain('Expand-Archive');
+      expect(script, tool).not.toContain('tar.exe');
+    }
+  });
+
+  it('is probed with -version and is only installed when Go is detected', () => {
+    expect(TOOL_CATALOG['gosec']?.probe).toEqual({ command: 'gosec', args: ['-version'] });
+    expect(TOOL_CATALOG['gosec']?.default).toBe(false);
+  });
+});
+
+describe('the Go toolchain: hints only, never installed', () => {
+  it('names go version as its probe and a manual hint per OS', () => {
+    const go = TOOL_CATALOG['go'];
+    expect(go?.probe).toEqual({ command: 'go', args: ['version'] });
+    expect(suggestedInstallCommandString('go', 'win32')).toBe('winget install GoLang.Go');
+    expect(suggestedInstallCommandString('go', 'darwin')).toBe('brew install go');
+    for (const os of ['win32', 'linux', 'darwin'] as const) {
+      for (const spec of Object.values(go?.install[os] ?? {})) expect(spec.command).toBe('echo');
+    }
+  });
+});
+
+describe('shellcheck: the pinned archive, its binary nested in a versioned directory', () => {
+  const r = PINNED_RELEASES.shellcheck;
+
+  it.each(['linux', 'darwin'] as const)('on %s: each CPU names its archive, sum and member; the member is what is unpacked and installed', (os) => {
+    const script = TOOL_CATALOG['shellcheck']?.install[os].curl?.args[1] ?? '';
+    for (const arch of ['amd64', 'arm64'] as const) {
+      const a = r.assets[`${os}-${arch}`];
+      expect(a.member).toBe(`shellcheck-v${r.version}/shellcheck`);
+      expect(script).toContain(`asset=${a.file}; sum=${a.sha256}; member=${a.member ?? ''}`);
+    }
+    expect(script).toContain('tar -xzf "$tmp/shellcheck.tar.gz" -C "$tmp" "$member"');
+    expect(script).toContain('install -m 0755 "$tmp/$member" "$HOME/.local/bin/shellcheck"');
+  });
+
+  it('on Windows: the ZIP, whose shellcheck.exe is at the root', () => {
+    const script = TOOL_CATALOG['shellcheck']?.install.win32.release?.args.at(-1) ?? '';
+    expect(script).toContain(`'${r.base}/${r.assets['windows-amd64'].file}'`);
+    expect(script).toContain('Expand-Archive');
+    expect(script).toContain("Join-Path $tmp 'x\\shellcheck.exe'");
+  });
+
+  it('a release without a member keeps the tool name at the root (gosec)', () => {
+    const script = TOOL_CATALOG['gosec']?.install.linux.curl?.args[1] ?? '';
+    expect(script).not.toContain('member=');
+    expect(script).toContain('tar -xzf "$tmp/gosec.tar.gz" -C "$tmp" gosec');
+  });
+});
+
+describe('govulncheck: go install of a pinned tag into the per-user tools directory', () => {
+  it('POSIX: GOBIN is ~/.local/bin, the tag exact', () => {
+    for (const os of ['linux', 'darwin'] as const) {
+      const spec = TOOL_CATALOG['govulncheck']?.install[os].go;
+      expect(spec?.command).toBe('bash');
+      expect(spec?.args[1]).toContain(`GOBIN="$HOME/.local/bin" go install 'golang.org/x/vuln/cmd/govulncheck@v1.9.0'`);
+      expect(spec?.user_bin).toBe('govulncheck');
+      expect(spec?.args[1]).not.toMatch(/@latest/);
+    }
+  });
+
+  it('Windows: PowerShell sets GOBIN to the per-user tools directory, with no double quote', () => {
+    const spec = TOOL_CATALOG['govulncheck']?.install.win32.go;
+    const script = spec?.args.at(-1) ?? '';
+    expect(spec?.command).toBe('powershell');
+    expect(script).toContain("$env:GOBIN = Join-Path $env:USERPROFILE '.local\\bin'");
+    expect(script).toContain("go install 'golang.org/x/vuln/cmd/govulncheck@v1.9.0'");
+    expect(script).toContain('if ($LASTEXITCODE -ne 0) { throw');
+    expect(script).not.toContain('"');
+    expect(spec?.user_bin).toBe('govulncheck.exe');
+  });
+});
+
+describe('cppcheck: scoop first on Windows, the release pinned, the floor the runner enforces', () => {
+  it('scoop (per user) is picked before winget, whose MSI installs per machine and so needs elevation', () => {
+    const win = TOOL_CATALOG['cppcheck']?.install.win32;
+    expect(win?.scoop?.args).toEqual(['install', 'cppcheck@2.22.0']);
+    expect(win?.winget?.args).toEqual(expect.arrayContaining(['Cppcheck.Cppcheck', '--exact', '--version', '2.22.0']));
+    expect(win?.winget?.needs_elevation).toBe(true);
+    expect(pickInstallSpec('cppcheck', 'win32', [{ name: 'release' }, { name: 'winget' }, { name: 'scoop' }])?.manager).toBe('scoop');
+    expect(pickInstallSpec('cppcheck', 'win32', [{ name: 'release' }, { name: 'winget' }])?.manager).toBe('winget');
+  });
+
+  it('version_floor is CPPCHECK_MIN_VERSION, which scan_sast checks before every run', () => {
+    expect(TOOL_CATALOG['cppcheck']?.version_floor).toBe(`${CPPCHECK_MIN_VERSION}.0`);
+    expect(TOOL_CATALOG['cppcheck']?.required_by).toEqual(['scan_sast', 'security_scan_full', 'review_pr']);
+  });
+});
+
+describe('Psalm: the release PHAR, sha256-checked, run by php; PHP itself never installed', () => {
+  it('POSIX: curl, the pinned sum checked before the PHAR is installed to ~/.local/bin/psalm.phar', () => {
+    for (const os of ['linux', 'darwin'] as const) {
+      const spec = TOOL_CATALOG['psalm']?.install[os].curl;
+      const script = spec?.args[1] ?? '';
+      expect(script).toContain(`https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`);
+      expect(script).toContain(`echo "${PSALM_PHAR_SHA256}  $tmp" | ${os === 'linux' ? 'sha256sum' : 'shasum -a 256'} -c -`);
+      expect(script.indexOf('-c -')).toBeLessThan(script.indexOf('install -m 0755'));
+      expect(spec?.user_bin).toBe('psalm.phar');
+    }
+  });
+
+  it('Windows: PowerShell checks the same sum and copies psalm.phar to the per-user tools directory', () => {
+    const script = TOOL_CATALOG['psalm']?.install.win32.release?.args.at(-1) ?? '';
+    expect(script).toContain(`if ($got -ne '${PSALM_PHAR_SHA256}')`);
+    expect(script).toContain("Join-Path $env:USERPROFILE '.local\\bin'");
+    expect(TOOL_CATALOG['psalm']?.probe).toEqual({ command: 'psalm.phar', args: ['--version'], phar: true });
+  });
+
+  it('PHP: manual steps only, on every OS', () => {
+    expect(suggestedInstallCommandString('php', 'win32')).toBe('winget install PHP.PHP.8.4');
+    expect(suggestedInstallCommandString('php', 'linux')).toBe('sudo apt-get install php-cli php-xml php-mbstring');
+    for (const os of ['win32', 'linux', 'darwin'] as const) {
+      for (const spec of Object.values(TOOL_CATALOG['php']?.install[os] ?? {})) expect(spec.command).toBe('echo');
+    }
+    expect(TOOL_CATALOG['php']?.version_floor).toBe(`${PHP_MIN_VERSION.join('.')}.0`);
   });
 });

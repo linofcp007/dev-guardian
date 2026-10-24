@@ -316,11 +316,30 @@ describe('owaspCoverage — findings and hints', () => {
   // M-d: "would be tested by" lists only what could make the category
   // tested; thin and narrow detectors are listed apart.
   it('names only detectors that could make the category tested, and the partial ones apart', () => {
+    const rust = owaspCoverage([], [], langs('rust'));
+    // Nothing dev-guardian runs has an A09 rule for Rust.
+    expect(cat(rust, 'A09:2025').could_be_tested_by).toEqual([]);
+    expect(cat(rust, 'A09:2025').could_partly_cover).toEqual([]);
+    expect(cat(rust, 'A09:2025').untestable_languages).toEqual(['rust']);
+
+    // For Go, gosec's one log-injection rule (G706) — thin, named apart.
     const go = owaspCoverage([], [], langs('go'));
-    // Nothing dev-guardian runs has an A09 rule for Go.
     expect(cat(go, 'A09:2025').could_be_tested_by).toEqual([]);
-    expect(cat(go, 'A09:2025').could_partly_cover).toEqual([]);
-    expect(cat(go, 'A09:2025').untestable_languages).toEqual(['go']);
+    expect(cat(go, 'A09:2025').could_partly_cover.join(' | ')).toMatch(/gosec[^|]*go 1 rule\(s\), one weakness \(CWE-117\)/);
+    expect(cat(go, 'A05:2025').could_be_tested_by.join(' | ')).toMatch(/gosec \(scan_sast, Go\)[^|]*go 10 rules, 6 CWEs/);
+
+    // For C, cppcheck's memory and logic checks — and that run makes A10 tested.
+    const c = owaspCoverage([], [], langs('c'));
+    expect(cat(c, 'A10:2025').could_be_tested_by.join(' | ')).toMatch(/cppcheck \(scan_sast, C\/C\+\+\)[^|]*c 9 rules, 4 CWEs/);
+    expect(cat(c, 'A06:2025').could_be_tested_by.join(' | ')).toMatch(/cppcheck[^|]*c 8 rules, 2 CWEs/);
+    const ran = owaspCoverage([run('sast', [{ name: 'cppcheck', status: 'ok' }])], [], langs('c'));
+    expect(statusOf(ran)['A10:2025']).toBe('tested');
+
+    // For PHP, Psalm's taint types — injection above all — on scan_sast and scan_wordpress.
+    const php = owaspCoverage([], [], langs('php'));
+    expect(cat(php, 'A05:2025').could_be_tested_by.join(' | ')).toMatch(/Psalm taint analysis[^|]*php 11 rules, 10 CWEs/);
+    const wp = owaspCoverage([run('wordpress', [{ name: 'psalm', status: 'ok' }])], [], langs('php'));
+    expect(statusOf(wp)['A05:2025']).toBe('tested');
 
     const js = owaspCoverage([], [], langs('javascript'));
     // The RGPD pack is named for what it is — one rule, one weakness, logs.
@@ -400,7 +419,7 @@ describe('OWASP_DETECTORS', () => {
     expect(new Set(OWASP_DETECTORS.map((d) => d.id)).size).toBe(OWASP_DETECTORS.length);
     for (const d of OWASP_DETECTORS) {
       expect(d.basis.length, d.id).toBeGreaterThan(20);
-      expect(d.measured, d.id).toMatch(/2026-09-28/);
+      expect(d.measured, d.id).toMatch(/\b2026-\d{2}-\d{2}\b/);
       for (const reach of Object.values(d.reach)) {
         if (reach?.kind !== 'rules') continue;
         for (const cell of Object.values(reach.perLanguage)) {

@@ -45,7 +45,7 @@ const DEFAULT_IMAGES = [FLOOR_IMAGE, 'node:24-bookworm-slim'];
 const RUN_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 const LOG_DIR = join(tmpdir(), 'dev-guardian-docker');
 /** The Python scanners, pinned (the versions this suite last passed with on the maintainer machine). */
-const PIP_PINS = ['semgrep==1.176.1', 'bandit==1.9.4'];
+const PIP_PINS = ['semgrep==1.182.0', 'bandit==1.9.4'];
 
 const USAGE = `usage: node scripts/test-docker.mjs [--image <name>]... [--toolchain] [--no-coverage] [--max-workers <n>] [--only <path>]...
 

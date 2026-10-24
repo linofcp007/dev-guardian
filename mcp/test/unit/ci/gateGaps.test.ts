@@ -202,6 +202,94 @@ describe('every gap as data', () => {
     expect(remedyFor('scanner_failed', 'semgrep', 'semgrep failed (a rule did not load)')).toMatch(/rule/);
   });
 
+  it("gosec's gaps: the Go toolchain is never install_toolchain's, and a package that does not type-check says how to make it build", () => {
+    expect(remedyFor('missing_tool', 'go', 'security_scan_full: go not installed')).toMatch(
+      /^Install the Go toolchain your go\.mod names .* install_toolchain never installs it\.$/,
+    );
+    expect(remedyFor('missing_tool', 'gosec', 'security_scan_full: gosec not installed')).toMatch(/^Install gosec and put it on PATH/);
+    const detail =
+      'security_scan_full: gosec ran with reduced coverage (…) — not accepted: Type error on broken/b.go (--accept-partial-parse accepts parse errors only: PartialParsing, Syntax error, Lexical error)';
+    expect(remedyFor('other', 'gosec', detail)).toMatch(/go mod download/);
+    expect(remedyFor('other', 'gosec', 'scan: gosec … Package not loaded on pkg')).toMatch(/go mod download/);
+  });
+
+  it('a gosec step: a type error gates as `other`, a syntax error is accepted by --accept-partial-parse', () => {
+    const toolsRun = [
+      {
+        name: 'gosec',
+        status: 'ok' as const,
+        reason: 'partial',
+        partially_parsed: [
+          { file: 'broken/b.go', type: 'Type error', message: 'undefined: x' },
+          { file: 'syntaxerr/s.go', type: 'Syntax error', message: "expected ')'" },
+        ],
+      },
+    ];
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: toolsRun,
+      missing_tools: ['gosec'],
+      partial_parses: {
+        gosec: [
+          { file: 'broken/b.go', type: 'Type error' },
+          { file: 'syntaxerr/s.go', type: 'Syntax error' },
+        ],
+      },
+    };
+    const base: GateInput = { findings: [], baseline: null, failOn: 'high', steps: [step], droppedBaselineEntries: 0 };
+    const onlySyntax = evaluateGate({ ...base, acceptedPartialParses: ['syntaxerr/s.go', 'broken/b.go'] });
+    expect(onlySyntax.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(onlySyntax.coverageGaps.join('\n')).toMatch(/not accepted: Type error on broken\/b\.go/);
+    expect(onlySyntax.coverageGapDetails.find((d) => d.gating)?.remedy).toMatch(/go mod download/);
+  });
+
+  it('a cppcheck step: a file it could not configure gates and says how to configure it; one too old says to upgrade', () => {
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: [
+        {
+          name: 'cppcheck',
+          status: 'ok' as const,
+          reason: 'partial',
+          partially_parsed: [
+            { file: 'src/syntax.c', type: 'Syntax error', message: "Unmatched '('" },
+            { file: 'src/macro.cpp', type: 'Unknown macro', message: 'There is an unknown macro here somewhere.' },
+          ],
+        },
+      ],
+      missing_tools: ['cppcheck'],
+      partial_parses: {
+        cppcheck: [
+          { file: 'src/syntax.c', type: 'Syntax error' },
+          { file: 'src/macro.cpp', type: 'Unknown macro' },
+        ],
+      },
+    };
+    const base: GateInput = { findings: [], baseline: null, failOn: 'high', steps: [step], droppedBaselineEntries: 0 };
+    const v = evaluateGate({ ...base, acceptedPartialParses: ['src/syntax.c', 'src/macro.cpp'] });
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps.join('\n')).toMatch(/not accepted: Unknown macro on src\/macro\.cpp/);
+    expect(v.coverageGapDetails.find((d) => d.gating)?.remedy).toMatch(/compile_commands\.json .*CMAKE_EXPORT_COMPILE_COMMANDS/);
+    expect(remedyFor('other', 'cppcheck', 'scan: cppcheck … not accepted: Not read on src/gone.c')).toMatch(/exists and is readable/);
+
+    const old = 'security_scan_full: cppcheck skipped (cppcheck 2.13 or newer is needed and it is 2.10: an older one skips a file …)';
+    expect(remedyFor('skipped', 'cppcheck', old)).toBe(
+      'Install a newer cppcheck — the detail names the oldest it runs — and put it first on PATH, then rerun the scan.',
+    );
+  });
+
+  it("Psalm's gaps: PHP is never install_toolchain's, and one too old or a Psalm too old says to upgrade", () => {
+    expect(remedyFor('missing_tool', 'php', 'security_scan_full: php not installed')).toMatch(
+      /^Install PHP 8\.2 or newer with its xml and mbstring extensions .* install_toolchain never installs it\.$/,
+    );
+    expect(remedyFor('skipped', 'psalm', 'scan: psalm skipped (Psalm needs PHP 8.2 or newer and it is 8.1)')).toBe(
+      'Install PHP 8.2 or newer and put it first on PATH, then rerun the scan.',
+    );
+    expect(remedyFor('skipped', 'psalm', 'scan: psalm skipped (Psalm 6 or newer is needed and it is 5.26)')).toMatch(/^Install a newer psalm/);
+  });
+
   it('kinds from what a step says: not installed, no lockfile, a refused step, a failed run, a shallow clone', () => {
     const steps: ScanStepResult[] = [
       { tool: 'security_scan_full', ran: true, tools_run: [], missing_tools: ['bandit'] },

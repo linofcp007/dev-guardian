@@ -113,13 +113,29 @@ describe('install_toolchain on Windows: pinned release archives first', () => {
       ['gitleaks', 'release'],
       ['syft', 'release'],
     ]);
-    expect(r.would_install[0]?.command).toMatch(/trivy v0\.74\.0 release archive \(windows, sha256-checked\)/);
+    expect(r.would_install[0]?.command).toMatch(/trivy v0\.76\.1 release archive \(windows, sha256-checked\)/);
+  });
+
+  it('gosec through its pinned archive; the Go toolchain it needs is a manual step, never installed', async () => {
+    vi.mocked(resolveBinary).mockImplementation(async (name) =>
+      name === 'powershell' ? 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' : name === 'winget' ? 'C:\\winget.exe' : null,
+    );
+    const r = (await tool('install_toolchain').handler({ tools: ['gosec', 'go'], dry_run: true }, plugin())) as unknown as DryRun & {
+      manual_steps: Array<{ tool: string; instructions: string }>;
+    };
+    expect(r.would_install.map((e) => [e.tool, e.manager])).toEqual([['gosec', 'release']]);
+    expect(r.would_install[0]?.command).toMatch(/gosec v2\.30\.0 release archive \(windows, sha256-checked\)/);
+    expect(r.manual_steps).toEqual([
+      { tool: 'go', instructions: 'dev-guardian never auto-installs the Go toolchain. winget install GoLang.Go' },
+    ]);
+    // Probes only: nothing ever asks winget for Go.
+    expect(vi.mocked(runProcess).mock.calls.some((c) => (c[0].args ?? []).includes('GoLang.Go'))).toBe(false);
   });
 
   it('without PowerShell, scoop installs the pinned version — never latest', async () => {
     vi.mocked(resolveBinary).mockImplementation(async (name) => (name === 'scoop' ? 'C:\\scoop.cmd' : null));
     const r = (await tool('install_toolchain').handler({ tools: ['trivy'], dry_run: true }, plugin())) as unknown as DryRun;
-    expect(r.would_install).toEqual([expect.objectContaining({ tool: 'trivy', manager: 'scoop', command: 'scoop install trivy@0.74.0' })]);
+    expect(r.would_install).toEqual([expect.objectContaining({ tool: 'trivy', manager: 'scoop', command: 'scoop install trivy@0.76.1' })]);
   });
 });
 

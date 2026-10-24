@@ -1,10 +1,11 @@
 # Supported stacks, scanners and platforms
 
 **Stacks.** JavaScript / TypeScript (npm, yarn, pnpm, bun), Python (pip, poetry, uv), PHP (composer, WordPress
-included), Go, Rust, Ruby, Java / Kotlin (maven, gradle), C# / .NET, Docker and compose, IaC (Terraform,
+included), Go, Rust, Ruby, Java / Kotlin (maven, gradle), C# / .NET, C / C++ (cppcheck; a `compile_commands.json`
+when the project has one), shell scripts, Docker and compose, IaC (Terraform,
 Kubernetes, Ansible, CloudFormation, Helm), GitHub Actions. Polyglot projects are supported.
 
-**Run by the MCP tools.** Semgrep, Trivy, gitleaks, Syft, Bandit, ruff, radon, jscpd, ESLint (when the project
+**Run by the MCP tools.** Semgrep, Trivy, gitleaks, Syft, Bandit, gosec, govulncheck, cppcheck, Psalm, shellcheck, ruff, radon, jscpd, ESLint (when the project
 has it), staticcheck, hadolint, cosign, Lighthouse, k6, nuclei, PHPCS, WP-CLI, WPScan, the .NET SDK analyzers,
 OSV.dev.
 

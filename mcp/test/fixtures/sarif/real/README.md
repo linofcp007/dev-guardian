@@ -10,6 +10,7 @@ the tool named, not by hand; the only edits are listed below.
 | `trivy.sarif.json` | Trivy 0.69.3 | `trivy fs --skip-db-update --scanners vuln --format sarif .` over a directory holding only a `requirements.txt` that pins `requests==2.19.0`, `PyYAML==5.3` and `urllib3==1.24.1` (vulnerability DB of 2026-10-02) |
 | `gitleaks.sarif.json` | gitleaks 8.30.1 | `gitleaks detect --no-git --report-format sarif --source .` over the same copy as Semgrep's, plus `config/settings.js` holding two fake tokens, the first of them on two lines |
 | `codeql-valid.sarif.json` | CodeQL (two runs: `LGTM.com` 1.24.0-SNAPSHOT and `CodeQL command-line toolchain` 2.0.0) | `src/testdata/valid-sarif.sarif` of [github/codeql-action](https://github.com/github/codeql-action/blob/ddee374101380e1f4619b73bf9abb8b9f0032200/src/testdata/valid-sarif.sarif), unmodified |
+| `brakeman.sarif.json` | Brakeman 8.1.0 (`presidentbeef/brakeman:latest`, 2026-10-24) | `brakeman --no-pager -q -f sarif -o brakeman.sarif .` over a three-file Rails app: a `Gemfile.lock` pinning `rails (7.1.3)`, and a `UsersController` with `User.where("name = '#{params[:name]}'")` (line 3) and `` `ping -c1 #{params[:host]}` `` (line 7); re-serialised with two-space indentation |
 | `codeql-fingerprinting2.sarif.json` | CodeQL command-line toolchain 2.0.0+202002031536 | `src/testdata/fingerprinting2.expected.sarif` of [github/codeql-action](https://github.com/github/codeql-action/blob/02e8dcfe9cac6b6ae038d8578b850d007c925682/src/testdata/fingerprinting2.expected.sarif), unmodified |
 
 The files are named `.sarif.json` because the repository's `.gitignore`
@@ -45,6 +46,13 @@ No other log contains a path of the machine that produced it.
   and AWS's documentation key from `mcp/test/fixtures/base/hits/secrets.txt`,
   and the `ghp_…`/`sk_live_…` values the test suite already uses. None is a
   credential.
+- **Brakeman**: no `partialFingerprints` at all, `%SRCROOT%` declared in
+  `originalUriBaseIds` with a description and no URI, rule ids `BRAKE<nnnn>`
+  with the check's name under `name`, and a result on `Gemfile.lock` (a Rails
+  version past its end of support) beside the code results. Brakeman is not
+  open-source software (the Brakeman Public Use License: free to analyse your
+  own code, a commercial licence to offer it as a service); dev-guardian never
+  runs or installs it, and imports a log you made.
 - **Trivy**: severities come from the rules' `security-severity`; `ROOTPATH`
   points outside the project, so the URIs are read relative to its root.
 - **CodeQL**: two runs in one log; a file-level result with no region; an

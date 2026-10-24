@@ -165,7 +165,7 @@ Open one GitHub issue per top open finding of project\_path with the local gh CL
 
 ### `deps_audit`
 
-Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync lock is a gap). Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).
+Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync lock is a gap); for Go, govulncheck, which reports the vulnerable functions the code calls. Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -357,7 +357,7 @@ One project's open findings (newest usable scan of each type, suppressions out).
 
 ### `quality_check`
 
-jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and installed in node\_modules (it runs the project's config), staticcheck for Go. Findings: duplicate, complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with scope).
+jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and installed in node\_modules (it runs the project's config), staticcheck for Go, shellcheck for shell scripts. Findings: duplicate, complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with scope).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -400,14 +400,14 @@ Write a scan report as markdown (default), html (self-contained, light/dark), sa
 
 ### `review_pr`
 
-Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules) and Bandit on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never "no files changed". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the project's gap, not the review's.
+Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never "no files changed". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the project's gap, not the review's.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Project root. Default: the server's working directory. |
 | `base_ref` | string | no | — | Base ref for the diff. Defaults to origin/HEAD, then main, then master. |
 | `head_ref` | string | no | — | Head ref. Defaults to HEAD. |
-| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy may still go out. |
+| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy may still go out. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Response floor only; every finding is still recorded (`severity_filter`). |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache. |
 
@@ -488,7 +488,7 @@ Trivy config over Terraform, Kubernetes, CloudFormation and Helm; with .github/w
 
 ### `scan_sast`
 
-Semgrep with the registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What Semgrep could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local\_only avoids the registry and its metrics.
+Semgrep with the registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for Go, through the Go toolchain (it may download modules); cppcheck for C/C++; Psalm's taint analysis for PHP; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local\_only avoids the registry and its metrics.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -540,7 +540,7 @@ Audit a third-party AI skill, MCP server, plugin or agent before installing it (
 
 ### `scan_wordpress`
 
-Source scan of a WordPress plugin, theme or site: Semgrep PHP with the WordPress pack, Trivy on composer.lock (a composer.json with no lock is a named gap), gitleaks and PHPCS with a WordPress standard. A missing scanner is skipped with its reason. For an install: wp\_audit; for known vulnerabilities: wp\_vuln\_check.
+Source scan of a WordPress plugin, theme or site: Semgrep PHP with the WordPress pack, Trivy on composer.lock (a composer.json with no lock is a named gap), gitleaks, PHPCS with a WordPress standard and Psalm's taint analysis with WordPress's APIs modelled. A missing scanner is skipped with its reason. For an install: wp\_audit; for known vulnerabilities: wp\_vuln\_check.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -561,7 +561,7 @@ scan\_sast, scan\_secrets, scan\_deps and scan\_iac as one scan: each runs as it
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Response floor only; every finding is still recorded (`severity_filter`). |
 | `auto_fix` | boolean | no | `false` | Apply Semgrep's autofixes to the source (a clean tree, unless allow\_dirty). |
 | `allow_dirty` | boolean | no | `false` | With auto\_fix: allow uncommitted changes in the tree. |
-| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy still goes out. |
+| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy still goes out. |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache. |
 
 ### `set_baseline`

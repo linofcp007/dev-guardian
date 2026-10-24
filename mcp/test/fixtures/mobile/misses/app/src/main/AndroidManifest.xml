@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.fixture">
+    <application
+        android:allowBackup="false"
+        android:debuggable="${debuggable}"
+        android:usesCleartextTraffic="false"
+        android:label="Fixture">
+        <service android:name=".Private" android:exported="false" />
+        <service android:name=".Guarded" android:exported="true" android:permission="com.example.fixture.BIND" />
+        <receiver android:name=".Job" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+        <receiver
+            android:name=".Push"
+            android:permission="com.google.android.c2dm.permission.SEND"
+            android:exported="true" />
+        <provider android:name=".Both" android:authorities="com.example.fixture.both" android:exported="true" android:readPermission="com.example.fixture.READ" android:writePermission="com.example.fixture.WRITE" />
+        <provider android:name=".Closed" android:authorities="com.example.fixture.closed" android:exported="false" />
+    </application>
+</manifest>

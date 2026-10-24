@@ -37,9 +37,10 @@ git diff <last-tag>..HEAD       # pre-release
 
 1. `review_pr { project_path: "<project>", base_ref: "<base>" }` — `base_ref` defaults to `origin/HEAD`, then
    `main`, then `master`; `head_ref` to `HEAD`. It runs Semgrep (`scan_sast`'s rules) on every added, modified or
-   renamed file, gitleaks on the PR's commits (`base..head`), Bandit on changed `.py` files, and Trivy when a
-   dependency manifest changed. Files are read at `head` — the working tree when it is checked out, otherwise a
-   temporary checkout. An unknown ref is an error, never "no changed files". `local_only: true` avoids Semgrep's
+   renamed file, gitleaks on the PR's commits (`base..head`), Bandit on changed `.py` files, gosec on the packages
+   of changed `.go` files (its findings kept to those files), cppcheck on changed C/C++ files, and Trivy when a
+   dependency manifest changed. Files
+   are read at `head` — the working tree when it is checked out, otherwise a temporary checkout. An unknown ref is an error, never "no changed files". `local_only: true` avoids Semgrep's
    registry.
 2. Bugs and quality on **the diff's files only** (`review_pr` does not run them), with `head` checked out:
    - `bug_hunt { project_path: "<project>", scope: { diff: { base: "<base>" } } }`

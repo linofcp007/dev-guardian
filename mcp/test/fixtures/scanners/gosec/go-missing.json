@@ -1,0 +1,26 @@
+{
+	"Golang errors": {
+		".": [
+			{
+				"line": 0,
+				"column": 0,
+				"error": "loading files from package \".\": err: go command required, not found: exec: \"go\": executable file not found in $PATH: stderr: "
+			}
+		],
+		"creds": [
+			{
+				"line": 0,
+				"column": 0,
+				"error": "loading files from package \"creds\": err: go command required, not found: exec: \"go\": executable file not found in $PATH: stderr: "
+			}
+		]
+	},
+	"Issues": [],
+	"Stats": {
+		"files": 0,
+		"lines": 0,
+		"nosec": 0,
+		"found": 0
+	},
+	"GosecVersion": "2.30.0"
+}

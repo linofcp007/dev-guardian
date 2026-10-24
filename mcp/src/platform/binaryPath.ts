@@ -138,6 +138,24 @@ export function findOnPath(name: string, env: NodeJS.ProcessEnv = process.env, p
 }
 
 /**
+ * The first regular file named exactly `name` in a searchable directory of
+ * `env`'s PATH — no PATHEXT, no execute bit: a PHAR is run by `php`, never
+ * spawned itself (`runners/psalmRun.ts`). Null for a name that is not bare.
+ */
+export function findFileOnPath(name: string, env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string | null {
+  if (!isBareName(name, platform)) return null;
+  for (const dir of searchDirs(envValue(env, 'PATH', platform) ?? '', platform)) {
+    const candidate = join(dir, name);
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Not there: the next directory.
+    }
+  }
+  return null;
+}
+
+/**
  * What to hand a spawn for `command`: the absolute path a bare name resolves
  * to, else `command` unchanged — a path is spawned as given, and a bare name
  * found nowhere fails to spawn (ENOENT) as it always did, with

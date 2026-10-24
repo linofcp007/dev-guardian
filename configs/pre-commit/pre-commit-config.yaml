@@ -44,7 +44,7 @@ repos:
   # For a hook that contacts nothing, drop `--config=auto` and add
   # `--metrics=off`; you keep your own rules and lose the registry's.
   - repo: https://github.com/semgrep/semgrep
-    rev: v1.178.0
+    rev: v1.182.0
     hooks:
       - id: semgrep
         args:

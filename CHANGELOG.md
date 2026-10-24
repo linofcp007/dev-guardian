@@ -8,6 +8,139 @@ version bump.
 
 ## [Unreleased]
 
+gosec joins `scan_sast` and `review_pr` for Go, cppcheck joins them for C and C++, Psalm's taint analysis joins
+`scan_sast` and `scan_wordpress` for PHP, govulncheck joins `deps_audit`, shellcheck joins `quality_check`, a mobile
+pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
+
+### Upgrading from 3.4.0
+
+- **A Go project needs gosec and the Go toolchain.** `scan_sast` (and so `security_scan_full`, `review_pr`,
+  `audit_executive` and the CLI `scan`) runs gosec whenever the project has a `go.mod`, a `go.work` or a `.go`
+  file. Without gosec the run lists `gosec` missing; without Go, `go` — coverage is partial and the CLI `scan`
+  exits 2 until both are there. `install_toolchain { tools: ["gosec"] }` installs gosec 2.30.0 from its pinned,
+  sha256-checked archive; Go is never installed for you. Regenerate the CI pipeline with `ci-init`: it installs
+  gosec, and on GitHub sets up the Go a root `go.mod` names; GitLab and Bitbucket need `go` on the image.
+- **A C or C++ project needs cppcheck 2.13 or newer.** `scan_sast` runs it whenever the project has a `.c`,
+  `.cc`, `.cpp`, `.cxx` or `.c++` file; without it the run lists `cppcheck` missing and the CLI `scan` exits 2.
+  An older cppcheck is never run — 2.10, Debian bookworm's, skips a file it cannot configure without saying so
+  — and is named the same way. `install_toolchain { tools: ["cppcheck"] }` installs 2.22.0 with scoop (or winget,
+  elevated) on Windows, apt on Linux, Homebrew on macOS. The regenerated GitHub pipeline installs Ubuntu's
+  cppcheck when the checkout has C or C++; GitLab and Bitbucket, on a bookworm image, need it on the image.
+- **A PHP project needs Psalm and PHP 8.2 or newer.** `scan_sast` and `scan_wordpress` run Psalm's taint analysis
+  whenever the project has a `.php` or `.phtml` file outside `vendor/`; without Psalm the run lists `psalm`
+  missing, without PHP (or with one older than 8.2) `php`, and the CLI `scan` exits 2. `install_toolchain { tools:
+  ["psalm"] }` installs Psalm 6.20.1's release PHAR, sha256-checked, into the per-user tools directory; PHP is
+  never installed for you. The regenerated pipelines install the PHAR when the checkout has PHP (GitLab and
+  Bitbucket also Debian's PHP 8.2). The first scans report taint findings the baseline does not hold.
+- **New findings.** gosec on Go code, cppcheck on C and C++, Psalm and the WordPress pack on PHP and the mobile
+  pack on Android and iOS configuration report findings the baseline does not hold, and a high one fails `--fail-on high`. Review them; rebuild the baseline on the base
+  branch only for what you accept, never with `baseline update` on the branch itself.
+
+### Added
+
+- **gosec in `scan_sast` and `review_pr`** (`runners/gosecRun.ts`). The package directories are listed by
+  dev-guardian — `.guardianignore` applied, `vendor/`, `testdata/` and the directories `go` ignores left out —
+  and handed to gosec one by one: its own `./...` skips any directory whose name starts with `vendor`
+  (`vendored/`, `vendors/`), unreported, measured on 2.30.0. Each report is judged: a file gosec could not parse
+  is `Syntax error` (`--accept-partial-parse` accepts it); a file of a package that does not type-check — a
+  compile error, a dependency not downloaded — is `Type error`, and a package `go` could not load is `Package not
+  loaded`, because gosec then skips that package's SSA and taint rules (G701–G710); files the platform's build
+  constraints leave out are counted in the reason. `-quiet` is never passed (with it a clean run writes no
+  report). A `GOFLAGS` `-mod=mod` runs as `-mod=readonly`. `review_pr` reads a changed file's whole package and
+  keeps the findings to the changed files. G101's snippet is redacted. The OWASP coverage tables count gosec's
+  62 rules for Go.
+- **cppcheck in `scan_sast`** (`runners/cppcheckRun.ts`), for C and C++: its `error` and `warning` checks, from
+  the XML v2 report (SARIF puts a result's defect last and drops `inconclusive`), `error` high and `warning`
+  medium, one step lower when inconclusive, the trace in the message, cppcheck's own CWE. The translation units
+  are handed over in a file list (`.guardianignore` applied; headers through the files that include them), or a
+  root or `build/` `compile_commands.json` is used — and named — for the whole project, and the translation units
+  it does not list are checked after it from the list, so a file left out of it is never left unchecked. Measured on 2.22.0,
+  2.17.1, 2.13 and 2.10: what cppcheck analysed less than asked is named — `Syntax error` (accepted by
+  `--accept-partial-parse`), `Unknown macro`, `Not analysed` (an `#error` in every configuration, a compile
+  database entry not on disk) and `Not read` (a listed file it skipped with exit 0, caught through its build
+  directory's `files.txt`); a file checked in only some `#ifdef` configurations, or a function too complex for
+  the normal level, is noted, never a gap. The OWASP coverage tables count its 189 CWE-tagged checks for C and
+  C++ (A06 and A10).
+- **Psalm's taint analysis in `scan_sast` and `scan_wordpress`** (`runners/psalmRun.ts`), measured on Psalm
+  6.20.1 with PHP 8.2 to 8.5: SQL, shell, eval, include, unserialize, SSRF, file, header, XSS and the other taint
+  types, the trace from the source in the message, each type's CWE and severity dev-guardian's (Psalm gives
+  neither), one finding per sink. dev-guardian writes the configuration — never the project's `psalm.xml`, whose
+  issue handlers could switch a taint type off — and hands Psalm an empty root of its own: with the project as its
+  root, Psalm runs the project's `vendor/autoload.php`. The files are listed one by one (`.guardianignore`
+  applied; `.php`, `.phtml`, `.inc`; `vendor/` left out and named), PDO and mysqli are sinks, every function is
+  global. The exit code is not trusted (0 with findings under `GITHUB_WORKFLOW`): the JSON report must hold as
+  many issues as Psalm counts. A file that hangs Psalm ends the run after 40 minutes, a failure. A WordPress
+  project, and every `scan_wordpress`, gets `configs/psalm/wordpress-taint.phpstub`: `$wpdb`'s queries as SQL
+  sinks, `prepare` and `esc_sql` as SQL escapes (an `esc_sql` value outside quotes is the WordPress pack's, below), `esc_html`/`esc_attr`/`esc_url`/`esc_textarea`/`esc_js`/`wp_kses`
+  as HTML escapes, `maybe_unserialize` and `wp_remote_*` as sinks — without it `$wpdb` is no sink at all. A scope
+  reads the whole project's PHP (a flow crosses files) and keeps the scope's findings. In taint mode Psalm reports
+  no file it could not parse; scan_sast's Semgrep pass names those. The OWASP coverage tables count its types for
+  PHP (A01, A05, A08).
+- **`configs/semgrep/wordpress.yml`**, run by `scan_sast` with the other plugin packs and by `scan_wordpress`
+  (1 taint rule): an `esc_sql(...)` value that reaches SQL outside quotes — after `=`, `<`, `>`, `IN`, `IN (`,
+  `VALUES (`, `LIKE`, `LIMIT`, `OFFSET`, `BETWEEN` or `AND` — which `esc_sql` does not protect (it escapes quotes
+  only), the shape of CVE-2021-24340. The value is followed through the function (assignments, `implode`) to a
+  concatenation after such a literal, an interpolation (`"... id = $id"`, `{$id}`; the sink is the variable alone,
+  so another, unquoted variable in the same string does not count) or a `sprintf` argument whose format has every
+  `%s` unquoted. It decides by the literal right before the value, never by counting quotes along the chain. A value
+  made a number (`(int)`, `absint`, `intval`, `(float)`, `floatval`, `count`, `sizeof`, `strlen`) inside or after
+  the call, or one the concatenation itself quotes (`"'" . implode("', '", $ids) . "'"`), is not reported. Measured
+  on WooCommerce 11.2.1, wp-statistics 13.0.7 and Contact Form 7 6.2.3: 7 findings, the CVE's line among them, the
+  others the same shape on ids the code had already made integers or kept internal; one taint fixpoint timeout on
+  Semgrep 1.176.1 (a note), none on 1.181.0.
+- **`configs/semgrep/mobile.yml`**, run by `scan_sast` with the LLM and web-JS packs (14 rules): a debuggable or
+  backup-enabled Android app, cleartext traffic in the manifest or the network security config, a service,
+  receiver or provider exported without a permission, user-installed CAs trusted outside `<debug-overrides>`,
+  iOS App Transport Security switched off or a domain allowed insecure HTTP; and in Java and Kotlin, WebView
+  debugging outside `BuildConfig.DEBUG`, file-URL access, `addJavascriptInterface`, `MODE_WORLD_*`, a Kotlin
+  TrustManager that accepts every certificate and a HostnameVerifier lambda that accepts every host. Every rule
+  is `generic`, limited to those files, so nothing is parsed (a file Semgrep cannot parse would make the scan
+  partial). Exported activities and Java's class-form TrustManager and HostnameVerifier stay with the
+  registry's rules, which already report them.
+- **govulncheck in `deps_audit`** (`runners/govulncheckRun.ts`), once per Go module, `GOWORK=off`: Trivy
+  reports the vulnerable modules, govulncheck the vulnerable FUNCTIONS the code calls, at the project's own call
+  site, with the module and the trace in the message. The Go database gives no severity: a finding takes
+  Trivy's for the same CVE or GHSA, `medium` otherwise. One package that does not type-check fails govulncheck
+  for its whole module (measured on v1.9.0): that module is named `Module not analysed`, never a clean module.
+  Installed with `go install` of v1.9.0 into the per-user tools directory.
+- **shellcheck in `quality_check`** (`runners/shellcheckRun.ts`): `.sh`, `.bash`, `.dash` and `.ksh` files, and
+  extensionless files with a shell shebang (never zsh, which shellcheck does not support). Only the project's
+  root `.shellcheckrc` is read (`--rcfile`; without one `--norc`): a nested one or the user's own could switch
+  checks off unseen. A script whose parse stopped (SC1072/SC1073) is a named partial gap. 0.11.0, pinned and
+  sha256-checked on every OS.
+- **Brakeman's SARIF** (8.1.0) imports with every result in place (`import_sarif`); `docs/sarif-import.md` says
+  how to make it and why dev-guardian runs neither Brakeman (not open-source: the Brakeman Public Use License)
+  nor CodeQL (free for open-source code only).
+- `check_toolchain` lists gosec, govulncheck, shellcheck, cppcheck, Psalm (run by `php`), the Go toolchain and
+  PHP; `install_toolchain` routes Go and PHP to manual steps, as the .NET SDK. The CI gate's remedies name `go mod download` for a package that
+  does not type-check, say that `install_toolchain` never installs Go, name the `compile_commands.json` that
+  configures a file cppcheck could not, say to upgrade a cppcheck, a Psalm or a PHP too old to run, and that
+  `install_toolchain` never installs PHP.
+
+### Changed
+
+- **Pinned versions reviewed on 2026-10-24** (no compromised release found; every sum checked against the
+  release's checksums and GitHub's asset digest): Trivy 0.74.0 → 0.76.1 and cosign 3.1.3 → 3.1.4 (both built
+  with Go 1.27.3, which distrusts the compromised eMudhra CAs, GO-2026-6809), Syft 1.52.0 → 1.55.0 (x/net and
+  containerd fixes); in the CI templates Semgrep 1.178.0 → 1.182.0 (its pyjwt 2.13.0 had fifteen advisories),
+  zizmor 1.30.1 → 1.31.1, actions/setup-node v7.1.0, github/codeql-action v4.39.1, upload-artifact v7.0.2 and
+  download-artifact v8.0.2, each by commit SHA. The pre-commit template's Semgrep is v1.182.0.
+- The server's bundled fast-uri is 3.1.9 (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr); the MCP SDK's floor is
+  1.32.1; vitest 5.0.5 and vite 8.3.5 for the test suite.
+
+### Fixed
+
+- **On Windows, one directory too long for Windows no longer fails Semgrep's whole scan.** With the default
+  `LongPathsEnabled=0`, a directory at a path of 256 characters or more anywhere in a project that is not a git
+  repository (a WordPress install copied off a server, WooCommerce's `packages/email-editor` icons under a deep
+  folder) made Semgrep 1.176.1's own walk fail the listing — `Failed to obtain target files`, nothing scanned, the
+  root's files included, the run `failed`. Every Semgrep run over a directory (`scan_sast`, `scan_wordpress`,
+  `bug_hunt`, `compliance_check`, `map_attack_surface`) is now repeated once, when its walk failed that way, with
+  each directory at 248 characters or more excluded (`--exclude`, so every `.semgrepignore` is still honoured): the
+  rest is scanned, the reason says which directories were left out, and their files are named `Path too long`,
+  as a file at 260 characters or more already was. The length is measured on the real path, so a short (8.3) name
+  in the project's path no longer hides it.
+
 ## [3.4.0] - 2026-10-14
 
 Reviews 10, 11 and 12 — the combined review of 3.3.0, and two reviews of this release before it shipped. Review

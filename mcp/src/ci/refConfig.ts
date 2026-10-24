@@ -165,6 +165,8 @@ export const GATE_CONFIG: Readonly<Record<RepoConfigRunner, 'ref' | 'tree' | 'no
   actionlint: 'tree',
   zizmor: 'tree',
   'dotnet-analyzers': 'tree',
+  // scan_sast's cppcheck pass reads the tree's compile_commands.json.
+  cppcheck: 'tree',
   // deps_audit, scan_containers and quality_check are not gate steps.
   npm: 'not_in_gate',
   'pip-audit': 'not_in_gate',
@@ -175,6 +177,7 @@ export const GATE_CONFIG: Readonly<Record<RepoConfigRunner, 'ref' | 'tree' | 'no
   radon: 'not_in_gate',
   staticcheck: 'not_in_gate',
   eslint: 'not_in_gate',
+  shellcheck: 'not_in_gate',
 };
 
 /** What `--rules-ref` copied, for the gate's output. */

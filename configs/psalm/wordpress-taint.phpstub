@@ -1,0 +1,134 @@
+<?php
+// dev-guardian's taint annotations for WordPress APIs, loaded by Psalm's taint
+// analysis when scan_sast or scan_wordpress reads a WordPress project
+// (mcp/src/runners/psalmRun.ts). Without them $wpdb is no SQL sink at all and
+// every WordPress function ends a flow: php-stubs/wordpress-stubs and
+// humanmade/psalm-plugin-wordpress annotate no taint (measured on Psalm 6.20.1,
+// 2026-10-24). A stub REPLACES a definition the project has, so only the
+// functions below are declared, each as WordPress documents it.
+//
+// Not modelled, on purpose:
+//   - esc_sql is an SQL escape here, as WordPress documents it for a value
+//     inside quotes; modelled as a pass-through it reported every correct,
+//     quoted use too. A value it escapes OUTSIDE quotes (`id = " . esc_sql($x)`,
+//     CVE-2021-24340) is configs/semgrep/wordpress.yml's, which scan_sast and
+//     scan_wordpress also run.
+//   - get_option and other stored values are no source: as one, 46 of 48
+//     findings on WooCommerce 11.2.1 were false.
+
+class wpdb {
+    /** @var string */
+    public $prefix;
+
+    /** @psalm-taint-sink sql $query */
+    public function query($query) {}
+
+    /** @psalm-taint-sink sql $query */
+    public function get_results($query = null, $output = 'OBJECT') {}
+
+    /** @psalm-taint-sink sql $query */
+    public function get_var($query = null, $x = 0, $y = 0) {}
+
+    /** @psalm-taint-sink sql $query */
+    public function get_row($query = null, $output = 'OBJECT', $y = 0) {}
+
+    /** @psalm-taint-sink sql $query */
+    public function get_col($query = null, $x = 0) {}
+
+    /**
+     * @psalm-flow ($query, $args) -> return
+     * @psalm-taint-escape sql
+     * @return string
+     */
+    public function prepare($query, ...$args) {}
+}
+
+/**
+ * @psalm-flow ($data) -> return
+ * @psalm-taint-escape sql
+ */
+function esc_sql($data) {}
+
+/**
+ * @psalm-flow ($text) -> return
+ * @psalm-taint-escape html
+ * @psalm-taint-escape has_quotes
+ * @return string
+ */
+function esc_html($text) {}
+
+/**
+ * @psalm-flow ($text) -> return
+ * @psalm-taint-escape html
+ * @psalm-taint-escape has_quotes
+ * @return string
+ */
+function esc_attr($text) {}
+
+/**
+ * @psalm-flow ($text) -> return
+ * @psalm-taint-escape html
+ * @psalm-taint-escape has_quotes
+ * @return string
+ */
+function esc_textarea($text) {}
+
+/**
+ * @psalm-flow ($text) -> return
+ * @psalm-taint-escape html
+ * @psalm-taint-escape has_quotes
+ * @return string
+ */
+function esc_js($text) {}
+
+/**
+ * @psalm-flow ($url) -> return
+ * @psalm-taint-escape html
+ * @psalm-taint-escape has_quotes
+ * @return string
+ */
+function esc_url($url, $protocols = null, $_context = 'display') {}
+
+/**
+ * @psalm-flow ($content) -> return
+ * @psalm-taint-escape html
+ * @return string
+ */
+function wp_kses($content, $allowed_html, $allowed_protocols = array()) {}
+
+/**
+ * @psalm-flow ($data) -> return
+ * @psalm-taint-escape html
+ * @return string
+ */
+function wp_kses_post($data) {}
+
+/**
+ * Strips tags, not quotes: still tainted inside an attribute.
+ *
+ * @psalm-flow ($str) -> return
+ * @psalm-taint-escape html
+ * @return string
+ */
+function sanitize_text_field($str) {}
+
+/** @psalm-flow ($value) -> return */
+function wp_unslash($value) {}
+
+/** @psalm-flow ($value) -> return */
+function stripslashes_deep($value) {}
+
+/** @return int */
+function absint($maybeint) {}
+
+/** @psalm-taint-sink unserialize $data */
+function maybe_unserialize($data) {}
+
+/** @psalm-taint-sink ssrf $url */
+function wp_remote_get($url, $args = array()) {}
+
+/** @psalm-taint-sink ssrf $url */
+function wp_remote_post($url, $args = array()) {}
+
+/** @psalm-taint-sink ssrf $url */
+function wp_remote_request($url, $args = array()) {}

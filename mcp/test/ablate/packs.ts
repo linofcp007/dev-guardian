@@ -259,6 +259,17 @@
  * files of the llm-scan spike's synthetic app, with two TRUE positives (S04,
  * S06) and three decoys among them -- so it is neither `hits/` nor a decoy
  * tree: axis 1 sees it as part of the fixture corpus, axis 0 and 2 do not.
+ *
+ * **`mobile.yml`, `GUARDIAN_MOBILE_SRC`.** The mobile configuration pack (the
+ * Android manifest, its network security config, the iOS Info.plist), run by
+ * scan_sast. Unset, axis 3 is `N/A`: this repo holds none of those files.
+ * Point it at a tree of real Android and iOS app sources; every rule is a
+ * `generic` regex limited by `paths.include`, so only those files are read.
+ *
+ * **`wordpress.yml`, `GUARDIAN_PHP_SRC`.** The WordPress pack (an `esc_sql`
+ * value put outside quotes), run by scan_sast and scan_wordpress. Its axis 3 is
+ * the same WordPress tree as bugfix-php's; the pack header records the three
+ * trees it was measured on (WooCommerce, wp-statistics, Contact Form 7).
  */
 
 import { existsSync } from 'node:fs';
@@ -301,6 +312,9 @@ export const LLM_SRC_ENV = 'GUARDIAN_LLM_SRC';
 
 /** Env var naming a tree of real Node/Express application code (JS/TS, raw SQL), for axis 3. */
 export const WEBJS_SRC_ENV = 'GUARDIAN_WEBJS_SRC';
+
+/** Env var naming a tree of real Android and iOS app sources, for axis 3. */
+export const MOBILE_SRC_ENV = 'GUARDIAN_MOBILE_SRC';
 
 /**
  * An opt-in axis-3 corpus read from an environment variable.
@@ -385,6 +399,18 @@ export function webJsCorpus(): RealCorpus | undefined {
   );
 }
 
+/**
+ * Axis-3 corpus for the mobile configuration pack. Unset, axis 3 is `N/A`:
+ * this repo holds no Android manifest, network security config or Info.plist.
+ */
+export function mobileCorpus(): RealCorpus | undefined {
+  return envCorpus(
+    MOBILE_SRC_ENV,
+    'mobile corpus (GUARDIAN_MOBILE_SRC)',
+    'a tree of real Android and iOS app sources (AndroidManifest.xml, res/xml/, Info.plist)',
+  );
+}
+
 const RUST_STDLIB = rustStdlibCorpus();
 const CSHARP_SRC = csharpCorpus();
 const JAVA_SRC = javaCorpus();
@@ -394,6 +420,7 @@ const PHP_SRC = phpCorpus();
 const RGPD_SRC = rgpdCorpus();
 const LLM_SRC = llmCorpus();
 const WEBJS_SRC = webJsCorpus();
+const MOBILE_SRC = mobileCorpus();
 
 export const PACKS: readonly PackSpec[] = [
   {
@@ -488,6 +515,25 @@ export const PACKS: readonly PackSpec[] = [
     fixtures: fixtures('web-js'),
     hitsSubdir: 'hits',
     realCode: WEBJS_SRC,
+  },
+  // The mobile configuration pack (Android manifest, network security config,
+  // Info.plist), run by scan_sast. See `test/e2e/mobilePack.test.ts`.
+  {
+    name: 'mobile',
+    config: config('mobile'),
+    fixtures: fixtures('mobile'),
+    hitsSubdir: 'hits',
+    realCode: MOBILE_SRC,
+  },
+  // The WordPress pack (an esc_sql value put outside quotes), run by scan_sast
+  // and scan_wordpress. See `test/e2e/wordpressPack.test.ts`; axis 3 is the
+  // same `GUARDIAN_PHP_SRC` WordPress tree as bugfix-php's.
+  {
+    name: 'wordpress',
+    config: config('wordpress'),
+    fixtures: fixtures('wordpress'),
+    hitsSubdir: 'hits',
+    realCode: PHP_SRC,
   },
 ];
 

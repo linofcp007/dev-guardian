@@ -1,0 +1,2 @@
+# Nested config: never read (the root one wins through --rcfile).
+disable=SC2164

@@ -462,6 +462,16 @@ interface WordPressSignals {
   frameworks: string[];
 }
 
+/** Whether the project is WordPress (a site, a theme or a plugin) by {@link detectWordPress}'s signals — scan_sast's Psalm pass. */
+export function isWordPressProject(projectPath: string): boolean {
+  const io: ReadCtx = {
+    root: projectPath,
+    budget: new ReadBudget(DETECTION_BUDGET_BYTES, DETECTION_BUDGET_FILES),
+    unread: new Map(),
+  };
+  return detectWordPress(io, projectPath).isWordPress;
+}
+
 /**
  * WordPress/WooCommerce/Kadence detection, scoped to `dir` — deliberately a
  * whole-project concern (evaluated once, at the root), unlike the manifest

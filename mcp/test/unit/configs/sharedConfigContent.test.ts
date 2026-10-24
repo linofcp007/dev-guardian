@@ -44,7 +44,7 @@ describe('configs/pre-commit/pre-commit-config.yaml', () => {
 
   it('uses the semgrep/semgrep repo (returntocorp/semgrep is a stale org name), current release', () => {
     expect(doc.repos.some((r) => r.repo === 'https://github.com/returntocorp/semgrep')).toBe(false);
-    expect(repoByUrl('https://github.com/semgrep/semgrep').rev).toBe('v1.178.0');
+    expect(repoByUrl('https://github.com/semgrep/semgrep').rev).toBe('v1.182.0');
   });
 
   it('pins ruff-pre-commit to a current release, not v0.5.0', () => {

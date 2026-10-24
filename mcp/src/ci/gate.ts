@@ -507,6 +507,14 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
   }
   switch (kind) {
     case 'missing_tool': {
+      // The Go toolchain gosec loads packages through: never installed for you (installCatalog.ts MANUAL_ONLY_TOOLS).
+      if (scanner === 'go') {
+        return 'Install the Go toolchain your go.mod names (https://go.dev/doc/install; on GitHub Actions, actions/setup-go) and put it on PATH, then rerun the scan — install_toolchain never installs it.';
+      }
+      // The PHP runtime Psalm runs on: never installed for you either.
+      if (scanner === 'php') {
+        return 'Install PHP 8.2 or newer with its xml and mbstring extensions (Debian and Ubuntu: php-cli php-xml php-mbstring) and put it on PATH, then rerun the scan — install_toolchain never installs it.';
+      }
       const hint = INSTALL_HINT[scanner];
       return hint !== undefined
         ? `Install ${scanner} (\`${hint}\`) and put it on PATH, then rerun the scan.`
@@ -534,6 +542,14 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
         ? 'Fix or remove the rule the detail names, then rerun the scan.'
         : 'Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.';
     case 'skipped':
+      // Psalm's PHP older than it runs (runners/psalmRun.ts#PHP_MIN_VERSION).
+      if (/ needs PHP \d+\.\d+ or newer and /.test(detail)) {
+        return 'Install PHP 8.2 or newer and put it first on PATH, then rerun the scan.';
+      }
+      // cppcheck or Psalm older than it runs (runners/cppcheckRun.ts, runners/psalmRun.ts).
+      if (/ or newer is needed and /.test(detail)) {
+        return `Install a newer ${scanner} — the detail names the oldest it runs — and put it first on PATH, then rerun the scan.`;
+      }
       return /local_only|--local-only/i.test(detail)
         ? 'Add rules of the project\'s own (a committed .semgrep.yml, or the init_project tool), or drop --local-only.'
         : 'Read why the scanner was skipped in the detail and give it something it can scan, or rerun where it can run.';
@@ -546,6 +562,14 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
       if (/target limit|size limit/i.test(detail)) return "Split the files over Semgrep's 1 MB target limit, or list them in .guardianignore after review.";
       if (/submodule/i.test(detail)) return 'Scan each submodule as a project of its own, or list it in .guardianignore after review.';
       if (/did not load/i.test(detail)) return 'Fix or remove the rule the detail names, then rerun the scan.';
+      if (/\b(Type error|Package not loaded) on /.test(detail)) {
+        return "Make each named Go package build where the scan runs — the Go version go.mod names, its modules downloaded (`go mod download`) — then rerun: gosec skipped the SSA and taint rules of every package that does not type-check.";
+      }
+      // cppcheck's (runners/cppcheckRun.ts): the file was not configured, or not read at all.
+      if (/\b(Unknown macro|Not analysed) on /.test(detail)) {
+        return "Give cppcheck the build's configuration — a compile_commands.json at the root or in build/ (CMake: -DCMAKE_EXPORT_COMPILE_COMMANDS=ON), with any header the build generates in place — then rerun; or, after review, list the named file in .guardianignore.";
+      }
+      if (/\bNot read on /.test(detail)) return 'Check that the named file exists and is readable where the scan runs, then rerun.';
       return 'Read the detail; docs/ci.md says what each gap means and what clears it.';
   }
 }

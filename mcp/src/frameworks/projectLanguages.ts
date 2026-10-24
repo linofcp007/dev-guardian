@@ -83,7 +83,8 @@ import { lstat, readdir } from 'node:fs/promises';
 import { join, win32 } from 'node:path';
 import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
-import { readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { readProjectTextOrUndefined, realpathInProject } from '../platform/projectFs.js';
+import { WINDOWS_DIR_MAX } from '../runners/semgrepLongDirs.js';
 import { git, splitNul } from '../runners/git.js';
 import { OWASP_SCAN_TYPES } from './coverage.js';
 import { canonicalLanguage, languageOfFile, SOURCE_LANGUAGES, type SourceLanguage } from './languages.js';
@@ -544,7 +545,8 @@ interface OversizedFiles {
   incomplete?: string;
   /**
    * Windows only: the same listing's files whose absolute path is
-   * {@link WINDOWS_MAX_PATH} characters or longer (project-relative,
+   * {@link WINDOWS_MAX_PATH} characters or longer, or whose directory's is
+   * `runners/semgrepLongDirs.ts#WINDOWS_DIR_MAX` (project-relative,
    * `/`-separated) — candidates a scanner may not have opened
    * (`runners/semgrepCoverageGaps.ts`). Absent: none, or not Windows.
    */
@@ -560,7 +562,13 @@ interface OversizedFiles {
  */
 export const WINDOWS_MAX_PATH = 260;
 
-/** The files of `rels` (project-relative) whose absolute path under `root` is too long for Windows, sorted; none elsewhere. */
+/**
+ * The files of `rels` (project-relative) whose absolute path under `root` is
+ * too long for Windows, or that sit in a directory too long for Semgrep's walk
+ * to list (`runners/semgrepLongDirs.ts`), sorted; none elsewhere. Measured on
+ * the real path when `root` is one on this host: a short (8.3) name in the
+ * given one hides its length.
+ */
 export function longPathsOf(
   root: string,
   rels: readonly string[],
@@ -569,8 +577,14 @@ export function longPathsOf(
   if (platform !== 'win32') return [];
   // Windows' own path rules whatever the host (`path.win32`): on Linux a drive path resolved as a relative
   // path under the working directory, and every name read as too long (the first Linux run, review 8 finding 1).
-  const base = win32.resolve(root);
-  return rels.filter((rel) => win32.join(base, ...rel.split('/')).length >= WINDOWS_MAX_PATH).sort();
+  const base = (platform === process.platform ? realpathInProject(root, '.') : null) ?? win32.resolve(root);
+  return rels
+    .filter((rel) => {
+      const parts = rel.split('/');
+      if (win32.join(base, ...parts).length >= WINDOWS_MAX_PATH) return true;
+      return parts.length > 1 && win32.join(base, ...parts.slice(0, -1)).length >= WINDOWS_DIR_MAX;
+    })
+    .sort();
 }
 
 /** Whether `rel` is a file the scanners read with a source language — see the module comment. */

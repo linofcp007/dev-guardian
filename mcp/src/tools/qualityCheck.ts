@@ -6,7 +6,10 @@
  *   - ESLint when the project configures it AND has it installed in
  *     `node_modules` — run with this Node, never through `npx`, which
  *     downloads ESLint from the network into a project that has none;
- *   - staticcheck when there is a `go.mod`.
+ *   - staticcheck when there is a `go.mod`;
+ *   - shellcheck over the shell scripts (`runners/shellcheckRun.ts`: `.sh`,
+ *     `.bash`, `.dash`, `.ksh`, and extensionless files with such a shebang),
+ *     with the project's root `.shellcheckrc` only.
  *
  * It used to run `scripts/scan/quality-scan.sh`, which lost ruff and radon to
  * `find | head -1` under `pipefail` on large Python trees, captured ESLint /
@@ -27,7 +30,7 @@
  * scoped files — a copy of code outside the scope is not seen, and the reason
  * says so), ruff and radon the `.py` ones, ESLint the JS/TS ones, staticcheck
  * the packages holding the `.go` ones (it analyses packages, not files; the
- * factory keeps only findings in scoped files). The budgets in
+ * factory keeps only findings in scoped files), shellcheck the shell scripts. The budgets in
  * `.guardian/budgets.yml` are project-level — a duplication percentage of the
  * whole project — so a scoped run skips them and says why.
  */
@@ -48,7 +51,10 @@ import { asArray, getNumber, getProp, parseInputAsJson, type ScannerParser } fro
 import { jscpdParser } from '../runners/scannerParsers/jscpd.js';
 import { radonErrors, radonParser } from '../runners/scannerParsers/radon.js';
 import { ruffParser } from '../runners/scannerParsers/ruff.js';
+import { shellcheckParser } from '../runners/scannerParsers/shellcheck.js';
 import { staticcheckErrors, staticcheckParser } from '../runners/scannerParsers/staticcheck.js';
+import { SHELLCHECK, shellcheckScripts, shellScripts } from '../runners/shellcheckRun.js';
+import { listScannedFiles } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath } from '../schemas.js';
 import type { Finding, ToolRun } from '../types.js';
 import { registerToolModule } from './index.js';
@@ -113,7 +119,8 @@ registerToolModule(
     title: 'Code quality scan',
     description:
       'jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and ' +
-      "installed in node_modules (it runs the project's config), staticcheck for Go. Findings: duplicate, " +
+      "installed in node_modules (it runs the project's config), staticcheck for Go, shellcheck for shell " +
+      'scripts. Findings: duplicate, ' +
       'complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed ' +
       'analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with ' +
       'scope).',
@@ -157,6 +164,11 @@ registerToolModule(
       }
       if (!out.cancelled && hasEslintConfig(ctx.projectPath)) await runEslint(ctx, reportDir, out);
       if (!out.cancelled && presentInProject(ctx.projectPath, 'go.mod')) await runStaticcheck(ctx, out);
+      if (!out.cancelled) {
+        // What the scan reads, `.guardianignore` applied.
+        const files = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
+        await runShellcheck(ctx, out, shellScripts(ctx.projectPath, files));
+      }
       // Separated step, deliberately: reads the jscpd/radon reports jscpd and
       // radon already wrote above (never re-runs a scanner), and is the only
       // part of this file that knows about .guardian/budgets.yml at all.
@@ -422,6 +434,23 @@ async function runStaticcheck(ctx: InvokeContext, out: Collected, packages: read
   record(out, 'staticcheck', run, [0, 1], run.stdout, () => true, staticcheckParser, couldNotAnalyse(errors));
 }
 
+/** shellcheck over `scripts` (`runners/shellcheckRun.ts`); no entry at all when there is none. */
+async function runShellcheck(ctx: InvokeContext, out: Collected, scripts: readonly string[]): Promise<void> {
+  if (scripts.length === 0) return;
+  if (!(await scannerAvailable(SHELLCHECK))) return notInstalled(out, SHELLCHECK);
+  const pass = await shellcheckScripts({
+    projectPath: ctx.projectPath,
+    scripts,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  if (pass.cancelled) out.cancelled = true;
+  for (const raw of pass.reports) out.parser_inputs.push({ parser: shellcheckParser, input: raw });
+  out.tools_run.push(pass.toolRun);
+  if (pass.missing) out.missing_tools.push(SHELLCHECK);
+}
+
 // ---- scoped runs ------------------------------------------------------
 
 const JS_TS = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i;
@@ -487,6 +516,7 @@ async function runOnScope(ctx: InvokeContext, reportDir: string, out: Collected,
     const packages = [...new Set(goFiles.map((f) => (f.includes('/') ? `./${f.slice(0, f.lastIndexOf('/'))}` : '.')))].sort();
     await runStaticcheck(ctx, out, packages);
   }
+  if (!out.cancelled) await runShellcheck(ctx, out, shellScripts(ctx.projectPath, files));
   if (!out.cancelled && loadBudgets(ctx.projectPath).kind !== 'none') {
     out.tools_run.push({
       name: 'budgets',

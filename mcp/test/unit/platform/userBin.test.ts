@@ -11,7 +11,7 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveBinary } from '../../../src/platform/pkgManagerDetect.js';
-import { ensureUserBinOnPath, pathHasDir, userBinDir, userBinPlacement } from '../../../src/platform/userBin.js';
+import { ensureInstallerDirsOnPath, ensureUserBinOnPath, pathHasDir, userBinDir, userBinPlacement } from '../../../src/platform/userBin.js';
 import { runVersionProbe } from '../../../src/runners/toolProbe.js';
 import { resetScannerCache, scannerAvailable } from '../../../src/tools/scanHelpers.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -75,6 +75,38 @@ describe('ensureUserBinOnPath', () => {
     const env: NodeJS.ProcessEnv = {};
     ensureUserBinOnPath(env, home);
     expect(env['PATH']).toBe(bin);
+  });
+});
+
+describe('ensureInstallerDirsOnPath — cppcheck’s MSI installs to %ProgramFiles%\\Cppcheck and leaves PATH alone', () => {
+  const SYSTEM = 'C:\\Windows';
+
+  function programFiles(withExe: boolean): string {
+    const pf = makeTempDir('ubin-pf-');
+    mkdirSync(join(pf, 'Cppcheck'));
+    if (withExe) writeFileSync(join(pf, 'Cppcheck', 'cppcheck.exe'), '');
+    return pf;
+  }
+
+  it('on Windows appends the directory once, when cppcheck.exe is there; ProgramW6432 before ProgramFiles', () => {
+    const pf = programFiles(true);
+    const env: NodeJS.ProcessEnv = { PATH: SYSTEM, ProgramW6432: pf, ProgramFiles: 'C:\\nowhere' };
+    ensureInstallerDirsOnPath(env, 'win32');
+    expect(env['PATH']).toBe(`${SYSTEM};${join(pf, 'Cppcheck')}`);
+    ensureInstallerDirsOnPath(env, 'win32');
+    expect(env['PATH']).toBe(`${SYSTEM};${join(pf, 'Cppcheck')}`);
+  });
+
+  it('nothing without cppcheck.exe, without %ProgramFiles%, or off Windows', () => {
+    const empty = { PATH: SYSTEM, ProgramFiles: programFiles(false) };
+    ensureInstallerDirsOnPath(empty, 'win32');
+    expect(empty.PATH).toBe(SYSTEM);
+    const none: NodeJS.ProcessEnv = { PATH: SYSTEM };
+    ensureInstallerDirsOnPath(none, 'win32');
+    expect(none['PATH']).toBe(SYSTEM);
+    const linux = { PATH: '/usr/bin', ProgramFiles: programFiles(true) };
+    ensureInstallerDirsOnPath(linux, 'linux');
+    expect(linux.PATH).toBe('/usr/bin');
   });
 });
 

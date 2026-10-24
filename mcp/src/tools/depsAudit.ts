@@ -31,6 +31,13 @@
  *     `packages.lock.json` (see `trivy.ts`), so this is NuGet's only source
  *     of CVE-adjacent findings, not a complementary one like npm's.
  *
+ *   - `govulncheck -format json ./...`, once per Go module (`go.mod`) when
+ *     govulncheck and Go are on PATH (`runners/govulncheckRun.ts`): Trivy
+ *     already reports the vulnerable modules; govulncheck reports, at the
+ *     project's own call site, each vulnerable FUNCTION the code calls.
+ *     The Go database gives no severity: such a finding takes Trivy's for
+ *     the same CVE or GHSA ({@link withTrivySeverity}), `medium` otherwise.
+ *
  * pip-audit resolves `-r` requirements by building a temporary virtualenv
  * and installing them into it from PyPI — network access, and an sdist's own
  * build step runs there. The tool description says so, next to the restore.
@@ -49,6 +56,9 @@ import {
   removeCreatedLockFiles,
 } from '../deps/dotnetRestore.js';
 import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
+import { govulncheckParser } from '../runners/scannerParsers/govulncheck.js';
+import { govulncheckModules } from '../runners/govulncheckRun.js';
+import { listScannedFiles } from '../platform/guardianIgnore.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -113,6 +123,29 @@ function dropNpmDuplicatesOfTrivy(findings: Finding[]): Finding[] {
   });
 }
 
+/**
+ * A govulncheck finding (a vulnerable function the code calls) takes the
+ * severity Trivy gave the same vulnerability — matched by any CVE / GHSA /
+ * GO id either finding carries — because the Go vulnerability database gives
+ * none. Otherwise it keeps the parser's `medium`.
+ */
+export function withTrivySeverity(findings: Finding[]): Finding[] {
+  const severityById = new Map<string, Finding['severity']>();
+  for (const f of findings) {
+    if (f.tool !== TRIVY_TOOL_NAME) continue;
+    for (const id of [f.rule_id, ...(f.vuln_aliases ?? [])]) if (id !== undefined) severityById.set(id.toUpperCase(), f.severity);
+  }
+  if (severityById.size === 0) return findings;
+  return findings.map((f) => {
+    if (f.tool !== 'govulncheck') return f;
+    for (const id of [f.rule_id, ...(f.vuln_aliases ?? [])]) {
+      const severity = id !== undefined ? severityById.get(id.toUpperCase()) : undefined;
+      if (severity !== undefined) return { ...f, severity };
+    }
+    return f;
+  });
+}
+
 function detectBots(projectPath: string): BotConfigured {
   return {
     renovate:
@@ -131,7 +164,8 @@ registerToolModule(
       "Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs " +
       "the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list " +
       "package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync " +
-      'lock is a gap). Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).',
+      'lock is a gap); for Go, govulncheck, which reports the vulnerable functions the code calls. Returns ' +
+      'findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).',
     // Its own type, not scan_deps' 'deps': the two shared cache entries and
     // answered for each other. Readers that want "the latest deps_audit" use
     // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.
@@ -210,6 +244,20 @@ registerToolModule(
       // .sln/.csproj exists and the SDK is on PATH.
       const dotnetFailures = await runDotnetSca({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
 
+      // Go: govulncheck per module, for the vulnerable functions the code
+      // calls (the modules themselves are Trivy's, above).
+      const files = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
+      const govuln = await govulncheckModules({
+        projectPath: ctx.projectPath,
+        files,
+        env: ctx.scriptEnv,
+        signal: ctx.signal,
+        ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+      });
+      for (const r of govuln.reports) parser_inputs.push({ parser: govulncheckParser, input: r });
+      if (govuln.toolRun !== null) tools_run.push(govuln.toolRun);
+      for (const name of govuln.missing) if (!missing_tools.includes(name)) missing_tools.push(name);
+
       const bot_configured = detectBots(ctx.projectPath);
 
       return {
@@ -217,7 +265,7 @@ registerToolModule(
         tools_run,
         missing_tools,
         parser_inputs,
-        dedupeFindings: dropNpmDuplicatesOfTrivy,
+        dedupeFindings: (findings) => withTrivySeverity(dropNpmDuplicatesOfTrivy(findings)),
         report_paths: [reportDir],
         extras: {
           bot_configured,

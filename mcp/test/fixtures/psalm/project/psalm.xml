@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<!-- The project's own configuration, which the scan never reads: it would switch TaintedShell off. -->
+<psalm errorLevel="1" xmlns="https://getpsalm.org/schema/config">
+    <projectFiles><directory name="src" /></projectFiles>
+    <issueHandlers><TaintedShell errorLevel="suppress" /></issueHandlers>
+</psalm>

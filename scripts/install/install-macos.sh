@@ -72,10 +72,10 @@ brew_install semgrep
 b "=== Trivy (release fixada) ==="
 mkdir -p "$HOME/.local/bin"
 if ! has trivy && [ ! -x "$HOME/.local/bin/trivy" ]; then
-  instala_fixado trivy "https://github.com/aquasecurity/trivy/releases/download/v0.74.0" \
-    trivy_0.74.0_macOS-64bit.tar.gz 472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485 \
-    trivy_0.74.0_macOS-ARM64.tar.gz 1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11 \
-    || r "Falhou Trivy — instala a v0.74.0 à mão (https://github.com/aquasecurity/trivy/releases/tag/v0.74.0)"
+  instala_fixado trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1" \
+    trivy_0.76.1_macOS-64bit.tar.gz 7aa762eacd582052d053b62dcf972a1ab058abe39a57ccae234ed8894945b6b7 \
+    trivy_0.76.1_macOS-ARM64.tar.gz 11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5 \
+    || r "Falhou Trivy — instala a v0.76.1 à mão (https://github.com/aquasecurity/trivy/releases/tag/v0.76.1)"
 fi
 if [ -x "$HOME/.local/bin/trivy" ]; then
   g "✓ Trivy em $HOME/.local/bin/trivy"
