@@ -108,7 +108,7 @@ describe('scan_sast: Psalm taint analysis over the PHP (real Psalm, gated)', () 
     const run = out.tools_run.find((t) => t.name === 'psalm');
     expect(run?.status).toBe('ok');
     expect(run?.reason).toMatch(/^7 PHP file\(s\) analysed for taint; vendor\/ not analysed: a call into it ends a flow; PHP \d+\.\d+/);
-    expect(run?.version).toMatch(/^\d+\.\d+$/);
+    expect(run?.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(out.missing_tools).not.toContain('psalm');
     expect(at(findings)).toEqual(PLAIN);
     expect(findings.find((f) => f.rule_id === 'TaintedSql')).toMatchObject({ severity: 'high', cwe: ['CWE-89'], category: 'security' });
@@ -120,7 +120,9 @@ describe('scan_sast: Psalm taint analysis over the PHP (real Psalm, gated)', () 
   it.skipIf(!PSALM)("a scope: the whole project's PHP is read, and only the scope's findings are kept", async () => {
     const { out, findings } = await scan('scan_sast', copy('project'), { scope: { paths: ['src/lib/helpers.php'] } });
     const run = out.tools_run.find((t) => t.name === 'psalm');
-    expect(run?.reason).toMatch(/^7 PHP file\(s\) analysed for taint \(the whole project's, for the scope's 1: a flow crosses files\)/);
+    expect(run?.reason).toMatch(
+      /^7 PHP file\(s\) analysed for taint — the whole project's, for a scope of 1 file\(s\), since a flow crosses files; only the scope's findings are kept;/,
+    );
     expect(at(findings)).toEqual(['TaintedShell src/lib/helpers.php:6']);
   });
 

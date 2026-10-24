@@ -265,6 +265,11 @@
  * scan_sast. Unset, axis 3 is `N/A`: this repo holds none of those files.
  * Point it at a tree of real Android and iOS app sources; every rule is a
  * `generic` regex limited by `paths.include`, so only those files are read.
+ *
+ * **`wordpress.yml`, `GUARDIAN_PHP_SRC`.** The WordPress pack (an `esc_sql`
+ * value put outside quotes), run by scan_sast and scan_wordpress. Its axis 3 is
+ * the same WordPress tree as bugfix-php's; the pack header records the three
+ * trees it was measured on (WooCommerce, wp-statistics, Contact Form 7).
  */
 
 import { existsSync } from 'node:fs';
@@ -519,6 +524,16 @@ export const PACKS: readonly PackSpec[] = [
     fixtures: fixtures('mobile'),
     hitsSubdir: 'hits',
     realCode: MOBILE_SRC,
+  },
+  // The WordPress pack (an esc_sql value put outside quotes), run by scan_sast
+  // and scan_wordpress. See `test/e2e/wordpressPack.test.ts`; axis 3 is the
+  // same `GUARDIAN_PHP_SRC` WordPress tree as bugfix-php's.
+  {
+    name: 'wordpress',
+    config: config('wordpress'),
+    fixtures: fixtures('wordpress'),
+    hitsSubdir: 'hits',
+    realCode: PHP_SRC,
   },
 ];
 

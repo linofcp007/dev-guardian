@@ -16,7 +16,9 @@
  * driver, a request path reaching a file API, a request URL fetched), the
  * mobile pack (`configs/semgrep/mobile.yml`: the Android manifest, its
  * network security config and the iOS Info.plist, read as text — `generic`
- * rules limited to those files by `paths.include`) and the
+ * rules limited to those files by `paths.include`), the WordPress pack
+ * (`configs/semgrep/wordpress.yml`: an `esc_sql` value put outside quotes,
+ * which the Psalm pass's WordPress stub counts as escaped) and the
  * LLM-application pack (`configs/semgrep/llm.yml`:
  * model output reaching an interpreter, remote code in a model load, request
  * data in a system prompt, a completion with no token cap), in both modes — it
@@ -56,8 +58,11 @@ export const WEBJS_RULES_FILE = 'web-js.yml';
 /** The plugin's mobile configuration pack (Android manifest, network security config, iOS Info.plist). */
 export const MOBILE_RULES_FILE = 'mobile.yml';
 
+/** The plugin's WordPress pack (an `esc_sql` value outside quotes); scan_wordpress passes it too. */
+export const WORDPRESS_RULES_FILE = 'wordpress.yml';
+
 /** The plugin's own packs every Semgrep run passes, in argv order. */
-export const PLUGIN_PACK_FILES: readonly string[] = [LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE];
+export const PLUGIN_PACK_FILES: readonly string[] = [LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE];
 
 /** Absolute path of the plugin's LLM-application pack. */
 export function llmRulesPath(): string {

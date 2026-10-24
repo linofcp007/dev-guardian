@@ -9,9 +9,10 @@
 //
 // Not modelled, on purpose:
 //   - esc_sql is an SQL escape here, as WordPress documents it for a value
-//     inside quotes. A value it escapes OUTSIDE quotes (`id = " . esc_sql($x)`,
-//     CVE-2021-24340) is therefore not reported; modelled as a pass-through it
-//     reported every correct, quoted use too.
+//     inside quotes; modelled as a pass-through it reported every correct,
+//     quoted use too. A value it escapes OUTSIDE quotes (`id = " . esc_sql($x)`,
+//     CVE-2021-24340) is configs/semgrep/wordpress.yml's, which scan_sast and
+//     scan_wordpress also run.
 //   - get_option and other stored values are no source: as one, 46 of 48
 //     findings on WooCommerce 11.2.1 were false.
 

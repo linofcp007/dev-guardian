@@ -60,7 +60,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **42 of the 168 rules** across the thirteen packs are
+nothing but positive terms. **42 of the 169 rules** across the fourteen packs are
 one of those — 36 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -83,6 +83,7 @@ prints `N/A`.
 | `llm` | 9 | 8 | 1 |
 | `web-js` | 3 | 3 | 0 |
 | `mobile` | 14 | 2 | 12 |
+| `wordpress` | 1 | 1 | 0 |
 
 The same numbers, rule by rule, are in [`docs/rule-packs.md`](../../docs/rule-packs.md),
 which `npm run build` generates; `mcp/test/docs/docs.test.ts` fails when this
@@ -145,6 +146,7 @@ precision evidence it does have). Measured with the corpora below:
 | `bugfix-rs` | Rust stdlib | 1201 | 0 | 0 |
 | `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 | `web-js` | uptime-kuma, actual and outline (Node apps) | 4933 | 15 (14 comparable) | 3, all working positive branches |
+| `wordpress` | WooCommerce 11.2.1, wp-statistics 13.0.7, Contact Form 7 6.2.3 | 4176 | 6 | 0 |
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and

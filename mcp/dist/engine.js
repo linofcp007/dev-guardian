@@ -36566,7 +36566,7 @@ function hasDotnetProject(projectPath) {
     return false;
   }
 }
-var LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT, LLM_PACK_MEASURED_SEMGREP;
+var LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT, LLM_PACK_MEASURED_SEMGREP;
 var init_semgrepConfigs = __esm({
   "src/runners/semgrepConfigs.ts"() {
     "use strict";
@@ -36577,7 +36577,8 @@ var init_semgrepConfigs = __esm({
     LLM_RULES_FILE = "llm.yml";
     WEBJS_RULES_FILE = "web-js.yml";
     MOBILE_RULES_FILE = "mobile.yml";
-    PLUGIN_PACK_FILES = [LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE];
+    WORDPRESS_RULES_FILE = "wordpress.yml";
+    PLUGIN_PACK_FILES = [LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE];
     CONTAINER_PACKS_ROOT = "/guardian-packs";
     LLM_PACK_MEASURED_SEMGREP = "1.176.1";
   }
@@ -39439,6 +39440,9 @@ function versionOf(output, prefix) {
   const m = (prefix === "psalm" ? /Psalm\s+v?(\d+)\.(\d+)/i : /^\s*(?:PHP\s+)?(\d+)\.(\d+)/im).exec(output);
   return m === null ? null : [Number(m[1]), Number(m[2])];
 }
+function psalmRelease(output) {
+  return /Psalm\s+v?(\d+\.\d+(?:\.\d+)?)/i.exec(output)?.[1] ?? null;
+}
 function countedIssues(stdout) {
   let total = 0;
   for (const line of stdout.split(/\r?\n/)) {
@@ -39499,8 +39503,9 @@ async function psalmTaint(args) {
     return skipped2(`Psalm needs PHP ${PHP_MIN_VERSION.join(".")} or newer and ${found2}`, PHP_RUNTIME);
   }
   const versionRun = await probe2([psalm, "--version"]);
-  const version2 = versionOf(`${versionRun.stdout}
-${versionRun.stderr}`, "psalm");
+  const versionOutput = `${versionRun.stdout}
+${versionRun.stderr}`;
+  const version2 = versionOf(versionOutput, "psalm");
   if (version2 === null || version2[0] < PSALM_MIN_MAJOR) {
     const found2 = version2 === null ? `its version could not be read (${psalm})` : `it is ${version2.join(".")}`;
     return skipped2(`Psalm ${PSALM_MIN_MAJOR} or newer is needed and ${found2}`, PSALM);
@@ -39541,12 +39546,12 @@ ${versionRun.stderr}`, "psalm");
     }
     const judged = judgePsalm({ run: run2, report });
     const cancelled = run2.outcome === "cancelled";
-    const versionText = version2.join(".");
+    const versionText = psalmRelease(versionOutput) ?? version2.join(".");
     if (!judged.ok) {
       return { toolRun: { name: PSALM, version: versionText, status: "failed", reason: judged.reason ?? "Psalm failed" }, missing: [], report: null, cancelled };
     }
     const reason = [
-      `${analysed.length} PHP file(s) analysed for taint${args.scopeFiles !== void 0 ? ` (the whole project's, for the scope's ${args.scopeFiles}: a flow crosses files)` : ""}`,
+      `${analysed.length} PHP file(s) analysed for taint${args.scopeFiles !== void 0 ? ` \u2014 the whole project's, for a scope of ${args.scopeFiles} file(s), since a flow crosses files; only the scope's findings are kept` : ""}`,
       ...presentInProject(args.projectPath, "vendor") ? ["vendor/ not analysed: a call into it ends a flow"] : [],
       ...stub !== null ? ["WordPress's APIs modelled ($wpdb's queries as SQL sinks, its escapes)"] : [],
       `PHP ${php.join(".")}`
@@ -72078,6 +72083,8 @@ var init_scanWordpress = __esm({
                 const args = [
                   "--config=p/php",
                   "--config=p/wordpress",
+                  // The plugin's own: an esc_sql value outside quotes (configs/semgrep/wordpress.yml).
+                  `--config=${pluginPackPath(WORDPRESS_RULES_FILE)}`,
                   ...semgrepScanFlags(ctx.configRoot).args,
                   "--json",
                   "--quiet",
@@ -72094,7 +72101,7 @@ var init_scanWordpress = __esm({
                   onLog: ctx.onLog
                 });
                 const raw = readJsonSafe(outFile);
-                if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
+                if (raw) parser_inputs.push({ parser: semgrepParserFor([pluginPackPath(WORDPRESS_RULES_FILE)]), input: raw });
                 recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
                 const at = tools_run.findIndex((t) => t.name === "semgrep-wp");
                 const entry = tools_run[at];

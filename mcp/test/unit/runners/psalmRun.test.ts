@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { countedIssues, hasPhpSource, judgePsalm, phpSources, psalmConfigXml, versionOf } from '../../../src/runners/psalmRun.js';
+import { countedIssues, hasPhpSource, judgePsalm, phpSources, psalmConfigXml, psalmRelease, versionOf } from '../../../src/runners/psalmRun.js';
 import { psalmParser } from '../../../src/runners/scannerParsers/psalm.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -61,6 +61,9 @@ describe('versionOf and countedIssues', () => {
     expect(versionOf('8.4.4', 'php')).toEqual([8, 4]);
     expect(versionOf('Psalm 6.20.1@376425b8e67b79773add388e16b4f6be5693dc87\r\n', 'psalm')).toEqual([6, 20]);
     expect(versionOf('<?php echo 1;', 'psalm')).toBeNull();
+    expect(psalmRelease('Psalm 6.20.1@376425b8e67b79773add388e16b4f6be5693dc87\r\n')).toBe('6.20.1');
+    expect(psalmRelease('Psalm 7.0')).toBe('7.0');
+    expect(psalmRelease('nothing')).toBeNull();
   });
 
   it('sums the per-type counts; nothing counted is 0; any other line is not a count', () => {

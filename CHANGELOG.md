@@ -10,7 +10,7 @@ version bump.
 
 gosec joins `scan_sast` and `review_pr` for Go, cppcheck joins them for C and C++, Psalm's taint analysis joins
 `scan_sast` and `scan_wordpress` for PHP, govulncheck joins `deps_audit`, shellcheck joins `quality_check`, a mobile
-pack joins the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
+pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
 
 ### Upgrading from 3.4.0
 
@@ -32,8 +32,8 @@ pack joins the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
   ["psalm"] }` installs Psalm 6.20.1's release PHAR, sha256-checked, into the per-user tools directory; PHP is
   never installed for you. The regenerated pipelines install the PHAR when the checkout has PHP (GitLab and
   Bitbucket also Debian's PHP 8.2). The first scans report taint findings the baseline does not hold.
-- **New findings.** gosec on Go code and the mobile pack on Android and iOS configuration report findings the
-  baseline does not hold, and a high one fails `--fail-on high`. Review them; rebuild the baseline on the base
+- **New findings.** gosec on Go code, cppcheck on C and C++, Psalm and the WordPress pack on PHP and the mobile
+  pack on Android and iOS configuration report findings the baseline does not hold, and a high one fails `--fail-on high`. Review them; rebuild the baseline on the base
   branch only for what you accept, never with `baseline update` on the branch itself.
 
 ### Added
@@ -71,11 +71,19 @@ pack joins the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
   global. The exit code is not trusted (0 with findings under `GITHUB_WORKFLOW`): the JSON report must hold as
   many issues as Psalm counts. A file that hangs Psalm ends the run after 40 minutes, a failure. A WordPress
   project, and every `scan_wordpress`, gets `configs/psalm/wordpress-taint.phpstub`: `$wpdb`'s queries as SQL
-  sinks, `prepare` and `esc_sql` as SQL escapes, `esc_html`/`esc_attr`/`esc_url`/`esc_textarea`/`esc_js`/`wp_kses`
+  sinks, `prepare` and `esc_sql` as SQL escapes (an `esc_sql` value outside quotes is the WordPress pack's, below), `esc_html`/`esc_attr`/`esc_url`/`esc_textarea`/`esc_js`/`wp_kses`
   as HTML escapes, `maybe_unserialize` and `wp_remote_*` as sinks — without it `$wpdb` is no sink at all. A scope
   reads the whole project's PHP (a flow crosses files) and keeps the scope's findings. In taint mode Psalm reports
   no file it could not parse; scan_sast's Semgrep pass names those. The OWASP coverage tables count its types for
   PHP (A01, A05, A08).
+- **`configs/semgrep/wordpress.yml`**, run by `scan_sast` with the other plugin packs and by `scan_wordpress`
+  (1 rule): an `esc_sql(...)` value put outside quotes in SQL — after `=`, `<`, `>`, `IN (`, `VALUES (`, `LIKE`,
+  `LIMIT`, `OFFSET`, `BETWEEN` or `AND` — which `esc_sql` does not protect (it escapes quotes only), the shape of
+  CVE-2021-24340. It decides by the literal right before the call, never by counting quotes along the chain (a
+  quote opened in an earlier literal). A value converted inside the call (`(int)`, `absint`, `intval`, `(float)`,
+  `floatval`) is not reported. Measured on WooCommerce 11.2.1, wp-statistics 13.0.7 and Contact Form 7 6.2.3: 6
+  findings, the CVE's line among them, the other 5 the same shape on ids the code had already made integers. A
+  variable assigned from `esc_sql` and used later, and a `sprintf` with an unquoted `%s`, are not seen.
 - **`configs/semgrep/mobile.yml`**, run by `scan_sast` with the LLM and web-JS packs (14 rules): a debuggable or
   backup-enabled Android app, cleartext traffic in the manifest or the network security config, a service,
   receiver or provider exported without a permission, user-installed CAs trusted outside `<debug-overrides>`,

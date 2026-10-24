@@ -81,7 +81,7 @@ describe('psalmTaint: the gates', () => {
     expect(root.startsWith(project)).toBe(false);
     expect(run?.cwd).toBe(root);
     // The mocked run wrote no report: a failure, never a clean run.
-    expect(r.toolRun).toEqual({ name: 'psalm', version: '6.20', status: 'failed', reason: 'Psalm wrote no report' });
+    expect(r.toolRun).toEqual({ name: 'psalm', version: '6.20.1', status: 'failed', reason: 'Psalm wrote no report' });
   });
 });
 

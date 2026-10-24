@@ -113,6 +113,11 @@ export function versionOf(output: string, prefix: 'php' | 'psalm'): [number, num
   return m === null ? null : [Number(m[1]), Number(m[2])];
 }
 
+/** `Psalm 6.20.1@376425b8…` → `6.20.1`, the version `tools_run` records; null when none is there. */
+export function psalmRelease(output: string): string | null {
+  return /Psalm\s+v?(\d+\.\d+(?:\.\d+)?)/i.exec(output)?.[1] ?? null;
+}
+
 /** The total of `--output-format=count`'s `TaintedSql: 3` lines; null when a line is something else. */
 export function countedIssues(stdout: string): number | null {
   let total = 0;
@@ -214,7 +219,8 @@ export async function psalmTaint(args: {
     return skipped(`Psalm needs PHP ${PHP_MIN_VERSION.join('.')} or newer and ${found}`, PHP_RUNTIME);
   }
   const versionRun = await probe([psalm, '--version']);
-  const version = versionOf(`${versionRun.stdout}\n${versionRun.stderr}`, 'psalm');
+  const versionOutput = `${versionRun.stdout}\n${versionRun.stderr}`;
+  const version = versionOf(versionOutput, 'psalm');
   if (version === null || version[0] < PSALM_MIN_MAJOR) {
     const found = version === null ? `its version could not be read (${psalm})` : `it is ${version.join('.')}`;
     return skipped(`Psalm ${PSALM_MIN_MAJOR} or newer is needed and ${found}`, PSALM);
@@ -257,12 +263,16 @@ export async function psalmTaint(args: {
     }
     const judged = judgePsalm({ run, report });
     const cancelled = run.outcome === 'cancelled';
-    const versionText = version.join('.');
+    const versionText = psalmRelease(versionOutput) ?? version.join('.');
     if (!judged.ok) {
       return { toolRun: { name: PSALM, version: versionText, status: 'failed', reason: judged.reason ?? 'Psalm failed' }, missing: [], report: null, cancelled };
     }
     const reason = [
-      `${analysed.length} PHP file(s) analysed for taint${args.scopeFiles !== undefined ? ` (the whole project's, for the scope's ${args.scopeFiles}: a flow crosses files)` : ''}`,
+      `${analysed.length} PHP file(s) analysed for taint${
+        args.scopeFiles !== undefined
+          ? ` — the whole project's, for a scope of ${args.scopeFiles} file(s), since a flow crosses files; only the scope's findings are kept`
+          : ''
+      }`,
       ...(presentInProject(args.projectPath, 'vendor') ? ['vendor/ not analysed: a call into it ends a flow'] : []),
       ...(stub !== null ? ["WordPress's APIs modelled ($wpdb's queries as SQL sinks, its escapes)"] : []),
       `PHP ${php.join('.')}`,

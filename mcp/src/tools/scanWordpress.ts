@@ -2,7 +2,8 @@
  * `scan_wordpress` — WordPress code scan.
  *
  * Source-side scan (no live WP install required). Aggregates:
- *   - Semgrep with `p/php` (and `p/wordpress` if available locally)
+ *   - Semgrep with `p/php` (and `p/wordpress` if available locally) and the
+ *     plugin's `configs/semgrep/wordpress.yml`
  *   - Trivy fs for dependency CVEs and licences, judged like scan_deps: a
  *     manifest Trivy read nothing for (a composer.json with no lock) is a
  *     named gap (`runners/trivyRun.ts#judgeTrivyFs`)
@@ -21,7 +22,7 @@ import { z } from 'zod';
 import { historyState } from '../runners/git.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
-import { semgrepParser } from '../runners/scannerParsers/semgrep.js';
+import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { metricsEnvProblem, runSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
@@ -32,7 +33,7 @@ import { PSALM, psalmTaint } from '../runners/psalmRun.js';
 import { psalmParser } from '../runners/scannerParsers/psalm.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
-import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
+import { pluginPackPath, withSemgrepEngineNote, WORDPRESS_RULES_FILE } from '../runners/semgrepConfigs.js';
 import {
   AllowDirty,
   AutoFix,
@@ -115,6 +116,8 @@ registerToolModule(
             const args = [
               '--config=p/php',
               '--config=p/wordpress',
+              // The plugin's own: an esc_sql value outside quotes (configs/semgrep/wordpress.yml).
+              `--config=${pluginPackPath(WORDPRESS_RULES_FILE)}`,
               ...semgrepScanFlags(ctx.configRoot).args,
               '--json',
               '--quiet',
@@ -132,7 +135,8 @@ registerToolModule(
               onLog: ctx.onLog,
             });
             const raw = readJsonSafe(outFile);
-            if (raw) parser_inputs.push({ parser: semgrepParser, input: raw });
+            // The plugin pack's rule ids come out bare, as on scan_sast (runners/semgrepRuleIds.ts).
+            if (raw) parser_inputs.push({ parser: semgrepParserFor([pluginPackPath(WORDPRESS_RULES_FILE)]), input: raw });
             recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
             // The shared gaps: files over Semgrep's size limit, initialised
             // submodules (runners/semgrepCoverageGaps.ts).
