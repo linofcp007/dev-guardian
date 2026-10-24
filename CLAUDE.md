@@ -62,6 +62,7 @@ npm test              # vitest (full suite) — the gate before a commit
 npm run test:fast     # unit tests minus the slowest files — the inner loop
 npm run test:docker   # Linux containers: Node 22.13 floor (coverage enforced) + LTS — before a release
 npm run ablate -- <pack>   # rule-pack ablation harness (not a vitest test)
+npm run pins          # every pinned scanner / action version against upstream's latest (network)
 ```
 
 ## Topic map (`docs/maintainers/`)

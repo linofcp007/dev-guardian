@@ -19,6 +19,7 @@
     "test:fast": "vitest run --config vitest.fast.config.ts",
     "test:watch": "vitest",
     "ablate": "tsx test/ablate/cli.ts",
+    "pins": "tsx scripts/checkPins.mjs",
     "eval:llm-scan": "tsx test/evals/llmScan/run.ts",
     "test:coverage": "vitest run --coverage",
     "test:docker": "node scripts/test-docker.mjs",

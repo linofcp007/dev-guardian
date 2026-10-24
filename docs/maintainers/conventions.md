@@ -173,3 +173,10 @@ Enforced by the compiler where possible, by review where not:
   [`mcp/package.json`](../../mcp/package.json) (keep all three in lock-step — the MCP
   server reports the `plugin.json` version at runtime), add a `CHANGELOG.md`
   entry, and tag `vX.Y.Z`.
+- **Pinned versions** — every scanner and action dev-guardian pins (`configs/ci/pinned.json`,
+  `PINNED_RELEASES` and the other pins in `mcp/src/runners/installCatalog.ts`) — are checked against
+  upstream with `npm run pins` (network; `GH_TOKEN` lifts GitHub's rate limit): exit 1 names each one
+  behind, with the sha256 GitHub records for the newer assets as a starting point. Never bump on that
+  alone: hash the download yourself, match the release's own checksums and its signature where it has
+  one, and record how beside the pin. A PyPI release with no upstream tag (Semgrep 1.182.1) is not
+  taken as the latest.
