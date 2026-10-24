@@ -38,7 +38,7 @@ import {
   type PluginPackFixpoint,
 } from './semgrepReport.js';
 import { localRuleIdNormalizer, noRuleLoaded, type RuleIdContext } from './semgrepRuleIds.js';
-import { extendedLengthPath, rewriteReportPaths, tooLongForWindows, windowsBase } from './semgrepLongDirs.js';
+import { extendedLengthPath, rewriteReportPaths, tooLongForWindows, windowsBase, windowsPathKey } from './semgrepLongDirs.js';
 import { toRelativeIfPossible } from './scannerParsers/index.js';
 
 interface BatchCheck {
@@ -305,7 +305,7 @@ export function semgrepOnFiles(args: {
   const projectPath = args.cwd;
   // Windows: a file too long for Semgrep to open by path is handed as an
   // extended-length one, and named back (runners/semgrepLongDirs.ts).
-  const long = extendedTargets(args.files, args.cwd);
+  const long = extendedTargets(args.files, args.cwd, rewriteReportPaths);
   return scanFileBatches({
     name: 'semgrep',
     // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
@@ -351,23 +351,25 @@ export function semgrepOnFiles(args: {
 
 /**
  * `files` (relative to `cwd`) with each one too long for Windows replaced by
- * its extended-length form, and the report rewrite that names it back; on
- * another system, or with none too long, `files` as they are.
+ * its extended-length form, and the report rewrite that names it back —
+ * `rewrite` is the scanner's own report shape (Semgrep's
+ * `rewriteReportPaths`, {@link rewriteBanditReportPaths}); on another system,
+ * or with none too long, `files` as they are.
  */
 function extendedTargets(
   files: readonly string[],
   cwd: string,
+  rewrite: (raw: unknown, map: (path: string) => string | null) => unknown,
   platform: NodeJS.Platform = process.platform,
 ): { files: readonly string[]; mapReport?: (raw: string) => string } {
   if (platform !== 'win32') return { files };
   const base = windowsBase(cwd);
-  const norm = (p: string): string => p.replace(/^\\\\\?\\/, '').split('/').join('\\').toLowerCase();
   const back = new Map<string, string>();
   const out = files.map((f) => {
     const rel = f.split('\\').join('/');
     if (!tooLongForWindows(base, rel)) return f;
     const abs = win32.join(base, ...rel.split('/'));
-    back.set(norm(abs), f);
+    back.set(windowsPathKey(abs), f);
     return extendedLengthPath(abs);
   });
   if (back.size === 0) return { files };
@@ -375,12 +377,38 @@ function extendedTargets(
     files: out,
     mapReport: (raw) => {
       try {
-        return JSON.stringify(rewriteReportPaths(JSON.parse(raw), (p) => back.get(norm(p)) ?? null));
+        return JSON.stringify(rewrite(JSON.parse(raw), (p) => back.get(windowsPathKey(p)) ?? null));
       } catch {
         return raw;
       }
     },
   };
+}
+
+/**
+ * A Bandit JSON report with each path `rewrite` maps replaced — the
+ * results' and the errors' `filename`, and the `metrics` keys (the files it
+ * analysed). A path `rewrite` returns null for is kept.
+ */
+export function rewriteBanditReportPaths(raw: unknown, rewrite: (path: string) => string | null): unknown {
+  if (raw === null || typeof raw !== 'object') return raw;
+  const map = (p: string): string => rewrite(p) ?? p;
+  const withFilename = (o: unknown): unknown => {
+    if (o === null || typeof o !== 'object') return o;
+    const rec = o as Record<string, unknown>;
+    const file = rec['filename'];
+    return typeof file === 'string' ? { ...rec, filename: map(file) } : o;
+  };
+  const report = { ...(raw as Record<string, unknown>) };
+  if (Array.isArray(report['results'])) report['results'] = report['results'].map(withFilename);
+  if (Array.isArray(report['errors'])) report['errors'] = report['errors'].map(withFilename);
+  const metrics = report['metrics'];
+  if (metrics !== null && typeof metrics === 'object' && !Array.isArray(metrics)) {
+    report['metrics'] = Object.fromEntries(
+      Object.entries(metrics as Record<string, unknown>).map(([k, v]) => [k === '_totals' ? k : map(k), v]),
+    );
+  }
+  return report;
 }
 
 /**
@@ -390,6 +418,12 @@ function extendedTargets(
  * walks directory targets only — so a configuration reaches it here only as
  * `ini`, and the caller that passes one names it (scan_sast passes the one
  * its whole-project run uses; review_pr passes none).
+ *
+ * On Windows a file at a path too long to open is handed as an
+ * extended-length path and named back, as for Semgrep — measured on Bandit
+ * 1.9.4 (Python 3.12, `LongPathsEnabled=0`): a `deep.py` at 301 characters
+ * was missing from a `-r` walk's `metrics`, with no error, and read when
+ * given as `\\?\C:\…`.
  */
 export function banditOnFiles(args: {
   files: readonly string[];
@@ -400,16 +434,20 @@ export function banditOnFiles(args: {
   onLog?: (line: string) => void;
   /** The `--ini` to read; absent, Bandit reads no configuration file. */
   ini?: string;
+  /** Report file name prefix (default `bandit`): `<prefix>-<n>.json`. */
+  reportPrefix?: string;
 }): Promise<FileBatchScanResult> {
+  const long = extendedTargets(args.files, args.cwd, rewriteBanditReportPaths);
   return scanFileBatches({
     name: 'bandit',
     command: 'bandit',
     args: ['-f', 'json', '-q', ...(args.ini !== undefined ? ['--ini', args.ini] : [])],
     reportArgs: (f) => ['-o', f],
-    files: args.files,
+    files: long.files,
+    ...(long.mapReport !== undefined ? { mapReport: long.mapReport } : {}),
     cwd: args.cwd,
     reportDir: args.reportDir,
-    reportPrefix: 'bandit',
+    reportPrefix: args.reportPrefix ?? 'bandit',
     env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),

@@ -669,54 +669,107 @@ async function runBandit(args: Collect & { ctx: InvokeContext; reportDir: string
   // --accept-partial-parse, exactly as a partial Semgrep run.
   const check = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
   const parsed = (check.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
-  // Windows: a Python file at a path too long to open that Bandit did not
-  // analyse — absent from its `metrics`, often with no error at all — is a
-  // named gap, as it is for Semgrep (review 8, finding 2).
-  const tooLong = check.ok ? await banditLongPaths(ctx, raw, parsed) : [];
-  const partial = [...parsed, ...tooLong];
+  // Windows: a Python file at a path too long to open that the walk did not
+  // analyse — absent from its `metrics`, with no error at all — is read on its
+  // own as an extended-length path; one still not read is a named gap, as it
+  // is for Semgrep (review 8, finding 2).
+  const long = check.ok ? await banditLongFiles({ ctx, raw, named: parsed, ini: ini.path, reportDir }) : NO_LONG_FILES;
+  for (const report of long.reports) parser_inputs.push({ parser: banditParser, input: report });
+  const unparsed = [...parsed, ...long.partial];
+  const partial = [...unparsed, ...long.tooLong];
   const reason = [
-    ...(parsed.length > 0 ? [describePartialParse(parsed, 'findings in the unparsed files may be missing')] : []),
-    ...(tooLong.length > 0 ? [describeTooLong(tooLong.map((p) => p.file))] : []),
+    ...(unparsed.length > 0 ? [describePartialParse(unparsed, 'findings in the unparsed files may be missing')] : []),
+    ...(long.tooLong.length > 0 ? [describeTooLong(long.tooLong.map((p) => p.file))] : []),
+    ...(long.read > 0 ? [`${long.read} Python file(s) at a path too long for Windows read on their own, as extended-length paths`] : []),
   ].join('; ');
   const run: ToolRun = !check.ok
     ? { name: 'bandit', status: 'failed', reason: check.reason ?? 'bandit failed' }
     : partial.length > 0
       ? { name: 'bandit', status: 'ok', reason, partially_parsed: partial }
-      : { name: 'bandit', status: 'ok' };
+      : reason !== ''
+        ? { name: 'bandit', status: 'ok', reason }
+        : { name: 'bandit', status: 'ok' };
   if (partial.length > 0 && check.ok) missing_tools.push('bandit');
   // The root .bandit only — the one passed with --ini (`runners/repoConfig.ts`).
   tools_run.push(ini.honoured ? await nameRepoConfig(run, ctx.configRoot, 'bandit') : run);
 }
 
+/** The files a Bandit report's `metrics` lists as analysed: `/`-separated, lower case. */
+function banditAnalysed(raw: string | null): string[] {
+  const metrics = getProp(raw === null ? null : parseInputAsJson(raw), 'metrics');
+  return metrics !== null && typeof metrics === 'object'
+    ? Object.keys(metrics).filter((k) => k !== '_totals').map((k) => k.split('\\').join('/').toLowerCase())
+    : [];
+}
+
+/** Whether `rel` is among {@link banditAnalysed}'s files (absolute or relative). */
+const analysedIn = (analysed: readonly string[], rel: string): boolean => {
+  const key = rel.toLowerCase();
+  return analysed.some((a) => a === key || a.endsWith(`/${key}`));
+};
+
+interface BanditLongFiles {
+  /** The second run's reports, its paths named as the project's. */
+  reports: string[];
+  /** How many files it read. */
+  read: number;
+  /** Files it read only in part (a syntax error). */
+  partial: PartialParse[];
+  /** Files still not analysed — each a `Path too long` gap. */
+  tooLong: PartialParse[];
+}
+
+const NO_LONG_FILES: BanditLongFiles = { reports: [], read: 0, partial: [], tooLong: [] };
+
 /**
- * Windows only: the project's Python files at a path of 260 characters or
- * more (`frameworks/projectLanguages.ts#WINDOWS_MAX_PATH`) that Bandit's
- * report does not list in `metrics` (the files it analysed) and that are not
- * named already — each a `Path too long` entry. Measured in review 8: Bandit
- * sometimes reported such a file and sometimes dropped it silently.
+ * Windows only: the project's Python files at a path too long for Windows
+ * (`runners/semgrepLongDirs.ts#tooLongForWindows`) that the whole-project
+ * run's report does not list in `metrics` (the files it analysed), and that
+ * are not named already, read in a second run as extended-length explicit
+ * targets (`runners/fileBatchScan.ts#banditOnFiles`) with the same `--ini`.
+ * Measured in review 8: Bandit's walk sometimes reported such a file and
+ * sometimes dropped it silently; on 1.9.4 it dropped it, and read it given as
+ * `\\?\C:\…`. The candidates are the shared gaps' (`.guardianignore` and the
+ * walk's own exclusions applied).
  */
-async function banditLongPaths(ctx: InvokeContext, raw: string | null, named: readonly PartialParse[]): Promise<PartialParse[]> {
-  if (process.platform !== 'win32') return [];
-  const candidates = ((await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx))).longPaths ?? []).filter((f) =>
-    f.toLowerCase().endsWith('.py'),
+async function banditLongFiles(a: {
+  ctx: InvokeContext;
+  raw: string | null;
+  named: readonly PartialParse[];
+  ini: string;
+  reportDir: string;
+}): Promise<BanditLongFiles> {
+  const { ctx } = a;
+  if (process.platform !== 'win32') return NO_LONG_FILES;
+  const analysed = banditAnalysed(a.raw);
+  const missed = ((await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx))).longPaths ?? []).filter(
+    (f) => isPython(f) && !a.named.some((p) => p.file.toLowerCase() === f.toLowerCase()) && !analysedIn(analysed, f),
   );
-  if (candidates.length === 0) return [];
-  const root = raw === null ? null : parseInputAsJson(raw);
-  const metrics = getProp(root, 'metrics');
-  const analysed =
-    metrics !== null && typeof metrics === 'object'
-      ? Object.keys(metrics).map((k) => k.split('\\').join('/').toLowerCase())
-      : [];
-  return candidates
-    .filter((f) => {
-      const key = f.toLowerCase();
-      return !named.some((p) => p.file.toLowerCase() === key) && !analysed.some((a) => a === key || a.endsWith(`/${key}`));
-    })
-    .map((file) => ({
-      file,
-      type: PATH_TOO_LONG_TYPE,
-      message: 'the path is 260 characters or longer, and Bandit did not analyse the file',
-    }));
+  if (missed.length === 0) return NO_LONG_FILES;
+  const pass = await banditOnFiles({
+    files: missed,
+    ini: a.ini,
+    cwd: ctx.projectPath,
+    reportDir: a.reportDir,
+    reportPrefix: 'bandit-long',
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  const read = pass.reports.flatMap(banditAnalysed);
+  const partial = pass.partial.filter((p) => missed.includes(p.file));
+  return {
+    reports: pass.reports,
+    read: missed.filter((f) => analysedIn(read, f)).length,
+    partial,
+    tooLong: missed
+      .filter((f) => !analysedIn(read, f) && !partial.some((p) => p.file === f))
+      .map((file) => ({
+        file,
+        type: PATH_TOO_LONG_TYPE,
+        message: 'the path is 260 characters or longer, and Bandit did not analyse the file, even as an extended-length path',
+      })),
+  };
 }
 
 /** The CI gate's `--rules-ref` copy of `.guardianignore`, for the shared coverage gaps; none otherwise. */

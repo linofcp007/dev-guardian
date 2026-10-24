@@ -19059,6 +19059,9 @@ function tooLongForWindows(base2, rel2) {
 function extendedLengthPath(abs) {
   return abs.startsWith("\\\\") ? `\\\\?\\UNC\\${abs.slice(2)}` : `\\\\?\\${abs}`;
 }
+function windowsPathKey(p) {
+  return p.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, "").split("/").join("\\").toLowerCase();
+}
 function failedToListTargets(...outputs) {
   return outputs.some((o) => o !== null && o !== void 0 && LISTING_FAILED.test(o));
 }
@@ -20477,7 +20480,7 @@ function remedyFor(kind, tool54, detail, cause) {
     case "taint_timeout":
       return "Nothing to do for the gate (not gating): taint findings in the named functions may be missing \u2014 splitting very large functions helps Semgrep.";
     case "path_too_long":
-      return "Move the project to a shorter path. Windows long paths (LongPathsEnabled=1 under HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem, then restart) help Bandit, which is long-path aware, but not Semgrep, whose engine is not: dev-guardian already reads Semgrep's files as extended-length paths.";
+      return "Move the project to a shorter path. dev-guardian already hands Semgrep and Bandit such files as extended-length paths (\\\\?\\C:\\\u2026), so a file named here could not be read even that way; Windows long paths (LongPathsEnabled=1) do not help Semgrep, whose engine is not long-path aware.";
     case "scanner_failed":
       if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {
         return "Unset SEMGREP_SEND_METRICS, or set it to on, off or auto (Semgrep refuses any other value, in any case), then rerun the scan.";
@@ -38798,7 +38801,7 @@ async function readLongFiles(a) {
   });
   if (wanted.length === 0) return 0;
   const base2 = windowsBase(a.target);
-  const norm = (p) => p.replace(/^\\\\\?\\/, "").split("/").join("\\").toLowerCase();
+  const norm = windowsPathKey;
   const given = new Map(wanted.map((rel2) => [norm(win323.join(base2, ...rel2.split("/"))), win323.join(a.target, ...rel2.split("/"))]));
   const targets = wanted.map((rel2) => extendedLengthPath(win323.join(base2, ...rel2.split("/"))));
   const outAt = args.indexOf("--output");
@@ -38997,7 +39000,7 @@ function semgrepOnFiles(args) {
     ...rules2?.nonPackTaintRules !== void 0 ? { nonPackTaintRules: rules2.nonPackTaintRules } : {}
   };
   const projectPath = args.cwd;
-  const long = extendedTargets(args.files, args.cwd);
+  const long = extendedTargets(args.files, args.cwd, rewriteReportPaths);
   return scanFileBatches({
     name: "semgrep",
     // The command and its UTF-8 environment, from the one helper (runners/semgrepRun.ts).
@@ -39034,16 +39037,15 @@ function semgrepOnFiles(args) {
     ...rules2 !== void 0 ? { noRuleLoaded: (failed) => noRuleLoaded(rules2.loadedFrom ?? rules2.configs, failed, rules2.ctx) } : {}
   });
 }
-function extendedTargets(files, cwd, platform = process.platform) {
+function extendedTargets(files, cwd, rewrite, platform = process.platform) {
   if (platform !== "win32") return { files };
   const base2 = windowsBase(cwd);
-  const norm = (p) => p.replace(/^\\\\\?\\/, "").split("/").join("\\").toLowerCase();
   const back = /* @__PURE__ */ new Map();
   const out = files.map((f) => {
     const rel2 = f.split("\\").join("/");
     if (!tooLongForWindows(base2, rel2)) return f;
     const abs = win324.join(base2, ...rel2.split("/"));
-    back.set(norm(abs), f);
+    back.set(windowsPathKey(abs), f);
     return extendedLengthPath(abs);
   });
   if (back.size === 0) return { files };
@@ -39051,23 +39053,45 @@ function extendedTargets(files, cwd, platform = process.platform) {
     files: out,
     mapReport: (raw) => {
       try {
-        return JSON.stringify(rewriteReportPaths(JSON.parse(raw), (p) => back.get(norm(p)) ?? null));
+        return JSON.stringify(rewrite(JSON.parse(raw), (p) => back.get(windowsPathKey(p)) ?? null));
       } catch {
         return raw;
       }
     }
   };
 }
+function rewriteBanditReportPaths(raw, rewrite) {
+  if (raw === null || typeof raw !== "object") return raw;
+  const map = (p) => rewrite(p) ?? p;
+  const withFilename = (o) => {
+    if (o === null || typeof o !== "object") return o;
+    const rec = o;
+    const file = rec["filename"];
+    return typeof file === "string" ? { ...rec, filename: map(file) } : o;
+  };
+  const report = { ...raw };
+  if (Array.isArray(report["results"])) report["results"] = report["results"].map(withFilename);
+  if (Array.isArray(report["errors"])) report["errors"] = report["errors"].map(withFilename);
+  const metrics = report["metrics"];
+  if (metrics !== null && typeof metrics === "object" && !Array.isArray(metrics)) {
+    report["metrics"] = Object.fromEntries(
+      Object.entries(metrics).map(([k, v]) => [k === "_totals" ? k : map(k), v])
+    );
+  }
+  return report;
+}
 function banditOnFiles(args) {
+  const long = extendedTargets(args.files, args.cwd, rewriteBanditReportPaths);
   return scanFileBatches({
     name: "bandit",
     command: "bandit",
     args: ["-f", "json", "-q", ...args.ini !== void 0 ? ["--ini", args.ini] : []],
     reportArgs: (f) => ["-o", f],
-    files: args.files,
+    files: long.files,
+    ...long.mapReport !== void 0 ? { mapReport: long.mapReport } : {},
     cwd: args.cwd,
     reportDir: args.reportDir,
-    reportPrefix: "bandit",
+    reportPrefix: args.reportPrefix ?? "bandit",
     env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...args.onLog ? { onLog: args.onLog } : {},
@@ -40970,33 +40994,53 @@ async function runBandit(args) {
   if (raw) parser_inputs.push({ parser: banditParser, input: raw });
   const check2 = checkBanditReport({ raw, exitCode: result.exitCode, outcome: result.outcome });
   const parsed2 = (check2.partial ?? []).map((p) => ({ ...p, file: toRelativeIfPossible(p.file, ctx.projectPath) }));
-  const tooLong = check2.ok ? await banditLongPaths(ctx, raw, parsed2) : [];
-  const partial3 = [...parsed2, ...tooLong];
+  const long = check2.ok ? await banditLongFiles({ ctx, raw, named: parsed2, ini: ini.path, reportDir }) : NO_LONG_FILES;
+  for (const report of long.reports) parser_inputs.push({ parser: banditParser, input: report });
+  const unparsed = [...parsed2, ...long.partial];
+  const partial3 = [...unparsed, ...long.tooLong];
   const reason = [
-    ...parsed2.length > 0 ? [describePartialParse(parsed2, "findings in the unparsed files may be missing")] : [],
-    ...tooLong.length > 0 ? [describeTooLong(tooLong.map((p) => p.file))] : []
+    ...unparsed.length > 0 ? [describePartialParse(unparsed, "findings in the unparsed files may be missing")] : [],
+    ...long.tooLong.length > 0 ? [describeTooLong(long.tooLong.map((p) => p.file))] : [],
+    ...long.read > 0 ? [`${long.read} Python file(s) at a path too long for Windows read on their own, as extended-length paths`] : []
   ].join("; ");
-  const run2 = !check2.ok ? { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" } : partial3.length > 0 ? { name: "bandit", status: "ok", reason, partially_parsed: partial3 } : { name: "bandit", status: "ok" };
+  const run2 = !check2.ok ? { name: "bandit", status: "failed", reason: check2.reason ?? "bandit failed" } : partial3.length > 0 ? { name: "bandit", status: "ok", reason, partially_parsed: partial3 } : reason !== "" ? { name: "bandit", status: "ok", reason } : { name: "bandit", status: "ok" };
   if (partial3.length > 0 && check2.ok) missing_tools.push("bandit");
   tools_run.push(ini.honoured ? await nameRepoConfig(run2, ctx.configRoot, "bandit") : run2);
 }
-async function banditLongPaths(ctx, raw, named2) {
-  if (process.platform !== "win32") return [];
-  const candidates2 = ((await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx))).longPaths ?? []).filter(
-    (f) => f.toLowerCase().endsWith(".py")
+function banditAnalysed(raw) {
+  const metrics = getProp(raw === null ? null : parseInputAsJson(raw), "metrics");
+  return metrics !== null && typeof metrics === "object" ? Object.keys(metrics).filter((k) => k !== "_totals").map((k) => k.split("\\").join("/").toLowerCase()) : [];
+}
+async function banditLongFiles(a) {
+  const { ctx } = a;
+  if (process.platform !== "win32") return NO_LONG_FILES;
+  const analysed = banditAnalysed(a.raw);
+  const missed = ((await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx))).longPaths ?? []).filter(
+    (f) => isPython(f) && !a.named.some((p) => p.file.toLowerCase() === f.toLowerCase()) && !analysedIn(analysed, f)
   );
-  if (candidates2.length === 0) return [];
-  const root = raw === null ? null : parseInputAsJson(raw);
-  const metrics = getProp(root, "metrics");
-  const analysed = metrics !== null && typeof metrics === "object" ? Object.keys(metrics).map((k) => k.split("\\").join("/").toLowerCase()) : [];
-  return candidates2.filter((f) => {
-    const key = f.toLowerCase();
-    return !named2.some((p) => p.file.toLowerCase() === key) && !analysed.some((a) => a === key || a.endsWith(`/${key}`));
-  }).map((file) => ({
-    file,
-    type: PATH_TOO_LONG_TYPE,
-    message: "the path is 260 characters or longer, and Bandit did not analyse the file"
-  }));
+  if (missed.length === 0) return NO_LONG_FILES;
+  const pass2 = await banditOnFiles({
+    files: missed,
+    ini: a.ini,
+    cwd: ctx.projectPath,
+    reportDir: a.reportDir,
+    reportPrefix: "bandit-long",
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...ctx.onLog ? { onLog: ctx.onLog } : {}
+  });
+  const read3 = pass2.reports.flatMap(banditAnalysed);
+  const partial3 = pass2.partial.filter((p) => missed.includes(p.file));
+  return {
+    reports: pass2.reports,
+    read: missed.filter((f) => analysedIn(read3, f)).length,
+    partial: partial3,
+    tooLong: missed.filter((f) => !analysedIn(read3, f) && !partial3.some((p) => p.file === f)).map((file) => ({
+      file,
+      type: PATH_TOO_LONG_TYPE,
+      message: "the path is 260 characters or longer, and Bandit did not analyse the file, even as an extended-length path"
+    }))
+  };
 }
 function ignoreFrom(ctx) {
   return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
@@ -41321,7 +41365,7 @@ function projectReferencesScs(projectPath) {
   }
   return false;
 }
-var MAX_DOTNET_PROJECT_FILE_BYTES, DOTNET_BUILD_TIMEOUT_MS, NEUTRAL_BANDIT_INI, isPython, DOTNET_SOURCE, SARIF_TARGETS;
+var MAX_DOTNET_PROJECT_FILE_BYTES, DOTNET_BUILD_TIMEOUT_MS, analysedIn, NO_LONG_FILES, NEUTRAL_BANDIT_INI, isPython, DOTNET_SOURCE, SARIF_TARGETS;
 var init_scanSast = __esm({
   "src/tools/scanSast.ts"() {
     "use strict";
@@ -41441,6 +41485,11 @@ var init_scanSast = __esm({
         }
       })
     );
+    analysedIn = (analysed, rel2) => {
+      const key = rel2.toLowerCase();
+      return analysed.some((a) => a === key || a.endsWith(`/${key}`));
+    };
+    NO_LONG_FILES = { reports: [], read: 0, partial: [], tooLong: [] };
     NEUTRAL_BANDIT_INI = "bandit-neutral.ini";
     isPython = (f) => f.toLowerCase().endsWith(".py");
     DOTNET_SOURCE = /\.(cs|fs|vb|razor|cshtml)$/i;

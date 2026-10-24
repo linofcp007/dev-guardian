@@ -82,6 +82,20 @@ export function extendedLengthPath(abs: string): string {
   return abs.startsWith('\\\\') ? `\\\\?\\UNC\\${abs.slice(2)}` : `\\\\?\\${abs}`;
 }
 
+/**
+ * A path as a report key, the extended-length prefix taken off (a share's
+ * back to `\\host\…`), `\`-separated, lower case — what a scanner wrote for
+ * an extended-length target and the path it stands for compare equal.
+ */
+export function windowsPathKey(p: string): string {
+  return p
+    .replace(/^\\\\\?\\UNC\\/i, '\\\\')
+    .replace(/^\\\\\?\\/, '')
+    .split('/')
+    .join('\\')
+    .toLowerCase();
+}
+
 /** Whether a Semgrep run's output — its JSON report, stdout or stderr — says it could not list its targets. */
 export function failedToListTargets(...outputs: ReadonlyArray<string | null | undefined>): boolean {
   return outputs.some((o) => o !== null && o !== undefined && LISTING_FAILED.test(o));
