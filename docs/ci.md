@@ -142,7 +142,7 @@ A gap's `kind` says what it is, so a reader can say the right thing about it —
 
 ### Windows: paths too long
 
-With Windows' default `LongPathsEnabled=0`, a scanner that is not long-path aware cannot open a file whose absolute path is 260 characters or more. Semgrep skipped such a file with no error at all — a JavaScript file at a 301-character path holding `exec('ls ' + req.query.dir)` was missing from its `paths.scanned`, and the gate read coverage full, exit 0. Every such file Semgrep would read and its report does not list as scanned is now a gap of kind `path_too_long`, named per file, which no flag accepts: enable long paths (`LongPathsEnabled=1` under `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`, then restart) or scan from a shorter path.
+With Windows' default `LongPathsEnabled=0`, a scanner that is not long-path aware cannot open a file whose absolute path is 260 characters or more. Semgrep skipped such a file with no error at all — a JavaScript file at a 301-character path holding `exec('ls ' + req.query.dir)` was missing from its `paths.scanned`, and the gate read coverage full, exit 0. Every such file Semgrep would read and its report does not list as scanned is now a gap of kind `path_too_long`, named per file, which no flag accepts: enable long paths (`LongPathsEnabled=1` under `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`, then restart) or scan from a shorter path. A directory is worse: one at 256 characters or more made Semgrep's own walk (outside a git repository) fail the whole listing, so the scan is repeated with every directory at 248 or more excluded, and the files in those directories are `path_too_long` gaps too — the rest of the project is scanned.
 
 ### A shallow checkout exits 2
 

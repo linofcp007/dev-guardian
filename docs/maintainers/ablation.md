@@ -146,7 +146,7 @@ precision evidence it does have). Measured with the corpora below:
 | `bugfix-rs` | Rust stdlib | 1201 | 0 | 0 |
 | `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 | `web-js` | uptime-kuma, actual and outline (Node apps) | 4933 | 15 (14 comparable) | 3, all working positive branches |
-| `wordpress` | WooCommerce 11.2.1, wp-statistics 13.0.7, Contact Form 7 6.2.3 | 4176 | 6 | 0 |
+| `wordpress` | WooCommerce 11.2.1, wp-statistics 13.0.7, Contact Form 7 6.2.3 | 4176 | 7 (5 comparable) | 0 |
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and

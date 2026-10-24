@@ -51,6 +51,7 @@ import type { PartialParse, ToolRun } from '../types.js';
 import { describeSubmodules, initialisedSubmodules, trackedGuardianOutput } from './git.js';
 import { asArray, getProp, parseInputAsJson } from './scannerParsers/index.js';
 import { nameAFew } from './semgrepReport.js';
+import { WINDOWS_DIR_MAX } from './semgrepLongDirs.js';
 
 export interface SemgrepCoverageGaps {
   /** Files Semgrep ignores for their size. */
@@ -207,8 +208,9 @@ export const PATH_TOO_LONG_TYPE = 'Path too long';
 /** `N file(s) at a path of 260 characters or more were not scanned …` — a few named. */
 export function describeTooLong(files: readonly string[]): string {
   return (
-    `${files.length} file(s) at a path of ${WINDOWS_MAX_PATH} characters or more were not scanned ` +
-    `(Windows MAX_PATH): ${nameAFew(files)} — enable long paths (LongPathsEnabled=1) or move the project to a shorter path`
+    `${files.length} file(s) at a path of ${WINDOWS_MAX_PATH} characters or more, or in a directory of ` +
+    `${WINDOWS_DIR_MAX} or more, were not scanned (Windows MAX_PATH): ${nameAFew(files)} — enable long paths ` +
+    '(LongPathsEnabled=1) or move the project to a shorter path'
   );
 }
 
@@ -258,7 +260,7 @@ function applyGaps(
   const longEntries: PartialParse[] = tooLong.map((file) => ({
     file,
     type: PATH_TOO_LONG_TYPE,
-    message: `the path is ${WINDOWS_MAX_PATH} characters or longer, and the scanner could not open it`,
+    message: `the path is ${WINDOWS_MAX_PATH} characters or longer, or its directory ${WINDOWS_DIR_MAX}, and the scanner did not read it`,
   }));
   return {
     toolRun: {

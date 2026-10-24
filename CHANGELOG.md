@@ -77,13 +77,17 @@ pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF 
   no file it could not parse; scan_sast's Semgrep pass names those. The OWASP coverage tables count its types for
   PHP (A01, A05, A08).
 - **`configs/semgrep/wordpress.yml`**, run by `scan_sast` with the other plugin packs and by `scan_wordpress`
-  (1 rule): an `esc_sql(...)` value put outside quotes in SQL — after `=`, `<`, `>`, `IN (`, `VALUES (`, `LIKE`,
-  `LIMIT`, `OFFSET`, `BETWEEN` or `AND` — which `esc_sql` does not protect (it escapes quotes only), the shape of
-  CVE-2021-24340. It decides by the literal right before the call, never by counting quotes along the chain (a
-  quote opened in an earlier literal). A value converted inside the call (`(int)`, `absint`, `intval`, `(float)`,
-  `floatval`) is not reported. Measured on WooCommerce 11.2.1, wp-statistics 13.0.7 and Contact Form 7 6.2.3: 6
-  findings, the CVE's line among them, the other 5 the same shape on ids the code had already made integers. A
-  variable assigned from `esc_sql` and used later, and a `sprintf` with an unquoted `%s`, are not seen.
+  (1 taint rule): an `esc_sql(...)` value that reaches SQL outside quotes — after `=`, `<`, `>`, `IN`, `IN (`,
+  `VALUES (`, `LIKE`, `LIMIT`, `OFFSET`, `BETWEEN` or `AND` — which `esc_sql` does not protect (it escapes quotes
+  only), the shape of CVE-2021-24340. The value is followed through the function (assignments, `implode`) to a
+  concatenation after such a literal, an interpolation (`"... id = $id"`, `{$id}`; the sink is the variable alone,
+  so another, unquoted variable in the same string does not count) or a `sprintf` argument whose format has every
+  `%s` unquoted. It decides by the literal right before the value, never by counting quotes along the chain. A value
+  made a number (`(int)`, `absint`, `intval`, `(float)`, `floatval`, `count`, `sizeof`, `strlen`) inside or after
+  the call, or one the concatenation itself quotes (`"'" . implode("', '", $ids) . "'"`), is not reported. Measured
+  on WooCommerce 11.2.1, wp-statistics 13.0.7 and Contact Form 7 6.2.3: 7 findings, the CVE's line among them, the
+  others the same shape on ids the code had already made integers or kept internal; one taint fixpoint timeout on
+  Semgrep 1.176.1 (a note), none on 1.181.0.
 - **`configs/semgrep/mobile.yml`**, run by `scan_sast` with the LLM and web-JS packs (14 rules): a debuggable or
   backup-enabled Android app, cleartext traffic in the manifest or the network security config, a service,
   receiver or provider exported without a permission, user-installed CAs trusted outside `<debug-overrides>`,
@@ -123,6 +127,19 @@ pack and a WordPress pack join the plugin's Semgrep packs, and Brakeman's SARIF 
   download-artifact v8.0.2, each by commit SHA. The pre-commit template's Semgrep is v1.182.0.
 - The server's bundled fast-uri is 3.1.9 (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr); the MCP SDK's floor is
   1.32.1; vitest 5.0.5 and vite 8.3.5 for the test suite.
+
+### Fixed
+
+- **On Windows, one directory too long for Windows no longer fails Semgrep's whole scan.** With the default
+  `LongPathsEnabled=0`, a directory at a path of 256 characters or more anywhere in a project that is not a git
+  repository (a WordPress install copied off a server, WooCommerce's `packages/email-editor` icons under a deep
+  folder) made Semgrep 1.176.1's own walk fail the listing — `Failed to obtain target files`, nothing scanned, the
+  root's files included, the run `failed`. Every Semgrep run over a directory (`scan_sast`, `scan_wordpress`,
+  `bug_hunt`, `compliance_check`, `map_attack_surface`) is now repeated once, when its walk failed that way, with
+  each directory at 248 characters or more excluded (`--exclude`, so every `.semgrepignore` is still honoured): the
+  rest is scanned, the reason says which directories were left out, and their files are named `Path too long`,
+  as a file at 260 characters or more already was. The length is measured on the real path, so a short (8.3) name
+  in the project's path no longer hides it.
 
 ## [3.4.0] - 2026-10-14
 

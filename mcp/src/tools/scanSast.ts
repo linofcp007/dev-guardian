@@ -120,7 +120,7 @@ import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerPar
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { nameRepoConfig } from '../runners/repoConfig.js';
-import { metricsEnvProblem, runSemgrep as spawnSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
+import { longDirsNote, metricsEnvProblem, runSemgrep as spawnSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
 import {
   localRuleIdNormalizer,
   mayHoldTaintRules,
@@ -341,8 +341,10 @@ async function runSemgrep(args: Collect & {
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
+    // Windows: directories its walk could not list, left out on a second run (runners/semgrepLongDirs.ts).
+    const longDirs = longDirsNote(result);
     recordSemgrepRun({
-      ctx, result, outFile, notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
+      ctx, result, outFile, notes: longDirs !== null ? [...notes, longDirs] : notes, via: null, configs: plan.rulePacks, loadedFrom: plan.ruleConfigs,
       packMissing: plan.packMissing, gaps: await semgrepCoverageGaps(ctx.projectPath, ignoreFrom(ctx)), tools_run, missing_tools, parser_inputs,
     });
     return;

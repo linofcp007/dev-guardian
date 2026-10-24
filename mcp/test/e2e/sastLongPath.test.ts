@@ -12,8 +12,8 @@
  * Gated on Windows and Semgrep being on PATH.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PluginContext } from '../../src/context.js';
 import { WINDOWS_MAX_PATH } from '../../src/frameworks/projectLanguages.js';
@@ -80,8 +80,49 @@ describe('scan_sast: a file at a path too long for Windows is scanned or named, 
     if (named) {
       expect(out.coverage).toBe('partial');
       expect(out.missing_tools).toContain('semgrep');
-      expect(semgrep?.reason).toMatch(/at a path of 260 characters or more were not scanned/);
+      expect(semgrep?.reason).toMatch(/at a path of 260 characters or more, or in a directory of 248 or more, were not scanned/);
     }
+  });
+
+  // A directory at a path of 256-259 characters holding no source (WooCommerce's
+  // `email-editor/.../Blocks/icons/*`, PNGs only, under a deep folder) made Semgrep 1.176.1's
+  // walk fail the whole listing: nothing scanned, `failed`. The run is repeated with that
+  // directory excluded (runners/semgrepLongDirs.ts): the rest is scanned, and a source file in
+  // a directory of 248 or more is named.
+  it.skipIf(!READY)('a directory too long for Semgrep to list never fails the scan of the rest', async () => {
+    const dir = resolveProjectPath(makeTempDir('sast-longdir-')).path;
+    writeFileSync(join(dir, '.semgrep.yml'), RULES);
+    writeFileSync(join(dir, 'short.js'), 'eval(process.argv[2]);\n');
+    const real = realpathSync.native(dir);
+    let deep = join(real, 'd');
+    while (deep.length < 258 - 12) deep = join(deep, 'dddddddddd');
+    deep = join(deep, 'x'.repeat(258 - deep.length - 1));
+    expect(deep.length).toBe(258);
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(deep, 'icon.png'), 'png');
+    // A source file beside it, in a directory past 248: named, whatever Semgrep did with it.
+    const near = dirname(deep);
+    writeFileSync(join(near, 'n.js'), 'eval(process.argv[3]);\n');
+    const nearRel = relative(real, join(near, 'n.js')).split(sep).join('/');
+
+    const tool = TOOLS.find((t) => t.name === 'scan_sast');
+    if (!tool) throw new Error('scan_sast not registered');
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const storage = new Storage(db);
+    const p: PluginContext = { storage, shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
+    const r = await tool.handler({ project_path: dir, force: true, local_only: true }, p);
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    const out = r as unknown as { scan_id: string; tools_run: ToolRun[]; missing_tools: string[] };
+    const semgrep = out.tools_run.find((t) => t.name === 'semgrep');
+    expect(semgrep?.status).toBe('ok');
+    const files = storage.findings.listByScan(out.scan_id).map((f) => (f.file_path ?? '').split(String.fromCharCode(92)).join('/'));
+    expect(files.some((f) => f.endsWith('short.js'))).toBe(true);
+    const found = files.some((f) => f.endsWith(nearRel));
+    const named = (semgrep?.partially_parsed ?? []).some((pp) => pp.file === nearRel && pp.type === PATH_TOO_LONG_TYPE);
+    expect(found || named).toBe(true);
+    expect(found && named).toBe(false);
+    if (/Semgrep could not list the project on Windows/.test(semgrep?.reason ?? '')) expect(named).toBe(true);
   });
 
   // Bandit too: it sometimes reported such a file and sometimes dropped it

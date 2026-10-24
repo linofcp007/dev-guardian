@@ -7,44 +7,61 @@
 #
 #   | regra                       | CWE    | como decide                         |
 #   | --------------------------- | ------ | ----------------------------------- |
-#   | wordpress-esc-sql-unquoted  | CWE-89 | padrão: o literal imediatamente     |
-#   |                             |        | antes do valor de `esc_sql` acaba   |
-#   |                             |        | num contexto de valor sem aspas     |
+#   | wordpress-esc-sql-unquoted  | CWE-89 | taint na mesma função: o valor de   |
+#   |                             |        | `esc_sql(...)` até uma posição de   |
+#   |                             |        | valor SEM aspas no texto SQL        |
+#
+# Medido em 2026-10-24 sobre o WooCommerce 11.2.1, o wp-statistics 13.0.7 e o
+# Contact Form 7 6.2.3 (3 379 ficheiros PHP fora de `vendor/`): 7 achados,
+# nenhum fora da forma — a linha do CVE-2021-24340, 2 ids de hooks do
+# WordPress (wp-statistics), 3 números ou listas que o WooCommerce já
+# converteu (`absint`, `is_numeric`) e 1 lista de ids que o WooCommerce passa
+# pelo `esc_sql` e por `implode` para um `IN ( ... )` sem aspas (ids internos).
+# Antes dos sanitizers abaixo eram 9: os ids de pedidos tirados do resultado de
+# uma consulta (`count`) e uma lista que já trazia as aspas (`"'" . ... . "'"`).
+# Fixpoint timeouts do taint: 1 no Semgrep 1.176.1, 0 no 1.181.0 (uma nota,
+# não uma lacuna: `runners/semgrepReport.ts`).
 #
 # wordpress-esc-sql-unquoted
 #   - O `esc_sql` só escapa aspas e barras: um valor posto FORA de aspas
 #     (`WHERE id = " . esc_sql($_GET['id'])`, o CVE-2021-24340 do
-#     wp-statistics 13.0.7) continua a ser SQL. Dispara quando o literal que
-#     precede `esc_sql(...)` acaba num contexto de valor: `=`, `<`, `>`,
-#     `IN (`, `VALUES (`, `LIKE`, `LIMIT`, `OFFSET`, `BETWEEN` ou `AND`, com
-#     ou sem espaços. Decide pelo literal que precede, nunca contando aspas na
-#     cadeia: num `" ... LIKE '%" . esc_sql($s) . "%' OR b LIKE '%" .
-#     esc_sql($s)` a aspa abre-se num literal anterior (medido no WooCommerce
-#     11.2.1: contar aspas dava 19 achados, contra os 3 de agora).
+#     wp-statistics 13.0.7) continua a ser SQL. A fonte é o valor de
+#     `esc_sql(...)`; segue-o pela função (atribuições, `implode`, ...) até um
+#     de três sítios, todos depois de um contexto de valor: `=`, `<`, `>`,
+#     `IN`, `IN (`, `VALUES (`, `LIKE`, `LIMIT`, `OFFSET`, `BETWEEN` ou `AND`,
+#     com ou sem espaços (um `IN ` sem parênteses: a lista traz os seus):
+#       * concatenado a seguir a um literal que acaba nesse contexto
+#         (`"... id = " . $id`). Decide pelo literal que precede, nunca
+#         contando aspas na cadeia: num `" ... LIKE '%" . esc_sql($s) .
+#         "%' OR b LIKE '%" . esc_sql($s)` a aspa abre-se num literal anterior
+#         (medido no WooCommerce 11.2.1: contar aspas dava 19 achados);
+#       * interpolado numa string entre aspas duplas, logo a seguir a esse
+#         contexto (`"... id = $id"`, `{$id}`). O sink é SÓ a variável (o `\K`
+#         do regex): `"... id = $outra AND n = '$id'"` não dispara. A string
+#         começa na aspa e não passa por um `;` (código, não SQL);
+#       * um argumento de `sprintf` cujo formato tem pelo menos um `%s` e
+#         TODOS os `%s` (também `%1$s`) num contexto de valor sem aspas. Um
+#         formato com `%s` entre aspas e outro sem aspas não dispara: sem
+#         saber que argumento cai em que `%s`, seria um palpite.
 #   - Decide pela FORMA, nunca pela origem do valor: um id que o código já
-#     converteu para inteiro antes (`absint`, `is_numeric`, o id que um hook
-#     do WordPress passa) dispara na mesma, e a correção é a mesma: `(int)`,
+#     converteu para inteiro noutro sítio (`is_numeric`, o id que um hook do
+#     WordPress passa) dispara na mesma, e a correção é a mesma: `(int)`,
 #     `absint` ou `$wpdb->prepare` com `%d`, e o `esc_sql` sai. Um valor
-#     convertido DENTRO do `esc_sql(...)` (`(int)`, `(float)`, `absint`,
-#     `intval`, `floatval`) não dispara.
-#   - Medido em 2026-10-24 sobre o WooCommerce 11.2.1, o wp-statistics 13.0.7
-#     e o Contact Form 7 6.2.3 (3 379 ficheiros PHP): 6 achados, nenhum fora
-#     da forma — a linha do CVE-2021-24340, 2 ids de hooks do WordPress
-#     (wp-statistics) e 3 listas ou números que o WooCommerce já converteu
-#     (`absint`, `is_numeric`).
-#   - Não vê uma variável atribuída de `esc_sql(...)` e usada depois, nem
-#     concatenada (`"... id = " . $id`) nem interpolada (`"... id = $id"`).
-#     Concatenada, o padrão com `pattern-inside` sobrepõe-se ao da chamada
-#     direta (o mesmo sítio com outro intervalo); interpolada, o Semgrep 1.176
-#     não liga o nome lido na string à variável atribuída (medido: um padrão
-#     por regex dispara também para uma variável que não veio do `esc_sql`).
-#     No corpus acima nenhuma das duas formas dava um achado: as 14
-#     interpolações candidatas eram de outras variáveis ou entre aspas.
+#     convertido DENTRO do `esc_sql(...)`, ou depois dele na mesma função
+#     (`(int)`, `(float)`, `absint`, `intval`, `floatval`, `count`, `sizeof`,
+#     `strlen`), não dispara; nem um valor que a própria concatenação já põe
+#     entre aspas (`"'" . implode("', '", $ids) . "'"`, `"('" ... "')"`).
+#   - O resultado de uma consulta (`$wpdb->get_results(...)` sobre um texto que
+#     levou o valor) continua marcado: um sanitizer em `$obj->metodo(...)`
+#     apagava também o texto passado à chamada (medido, com e sem `exact`), e
+#     com ele os achados dentro de `$wpdb->query(...)`. No corpus, o único
+#     caminho destes passava por um `count`, que é um sanitizer.
 #   - Não vê um identificador (entre crases, `ORDER BY`) nem um operador: o
 #     `esc_sql` também não escapa uma crase, mas o nome de uma coluna é quase
 #     sempre do próprio código; para um identificador há o `%i` do
 #     `$wpdb->prepare` (WordPress 6.2).
-#   - Um `sprintf` com `%s` sem aspas não é visto: só a concatenação.
+#   - Só na mesma função: um valor devolvido por uma função própria que chama
+#     o `esc_sql` não é seguido (o taint do Semgrep é intra-procedimento).
 
 rules:
   - id: wordpress-esc-sql-unquoted
@@ -62,17 +79,53 @@ rules:
       `(int)` ou `absint` e tirar o `esc_sql`; em geral, `$wpdb->prepare` com
       `%d` ou `%s` (que põe as aspas). Para uma lista `IN (...)`, um `%d` por
       elemento.
-    patterns:
-      - pattern: $S . esc_sql($X)
-      - pattern-not: $S . esc_sql((int) $Y)
-      - pattern-not: $S . esc_sql((float) $Y)
-      - pattern-not: $S . esc_sql(absint(...))
-      - pattern-not: $S . esc_sql(intval(...))
-      - pattern-not: $S . esc_sql(floatval(...))
-      # O literal que precede acaba num contexto de valor sem aspas. Aspas e
-      # barras em hexadecimal (\x22, \x27, \x5c): nenhuma camada de escape as
-      # pode reduzir. O `^(?:.*\.\s*)?` deixa passar uma cadeia antes do
-      # literal (o Semgrep dá-a inteira, com o `.` final).
-      - metavariable-regex:
-          metavariable: $S
-          regex: '(?s)^(?:.*\.\s*)?(?:\x22(?:[^\x22\x5c]|\x5c.)*(?i:[=<>]|\b(?:in|values)\s*\(|\b(?:like|limit|offset|between|and))\s*\x22|\x27(?:[^\x27\x5c]|\x5c.)*(?i:[=<>]|\b(?:in|values)\s*\(|\b(?:like|limit|offset|between|and))\s*\x27)\s*\.?\s*$'
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern: esc_sql($X)
+          - pattern-not: esc_sql((int) $Y)
+          - pattern-not: esc_sql((float) $Y)
+          - pattern-not: esc_sql(absint(...))
+          - pattern-not: esc_sql(intval(...))
+          - pattern-not: esc_sql(floatval(...))
+    pattern-sanitizers:
+      # Um número.
+      - pattern: (int) $X
+      - pattern: (float) $X
+      - pattern: absint(...)
+      - pattern: intval(...)
+      - pattern: floatval(...)
+      - pattern: count(...)
+      - pattern: sizeof(...)
+      - pattern: strlen(...)
+      # O valor já entre aspas na própria concatenação: `"'" . implode("', '",
+      # $ids) . "'"` (o WooCommerce), `"('" . ... . "')"`, `'"' . ... . '"'`.
+      # `exact`: o que está DENTRO continua a poder chegar a um sink.
+      - exact: true
+        pattern-either:
+          - pattern: |
+              "'" . $X . "'"
+          - pattern: |
+              "('" . $X . "')"
+          - pattern: |
+              '"' . $X . '"'
+    # Os sinks são regex sobre o texto, com `\K`: o sink é SÓ o valor que vem
+    # depois do contexto, e um padrão sobre a concatenação inteira mudaria o
+    # sítio do achado com cada forma da cadeia. Aspas e barras em hexadecimal
+    # (\x22, \x27, \x5c): nenhuma camada de escape as pode reduzir. Um literal
+    # começa na aspa e não passa por um `;` (código, não SQL).
+    pattern-sinks:
+      # Concatenado: o literal que precede acaba num contexto de valor, e o
+      # sink é o operando a seguir ao `.` (uma variável, com índices ou
+      # propriedades, ou uma chamada com até dois níveis de parênteses).
+      - pattern-regex: '(?:\x22(?:[^\x22\x5c;]|\x5c.)*?(?i:[=<>]|\b(?:in|values)\s*\(|\b(?:like|limit|offset|between|and|in))\s*\x22|\x27(?:[^\x27\x5c;]|\x5c.)*?(?i:[=<>]|\b(?:in|values)\s*\(|\b(?:like|limit|offset|between|and|in))\s*\x27)\s*\.\s*\K(?:[A-Za-z_\x5c][\w\x5c]*\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)|\$[A-Za-z_]\w*(?:\[[^\[\]]*\]|->[A-Za-z_]\w*)*)'
+      # Interpolado: da aspa que abre a string até à variável; o `\K` deixa no
+      # sink só a variável.
+      - pattern-regex: '\x22(?:[^\x22\x5c;]|\x5c.)*?(?i:[=<>]|\b(?:in|values)\s*\(|\b(?:like|limit|offset|between|and|in))\s*\{?\K\$[A-Za-z_]\w*'
+      # sprintf: pelo menos um `%s`, e todos sem aspas, num contexto de valor.
+      - patterns:
+          - pattern: sprintf($FMT, ..., $A, ...)
+          - metavariable-regex:
+              metavariable: $FMT
+              regex: '^(?:\x22(?=(?:[^\x22\x5c]|\x5c.)*%(?:\d+\$)?s)(?:[^%\x22\x5c]|\x5c.|%%|%(?!(?:\d+\$)?s)|(?<=[=<>(]|[=<>(]\s|[=<>(]\s\s|(?i:like\s)|(?i:limit\s)|(?i:offset\s)|(?i:between\s)|(?i:and\s)|(?i:in\s))%(?:\d+\$)?s)*\x22|\x27(?=(?:[^\x27\x5c]|\x5c.)*%(?:\d+\$)?s)(?:[^%\x27\x5c]|\x5c.|%%|%(?!(?:\d+\$)?s)|(?<=[=<>(]|[=<>(]\s|[=<>(]\s\s|(?i:like\s)|(?i:limit\s)|(?i:offset\s)|(?i:between\s)|(?i:and\s)|(?i:in\s))%(?:\d+\$)?s)*\x27)$'
+          - focus-metavariable: $A

@@ -25,7 +25,7 @@ import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
-import { metricsEnvProblem, runSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
+import { longDirsNote, metricsEnvProblem, runSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { listScannedFiles, trivySkipArgs } from '../platform/guardianIgnore.js';
@@ -148,6 +148,10 @@ registerToolModule(
                 reports: raw !== null ? [raw] : [],
               });
               tools_run[at] = applied.toolRun;
+              // Windows: directories its walk could not list, left out on a second run (runners/semgrepLongDirs.ts).
+              const longDirs = longDirsNote(r);
+              const named = tools_run[at];
+              if (longDirs !== null && named !== undefined) named.reason = [named.reason, longDirs].filter(Boolean).join('; ');
               if (applied.missing) markMissing(missing_tools, 'semgrep-wp');
             }
           })(),

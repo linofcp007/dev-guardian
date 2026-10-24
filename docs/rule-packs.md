@@ -289,4 +289,4 @@ dev-guardian ships **169 rules in 14 packs** under [`configs/semgrep/`](../confi
 
 | Rule | Severity | Languages | Ablatable clauses |
 | --- | --- | --- | --- |
-| `wordpress-esc-sql-unquoted` | WARNING | php | 6 |
+| `wordpress-esc-sql-unquoted` | WARNING | php | 9 |

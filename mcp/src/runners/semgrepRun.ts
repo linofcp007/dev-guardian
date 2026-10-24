@@ -22,8 +22,13 @@
  * here, into the Docker fallback's container (`dockerScanner.ts`, `-e`) and
  * into check_toolchain's probe (`installCatalog.ts`); `init_project`'s status
  * script sets it as well.
+ *
+ * On Windows, a run whose own walk could not list the tree — a directory too
+ * long for Windows anywhere in it — is run again with those directories
+ * excluded (`runners/semgrepLongDirs.ts`), and says which.
  */
 
+import { readFileSync } from 'node:fs';
 import {
   DEFAULT_SEMGREP_TIMEOUT_S,
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
@@ -33,6 +38,7 @@ import {
 import { semgrepGuardianOutputExcludes } from '../platform/guardianOutput.js';
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from './processRunner.js';
 import { pythonUtf8Env } from './semgrepReport.js';
+import { failedToListTargets, longDirsUnder, semgrepExcludeForDir } from './semgrepLongDirs.js';
 
 /** The command itself, for callers that describe a Semgrep spawn as data (`scanFileBatches`, `batchArgs`). */
 export const SEMGREP_COMMAND = 'semgrep';
@@ -181,10 +187,54 @@ export function metricsEnvProblem(configs: readonly string[], env: NodeJS.Proces
 
 type SemgrepRunOptions = Omit<ProcessRunOptions, 'command'>;
 
-/** Run Semgrep — through `run` when the caller injects one (create_fix_pr's worktree runner). */
-export function runSemgrep(
+/** A Semgrep run, and — Windows — the directories its retry left out (see the module comment). */
+interface SemgrepRunResult extends ProcessRunResult {
+  /** Project-relative, `/`-separated: the retry's `--exclude`s. Absent: no retry. */
+  excludedLongDirs?: string[];
+}
+
+/** The `--output` report a failed run wrote, for its error messages; null when there is none. */
+function failedReport(args: readonly string[]): string | null {
+  const at = args.indexOf('--output');
+  const out = at >= 0 ? args[at + 1] : undefined;
+  if (out === undefined) return null;
+  try {
+    return readFileSync(out, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run Semgrep — through `run` when the caller injects one (create_fix_pr's
+ * worktree runner). The directory target, when there is one, is the last
+ * argument: on Windows a run whose walk could not list it is run once more,
+ * the directories too long for Windows excluded.
+ */
+export async function runSemgrep(
   opts: SemgrepRunOptions,
   run: (options: ProcessRunOptions) => Promise<ProcessRunResult> = runProcess,
-): Promise<ProcessRunResult> {
-  return run({ ...opts, ...semgrepSpawn(opts.env) });
+  platform: NodeJS.Platform = process.platform,
+): Promise<SemgrepRunResult> {
+  const first = await run({ ...opts, ...semgrepSpawn(opts.env) });
+  const args = opts.args ?? [];
+  const target = args.at(-1);
+  if (platform !== 'win32' || target === undefined || first.exitCode === 0 || first.exitCode === null) return first;
+  if (!failedToListTargets(failedReport(args), first.stdout, first.stderr)) return first;
+  const dirs = longDirsUnder(target, platform);
+  if (dirs.length === 0) return first;
+  const retry = await run({ ...opts, args: [...args.slice(0, -1), ...dirs.map(semgrepExcludeForDir), target], ...semgrepSpawn(opts.env) });
+  return { ...retry, excludedLongDirs: dirs };
+}
+
+/** The note a run that left directories out carries, for its `reason`; null when it left none out. */
+export function longDirsNote(result: SemgrepRunResult): string | null {
+  const dirs = result.excludedLongDirs;
+  if (dirs === undefined || dirs.length === 0) return null;
+  const shown = dirs.slice(0, 3).join(', ');
+  return (
+    `Semgrep could not list the project on Windows: ${dirs.length} director${dirs.length === 1 ? 'y' : 'ies'} at a path of ` +
+    `248 characters or more ${dirs.length === 1 ? 'was' : 'were'} left out and the run repeated — ${shown}` +
+    `${dirs.length > 3 ? ', …' : ''}; their files are named below`
+  );
 }

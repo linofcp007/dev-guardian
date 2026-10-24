@@ -5,11 +5,18 @@
  *   hits/    every line marked `// BUG` is one `wordpress-esc-sql-unquoted`
  *            finding: an `esc_sql(...)` value after `=`, `IN (`, `>=` and
  *            `LIMIT`, in a double- and a single-quoted PHP literal, after a
- *            quoted value, at the end of a chain; nothing else may fire;
+ *            quoted value, at the end of a chain; through a variable,
+ *            `implode` and a list that brings its own parentheses;
+ *            interpolated (`$id`, `{$id}`, in a string over two lines); a
+ *            `sprintf` argument for an unquoted `%s` / `%1$s`. Nothing else
+ *            may fire;
  *   misses/  the safe shapes: the value between quotes (also a quote opened in
  *            an earlier literal of the chain, and `"` as the SQL quote), an
  *            identifier between backticks and an operator, text that is not
- *            SQL, a value converted inside `esc_sql(...)`, `$wpdb->prepare`;
+ *            SQL, a value converted inside `esc_sql(...)` or after it, a list
+ *            the concatenation quotes itself, an interpolation between quotes
+ *            or of another variable, code that is not a string, a `sprintf`
+ *            with a quoted `%s`, a `%d` or a mixed format, `$wpdb->prepare`;
  *            nothing fires.
  *
  * That `scan_wordpress` passes it beside the registry's `p/php` and
@@ -80,9 +87,9 @@ function scan(dir: string): { rows: Array<{ rule: string; at: string; cwe: strin
 }
 
 describe('configs/semgrep/wordpress.yml', () => {
-  it('exists, and the fixture marks seven bugs', () => {
+  it('exists, and the fixture marks fifteen bugs', () => {
     expect(existsSync(PACK)).toBe(true);
-    expect(bugLines()).toHaveLength(7);
+    expect(bugLines()).toHaveLength(15);
   });
 
   it.runIf(!AVAILABLE && REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1: semgrep must be on PATH', () => {
