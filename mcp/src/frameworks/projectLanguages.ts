@@ -83,8 +83,8 @@ import { lstat, readdir } from 'node:fs/promises';
 import { join, win32 } from 'node:path';
 import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
-import { readProjectTextOrUndefined, realpathInProject } from '../platform/projectFs.js';
-import { WINDOWS_DIR_MAX } from '../runners/semgrepLongDirs.js';
+import { readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { tooLongForWindows, windowsBase, WINDOWS_MAX_PATH } from '../runners/semgrepLongDirs.js';
 import { git, splitNul } from '../runners/git.js';
 import { OWASP_SCAN_TYPES } from './coverage.js';
 import { canonicalLanguage, languageOfFile, SOURCE_LANGUAGES, type SourceLanguage } from './languages.js';
@@ -553,14 +553,8 @@ interface OversizedFiles {
   longPaths?: string[];
 }
 
-/**
- * Windows' `MAX_PATH`: a path of this many characters or more cannot be
- * opened by a program that is not long-path aware, which is the default
- * (`LongPathsEnabled=0`). Review 8, finding 2: a file at a 301-character path
- * holding `exec('ls ' + req.query.dir)` was missing from Semgrep's
- * `paths.scanned`, with no error, and the gate read coverage full, exit 0.
- */
-export const WINDOWS_MAX_PATH = 260;
+/** Windows' `MAX_PATH` (`runners/semgrepLongDirs.ts`, where Semgrep's limits are measured). */
+export { WINDOWS_MAX_PATH };
 
 /**
  * The files of `rels` (project-relative) whose absolute path under `root` is
@@ -577,14 +571,8 @@ export function longPathsOf(
   if (platform !== 'win32') return [];
   // Windows' own path rules whatever the host (`path.win32`): on Linux a drive path resolved as a relative
   // path under the working directory, and every name read as too long (the first Linux run, review 8 finding 1).
-  const base = (platform === process.platform ? realpathInProject(root, '.') : null) ?? win32.resolve(root);
-  return rels
-    .filter((rel) => {
-      const parts = rel.split('/');
-      if (win32.join(base, ...parts).length >= WINDOWS_MAX_PATH) return true;
-      return parts.length > 1 && win32.join(base, ...parts.slice(0, -1)).length >= WINDOWS_DIR_MAX;
-    })
-    .sort();
+  const base = platform === process.platform ? windowsBase(root) : win32.resolve(root);
+  return rels.filter((rel) => tooLongForWindows(base, rel)).sort();
 }
 
 /** Whether `rel` is a file the scanners read with a source language — see the module comment. */

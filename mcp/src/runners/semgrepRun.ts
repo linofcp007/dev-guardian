@@ -28,7 +28,8 @@
  * excluded (`runners/semgrepLongDirs.ts`), and says which.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { win32 } from 'node:path';
 import {
   DEFAULT_SEMGREP_TIMEOUT_S,
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
@@ -38,7 +39,17 @@ import {
 import { semgrepGuardianOutputExcludes } from '../platform/guardianOutput.js';
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from './processRunner.js';
 import { pythonUtf8Env } from './semgrepReport.js';
-import { failedToListTargets, longDirsUnder, semgrepExcludeForDir } from './semgrepLongDirs.js';
+import { batchArgs } from './argBatches.js';
+import { compileIgnore } from '../platform/guardianIgnore.js';
+import {
+  extendedLengthPath,
+  failedToListTargets,
+  longPathWalk,
+  rewriteReportPaths,
+  semgrepExcludeForDir,
+  semgrepIgnores,
+  windowsBase,
+} from './semgrepLongDirs.js';
 
 /** The command itself, for callers that describe a Semgrep spawn as data (`scanFileBatches`, `batchArgs`). */
 export const SEMGREP_COMMAND = 'semgrep';
@@ -187,29 +198,50 @@ export function metricsEnvProblem(configs: readonly string[], env: NodeJS.Proces
 
 type SemgrepRunOptions = Omit<ProcessRunOptions, 'command'>;
 
-/** A Semgrep run, and — Windows — the directories its retry left out (see the module comment). */
+/** A Semgrep run, and — Windows — what was done about the paths too long for it (`runners/semgrepLongDirs.ts`). */
 interface SemgrepRunResult extends ProcessRunResult {
-  /** Project-relative, `/`-separated: the retry's `--exclude`s. Absent: no retry. */
+  /** Project-relative, `/`-separated: the directories a repeated run excluded from its walk. Absent: none. */
   excludedLongDirs?: string[];
+  /** How many files too long for the walk were read on their own, their findings merged into the report. Absent: none. */
+  longFilesRead?: number;
 }
 
-/** The `--output` report a failed run wrote, for its error messages; null when there is none. */
-function failedReport(args: readonly string[]): string | null {
+/** The `--output` file the arguments name, if any. */
+function outputOf(args: readonly string[]): string | undefined {
   const at = args.indexOf('--output');
-  const out = at >= 0 ? args[at + 1] : undefined;
-  if (out === undefined) return null;
+  return at >= 0 ? args[at + 1] : undefined;
+}
+
+/** A report file's text; null when it cannot be read. */
+function readReport(path: string | undefined): string | null {
+  if (path === undefined) return null;
   try {
-    return readFileSync(out, 'utf8');
+    return readFileSync(path, 'utf8');
   } catch {
     return null;
   }
 }
 
+function parsed(text: string | null): Record<string, unknown> | null {
+  if (text === null) return null;
+  try {
+    const v: unknown = JSON.parse(text);
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+const listOf = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
 /**
  * Run Semgrep — through `run` when the caller injects one (create_fix_pr's
  * worktree runner). The directory target, when there is one, is the last
- * argument: on Windows a run whose walk could not list it is run once more,
- * the directories too long for Windows excluded.
+ * argument. On Windows (see the module comment): a run whose walk could not
+ * list it is run once more with the directories too long for Windows
+ * excluded; then the source files too long for its walk are read on their own
+ * as extended-length paths, and their findings merged into the run's
+ * `--output` report.
  */
 export async function runSemgrep(
   opts: SemgrepRunOptions,
@@ -219,22 +251,99 @@ export async function runSemgrep(
   const first = await run({ ...opts, ...semgrepSpawn(opts.env) });
   const args = opts.args ?? [];
   const target = args.at(-1);
-  if (platform !== 'win32' || target === undefined || first.exitCode === 0 || first.exitCode === null) return first;
-  if (!failedToListTargets(failedReport(args), first.stdout, first.stderr)) return first;
-  const dirs = longDirsUnder(target, platform);
-  if (dirs.length === 0) return first;
-  const retry = await run({ ...opts, args: [...args.slice(0, -1), ...dirs.map(semgrepExcludeForDir), target], ...semgrepSpawn(opts.env) });
-  return { ...retry, excludedLongDirs: dirs };
+  if (platform !== 'win32' || target === undefined || first.exitCode === null || first.outcome === 'cancelled') return first;
+  // Nothing for a file target: the walk lists a directory.
+  const walk = longPathWalk(target, platform);
+  if (walk.dirs.length === 0 && walk.files.length === 0) return first;
+  const out = outputOf(args);
+  let result: SemgrepRunResult = first;
+  if (first.exitCode !== 0 && walk.dirs.length > 0 && failedToListTargets(readReport(out), first.stdout, first.stderr)) {
+    const retry = await run({ ...opts, args: [...args.slice(0, -1), ...walk.dirs.map(semgrepExcludeForDir), target], ...semgrepSpawn(opts.env) });
+    result = { ...retry, excludedLongDirs: walk.dirs };
+  }
+  if (walk.files.length === 0 || out === undefined || result.exitCode === null || result.outcome === 'cancelled') return result;
+  const read = await readLongFiles({ opts, run, target, out, files: walk.files, semgrepignores: walk.semgrepignores });
+  return read > 0 ? { ...result, longFilesRead: read } : result;
 }
 
-/** The note a run that left directories out carries, for its `reason`; null when it left none out. */
+/**
+ * The second run: the files the walk did not list for their length, each an
+ * extended-length explicit target — never one the run's own `--exclude`s or a
+ * `.semgrepignore` leave out, which explicit targets would bypass — merged
+ * into `out` under the path the walk would have given (`target\rel`). Returns
+ * how many it read; 0 when there was none, or the report is not one.
+ */
+async function readLongFiles(a: {
+  opts: SemgrepRunOptions;
+  run: (options: ProcessRunOptions) => Promise<ProcessRunResult>;
+  target: string;
+  out: string;
+  files: readonly string[];
+  semgrepignores: Parameters<typeof semgrepIgnores>[0]['semgrepignores'];
+}): Promise<number> {
+  const report = parsed(readReport(a.out));
+  if (report === null) return 0;
+  const paths = report['paths'];
+  const scanned = listOf(paths !== null && typeof paths === 'object' ? (paths as Record<string, unknown>)['scanned'] : undefined)
+    .filter((p): p is string => typeof p === 'string')
+    .map((p) => p.split('\\').join('/').replace(/^\.\//, '').toLowerCase());
+  const args = a.opts.args ?? [];
+  const excludes = compileIgnore(args.filter((x) => x.startsWith('--exclude=')).map((x) => x.slice('--exclude='.length)).join('\n'));
+  const wanted = a.files.filter((rel) => {
+    const key = rel.toLowerCase();
+    if (scanned.some((s) => s === key || s.endsWith(`/${key}`))) return false;
+    return !excludes.ignores(rel) && !semgrepIgnores({ semgrepignores: a.semgrepignores }, rel);
+  });
+  if (wanted.length === 0) return 0;
+
+  const base = windowsBase(a.target);
+  const norm = (p: string): string => p.replace(/^\\\\\?\\/, '').split('/').join('\\').toLowerCase();
+  const given = new Map(wanted.map((rel) => [norm(win32.join(base, ...rel.split('/'))), win32.join(a.target, ...rel.split('/'))]));
+  const targets = wanted.map((rel) => extendedLengthPath(win32.join(base, ...rel.split('/'))));
+  // The run's own arguments, without its target and its report.
+  const outAt = args.indexOf('--output');
+  const fixed = args.slice(0, -1).filter((_x, i) => i !== outAt && i !== outAt + 1);
+  const merged = { results: listOf(report['results']), errors: listOf(report['errors']), scanned: [] as unknown[] };
+  let read = 0;
+  for (const [i, batch] of batchArgs(targets, { command: SEMGREP_COMMAND, fixedArgs: [...fixed, '--output', a.out] }).entries()) {
+    const part = `${a.out}.long-${String(i + 1)}.json`;
+    await a.run({ ...a.opts, args: [...fixed, '--output', part, ...batch], ...semgrepSpawn(a.opts.env) });
+    const raw = parsed(readReport(part));
+    rmSync(part, { force: true });
+    if (raw === null) continue;
+    const back = rewriteReportPaths(raw, (p) => given.get(norm(p)) ?? null) as Record<string, unknown>;
+    merged.results.push(...listOf(back['results']));
+    merged.errors.push(...listOf(back['errors']));
+    const backPaths = back['paths'];
+    const got = listOf(backPaths !== null && typeof backPaths === 'object' ? (backPaths as Record<string, unknown>)['scanned'] : undefined);
+    merged.scanned.push(...got);
+    read += got.length;
+  }
+  if (read === 0 && merged.errors.length === listOf(report['errors']).length) return 0;
+  const ownPaths = paths !== null && typeof paths === 'object' ? (paths as Record<string, unknown>) : {};
+  const next = {
+    ...report,
+    results: merged.results,
+    errors: merged.errors,
+    paths: { ...ownPaths, scanned: [...listOf(ownPaths['scanned']), ...merged.scanned] },
+  };
+  writeFileSync(a.out, JSON.stringify(next), 'utf8');
+  return read;
+}
+
+/** The note a run that worked around Windows' path limits carries, for its `reason`; null when it did not. */
 export function longDirsNote(result: SemgrepRunResult): string | null {
-  const dirs = result.excludedLongDirs;
-  if (dirs === undefined || dirs.length === 0) return null;
-  const shown = dirs.slice(0, 3).join(', ');
-  return (
-    `Semgrep could not list the project on Windows: ${dirs.length} director${dirs.length === 1 ? 'y' : 'ies'} at a path of ` +
-    `248 characters or more ${dirs.length === 1 ? 'was' : 'were'} left out and the run repeated — ${shown}` +
-    `${dirs.length > 3 ? ', …' : ''}; their files are named below`
-  );
+  const dirs = result.excludedLongDirs ?? [];
+  const files = result.longFilesRead ?? 0;
+  const notes: string[] = [];
+  if (dirs.length > 0) {
+    const shown = dirs.slice(0, 3).join(', ');
+    notes.push(
+      `Semgrep could not list the project on Windows: ${dirs.length} director${dirs.length === 1 ? 'y' : 'ies'} at a path of ` +
+        `248 characters or more ${dirs.length === 1 ? 'was' : 'were'} left out of its walk and the run repeated — ${shown}` +
+        `${dirs.length > 3 ? ', …' : ''}`,
+    );
+  }
+  if (files > 0) notes.push(`${files} file(s) at a path too long for Windows read on their own, as extended-length paths`);
+  return notes.length > 0 ? notes.join('; ') : null;
 }

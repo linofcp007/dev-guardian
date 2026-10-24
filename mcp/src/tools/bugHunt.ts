@@ -625,7 +625,9 @@ async function withSemgrepGaps(ctx: InvokeContext, inv: ScannerInvocation): Prom
   if (entry === undefined) return inv;
   if (entry.status === 'skipped' && (entry.reason === 'not_installed' || /scope holds no file/.test(entry.reason ?? ''))) return inv;
   const gaps = await semgrepCoverageGaps(ctx.projectPath, ctx.scope !== null ? { files: ctx.scope.files } : {});
-  const applied = applySemgrepCoverageGaps(entry, gaps, { scannedNothing: entry.status === 'skipped' });
+  // Its reports say which too-long paths it did read (runners/semgrepLongDirs.ts).
+  const reports = inv.parser_inputs.filter((p) => p.parser.name === 'semgrep').map((p) => p.input);
+  const applied = applySemgrepCoverageGaps(entry, gaps, { scannedNothing: entry.status === 'skipped', reports });
   const tools_run = [...inv.tools_run];
   tools_run[i] = applied.toolRun;
   const missing_tools = [...inv.missing_tools];

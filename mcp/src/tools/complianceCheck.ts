@@ -146,8 +146,11 @@ async function runRgpdPack(
   const at = out.tools_run.findIndex((t, i) => i >= before && t.name === 'semgrep-rgpd');
   const entry = out.tools_run[at];
   if (!ran || entry === undefined) return;
+  // Its reports say which too-long paths it did read (runners/semgrepLongDirs.ts).
+  const reports = out.parser_inputs.filter((p) => p.parser.name === 'semgrep').map((p) => p.input);
   const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
     scannedNothing: entry.status === 'skipped',
+    reports,
   });
   out.tools_run[at] = applied.toolRun;
   if (applied.missing) markMissing(out.missing_tools, 'semgrep-rgpd');
