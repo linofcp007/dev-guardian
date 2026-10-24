@@ -335,6 +335,12 @@ describe('owaspCoverage — findings and hints', () => {
     const ran = owaspCoverage([run('sast', [{ name: 'cppcheck', status: 'ok' }])], [], langs('c'));
     expect(statusOf(ran)['A10:2025']).toBe('tested');
 
+    // For PHP, Psalm's taint types — injection above all — on scan_sast and scan_wordpress.
+    const php = owaspCoverage([], [], langs('php'));
+    expect(cat(php, 'A05:2025').could_be_tested_by.join(' | ')).toMatch(/Psalm taint analysis[^|]*php 11 rules, 10 CWEs/);
+    const wp = owaspCoverage([run('wordpress', [{ name: 'psalm', status: 'ok' }])], [], langs('php'));
+    expect(statusOf(wp)['A05:2025']).toBe('tested');
+
     const js = owaspCoverage([], [], langs('javascript'));
     // The RGPD pack is named for what it is — one rule, one weakness, logs.
     expect(cat(js, 'A09:2025').could_be_tested_by).toEqual([]);

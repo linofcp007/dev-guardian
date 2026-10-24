@@ -217,9 +217,10 @@ describe('check_toolchain', () => {
     // (scan_containers' image signature and provenance check); 23 with gosec
     // and the Go toolchain it loads packages through (scan_sast on Go); 26
     // with govulncheck (deps_audit), shellcheck (quality_check) and
-    // cppcheck (scan_sast on C/C++).
-    expect(r.summary.total_catalogued).toBe(26);
-    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(26);
+    // cppcheck (scan_sast on C/C++); 28 with Psalm and the PHP runtime it
+    // runs on (scan_sast's and scan_wordpress' taint analysis).
+    expect(r.summary.total_catalogued).toBe(28);
+    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(28);
     expect(commands.has('cosign')).toBe(true);
     expect(commands.has('gosec')).toBe(true);
     expect(commands.has('go')).toBe(true);
@@ -332,7 +333,7 @@ describe('check_toolchain', () => {
     expect(r.tools.find((t) => t.name === 'docker')).toMatchObject({ installed: true, version: '29.8.0' });
     // Informational entries never count toward the catalogue summary.
     // 21, not 18 — see the comment on the other total_catalogued assertion above.
-    expect(r.summary.installed + r.summary.missing).toBe(26);
+    expect(r.summary.installed + r.summary.missing).toBe(28);
   });
 });
 

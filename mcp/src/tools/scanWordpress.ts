@@ -8,6 +8,8 @@
  *     named gap (`runners/trivyRun.ts#judgeTrivyFs`)
  *   - gitleaks for secrets
  *   - PHPCS with `WordPress` standard (when phpcs + WPCS installed)
+ *   - Psalm's taint analysis, WordPress's APIs modelled
+ *     (`runners/psalmRun.ts`: `$wpdb`'s queries as SQL sinks, its escapes)
  *
  * For live-install audits, use `wp_audit`. For WPScan vuln-DB lookup,
  * use `wp_vuln_check`.
@@ -25,7 +27,9 @@ import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { metricsEnvProblem, runSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
-import { trivySkipArgs } from '../platform/guardianIgnore.js';
+import { listScannedFiles, trivySkipArgs } from '../platform/guardianIgnore.js';
+import { PSALM, psalmTaint } from '../runners/psalmRun.js';
+import { psalmParser } from '../runners/scannerParsers/psalm.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
 import { checkSemgrepReport, describePartialParse } from '../runners/semgrepReport.js';
 import { withSemgrepEngineNote } from '../runners/semgrepConfigs.js';
@@ -56,9 +60,9 @@ registerToolModule(
     title: 'WordPress code scan',
     description:
       'Source scan of a WordPress plugin, theme or site: Semgrep PHP with the WordPress pack, Trivy on ' +
-      'composer.lock (a composer.json with no lock is a named gap), gitleaks and PHPCS with a WordPress ' +
-      'standard. A missing scanner is skipped with its reason. For an install: wp_audit; for known ' +
-      'vulnerabilities: wp_vuln_check.',
+      'composer.lock (a composer.json with no lock is a named gap), gitleaks, PHPCS with a WordPress ' +
+      "standard and Psalm's taint analysis with WordPress's APIs modelled. A missing scanner is skipped with its " +
+      'reason. For an install: wp_audit; for known vulnerabilities: wp_vuln_check.',
     scan_type: 'wordpress',
     // Its secrets pass reads git history: HEAD and every ref join the key.
     cacheState: (_input, { projectPath }) => historyState(projectPath),
@@ -148,6 +152,28 @@ registerToolModule(
         tools_run.push({ name: 'semgrep-wp', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('semgrep');
       }
+
+      // Psalm's taint analysis, WordPress's APIs modelled (runners/psalmRun.ts).
+      tasks.push(
+        (async () => {
+          try {
+            const pass = await psalmTaint({
+              projectPath: ctx.projectPath,
+              files: ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath),
+              wordpress: true,
+              reportDir,
+              env: ctx.scriptEnv,
+              signal: ctx.signal,
+              ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+            });
+            if (pass.report !== null) parser_inputs.push({ parser: psalmParser, input: pass.report });
+            if (pass.toolRun !== null) tools_run.push(pass.toolRun);
+            for (const name of pass.missing) markMissing(missing_tools, name);
+          } catch (e) {
+            tools_run.push({ name: PSALM, status: 'failed', reason: `taint analysis failed: ${e instanceof Error ? e.message : String(e)}` });
+          }
+        })(),
+      );
 
       // Secrets: history AND uncommitted files (or the whole directory when
       // this is not a git repository — the common case for a WordPress site

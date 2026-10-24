@@ -251,6 +251,18 @@ const CPPCHECK_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A10:2025': rules({ c: cell(9, 4), cpp: cell(9, 4) }),
 };
 
+/**
+ * Psalm 6.20.1's taint types (`runners/scannerParsers/psalm.ts`
+ * PSALM_TAINT_TYPES: 20, 19 with the CWE dev-guardian gives them — Psalm
+ * gives none), counted with {@link countRuleReach} as one PHP rule per type,
+ * measured 2026-10-24. PHP only.
+ */
+const PSALM_RULES: Partial<Record<Owasp2025Id, Reach>> = {
+  'A01:2025': rules({ php: cell(4, 3) }),
+  'A05:2025': rules({ php: cell(11, 10) }),
+  'A08:2025': rules({ php: cell(2, 2) }),
+};
+
 /** configs/semgrep/bugfix-*.yml, recounted by packTaxonomy.test.ts. */
 const BUGFIX_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A06:2025': rules({ javascript: cell(1, 'CWE-362'), typescript: cell(1, 'CWE-362') }),
@@ -318,6 +330,15 @@ export const OWASP_DETECTORS: readonly OwaspDetector[] = [
     reach: CPPCHECK_RULES,
     basis: "cppcheck's own CWE per check (--errorlist, error and warning severities), mapped with OWASP's CWE list.",
     measured: 'cppcheck 2.22.0, 2026-10-24',
+  },
+  {
+    id: 'psalm',
+    label: 'Psalm taint analysis (scan_sast, scan_wordpress; PHP)',
+    runs: ['psalm'],
+    scanTypes: ['sast', 'security_full', 'wordpress'],
+    reach: PSALM_RULES,
+    basis: "Psalm's taint types, each with the CWE dev-guardian assigns it (Psalm reports none), mapped with OWASP's CWE list.",
+    measured: 'Psalm 6.20.1, 2026-10-24',
   },
   {
     id: 'bugfix-packs',

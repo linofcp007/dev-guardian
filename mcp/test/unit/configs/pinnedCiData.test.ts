@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { PINNED_RELEASES, TRIVY_INSTALL_TAG } from '../../../src/runners/installCatalog.js';
+import { PINNED_RELEASES, PSALM_PHAR_SHA256, PSALM_VERSION, TRIVY_INSTALL_TAG } from '../../../src/runners/installCatalog.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 /** configs -> unit -> test -> mcp -> repo root. */
@@ -92,7 +92,7 @@ describe('configs/ci/pinned.json: actions', () => {
 describe('configs/ci/pinned.json: scanners with a downloaded binary', () => {
   const pinned = readPinned();
 
-  it.each(['trivy', 'gitleaks', 'actionlint', 'gosec'])('%s has a 64-hex sha256 and a linux amd64 URL', (key) => {
+  it.each(['trivy', 'gitleaks', 'actionlint', 'gosec', 'psalm'])('%s has a 64-hex sha256 and a linux amd64 URL', (key) => {
     expect(pinned.scanners[key]?.linux_amd64_sha256).toMatch(SHA256);
     expect(pinned.scanners[key]?.linux_amd64_url).toMatch(/^https:\/\//);
   });
@@ -115,6 +115,15 @@ describe('configs/ci/pinned.json: scanners with a downloaded binary', () => {
       linux_amd64_url: `${r.base}/${a.file}`,
       linux_amd64_sha256: a.sha256,
     });
+  });
+
+  it("psalm is the PHAR installCatalog.ts pins, at the same URL and sum (no archive: run by php)", () => {
+    expect(pinned.scanners['psalm']).toMatchObject({
+      version: PSALM_VERSION,
+      linux_amd64_url: `https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`,
+      linux_amd64_sha256: PSALM_PHAR_SHA256,
+    });
+    expect(pinned.scanners['psalm']?.archive_member).toBeUndefined();
   });
 
   it("trivy's version matches installCatalog.ts's TRIVY_INSTALL_TAG (single source of truth, enforced)", () => {

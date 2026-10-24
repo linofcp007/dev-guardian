@@ -137,6 +137,19 @@ const GITLEAKS_VERSION = '8.30.1';
 
 /** The cppcheck release scoop and winget are asked for (2026-09-19). */
 const CPPCHECK_VERSION = '2.22.0';
+
+/**
+ * The Psalm release PHAR every Psalm install fetches. 6.20.1 was published
+ * 2026-10-20; checked on 2026-10-24: the sum matches GitHub's asset digest
+ * and the psalm/phar repository's copy of the same tag, and `psalm.phar.asc`
+ * verifies with the ed25519 key `bin/ci/build-phar.sh` signs with at that tag
+ * (54F5DF0E979A94C40DEDE5E599BF4D9A33D65E1E). Assets of older releases were
+ * re-signed after their release: pinned by sum, never by tag. Bump the
+ * version and the sum together, deliberately.
+ */
+export const PSALM_VERSION = '6.20.1';
+export const PSALM_PHAR_SHA256 = 'f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51';
+const PSALM_PHAR_URL = `https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`;
 const GOSEC_VERSION = '2.30.0';
 const SHELLCHECK_VERSION = '0.11.0';
 
@@ -504,6 +517,39 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     },
     prefer: { win32: ['scoop'] },
     default: false, // only when C or C++ is detected
+  },
+  psalm: {
+    name: 'psalm',
+    // 6: the release scan_sast's taint pass was measured on (6.20.1) — its
+    // configuration and JSON report; checked at run time (runners/psalmRun.ts).
+    version_floor: '6.0.0',
+    probe: { command: 'psalm.phar', args: ['--version'], phar: true },
+    required_by: ['scan_sast', 'security_scan_full', 'scan_wordpress'],
+    install: {
+      // The release PHAR, sha256-checked, into the per-user tools directory:
+      // dev-guardian runs it with `php`, on every OS (no .cmd shim, no shell).
+      win32: { release: psalmPharWindowsInstaller() },
+      linux: { curl: psalmPharInstaller('linux') },
+      darwin: { curl: psalmPharInstaller('darwin') },
+    },
+    default: false, // only when PHP is detected
+  },
+  // The PHP runtime Psalm runs on — like the Go toolchain, never installed
+  // for you (install_toolchain routes it to manual steps): which PHP a
+  // project runs on is the project's choice.
+  php: {
+    name: 'php',
+    // 8.2: Psalm 6's PHAR refuses 8.1 (measured).
+    version_floor: '8.2.0',
+    probe: { command: 'php', args: ['--version'] },
+    required_by: ['scan_sast', 'security_scan_full', 'scan_wordpress'],
+    install: {
+      // Verified 2026-10-24: winget-pkgs carries PHP.PHP.8.4, scoop's Main bucket `php`.
+      win32: { winget: manualHint('winget install PHP.PHP.8.4'), scoop: manualHint('scoop install php') },
+      linux: { apt: manualHint('sudo apt-get install php-cli php-xml php-mbstring') },
+      darwin: { brew: manualHint('brew install php') },
+    },
+    default: false,
   },
   jscpd: {
     name: 'jscpd',
@@ -877,6 +923,60 @@ function cosignReleaseInstaller(os: 'linux' | 'darwin'): InstallSpec {
 }
 
 /**
+ * Psalm's release PHAR ({@link PSALM_VERSION}), checked against its sha256
+ * and installed to `~/.local/bin/psalm.phar` — one file for every CPU, run
+ * by `php`. The shape of {@link cosignReleaseInstaller}.
+ */
+function psalmPharInstaller(os: 'linux' | 'darwin'): InstallSpec {
+  const check = os === 'linux' ? 'sha256sum -c -' : 'shasum -a 256 -c -';
+  const script = [
+    'set -eu',
+    'tmp="$(mktemp)"',
+    'trap \'rm -f "$tmp"\' EXIT',
+    `curl -sSfL -o "$tmp" "${PSALM_PHAR_URL}"`,
+    `echo "${PSALM_PHAR_SHA256}  $tmp" | ${check}`,
+    'mkdir -p "$HOME/.local/bin"',
+    'install -m 0755 "$tmp" "$HOME/.local/bin/psalm.phar"',
+  ].join('\n');
+  return {
+    command: 'bash',
+    args: ['-c', script],
+    needs_elevation: false,
+    description: `Psalm ${PSALM_VERSION} release PHAR (${os}, sha256-checked) → ~/.local/bin/psalm.phar, run by php`,
+    user_bin: 'psalm.phar',
+  };
+}
+
+/** {@link psalmPharInstaller} on Windows: PowerShell, into `%USERPROFILE%\.local\bin\psalm.phar`. */
+function psalmPharWindowsInstaller(): InstallSpec {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12',
+    '$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())',
+    'New-Item -ItemType Directory -Path $tmp | Out-Null',
+    'try {',
+    "  $phar = Join-Path $tmp 'psalm.phar'",
+    `  Invoke-WebRequest -UseBasicParsing -Uri '${PSALM_PHAR_URL}' -OutFile $phar`,
+    '  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $phar).Hash.ToLowerInvariant()',
+    `  if ($got -ne '${PSALM_PHAR_SHA256}') { throw ('psalm: sha256 mismatch, got ' + $got) }`,
+    "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
+    '  New-Item -ItemType Directory -Force -Path $bin | Out-Null',
+    "  Copy-Item -LiteralPath $phar -Destination (Join-Path $bin 'psalm.phar') -Force",
+    '} finally {',
+    '  Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue',
+    '}',
+  ].join('\n');
+  return {
+    command: 'powershell',
+    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    needs_elevation: false,
+    description: `Psalm ${PSALM_VERSION} release PHAR (windows, sha256-checked) → %USERPROFILE%\\.local\\bin\\psalm.phar, run by php`,
+    user_bin: 'psalm.phar',
+  };
+}
+
+/**
  * `tool`'s pinned release archive for this CPU ({@link PINNED_RELEASES}),
  * checked against its sha256 before it is unpacked and its binary installed
  * to `~/.local/bin` — the shape of {@link cosignReleaseInstaller}, for a
@@ -1063,7 +1163,11 @@ function wpCliCurlInstaller(): InstallSpec {
 }
 
 /** The toolchains install_toolchain never installs, and what each is called in its manual step. */
-export const MANUAL_ONLY_TOOLS: Readonly<Record<string, string>> = { 'dotnet-sdk': 'the .NET SDK', go: 'the Go toolchain' };
+export const MANUAL_ONLY_TOOLS: Readonly<Record<string, string>> = {
+  'dotnet-sdk': 'the .NET SDK',
+  go: 'the Go toolchain',
+  php: 'the PHP runtime',
+};
 
 function manualHint(humanCommand: string): InstallSpec {
   // SENTINEL: this spec is NEVER executed by install_toolchain — the tool

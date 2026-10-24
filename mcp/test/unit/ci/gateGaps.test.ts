@@ -280,6 +280,16 @@ describe('every gap as data', () => {
     );
   });
 
+  it("Psalm's gaps: PHP is never install_toolchain's, and one too old or a Psalm too old says to upgrade", () => {
+    expect(remedyFor('missing_tool', 'php', 'security_scan_full: php not installed')).toMatch(
+      /^Install PHP 8\.2 or newer with its xml and mbstring extensions .* install_toolchain never installs it\.$/,
+    );
+    expect(remedyFor('skipped', 'psalm', 'scan: psalm skipped (Psalm needs PHP 8.2 or newer and it is 8.1)')).toBe(
+      'Install PHP 8.2 or newer and put it first on PATH, then rerun the scan.',
+    );
+    expect(remedyFor('skipped', 'psalm', 'scan: psalm skipped (Psalm 6 or newer is needed and it is 5.26)')).toMatch(/^Install a newer psalm/);
+  });
+
   it('kinds from what a step says: not installed, no lockfile, a refused step, a failed run, a shallow clone', () => {
     const steps: ScanStepResult[] = [
       { tool: 'security_scan_full', ran: true, tools_run: [], missing_tools: ['bandit'] },

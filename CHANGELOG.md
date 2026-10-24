@@ -8,9 +8,9 @@ version bump.
 
 ## [Unreleased]
 
-gosec joins `scan_sast` and `review_pr` for Go and cppcheck joins `scan_sast` for C and C++, govulncheck joins
-`deps_audit`, shellcheck joins `quality_check`, a mobile pack joins the plugin's Semgrep packs, and Brakeman's
-SARIF is a tested import.
+gosec joins `scan_sast` and `review_pr` for Go, cppcheck joins them for C and C++, Psalm's taint analysis joins
+`scan_sast` and `scan_wordpress` for PHP, govulncheck joins `deps_audit`, shellcheck joins `quality_check`, a mobile
+pack joins the plugin's Semgrep packs, and Brakeman's SARIF is a tested import.
 
 ### Upgrading from 3.4.0
 
@@ -26,6 +26,12 @@ SARIF is a tested import.
   — and is named the same way. `install_toolchain { tools: ["cppcheck"] }` installs 2.22.0 with scoop (or winget,
   elevated) on Windows, apt on Linux, Homebrew on macOS. The regenerated GitHub pipeline installs Ubuntu's
   cppcheck when the checkout has C or C++; GitLab and Bitbucket, on a bookworm image, need it on the image.
+- **A PHP project needs Psalm and PHP 8.2 or newer.** `scan_sast` and `scan_wordpress` run Psalm's taint analysis
+  whenever the project has a `.php` or `.phtml` file outside `vendor/`; without Psalm the run lists `psalm`
+  missing, without PHP (or with one older than 8.2) `php`, and the CLI `scan` exits 2. `install_toolchain { tools:
+  ["psalm"] }` installs Psalm 6.20.1's release PHAR, sha256-checked, into the per-user tools directory; PHP is
+  never installed for you. The regenerated pipelines install the PHAR when the checkout has PHP (GitLab and
+  Bitbucket also Debian's PHP 8.2). The first scans report taint findings the baseline does not hold.
 - **New findings.** gosec on Go code and the mobile pack on Android and iOS configuration report findings the
   baseline does not hold, and a high one fails `--fail-on high`. Review them; rebuild the baseline on the base
   branch only for what you accept, never with `baseline update` on the branch itself.
@@ -55,6 +61,21 @@ SARIF is a tested import.
   directory's `files.txt`); a file checked in only some `#ifdef` configurations, or a function too complex for
   the normal level, is noted, never a gap. The OWASP coverage tables count its 189 CWE-tagged checks for C and
   C++ (A06 and A10).
+- **Psalm's taint analysis in `scan_sast` and `scan_wordpress`** (`runners/psalmRun.ts`), measured on Psalm
+  6.20.1 with PHP 8.2 to 8.5: SQL, shell, eval, include, unserialize, SSRF, file, header, XSS and the other taint
+  types, the trace from the source in the message, each type's CWE and severity dev-guardian's (Psalm gives
+  neither), one finding per sink. dev-guardian writes the configuration — never the project's `psalm.xml`, whose
+  issue handlers could switch a taint type off — and hands Psalm an empty root of its own: with the project as its
+  root, Psalm runs the project's `vendor/autoload.php`. The files are listed one by one (`.guardianignore`
+  applied; `.php`, `.phtml`, `.inc`; `vendor/` left out and named), PDO and mysqli are sinks, every function is
+  global. The exit code is not trusted (0 with findings under `GITHUB_WORKFLOW`): the JSON report must hold as
+  many issues as Psalm counts. A file that hangs Psalm ends the run after 40 minutes, a failure. A WordPress
+  project, and every `scan_wordpress`, gets `configs/psalm/wordpress-taint.phpstub`: `$wpdb`'s queries as SQL
+  sinks, `prepare` and `esc_sql` as SQL escapes, `esc_html`/`esc_attr`/`esc_url`/`esc_textarea`/`esc_js`/`wp_kses`
+  as HTML escapes, `maybe_unserialize` and `wp_remote_*` as sinks — without it `$wpdb` is no sink at all. A scope
+  reads the whole project's PHP (a flow crosses files) and keeps the scope's findings. In taint mode Psalm reports
+  no file it could not parse; scan_sast's Semgrep pass names those. The OWASP coverage tables count its types for
+  PHP (A01, A05, A08).
 - **`configs/semgrep/mobile.yml`**, run by `scan_sast` with the LLM and web-JS packs (14 rules): a debuggable or
   backup-enabled Android app, cleartext traffic in the manifest or the network security config, a service,
   receiver or provider exported without a permission, user-installed CAs trusted outside `<debug-overrides>`,
@@ -78,10 +99,11 @@ SARIF is a tested import.
 - **Brakeman's SARIF** (8.1.0) imports with every result in place (`import_sarif`); `docs/sarif-import.md` says
   how to make it and why dev-guardian runs neither Brakeman (not open-source: the Brakeman Public Use License)
   nor CodeQL (free for open-source code only).
-- `check_toolchain` lists gosec, govulncheck, shellcheck, cppcheck and the Go toolchain; `install_toolchain`
-  routes Go to a manual step, as the .NET SDK. The CI gate's remedies name `go mod download` for a package that
+- `check_toolchain` lists gosec, govulncheck, shellcheck, cppcheck, Psalm (run by `php`), the Go toolchain and
+  PHP; `install_toolchain` routes Go and PHP to manual steps, as the .NET SDK. The CI gate's remedies name `go mod download` for a package that
   does not type-check, say that `install_toolchain` never installs Go, name the `compile_commands.json` that
-  configures a file cppcheck could not, and say to upgrade a cppcheck too old to run.
+  configures a file cppcheck could not, say to upgrade a cppcheck, a Psalm or a PHP too old to run, and that
+  `install_toolchain` never installs PHP.
 
 ### Changed
 

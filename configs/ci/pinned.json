@@ -90,6 +90,12 @@
       "linux_amd64_sha256": "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb",
       "archive_member": "gosec",
       "_note": "Hashed independently and matched against gosec_2.30.0_checksums.txt, and verified with cosign verify-blob against securego/gosec's cosign.pub and the release's .sigstore.json bundle (2026-10-24); `tar -tzf` lists gosec at the archive root. Same version as PINNED_RELEASES.gosec in mcp/src/runners/installCatalog.ts — test/unit/configs/pinnedCiData.test.ts asserts they agree."
+    },
+    "psalm": {
+      "version": "6.20.1",
+      "linux_amd64_url": "https://github.com/vimeo/psalm/releases/download/6.20.1/psalm.phar",
+      "linux_amd64_sha256": "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51",
+      "_note": "The release PHAR (one file for every CPU, run by php), installed only when the checkout has PHP. Hashed independently and matched against GitHub's asset digest and the psalm/phar repository's copy of the tag; psalm.phar.asc verifies with the ed25519 key bin/ci/build-phar.sh signs with (2026-10-24). Same version and sum as PSALM_VERSION / PSALM_PHAR_SHA256 in mcp/src/runners/installCatalog.ts — test/unit/configs/pinnedCiData.test.ts asserts they agree."
     }
   }
 }

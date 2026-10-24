@@ -34,7 +34,10 @@
 #      C++ source (scan_sast's own test: `.c .cc .cpp .cxx .c++`, outside
 #      hidden directories): Ubuntu's own package (apt checks its signature),
 #      2.13 on ubuntu-24.04 — the oldest scan_sast runs, since an older one
-#      skips a file it cannot configure without saying so.
+#      skips a file it cannot configure without saying so. And Psalm, ONLY
+#      when the checkout has a PHP source outside vendor/ and node_modules/:
+#      its release PHAR, sha256-checked like the binaries of step 7, run by
+#      the runner image's own PHP (8.3 on ubuntu-24.04; Psalm needs 8.2).
 #   4. Points DEV_GUARDIAN_HOME at a directory under `$RUNNER_TEMP` — the
 #      runner's own documented scratch space — via `$GITHUB_ENV`, not a
 #      workflow- or job-level `env:` block: GitHub Actions does not allow
@@ -245,6 +248,26 @@ jobs:
       - name: Install cppcheck
         if: steps.cpp_probe.outputs.found == 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Detect PHP sources (scan_sast runs Psalm's taint analysis on them)
+        id: php_probe
+        run: |
+          if find . -path './.*' -prune -o -name vendor -prune -o -name node_modules -prune -o -type f \( -iname '*.php' -o -iname '*.phtml' \) -print -quit | grep -q .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Psalm (the release PHAR, sha256-checked; the image's PHP runs it)
+        if: steps.php_probe.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/dev-guardian-scanners"
+          mkdir -p "$dir"
+          curl -sSfL -o "$dir/psalm.phar" "{{PSALM_URL}}"
+          echo "{{PSALM_SHA256}}  $dir/psalm.phar" | sha256sum -c -
+          sudo install -m 0755 "$dir/psalm.phar" /usr/local/bin/psalm.phar
+          php --version
 
       - name: Point DEV_GUARDIAN_HOME outside this checkout
         run: echo "DEV_GUARDIAN_HOME=$RUNNER_TEMP/dev-guardian" >> "$GITHUB_ENV"

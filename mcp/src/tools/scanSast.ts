@@ -2,8 +2,10 @@
  * `scan_sast` — Semgrep static analysis, plus Bandit when Python is present,
  * gosec when Go is (`runners/gosecRun.ts`: through the Go toolchain, which
  * loads — and may download — the project's modules), cppcheck's error and
- * warning checks when C or C++ is (`runners/cppcheckRun.ts`), and the .NET
- * SDK's security analyzers when the project is .NET.
+ * warning checks when C or C++ is (`runners/cppcheckRun.ts`), Psalm's taint
+ * analysis when PHP is (`runners/psalmRun.ts`: never the project's own
+ * configuration or autoloader), and the .NET SDK's security analyzers when
+ * the project is .NET.
  *
  * Invokes Semgrep directly (no shell script), writing the JSON report to
  * `.guardian/reports/sast-<short-scan-id>/sast.json`.
@@ -108,6 +110,9 @@ import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fil
 import { gosecOnPackages, isGoSource } from '../runners/gosecRun.js';
 import { cppcheckSources, cppSources } from '../runners/cppcheckRun.js';
 import { cppcheckParser } from '../runners/scannerParsers/cppcheck.js';
+import { hasPhpSource, psalmTaint } from '../runners/psalmRun.js';
+import { psalmParser } from '../runners/scannerParsers/psalm.js';
+import { isWordPressProject } from '../runners/stackDetect.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
 import { getProp, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
@@ -193,7 +198,8 @@ registerToolModule(
     description:
       "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS, " +
       'mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for ' +
-      "Go, through the Go toolchain (it may download modules); cppcheck for C/C++; for .NET, a locked restore and `dotnet build` " +
+      "Go, through the Go toolchain (it may download modules); cppcheck for C/C++; Psalm's taint analysis for PHP; for .NET, a " +
+      'locked restore and `dotnet build` ' +
       "with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial " +
       'coverage. `tools_run[].honoured_config`: the project files that decided a run. local_only avoids the ' +
       'registry and its metrics.',
@@ -244,6 +250,11 @@ registerToolModule(
         await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
         await runGosec({ ctx, reportDir, files: files.filter(isGoSource), tools_run, missing_tools, parser_inputs });
         await runCppcheck({ ctx, reportDir, files: cppSources(files), scoped: true, tools_run, missing_tools, parser_inputs });
+        // Psalm reads the whole project's PHP for a scope's (a taint flow crosses files); the factory keeps the scope's findings.
+        if (hasPhpSource(files)) {
+          const all = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
+          await runPsalm({ ctx, reportDir, files: all, scopeFiles: files.length, tools_run, missing_tools, parser_inputs });
+        }
         dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
       } else {
         await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
@@ -256,6 +267,9 @@ registerToolModule(
         if (looksGo(ctx.projectPath)) await runGosec({ ctx, reportDir, files: await scanned(), tools_run, missing_tools, parser_inputs });
         if (hasFileWithExtension(ctx.projectPath, ['.c', '.cc', '.cpp', '.cxx', '.c++'])) {
           await runCppcheck({ ctx, reportDir, files: await scanned(), scoped: false, tools_run, missing_tools, parser_inputs });
+        }
+        if (hasFileWithExtension(ctx.projectPath, ['.php', '.phtml'])) {
+          await runPsalm({ ctx, reportDir, files: await scanned(), tools_run, missing_tools, parser_inputs });
         }
         await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
       }
@@ -879,6 +893,30 @@ async function runCppcheck(
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
   });
   for (const report of pass.reports) parser_inputs.push({ parser: cppcheckParser, input: report });
+  if (pass.toolRun !== null) tools_run.push(pass.toolRun);
+  for (const name of pass.missing) markMissing(missing_tools, name);
+}
+
+/**
+ * Psalm's taint analysis over the project's PHP (`runners/psalmRun.ts`),
+ * WordPress's APIs modelled when the project is WordPress. No entry when
+ * there is no PHP outside `vendor/`.
+ */
+async function runPsalm(
+  args: Collect & { ctx: InvokeContext; reportDir: string; files: readonly string[]; scopeFiles?: number },
+): Promise<void> {
+  const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
+  const pass = await psalmTaint({
+    projectPath: ctx.projectPath,
+    files,
+    wordpress: isWordPressProject(ctx.projectPath),
+    ...(args.scopeFiles !== undefined ? { scopeFiles: args.scopeFiles } : {}),
+    reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  if (pass.report !== null) parser_inputs.push({ parser: psalmParser, input: pass.report });
   if (pass.toolRun !== null) tools_run.push(pass.toolRun);
   for (const name of pass.missing) markMissing(missing_tools, name);
 }

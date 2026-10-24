@@ -641,13 +641,18 @@ project's own build and test commands.
 | `api.wordpress.org` | `wp_audit` (`mode` install or bulk: WP-CLI `verify-checksums`) | per call |
 | The target you name | `perf_check` (Lighthouse URL, k6 script) | per call |
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
-| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture") |
+| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture"); so is Psalm's release PHAR, before it is copied |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
 | Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
 | Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |
 
 `map_attack_surface` itself sends nothing, but the Semgrep it runs does what
-the rows above say: metrics when you are logged in (its version check is off). The
+the rows above say: metrics when you are logged in (its version check is off).
+Psalm (`scan_sast` and `scan_wordpress` on PHP) makes no request — traced on
+6.20.1 — and is never passed `--shepherd`, which uploads statistics. It is run
+with dev-guardian's own configuration and an empty root directory of its own:
+the project's `psalm.xml` is never read and its `vendor/autoload.php` never
+runs (with the project as its root, Psalm runs it). The
 hooks' SessionStart and secret-warning branches, `detect_stack`,
 `audit_agent_config`, `observability_setup`, the `status` and `dashboard` CLI
 commands and the history readers (`diff_scans`, `set_baseline`,

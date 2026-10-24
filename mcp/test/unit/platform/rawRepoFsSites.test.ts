@@ -189,6 +189,11 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "cppcheck's file list into, and its XML report and its build directory's files.txt back from, the report directory ensureReportDir verified",
   },
+  'src/runners/psalmRun.ts': {
+    apis: { writeFileSync: 1, readFileSync: 1 },
+    kind: 'own',
+    reason: "Psalm's configuration into the temp directory mkdtemp just made, and its JSON report back from the verified report directory",
+  },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },
@@ -326,9 +331,11 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "fixpr/ (another reviewer's): the fix worktree dev-guardian created, and a path git listed for it, compared by real spelling",
   },
   'src/platform/binaryPath.ts': {
-    apis: { statSync: 1, accessSync: 1 },
+    apis: { statSync: 2, accessSync: 1 },
     kind: 'host',
-    reason: 'candidates on the PATH entries a bare command name is looked up in — absolute, local entries only, never the current directory',
+    reason:
+      'candidates on the PATH entries a bare command name (or a PHAR, by its exact name) is looked up in — absolute, local entries only, ' +
+      'never the current directory',
   },
   'src/runners/npmCmdShim.ts': {
     apis: { statSync: 1 },

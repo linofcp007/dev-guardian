@@ -103,8 +103,8 @@ function bookkeepingNames(): string[] {
     ...collect(/judgeTrivyConfig\(\{\s*name:\s*'([^']+)'/g),
     // gitleaks' passes.
     ...collect(/export const GITLEAKS_[A-Z_]+\s*=\s*'([^']+)'/g),
-    // gosec's, govulncheck's, shellcheck's and cppcheck's passes, and the Go toolchain's gap.
-    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK)\s*=\s*'([^']+)'/g),
+    // gosec's, govulncheck's, shellcheck's, cppcheck's and Psalm's passes, and the Go and PHP runtimes' gaps.
+    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK|PSALM|PHP_RUNTIME)\s*=\s*'([^']+)'/g),
     // judgeTrivyFs' walk gap: `export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk'`.
     ...collect(/export const TRIVY_[A-Z_]+_GAP\s*=\s*'([^']+)'/g),
     // audit_executive: one entry per sub-tool.
@@ -161,6 +161,8 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/gosecRun.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
   'runners/govulncheckRun.ts:GOVULNCHECK': 'the GOVULNCHECK constant',
   'runners/cppcheckRun.ts:CPPCHECK': 'the CPPCHECK constant',
+  'runners/psalmRun.ts:PSALM': 'the PSALM / PHP_RUNTIME constants',
+  'tools/scanWordpress.ts:PSALM': 'the PSALM constant',
   'runners/shellcheckRun.ts:SHELLCHECK': 'the SHELLCHECK constant',
   'tools/qualityCheck.ts:SHELLCHECK': 'the SHELLCHECK constant',
   'tools/depsAudit.ts:name': "runners/govulncheckRun.ts#govulncheckModules' `missing`: GOVULNCHECK or 'go'",
@@ -295,7 +297,8 @@ describe('runNames: the pairs that do not share a name', () => {
     ['hadolint', ['hadolint']],
     ['docker-compose', ['docker-compose']],
     ['budgets', ['budgets']],
-    ['scan_sast', ['semgrep', 'bandit', 'gosec', 'cppcheck', 'security-code-scan', 'dotnet-analyzers']],
+    ['scan_sast', ['semgrep', 'bandit', 'gosec', 'cppcheck', 'psalm', 'security-code-scan', 'dotnet-analyzers']],
+    ['php', ['psalm']],
     ['cppcheck', ['cppcheck']],
     ['go', ['gosec', 'govulncheck']],
     ['scan_iac', [TRIVY_CONFIG, 'zizmor', 'actionlint']],

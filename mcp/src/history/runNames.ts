@@ -145,6 +145,10 @@ export const RUN_NAMES = {
   go: scanner('gosec', 'govulncheck'),
   // scan_sast's and review_pr's C/C++ pass (runners/cppcheckRun.ts).
   cppcheck: scanner('cppcheck'),
+  // scan_sast's and scan_wordpress' PHP taint pass (runners/psalmRun.ts), and
+  // the missing_tools entry when the PHP runtime it runs on is absent or too old.
+  psalm: scanner('psalm'),
+  php: scanner('psalm'),
   'security-code-scan': scanner('security-code-scan'),
   // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
   'dotnet-analyzers': scanner('dotnet-analyzers'),
@@ -293,16 +297,16 @@ export const RUN_NAMES = {
   // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
   // sub-scan's own bookkeeping instead whenever the row still exists; these
   // speak for a sub-tool that failed before it wrote one.
-  security_scan_full: scanner('semgrep', 'bandit', 'gosec', 'cppcheck', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
+  security_scan_full: scanner('semgrep', 'bandit', 'gosec', 'cppcheck', 'psalm', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
   quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'shellcheck', 'budgets'),
   deps_audit: scanner(...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package', 'govulncheck'),
   compliance_check: scanner(...TRIVY_FS_KEYS, 'semgrep'),
-  scan_wordpress: scanner('semgrep', 'gitleaks', ...TRIVY_FS_KEYS, 'phpcs'),
+  scan_wordpress: scanner('semgrep', 'gitleaks', ...TRIVY_FS_KEYS, 'phpcs', 'psalm'),
 
   // security_scan_full: its own entry for a child that threw, answered an
   // error, or is not registered — the child wrote no bookkeeping of its own.
   // (An audit reads these through the security_scan_full sub-scan.)
-  scan_sast: scanner('semgrep', 'bandit', 'gosec', 'cppcheck', 'security-code-scan', 'dotnet-analyzers'),
+  scan_sast: scanner('semgrep', 'bandit', 'gosec', 'cppcheck', 'psalm', 'security-code-scan', 'dotnet-analyzers'),
   scan_secrets: scanner('gitleaks'),
   scan_deps: scanner(...TRIVY_FS_KEYS),
   scan_iac: scanner(TRIVY_CONFIG, 'zizmor', 'actionlint'),

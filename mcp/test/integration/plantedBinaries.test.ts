@@ -17,7 +17,7 @@ import { copyFileSync, chmodSync, existsSync, mkdirSync, rmSync, writeFileSync }
 import { delimiter, join } from 'node:path';
 import { execa } from 'execa';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { commandFor, findOnPath, hardenCommandSearch, searchDirs } from '../../src/platform/binaryPath.js';
+import { commandFor, findFileOnPath, findOnPath, hardenCommandSearch, searchDirs } from '../../src/platform/binaryPath.js';
 import { execGit, execGitSync } from '../../src/platform/gitSafety.js';
 import { resolveBinary } from '../../src/platform/pkgManagerDetect.js';
 import { runProcess } from '../../src/runners/processRunner.js';
@@ -43,6 +43,20 @@ describe('searchDirs — only absolute entries are searched', () => {
 
   it('a name that is not bare is never looked up', () => {
     for (const name of ['./node', '../node', 'bin/node', 'C:node', '.', '..', '']) expect(findOnPath(name)).toBeNull();
+  });
+});
+
+describe('findFileOnPath — a PHAR by its exact name (runners/psalmRun.ts)', () => {
+  it('the first PATH directory holding a file of that name — no PATHEXT, no execute bit; never "." or a name that is not bare', () => {
+    const a = makeTempDir('ffp-a-');
+    const b = makeTempDir('ffp-b-');
+    // A directory of that name is no file.
+    mkdirSync(join(a, 'psalm.phar'));
+    writeFileSync(join(b, 'psalm.phar'), '#!/usr/bin/env php\n');
+    const env = { PATH: ['.', 'relative', a, b].join(delimiter) };
+    expect(findFileOnPath('psalm.phar', env)).toBe(join(b, 'psalm.phar'));
+    expect(findFileOnPath('psalm', env)).toBeNull();
+    for (const name of ['./psalm.phar', '../psalm.phar', 'x/psalm.phar', '']) expect(findFileOnPath(name, env)).toBeNull();
   });
 });
 

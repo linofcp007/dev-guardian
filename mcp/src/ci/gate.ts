@@ -511,6 +511,10 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
       if (scanner === 'go') {
         return 'Install the Go toolchain your go.mod names (https://go.dev/doc/install; on GitHub Actions, actions/setup-go) and put it on PATH, then rerun the scan — install_toolchain never installs it.';
       }
+      // The PHP runtime Psalm runs on: never installed for you either.
+      if (scanner === 'php') {
+        return 'Install PHP 8.2 or newer with its xml and mbstring extensions (Debian and Ubuntu: php-cli php-xml php-mbstring) and put it on PATH, then rerun the scan — install_toolchain never installs it.';
+      }
       const hint = INSTALL_HINT[scanner];
       return hint !== undefined
         ? `Install ${scanner} (\`${hint}\`) and put it on PATH, then rerun the scan.`
@@ -538,7 +542,11 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
         ? 'Fix or remove the rule the detail names, then rerun the scan.'
         : 'Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.';
     case 'skipped':
-      // cppcheck older than it runs (runners/cppcheckRun.ts#CPPCHECK_MIN_VERSION).
+      // Psalm's PHP older than it runs (runners/psalmRun.ts#PHP_MIN_VERSION).
+      if (/ needs PHP \d+\.\d+ or newer and /.test(detail)) {
+        return 'Install PHP 8.2 or newer and put it first on PATH, then rerun the scan.';
+      }
+      // cppcheck or Psalm older than it runs (runners/cppcheckRun.ts, runners/psalmRun.ts).
       if (/ or newer is needed and /.test(detail)) {
         return `Install a newer ${scanner} — the detail names the oldest it runs — and put it first on PATH, then rerun the scan.`;
       }

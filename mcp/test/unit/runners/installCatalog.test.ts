@@ -10,6 +10,8 @@ import {
   COSIGN_RELEASE_SHA256,
   COSIGN_VERSION,
   PINNED_RELEASES,
+  PSALM_PHAR_SHA256,
+  PSALM_VERSION,
   TOOL_CATALOG,
   TRIVY_INSTALL_TAG,
   knownCompromise,
@@ -18,6 +20,7 @@ import {
 } from '../../../src/runners/installCatalog.js';
 import { COSIGN_MIN_VERSION } from '../../../src/runners/cosignCheck.js';
 import { CPPCHECK_MIN_VERSION } from '../../../src/runners/cppcheckRun.js';
+import { PHP_MIN_VERSION } from '../../../src/runners/psalmRun.js';
 
 describe('install hints', () => {
   it('suggests the current .NET LTS SDK, not .NET 6 (out of support since 2024-11)', () => {
@@ -514,5 +517,34 @@ describe('cppcheck: scoop first on Windows, the release pinned, the floor the ru
   it('version_floor is CPPCHECK_MIN_VERSION, which scan_sast checks before every run', () => {
     expect(TOOL_CATALOG['cppcheck']?.version_floor).toBe(`${CPPCHECK_MIN_VERSION}.0`);
     expect(TOOL_CATALOG['cppcheck']?.required_by).toEqual(['scan_sast', 'security_scan_full', 'review_pr']);
+  });
+});
+
+describe('Psalm: the release PHAR, sha256-checked, run by php; PHP itself never installed', () => {
+  it('POSIX: curl, the pinned sum checked before the PHAR is installed to ~/.local/bin/psalm.phar', () => {
+    for (const os of ['linux', 'darwin'] as const) {
+      const spec = TOOL_CATALOG['psalm']?.install[os].curl;
+      const script = spec?.args[1] ?? '';
+      expect(script).toContain(`https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`);
+      expect(script).toContain(`echo "${PSALM_PHAR_SHA256}  $tmp" | ${os === 'linux' ? 'sha256sum' : 'shasum -a 256'} -c -`);
+      expect(script.indexOf('-c -')).toBeLessThan(script.indexOf('install -m 0755'));
+      expect(spec?.user_bin).toBe('psalm.phar');
+    }
+  });
+
+  it('Windows: PowerShell checks the same sum and copies psalm.phar to the per-user tools directory', () => {
+    const script = TOOL_CATALOG['psalm']?.install.win32.release?.args.at(-1) ?? '';
+    expect(script).toContain(`if ($got -ne '${PSALM_PHAR_SHA256}')`);
+    expect(script).toContain("Join-Path $env:USERPROFILE '.local\\bin'");
+    expect(TOOL_CATALOG['psalm']?.probe).toEqual({ command: 'psalm.phar', args: ['--version'], phar: true });
+  });
+
+  it('PHP: manual steps only, on every OS', () => {
+    expect(suggestedInstallCommandString('php', 'win32')).toBe('winget install PHP.PHP.8.4');
+    expect(suggestedInstallCommandString('php', 'linux')).toBe('sudo apt-get install php-cli php-xml php-mbstring');
+    for (const os of ['win32', 'linux', 'darwin'] as const) {
+      for (const spec of Object.values(TOOL_CATALOG['php']?.install[os] ?? {})) expect(spec.command).toBe('echo');
+    }
+    expect(TOOL_CATALOG['php']?.version_floor).toBe(`${PHP_MIN_VERSION.join('.')}.0`);
   });
 });

@@ -488,7 +488,7 @@ Trivy config over Terraform, Kubernetes, CloudFormation and Helm; with .github/w
 
 ### `scan_sast`
 
-Semgrep with the registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for Go, through the Go toolchain (it may download modules); cppcheck for C/C++; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local\_only avoids the registry and its metrics.
+Semgrep with the registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for Go, through the Go toolchain (it may download modules); cppcheck for C/C++; Psalm's taint analysis for PHP; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local\_only avoids the registry and its metrics.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -540,7 +540,7 @@ Audit a third-party AI skill, MCP server, plugin or agent before installing it (
 
 ### `scan_wordpress`
 
-Source scan of a WordPress plugin, theme or site: Semgrep PHP with the WordPress pack, Trivy on composer.lock (a composer.json with no lock is a named gap), gitleaks and PHPCS with a WordPress standard. A missing scanner is skipped with its reason. For an install: wp\_audit; for known vulnerabilities: wp\_vuln\_check.
+Source scan of a WordPress plugin, theme or site: Semgrep PHP with the WordPress pack, Trivy on composer.lock (a composer.json with no lock is a named gap), gitleaks, PHPCS with a WordPress standard and Psalm's taint analysis with WordPress's APIs modelled. A missing scanner is skipped with its reason. For an install: wp\_audit; for known vulnerabilities: wp\_vuln\_check.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

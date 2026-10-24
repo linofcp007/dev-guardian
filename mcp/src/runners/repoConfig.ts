@@ -209,6 +209,7 @@ export const NO_REPO_CONFIG: Readonly<Record<string, string>> = {
   docker: 'runs the Semgrep image, which reads the project as Semgrep does (named on the semgrep run)',
   gosec: 'never given -conf, and looks for no file of its own; a `#nosec` comment is the code\'s own',
   govulncheck: 'reads the modules (go.mod, go.sum, vendor/) as go builds them, with GOWORK=off; no configuration of its own',
+  php: "runs Psalm with dev-guardian's own --config and an empty --root: never the project's psalm.xml, composer.json or autoloader (psalmRun.ts)",
 };
 
 /** Names a nested file may take at any depth, bounded like the other project walks. */

@@ -32,7 +32,10 @@
 #      A C or C++ project needs cppcheck 2.13 or newer on PATH: this image's
 #      Debian bookworm package is 2.10, which skips a file it cannot
 #      configure without saying so, and scan_sast refuses it — `cppcheck`
-#      is then a named gap and the gate exits 2.
+#      is then a named gap and the gate exits 2. A PHP project gets this
+#      image's PHP (Debian bookworm's 8.2: php-cli, php-xml, php-mbstring)
+#      and Psalm's release PHAR, sha256-checked like the binaries of step 5,
+#      only when the checkout has a PHP source outside vendor/.
 #   3. Clones dev-guardian itself at a pinned release tag, resolved to its
 #      exact commit SHA when this pipeline was GENERATED (ci-init: `git
 #      ls-remote`/a local tag lookup) and verified again with `git
@@ -139,6 +142,12 @@ dev-guardian:
       install_checked gitleaks "{{GITLEAKS_URL}}" "{{GITLEAKS_SHA256}}" "{{GITLEAKS_MEMBER}}"
       install_checked actionlint "{{ACTIONLINT_URL}}" "{{ACTIONLINT_SHA256}}" "{{ACTIONLINT_MEMBER}}"
       install_checked gosec "{{GOSEC_URL}}" "{{GOSEC_SHA256}}" "{{GOSEC_MEMBER}}"
+      if find . -path './.*' -prune -o -name vendor -prune -o -name node_modules -prune -o -type f \( -iname '*.php' -o -iname '*.phtml' \) -print -quit | grep -q .; then
+        apt-get install -y --no-install-recommends php-cli php-xml php-mbstring
+        curl -sSfL -o /tmp/dev-guardian-scanners/psalm.phar "{{PSALM_URL}}"
+        echo "{{PSALM_SHA256}}  /tmp/dev-guardian-scanners/psalm.phar" | sha256sum -c -
+        install -m 0755 /tmp/dev-guardian-scanners/psalm.phar /usr/local/bin/psalm.phar
+      fi
     - pipx install "bandit[toml]=={{BANDIT_VERSION}}"
     - pipx install "semgrep=={{SEMGREP_VERSION}}"
     - pipx install "zizmor=={{ZIZMOR_VERSION}}"
