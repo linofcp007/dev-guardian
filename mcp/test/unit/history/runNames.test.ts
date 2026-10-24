@@ -158,6 +158,9 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/gitleaksScan.ts:name': 'a parameter only ever given a GITLEAKS_* constant',
   'runners/gitleaksScan.ts:entry.name': "noteSubmodules: the name of one of this scan's own passes (GITLEAKS_*)",
   'runners/fileBatchScan.ts:opts.name': "semgrepOnFiles' and banditOnFiles' `name: '…'`",
+  'runners/scannerPasses.ts:pass.name':
+    "a pass that threw: its ScannerPass `name: '…'` in tools/scanSast.ts — 'semgrep', 'bandit', 'gosec', 'cppcheck', PSALM, 'dotnet-analyzers', the names the passes write themselves",
+  'runners/scannerPasses.ts:name': "the merge's copy of each pass's own missing_tools names",
   'runners/gosecRun.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
   'runners/govulncheckRun.ts:GOVULNCHECK': 'the GOVULNCHECK constant',
   'runners/cppcheckRun.ts:CPPCHECK': 'the CPPCHECK constant',

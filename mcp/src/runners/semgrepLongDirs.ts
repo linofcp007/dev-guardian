@@ -1,6 +1,7 @@
 /**
  * Semgrep and Windows' path limits — measured on Semgrep 1.176.1 with
- * Windows' default `LongPathsEnabled=0`, 2026-10-25. Its engine,
+ * Windows' default `LongPathsEnabled=0`, 2026-10-25, and again on 1.182.0
+ * (the version the CI templates pin), 2026-10-24: the same. Its engine,
  * `semgrep-core.exe`, has a manifest without `longPathAware`, so turning
  * `LongPathsEnabled` on does not lift either limit for it (Windows needs
  * both); its Python CLI is long-path aware.
@@ -8,10 +9,11 @@
  *   - A FILE at a path of 260 characters or more cannot be opened by path —
  *     but the same file handed as an extended-length path (`\\?\C:\…`, an
  *     explicit target) is read: a 305-character file was. A drive letter
- *     (`subst`) also works; a directory junction does not (Semgrep resolves
- *     it back to the long path).
+ *     (`subst`) also works; a directory junction did not on 1.176.1 (Semgrep
+ *     resolved it back to the long path) and did on 1.182.0.
  *   - One DIRECTORY at a path of 256 characters or more anywhere in the tree
- *     (256–259, and 261 up; one of exactly 260 was listed) makes the walk fail
+ *     (256–259, and 261 up; one of exactly 260 was listed on 1.176.1, not on
+ *     1.182.0) makes the walk fail
  *     the whole listing — `Failed to obtain target files from semgrep-core`,
  *     nothing scanned, the root's files included. A WordPress install copied
  *     off a server is the usual shape (WooCommerce 11.2.1's

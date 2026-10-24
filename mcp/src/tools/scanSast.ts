@@ -75,6 +75,16 @@
  * The choice is recorded on the scan (`local_only`), so `create_fix_pr` can
  * re-scan a fix with the same rules that found the target.
  *
+ * ---- The scanners run side by side ----------------------------------
+ *
+ * Semgrep, Bandit, gosec, cppcheck, Psalm and the .NET analyzers ran one
+ * after another, so a project in several languages waited for their sum;
+ * they now run side by side (`runners/scannerPasses.ts`), at most
+ * `GUARDIAN_MAX_PARALLEL_SCANNERS` (default 3) at once, each gathering its
+ * own results, merged in that order. Two write into what another reads, and
+ * wait for Semgrep: `--autofix` (then every other pass), and the .NET build,
+ * whose `obj/` and `bin/` would appear in the tree Semgrep walks.
+ *
  * ---- `scope`, and `.guardianignore` -------------------------------------
  *
  * With `scope` (`platform/scope.ts`), Semgrep and Bandit get the scoped files
@@ -110,7 +120,8 @@ import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fil
 import { gosecOnPackages, isGoSource } from '../runners/gosecRun.js';
 import { cppcheckSources, cppSources } from '../runners/cppcheckRun.js';
 import { cppcheckParser } from '../runners/scannerParsers/cppcheck.js';
-import { hasPhpSource, psalmTaint } from '../runners/psalmRun.js';
+import { hasPhpSource, PSALM, psalmTaint } from '../runners/psalmRun.js';
+import { maxParallelScanners, runScannerPasses, type ScannerPass } from '../runners/scannerPasses.js';
 import { psalmParser } from '../runners/scannerParsers/psalm.js';
 import { isWordPressProject } from '../runners/stackDetect.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
@@ -238,41 +249,67 @@ registerToolModule(
     },
     invoke: async (input, ctx): Promise<ScannerInvocation> => {
       const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
-      const tools_run: ToolRun[] = [];
-      const missing_tools: string[] = [];
-      const parser_inputs: ScannerInvocation['parser_inputs'] = [];
       const autoFix = input.auto_fix === true;
       const localOnly = input.local_only === true;
+      // What the scan reads, `.guardianignore` applied — listed once, when a pass needs it; gosec
+      // still reads an ignored file of a kept package, and the factory drops its findings.
+      let listing: Promise<readonly string[]> | null = null;
+      const scanned = (): Promise<readonly string[]> =>
+        (listing ??= ctx.exclusions !== null ? Promise.resolve(ctx.exclusions.keptFiles) : listScannedFiles(ctx.projectPath));
 
+      // The scanners run side by side (see `runSastPasses`), in this order in `tools_run`. Semgrep's
+      // --autofix rewrites the files the others read, and the .NET build writes obj/ and bin/ into
+      // the tree Semgrep walks: each waits for Semgrep.
+      const afterSemgrep = autoFix ? ['semgrep'] : [];
+      let passes: ScannerPass[];
       if (ctx.scope !== null) {
         const files = ctx.scope.files;
-        await runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs });
-        await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
-        await runGosec({ ctx, reportDir, files: files.filter(isGoSource), tools_run, missing_tools, parser_inputs });
-        await runCppcheck({ ctx, reportDir, files: cppSources(files), scoped: true, tools_run, missing_tools, parser_inputs });
-        // Psalm reads the whole project's PHP for a scope's (a taint flow crosses files); the factory keeps the scope's findings.
-        if (hasPhpSource(files)) {
-          const all = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
-          await runPsalm({ ctx, reportDir, files: all, scopeFiles: files.length, tools_run, missing_tools, parser_inputs });
-        }
-        dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
+        passes = [
+          { name: 'semgrep', run: (c) => runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, ...c }) },
+          { name: 'bandit', after: afterSemgrep, run: (c) => runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), ...c }) },
+          { name: 'gosec', after: afterSemgrep, run: (c) => runGosec({ ctx, reportDir, files: files.filter(isGoSource), ...c }) },
+          { name: 'cppcheck', after: afterSemgrep, run: (c) => runCppcheck({ ctx, reportDir, files: cppSources(files), scoped: true, ...c }) },
+          // Psalm reads the whole project's PHP for a scope's (a taint flow crosses files); the factory keeps the scope's findings.
+          {
+            name: PSALM,
+            after: afterSemgrep,
+            run: async (c) => {
+              if (hasPhpSource(files)) await runPsalm({ ctx, reportDir, files: await scanned(), scopeFiles: files.length, ...c });
+            },
+          },
+          { name: 'dotnet-analyzers', run: async (c) => dotnetNotApplicableToScope({ ctx, files, ...c }) },
+        ];
       } else {
-        await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
-        await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
-        // What the scan reads, `.guardianignore` applied (listed once, when a pass needs it); gosec
-        // still reads an ignored file of a kept package, and the factory drops its findings.
-        let listed: readonly string[] | null = null;
-        const scanned = async (): Promise<readonly string[]> =>
-          (listed ??= ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath));
-        if (looksGo(ctx.projectPath)) await runGosec({ ctx, reportDir, files: await scanned(), tools_run, missing_tools, parser_inputs });
-        if (hasFileWithExtension(ctx.projectPath, ['.c', '.cc', '.cpp', '.cxx', '.c++'])) {
-          await runCppcheck({ ctx, reportDir, files: await scanned(), scoped: false, tools_run, missing_tools, parser_inputs });
-        }
-        if (hasFileWithExtension(ctx.projectPath, ['.php', '.phtml'])) {
-          await runPsalm({ ctx, reportDir, files: await scanned(), tools_run, missing_tools, parser_inputs });
-        }
-        await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
+        passes = [
+          { name: 'semgrep', run: (c) => runSemgrep({ ctx, reportDir, autoFix, localOnly, ...c }) },
+          { name: 'bandit', after: afterSemgrep, run: (c) => runBandit({ ctx, reportDir, ...c }) },
+          {
+            name: 'gosec',
+            after: afterSemgrep,
+            run: async (c) => {
+              if (looksGo(ctx.projectPath)) await runGosec({ ctx, reportDir, files: await scanned(), ...c });
+            },
+          },
+          {
+            name: 'cppcheck',
+            after: afterSemgrep,
+            run: async (c) => {
+              if (hasFileWithExtension(ctx.projectPath, ['.c', '.cc', '.cpp', '.cxx', '.c++'])) {
+                await runCppcheck({ ctx, reportDir, files: await scanned(), scoped: false, ...c });
+              }
+            },
+          },
+          {
+            name: PSALM,
+            after: afterSemgrep,
+            run: async (c) => {
+              if (hasFileWithExtension(ctx.projectPath, ['.php', '.phtml'])) await runPsalm({ ctx, reportDir, files: await scanned(), ...c });
+            },
+          },
+          { name: 'dotnet-analyzers', after: ['semgrep'], run: (c) => runDotnetAnalyzers({ ctx, ...c }) },
+        ];
       }
+      const { tools_run, missing_tools, parser_inputs } = await runScannerPasses(passes, maxParallelScanners());
 
       // `failed` only when something failed and nothing ran: a scope with
       // no file in it skips every scanner, which is not a failure.

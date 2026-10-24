@@ -40526,6 +40526,68 @@ var init_psalmRun = __esm({
   }
 });
 
+// src/runners/scannerPasses.ts
+function maxParallelScanners(env = process.env) {
+  const n = Number(env["GUARDIAN_MAX_PARALLEL_SCANNERS"]);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_PARALLEL_SCANNERS;
+}
+async function runScannerPasses(passes2, limit) {
+  const parts = passes2.map(() => ({ tools_run: [], missing_tools: [], parser_inputs: [] }));
+  let active = 0;
+  const waiting = [];
+  const acquire = async () => {
+    if (active < Math.max(1, limit)) {
+      active += 1;
+      return;
+    }
+    await new Promise((resolve36) => waiting.push(resolve36));
+  };
+  const release = () => {
+    const next = waiting.shift();
+    if (next !== void 0) next();
+    else active -= 1;
+  };
+  const done = /* @__PURE__ */ new Map();
+  passes2.forEach((pass2, i) => {
+    const into = parts[i];
+    if (into === void 0) return;
+    const before = (pass2.after ?? []).flatMap((name) => done.get(name) ?? []);
+    done.set(
+      pass2.name,
+      (async () => {
+        await Promise.all(before);
+        await acquire();
+        try {
+          await pass2.run(into);
+        } catch (e) {
+          into.tools_run.push({
+            name: pass2.name,
+            status: "failed",
+            reason: `${pass2.name} could not run: ${e instanceof Error ? e.message : String(e)}`
+          });
+        } finally {
+          release();
+        }
+      })()
+    );
+  });
+  await Promise.all(done.values());
+  const out = { tools_run: [], missing_tools: [], parser_inputs: [] };
+  for (const part of parts) {
+    out.tools_run.push(...part.tools_run);
+    for (const name of part.missing_tools) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
+    out.parser_inputs.push(...part.parser_inputs);
+  }
+  return out;
+}
+var DEFAULT_MAX_PARALLEL_SCANNERS;
+var init_scannerPasses = __esm({
+  "src/runners/scannerPasses.ts"() {
+    "use strict";
+    DEFAULT_MAX_PARALLEL_SCANNERS = 3;
+  }
+});
+
 // src/runners/scannerParsers/psalm.ts
 function mapIssue(raw, type, file, ctx) {
   const rel2 = toRelativeIfPossible(file, ctx.project_path);
@@ -42068,6 +42130,7 @@ var init_scanSast = __esm({
     init_cppcheckRun();
     init_cppcheck();
     init_psalmRun();
+    init_scannerPasses();
     init_psalm();
     init_stackDetect();
     init_bandit();
@@ -42130,36 +42193,60 @@ var init_scanSast = __esm({
         },
         invoke: async (input, ctx) => {
           const reportDir = ensureReportDir(ctx.projectPath, ctx.scanId, "sast");
-          const tools_run = [];
-          const missing_tools = [];
-          const parser_inputs = [];
           const autoFix = input.auto_fix === true;
           const localOnly = input.local_only === true;
+          let listing = null;
+          const scanned = () => listing ??= ctx.exclusions !== null ? Promise.resolve(ctx.exclusions.keptFiles) : listScannedFiles(ctx.projectPath);
+          const afterSemgrep = autoFix ? ["semgrep"] : [];
+          let passes2;
           if (ctx.scope !== null) {
             const files = ctx.scope.files;
-            await runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs });
-            await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
-            await runGosec({ ctx, reportDir, files: files.filter(isGoSource), tools_run, missing_tools, parser_inputs });
-            await runCppcheck({ ctx, reportDir, files: cppSources(files), scoped: true, tools_run, missing_tools, parser_inputs });
-            if (hasPhpSource(files)) {
-              const all = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
-              await runPsalm({ ctx, reportDir, files: all, scopeFiles: files.length, tools_run, missing_tools, parser_inputs });
-            }
-            dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
+            passes2 = [
+              { name: "semgrep", run: (c) => runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, ...c }) },
+              { name: "bandit", after: afterSemgrep, run: (c) => runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), ...c }) },
+              { name: "gosec", after: afterSemgrep, run: (c) => runGosec({ ctx, reportDir, files: files.filter(isGoSource), ...c }) },
+              { name: "cppcheck", after: afterSemgrep, run: (c) => runCppcheck({ ctx, reportDir, files: cppSources(files), scoped: true, ...c }) },
+              // Psalm reads the whole project's PHP for a scope's (a taint flow crosses files); the factory keeps the scope's findings.
+              {
+                name: PSALM,
+                after: afterSemgrep,
+                run: async (c) => {
+                  if (hasPhpSource(files)) await runPsalm({ ctx, reportDir, files: await scanned(), scopeFiles: files.length, ...c });
+                }
+              },
+              { name: "dotnet-analyzers", run: async (c) => dotnetNotApplicableToScope({ ctx, files, ...c }) }
+            ];
           } else {
-            await runSemgrep2({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
-            await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
-            let listed2 = null;
-            const scanned = async () => listed2 ??= ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
-            if (looksGo(ctx.projectPath)) await runGosec({ ctx, reportDir, files: await scanned(), tools_run, missing_tools, parser_inputs });
-            if (hasFileWithExtension(ctx.projectPath, [".c", ".cc", ".cpp", ".cxx", ".c++"])) {
-              await runCppcheck({ ctx, reportDir, files: await scanned(), scoped: false, tools_run, missing_tools, parser_inputs });
-            }
-            if (hasFileWithExtension(ctx.projectPath, [".php", ".phtml"])) {
-              await runPsalm({ ctx, reportDir, files: await scanned(), tools_run, missing_tools, parser_inputs });
-            }
-            await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
+            passes2 = [
+              { name: "semgrep", run: (c) => runSemgrep2({ ctx, reportDir, autoFix, localOnly, ...c }) },
+              { name: "bandit", after: afterSemgrep, run: (c) => runBandit({ ctx, reportDir, ...c }) },
+              {
+                name: "gosec",
+                after: afterSemgrep,
+                run: async (c) => {
+                  if (looksGo(ctx.projectPath)) await runGosec({ ctx, reportDir, files: await scanned(), ...c });
+                }
+              },
+              {
+                name: "cppcheck",
+                after: afterSemgrep,
+                run: async (c) => {
+                  if (hasFileWithExtension(ctx.projectPath, [".c", ".cc", ".cpp", ".cxx", ".c++"])) {
+                    await runCppcheck({ ctx, reportDir, files: await scanned(), scoped: false, ...c });
+                  }
+                }
+              },
+              {
+                name: PSALM,
+                after: afterSemgrep,
+                run: async (c) => {
+                  if (hasFileWithExtension(ctx.projectPath, [".php", ".phtml"])) await runPsalm({ ctx, reportDir, files: await scanned(), ...c });
+                }
+              },
+              { name: "dotnet-analyzers", after: ["semgrep"], run: (c) => runDotnetAnalyzers({ ctx, ...c }) }
+            ];
           }
+          const { tools_run, missing_tools, parser_inputs } = await runScannerPasses(passes2, maxParallelScanners());
           const anyOk = tools_run.some((t) => t.status === "ok");
           const anyFailed = tools_run.some((t) => t.status === "failed");
           const outcome = anyOk || missing_tools.length > 0 || !anyFailed ? "completed" : "failed";
