@@ -60,8 +60,8 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **37 of the 162 rules** across the thirteen packs are
-one of those — 31 bare and 6 positive-only — and they used to appear
+nothing but positive terms. **42 of the 168 rules** across the thirteen packs are
+one of those — 36 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
 11. The capability was never missing — there is genuinely nothing to ablate.
@@ -82,7 +82,7 @@ prints `N/A`.
 | `rgpd` | 8 | 8 | 0 |
 | `llm` | 9 | 8 | 1 |
 | `web-js` | 3 | 3 | 0 |
-| `mobile` | 8 | 1 | 7 |
+| `mobile` | 14 | 2 | 12 |
 
 The same numbers, rule by rule, are in [`docs/rule-packs.md`](../../docs/rule-packs.md),
 which `npm run build` generates; `mcp/test/docs/docs.test.ts` fails when this

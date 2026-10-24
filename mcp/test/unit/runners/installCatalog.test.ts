@@ -17,6 +17,7 @@ import {
   suggestedInstallCommandString,
 } from '../../../src/runners/installCatalog.js';
 import { COSIGN_MIN_VERSION } from '../../../src/runners/cosignCheck.js';
+import { CPPCHECK_MIN_VERSION } from '../../../src/runners/cppcheckRun.js';
 
 describe('install hints', () => {
   it('suggests the current .NET LTS SDK, not .NET 6 (out of support since 2024-11)', () => {
@@ -446,5 +447,72 @@ describe('the Go toolchain: hints only, never installed', () => {
     for (const os of ['win32', 'linux', 'darwin'] as const) {
       for (const spec of Object.values(go?.install[os] ?? {})) expect(spec.command).toBe('echo');
     }
+  });
+});
+
+describe('shellcheck: the pinned archive, its binary nested in a versioned directory', () => {
+  const r = PINNED_RELEASES.shellcheck;
+
+  it.each(['linux', 'darwin'] as const)('on %s: each CPU names its archive, sum and member; the member is what is unpacked and installed', (os) => {
+    const script = TOOL_CATALOG['shellcheck']?.install[os].curl?.args[1] ?? '';
+    for (const arch of ['amd64', 'arm64'] as const) {
+      const a = r.assets[`${os}-${arch}`];
+      expect(a.member).toBe(`shellcheck-v${r.version}/shellcheck`);
+      expect(script).toContain(`asset=${a.file}; sum=${a.sha256}; member=${a.member ?? ''}`);
+    }
+    expect(script).toContain('tar -xzf "$tmp/shellcheck.tar.gz" -C "$tmp" "$member"');
+    expect(script).toContain('install -m 0755 "$tmp/$member" "$HOME/.local/bin/shellcheck"');
+  });
+
+  it('on Windows: the ZIP, whose shellcheck.exe is at the root', () => {
+    const script = TOOL_CATALOG['shellcheck']?.install.win32.release?.args.at(-1) ?? '';
+    expect(script).toContain(`'${r.base}/${r.assets['windows-amd64'].file}'`);
+    expect(script).toContain('Expand-Archive');
+    expect(script).toContain("Join-Path $tmp 'x\\shellcheck.exe'");
+  });
+
+  it('a release without a member keeps the tool name at the root (gosec)', () => {
+    const script = TOOL_CATALOG['gosec']?.install.linux.curl?.args[1] ?? '';
+    expect(script).not.toContain('member=');
+    expect(script).toContain('tar -xzf "$tmp/gosec.tar.gz" -C "$tmp" gosec');
+  });
+});
+
+describe('govulncheck: go install of a pinned tag into the per-user tools directory', () => {
+  it('POSIX: GOBIN is ~/.local/bin, the tag exact', () => {
+    for (const os of ['linux', 'darwin'] as const) {
+      const spec = TOOL_CATALOG['govulncheck']?.install[os].go;
+      expect(spec?.command).toBe('bash');
+      expect(spec?.args[1]).toContain(`GOBIN="$HOME/.local/bin" go install 'golang.org/x/vuln/cmd/govulncheck@v1.9.0'`);
+      expect(spec?.user_bin).toBe('govulncheck');
+      expect(spec?.args[1]).not.toMatch(/@latest/);
+    }
+  });
+
+  it('Windows: PowerShell sets GOBIN to the per-user tools directory, with no double quote', () => {
+    const spec = TOOL_CATALOG['govulncheck']?.install.win32.go;
+    const script = spec?.args.at(-1) ?? '';
+    expect(spec?.command).toBe('powershell');
+    expect(script).toContain("$env:GOBIN = Join-Path $env:USERPROFILE '.local\\bin'");
+    expect(script).toContain("go install 'golang.org/x/vuln/cmd/govulncheck@v1.9.0'");
+    expect(script).toContain('if ($LASTEXITCODE -ne 0) { throw');
+    expect(script).not.toContain('"');
+    expect(spec?.user_bin).toBe('govulncheck.exe');
+  });
+});
+
+describe('cppcheck: scoop first on Windows, the release pinned, the floor the runner enforces', () => {
+  it('scoop (per user) is picked before winget, whose MSI installs per machine and so needs elevation', () => {
+    const win = TOOL_CATALOG['cppcheck']?.install.win32;
+    expect(win?.scoop?.args).toEqual(['install', 'cppcheck@2.22.0']);
+    expect(win?.winget?.args).toEqual(expect.arrayContaining(['Cppcheck.Cppcheck', '--exact', '--version', '2.22.0']));
+    expect(win?.winget?.needs_elevation).toBe(true);
+    expect(pickInstallSpec('cppcheck', 'win32', [{ name: 'release' }, { name: 'winget' }, { name: 'scoop' }])?.manager).toBe('scoop');
+    expect(pickInstallSpec('cppcheck', 'win32', [{ name: 'release' }, { name: 'winget' }])?.manager).toBe('winget');
+  });
+
+  it('version_floor is CPPCHECK_MIN_VERSION, which scan_sast checks before every run', () => {
+    expect(TOOL_CATALOG['cppcheck']?.version_floor).toBe(`${CPPCHECK_MIN_VERSION}.0`);
+    expect(TOOL_CATALOG['cppcheck']?.required_by).toEqual(['scan_sast', 'security_scan_full', 'review_pr']);
   });
 });

@@ -103,8 +103,8 @@ function bookkeepingNames(): string[] {
     ...collect(/judgeTrivyConfig\(\{\s*name:\s*'([^']+)'/g),
     // gitleaks' passes.
     ...collect(/export const GITLEAKS_[A-Z_]+\s*=\s*'([^']+)'/g),
-    // gosec's pass and the Go toolchain's gap (runners/gosecRun.ts).
-    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN)\s*=\s*'([^']+)'/g),
+    // gosec's, govulncheck's, shellcheck's and cppcheck's passes, and the Go toolchain's gap.
+    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK)\s*=\s*'([^']+)'/g),
     // judgeTrivyFs' walk gap: `export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk'`.
     ...collect(/export const TRIVY_[A-Z_]+_GAP\s*=\s*'([^']+)'/g),
     // audit_executive: one entry per sub-tool.
@@ -159,6 +159,11 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/gitleaksScan.ts:entry.name': "noteSubmodules: the name of one of this scan's own passes (GITLEAKS_*)",
   'runners/fileBatchScan.ts:opts.name': "semgrepOnFiles' and banditOnFiles' `name: '…'`",
   'runners/gosecRun.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
+  'runners/govulncheckRun.ts:GOVULNCHECK': 'the GOVULNCHECK constant',
+  'runners/cppcheckRun.ts:CPPCHECK': 'the CPPCHECK constant',
+  'runners/shellcheckRun.ts:SHELLCHECK': 'the SHELLCHECK constant',
+  'tools/qualityCheck.ts:SHELLCHECK': 'the SHELLCHECK constant',
+  'tools/depsAudit.ts:name': "runners/govulncheckRun.ts#govulncheckModules' `missing`: GOVULNCHECK or 'go'",
   'tools/reviewPr.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
   'tools/reviewPr.ts:name': "runners/gosecRun.ts#gosecOnPackages' `missing`: GOSEC or GO_TOOLCHAIN",
   'tools/depsAudit.ts:opts.command': "tryNativeAudit's `command: '…'`",
@@ -290,8 +295,9 @@ describe('runNames: the pairs that do not share a name', () => {
     ['hadolint', ['hadolint']],
     ['docker-compose', ['docker-compose']],
     ['budgets', ['budgets']],
-    ['scan_sast', ['semgrep', 'bandit', 'gosec', 'security-code-scan', 'dotnet-analyzers']],
-    ['go', ['gosec']],
+    ['scan_sast', ['semgrep', 'bandit', 'gosec', 'cppcheck', 'security-code-scan', 'dotnet-analyzers']],
+    ['cppcheck', ['cppcheck']],
+    ['go', ['gosec', 'govulncheck']],
     ['scan_iac', [TRIVY_CONFIG, 'zizmor', 'actionlint']],
     ['zizmor', ['zizmor']],
     ['actionlint', ['actionlint']],
@@ -299,7 +305,7 @@ describe('runNames: the pairs that do not share a name', () => {
     ['trivy-config', [TRIVY_CONFIG]],
     ['trivy-dockerfile', [TRIVY_CONFIG]],
     ['osv.dev', [SKILL_OSV]],
-    ['deps_audit', [...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package']],
+    ['deps_audit', [...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package', 'govulncheck']],
     ['scan_deps', TRIVY_FS_KEYS],
     ['trivy:npm', [trivyFsKey('npm')]],
     ['trivy:dotnet', [trivyFsKey('dotnet')]],

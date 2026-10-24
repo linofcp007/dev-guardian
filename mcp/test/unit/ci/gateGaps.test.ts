@@ -244,6 +244,42 @@ describe('every gap as data', () => {
     expect(onlySyntax.coverageGapDetails.find((d) => d.gating)?.remedy).toMatch(/go mod download/);
   });
 
+  it('a cppcheck step: a file it could not configure gates and says how to configure it; one too old says to upgrade', () => {
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: [
+        {
+          name: 'cppcheck',
+          status: 'ok' as const,
+          reason: 'partial',
+          partially_parsed: [
+            { file: 'src/syntax.c', type: 'Syntax error', message: "Unmatched '('" },
+            { file: 'src/macro.cpp', type: 'Unknown macro', message: 'There is an unknown macro here somewhere.' },
+          ],
+        },
+      ],
+      missing_tools: ['cppcheck'],
+      partial_parses: {
+        cppcheck: [
+          { file: 'src/syntax.c', type: 'Syntax error' },
+          { file: 'src/macro.cpp', type: 'Unknown macro' },
+        ],
+      },
+    };
+    const base: GateInput = { findings: [], baseline: null, failOn: 'high', steps: [step], droppedBaselineEntries: 0 };
+    const v = evaluateGate({ ...base, acceptedPartialParses: ['src/syntax.c', 'src/macro.cpp'] });
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(v.coverageGaps.join('\n')).toMatch(/not accepted: Unknown macro on src\/macro\.cpp/);
+    expect(v.coverageGapDetails.find((d) => d.gating)?.remedy).toMatch(/compile_commands\.json .*CMAKE_EXPORT_COMPILE_COMMANDS/);
+    expect(remedyFor('other', 'cppcheck', 'scan: cppcheck … not accepted: Not read on src/gone.c')).toMatch(/exists and is readable/);
+
+    const old = 'security_scan_full: cppcheck skipped (cppcheck 2.13 or newer is needed and it is 2.10: an older one skips a file …)';
+    expect(remedyFor('skipped', 'cppcheck', old)).toBe(
+      'Install a newer cppcheck — the detail names the oldest it runs — and put it first on PATH, then rerun the scan.',
+    );
+  });
+
   it('kinds from what a step says: not installed, no lockfile, a refused step, a failed run, a shallow clone', () => {
     const steps: ScanStepResult[] = [
       { tool: 'security_scan_full', ran: true, tools_run: [], missing_tools: ['bandit'] },

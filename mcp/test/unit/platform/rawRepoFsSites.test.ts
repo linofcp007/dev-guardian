@@ -184,6 +184,11 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "a pull request's or an issue's body, into its own mkdtemp directory for gh --body-file",
   },
+  'src/runners/cppcheckRun.ts': {
+    apis: { writeFileSync: 1, readFileSync: 1 },
+    kind: 'own',
+    reason: "cppcheck's file list into, and its XML report and its build directory's files.txt back from, the report directory ensureReportDir verified",
+  },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },
@@ -341,9 +346,9 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "which of the plugin's two install layouts holds its scripts/",
   },
   'src/platform/userBin.ts': {
-    apis: { existsSync: 1 },
+    apis: { existsSync: 2 },
     kind: 'user',
-    reason: "the per-user tools directory in the user's own home",
+    reason: "the per-user tools directory in the user's own home, and cppcheck.exe where its installer puts it (%ProgramFiles%\\Cppcheck)",
   },
   'src/runners/git.ts': {
     apis: { existsSync: 1 },

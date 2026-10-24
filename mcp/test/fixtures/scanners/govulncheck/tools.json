@@ -1,0 +1,29 @@
+{
+  "config": {
+    "protocol_version": "v1.0.0",
+    "scanner_name": "govulncheck",
+    "scanner_version": "v1.9.0",
+    "db": "https://vuln.go.dev",
+    "db_last_modified": "2026-10-21T00:27:29Z",
+    "go_version": "go1.26.10",
+    "scan_level": "symbol",
+    "scan_mode": "source"
+  }
+}
+{
+  "SBOM": {
+    "go_version": "go1.26.10",
+    "modules": [
+      {
+        "path": "example.com/govulnfixture/tools"
+      },
+      {
+        "path": "stdlib",
+        "version": "v1.26.10"
+      }
+    ],
+    "roots": [
+      "example.com/govulnfixture/tools"
+    ]
+  }
+}

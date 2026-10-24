@@ -1,8 +1,9 @@
 /**
  * `scan_sast` — Semgrep static analysis, plus Bandit when Python is present,
  * gosec when Go is (`runners/gosecRun.ts`: through the Go toolchain, which
- * loads — and may download — the project's modules), and the .NET SDK's
- * security analyzers when the project is .NET.
+ * loads — and may download — the project's modules), cppcheck's error and
+ * warning checks when C or C++ is (`runners/cppcheckRun.ts`), and the .NET
+ * SDK's security analyzers when the project is .NET.
  *
  * Invokes Semgrep directly (no shell script), writing the JSON report to
  * `.guardian/reports/sast-<short-scan-id>/sast.json`.
@@ -105,6 +106,8 @@ import { banditExcludeArgs, listScannedFiles, semgrepExcludeArgs } from '../plat
 import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { gosecOnPackages, isGoSource } from '../runners/gosecRun.js';
+import { cppcheckSources, cppSources } from '../runners/cppcheckRun.js';
+import { cppcheckParser } from '../runners/scannerParsers/cppcheck.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
 import { getProp, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
@@ -190,7 +193,7 @@ registerToolModule(
     description:
       "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS, " +
       'mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for ' +
-      "Go, through the Go toolchain (it may download modules); for .NET, a locked restore and `dotnet build` " +
+      "Go, through the Go toolchain (it may download modules); cppcheck for C/C++; for .NET, a locked restore and `dotnet build` " +
       "with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial " +
       'coverage. `tools_run[].honoured_config`: the project files that decided a run. local_only avoids the ' +
       'registry and its metrics.',
@@ -240,15 +243,19 @@ registerToolModule(
         await runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs });
         await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
         await runGosec({ ctx, reportDir, files: files.filter(isGoSource), tools_run, missing_tools, parser_inputs });
+        await runCppcheck({ ctx, reportDir, files: cppSources(files), scoped: true, tools_run, missing_tools, parser_inputs });
         dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
       } else {
         await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
         await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
-        if (looksGo(ctx.projectPath)) {
-          // What the scan reads, `.guardianignore` applied; gosec still reads an
-          // ignored file of a kept package, and the factory drops its findings.
-          const files = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
-          await runGosec({ ctx, reportDir, files, tools_run, missing_tools, parser_inputs });
+        // What the scan reads, `.guardianignore` applied (listed once, when a pass needs it); gosec
+        // still reads an ignored file of a kept package, and the factory drops its findings.
+        let listed: readonly string[] | null = null;
+        const scanned = async (): Promise<readonly string[]> =>
+          (listed ??= ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath));
+        if (looksGo(ctx.projectPath)) await runGosec({ ctx, reportDir, files: await scanned(), tools_run, missing_tools, parser_inputs });
+        if (hasFileWithExtension(ctx.projectPath, ['.c', '.cc', '.cpp', '.cxx', '.c++'])) {
+          await runCppcheck({ ctx, reportDir, files: await scanned(), scoped: false, tools_run, missing_tools, parser_inputs });
         }
         await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
       }
@@ -851,6 +858,29 @@ async function runBanditOnScope(args: Collect & { ctx: InvokeContext; reportDir:
   });
   for (const raw of run.reports) parser_inputs.push({ parser: banditParser, input: raw });
   tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.projectPath, 'bandit') : run.toolRun);
+}
+
+/**
+ * cppcheck over the C/C++ translation units of `files` (`runners/cppcheckRun.ts`):
+ * the whole project's, or a scope's. No entry at all when there is none.
+ */
+async function runCppcheck(
+  args: Collect & { ctx: InvokeContext; reportDir: string; files: readonly string[]; scoped: boolean },
+): Promise<void> {
+  const { ctx, reportDir, files, scoped, tools_run, missing_tools, parser_inputs } = args;
+  if (files.length === 0) return;
+  const pass = await cppcheckSources({
+    projectPath: ctx.projectPath,
+    files,
+    scoped,
+    reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  for (const report of pass.reports) parser_inputs.push({ parser: cppcheckParser, input: report });
+  if (pass.toolRun !== null) tools_run.push(pass.toolRun);
+  for (const name of pass.missing) markMissing(missing_tools, name);
 }
 
 /** A module file at the root, or any `.go` file (a walk that stops at the first): gosec has something to read. */

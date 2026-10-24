@@ -328,6 +328,13 @@ describe('owaspCoverage — findings and hints', () => {
     expect(cat(go, 'A09:2025').could_partly_cover.join(' | ')).toMatch(/gosec[^|]*go 1 rule\(s\), one weakness \(CWE-117\)/);
     expect(cat(go, 'A05:2025').could_be_tested_by.join(' | ')).toMatch(/gosec \(scan_sast, Go\)[^|]*go 10 rules, 6 CWEs/);
 
+    // For C, cppcheck's memory and logic checks — and that run makes A10 tested.
+    const c = owaspCoverage([], [], langs('c'));
+    expect(cat(c, 'A10:2025').could_be_tested_by.join(' | ')).toMatch(/cppcheck \(scan_sast, C\/C\+\+\)[^|]*c 9 rules, 4 CWEs/);
+    expect(cat(c, 'A06:2025').could_be_tested_by.join(' | ')).toMatch(/cppcheck[^|]*c 8 rules, 2 CWEs/);
+    const ran = owaspCoverage([run('sast', [{ name: 'cppcheck', status: 'ok' }])], [], langs('c'));
+    expect(statusOf(ran)['A10:2025']).toBe('tested');
+
     const js = owaspCoverage([], [], langs('javascript'));
     // The RGPD pack is named for what it is — one rule, one weakness, logs.
     expect(cat(js, 'A09:2025').could_be_tested_by).toEqual([]);

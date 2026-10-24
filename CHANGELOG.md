@@ -8,7 +8,8 @@ version bump.
 
 ## [Unreleased]
 
-gosec joins `scan_sast` and `review_pr` for Go, a mobile pack joins the plugin's Semgrep packs, and Brakeman's
+gosec joins `scan_sast` and `review_pr` for Go and cppcheck joins `scan_sast` for C and C++, govulncheck joins
+`deps_audit`, shellcheck joins `quality_check`, a mobile pack joins the plugin's Semgrep packs, and Brakeman's
 SARIF is a tested import.
 
 ### Upgrading from 3.4.0
@@ -19,6 +20,12 @@ SARIF is a tested import.
   exits 2 until both are there. `install_toolchain { tools: ["gosec"] }` installs gosec 2.30.0 from its pinned,
   sha256-checked archive; Go is never installed for you. Regenerate the CI pipeline with `ci-init`: it installs
   gosec, and on GitHub sets up the Go a root `go.mod` names; GitLab and Bitbucket need `go` on the image.
+- **A C or C++ project needs cppcheck 2.13 or newer.** `scan_sast` runs it whenever the project has a `.c`,
+  `.cc`, `.cpp`, `.cxx` or `.c++` file; without it the run lists `cppcheck` missing and the CLI `scan` exits 2.
+  An older cppcheck is never run — 2.10, Debian bookworm's, skips a file it cannot configure without saying so
+  — and is named the same way. `install_toolchain { tools: ["cppcheck"] }` installs 2.22.0 with scoop (or winget,
+  elevated) on Windows, apt on Linux, Homebrew on macOS. The regenerated GitHub pipeline installs Ubuntu's
+  cppcheck when the checkout has C or C++; GitLab and Bitbucket, on a bookworm image, need it on the image.
 - **New findings.** gosec on Go code and the mobile pack on Android and iOS configuration report findings the
   baseline does not hold, and a high one fails `--fail-on high`. Review them; rebuild the baseline on the base
   branch only for what you accept, never with `baseline update` on the branch itself.
@@ -36,18 +43,45 @@ SARIF is a tested import.
   report). A `GOFLAGS` `-mod=mod` runs as `-mod=readonly`. `review_pr` reads a changed file's whole package and
   keeps the findings to the changed files. G101's snippet is redacted. The OWASP coverage tables count gosec's
   62 rules for Go.
-- **`configs/semgrep/mobile.yml`**, run by `scan_sast` with the LLM and web-JS packs (8 rules): a debuggable or
+- **cppcheck in `scan_sast`** (`runners/cppcheckRun.ts`), for C and C++: its `error` and `warning` checks, from
+  the XML v2 report (SARIF puts a result's defect last and drops `inconclusive`), `error` high and `warning`
+  medium, one step lower when inconclusive, the trace in the message, cppcheck's own CWE. The translation units
+  are handed over in a file list (`.guardianignore` applied; headers through the files that include them), or a
+  root or `build/` `compile_commands.json` is used — and named — for the whole project, and the translation units
+  it does not list are checked after it from the list, so a file left out of it is never left unchecked. Measured on 2.22.0,
+  2.17.1, 2.13 and 2.10: what cppcheck analysed less than asked is named — `Syntax error` (accepted by
+  `--accept-partial-parse`), `Unknown macro`, `Not analysed` (an `#error` in every configuration, a compile
+  database entry not on disk) and `Not read` (a listed file it skipped with exit 0, caught through its build
+  directory's `files.txt`); a file checked in only some `#ifdef` configurations, or a function too complex for
+  the normal level, is noted, never a gap. The OWASP coverage tables count its 189 CWE-tagged checks for C and
+  C++ (A06 and A10).
+- **`configs/semgrep/mobile.yml`**, run by `scan_sast` with the LLM and web-JS packs (14 rules): a debuggable or
   backup-enabled Android app, cleartext traffic in the manifest or the network security config, a service,
   receiver or provider exported without a permission, user-installed CAs trusted outside `<debug-overrides>`,
-  and iOS App Transport Security switched off or a domain allowed insecure HTTP. Every rule is `generic`,
-  limited to those files, so no other XML file is parsed (a file Semgrep cannot parse would make the scan
-  partial). Exported activities stay with the registry's `exported_activity` rule.
+  iOS App Transport Security switched off or a domain allowed insecure HTTP; and in Java and Kotlin, WebView
+  debugging outside `BuildConfig.DEBUG`, file-URL access, `addJavascriptInterface`, `MODE_WORLD_*`, a Kotlin
+  TrustManager that accepts every certificate and a HostnameVerifier lambda that accepts every host. Every rule
+  is `generic`, limited to those files, so nothing is parsed (a file Semgrep cannot parse would make the scan
+  partial). Exported activities and Java's class-form TrustManager and HostnameVerifier stay with the
+  registry's rules, which already report them.
+- **govulncheck in `deps_audit`** (`runners/govulncheckRun.ts`), once per Go module, `GOWORK=off`: Trivy
+  reports the vulnerable modules, govulncheck the vulnerable FUNCTIONS the code calls, at the project's own call
+  site, with the module and the trace in the message. The Go database gives no severity: a finding takes
+  Trivy's for the same CVE or GHSA, `medium` otherwise. One package that does not type-check fails govulncheck
+  for its whole module (measured on v1.9.0): that module is named `Module not analysed`, never a clean module.
+  Installed with `go install` of v1.9.0 into the per-user tools directory.
+- **shellcheck in `quality_check`** (`runners/shellcheckRun.ts`): `.sh`, `.bash`, `.dash` and `.ksh` files, and
+  extensionless files with a shell shebang (never zsh, which shellcheck does not support). Only the project's
+  root `.shellcheckrc` is read (`--rcfile`; without one `--norc`): a nested one or the user's own could switch
+  checks off unseen. A script whose parse stopped (SC1072/SC1073) is a named partial gap. 0.11.0, pinned and
+  sha256-checked on every OS.
 - **Brakeman's SARIF** (8.1.0) imports with every result in place (`import_sarif`); `docs/sarif-import.md` says
   how to make it and why dev-guardian runs neither Brakeman (not open-source: the Brakeman Public Use License)
   nor CodeQL (free for open-source code only).
-- `check_toolchain` lists gosec and the Go toolchain; `install_toolchain` routes Go to a manual step, as the
-  .NET SDK. The CI gate's remedies name `go mod download` for a package that does not type-check, and say that
-  `install_toolchain` never installs Go.
+- `check_toolchain` lists gosec, govulncheck, shellcheck, cppcheck and the Go toolchain; `install_toolchain`
+  routes Go to a manual step, as the .NET SDK. The CI gate's remedies name `go mod download` for a package that
+  does not type-check, say that `install_toolchain` never installs Go, name the `compile_commands.json` that
+  configures a file cppcheck could not, and say to upgrade a cppcheck too old to run.
 
 ### Changed
 

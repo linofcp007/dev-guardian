@@ -9,7 +9,9 @@
  *   misses/  the safe shape of every rule: `false` values, a component with a
  *            permission (before or after `exported`), a provider with both
  *            permissions, the user CA under `<debug-overrides>`, local
- *            networking, a manifest placeholder; nothing fires. Its layout
+ *            networking, a manifest placeholder, WebView debugging guarded by
+ *            `BuildConfig.DEBUG` (on its line and as a block), a delegating
+ *            TrustManager, a HostnameVerifier that compares; nothing fires. Its layout
  *            under `res/layout/` is never read (the network security rules
  *            read `res/xml/` only).
  *
@@ -44,6 +46,10 @@ const AVAILABLE = semgrepAvailable();
 const MANIFEST = 'app/src/main/AndroidManifest.xml';
 const NSC = 'app/src/main/res/xml/network_security_config.xml';
 const PLIST = 'ios/Fixture/Info.plist';
+const JAVA = 'app/src/main/java/com/example/fixture/Web.java';
+const KOTLIN = 'app/src/main/kotlin/com/example/fixture/Web.kt';
+const SAFE_JAVA = 'app/src/main/java/com/example/fixture/Safe.java';
+const SAFE_KOTLIN = 'app/src/main/kotlin/com/example/fixture/Safe.kt';
 
 /** Every finding hits/ must produce: `rule file:line`, sorted. */
 const EXPECTED_HITS = [
@@ -63,6 +69,22 @@ const EXPECTED_HITS = [
   `mobile-ios-ats-arbitrary-loads ${PLIST}:9`,
   `mobile-ios-ats-insecure-exception ${PLIST}:17`,
   `mobile-ios-ats-insecure-exception ${PLIST}:19`,
+  // Java and Kotlin, the same calls: `setX(true)` and `x = true`.
+  `mobile-android-webview-debugging ${JAVA}:12`,
+  `mobile-android-webview-debugging ${KOTLIN}:11`,
+  `mobile-android-webview-js-interface ${JAVA}:14`,
+  `mobile-android-webview-js-interface ${KOTLIN}:13`,
+  `mobile-android-webview-file-url-access ${JAVA}:15`,
+  `mobile-android-webview-file-url-access ${JAVA}:16`,
+  `mobile-android-webview-file-url-access ${KOTLIN}:14`,
+  `mobile-android-webview-file-url-access ${KOTLIN}:15`,
+  `mobile-android-world-accessible-mode ${JAVA}:17`,
+  `mobile-android-world-accessible-mode ${JAVA}:18`,
+  `mobile-android-world-accessible-mode ${KOTLIN}:16`,
+  `mobile-kotlin-trust-all-certificates ${KOTLIN}:21`,
+  // The lambdas only: Java's class forms (lines 24-33) are the registry's.
+  `mobile-hostname-verifier-accepts-all ${JAVA}:35`,
+  `mobile-hostname-verifier-accepts-all ${KOTLIN}:25`,
 ].sort();
 
 /** The CWE each rule declares, as `metadata.cwe` begins. */
@@ -75,6 +97,12 @@ const CWE: Readonly<Record<string, string>> = {
   'mobile-android-nsc-user-ca': 'CWE-295',
   'mobile-ios-ats-arbitrary-loads': 'CWE-319',
   'mobile-ios-ats-insecure-exception': 'CWE-319',
+  'mobile-android-webview-debugging': 'CWE-489',
+  'mobile-android-webview-file-url-access': 'CWE-200',
+  'mobile-android-webview-js-interface': 'CWE-749',
+  'mobile-android-world-accessible-mode': 'CWE-276',
+  'mobile-kotlin-trust-all-certificates': 'CWE-295',
+  'mobile-hostname-verifier-accepts-all': 'CWE-295',
 };
 
 interface RawResult {
@@ -130,7 +158,7 @@ describe('configs/semgrep/mobile.yml', () => {
   it.skipIf(!AVAILABLE)('hits/: every finding listed, nothing else, every file read, each rule with its CWE', () => {
     const s = scan(resolve(FIXTURES, 'hits'));
     expect(s.errors).toEqual([]);
-    expect(s.scanned).toEqual([MANIFEST, NSC, PLIST].sort());
+    expect(s.scanned).toEqual([MANIFEST, NSC, PLIST, JAVA, KOTLIN].sort());
     expect(s.rows.map((r) => `${r.rule} ${r.at}`).sort()).toEqual(EXPECTED_HITS);
     expect(new Set(s.rows.map((r) => r.rule))).toEqual(new Set(Object.keys(CWE)));
     for (const r of s.rows) expect(r.cwe[0] ?? '', r.rule).toMatch(new RegExp(`^${CWE[r.rule] ?? 'none'}:`));
@@ -139,7 +167,7 @@ describe('configs/semgrep/mobile.yml', () => {
   it.skipIf(!AVAILABLE)('misses/: nothing fires, and the layout outside res/xml/ is never read', () => {
     const s = scan(resolve(FIXTURES, 'misses'));
     expect(s.errors).toEqual([]);
-    expect(s.scanned).toEqual([MANIFEST, NSC, PLIST].sort());
+    expect(s.scanned).toEqual([MANIFEST, NSC, PLIST, SAFE_JAVA, SAFE_KOTLIN].sort());
     expect(s.rows).toEqual([]);
   });
 });

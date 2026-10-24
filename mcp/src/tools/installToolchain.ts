@@ -426,6 +426,8 @@ async function listAvailableManagers(
       ['winget', 'winget'],
       ['scoop', 'scoop'],
       ['choco', 'choco'],
+      // `go install` of a pinned module tag (govulncheck), into the per-user tools directory.
+      ['go', 'go'],
     ];
     return Promise.all(
       all.map(async ([name, onPath]): Promise<PkgManagerCandidate> => {

@@ -23,7 +23,7 @@ import {
   GOSEC_SYNTAX_ERROR,
   GOSEC_TYPE_ERROR,
   goPackageDirs,
-  gosecEnv,
+  goToolEnv,
   gosecIssuesIn,
   isGoSource,
 } from '../../../src/runners/gosecRun.js';
@@ -153,18 +153,18 @@ describe('checkGosecReport', () => {
   });
 });
 
-describe('gosecEnv', () => {
+describe('goToolEnv', () => {
   it('-mod=mod, which lets go rewrite go.mod and go.sum, runs as -mod=readonly, and says so', () => {
-    const r = gosecEnv({ GOFLAGS: '-trimpath -mod=mod -v', PATH: '/bin' });
+    const r = goToolEnv({ GOFLAGS: '-trimpath -mod=mod -v', PATH: '/bin' });
     expect(r.env).toEqual({ GOFLAGS: '-trimpath -mod=readonly -v', PATH: '/bin' });
     expect(r.note).toContain('-mod=readonly');
   });
 
   it('anything else is passed as it is', () => {
     const env = { GOFLAGS: '-mod=vendor', PATH: '/bin' };
-    expect(gosecEnv(env)).toEqual({ env, note: null });
-    expect(gosecEnv({ PATH: '/bin' }).note).toBeNull();
-    expect(gosecEnv({ GOFLAGS: '-mod=modcacherw' }).note).toBeNull();
+    expect(goToolEnv(env)).toEqual({ env, note: null });
+    expect(goToolEnv({ PATH: '/bin' }).note).toBeNull();
+    expect(goToolEnv({ GOFLAGS: '-mod=modcacherw' }).note).toBeNull();
   });
 });
 

@@ -238,6 +238,19 @@ const GOSEC_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A10:2025': rules({ go: cell(1, 'CWE-703') }),
 };
 
+/**
+ * cppcheck 2.22.0 (`cppcheck --errorlist`: every `error` and `warning`
+ * check with a CWE that reports a defect, 189), counted with
+ * {@link countRuleReach} as one rule per check for C and for C++, measured
+ * 2026-10-24. Its checks are memory and logic defects, and most of their
+ * CWEs (CWE-788, -119, …) are on no OWASP 2025 list: 9 checks reach A10 and
+ * 8 reach A06.
+ */
+const CPPCHECK_RULES: Partial<Record<Owasp2025Id, Reach>> = {
+  'A06:2025': rules({ c: cell(8, 2), cpp: cell(8, 2) }),
+  'A10:2025': rules({ c: cell(9, 4), cpp: cell(9, 4) }),
+};
+
 /** configs/semgrep/bugfix-*.yml, recounted by packTaxonomy.test.ts. */
 const BUGFIX_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A06:2025': rules({ javascript: cell(1, 'CWE-362'), typescript: cell(1, 'CWE-362') }),
@@ -296,6 +309,15 @@ export const OWASP_DETECTORS: readonly OwaspDetector[] = [
     reach: GOSEC_RULES,
     basis: "gosec's own rule-to-CWE table (one CWE per rule), mapped with OWASP's CWE list.",
     measured: 'gosec 2.30.0, 2026-10-24',
+  },
+  {
+    id: 'cppcheck',
+    label: 'cppcheck (scan_sast, C/C++)',
+    runs: ['cppcheck'],
+    scanTypes: ['sast', 'security_full', 'review_pr'],
+    reach: CPPCHECK_RULES,
+    basis: "cppcheck's own CWE per check (--errorlist, error and warning severities), mapped with OWASP's CWE list.",
+    measured: 'cppcheck 2.22.0, 2026-10-24',
   },
   {
     id: 'bugfix-packs',

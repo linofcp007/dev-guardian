@@ -9,7 +9,7 @@ Gestão de dependências: CVEs, plano de upgrades, vetting do que acabou de entr
 
 ## 1. Scan de vulnerabilidades
 
-- Auditoria completa: `deps_audit { project_path: "<project>" }` — Trivy fs (vuln + licença) e, conforme o stack, `npm audit`, `pip-audit` (num virtualenv **temporário**, com acesso à rede; o build de um sdist corre lá) e, para `.sln`/`.csproj`, `dotnet restore --locked-mode` + `dotnet list package --vulnerable` (o restore **executa o MSBuild do projeto**). Devolve os findings, os CVEs indexados e `bot_configured` (se já há Renovate ou Dependabot). Avisa o utilizador do que corre antes de o chamar.
+- Auditoria completa: `deps_audit { project_path: "<project>" }` — Trivy fs (vuln + licença) e, conforme o stack, `npm audit`, `pip-audit` (num virtualenv **temporário**, com acesso à rede; o build de um sdist corre lá) para `.sln`/`.csproj`, `dotnet restore --locked-mode` + `dotnet list package --vulnerable` (o restore **executa o MSBuild do projeto**) e, para Go, `govulncheck` por módulo (as funções vulneráveis que o código chama, no sítio da chamada). Devolve os findings, os CVEs indexados e `bot_configured` (se já há Renovate ou Dependabot). Avisa o utilizador do que corre antes de o chamar.
 - Rápido, só Trivy: `scan_deps { project_path: "<project>" }`.
 
 ### Triagem de cada CVE

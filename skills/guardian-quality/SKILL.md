@@ -22,7 +22,7 @@ Análise de qualidade de código com foco em legibilidade, manutenibilidade e d�
 
 ## Ferramentas
 
-O que a tool `quality_check` corre: `jscpd` (duplicação, qualquer linguagem), `ruff` e `radon` (Python), ESLint (só se estiver configurado e instalado em `node_modules` — nunca via `npx`) e `staticcheck` (quando há `go.mod`). Um analisador aplicável que falta ou falha fica registado e a cobertura fica `partial`, nunca `full`.
+O que a tool `quality_check` corre: `jscpd` (duplicação, qualquer linguagem), `ruff` e `radon` (Python), ESLint (só se estiver configurado e instalado em `node_modules` — nunca via `npx`) `staticcheck` (quando há `go.mod`) e `shellcheck` (scripts `.sh`/`.bash` e os que têm shebang de shell; só o `.shellcheckrc` da raiz conta). Um analisador aplicável que falta ou falha fica registado e a cobertura fica `partial`, nunca `full`.
 
 Fora da tool — só sugestões para o utilizador correr, sem histórico nem baseline: `lizard` (complexidade multi-linguagem), `vulture` / `ts-prune` / `knip` (dead code), `coverage.py`, `c8` / `nyc`, `go test -cover` (coverage), `mutmut` / `stryker` (mutation testing).
 

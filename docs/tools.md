@@ -165,7 +165,7 @@ Open one GitHub issue per top open finding of project\_path with the local gh CL
 
 ### `deps_audit`
 
-Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync lock is a gap). Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).
+Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync lock is a gap); for Go, govulncheck, which reports the vulnerable functions the code calls. Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -357,7 +357,7 @@ One project's open findings (newest usable scan of each type, suppressions out).
 
 ### `quality_check`
 
-jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and installed in node\_modules (it runs the project's config), staticcheck for Go. Findings: duplicate, complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with scope).
+jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and installed in node\_modules (it runs the project's config), staticcheck for Go, shellcheck for shell scripts. Findings: duplicate, complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with scope).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -400,7 +400,7 @@ Write a scan report as markdown (default), html (self-contained, light/dark), sa
 
 ### `review_pr`
 
-Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules), Bandit and gosec on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never "no files changed". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the project's gap, not the review's.
+Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never "no files changed". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the project's gap, not the review's.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -488,7 +488,7 @@ Trivy config over Terraform, Kubernetes, CloudFormation and Helm; with .github/w
 
 ### `scan_sast`
 
-Semgrep with the registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for Go, through the Go toolchain (it may download modules); for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local\_only avoids the registry and its metrics.
+Semgrep with the registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for Go, through the Go toolchain (it may download modules); cppcheck for C/C++; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local\_only avoids the registry and its metrics.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

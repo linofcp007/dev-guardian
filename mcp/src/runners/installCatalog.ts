@@ -22,7 +22,7 @@ import type { VersionProbe } from './toolProbe.js';
  * where the catalogue has one; winget, scoop and choco follow their own
  * manifests.
  */
-type WindowsPkgManager = 'release' | 'winget' | 'scoop' | 'choco' | 'wsl';
+type WindowsPkgManager = 'release' | 'winget' | 'scoop' | 'choco' | 'go' | 'wsl';
 type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl' | 'uv' | 'cargo' | 'go';
 
 export interface InstallSpec {
@@ -74,7 +74,7 @@ interface ToolMeta {
    * are available — ahead of `install_toolchain`'s general order for that OS
    * (Homebrew first on macOS). Trivy's pinned archive on macOS: see its entry.
    */
-  prefer?: { darwin?: readonly PosixPkgManager[]; linux?: readonly PosixPkgManager[] };
+  prefer?: { win32?: readonly WindowsPkgManager[]; darwin?: readonly PosixPkgManager[]; linux?: readonly PosixPkgManager[] };
   /** Whether this tool is part of the default install profile. */
   default: boolean;
 }
@@ -124,13 +124,29 @@ interface PinnedRelease {
   version: string;
   /** `https://github.com/<owner>/<repo>/releases/download/v<version>` */
   base: string;
-  assets: Readonly<Record<ReleasePlatform, { file: string; sha256: string }>>;
+  /**
+   * `member`: the binary's path inside a `.tar.gz` when it is not the tool's
+   * name at the archive root (shellcheck's `shellcheck-v<version>/shellcheck`).
+   */
+  assets: Readonly<Record<ReleasePlatform, { file: string; sha256: string; member?: string }>>;
 }
 
 const SYFT_VERSION = '1.55.0';
 const TRIVY_VERSION = TRIVY_INSTALL_TAG.slice(1);
 const GITLEAKS_VERSION = '8.30.1';
+
+/** The cppcheck release scoop and winget are asked for (2026-09-19). */
+const CPPCHECK_VERSION = '2.22.0';
 const GOSEC_VERSION = '2.30.0';
+const SHELLCHECK_VERSION = '0.11.0';
+
+/**
+ * govulncheck publishes no binaries: it is installed with `go install` at
+ * this exact tag (Go's checksum database verifies the module), into the
+ * per-user tools directory ({@link goInstallToUserBin}). v1.9.0 was published
+ * 2026-10-11 (proxy.golang.org).
+ */
+const GOVULNCHECK_MODULE = 'golang.org/x/vuln/cmd/govulncheck@v1.9.0';
 
 /**
  * The Syft, Trivy and gitleaks releases every install of them fetches — the
@@ -161,8 +177,14 @@ const GOSEC_VERSION = '2.30.0';
  * bundles. It ships `.tar.gz` archives for Windows too, with `gosec.exe` at
  * the root, which {@link windowsReleaseInstaller} unpacks with Windows' own
  * `tar.exe`.
+ *
+ * shellcheck 0.11.0 (2025-08-04) publishes no checksums file: each archive was
+ * hashed independently on 2026-10-24 and matched the digest GitHub records for
+ * the asset. Its POSIX archives hold the binary at
+ * `shellcheck-v0.11.0/shellcheck` (`tar -tzf`, the `member` below); the
+ * Windows ZIP holds `shellcheck.exe` at the root.
  */
-export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'gosec', PinnedRelease>> = {
+export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'gosec' | 'shellcheck', PinnedRelease>> = {
   syft: {
     version: SYFT_VERSION,
     base: `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}`,
@@ -205,6 +227,33 @@ export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'g
       'darwin-amd64': { file: `gosec_${GOSEC_VERSION}_darwin_amd64.tar.gz`, sha256: '1b10b496954791f4b57448722f0cb93c0fa4aba24e9d286c0459dfde593e0898' },
       'darwin-arm64': { file: `gosec_${GOSEC_VERSION}_darwin_arm64.tar.gz`, sha256: 'cac8c480673fc179798402b6d86efc12b6bcf11c18bcf377fda02cc55846dd97' },
       'windows-amd64': { file: `gosec_${GOSEC_VERSION}_windows_amd64.tar.gz`, sha256: '503bdfe6155584f2497ef855846b66406bce5b574ce1a9c7a7bb171aff2caa02' },
+    },
+  },
+  shellcheck: {
+    version: SHELLCHECK_VERSION,
+    base: `https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}`,
+    assets: {
+      'linux-amd64': {
+        file: `shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz`,
+        sha256: 'b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6',
+        member: `shellcheck-v${SHELLCHECK_VERSION}/shellcheck`,
+      },
+      'linux-arm64': {
+        file: `shellcheck-v${SHELLCHECK_VERSION}.linux.aarch64.tar.gz`,
+        sha256: '68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc',
+        member: `shellcheck-v${SHELLCHECK_VERSION}/shellcheck`,
+      },
+      'darwin-amd64': {
+        file: `shellcheck-v${SHELLCHECK_VERSION}.darwin.x86_64.tar.gz`,
+        sha256: 'c2c15e08df0e8fbc374c335b230a7ee958c313fa5714817a59aa59f1aa594f51',
+        member: `shellcheck-v${SHELLCHECK_VERSION}/shellcheck`,
+      },
+      'darwin-arm64': {
+        file: `shellcheck-v${SHELLCHECK_VERSION}.darwin.aarch64.tar.gz`,
+        sha256: '339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f',
+        member: `shellcheck-v${SHELLCHECK_VERSION}/shellcheck`,
+      },
+      'windows-amd64': { file: `shellcheck-v${SHELLCHECK_VERSION}.zip`, sha256: '8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e' },
     },
   },
 };
@@ -402,6 +451,59 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       darwin: { brew: manualHint('brew install go') },
     },
     default: false,
+  },
+  govulncheck: {
+    name: 'govulncheck',
+    // 1.0.0: the `-format json` stream deps_audit reads (protocol v1.0.0).
+    version_floor: '1.0.0',
+    probe: { command: 'govulncheck', args: ['-version'] },
+    required_by: ['deps_audit'],
+    install: {
+      win32: { go: goInstallToUserBin(GOVULNCHECK_MODULE, 'win32') },
+      linux: { go: goInstallToUserBin(GOVULNCHECK_MODULE, 'posix') },
+      darwin: { go: goInstallToUserBin(GOVULNCHECK_MODULE, 'posix') },
+    },
+    default: false, // only when Go is detected
+  },
+  shellcheck: {
+    name: 'shellcheck',
+    // 0.10.0: `--rcfile`, which quality_check passes (runners/shellcheckRun.ts).
+    version_floor: '0.10.0',
+    probe: { command: 'shellcheck', args: ['--version'] },
+    required_by: ['quality_check'],
+    install: {
+      // The pinned release archive, sha256-checked (see PINNED_RELEASES).
+      win32: { release: windowsReleaseInstaller('shellcheck') },
+      linux: { curl: releaseArchiveInstaller('shellcheck', 'linux') },
+      darwin: { brew: brewInstall('shellcheck'), curl: releaseArchiveInstaller('shellcheck', 'darwin') },
+    },
+    default: false, // only when the project has shell scripts
+  },
+  cppcheck: {
+    name: 'cppcheck',
+    // 2.13: the oldest that reports a file it did not analyse — scan_sast
+    // checks it at run time and names an older one as a gap
+    // (runners/cppcheckRun.ts#CPPCHECK_MIN_VERSION, held equal by a test;
+    // not imported: that module reaches this one). Debian bookworm's
+    // package is 2.10, Ubuntu 22.04's 2.7: below the floor.
+    version_floor: '2.13.0',
+    probe: { command: 'cppcheck', args: ['--version'] },
+    required_by: ['scan_sast', 'security_scan_full', 'review_pr'],
+    install: {
+      // Verified 2026-10-24: scoop's Main bucket and winget-pkgs carry
+      // 2.22.0, the same MSI (sha256 3929162b…547b). scoop first (`prefer`
+      // below): it unpacks the MSI per user, where winget runs it
+      // per-machine — elevated — into %ProgramFiles%\Cppcheck, which
+      // platform/userBin.ts#ensureInstallerDirsOnPath puts on the PATH.
+      win32: {
+        scoop: scoopInstall(`cppcheck@${CPPCHECK_VERSION}`),
+        winget: { ...wingetInstall('Cppcheck.Cppcheck', CPPCHECK_VERSION), needs_elevation: true },
+      },
+      linux: { apt: aptInstall('cppcheck') },
+      darwin: { brew: brewInstall('cppcheck') },
+    },
+    prefer: { win32: ['scoop'] },
+    default: false, // only when C or C++ is detected
   },
   jscpd: {
     name: 'jscpd',
@@ -787,20 +889,24 @@ function releaseArchiveInstaller(tool: keyof typeof PINNED_RELEASES, os: 'linux'
   const amd = r.assets[`${os}-amd64`];
   const arm = r.assets[`${os}-arm64`];
   const check = os === 'linux' ? 'sha256sum -c -' : 'shasum -a 256 -c -';
+  // The binary's path inside the archive: the tool's name at the root, unless the release nests it.
+  const nested = amd.member !== undefined || arm.member !== undefined;
+  const memberOf = (a: { member?: string }): string => (nested ? `; member=${a.member ?? tool}` : '');
+  const member = nested ? '"$member"' : tool;
   const script = [
     'set -eu',
     'case "$(uname -m)" in',
-    `  x86_64|amd64) asset=${amd.file}; sum=${amd.sha256} ;;`,
-    `  aarch64|arm64) asset=${arm.file}; sum=${arm.sha256} ;;`,
+    `  x86_64|amd64) asset=${amd.file}; sum=${amd.sha256}${memberOf(amd)} ;;`,
+    `  aarch64|arm64) asset=${arm.file}; sum=${arm.sha256}${memberOf(arm)} ;;`,
     `  *) echo "${tool}: no pinned release archive for this CPU ($(uname -m))" >&2; exit 1 ;;`,
     'esac',
     'tmp="$(mktemp -d)"',
     'trap \'rm -rf "$tmp"\' EXIT',
     `curl -sSfL -o "$tmp/${tool}.tar.gz" "${r.base}/$asset"`,
     `echo "$sum  $tmp/${tool}.tar.gz" | ${check}`,
-    `tar -xzf "$tmp/${tool}.tar.gz" -C "$tmp" ${tool}`,
+    `tar -xzf "$tmp/${tool}.tar.gz" -C "$tmp" ${member}`,
     'mkdir -p "$HOME/.local/bin"',
-    `install -m 0755 "$tmp/${tool}" "$HOME/.local/bin/${tool}"`,
+    `install -m 0755 "$tmp/${nested ? '$member' : tool}" "$HOME/.local/bin/${tool}"`,
   ].join('\n');
   return {
     command: 'bash',
@@ -898,6 +1004,41 @@ function goInstall(modulePath: string): InstallSpec {
   };
 }
 
+/**
+ * `go install <module>@<tag>` into the per-user tools directory the pinned
+ * installers use (`GOBIN`: `~/.local/bin`, `%USERPROFILE%\.local\bin`), so
+ * the server finds the binary without the user's `GOPATH/bin` on PATH. The
+ * module is verified against Go's checksum database. Written with single
+ * quotes alone on Windows, so the command line has no `"` to re-quote.
+ */
+function goInstallToUserBin(moduleAtTag: string, os: 'win32' | 'posix'): InstallSpec {
+  const tool = moduleAtTag.slice(moduleAtTag.lastIndexOf('/') + 1, moduleAtTag.indexOf('@'));
+  if (os === 'win32') {
+    return {
+      command: 'powershell',
+      args: [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+        [
+          "$ErrorActionPreference = 'Stop'",
+          "$env:GOBIN = Join-Path $env:USERPROFILE '.local\\bin'",
+          `go install '${moduleAtTag}'`,
+          `if ($LASTEXITCODE -ne 0) { throw ('${tool}: go install failed (exit ' + $LASTEXITCODE + ')') }`,
+        ].join('\n'),
+      ],
+      needs_elevation: false,
+      description: `go install ${moduleAtTag} → %USERPROFILE%\\.local\\bin\\${tool}.exe`,
+      user_bin: `${tool}.exe`,
+    };
+  }
+  return {
+    command: 'bash',
+    args: ['-c', ['set -eu', 'mkdir -p "$HOME/.local/bin"', `GOBIN="$HOME/.local/bin" go install '${moduleAtTag}'`].join('\n')],
+    needs_elevation: false,
+    description: `go install ${moduleAtTag} → ~/.local/bin/${tool}`,
+    user_bin: tool,
+  };
+}
+
 function gemInstall(pkg: string): InstallSpec {
   return {
     command: 'gem',
@@ -972,7 +1113,8 @@ export function pickInstallSpec(
   if (!candidates) return null;
   const byName = candidates as Record<string, InstallSpec | undefined>;
   // The tool's own preference first ({@link ToolMeta.prefer}), then the OS's order.
-  const preferred: readonly string[] = os === 'darwin' ? (meta.prefer?.darwin ?? []) : os === 'linux' ? (meta.prefer?.linux ?? []) : [];
+  const preferred: readonly string[] =
+    os === 'win32' ? (meta.prefer?.win32 ?? []) : os === 'darwin' ? (meta.prefer?.darwin ?? []) : os === 'linux' ? (meta.prefer?.linux ?? []) : [];
   const available = new Set<string>(availableManagers.map((m) => m.name));
   for (const name of [...preferred.filter((n) => available.has(n)), ...availableManagers.map((m) => m.name)]) {
     const spec = byName[name];

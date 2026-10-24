@@ -101,7 +101,9 @@ when you need to know the rule pack was actually exercised. Only absence skips:
 a Semgrep on `PATH` that fails `--version` fails the rule-pack tests.
 `GUARDIAN_REQUIRE_LINTERS=1` does the same for actionlint and zizmor, and
 `GUARDIAN_REQUIRE_GOSEC=1` for gosec and the Go toolchain (`test/e2e/gosecSast.test.ts`;
-neither is in `--toolchain`, so run it where both are on `PATH`). The
+neither is in `--toolchain`, so run it where both are on `PATH`), and
+`GUARDIAN_REQUIRE_CPPCHECK=1` for cppcheck (`test/e2e/cppcheckSast.test.ts`; not in `--toolchain`
+either — on Windows, `msiexec /a` of the release MSI unpacks it without installing). The
 suite keeps Semgrep's settings, log and version cache out of your home
 directory (`test/setup/semgrepHome.ts`). Timing tests assert a shape, not a
 number of milliseconds (`test/helpers/timing.ts`): a ratio of 8x the input,

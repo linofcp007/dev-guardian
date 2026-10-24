@@ -180,11 +180,12 @@ function filesAnalysed(reports: readonly string[]): number {
 }
 
 /**
- * The environment gosec's `go` runs with: the caller's, except a `GOFLAGS`
+ * The environment the Go toolchain runs with under gosec and govulncheck
+ * (`runners/govulncheckRun.ts`): the caller's, except a `GOFLAGS`
  * `-mod=mod`, which lets `go` rewrite the project's `go.mod` and `go.sum` —
  * replaced by `-mod=readonly` (Go's own default), and said so.
  */
-export function gosecEnv(env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; note: string | null } {
+export function goToolEnv(env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; note: string | null } {
   const flags = env['GOFLAGS'];
   if (flags === undefined || !/(^|\s)-mod=mod(\s|$)/.test(flags)) return { env, note: null };
   return {
@@ -264,10 +265,10 @@ export async function gosecOnPackages(args: {
       cancelled: false,
     };
   }
-  const { env, note } = gosecEnv(args.env);
+  const { env, note } = goToolEnv(args.env);
   const run = await scanFileBatches({
     name: GOSEC,
-    command: GOSEC,
+    command: 'gosec',
     args: ['-fmt=json', '-no-fail'],
     reportArgs: (f) => [`-out=${f}`, `-log=${f.replace(/\.json$/, '.log')}`],
     files: dirs,

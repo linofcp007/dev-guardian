@@ -30,7 +30,11 @@
 #      has a root go.mod: gosec loads every package through the Go toolchain,
 #      at the version go.mod names (`go-version-file`), with no module cache
 #      kept between runs (`cache: false`, the cache-poisoning reason step 2
-#      gives for npm).
+#      gives for npm). cppcheck likewise, ONLY when the checkout has a C or
+#      C++ source (scan_sast's own test: `.c .cc .cpp .cxx .c++`, outside
+#      hidden directories): Ubuntu's own package (apt checks its signature),
+#      2.13 on ubuntu-24.04 — the oldest scan_sast runs, since an older one
+#      skips a file it cannot configure without saying so.
 #   4. Points DEV_GUARDIAN_HOME at a directory under `$RUNNER_TEMP` — the
 #      runner's own documented scratch space — via `$GITHUB_ENV`, not a
 #      workflow- or job-level `env:` block: GitHub Actions does not allow
@@ -228,6 +232,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Detect C or C++ sources (scan_sast runs cppcheck on them)
+        id: cpp_probe
+        run: |
+          if find . -path './.*' -prune -o -type f \( -iname '*.c' -o -iname '*.cc' -o -iname '*.cpp' -o -iname '*.cxx' -o -iname '*.c++' \) -print -quit | grep -q .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install cppcheck
+        if: steps.cpp_probe.outputs.found == 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cppcheck
 
       - name: Point DEV_GUARDIAN_HOME outside this checkout
         run: echo "DEV_GUARDIAN_HOME=$RUNNER_TEMP/dev-guardian" >> "$GITHUB_ENV"

@@ -75,6 +75,7 @@ interface UserBinPath {
  * Idempotent, and cheap enough to call before every lookup.
  */
 export function ensureUserBinOnPath(env: NodeJS.ProcessEnv = process.env, home?: string): UserBinPath {
+  ensureInstallerDirsOnPath(env);
   const dir = userBinDir(home);
   if (dir === null) return { dir: null, added: false, onUserPath: false };
   const onUserPath = pathHasDir(dir, STARTUP_PATH);
@@ -82,6 +83,22 @@ export function ensureUserBinOnPath(env: NodeJS.ProcessEnv = process.env, home?:
   if (pathHasDir(dir, current) || !existsSync(dir)) return { dir, added: false, onUserPath };
   env['PATH'] = current === '' ? dir : `${current}${current.endsWith(delimiter) ? '' : delimiter}${dir}`;
   return { dir, added: true, onUserPath };
+}
+
+/**
+ * Windows only: the directories an installer the catalogue names puts a tool
+ * in without touching PATH — cppcheck's MSI (winget `Cppcheck.Cppcheck`)
+ * installs to `%ProgramFiles%\Cppcheck` — appended the same way, when the
+ * tool is there.
+ */
+export function ensureInstallerDirsOnPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): void {
+  if (platform !== 'win32') return;
+  const programFiles = env['ProgramW6432'] ?? env['ProgramFiles'];
+  if (programFiles === undefined || programFiles.trim() === '') return;
+  const dir = join(programFiles, 'Cppcheck');
+  const current = env['PATH'] ?? '';
+  if (pathHasDir(dir, current, platform) || !existsSync(join(dir, 'cppcheck.exe'))) return;
+  env['PATH'] = current === '' ? dir : `${current}${current.endsWith(';') ? '' : ';'}${dir}`;
 }
 
 /**

@@ -1,6 +1,7 @@
 # dev-guardian Semgrep config mobile.
-# Configuração de apps Android e iOS que o registo da Semgrep não vê: o
-# manifesto Android, a network security config e o Info.plist (medido em
+# Configuração de apps Android e iOS que o registo da Semgrep não vê — o
+# manifesto Android, a network security config e o Info.plist — e as chamadas
+# Java e Kotlin do WebView, do TLS e dos modos de ficheiro (medido em
 # 2026-10-24 com --config auto: do registo só dispara
 # `java.android.security.exported_activity`, por isso as activities
 # exportadas ficam com essa regra e este pack trata dos services, receivers e
@@ -17,6 +18,21 @@
 #   | mobile-android-nsc-user-ca         | CWE-295  | res/xml/*.xml (network security) |
 #   | mobile-ios-ats-arbitrary-loads     | CWE-319  | Info.plist                       |
 #   | mobile-ios-ats-insecure-exception  | CWE-319  | Info.plist                       |
+#   | mobile-android-webview-debugging   | CWE-489  | *.java, *.kt                     |
+#   | mobile-android-webview-file-url-access | CWE-200 | *.java, *.kt                  |
+#   | mobile-android-webview-js-interface | CWE-749 | *.java, *.kt                     |
+#   | mobile-android-world-accessible-mode | CWE-276 | *.java, *.kt                    |
+#   | mobile-kotlin-trust-all-certificates | CWE-295 | *.kt                            |
+#   | mobile-hostname-verifier-accepts-all | CWE-295 | *.java, *.kt                    |
+#
+# As regras de código Java e Kotlin são `generic` também: a Semgrep não analisa
+# os ficheiros (um Kotlin que o parser não leia não é cobertura parcial), e o
+# mesmo texto serve às duas linguagens (`setX(true)` e `x = true`). Medido em
+# 2026-10-24 com --config auto: o registo apanha o TrustManager e o
+# HostnameVerifier de Java escritos como CLASSE
+# (`java.lang.security.audit.crypto.ssl.insecure-*`), e mais nada destas; por
+# isso o TrustManager vazio fica so para Kotlin, e o HostnameVerifier so na
+# forma lambda (Java e Kotlin), que o registo não vê.
 #
 # Todas as regras são `generic` com `paths.include`, de propósito: uma regra
 # `xml` faria a Semgrep analisar todos os `.xml` do projeto (pom.xml,
@@ -46,6 +62,17 @@
 #     debuggable) não dispara.
 #   - Um Info.plist binário (compilado) não é texto e não é lido; o pack lê
 #     `Info.plist` e `<Alvo>-Info.plist` em XML, a forma do repositório.
+#   - Nas regras de código o texto e lido como texto: uma chamada dentro de
+#     um comentário dispara, e so o literal `true` conta (um valor calculado,
+#     `setWebContentsDebuggingEnabled(enabled)`, não). A depuração do WebView
+#     guardada por `BuildConfig.DEBUG` (na mesma linha, ou num bloco
+#     `if (BuildConfig.DEBUG) { ... }`) não dispara; outra guarda
+#     (`ApplicationInfo.FLAG_DEBUGGABLE`, uma flag própria) dispara.
+#   - `addJavascriptInterface` e informativo: desde o Android 4.2 so os
+#     métodos com `@JavascriptInterface` ficam expostos, e o risco depende de o
+#     WebView carregar conteúdo de fora, que o pack não vê.
+#   - Um TrustManager Kotlin que aceita tudo com outro corpo (um `return`
+#     sozinho, um log) não dispara; so o corpo vazio ou `= Unit`.
 
 rules:
   - id: mobile-android-debuggable
@@ -209,3 +236,124 @@ rules:
       lido e alterado na rede (CWE-319). Confirmar que o domínio não leva
       dados de utilizadores, ou servi-lo por HTTPS.
     pattern-regex: <key>\s*NS(?:Temporary)?ExceptionAllowsInsecureHTTPLoads\s*</key>\s*<true\s*/>
+
+  - id: mobile-android-webview-debugging
+    metadata:
+      cwe:
+        - "CWE-489: Active Debug Code"
+      owasp:
+        - "A02:2025 - Security Misconfiguration"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/*.java"
+        - "**/*.kt"
+    message: >-
+      `WebView.setWebContentsDebuggingEnabled(true)`: o Chrome de qualquer
+      computador ligado por USB inspeciona e altera o conteúdo dos WebViews da
+      app — cookies, tokens, o JavaScript da página (CWE-489). Ligar so no
+      build debug: `setWebContentsDebuggingEnabled(BuildConfig.DEBUG)`.
+    patterns:
+      # A linha da chamada sem `BuildConfig.DEBUG` (a guarda na mesma linha).
+      - pattern-regex: (?m)^(?![^\n]*BuildConfig\.DEBUG)[^\n]*?\bsetWebContentsDebuggingEnabled\s*\(\s*true\s*\)
+      - pattern-not-inside: |
+          if (BuildConfig.DEBUG) { ... }
+
+  - id: mobile-android-webview-file-url-access
+    metadata:
+      cwe:
+        - "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/*.java"
+        - "**/*.kt"
+    message: >-
+      O WebView deixa uma página `file://` ler outros ficheiros ou outras
+      origens (`allowUniversalAccessFromFileURLs` / `allowFileAccessFromFileURLs`
+      a `true`): um HTML guardado pela app, ou trazido por outra, lê os
+      ficheiros privados da app e envia-os para fora (CWE-200). Deixar o valor
+      por omissão (`false`); para conteúdo local usar o `WebViewAssetLoader`.
+    pattern-regex: \b(?:setAllow(?:Universal|File)AccessFromFileURLs\s*\(\s*true\s*\)|allow(?:Universal|File)AccessFromFileURLs\s*=\s*true\b)
+
+  - id: mobile-android-webview-js-interface
+    metadata:
+      cwe:
+        - "CWE-749: Exposed Dangerous Method or Function"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [generic]
+    severity: INFO
+    paths:
+      include:
+        - "**/*.java"
+        - "**/*.kt"
+    message: >-
+      `addJavascriptInterface`: os métodos `@JavascriptInterface` do objeto
+      ficam ao alcance de todo o JavaScript que o WebView carregar (CWE-749).
+      Confirmar que o WebView so carrega conteúdo da própria app ou de um
+      domínio fixo em HTTPS, e que nenhum desses métodos devolve dados
+      sensíveis ou executa ações sem confirmação.
+    pattern-regex: \baddJavascriptInterface\s*\(
+
+  - id: mobile-android-world-accessible-mode
+    metadata:
+      cwe:
+        - "CWE-276: Incorrect Default Permissions"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/*.java"
+        - "**/*.kt"
+    message: >-
+      `MODE_WORLD_READABLE` / `MODE_WORLD_WRITEABLE`: qualquer app do aparelho
+      lê ou escreve o ficheiro ou as preferências (CWE-276); desde o Android 7
+      lança `SecurityException`. Usar `MODE_PRIVATE` e, para partilhar, um
+      `FileProvider`.
+    pattern-regex: \bMODE_WORLD_(?:READABLE|WRITEABLE)\b
+
+  - id: mobile-kotlin-trust-all-certificates
+    metadata:
+      cwe:
+        - "CWE-295: Improper Certificate Validation"
+      owasp:
+        - "A07:2025 - Authentication Failures"
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "**/*.kt"
+    message: >-
+      Um `X509TrustManager` cujo `checkServerTrusted` não faz nada aceita
+      qualquer certificado: quem estiver na rede intercepta e altera o TLS da
+      app (CWE-295). Usar o TrustManager do sistema; para fixar o certificado,
+      um `CertificatePinner` (OkHttp) ou `<pin-set>` na network security config.
+    pattern-regex: \bfun\s+checkServerTrusted\s*\([^)]*\)\s*(?:\{\s*\}|=\s*Unit\b)
+
+  - id: mobile-hostname-verifier-accepts-all
+    metadata:
+      cwe:
+        - "CWE-295: Improper Certificate Validation"
+      owasp:
+        - "A07:2025 - Authentication Failures"
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "**/*.java"
+        - "**/*.kt"
+    message: >-
+      Um `HostnameVerifier` que devolve sempre `true` aceita o certificado de
+      qualquer servidor para qualquer nome: o TLS deixa de provar com quem a
+      app fala (CWE-295). Usar o verificador por omissão
+      (`HttpsURLConnection.getDefaultHostnameVerifier()`) ou comparar o nome.
+    # Lambdas Java (`(h, s) -> true`) e Kotlin (`{ _, _ -> true }`); a forma de
+    # classe Java e a regra do registo `insecure-hostname-verifier`.
+    pattern-regex: \bHostnameVerifier\b[^;{]*?(?:\{\s*\w+\s*,\s*\w+\s*->\s*true\s*\}|=\s*\(\s*\w+\s*,\s*\w+\s*\)\s*->\s*true\b)

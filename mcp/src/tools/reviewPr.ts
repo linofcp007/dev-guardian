@@ -16,6 +16,9 @@
  *   - gosec over the packages that hold a changed Go file — it reads a
  *     package whole — its findings kept to the changed files
  *     (`runners/gosecRun.ts`);
+ *   - cppcheck over the changed C and C++ translation units — a changed
+ *     header is read through the changed files that include it
+ *     (`runners/cppcheckRun.ts`);
  *   - Trivy over the project when a dependency manifest or lockfile changed.
  *
  * It used to hand a space-joined file list to `scripts/scan/review-scan.sh`,
@@ -65,8 +68,10 @@ import {
   withHonoured,
   type TrivyFsJudgement,
 } from '../runners/trivyRun.js';
+import { cppcheckSources, cppSources } from '../runners/cppcheckRun.js';
 import { GOSEC, gosecIssuesIn, gosecOnPackages, isGoSource } from '../runners/gosecRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
+import { cppcheckParser } from '../runners/scannerParsers/cppcheck.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { MANIFEST_ECOSYSTEM_LOCKFILES, trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -116,7 +121,7 @@ const reviewPr = makeScanTool({
   name: 'review_pr',
   title: 'Pre-PR diff review',
   description:
-    "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit and gosec on " +
+    "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit, gosec and cppcheck on " +
     'changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy ' +
     'when a manifest changed. An unresolvable ref is an error, never "no files changed". ' +
     '`preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the ' +
@@ -178,6 +183,7 @@ const reviewPr = makeScanTool({
         out.tools_run.push({ name: 'semgrep', status: 'failed', reason: unavailable });
         if (changed.some(isPython)) out.tools_run.push({ name: 'bandit', status: 'failed', reason: unavailable });
         if (changed.some(isGoSource)) out.tools_run.push({ name: GOSEC, status: 'failed', reason: unavailable });
+        if (cppSources(changed).length > 0) out.tools_run.push({ name: 'cppcheck', status: 'failed', reason: unavailable });
         if (touched.some(isManifest)) out.tools_run.push({ name: 'trivy', status: 'failed', reason: unavailable });
       } else {
         const present = changed.filter((f) => isFileOnDisk(join(scanRoot, f)));
@@ -185,6 +191,7 @@ const reviewPr = makeScanTool({
         await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where, submodules });
         if (!out.cancelled) await runBandit(ctx, out, { scanRoot, reportDir, files: present.filter(isPython) });
         if (!out.cancelled) await runGosec(ctx, out, { scanRoot, reportDir, files: present.filter(isGoSource) });
+        if (!out.cancelled) await runCppcheck(ctx, out, { scanRoot, reportDir, files: cppSources(present) });
         if (!out.cancelled && touched.some(isManifest)) await runTrivy(ctx, out, { scanRoot, reportDir, touched });
       }
 
@@ -419,6 +426,28 @@ async function runGosec(
   for (const raw of pass.reports) {
     out.parser_inputs.push({ parser: gosecParser, input: gosecIssuesIn(raw, args.scanRoot, (f) => reviewed.has(f)) });
   }
+  if (pass.toolRun !== null) out.tools_run.push(pass.toolRun);
+  for (const name of pass.missing) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
+  out.cancelled ||= pass.cancelled;
+}
+
+/** cppcheck over the changed C/C++ translation units present in `scanRoot` — from the list, never a compile database. */
+async function runCppcheck(
+  ctx: InvokeContext,
+  out: Collected,
+  args: { scanRoot: string; reportDir: string; files: readonly string[] },
+): Promise<void> {
+  if (args.files.length === 0) return;
+  const pass = await cppcheckSources({
+    projectPath: args.scanRoot,
+    files: args.files,
+    scoped: true,
+    reportDir: args.reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  for (const report of pass.reports) out.parser_inputs.push({ parser: cppcheckParser, input: report });
   if (pass.toolRun !== null) out.tools_run.push(pass.toolRun);
   for (const name of pass.missing) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
   out.cancelled ||= pass.cancelled;

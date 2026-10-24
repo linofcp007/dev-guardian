@@ -139,9 +139,12 @@ export const RUN_NAMES = {
   'semgrep-wp': scanner('semgrep'),
   bandit: scanner('bandit'),
   // scan_sast's and review_pr's Go pass (runners/gosecRun.ts), and the
-  // missing_tools entry when the Go toolchain it loads packages through is absent.
+  // missing_tools entry when the Go toolchain that it — and deps_audit's
+  // govulncheck — loads packages through is absent.
   gosec: scanner('gosec'),
-  go: scanner('gosec'),
+  go: scanner('gosec', 'govulncheck'),
+  // scan_sast's and review_pr's C/C++ pass (runners/cppcheckRun.ts).
+  cppcheck: scanner('cppcheck'),
   'security-code-scan': scanner('security-code-scan'),
   // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
   'dotnet-analyzers': scanner('dotnet-analyzers'),
@@ -188,6 +191,8 @@ export const RUN_NAMES = {
   npm: scanner('npm-audit'),
   'pip-audit': scanner('pip-audit'),
   dotnet: scanner('dotnet-list-package'),
+  // deps_audit's Go pass (runners/govulncheckRun.ts): the vulnerable functions the code calls.
+  govulncheck: scanner('govulncheck'),
 
   // quality_check. Its read of `.guardian/budgets.yml` measures the quality
   // budgets against jscpd's and radon's own reports, so either one not
@@ -197,6 +202,7 @@ export const RUN_NAMES = {
   radon: { measures: ['radon'], whenNotOk: ['radon', 'budgets'] },
   jscpd: { measures: ['jscpd'], whenNotOk: ['jscpd', 'budgets'] },
   staticcheck: scanner('staticcheck'),
+  shellcheck: scanner('shellcheck'),
   budgets: scanner('budgets'),
 
   // scan_containers, beside its Trivy passes: the Dockerfile linter and the
@@ -287,16 +293,16 @@ export const RUN_NAMES = {
   // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
   // sub-scan's own bookkeeping instead whenever the row still exists; these
   // speak for a sub-tool that failed before it wrote one.
-  security_scan_full: scanner('semgrep', 'bandit', 'gosec', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
-  quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'budgets'),
-  deps_audit: scanner(...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package'),
+  security_scan_full: scanner('semgrep', 'bandit', 'gosec', 'cppcheck', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
+  quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'shellcheck', 'budgets'),
+  deps_audit: scanner(...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package', 'govulncheck'),
   compliance_check: scanner(...TRIVY_FS_KEYS, 'semgrep'),
   scan_wordpress: scanner('semgrep', 'gitleaks', ...TRIVY_FS_KEYS, 'phpcs'),
 
   // security_scan_full: its own entry for a child that threw, answered an
   // error, or is not registered — the child wrote no bookkeeping of its own.
   // (An audit reads these through the security_scan_full sub-scan.)
-  scan_sast: scanner('semgrep', 'bandit', 'gosec', 'security-code-scan', 'dotnet-analyzers'),
+  scan_sast: scanner('semgrep', 'bandit', 'gosec', 'cppcheck', 'security-code-scan', 'dotnet-analyzers'),
   scan_secrets: scanner('gitleaks'),
   scan_deps: scanner(...TRIVY_FS_KEYS),
   scan_iac: scanner(TRIVY_CONFIG, 'zizmor', 'actionlint'),

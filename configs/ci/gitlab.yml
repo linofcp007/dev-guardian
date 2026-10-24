@@ -29,6 +29,10 @@
 #      toolchain gosec loads its packages through (`go` on PATH, at the
 #      version its go.mod names — Debian's own `golang` is too old for
 #      most), or `dev-guardian scan` reports `go` as a named gap and exits 2.
+#      A C or C++ project needs cppcheck 2.13 or newer on PATH: this image's
+#      Debian bookworm package is 2.10, which skips a file it cannot
+#      configure without saying so, and scan_sast refuses it — `cppcheck`
+#      is then a named gap and the gate exits 2.
 #   3. Clones dev-guardian itself at a pinned release tag, resolved to its
 #      exact commit SHA when this pipeline was GENERATED (ci-init: `git
 #      ls-remote`/a local tag lookup) and verified again with `git
