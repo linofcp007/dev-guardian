@@ -138,6 +138,10 @@ export const RUN_NAMES = {
   semgrep: scanner('semgrep'),
   'semgrep-wp': scanner('semgrep'),
   bandit: scanner('bandit'),
+  // scan_sast's and review_pr's Go pass (runners/gosecRun.ts), and the
+  // missing_tools entry when the Go toolchain it loads packages through is absent.
+  gosec: scanner('gosec'),
+  go: scanner('gosec'),
   'security-code-scan': scanner('security-code-scan'),
   // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
   'dotnet-analyzers': scanner('dotnet-analyzers'),
@@ -283,7 +287,7 @@ export const RUN_NAMES = {
   // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
   // sub-scan's own bookkeeping instead whenever the row still exists; these
   // speak for a sub-tool that failed before it wrote one.
-  security_scan_full: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
+  security_scan_full: scanner('semgrep', 'bandit', 'gosec', 'security-code-scan', 'dotnet-analyzers', 'gitleaks', ...TRIVY_FS_KEYS, TRIVY_CONFIG),
   quality_check: scanner('eslint', 'ruff', 'radon', 'jscpd', 'staticcheck', 'budgets'),
   deps_audit: scanner(...TRIVY_FS_KEYS, 'npm-audit', 'pip-audit', 'dotnet-list-package'),
   compliance_check: scanner(...TRIVY_FS_KEYS, 'semgrep'),
@@ -292,7 +296,7 @@ export const RUN_NAMES = {
   // security_scan_full: its own entry for a child that threw, answered an
   // error, or is not registered — the child wrote no bookkeeping of its own.
   // (An audit reads these through the security_scan_full sub-scan.)
-  scan_sast: scanner('semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers'),
+  scan_sast: scanner('semgrep', 'bandit', 'gosec', 'security-code-scan', 'dotnet-analyzers'),
   scan_secrets: scanner('gitleaks'),
   scan_deps: scanner(...TRIVY_FS_KEYS),
   scan_iac: scanner(TRIVY_CONFIG, 'zizmor', 'actionlint'),

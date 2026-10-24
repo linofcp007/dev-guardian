@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.fixture">
+    <application
+        android:allowBackup="true"
+        android:debuggable="true"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:label="Fixture">
+        <!-- The launcher activity is the registry's exported_activity rule, not this pack's. -->
+        <activity android:name=".Main" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service android:name=".Sync" android:exported="true" />
+        <receiver
+            android:name=".Boot"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <provider android:name=".Files" android:authorities="com.example.fixture.files" android:exported='true' android:grantUriPermissions="true" />
+        <provider android:name=".HalfOpen" android:authorities="com.example.fixture.half" android:exported="true" android:readPermission="com.example.fixture.READ" />
+    </application>
+</manifest>

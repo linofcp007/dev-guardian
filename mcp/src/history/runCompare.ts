@@ -242,7 +242,7 @@ function isPluginPackGap(pp: PartialParse): boolean {
 let packRuleIds: ReadonlySet<string> | undefined;
 
 /**
- * The rule ids the plugin's packs declare (`configs/semgrep/llm.yml`, `web-js.yml`),
+ * The rule ids the plugin's packs declare (`configs/semgrep/llm.yml`, `web-js.yml`, `mobile.yml`),
  * as its findings are stored — the pack rule's own id (`localRuleIds.ts`).
  * Read once. A project-root rule carrying the same id is stored the same
  * way and is read as the pack's: that can only keep one of its findings

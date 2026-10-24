@@ -316,9 +316,23 @@ export async function loadProjectExclusions(
     hash: createHash('sha256').update(text).digest('hex'),
     patterns: matcher.patterns,
     ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
-    ...classify(listed ?? listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f)), matcher),
+    ...classify(listed ?? walkScannedFiles(projectPath), matcher),
     semgrepAnchor,
   };
+}
+
+/**
+ * The project's files a scan reads, before `.guardianignore`: git's own
+ * listing in a work tree, else a walk — `SCANNED_WALK_EXCLUDE` and the root
+ * `.guardian/`'s generated output left out either way (the listing
+ * {@link loadProjectExclusions} classifies). Project-relative, `/`-separated.
+ */
+export async function listScannedFiles(projectPath: string): Promise<string[]> {
+  return (await gitListFiles(projectPath)) ?? walkScannedFiles(projectPath);
+}
+
+function walkScannedFiles(projectPath: string): string[] {
+  return listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f));
 }
 
 /** A name no file has, to ask whether EVERYTHING inside a directory is excluded (`libs/core/**`). */

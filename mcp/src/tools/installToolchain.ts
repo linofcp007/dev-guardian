@@ -42,6 +42,7 @@ import { runProcess } from '../runners/processRunner.js';
 import { runShellScript } from '../runners/shellRunner.js';
 import { captureOutput } from '../runners/spawn.js';
 import {
+  MANUAL_ONLY_TOOLS,
   TOOL_CATALOG,
   listDefaultTools,
   pickInstallSpec,
@@ -306,15 +307,17 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
       });
       continue;
     }
-    // Hard rule: never auto-install the .NET SDK. We always route it to
-    // manual_steps with the OS-appropriate hint from the catalogue.
-    if (toolName === 'dotnet-sdk' && opts.os !== 'unsupported') {
-      const specs = TOOL_CATALOG['dotnet-sdk']?.install[opts.os];
+    // Hard rule: never auto-install an SDK — the .NET SDK, the Go toolchain
+    // (MANUAL_ONLY_TOOLS). Each is routed to manual_steps with the
+    // OS-appropriate hint from the catalogue.
+    const manualName = MANUAL_ONLY_TOOLS[toolName];
+    if (manualName !== undefined && opts.os !== 'unsupported') {
+      const specs = TOOL_CATALOG[toolName]?.install[opts.os];
       const first = specs ? (Object.values(specs)[0] as { description?: string } | undefined) : undefined;
-      const hint = first?.description ?? 'See https://learn.microsoft.com/dotnet/core/install/';
+      const hint = first?.description ?? (toolName === 'go' ? 'See https://go.dev/doc/install' : 'See https://learn.microsoft.com/dotnet/core/install/');
       opts.result.manual_steps.push({
         tool: toolName,
-        instructions: `dev-guardian never auto-installs the .NET SDK. ${hint}`,
+        instructions: `dev-guardian never auto-installs ${manualName}. ${hint}`,
       });
       continue;
     }

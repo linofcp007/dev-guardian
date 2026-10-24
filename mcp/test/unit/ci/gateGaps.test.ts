@@ -202,6 +202,48 @@ describe('every gap as data', () => {
     expect(remedyFor('scanner_failed', 'semgrep', 'semgrep failed (a rule did not load)')).toMatch(/rule/);
   });
 
+  it("gosec's gaps: the Go toolchain is never install_toolchain's, and a package that does not type-check says how to make it build", () => {
+    expect(remedyFor('missing_tool', 'go', 'security_scan_full: go not installed')).toMatch(
+      /^Install the Go toolchain your go\.mod names .* install_toolchain never installs it\.$/,
+    );
+    expect(remedyFor('missing_tool', 'gosec', 'security_scan_full: gosec not installed')).toMatch(/^Install gosec and put it on PATH/);
+    const detail =
+      'security_scan_full: gosec ran with reduced coverage (…) — not accepted: Type error on broken/b.go (--accept-partial-parse accepts parse errors only: PartialParsing, Syntax error, Lexical error)';
+    expect(remedyFor('other', 'gosec', detail)).toMatch(/go mod download/);
+    expect(remedyFor('other', 'gosec', 'scan: gosec … Package not loaded on pkg')).toMatch(/go mod download/);
+  });
+
+  it('a gosec step: a type error gates as `other`, a syntax error is accepted by --accept-partial-parse', () => {
+    const toolsRun = [
+      {
+        name: 'gosec',
+        status: 'ok' as const,
+        reason: 'partial',
+        partially_parsed: [
+          { file: 'broken/b.go', type: 'Type error', message: 'undefined: x' },
+          { file: 'syntaxerr/s.go', type: 'Syntax error', message: "expected ')'" },
+        ],
+      },
+    ];
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: toolsRun,
+      missing_tools: ['gosec'],
+      partial_parses: {
+        gosec: [
+          { file: 'broken/b.go', type: 'Type error' },
+          { file: 'syntaxerr/s.go', type: 'Syntax error' },
+        ],
+      },
+    };
+    const base: GateInput = { findings: [], baseline: null, failOn: 'high', steps: [step], droppedBaselineEntries: 0 };
+    const onlySyntax = evaluateGate({ ...base, acceptedPartialParses: ['syntaxerr/s.go', 'broken/b.go'] });
+    expect(onlySyntax.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    expect(onlySyntax.coverageGaps.join('\n')).toMatch(/not accepted: Type error on broken\/b\.go/);
+    expect(onlySyntax.coverageGapDetails.find((d) => d.gating)?.remedy).toMatch(/go mod download/);
+  });
+
   it('kinds from what a step says: not installed, no lockfile, a refused step, a failed run, a shallow clone', () => {
     const steps: ScanStepResult[] = [
       { tool: 'security_scan_full', ran: true, tools_run: [], missing_tools: ['bandit'] },

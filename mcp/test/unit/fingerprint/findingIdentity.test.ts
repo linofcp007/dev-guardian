@@ -152,6 +152,18 @@ describe('assignIdentities — where the content comes from', () => {
     expect(after.identity).toBe(before.identity);
   });
 
+  it('a gosec snippet read without its file: the `N: ` prefixes of its lines are not part of the identity', () => {
+    const gosec = (line: number, code: string): Finding =>
+      makeFinding({
+        tool: 'gosec', rule_id: 'G701', severity: 'high', category: 'security', title: 'SQL injection',
+        file_path: 'gone.go', line_start: line, line_end: line, snippet: code,
+      });
+    const before = only(assignIdentities([gosec(15, '14: \tid := q.Get("id")\n15: \trows, _ := db.Query(s + id)\n')], {}));
+    const after = only(assignIdentities([gosec(16, '15: \tid := q.Get("id")\n16: \trows, _ := db.Query(s + id)\n')], {}));
+    expect(after.content_key).toBe(before.content_key);
+    expect(after.identity).toBe(before.identity);
+  });
+
   it('falls back to the snippet when the file cannot be read, and hashes the same text the same way', () => {
     const dir = project({ 'a.js': 'x;\neval(userInput);\n' });
     const fromDisk = only(identify(dir, [semgrepHit('js.eval', 'a.js', 2)]));
@@ -285,6 +297,15 @@ describe('assignIdentities — credential findings are never keyed on their line
         tool: 'bandit', rule_id: 'B105', severity: 'low', category: 'security',
         subcategory: 'hardcoded_password_string', title: 's', file_path: '.env',
         line_start: line, line_end: line, snippet: `${line} password = "x"`,
+      }),
+    },
+    {
+      label: 'gosec G101 (its parser names the subcategory)',
+      line: (v) => `var dbPassword = "${v}"`,
+      finding: (line) => makeFinding({
+        tool: 'gosec', rule_id: 'G101', severity: 'high', category: 'security',
+        subcategory: 'hardcoded_credentials', title: 's', file_path: '.env',
+        line_start: line, line_end: line, snippet: `${line}: var dbPassword = "x"`,
       }),
     },
     {

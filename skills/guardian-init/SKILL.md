@@ -38,7 +38,7 @@ Pergunta confirmação. Se o utilizador disser "só X e Y", faz só isso.
 
 ### 4. Instalar os scanners
 
-`install_toolchain { dry_run: true }` mostra os comandos; depois, com aprovação, `install_toolchain {}`. Sem `tools`, instala o conjunto por omissão (semgrep, trivy, gitleaks, syft, pre-commit, mais ruff / bandit / jscpd quando o stack os pede); `tools: ["hadolint", "lighthouse"]` limita a esses.
+`install_toolchain { dry_run: true }` mostra os comandos; depois, com aprovação, `install_toolchain {}`. Sem `tools`, instala o conjunto por omissão (semgrep, trivy, gitleaks, syft, pre-commit, mais ruff / bandit / gosec / jscpd quando o stack os pede; o gosec precisa do Go, que nunca é instalado); `tools: ["hadolint", "lighthouse"]` limita a esses.
 
 - Linux e macOS: delega em `scripts/install/install-linux.sh` / `install-macos.sh` (detetam `apt`, `dnf`, `pacman`, `brew`).
 - Windows: winget, scoop ou choco (ou WSL) — funciona nativamente, não é preciso mudar de sistema.
@@ -122,10 +122,11 @@ Próximos passos sugeridos:
 | JS / TS | Semgrep, `bugfix-js.yml`, Trivy nos lock files, jscpd, ESLint se já estiver em `node_modules` | ESLint + `@typescript-eslint` configurados no projeto |
 | Python | Semgrep, `bugfix-py.yml`, Bandit, ruff, radon, Trivy, pip-audit (`deps_audit`) | — |
 | PHP / WordPress | Semgrep, `bugfix-php.yml`, Trivy em `composer.lock`, PHPCS-WPCS (`scan_wordpress`) | PHPStan ou Psalm |
-| Go | Semgrep, `bugfix-go.yml`, staticcheck (`quality_check`), Trivy em `go.sum` | gosec, govulncheck |
+| Go | Semgrep, `bugfix-go.yml`, gosec (`scan_sast`, através do toolchain do Go), staticcheck (`quality_check`), Trivy em `go.sum` | govulncheck |
 | Rust | Semgrep (uma regra, `bugfix-rs.yml`), Trivy em `Cargo.lock` | `cargo clippy`, `cargo audit`, `cargo deny` |
-| Ruby | Semgrep (registry), Trivy em `Gemfile.lock` | brakeman, RuboCop |
+| Ruby | Semgrep (registry), Trivy em `Gemfile.lock` | Brakeman (corrido à parte; o SARIF entra com `import_sarif`), RuboCop |
 | Java / Kotlin | Semgrep, `bugfix-java.yml`, Trivy em `pom.xml` / `build.gradle` | SpotBugs + FindSecBugs |
+| Android / iOS | Semgrep (`mobile.yml`: manifesto Android, network security config, Info.plist) | MobSF, para o APK / IPA compilado |
 | C# / .NET | Semgrep, `bugfix-cs.yml`, analyzers do SDK, `dotnet list package --vulnerable`, `/guardian-dotnet` | — |
 | Docker / IaC | Trivy (`scan_containers`, `scan_iac`), hadolint, cosign (assinatura da imagem), checks de compose | Checkov, se quiserem uma segunda opinião |
 

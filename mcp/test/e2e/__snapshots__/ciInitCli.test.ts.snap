@@ -29,7 +29,11 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      simply not attempted, no gap at all, on a repo with neither; running
 #      a ~300 MB SDK install on every Node/Python-only project regardless
 #      would be pure waste. actions/setup-dotnet is pinned by commit SHA
-#      like every other action here.
+#      like every other action here. Go likewise, ONLY when the repository
+#      has a root go.mod: gosec loads every package through the Go toolchain,
+#      at the version go.mod names (\`go-version-file\`), with no module cache
+#      kept between runs (\`cache: false\`, the cache-poisoning reason step 2
+#      gives for npm).
 #   4. Points DEV_GUARDIAN_HOME at a directory under \`$RUNNER_TEMP\` — the
 #      runner's own documented scratch space — via \`$GITHUB_ENV\`, not a
 #      workflow- or job-level \`env:\` block: GitHub Actions does not allow
@@ -63,10 +67,11 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      version wrote the downloaded tarballs and extracted binaries
 #      straight into the working directory, which gitleaks' own
 #      working-tree pass then saw as untracked files well over its size
-#      limit — a self-inflicted coverage gap on every run). bandit is
-#      installed unconditionally too (cheap; scan_sast only attempts it at
-#      all on a repo with Python files, but a template cannot know that in
-#      advance). Semgrep and zizmor are Python-distributed (pipx); pip
+#      limit — a self-inflicted coverage gap on every run). gosec too, the
+#      same way, and bandit by version — both unconditionally (cheap;
+#      scan_sast only attempts each on a repo with Go or Python files, but a
+#      template cannot know that in advance). Semgrep and zizmor are
+#      Python-distributed (pipx); pip
 #      verifies each downloaded wheel's hash against what PyPI's own index
 #      recorded for that exact version — real integrity, weaker than
 #      \`--require-hashes\` against a pinned constraints file (see
@@ -163,7 +168,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           # No dependency cache: setup-node caches npm automatically when
@@ -199,6 +204,22 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Detect a Go module (a root go.mod — gosec needs the Go toolchain it names)
+        id: go_probe
+        run: |
+          if [ -f go.mod ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.go_probe.outputs.found == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
       - name: Point DEV_GUARDIAN_HOME outside this checkout
         run: echo "DEV_GUARDIAN_HOME=$RUNNER_TEMP/dev-guardian" >> "$GITHUB_ENV"
 
@@ -215,7 +236,7 @@ jobs:
       - name: Install dev-guardian's runtime dependencies
         run: npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"
 
-      - name: Install scanners (Trivy/gitleaks/actionlint checksum-verified; bandit/semgrep/zizmor pinned by version)
+      - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor pinned by version)
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dev-guardian-scanners"
@@ -227,12 +248,13 @@ jobs:
             tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
             sudo install -m 0755 "$dir/$member" "/usr/local/bin/$name"
           }
-          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" "trivy"
+          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
           install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
           install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
+          install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
           pipx install "bandit[toml]==1.9.4"
-          pipx install "semgrep==1.178.0"
-          pipx install "zizmor==1.30.1"
+          pipx install "semgrep==1.182.0"
+          pipx install "zizmor==1.31.1"
           # \`run:\` steps do not share a shell, so \`export PATH=...\` here
           # would not reach the later "dev-guardian scan" step — pipx's own
           # install directory has to be persisted the GitHub Actions way.
@@ -285,13 +307,13 @@ jobs:
       - name: Upload SARIF to code scanning
         if: \${{ always() && steps.scan.outputs.upload-sarif == 'true' }}
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: dev-guardian-results.sarif
 
       - name: Keep the reports for the attest job
         if: \${{ !cancelled() && github.event_name == 'push' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dev-guardian-reports
           path: |
@@ -308,7 +330,7 @@ jobs:
       attestations: write
     steps:
       - name: Fetch the reports the scan job kept
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dev-guardian-reports
 
@@ -378,11 +400,14 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      gate \`hasRootDotnetSignal\` applies on the GitHub template — a root
 #      .csproj/.fsproj/.sln/.slnx); this template does NOT install it
 #      (Microsoft's own dotnet-install.sh has no per-release checksum this
-#      task could verify the way it did for the three Go binaries below) —
+#      task could verify the way it did for the Go binaries below) —
 #      a .NET project needs \`dotnet\` on the image or PATH already, or
 #      \`dev-guardian scan\` will report \`dotnet-sdk\` as a named gap and the
 #      pipeline's own gate will exit 2 (incomplete scan, never a silent
-#      pass) until it does.
+#      pass) until it does. A Go project likewise needs the Go
+#      toolchain gosec loads its packages through (\`go\` on PATH, at the
+#      version its go.mod names — Debian's own \`golang\` is too old for
+#      most), or \`dev-guardian scan\` reports \`go\` as a named gap and exits 2.
 #   3. Clones dev-guardian itself at a pinned release tag, resolved to its
 #      exact commit SHA when this pipeline was GENERATED (ci-init: \`git
 #      ls-remote\`/a local tag lookup) and verified again with \`git
@@ -401,16 +426,17 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      distribution) but its RUNTIME dependencies (execa, zod, yaml, the
 #      MCP SDK) still need installing once per run.
 #   5. Installs the scanner binaries \`dev-guardian scan\` drives — Trivy,
-#      gitleaks and actionlint — each pinned by exact version and verified
+#      gitleaks, actionlint and gosec — each pinned by exact version and verified
 #      against a sha256 fetched from that tool's own GitHub release (never
 #      "latest"), downloaded and extracted into a SCRATCH directory under
 #      \`/tmp\`, never into this checkout (an earlier version wrote the
 #      downloaded tarballs and extracted binaries straight into the working
 #      directory, which gitleaks' own working-tree pass then saw as
 #      untracked files well over its size limit — a self-inflicted coverage
-#      gap on every run). bandit is installed unconditionally too (cheap;
-#      scan_sast only attempts it at all on a repo with Python files, but a
-#      template cannot know that in advance). Semgrep and zizmor are
+#      gap on every run). gosec too, the same way, and bandit by version —
+#      both unconditionally (cheap; scan_sast only attempts each on a repo
+#      with Go or Python files, but a template cannot know that in
+#      advance). Semgrep and zizmor are
 #      Python-distributed (pipx); pip verifies each downloaded wheel's hash
 #      against what PyPI's own index recorded for that exact version — real
 #      integrity, weaker than \`--require-hashes\` against a pinned
@@ -475,12 +501,13 @@ definitions:
               tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
               install -m 0755 "$dir/$member" "/usr/local/bin/$name"
             }
-            install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" "trivy"
+            install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
             install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
             install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
+            install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
           - pipx install "bandit[toml]==1.9.4"
-          - pipx install "semgrep==1.178.0"
-          - pipx install "zizmor==1.30.1"
+          - pipx install "semgrep==1.182.0"
+          - pipx install "zizmor==1.31.1"
           - export PATH="$HOME/.local/bin:$PATH"
           - |
             set --
@@ -533,7 +560,11 @@ exports[`ci-init: snapshot of the rendered templates > github renders exactly as
 #      simply not attempted, no gap at all, on a repo with neither; running
 #      a ~300 MB SDK install on every Node/Python-only project regardless
 #      would be pure waste. actions/setup-dotnet is pinned by commit SHA
-#      like every other action here.
+#      like every other action here. Go likewise, ONLY when the repository
+#      has a root go.mod: gosec loads every package through the Go toolchain,
+#      at the version go.mod names (\`go-version-file\`), with no module cache
+#      kept between runs (\`cache: false\`, the cache-poisoning reason step 2
+#      gives for npm).
 #   4. Points DEV_GUARDIAN_HOME at a directory under \`$RUNNER_TEMP\` — the
 #      runner's own documented scratch space — via \`$GITHUB_ENV\`, not a
 #      workflow- or job-level \`env:\` block: GitHub Actions does not allow
@@ -567,10 +598,11 @@ exports[`ci-init: snapshot of the rendered templates > github renders exactly as
 #      version wrote the downloaded tarballs and extracted binaries
 #      straight into the working directory, which gitleaks' own
 #      working-tree pass then saw as untracked files well over its size
-#      limit — a self-inflicted coverage gap on every run). bandit is
-#      installed unconditionally too (cheap; scan_sast only attempts it at
-#      all on a repo with Python files, but a template cannot know that in
-#      advance). Semgrep and zizmor are Python-distributed (pipx); pip
+#      limit — a self-inflicted coverage gap on every run). gosec too, the
+#      same way, and bandit by version — both unconditionally (cheap;
+#      scan_sast only attempts each on a repo with Go or Python files, but a
+#      template cannot know that in advance). Semgrep and zizmor are
+#      Python-distributed (pipx); pip
 #      verifies each downloaded wheel's hash against what PyPI's own index
 #      recorded for that exact version — real integrity, weaker than
 #      \`--require-hashes\` against a pinned constraints file (see
@@ -635,7 +667,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           # No dependency cache: setup-node caches npm automatically when
@@ -671,6 +703,22 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Detect a Go module (a root go.mod — gosec needs the Go toolchain it names)
+        id: go_probe
+        run: |
+          if [ -f go.mod ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.go_probe.outputs.found == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
       - name: Point DEV_GUARDIAN_HOME outside this checkout
         run: echo "DEV_GUARDIAN_HOME=$RUNNER_TEMP/dev-guardian" >> "$GITHUB_ENV"
 
@@ -687,7 +735,7 @@ jobs:
       - name: Install dev-guardian's runtime dependencies
         run: npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"
 
-      - name: Install scanners (Trivy/gitleaks/actionlint checksum-verified; bandit/semgrep/zizmor pinned by version)
+      - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor pinned by version)
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dev-guardian-scanners"
@@ -699,12 +747,13 @@ jobs:
             tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
             sudo install -m 0755 "$dir/$member" "/usr/local/bin/$name"
           }
-          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" "trivy"
+          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
           install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
           install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
+          install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
           pipx install "bandit[toml]==1.9.4"
-          pipx install "semgrep==1.178.0"
-          pipx install "zizmor==1.30.1"
+          pipx install "semgrep==1.182.0"
+          pipx install "zizmor==1.31.1"
           # \`run:\` steps do not share a shell, so \`export PATH=...\` here
           # would not reach the later "dev-guardian scan" step — pipx's own
           # install directory has to be persisted the GitHub Actions way.
@@ -755,7 +804,7 @@ jobs:
       - name: Upload SARIF to code scanning
         if: \${{ always() && steps.scan.outputs.upload-sarif == 'true' }}
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: dev-guardian-results.sarif
 
@@ -787,11 +836,14 @@ exports[`ci-init: snapshot of the rendered templates > gitlab renders exactly as
 #      gate \`hasRootDotnetSignal\` applies on the GitHub template — a root
 #      .csproj/.fsproj/.sln/.slnx); this template does NOT install it
 #      (Microsoft's own dotnet-install.sh has no per-release checksum this
-#      task could verify the way it did for the three Go binaries below) —
+#      task could verify the way it did for the Go binaries below) —
 #      a .NET project needs \`dotnet\` on the runner's own image or PATH
 #      already, or \`dev-guardian scan\` will report \`dotnet-sdk\` as a named
 #      gap and the pipeline's own gate will exit 2 (incomplete scan, never
-#      a silent pass) until it does.
+#      a silent pass) until it does. A Go project likewise needs the Go
+#      toolchain gosec loads its packages through (\`go\` on PATH, at the
+#      version its go.mod names — Debian's own \`golang\` is too old for
+#      most), or \`dev-guardian scan\` reports \`go\` as a named gap and exits 2.
 #   3. Clones dev-guardian itself at a pinned release tag, resolved to its
 #      exact commit SHA when this pipeline was GENERATED (ci-init: \`git
 #      ls-remote\`/a local tag lookup) and verified again with \`git
@@ -810,16 +862,17 @@ exports[`ci-init: snapshot of the rendered templates > gitlab renders exactly as
 #      distribution) but its RUNTIME dependencies (execa, zod, yaml, the
 #      MCP SDK) still need installing once per run.
 #   5. Installs the scanner binaries \`dev-guardian scan\` drives — Trivy,
-#      gitleaks and actionlint — each pinned by exact version and verified
+#      gitleaks, actionlint and gosec — each pinned by exact version and verified
 #      against a sha256 fetched from that tool's own GitHub release (never
 #      "latest"), downloaded and extracted into a SCRATCH directory under
 #      \`/tmp\`, never into this checkout (an earlier version wrote the
 #      downloaded tarballs and extracted binaries straight into the working
 #      directory, which gitleaks' own working-tree pass then saw as
 #      untracked files well over its size limit — a self-inflicted coverage
-#      gap on every run). bandit is installed unconditionally too (cheap;
-#      scan_sast only attempts it at all on a repo with Python files, but a
-#      template cannot know that in advance). Semgrep and zizmor are
+#      gap on every run). gosec too, the same way, and bandit by version —
+#      both unconditionally (cheap; scan_sast only attempts each on a repo
+#      with Go or Python files, but a template cannot know that in
+#      advance). Semgrep and zizmor are
 #      Python-distributed (pipx); pip verifies each downloaded wheel's hash
 #      against what PyPI's own index recorded for that exact version — real
 #      integrity, weaker than \`--require-hashes\` against a pinned
@@ -893,12 +946,13 @@ dev-guardian:
         tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
         install -m 0755 "$dir/$member" "/usr/local/bin/$name"
       }
-      install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz" "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" "trivy"
+      install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
       install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
       install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
+      install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
     - pipx install "bandit[toml]==1.9.4"
-    - pipx install "semgrep==1.178.0"
-    - pipx install "zizmor==1.30.1"
+    - pipx install "semgrep==1.182.0"
+    - pipx install "zizmor==1.31.1"
     - export PATH="$HOME/.local/bin:$PATH"
     - |
       set --

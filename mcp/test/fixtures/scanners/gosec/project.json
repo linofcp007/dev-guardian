@@ -1,0 +1,230 @@
+{
+	"Golang errors": {
+		"": [
+			{
+				"line": 0,
+				"column": 0,
+				"error": "# command-line-arguments\nbroken/b.go:4:23: undefined: undefinedThing"
+			},
+			{
+				"line": 0,
+				"column": 0,
+				"error": "# command-line-arguments\nsyntaxerr/s.go:4:9: syntax error: unexpected {, expected )"
+			}
+		],
+		"/src/broken/b.go": [
+			{
+				"line": 4,
+				"column": 23,
+				"error": "undefined: undefinedThing"
+			}
+		],
+		"/src/syntaxerr/s.go": [
+			{
+				"line": 4,
+				"column": 9,
+				"error": "expected ')', found '{'"
+			},
+			{
+				"line": 4,
+				"column": 11,
+				"error": "missing ',' in parameter list"
+			},
+			{
+				"line": 4,
+				"column": 11,
+				"error": "expected ';', found 'EOF'"
+			},
+			{
+				"line": 4,
+				"column": 11,
+				"error": "expected ')', found 'EOF'"
+			}
+		]
+	},
+	"Issues": [
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "89",
+				"url": "https://cwe.mitre.org/data/definitions/89.html"
+			},
+			"rule_id": "G701",
+			"details": "SQL injection via taint analysis: (*database/sql.DB).Query",
+			"file": "/src/main.go",
+			"code": "15: \tid := r.URL.Query().Get(\"id\")\n16: \trows, _ := db.Query(\"SELECT * FROM users WHERE id=\" + id)\n17: \tfmt.Fprintln(w, rows)\n",
+			"line": "16",
+			"column": "21",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "LOW",
+			"cwe": {
+				"id": "798",
+				"url": "https://cwe.mitre.org/data/definitions/798.html"
+			},
+			"rule_id": "G101",
+			"details": "Potential hardcoded credentials",
+			"file": "/src/creds/creds.go",
+			"code": "3: // A fixture value, not a credential: it trips G101 by its name.\n4: var dbPassword = \"fixture-not-a-real-password-0000\"\n5: \n",
+			"line": "4",
+			"column": "5",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "78",
+				"url": "https://cwe.mitre.org/data/definitions/78.html"
+			},
+			"rule_id": "G702",
+			"details": "Command injection via taint analysis: os/exec.Command",
+			"file": "/src/main.go",
+			"code": "18: \thost := r.URL.Query().Get(\"host\")\n19: \tout, _ := exec.Command(\"sh\", \"-c\", \"ping \"+host).Output()\n20: \t_, _ = w.Write(out)\n",
+			"line": "19",
+			"column": "24",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "79",
+				"url": "https://cwe.mitre.org/data/definitions/79.html"
+			},
+			"rule_id": "G705",
+			"details": "XSS via taint analysis: fmt.Fprintln",
+			"file": "/src/main.go",
+			"code": "16: \trows, _ := db.Query(\"SELECT * FROM users WHERE id=\" + id)\n17: \tfmt.Fprintln(w, rows)\n18: \thost := r.URL.Query().Get(\"host\")\n",
+			"line": "17",
+			"column": "14",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "79",
+				"url": "https://cwe.mitre.org/data/definitions/79.html"
+			},
+			"rule_id": "G705",
+			"details": "XSS via taint analysis: (net/http.ResponseWriter).Write",
+			"file": "/src/main.go",
+			"code": "19: \tout, _ := exec.Command(\"sh\", \"-c\", \"ping \"+host).Output()\n20: \t_, _ = w.Write(out)\n21: \tsum := md5.Sum([]byte(id)) // #nosec G401 -- fixture: a suppressed finding\n",
+			"line": "20",
+			"column": "16",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "676",
+				"url": "https://cwe.mitre.org/data/definitions/676.html"
+			},
+			"rule_id": "G114",
+			"details": "Use of net/http serve function that has no support for setting timeouts",
+			"file": "/src/main.go",
+			"code": "26: \thttp.HandleFunc(\"/\", handler)\n27: \t_ = http.ListenAndServe(\":8080\", nil)\n28: }\n",
+			"line": "27",
+			"column": "6",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "78",
+				"url": "https://cwe.mitre.org/data/definitions/78.html"
+			},
+			"rule_id": "G204",
+			"details": "Subprocess launched with a potential tainted input or cmd arguments",
+			"file": "/src/main.go",
+			"code": "18: \thost := r.URL.Query().Get(\"host\")\n19: \tout, _ := exec.Command(\"sh\", \"-c\", \"ping \"+host).Output()\n20: \t_, _ = w.Write(out)\n",
+			"line": "19",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "89",
+				"url": "https://cwe.mitre.org/data/definitions/89.html"
+			},
+			"rule_id": "G202",
+			"details": "SQL string concatenation",
+			"file": "/src/main.go",
+			"code": "15: \tid := r.URL.Query().Get(\"id\")\n16: \trows, _ := db.Query(\"SELECT * FROM users WHERE id=\" + id)\n17: \tfmt.Fprintln(w, rows)\n",
+			"line": "16",
+			"column": "22",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "377",
+				"url": "https://cwe.mitre.org/data/definitions/377.html"
+			},
+			"rule_id": "G303",
+			"details": "File creation in shared tmp directory without using ioutil.Tempfile",
+			"file": "/src/vendored/v.go",
+			"code": "5: \n6: func Write() error { return os.WriteFile(\"/tmp/out\", []byte(\"x\"), 0o777) }\n",
+			"line": "6",
+			"column": "29",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "276",
+				"url": "https://cwe.mitre.org/data/definitions/276.html"
+			},
+			"rule_id": "G306",
+			"details": "Expect WriteFile permissions to be 0600 or less",
+			"file": "/src/vendored/v.go",
+			"code": "5: \n6: func Write() error { return os.WriteFile(\"/tmp/out\", []byte(\"x\"), 0o777) }\n",
+			"line": "6",
+			"column": "29",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "327",
+				"url": "https://cwe.mitre.org/data/definitions/327.html"
+			},
+			"rule_id": "G501",
+			"details": "Blocklisted import crypto/md5: weak cryptographic primitive",
+			"file": "/src/main.go",
+			"code": "4: import (\n5: \t\"crypto/md5\"\n6: \t\"database/sql\"\n",
+			"line": "5",
+			"column": "2",
+			"nosec": false,
+			"suppressions": null
+		}
+	],
+	"Stats": {
+		"files": 5,
+		"lines": 48,
+		"nosec": 1,
+		"found": 11
+	},
+	"GosecVersion": "2.30.0"
+}

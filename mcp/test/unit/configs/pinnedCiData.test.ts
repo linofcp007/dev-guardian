@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { TRIVY_INSTALL_TAG } from '../../../src/runners/installCatalog.js';
+import { PINNED_RELEASES, TRIVY_INSTALL_TAG } from '../../../src/runners/installCatalog.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 /** configs -> unit -> test -> mcp -> repo root. */
@@ -66,6 +66,7 @@ describe('configs/ci/pinned.json: actions', () => {
     'setup_node',
     'upload_sarif',
     'setup_dotnet',
+    'setup_go',
     'attest_build_provenance',
     'upload_artifact',
     'download_artifact',
@@ -76,12 +77,13 @@ describe('configs/ci/pinned.json: actions', () => {
 
   // `ci-init --attest`'s three actions. The SHAs were resolved with
   // `gh api repos/<repo>/tags` and cross-checked with `git ls-remote`
-  // (2026-09-28) — locked here so a careless edit, not a deliberate bump
+  // (2026-09-28; upload/download-artifact's bumps on 2026-10-24, `git
+  // ls-remote` and the GitHub API agreeing) — locked here so a careless edit, not a deliberate bump
   // that changes version and SHA together, fails the suite.
   it.each([
     ['attest_build_provenance', 'actions/attest-build-provenance', 'v4.2.2', '4d101475d8b20a2381f78447822ac1eab6504dd8'],
-    ['upload_artifact', 'actions/upload-artifact', 'v7.0.1', '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'],
-    ['download_artifact', 'actions/download-artifact', 'v8.0.1', '3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'],
+    ['upload_artifact', 'actions/upload-artifact', 'v7.0.2', 'cf430e030ddbb5b0abf93d22962f4752f3646cd9'],
+    ['download_artifact', 'actions/download-artifact', 'v8.0.2', '9000827ccba6bdab643e8b6fd33ac0654aef8333'],
   ])('%s is %s %s at the commit that tag named when it was pinned', (key, repo, version, sha) => {
     expect(pinned.actions[key]).toMatchObject({ repo, version, sha });
   });
@@ -90,7 +92,7 @@ describe('configs/ci/pinned.json: actions', () => {
 describe('configs/ci/pinned.json: scanners with a downloaded binary', () => {
   const pinned = readPinned();
 
-  it.each(['trivy', 'gitleaks', 'actionlint'])('%s has a 64-hex sha256 and a linux amd64 URL', (key) => {
+  it.each(['trivy', 'gitleaks', 'actionlint', 'gosec'])('%s has a 64-hex sha256 and a linux amd64 URL', (key) => {
     expect(pinned.scanners[key]?.linux_amd64_sha256).toMatch(SHA256);
     expect(pinned.scanners[key]?.linux_amd64_url).toMatch(/^https:\/\//);
   });
@@ -102,6 +104,17 @@ describe('configs/ci/pinned.json: scanners with a downloaded binary', () => {
     expect(pinned.scanners['trivy']?.archive_member).toBe('trivy');
     expect(pinned.scanners['gitleaks']?.archive_member).toBe('gitleaks');
     expect(pinned.scanners['actionlint']?.archive_member).toBe('actionlint');
+    expect(pinned.scanners['gosec']?.archive_member).toBe('gosec');
+  });
+
+  it("gosec is the release installCatalog.ts pins, at the same Linux amd64 archive and sum", () => {
+    const r = PINNED_RELEASES.gosec;
+    const a = r.assets['linux-amd64'];
+    expect(pinned.scanners['gosec']).toMatchObject({
+      version: r.version,
+      linux_amd64_url: `${r.base}/${a.file}`,
+      linux_amd64_sha256: a.sha256,
+    });
   });
 
   it("trivy's version matches installCatalog.ts's TRIVY_INSTALL_TAG (single source of truth, enforced)", () => {

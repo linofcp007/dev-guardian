@@ -26,7 +26,11 @@
 #      simply not attempted, no gap at all, on a repo with neither; running
 #      a ~300 MB SDK install on every Node/Python-only project regardless
 #      would be pure waste. actions/setup-dotnet is pinned by commit SHA
-#      like every other action here.
+#      like every other action here. Go likewise, ONLY when the repository
+#      has a root go.mod: gosec loads every package through the Go toolchain,
+#      at the version go.mod names (`go-version-file`), with no module cache
+#      kept between runs (`cache: false`, the cache-poisoning reason step 2
+#      gives for npm).
 #   4. Points DEV_GUARDIAN_HOME at a directory under `$RUNNER_TEMP` — the
 #      runner's own documented scratch space — via `$GITHUB_ENV`, not a
 #      workflow- or job-level `env:` block: GitHub Actions does not allow
@@ -60,10 +64,11 @@
 #      version wrote the downloaded tarballs and extracted binaries
 #      straight into the working directory, which gitleaks' own
 #      working-tree pass then saw as untracked files well over its size
-#      limit — a self-inflicted coverage gap on every run). bandit is
-#      installed unconditionally too (cheap; scan_sast only attempts it at
-#      all on a repo with Python files, but a template cannot know that in
-#      advance). Semgrep and zizmor are Python-distributed (pipx); pip
+#      limit — a self-inflicted coverage gap on every run). gosec too, the
+#      same way, and bandit by version — both unconditionally (cheap;
+#      scan_sast only attempts each on a repo with Go or Python files, but a
+#      template cannot know that in advance). Semgrep and zizmor are
+#      Python-distributed (pipx); pip
 #      verifies each downloaded wheel's hash against what PyPI's own index
 #      recorded for that exact version — real integrity, weaker than
 #      `--require-hashes` against a pinned constraints file (see
@@ -208,6 +213,22 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Detect a Go module (a root go.mod — gosec needs the Go toolchain it names)
+        id: go_probe
+        run: |
+          if [ -f go.mod ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.go_probe.outputs.found == 'true'
+        uses: actions/setup-go@{{SETUP_GO_SHA}} # {{SETUP_GO_VERSION}}
+        with:
+          go-version-file: go.mod
+          cache: false
+
       - name: Point DEV_GUARDIAN_HOME outside this checkout
         run: echo "DEV_GUARDIAN_HOME=$RUNNER_TEMP/dev-guardian" >> "$GITHUB_ENV"
 
@@ -224,7 +245,7 @@ jobs:
       - name: Install dev-guardian's runtime dependencies
         run: npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"
 
-      - name: Install scanners (Trivy/gitleaks/actionlint checksum-verified; bandit/semgrep/zizmor pinned by version)
+      - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor pinned by version)
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dev-guardian-scanners"
@@ -239,6 +260,7 @@ jobs:
           install_checked trivy "{{TRIVY_URL}}" "{{TRIVY_SHA256}}" "{{TRIVY_MEMBER}}"
           install_checked gitleaks "{{GITLEAKS_URL}}" "{{GITLEAKS_SHA256}}" "{{GITLEAKS_MEMBER}}"
           install_checked actionlint "{{ACTIONLINT_URL}}" "{{ACTIONLINT_SHA256}}" "{{ACTIONLINT_MEMBER}}"
+          install_checked gosec "{{GOSEC_URL}}" "{{GOSEC_SHA256}}" "{{GOSEC_MEMBER}}"
           pipx install "bandit[toml]=={{BANDIT_VERSION}}"
           pipx install "semgrep=={{SEMGREP_VERSION}}"
           pipx install "zizmor=={{ZIZMOR_VERSION}}"

@@ -39,7 +39,7 @@
  * hashed from the snippet on one machine and from the file on another would
  * disagree. The file is the one source that is the same for every scanner and
  * every machine, so it wins, and the snippet is the fallback for a file that
- * cannot be read (with Bandit's line numbers stripped from it, and never the
+ * cannot be read (with Bandit's and gosec's line numbers stripped from it, and never the
  * "requires login" placeholder). The one exception is a gitleaks finding that names a
  * commit: its lines live in history, not in the working tree (which may hold
  * anything at that line number today), and `rule=…;commit=…` is already a
@@ -661,14 +661,18 @@ function contentSource(
 
 /**
  * The source text inside a snippet. Bandit prefixes each line of its `code`
- * with the line number (`"2 data = pickle.loads(x)"`); those numbers are
- * exactly what the identity must not depend on.
+ * with the line number (`"2 data = pickle.loads(x)"`), gosec with the number
+ * and a colon (`"15: \trows, _ := db.Query(q)"`); those numbers are exactly
+ * what the identity must not depend on.
  */
+const LINE_NUMBER_PREFIX: Readonly<Record<string, RegExp>> = { bandit: /^\d+ /, gosec: /^\d+: / };
+
 function snippetText(tool: string, snippet: string): string {
-  if (tool.toLowerCase() !== 'bandit') return snippet;
+  const prefix = LINE_NUMBER_PREFIX[tool.toLowerCase()];
+  if (prefix === undefined) return snippet;
   return snippet
     .split(/\r\n|\r|\n/)
-    .map((line) => line.replace(/^\d+ /, ''))
+    .map((line) => line.replace(prefix, ''))
     .join('\n');
 }
 
@@ -686,7 +690,8 @@ const CREDENTIAL_RULE =
 /**
  * A finding whose flagged line holds a credential: every `subcategory:
  * 'secret'` finding (gitleaks, Trivy secrets), and a finding whose rule id or
- * subcategory names one — Bandit's B105–B107 (`hardcoded_password_*`), the
+ * subcategory names one — Bandit's B105–B107 (`hardcoded_password_*`),
+ * gosec's G101 (`hardcoded_credentials`, set by its parser), the
  * shipped `hardcoded-aws-key` / `hardcoded-private-key` rules, the Semgrep
  * registry's `*.secrets.*` family.
  */

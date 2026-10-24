@@ -8,6 +8,58 @@ version bump.
 
 ## [Unreleased]
 
+gosec joins `scan_sast` and `review_pr` for Go, a mobile pack joins the plugin's Semgrep packs, and Brakeman's
+SARIF is a tested import.
+
+### Upgrading from 3.4.0
+
+- **A Go project needs gosec and the Go toolchain.** `scan_sast` (and so `security_scan_full`, `review_pr`,
+  `audit_executive` and the CLI `scan`) runs gosec whenever the project has a `go.mod`, a `go.work` or a `.go`
+  file. Without gosec the run lists `gosec` missing; without Go, `go` — coverage is partial and the CLI `scan`
+  exits 2 until both are there. `install_toolchain { tools: ["gosec"] }` installs gosec 2.30.0 from its pinned,
+  sha256-checked archive; Go is never installed for you. Regenerate the CI pipeline with `ci-init`: it installs
+  gosec, and on GitHub sets up the Go a root `go.mod` names; GitLab and Bitbucket need `go` on the image.
+- **New findings.** gosec on Go code and the mobile pack on Android and iOS configuration report findings the
+  baseline does not hold, and a high one fails `--fail-on high`. Review them; rebuild the baseline on the base
+  branch only for what you accept, never with `baseline update` on the branch itself.
+
+### Added
+
+- **gosec in `scan_sast` and `review_pr`** (`runners/gosecRun.ts`). The package directories are listed by
+  dev-guardian — `.guardianignore` applied, `vendor/`, `testdata/` and the directories `go` ignores left out —
+  and handed to gosec one by one: its own `./...` skips any directory whose name starts with `vendor`
+  (`vendored/`, `vendors/`), unreported, measured on 2.30.0. Each report is judged: a file gosec could not parse
+  is `Syntax error` (`--accept-partial-parse` accepts it); a file of a package that does not type-check — a
+  compile error, a dependency not downloaded — is `Type error`, and a package `go` could not load is `Package not
+  loaded`, because gosec then skips that package's SSA and taint rules (G701–G710); files the platform's build
+  constraints leave out are counted in the reason. `-quiet` is never passed (with it a clean run writes no
+  report). A `GOFLAGS` `-mod=mod` runs as `-mod=readonly`. `review_pr` reads a changed file's whole package and
+  keeps the findings to the changed files. G101's snippet is redacted. The OWASP coverage tables count gosec's
+  62 rules for Go.
+- **`configs/semgrep/mobile.yml`**, run by `scan_sast` with the LLM and web-JS packs (8 rules): a debuggable or
+  backup-enabled Android app, cleartext traffic in the manifest or the network security config, a service,
+  receiver or provider exported without a permission, user-installed CAs trusted outside `<debug-overrides>`,
+  and iOS App Transport Security switched off or a domain allowed insecure HTTP. Every rule is `generic`,
+  limited to those files, so no other XML file is parsed (a file Semgrep cannot parse would make the scan
+  partial). Exported activities stay with the registry's `exported_activity` rule.
+- **Brakeman's SARIF** (8.1.0) imports with every result in place (`import_sarif`); `docs/sarif-import.md` says
+  how to make it and why dev-guardian runs neither Brakeman (not open-source: the Brakeman Public Use License)
+  nor CodeQL (free for open-source code only).
+- `check_toolchain` lists gosec and the Go toolchain; `install_toolchain` routes Go to a manual step, as the
+  .NET SDK. The CI gate's remedies name `go mod download` for a package that does not type-check, and say that
+  `install_toolchain` never installs Go.
+
+### Changed
+
+- **Pinned versions reviewed on 2026-10-24** (no compromised release found; every sum checked against the
+  release's checksums and GitHub's asset digest): Trivy 0.74.0 → 0.76.1 and cosign 3.1.3 → 3.1.4 (both built
+  with Go 1.27.3, which distrusts the compromised eMudhra CAs, GO-2026-6809), Syft 1.52.0 → 1.55.0 (x/net and
+  containerd fixes); in the CI templates Semgrep 1.178.0 → 1.182.0 (its pyjwt 2.13.0 had fifteen advisories),
+  zizmor 1.30.1 → 1.31.1, actions/setup-node v7.1.0, github/codeql-action v4.39.1, upload-artifact v7.0.2 and
+  download-artifact v8.0.2, each by commit SHA. The pre-commit template's Semgrep is v1.182.0.
+- The server's bundled fast-uri is 3.1.9 (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr); the MCP SDK's floor is
+  1.32.1; vitest 5.0.5 and vite 8.3.5 for the test suite.
+
 ## [3.4.0] - 2026-10-14
 
 Reviews 10, 11 and 12 — the combined review of 3.3.0, and two reviews of this release before it shipped. Review

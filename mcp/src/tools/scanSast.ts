@@ -1,6 +1,8 @@
 /**
- * `scan_sast` — Semgrep static analysis, plus Bandit when Python is present
- * and the .NET SDK's security analyzers when the project is .NET.
+ * `scan_sast` — Semgrep static analysis, plus Bandit when Python is present,
+ * gosec when Go is (`runners/gosecRun.ts`: through the Go toolchain, which
+ * loads — and may download — the project's modules), and the .NET SDK's
+ * security analyzers when the project is .NET.
  *
  * Invokes Semgrep directly (no shell script), writing the JSON report to
  * `.guardian/reports/sast-<short-scan-id>/sast.json`.
@@ -79,9 +81,12 @@
  * named gap rather than a silently widened one. The .NET analyzers run inside
  * a build of the whole project: for a scope they are `skipped` as
  * project-level, and a gap whenever .NET sources are in the scope. Bandit
- * gets the whole-project run's `--ini` either way (`banditIni`). Unscoped,
- * the project's `.guardianignore` reaches Semgrep as `--exclude` and Bandit as
- * `-x` (`platform/guardianIgnore.ts`); the factory filters the rest.
+ * gets the whole-project run's `--ini` either way (`banditIni`). gosec reads
+ * packages, not files: it gets the directories of the scope's Go files, and
+ * the factory keeps the findings inside the scope. Unscoped, the project's
+ * `.guardianignore` reaches Semgrep as `--exclude` and Bandit as `-x`
+ * (`platform/guardianIgnore.ts`), and decides which package directories gosec
+ * is handed; the factory filters the rest.
  */
 
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -96,10 +101,12 @@ import {
   removeCreatedLockFiles,
 } from '../deps/dotnetRestore.js';
 import { gitSafetyFor } from '../platform/gitSafety.js';
-import { banditExcludeArgs, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
+import { banditExcludeArgs, listScannedFiles, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
+import { gosecOnPackages, isGoSource } from '../runners/gosecRun.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
+import { gosecParser } from '../runners/scannerParsers/gosec.js';
 import { getProp, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
@@ -181,11 +188,12 @@ registerToolModule(
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description:
-      "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS " +
-      'and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; for .NET, a ' +
-      "locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What " +
-      'Semgrep could not process is partial coverage. `tools_run[].honoured_config`: the project files that ' +
-      'decided a run. local_only avoids the registry and its metrics.',
+      "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS, " +
+      'mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for ' +
+      "Go, through the Go toolchain (it may download modules); for .NET, a locked restore and `dotnet build` " +
+      "with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial " +
+      'coverage. `tools_run[].honoured_config`: the project files that decided a run. local_only avoids the ' +
+      'registry and its metrics.',
     scan_type: 'sast',
     category: 'security',
     supportsScope: true,
@@ -231,10 +239,17 @@ registerToolModule(
         const files = ctx.scope.files;
         await runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs });
         await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
+        await runGosec({ ctx, reportDir, files: files.filter(isGoSource), tools_run, missing_tools, parser_inputs });
         dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
       } else {
         await runSemgrep({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
         await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
+        if (looksGo(ctx.projectPath)) {
+          // What the scan reads, `.guardianignore` applied; gosec still reads an
+          // ignored file of a kept package, and the factory drops its findings.
+          const files = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
+          await runGosec({ ctx, reportDir, files, tools_run, missing_tools, parser_inputs });
+        }
         await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
       }
 
@@ -836,6 +851,37 @@ async function runBanditOnScope(args: Collect & { ctx: InvokeContext; reportDir:
   });
   for (const raw of run.reports) parser_inputs.push({ parser: banditParser, input: raw });
   tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.projectPath, 'bandit') : run.toolRun);
+}
+
+/** A module file at the root, or any `.go` file (a walk that stops at the first): gosec has something to read. */
+function looksGo(projectPath: string): boolean {
+  return (
+    presentInProject(projectPath, 'go.mod') ||
+    presentInProject(projectPath, 'go.work') ||
+    hasFileWithExtension(projectPath, ['.go'])
+  );
+}
+
+/**
+ * gosec over the Go packages of `files` (`runners/gosecRun.ts`): the whole
+ * project's files, or a scope's — gosec reads a package whole, and the
+ * factory keeps only the findings inside the scope. No entry at all when the
+ * files hold no Go package; the Go toolchain absent is the `go` gap.
+ */
+async function runGosec(args: Collect & { ctx: InvokeContext; reportDir: string; files: readonly string[] }): Promise<void> {
+  const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
+  if (files.length === 0) return;
+  const pass = await gosecOnPackages({
+    files,
+    cwd: ctx.projectPath,
+    reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  for (const raw of pass.reports) parser_inputs.push({ parser: gosecParser, input: raw });
+  if (pass.toolRun !== null) tools_run.push(pass.toolRun);
+  for (const name of pass.missing) markMissing(missing_tools, name);
 }
 
 /**

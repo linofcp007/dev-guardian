@@ -85,33 +85,35 @@ interface ToolMeta {
  * the version winget, scoop and choco are asked for. Pinned because the
  * installer used to be piped from the `main` branch into `sh` and then
  * install "latest": on 2026-03-19 "latest" WAS the malicious v0.69.4 (see
- * `compromised` on the trivy entry). v0.74.0 was published 2026-08-14 as an
- * immutable release (enabled on aquasecurity/trivy since 2026-03-03). Bump it
- * and its sums together, deliberately.
+ * `compromised` on the trivy entry). v0.76.1 was published 2026-10-21 as an
+ * immutable release (enabled on aquasecurity/trivy since 2026-03-03), built
+ * with Go 1.27.3 (the eMudhra CA distrust, GO-2026-6809). Bump it and its sums
+ * together, deliberately.
  */
-export const TRIVY_INSTALL_TAG = 'v0.74.0';
+export const TRIVY_INSTALL_TAG = 'v0.76.1';
 
 /**
  * The cosign release every pinned installer below fetches (winget, scoop and
- * the release-binary download). v3.1.3 was published 2026-08-06; bump it and
+ * the release-binary download). v3.1.4 was published 2026-10-20 as an
+ * immutable release, built with Go 1.27.3; bump it and
  * {@link COSIGN_RELEASE_SHA256} together, deliberately.
  */
-export const COSIGN_VERSION = '3.1.3';
+export const COSIGN_VERSION = '3.1.4';
 
 /**
  * sha256 of each POSIX release binary of {@link COSIGN_VERSION}. Each value
- * was checked three ways on 2026-09-28 and all three agreed: the binary
+ * was checked three ways on 2026-10-24 and all three agreed: the binary
  * downloaded and hashed independently (`curl … | sha256sum`), the release's
  * own `cosign_checksums.txt`, and the digest GitHub records for the release
  * asset. The Windows binary is not listed: winget and scoop verify it against
  * their own manifests, which carry the same hash
- * (9fe59be0…33be, checked against both manifests the same day).
+ * (cbe95378…1f2a, checked against both manifests the same day).
  */
 export const COSIGN_RELEASE_SHA256 = {
-  'linux-amd64': '4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71',
-  'linux-arm64': 'c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a',
-  'darwin-amd64': '2347488e5d5b25336644024dfeca5601b190e91197a71a917bda44744aff106c',
-  'darwin-arm64': '5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76',
+  'linux-amd64': '424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa',
+  'linux-arm64': 'ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2',
+  'darwin-amd64': '9d1e4abe2b6be279ed0d2ff706fde1ccd738747c834e3e6d44039c238867334f',
+  'darwin-arm64': '9f9b8cd557cf2e5b3df3373a00baa005a86b02391e3e06dd0ce37b3a1533d3a4',
 } as const;
 
 /** A platform a pinned release archive is published for. */
@@ -125,9 +127,10 @@ interface PinnedRelease {
   assets: Readonly<Record<ReleasePlatform, { file: string; sha256: string }>>;
 }
 
-const SYFT_VERSION = '1.52.0';
+const SYFT_VERSION = '1.55.0';
 const TRIVY_VERSION = TRIVY_INSTALL_TAG.slice(1);
 const GITLEAKS_VERSION = '8.30.1';
+const GOSEC_VERSION = '2.30.0';
 
 /**
  * The Syft, Trivy and gitleaks releases every install of them fetches — the
@@ -145,31 +148,41 @@ const GITLEAKS_VERSION = '8.30.1';
  * `<tool>_<version>_checksums.txt` (itself matching its GitHub asset
  * digest); and the digest GitHub records for the asset. The Windows ZIPs
  * also match scoop's Main bucket (all three) and winget-pkgs (Trivy,
- * gitleaks). Syft 1.52.0 (2026-09-17) and Trivy 0.74.0 (2026-08-14) are
- * immutable releases; gitleaks 8.30.1 (2026-03-21) is not — its assets could
- * be replaced, which the pinned sums catch.
+ * gitleaks). Syft 1.55.0 (2026-10-19) and Trivy 0.76.1 (2026-10-21) are
+ * immutable releases, their sums checked the same three ways on 2026-10-24
+ * (scoop and winget carry the same Windows ZIPs); gitleaks 8.30.1 (2026-03-21)
+ * is not — its assets could be replaced, which the pinned sums catch.
+ *
+ * gosec 2.30.0 (2026-10-23) was checked on 2026-10-24: each archive hashed
+ * independently and matched against the release's
+ * `gosec_2.30.0_checksums.txt`, and that file and the archives verified with
+ * `cosign verify-blob` against the project's own key (`cosign.pub` in
+ * securego/gosec, unchanged since 2022) and the release's `.sigstore.json`
+ * bundles. It ships `.tar.gz` archives for Windows too, with `gosec.exe` at
+ * the root, which {@link windowsReleaseInstaller} unpacks with Windows' own
+ * `tar.exe`.
  */
-export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks', PinnedRelease>> = {
+export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'gosec', PinnedRelease>> = {
   syft: {
     version: SYFT_VERSION,
     base: `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}`,
     assets: {
-      'linux-amd64': { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: 'caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d' },
-      'linux-arm64': { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: 'c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706' },
-      'darwin-amd64': { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: '56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917' },
-      'darwin-arm64': { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: '014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6' },
-      'windows-amd64': { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: 'de787a374cf961c56fd7b206b2e183295abba32d0af3cb44d9aef2357ca9eda2' },
+      'linux-amd64': { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: 'bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d' },
+      'linux-arm64': { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: '929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304' },
+      'darwin-amd64': { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: 'e2e5831cbabaec9a36fe65c34755c1113982c842a685edce3ce0b54a0ded8003' },
+      'darwin-arm64': { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: '1217c258bd5eb91ef3189cf22a82e02f9cac07e4ce934350f428e93aff674625' },
+      'windows-amd64': { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: 'ada4c9b93af575f479ce80fce6629897272a2d41f300a14bc49bace020767ca2' },
     },
   },
   trivy: {
     version: TRIVY_VERSION,
     base: `https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}`,
     assets: {
-      'linux-amd64': { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a' },
-      'linux-arm64': { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: 'b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5' },
-      'darwin-amd64': { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: '472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485' },
-      'darwin-arm64': { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: '1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11' },
-      'windows-amd64': { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: '94c40e0696e4b907a74b7b2e1438d5d72ebaca83115817407f568a002d520842' },
+      'linux-amd64': { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: 'c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0' },
+      'linux-arm64': { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: 'e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f' },
+      'darwin-amd64': { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: '7aa762eacd582052d053b62dcf972a1ab058abe39a57ccae234ed8894945b6b7' },
+      'darwin-arm64': { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: '11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5' },
+      'windows-amd64': { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: '1051f49cb22d5284f43425f72aad9cda63ca12ceb92e7caa06903490c82dc9bf' },
     },
   },
   gitleaks: {
@@ -181,6 +194,17 @@ export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks', Pin
       'darwin-amd64': { file: `gitleaks_${GITLEAKS_VERSION}_darwin_x64.tar.gz`, sha256: 'dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709' },
       'darwin-arm64': { file: `gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz`, sha256: 'b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5' },
       'windows-amd64': { file: `gitleaks_${GITLEAKS_VERSION}_windows_x64.zip`, sha256: 'd29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e' },
+    },
+  },
+  gosec: {
+    version: GOSEC_VERSION,
+    base: `https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}`,
+    assets: {
+      'linux-amd64': { file: `gosec_${GOSEC_VERSION}_linux_amd64.tar.gz`, sha256: '3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb' },
+      'linux-arm64': { file: `gosec_${GOSEC_VERSION}_linux_arm64.tar.gz`, sha256: '0867994920453070a5d6a713e35921a3058473e5c3bf777fdd5a2d6f95313fda' },
+      'darwin-amd64': { file: `gosec_${GOSEC_VERSION}_darwin_amd64.tar.gz`, sha256: '1b10b496954791f4b57448722f0cb93c0fa4aba24e9d286c0459dfde593e0898' },
+      'darwin-arm64': { file: `gosec_${GOSEC_VERSION}_darwin_arm64.tar.gz`, sha256: 'cac8c480673fc179798402b6d86efc12b6bcf11c18bcf377fda02cc55846dd97' },
+      'windows-amd64': { file: `gosec_${GOSEC_VERSION}_windows_amd64.tar.gz`, sha256: '503bdfe6155584f2497ef855846b66406bce5b574ce1a9c7a7bb171aff2caa02' },
     },
   },
 };
@@ -340,6 +364,45 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     },
     default: false, // only when Python detected
   },
+  gosec: {
+    name: 'gosec',
+    // 2.25.0: the taint rules (G701+, since 2.23.0) with the fix for their
+    // hang on packages with many call graphs. Not enforced strictly.
+    version_floor: '2.25.0',
+    probe: { command: 'gosec', args: ['-version'] },
+    required_by: ['scan_sast', 'security_scan_full', 'review_pr'],
+    install: {
+      // The pinned release archive, sha256-checked (see PINNED_RELEASES);
+      // `go install` of the same tag where Go is (the checksum database
+      // verifies the module). gosec needs the Go toolchain to run either way.
+      win32: { release: windowsReleaseInstaller('gosec') },
+      linux: {
+        curl: releaseArchiveInstaller('gosec', 'linux'),
+        go: goInstall(`github.com/securego/gosec/v2/cmd/gosec@v${GOSEC_VERSION}`),
+      },
+      darwin: {
+        brew: brewInstall('gosec'),
+        curl: releaseArchiveInstaller('gosec', 'darwin'),
+        go: goInstall(`github.com/securego/gosec/v2/cmd/gosec@v${GOSEC_VERSION}`),
+      },
+    },
+    default: false, // only when Go is detected
+  },
+  // The Go toolchain gosec loads packages through — like the .NET SDK, never
+  // auto-installed (install_toolchain routes it to manual steps): the
+  // project's go.mod decides which Go it needs.
+  go: {
+    name: 'go',
+    version_floor: '1.22.0',
+    probe: { command: 'go', args: ['version'] },
+    required_by: ['scan_sast', 'security_scan_full', 'review_pr'],
+    install: {
+      win32: { winget: manualHint('winget install GoLang.Go') },
+      linux: { apt: manualHint('see https://go.dev/doc/install') },
+      darwin: { brew: manualHint('brew install go') },
+    },
+    default: false,
+  },
   jscpd: {
     name: 'jscpd',
     version_floor: '3.0.0',
@@ -412,8 +475,8 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     probe: { command: 'cosign', args: ['version'] },
     required_by: ['scan_containers'],
     install: {
-      // Verified 2026-09-28: microsoft/winget-pkgs carries Sigstore.Cosign
-      // 3.1.3 and ScoopInstaller/Main carries cosign 3.1.3, both pointing
+      // Verified 2026-10-24: microsoft/winget-pkgs carries Sigstore.Cosign
+      // 3.1.4 and ScoopInstaller/Main carries cosign 3.1.4, both pointing
       // at the official cosign-windows-amd64.exe with the release's sha256.
       // Both take an exact version, so both are pinned.
       win32: {
@@ -567,9 +630,9 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       // dotnet.microsoft.com support policy); .NET 6, which it used to name,
       // left support in November 2024. winget id verified in
       // microsoft/winget-pkgs (manifests/m/Microsoft/DotNet/SDK/10).
-      win32: { winget: dotnetSdkHint('winget install Microsoft.DotNet.SDK.10') },
-      linux: { apt: dotnetSdkHint('see https://learn.microsoft.com/dotnet/core/install/linux') },
-      darwin: { brew: dotnetSdkHint('brew install --cask dotnet-sdk') },
+      win32: { winget: manualHint('winget install Microsoft.DotNet.SDK.10') },
+      linux: { apt: manualHint('see https://learn.microsoft.com/dotnet/core/install/linux') },
+      darwin: { brew: manualHint('brew install --cask dotnet-sdk') },
     },
     default: false,
   },
@@ -751,8 +814,10 @@ function releaseArchiveInstaller(tool: keyof typeof PINNED_RELEASES, os: 'linux'
 /**
  * The Windows twin of {@link releaseArchiveInstaller}: `tool`'s pinned
  * release ZIP, downloaded with PowerShell (`powershell.exe`, in every
- * supported Windows), checked with `Get-FileHash` before `Expand-Archive`,
- * and its `<tool>.exe` copied to `%USERPROFILE%\.local\bin` — the per-user
+ * supported Windows), checked with `Get-FileHash` before `Expand-Archive` —
+ * or, for a release that ships a `.tar.gz` (gosec), before Windows' own
+ * `%SystemRoot%\System32\tar.exe` unpacks `<tool>.exe` alone (never a `tar`
+ * found on PATH: Git's is another program) — and its `<tool>.exe` copied to `%USERPROFILE%\.local\bin` — the per-user
  * directory the POSIX installers use as `~/.local/bin`. The user's PATH is
  * not changed (a warning says when it lacks the directory): the server
  * appends the directory to its own PATH (`platform/userBin.ts`), so its
@@ -763,6 +828,14 @@ function releaseArchiveInstaller(tool: keyof typeof PINNED_RELEASES, os: 'linux'
 function windowsReleaseInstaller(tool: keyof typeof PINNED_RELEASES): InstallSpec {
   const r = PINNED_RELEASES[tool];
   const a = r.assets['windows-amd64'];
+  const tarball = a.file.endsWith('.tar.gz');
+  const unpack = tarball
+    ? [
+        "  New-Item -ItemType Directory -Path (Join-Path $tmp 'x') | Out-Null",
+        `  & (Join-Path $env:SystemRoot 'System32\\tar.exe') -xzf $zip -C (Join-Path $tmp 'x') ${tool}.exe`,
+        `  if ($LASTEXITCODE -ne 0) { throw ('${tool}: tar.exe could not unpack the archive (exit ' + $LASTEXITCODE + ')') }`,
+      ]
+    : ["  Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x')"];
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
@@ -773,11 +846,11 @@ function windowsReleaseInstaller(tool: keyof typeof PINNED_RELEASES): InstallSpe
     '$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())',
     'New-Item -ItemType Directory -Path $tmp | Out-Null',
     'try {',
-    `  $zip = Join-Path $tmp '${tool}.zip'`,
+    `  $zip = Join-Path $tmp '${tool}${tarball ? '.tar.gz' : '.zip'}'`,
     `  Invoke-WebRequest -UseBasicParsing -Uri '${r.base}/${a.file}' -OutFile $zip`,
     '  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()',
     `  if ($got -ne '${a.sha256}') { throw ('${tool}: sha256 mismatch, got ' + $got) }`,
-    "  Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x')",
+    ...unpack,
     "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
     '  New-Item -ItemType Directory -Force -Path $bin | Out-Null',
     `  Copy-Item -LiteralPath (Join-Path $tmp 'x\\${tool}.exe') -Destination (Join-Path $bin '${tool}.exe') -Force`,
@@ -848,9 +921,12 @@ function wpCliCurlInstaller(): InstallSpec {
   };
 }
 
-function dotnetSdkHint(humanCommand: string): InstallSpec {
+/** The toolchains install_toolchain never installs, and what each is called in its manual step. */
+export const MANUAL_ONLY_TOOLS: Readonly<Record<string, string>> = { 'dotnet-sdk': 'the .NET SDK', go: 'the Go toolchain' };
+
+function manualHint(humanCommand: string): InstallSpec {
   // SENTINEL: this spec is NEVER executed by install_toolchain — the tool
-  // checks meta.name and treats `dotnet-sdk` as read-only. We surface this
+  // treats every MANUAL_ONLY_TOOLS entry as read-only. We surface this
   // string via `check_toolchain.install_command` so the user knows how to
   // proceed manually.
   return {

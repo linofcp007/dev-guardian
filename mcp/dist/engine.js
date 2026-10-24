@@ -4352,8 +4352,9 @@ ${collapse(snippetText(f.tool, f.snippet))}`;
   return "none";
 }
 function snippetText(tool54, snippet) {
-  if (tool54.toLowerCase() !== "bandit") return snippet;
-  return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(/^\d+ /, "")).join("\n");
+  const prefix = LINE_NUMBER_PREFIX[tool54.toLowerCase()];
+  if (prefix === void 0) return snippet;
+  return snippet.split(/\r\n|\r|\n/).map((line) => line.replace(prefix, "")).join("\n");
 }
 function isCredentialFinding(f) {
   if ((f.subcategory ?? "").toLowerCase() === "secret") return true;
@@ -4395,7 +4396,7 @@ function compareStrings(a, b) {
 function sha2562(text2) {
   return createHash3("sha256").update(text2).digest("hex");
 }
-var REDACTED_SNIPPET, IDENTITY_VERSION, MAX_SOURCE_BYTES, MATCH_KEY_VERSION, CREDENTIAL_RULE;
+var REDACTED_SNIPPET, IDENTITY_VERSION, MAX_SOURCE_BYTES, MATCH_KEY_VERSION, LINE_NUMBER_PREFIX, CREDENTIAL_RULE;
 var init_findingIdentity = __esm({
   "src/fingerprint/findingIdentity.ts"() {
     "use strict";
@@ -4405,6 +4406,7 @@ var init_findingIdentity = __esm({
     IDENTITY_VERSION = 1;
     MAX_SOURCE_BYTES = 8 * 1024 * 1024;
     MATCH_KEY_VERSION = 1;
+    LINE_NUMBER_PREFIX = { bandit: /^\d+ /, gosec: /^\d+: / };
     CREDENTIAL_RULE = /(^|[^a-z])(secrets?|passwords?|passwd|pwd|credentials?|api[-_]?keys?|private[-_]?keys?|access[-_]?keys?|aws[-_]?keys?|hardcoded[-_ ]?(passwords?|secrets?|credentials?|keys?|tokens?))([^a-z]|$)/i;
   }
 });
@@ -18725,9 +18727,15 @@ async function loadProjectExclusions(projectPath, configRoot = projectPath) {
     hash: createHash7("sha256").update(text2).digest("hex"),
     patterns: matcher.patterns,
     ignores: (relPath, isDir) => matcher.ignores(relPath, isDir),
-    ...classify(listed2 ?? listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f)), matcher),
+    ...classify(listed2 ?? walkScannedFiles(projectPath), matcher),
     semgrepAnchor
   };
+}
+async function listScannedFiles(projectPath) {
+  return await gitListFiles(projectPath) ?? walkScannedFiles(projectPath);
+}
+function walkScannedFiles(projectPath) {
+  return listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f));
 }
 function submodulesNotIgnored(projectPath, submodules, configRoot = projectPath) {
   if (submodules.length === 0) return [];
@@ -19223,7 +19231,7 @@ function coverageRunsOf(bookkeeping, scans) {
   }
   return out;
 }
-var MIN_RULES, MIN_WEAKNESSES, rules, REGISTRY_RULES, BANDIT_RULES, BUGFIX_RULES, RGPD_RULES, DEPENDENCY_AUDITORS, CREDENTIALS_ONLY, DEPENDENCIES_ONLY, OWASP_DETECTORS, OWASP_SCAN_TYPES, COMPLETE_CELL;
+var MIN_RULES, MIN_WEAKNESSES, rules, REGISTRY_RULES, BANDIT_RULES, GOSEC_RULES, BUGFIX_RULES, RGPD_RULES, DEPENDENCY_AUDITORS, CREDENTIALS_ONLY, DEPENDENCIES_ONLY, OWASP_DETECTORS, OWASP_SCAN_TYPES, COMPLETE_CELL;
 var init_coverage = __esm({
   "src/frameworks/coverage.ts"() {
     "use strict";
@@ -19331,6 +19339,18 @@ var init_coverage = __esm({
       // Three checks, all CWE-703 — a class MITRE discourages for mapping.
       "A10:2025": rules({ python: cell(3, "CWE-703") })
     };
+    GOSEC_RULES = {
+      "A01:2025": rules({ go: cell(15, 6) }),
+      "A02:2025": rules({ go: cell(1, "CWE-614") }),
+      "A04:2025": rules({ go: cell(12, 4) }),
+      "A05:2025": rules({ go: cell(10, 6) }),
+      "A06:2025": rules({ go: cell(2, 2) }),
+      "A07:2025": rules({ go: cell(5, 4) }),
+      "A08:2025": rules({ go: cell(1, "CWE-502") }),
+      "A09:2025": rules({ go: cell(1, "CWE-117") }),
+      // G104 (unchecked errors), CWE-703 — a class MITRE discourages for mapping.
+      "A10:2025": rules({ go: cell(1, "CWE-703") })
+    };
     BUGFIX_RULES = {
       "A06:2025": rules({ javascript: cell(1, "CWE-362"), typescript: cell(1, "CWE-362") }),
       "A10:2025": rules({
@@ -19374,6 +19394,15 @@ var init_coverage = __esm({
         reach: BANDIT_RULES,
         basis: "Bandit's own CWE assignments across its plugins and blacklists, mapped with OWASP's CWE list.",
         measured: "Bandit 1.9.4, 2026-09-28"
+      },
+      {
+        id: "gosec",
+        label: "gosec (scan_sast, Go)",
+        runs: ["gosec"],
+        scanTypes: ["sast", "security_full", "review_pr"],
+        reach: GOSEC_RULES,
+        basis: "gosec's own rule-to-CWE table (one CWE per rule), mapped with OWASP's CWE list.",
+        measured: "gosec 2.30.0, 2026-10-24"
       },
       {
         id: "bugfix-packs",
@@ -20267,6 +20296,9 @@ function remedyFor(kind, tool54, detail, cause) {
   }
   switch (kind) {
     case "missing_tool": {
+      if (scanner2 === "go") {
+        return "Install the Go toolchain your go.mod names (https://go.dev/doc/install; on GitHub Actions, actions/setup-go) and put it on PATH, then rerun the scan \u2014 install_toolchain never installs it.";
+      }
       const hint = INSTALL_HINT[scanner2];
       return hint !== void 0 ? `Install ${scanner2} (\`${hint}\`) and put it on PATH, then rerun the scan.` : `Install ${scanner2} and put it on PATH (the install_toolchain MCP tool can), then rerun the scan.`;
     }
@@ -20299,6 +20331,9 @@ function remedyFor(kind, tool54, detail, cause) {
       if (/target limit|size limit/i.test(detail)) return "Split the files over Semgrep's 1 MB target limit, or list them in .guardianignore after review.";
       if (/submodule/i.test(detail)) return "Scan each submodule as a project of its own, or list it in .guardianignore after review.";
       if (/did not load/i.test(detail)) return "Fix or remove the rule the detail names, then rerun the scan.";
+      if (/\b(Type error|Package not loaded) on /.test(detail)) {
+        return "Make each named Go package build where the scan runs \u2014 the Go version go.mod names, its modules downloaded (`go mod download`) \u2014 then rerun: gosec skipped the SSA and taint rules of every package that does not type-check.";
+      }
       return "Read the detail; docs/ci.md says what each gap means and what clears it.";
   }
 }
@@ -36449,7 +36484,7 @@ function hasDotnetProject(projectPath) {
     return false;
   }
 }
-var LLM_RULES_FILE, WEBJS_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT, LLM_PACK_MEASURED_SEMGREP;
+var LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT, LLM_PACK_MEASURED_SEMGREP;
 var init_semgrepConfigs = __esm({
   "src/runners/semgrepConfigs.ts"() {
     "use strict";
@@ -36459,7 +36494,8 @@ var init_semgrepConfigs = __esm({
     init_semgrepRuleIds();
     LLM_RULES_FILE = "llm.yml";
     WEBJS_RULES_FILE = "web-js.yml";
-    PLUGIN_PACK_FILES = [LLM_RULES_FILE, WEBJS_RULES_FILE];
+    MOBILE_RULES_FILE = "mobile.yml";
+    PLUGIN_PACK_FILES = [LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE];
     CONTAINER_PACKS_ROOT = "/guardian-packs";
     LLM_PACK_MEASURED_SEMGREP = "1.176.1";
   }
@@ -38770,6 +38806,207 @@ var init_fileBatchScan = __esm({
   }
 });
 
+// src/runners/gosecRun.ts
+function goPackageDirs(files) {
+  const dirs = /* @__PURE__ */ new Set();
+  let goFiles = 0;
+  for (const raw of files) {
+    const file = toPosixPath(raw);
+    const segments = file.split("/");
+    const name = segments.pop() ?? "";
+    if (!name.endsWith(".go") || name.endsWith("_test.go") || name.startsWith(".") || name.startsWith("_")) continue;
+    if (segments.some((s) => NOT_PACKAGES.has(s) || s.startsWith(".") || s.startsWith("_"))) continue;
+    dirs.add(segments.length === 0 ? "." : segments.join("/"));
+    goFiles += 1;
+  }
+  return { dirs: [...dirs].sort(), goFiles };
+}
+function isGoSource(file) {
+  return goPackageDirs([file]).goFiles === 1;
+}
+function isSyntaxMessage(message2) {
+  return /\bsyntax error\b|^(expected|missing|illegal|unexpected)\b/i.test(message2.trim());
+}
+function checkGosecReport(args) {
+  if (args.outcome === "cancelled" || args.outcome === "timed_out" || args.outcome === "output_too_large") {
+    return { ok: false, reason: `gosec did not finish (${args.outcome})` };
+  }
+  if (args.exitCode !== 0 && args.exitCode !== 1) return { ok: false, reason: `exit ${String(args.exitCode)}` };
+  const root = args.raw === null ? null : parseInputAsJson(args.raw);
+  const stats = getProp(root, "Stats");
+  const scanned = getNumber(stats, "files");
+  if (root === null || typeof root !== "object" || scanned === void 0) return { ok: false, reason: "gosec wrote no JSON report" };
+  const errors = getProp(root, "Golang errors");
+  const entries2 = errors !== null && typeof errors === "object" ? Object.entries(errors) : [];
+  const partial3 = [];
+  const add = (file, type, message2) => {
+    if (!partial3.some((p) => p.file === file && p.type === type)) partial3.push({ file, type, message: message2.split(/\r?\n/)[0] ?? message2 });
+  };
+  const fileKeys = entries2.map(([key]) => toPosixPath(key)).filter((k) => k.endsWith(".go"));
+  for (const [key, list2] of entries2) {
+    const messages = asArray(list2).map((e) => getString(e, "error") ?? "").filter((m) => m !== "");
+    if (key === "") continue;
+    const first = messages[0] ?? "error";
+    if (toPosixPath(key).endsWith(".go")) {
+      add(key, messages.some(isSyntaxMessage) ? GOSEC_SYNTAX_ERROR : GOSEC_TYPE_ERROR, first);
+    } else {
+      add(key, GOSEC_PACKAGE_NOT_LOADED, first.replace(/^loading files from package "[^"]*": err: /, ""));
+    }
+  }
+  const unattributed = [];
+  for (const [key, list2] of entries2) {
+    if (key !== "") continue;
+    for (const e of asArray(list2)) {
+      const lines = (getString(e, "error") ?? "").split(/\r?\n/).filter((l) => l.trim() !== "" && !l.startsWith("#"));
+      for (const line of lines) {
+        const m = SUMMARY_LINE.exec(line.trim());
+        const file = m?.[1];
+        if (m === null || file === void 0) {
+          unattributed.push(line.trim());
+          continue;
+        }
+        const named2 = toPosixPath(file);
+        if (fileKeys.some((k) => k === named2 || k.endsWith(`/${named2}`))) continue;
+        const message2 = m[4] ?? line;
+        add(named2, isSyntaxMessage(message2) ? GOSEC_SYNTAX_ERROR : GOSEC_TYPE_ERROR, message2);
+      }
+    }
+  }
+  if (unattributed.length > 0) {
+    return { ok: false, scanned, reason: `gosec reported an error it names no file for: ${unattributed.slice(0, 3).join("; ")}` };
+  }
+  if (scanned === 0 && partial3.length > 0) {
+    const said = [...new Set(partial3.map((p) => p.message))].slice(0, 2).join("; ");
+    return { ok: false, scanned, reason: `gosec analysed no file: ${said}` };
+  }
+  return partial3.length > 0 ? { ok: true, scanned, partial: partial3 } : { ok: true, scanned };
+}
+function filesAnalysed(reports) {
+  let total = 0;
+  for (const raw of reports) total += getNumber(getProp(parseInputAsJson(raw), "Stats"), "files") ?? 0;
+  return total;
+}
+function gosecEnv(env) {
+  const flags = env["GOFLAGS"];
+  if (flags === void 0 || !/(^|\s)-mod=mod(\s|$)/.test(flags)) return { env, note: null };
+  return {
+    env: { ...env, GOFLAGS: flags.replace(/(^|\s)-mod=mod(?=\s|$)/g, "$1-mod=readonly") },
+    note: "GOFLAGS' -mod=mod was run as -mod=readonly, so go cannot rewrite go.mod or go.sum"
+  };
+}
+function nameAFew2(items, max = 5) {
+  const shown = items.slice(0, max).join("; ");
+  return items.length > max ? `${shown}; +${items.length - max} more` : shown;
+}
+function describeGosecPartial(partial3) {
+  const parts = [];
+  const of = (type) => partial3.filter((p) => p.type === type);
+  const syntax = of(GOSEC_SYNTAX_ERROR);
+  const types = of(GOSEC_TYPE_ERROR);
+  const notLoaded = of(GOSEC_PACKAGE_NOT_LOADED);
+  if (syntax.length > 0) {
+    parts.push(`partial: ${syntax.length} file(s) only partly parsed \u2014 findings in the unparsed spans may be missing (${nameAFew2(syntax.map((p) => `${p.file}: ${p.message}`))})`);
+  }
+  if (types.length > 0) {
+    parts.push(
+      `partial: ${types.length} file(s) in packages that did not type-check \u2014 their packages' SSA rules (the taint rules G701\u2013G710 among them) did not run; make them build (\`go mod download\`) for those (${nameAFew2(types.map((p) => `${p.file}: ${p.message}`))})`
+    );
+  }
+  if (notLoaded.length > 0) {
+    parts.push(`partial: ${notLoaded.length} package(s) not loaded \u2014 nothing in them was analysed (${nameAFew2(notLoaded.map((p) => `${p.file}: ${p.message}`))})`);
+  }
+  return parts.join("; ");
+}
+async function gosecOnPackages(args) {
+  const { dirs, goFiles } = goPackageDirs(args.files);
+  if (dirs.length === 0) return { toolRun: null, missing: [], reports: [], cancelled: false };
+  if (!await scannerAvailable(GOSEC)) {
+    const missing = [GOSEC, ...await scannerAvailable(GO_TOOLCHAIN) ? [] : [GO_TOOLCHAIN]];
+    return { toolRun: { name: GOSEC, status: "skipped", reason: "not_installed" }, missing, reports: [], cancelled: false };
+  }
+  if (!await scannerAvailable(GO_TOOLCHAIN)) {
+    return {
+      toolRun: {
+        name: GOSEC,
+        status: "skipped",
+        reason: "the Go toolchain (go) is not on PATH \u2014 gosec loads every package through it, so nothing could be analysed"
+      },
+      missing: [GO_TOOLCHAIN],
+      reports: [],
+      cancelled: false
+    };
+  }
+  const { env, note } = gosecEnv(args.env);
+  const run2 = await scanFileBatches({
+    name: GOSEC,
+    command: GOSEC,
+    args: ["-fmt=json", "-no-fail"],
+    reportArgs: (f) => [`-out=${f}`, `-log=${f.replace(/\.json$/, ".log")}`],
+    files: dirs,
+    cwd: args.cwd,
+    reportDir: args.reportDir,
+    reportPrefix: GOSEC,
+    env,
+    signal: args.signal,
+    ...args.onLog ? { onLog: args.onLog } : {},
+    check: checkGosecReport
+  });
+  const notes = note !== null ? [note] : [];
+  const toolRun = { ...run2.toolRun };
+  if (toolRun.status !== "ok") {
+    if (notes.length > 0) toolRun.reason = [toolRun.reason, ...notes].filter((s) => s !== void 0).join("; ");
+    return { toolRun, missing: [], reports: run2.reports, cancelled: run2.cancelled };
+  }
+  const analysed = filesAnalysed(run2.reports);
+  const listed2 = `${dirs.length} package director${dirs.length === 1 ? "y" : "ies"}, ${goFiles} Go file(s)`;
+  if (analysed === 0) {
+    return {
+      toolRun: {
+        name: GOSEC,
+        status: "skipped",
+        reason: `${listed2}: gosec analysed none of them \u2014 the platform's build constraints (GOOS/GOARCH tags, //go:build ignore) left every one out; Semgrep still read them`
+      },
+      missing: [GOSEC],
+      reports: run2.reports,
+      cancelled: run2.cancelled
+    };
+  }
+  const left = goFiles - analysed;
+  toolRun.reason = [
+    `${listed2}: ${analysed} analysed`,
+    ...left > 0 ? [`${left} left out by the platform's build constraints (GOOS/GOARCH tags, //go:build ignore) or cgo \u2014 Semgrep still read them`] : [],
+    ...run2.partial.length > 0 ? [describeGosecPartial(run2.partial)] : [],
+    ...notes
+  ].join("; ");
+  if (run2.partial.length > 0) toolRun.partially_parsed = run2.partial;
+  return { toolRun, missing: run2.partial.length > 0 ? [GOSEC] : [], reports: run2.reports, cancelled: run2.cancelled };
+}
+function gosecIssuesIn(raw, cwd, keep) {
+  const root = parseInputAsJson(raw);
+  if (root === null || typeof root !== "object") return raw;
+  const issues = asArray(getProp(root, "Issues")).filter((issue2) => {
+    const file = getString(issue2, "file");
+    return file !== void 0 && keep(toRelativeIfPossible(file, cwd));
+  });
+  return JSON.stringify({ ...root, Issues: issues });
+}
+var GOSEC, GO_TOOLCHAIN, GOSEC_SYNTAX_ERROR, GOSEC_TYPE_ERROR, GOSEC_PACKAGE_NOT_LOADED, NOT_PACKAGES, SUMMARY_LINE;
+var init_gosecRun = __esm({
+  "src/runners/gosecRun.ts"() {
+    "use strict";
+    init_scanHelpers();
+    init_fileBatchScan();
+    init_scannerParsers();
+    GOSEC = "gosec";
+    GO_TOOLCHAIN = "go";
+    GOSEC_SYNTAX_ERROR = "Syntax error";
+    GOSEC_TYPE_ERROR = "Type error";
+    GOSEC_PACKAGE_NOT_LOADED = "Package not loaded";
+    NOT_PACKAGES = /* @__PURE__ */ new Set(["vendor", "testdata"]);
+    SUMMARY_LINE = /^(.+?\.go):(\d+):(\d+): (.*)$/;
+  }
+});
+
 // src/runners/scannerParsers/bandit.ts
 function mapResult(raw, ctx) {
   const testId = getString(raw, "test_id");
@@ -38819,6 +39056,66 @@ var init_bandit = __esm({
         const findings = [];
         for (const raw of results) {
           const finding4 = mapResult(raw, ctx);
+          if (finding4) findings.push(finding4);
+        }
+        return { findings, cves: [] };
+      }
+    };
+  }
+});
+
+// src/runners/scannerParsers/gosec.ts
+function lineSpan(raw) {
+  const m = /^\s*(\d+)(?:\s*-\s*(\d+))?\s*$/.exec(raw ?? "");
+  if (m === null) return void 0;
+  const start = Number(m[1]);
+  const end = m[2] !== void 0 ? Number(m[2]) : start;
+  return start >= 1 ? { start, end: Math.max(start, end) } : void 0;
+}
+function mapIssue(raw, ctx) {
+  const ruleId = getString(raw, "rule_id");
+  const file = getString(raw, "file");
+  if (!ruleId || !file) return null;
+  if (getProp(raw, "nosec") === true || asArray(getProp(raw, "suppressions")).length > 0) return null;
+  const details = getString(raw, "details");
+  const confidence = getString(raw, "confidence");
+  const span2 = lineSpan(getString(raw, "line"));
+  const code = getString(raw, "code");
+  const subcategory = CREDENTIAL_RULES[ruleId];
+  const input = {
+    tool: GOSEC_TOOL_NAME,
+    rule_id: ruleId,
+    severity: normalizeSeverity(getString(raw, "severity")),
+    category: "security",
+    title: details ?? `gosec ${ruleId}`,
+    file_path: toRelativeIfPossible(file, ctx.project_path),
+    fix_available: false,
+    taxonomy: { cwe: getProp(getProp(raw, "cwe"), "id") }
+  };
+  if (subcategory !== void 0) input.subcategory = subcategory;
+  if (details !== void 0) input.message = confidence ? `${details} (confidence: ${confidence.toLowerCase()})` : details;
+  if (span2 !== void 0) {
+    input.line_start = span2.start;
+    input.line_end = span2.end;
+  }
+  if (code !== void 0) input.snippet = code;
+  return redactCredentialSnippet(makeFinding(input));
+}
+var GOSEC_TOOL_NAME, CREDENTIAL_RULES, gosecParser;
+var init_gosec = __esm({
+  "src/runners/scannerParsers/gosec.ts"() {
+    "use strict";
+    init_secretFindingRedaction();
+    init_scannerParsers();
+    GOSEC_TOOL_NAME = "gosec";
+    CREDENTIAL_RULES = { G101: "hardcoded_credentials" };
+    gosecParser = {
+      name: GOSEC_TOOL_NAME,
+      parse(input, ctx = {}) {
+        const root = parseInputAsJson(input);
+        const findings = [];
+        for (const raw of asArray(getProp(root, "Issues"))) {
+          const finding4 = mapIssue(raw, ctx);
           if (finding4) findings.push(finding4);
         }
         return { findings, cves: [] };
@@ -39550,6 +39847,24 @@ async function runBanditOnScope(args) {
   for (const raw of run2.reports) parser_inputs.push({ parser: banditParser, input: raw });
   tools_run.push(ini.honoured ? await nameRepoConfig(run2.toolRun, ctx.projectPath, "bandit") : run2.toolRun);
 }
+function looksGo(projectPath) {
+  return presentInProject(projectPath, "go.mod") || presentInProject(projectPath, "go.work") || hasFileWithExtension(projectPath, [".go"]);
+}
+async function runGosec(args) {
+  const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
+  if (files.length === 0) return;
+  const pass2 = await gosecOnPackages({
+    files,
+    cwd: ctx.projectPath,
+    reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...ctx.onLog ? { onLog: ctx.onLog } : {}
+  });
+  for (const raw of pass2.reports) parser_inputs.push({ parser: gosecParser, input: raw });
+  if (pass2.toolRun !== null) tools_run.push(pass2.toolRun);
+  for (const name of pass2.missing) markMissing(missing_tools, name);
+}
 function dotnetNotApplicableToScope(args) {
   const { ctx, files, tools_run, missing_tools } = args;
   if (!hasRootDotnetSignal(ctx.projectPath)) return;
@@ -39730,7 +40045,9 @@ var init_scanSast = __esm({
     init_guardianIgnore();
     init_scope();
     init_fileBatchScan();
+    init_gosecRun();
     init_bandit();
+    init_gosec();
     init_scannerParsers();
     init_dotnetSarif();
     init_semgrep();
@@ -39757,7 +40074,7 @@ var init_scanSast = __esm({
       makeScanTool({
         name: "scan_sast",
         title: "SAST scan (Semgrep)",
-        description: "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What Semgrep could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local_only avoids the registry and its metrics.",
+        description: "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS, mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for Go, through the Go toolchain (it may download modules); for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local_only avoids the registry and its metrics.",
         scan_type: "sast",
         category: "security",
         supportsScope: true,
@@ -39798,10 +40115,15 @@ var init_scanSast = __esm({
             const files = ctx.scope.files;
             await runSemgrepOnScope({ ctx, reportDir, autoFix, localOnly, files, tools_run, missing_tools, parser_inputs });
             await runBanditOnScope({ ctx, reportDir, files: files.filter(isPython), tools_run, missing_tools, parser_inputs });
+            await runGosec({ ctx, reportDir, files: files.filter(isGoSource), tools_run, missing_tools, parser_inputs });
             dotnetNotApplicableToScope({ ctx, files, tools_run, missing_tools, parser_inputs });
           } else {
             await runSemgrep2({ ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs });
             await runBandit({ ctx, reportDir, tools_run, missing_tools, parser_inputs });
+            if (looksGo(ctx.projectPath)) {
+              const files = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
+              await runGosec({ ctx, reportDir, files, tools_run, missing_tools, parser_inputs });
+            }
             await runDotnetAnalyzers({ ctx, tools_run, missing_tools, parser_inputs });
           }
           const anyOk = tools_run.some((t) => t.status === "ok");
@@ -42288,7 +42610,7 @@ var init_securityScanFull = __esm({
           auto_fix: AutoFix,
           allow_dirty: AllowDirty,
           local_only: external_exports.boolean().optional().describe(
-            "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy still goes out."
+            "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy still goes out."
           ),
           force: Force
         },
@@ -45320,6 +45642,24 @@ async function runBandit2(ctx, out, args) {
   out.tools_run.push(run2.toolRun);
   out.cancelled ||= run2.cancelled;
 }
+async function runGosec2(ctx, out, args) {
+  if (args.files.length === 0) return;
+  const pass2 = await gosecOnPackages({
+    files: args.files,
+    cwd: args.scanRoot,
+    reportDir: args.reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...ctx.onLog ? { onLog: ctx.onLog } : {}
+  });
+  const reviewed = new Set(args.files);
+  for (const raw of pass2.reports) {
+    out.parser_inputs.push({ parser: gosecParser, input: gosecIssuesIn(raw, args.scanRoot, (f) => reviewed.has(f)) });
+  }
+  if (pass2.toolRun !== null) out.tools_run.push(pass2.toolRun);
+  for (const name of pass2.missing) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
+  out.cancelled ||= pass2.cancelled;
+}
 async function runTrivy2(ctx, out, args) {
   if (!await scannerAvailable("trivy")) {
     out.tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
@@ -45441,7 +45781,9 @@ var init_reviewPr = __esm({
     init_semgrepRun();
     init_gitleaksScan();
     init_trivyRun();
+    init_gosecRun();
     init_bandit();
+    init_gosec();
     init_semgrep();
     init_trivy();
     init_semgrepConfigs();
@@ -45457,7 +45799,7 @@ var init_reviewPr = __esm({
       base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
       head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
       local_only: external_exports.boolean().optional().describe(
-        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM and web-JS packs). Trivy may still go out."
+        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy may still go out."
       ),
       severity_min: SeverityMin,
       force: Force
@@ -45465,7 +45807,7 @@ var init_reviewPr = __esm({
     reviewPr = makeScanTool({
       name: "review_pr",
       title: "Pre-PR diff review",
-      description: "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules) and Bandit on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never \"no files changed\". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch \u2014 the project's gap, not the review's.",
+      description: "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit and gosec on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never \"no files changed\". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch \u2014 the project's gap, not the review's.",
       scan_type: "review_pr",
       category: "security",
       supportsAutoFix: false,
@@ -45499,12 +45841,14 @@ var init_reviewPr = __esm({
           if (unavailable !== null) {
             out.tools_run.push({ name: "semgrep", status: "failed", reason: unavailable });
             if (changed.some(isPython2)) out.tools_run.push({ name: "bandit", status: "failed", reason: unavailable });
+            if (changed.some(isGoSource)) out.tools_run.push({ name: GOSEC, status: "failed", reason: unavailable });
             if (touched.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
           } else {
             const present5 = changed.filter((f) => isFileOnDisk(join51(scanRoot, f)));
             const submodules = await gitlinksAmong(ctx.projectPath, head, changed);
             await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present5, where, submodules });
             if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present5.filter(isPython2) });
+            if (!out.cancelled) await runGosec2(ctx, out, { scanRoot, reportDir, files: present5.filter(isGoSource) });
             if (!out.cancelled && touched.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir, touched });
           }
           if (!out.cancelled) {
@@ -47687,6 +48031,10 @@ var init_runNames = __esm({
       semgrep: scanner("semgrep"),
       "semgrep-wp": scanner("semgrep"),
       bandit: scanner("bandit"),
+      // scan_sast's and review_pr's Go pass (runners/gosecRun.ts), and the
+      // missing_tools entry when the Go toolchain it loads packages through is absent.
+      gosec: scanner("gosec"),
+      go: scanner("gosec"),
       "security-code-scan": scanner("security-code-scan"),
       // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
       "dotnet-analyzers": scanner("dotnet-analyzers"),
@@ -47819,7 +48167,7 @@ var init_runNames = __esm({
       // audit_executive: one entry per sub-tool. `runCompare.ts` reads the
       // sub-scan's own bookkeeping instead whenever the row still exists; these
       // speak for a sub-tool that failed before it wrote one.
-      security_scan_full: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers", "gitleaks", ...TRIVY_FS_KEYS, TRIVY_CONFIG),
+      security_scan_full: scanner("semgrep", "bandit", "gosec", "security-code-scan", "dotnet-analyzers", "gitleaks", ...TRIVY_FS_KEYS, TRIVY_CONFIG),
       quality_check: scanner("eslint", "ruff", "radon", "jscpd", "staticcheck", "budgets"),
       deps_audit: scanner(...TRIVY_FS_KEYS, "npm-audit", "pip-audit", "dotnet-list-package"),
       compliance_check: scanner(...TRIVY_FS_KEYS, "semgrep"),
@@ -47827,7 +48175,7 @@ var init_runNames = __esm({
       // security_scan_full: its own entry for a child that threw, answered an
       // error, or is not registered — the child wrote no bookkeeping of its own.
       // (An audit reads these through the security_scan_full sub-scan.)
-      scan_sast: scanner("semgrep", "bandit", "security-code-scan", "dotnet-analyzers"),
+      scan_sast: scanner("semgrep", "bandit", "gosec", "security-code-scan", "dotnet-analyzers"),
       scan_secrets: scanner("gitleaks"),
       scan_deps: scanner(...TRIVY_FS_KEYS),
       scan_iac: scanner(TRIVY_CONFIG, "zizmor", "actionlint"),
@@ -54805,6 +55153,12 @@ function releaseArchiveInstaller(tool54, os) {
 function windowsReleaseInstaller(tool54) {
   const r = PINNED_RELEASES[tool54];
   const a = r.assets["windows-amd64"];
+  const tarball = a.file.endsWith(".tar.gz");
+  const unpack = tarball ? [
+    "  New-Item -ItemType Directory -Path (Join-Path $tmp 'x') | Out-Null",
+    `  & (Join-Path $env:SystemRoot 'System32\\tar.exe') -xzf $zip -C (Join-Path $tmp 'x') ${tool54}.exe`,
+    `  if ($LASTEXITCODE -ne 0) { throw ('${tool54}: tar.exe could not unpack the archive (exit ' + $LASTEXITCODE + ')') }`
+  ] : ["  Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x')"];
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
@@ -54815,11 +55169,11 @@ function windowsReleaseInstaller(tool54) {
     "$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())",
     "New-Item -ItemType Directory -Path $tmp | Out-Null",
     "try {",
-    `  $zip = Join-Path $tmp '${tool54}.zip'`,
+    `  $zip = Join-Path $tmp '${tool54}${tarball ? ".tar.gz" : ".zip"}'`,
     `  Invoke-WebRequest -UseBasicParsing -Uri '${r.base}/${a.file}' -OutFile $zip`,
     "  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()",
     `  if ($got -ne '${a.sha256}') { throw ('${tool54}: sha256 mismatch, got ' + $got) }`,
-    "  Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x')",
+    ...unpack,
     "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
     "  New-Item -ItemType Directory -Force -Path $bin | Out-Null",
     `  Copy-Item -LiteralPath (Join-Path $tmp 'x\\${tool54}.exe') -Destination (Join-Path $bin '${tool54}.exe') -Force`,
@@ -54882,7 +55236,7 @@ function wpCliCurlInstaller() {
     description: "curl wp-cli.phar \u2192 ~/.local/bin/wp"
   };
 }
-function dotnetSdkHint(humanCommand) {
+function manualHint(humanCommand) {
   return {
     command: "echo",
     args: [humanCommand],
@@ -54931,44 +55285,45 @@ function knownCompromise(toolName, version2) {
   }
   return null;
 }
-var TRIVY_INSTALL_TAG, COSIGN_VERSION, COSIGN_RELEASE_SHA256, SYFT_VERSION, TRIVY_VERSION, GITLEAKS_VERSION, PINNED_RELEASES, TOOL_CATALOG;
+var TRIVY_INSTALL_TAG, COSIGN_VERSION, COSIGN_RELEASE_SHA256, SYFT_VERSION, TRIVY_VERSION, GITLEAKS_VERSION, GOSEC_VERSION, PINNED_RELEASES, TOOL_CATALOG, MANUAL_ONLY_TOOLS;
 var init_installCatalog = __esm({
   "src/runners/installCatalog.ts"() {
     "use strict";
     init_semverCompare();
     init_semgrepRun();
-    TRIVY_INSTALL_TAG = "v0.74.0";
-    COSIGN_VERSION = "3.1.3";
+    TRIVY_INSTALL_TAG = "v0.76.1";
+    COSIGN_VERSION = "3.1.4";
     COSIGN_RELEASE_SHA256 = {
-      "linux-amd64": "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71",
-      "linux-arm64": "c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a",
-      "darwin-amd64": "2347488e5d5b25336644024dfeca5601b190e91197a71a917bda44744aff106c",
-      "darwin-arm64": "5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76"
+      "linux-amd64": "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa",
+      "linux-arm64": "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2",
+      "darwin-amd64": "9d1e4abe2b6be279ed0d2ff706fde1ccd738747c834e3e6d44039c238867334f",
+      "darwin-arm64": "9f9b8cd557cf2e5b3df3373a00baa005a86b02391e3e06dd0ce37b3a1533d3a4"
     };
-    SYFT_VERSION = "1.52.0";
+    SYFT_VERSION = "1.55.0";
     TRIVY_VERSION = TRIVY_INSTALL_TAG.slice(1);
     GITLEAKS_VERSION = "8.30.1";
+    GOSEC_VERSION = "2.30.0";
     PINNED_RELEASES = {
       syft: {
         version: SYFT_VERSION,
         base: `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}`,
         assets: {
-          "linux-amd64": { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: "caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d" },
-          "linux-arm64": { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: "c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706" },
-          "darwin-amd64": { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: "56975f5d7ffa9846a1eaf64330647841b878097bc7e3730cb9325f93add96917" },
-          "darwin-arm64": { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: "014d561b6d13059124155f74a6c5a9a99501f5e209313638dd884f39eb418ee6" },
-          "windows-amd64": { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: "de787a374cf961c56fd7b206b2e183295abba32d0af3cb44d9aef2357ca9eda2" }
+          "linux-amd64": { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d" },
+          "linux-arm64": { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: "929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304" },
+          "darwin-amd64": { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: "e2e5831cbabaec9a36fe65c34755c1113982c842a685edce3ce0b54a0ded8003" },
+          "darwin-arm64": { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: "1217c258bd5eb91ef3189cf22a82e02f9cac07e4ce934350f428e93aff674625" },
+          "windows-amd64": { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: "ada4c9b93af575f479ce80fce6629897272a2d41f300a14bc49bace020767ca2" }
         }
       },
       trivy: {
         version: TRIVY_VERSION,
         base: `https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}`,
         assets: {
-          "linux-amd64": { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a" },
-          "linux-arm64": { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: "b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5" },
-          "darwin-amd64": { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: "472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485" },
-          "darwin-arm64": { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11" },
-          "windows-amd64": { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: "94c40e0696e4b907a74b7b2e1438d5d72ebaca83115817407f568a002d520842" }
+          "linux-amd64": { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" },
+          "linux-arm64": { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: "e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f" },
+          "darwin-amd64": { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: "7aa762eacd582052d053b62dcf972a1ab058abe39a57ccae234ed8894945b6b7" },
+          "darwin-arm64": { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: "11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5" },
+          "windows-amd64": { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: "1051f49cb22d5284f43425f72aad9cda63ca12ceb92e7caa06903490c82dc9bf" }
         }
       },
       gitleaks: {
@@ -54980,6 +55335,17 @@ var init_installCatalog = __esm({
           "darwin-amd64": { file: `gitleaks_${GITLEAKS_VERSION}_darwin_x64.tar.gz`, sha256: "dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709" },
           "darwin-arm64": { file: `gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz`, sha256: "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5" },
           "windows-amd64": { file: `gitleaks_${GITLEAKS_VERSION}_windows_x64.zip`, sha256: "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e" }
+        }
+      },
+      gosec: {
+        version: GOSEC_VERSION,
+        base: `https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}`,
+        assets: {
+          "linux-amd64": { file: `gosec_${GOSEC_VERSION}_linux_amd64.tar.gz`, sha256: "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" },
+          "linux-arm64": { file: `gosec_${GOSEC_VERSION}_linux_arm64.tar.gz`, sha256: "0867994920453070a5d6a713e35921a3058473e5c3bf777fdd5a2d6f95313fda" },
+          "darwin-amd64": { file: `gosec_${GOSEC_VERSION}_darwin_amd64.tar.gz`, sha256: "1b10b496954791f4b57448722f0cb93c0fa4aba24e9d286c0459dfde593e0898" },
+          "darwin-arm64": { file: `gosec_${GOSEC_VERSION}_darwin_arm64.tar.gz`, sha256: "cac8c480673fc179798402b6d86efc12b6bcf11c18bcf377fda02cc55846dd97" },
+          "windows-amd64": { file: `gosec_${GOSEC_VERSION}_windows_amd64.tar.gz`, sha256: "503bdfe6155584f2497ef855846b66406bce5b574ce1a9c7a7bb171aff2caa02" }
         }
       }
     };
@@ -55138,6 +55504,46 @@ var init_installCatalog = __esm({
         default: false
         // only when Python detected
       },
+      gosec: {
+        name: "gosec",
+        // 2.25.0: the taint rules (G701+, since 2.23.0) with the fix for their
+        // hang on packages with many call graphs. Not enforced strictly.
+        version_floor: "2.25.0",
+        probe: { command: "gosec", args: ["-version"] },
+        required_by: ["scan_sast", "security_scan_full", "review_pr"],
+        install: {
+          // The pinned release archive, sha256-checked (see PINNED_RELEASES);
+          // `go install` of the same tag where Go is (the checksum database
+          // verifies the module). gosec needs the Go toolchain to run either way.
+          win32: { release: windowsReleaseInstaller("gosec") },
+          linux: {
+            curl: releaseArchiveInstaller("gosec", "linux"),
+            go: goInstall(`github.com/securego/gosec/v2/cmd/gosec@v${GOSEC_VERSION}`)
+          },
+          darwin: {
+            brew: brewInstall("gosec"),
+            curl: releaseArchiveInstaller("gosec", "darwin"),
+            go: goInstall(`github.com/securego/gosec/v2/cmd/gosec@v${GOSEC_VERSION}`)
+          }
+        },
+        default: false
+        // only when Go is detected
+      },
+      // The Go toolchain gosec loads packages through — like the .NET SDK, never
+      // auto-installed (install_toolchain routes it to manual steps): the
+      // project's go.mod decides which Go it needs.
+      go: {
+        name: "go",
+        version_floor: "1.22.0",
+        probe: { command: "go", args: ["version"] },
+        required_by: ["scan_sast", "security_scan_full", "review_pr"],
+        install: {
+          win32: { winget: manualHint("winget install GoLang.Go") },
+          linux: { apt: manualHint("see https://go.dev/doc/install") },
+          darwin: { brew: manualHint("brew install go") }
+        },
+        default: false
+      },
       jscpd: {
         name: "jscpd",
         version_floor: "3.0.0",
@@ -55213,8 +55619,8 @@ var init_installCatalog = __esm({
         probe: { command: "cosign", args: ["version"] },
         required_by: ["scan_containers"],
         install: {
-          // Verified 2026-09-28: microsoft/winget-pkgs carries Sigstore.Cosign
-          // 3.1.3 and ScoopInstaller/Main carries cosign 3.1.3, both pointing
+          // Verified 2026-10-24: microsoft/winget-pkgs carries Sigstore.Cosign
+          // 3.1.4 and ScoopInstaller/Main carries cosign 3.1.4, both pointing
           // at the official cosign-windows-amd64.exe with the release's sha256.
           // Both take an exact version, so both are pinned.
           win32: {
@@ -55377,9 +55783,9 @@ var init_installCatalog = __esm({
           // dotnet.microsoft.com support policy); .NET 6, which it used to name,
           // left support in November 2024. winget id verified in
           // microsoft/winget-pkgs (manifests/m/Microsoft/DotNet/SDK/10).
-          win32: { winget: dotnetSdkHint("winget install Microsoft.DotNet.SDK.10") },
-          linux: { apt: dotnetSdkHint("see https://learn.microsoft.com/dotnet/core/install/linux") },
-          darwin: { brew: dotnetSdkHint("brew install --cask dotnet-sdk") }
+          win32: { winget: manualHint("winget install Microsoft.DotNet.SDK.10") },
+          linux: { apt: manualHint("see https://learn.microsoft.com/dotnet/core/install/linux") },
+          darwin: { brew: manualHint("brew install --cask dotnet-sdk") }
         },
         default: false
       },
@@ -55410,6 +55816,7 @@ var init_installCatalog = __esm({
         default: false
       }
     };
+    MANUAL_ONLY_TOOLS = { "dotnet-sdk": "the .NET SDK", go: "the Go toolchain" };
   }
 });
 
@@ -55706,13 +56113,14 @@ async function installPerTool(opts) {
       });
       continue;
     }
-    if (toolName === "dotnet-sdk" && opts.os !== "unsupported") {
-      const specs = TOOL_CATALOG["dotnet-sdk"]?.install[opts.os];
+    const manualName = MANUAL_ONLY_TOOLS[toolName];
+    if (manualName !== void 0 && opts.os !== "unsupported") {
+      const specs = TOOL_CATALOG[toolName]?.install[opts.os];
       const first = specs ? Object.values(specs)[0] : void 0;
-      const hint = first?.description ?? "See https://learn.microsoft.com/dotnet/core/install/";
+      const hint = first?.description ?? (toolName === "go" ? "See https://go.dev/doc/install" : "See https://learn.microsoft.com/dotnet/core/install/");
       opts.result.manual_steps.push({
         tool: toolName,
-        instructions: `dev-guardian never auto-installs the .NET SDK. ${hint}`
+        instructions: `dev-guardian never auto-installs ${manualName}. ${hint}`
       });
       continue;
     }
@@ -61992,6 +62400,37 @@ var require_utils = __commonJS({
       }
       return output.join("");
     }
+    function removeDotSegmentsRelative(path3) {
+      if (path3 === "" || path3[0] === "/") {
+        return removeDotSegments(path3);
+      }
+      const segments = path3.split("/");
+      const last = segments.length - 1;
+      const output = [];
+      let trailingDirectory = false;
+      for (let i = 0; i <= last; i++) {
+        const segment = segments[i];
+        if (segment === "." || segment === "..") {
+          if (segment === "..") {
+            if (output.length !== 0 && output[output.length - 1] !== "..") {
+              output.pop();
+            } else {
+              output.push("..");
+            }
+          }
+          trailingDirectory = i === last;
+        } else {
+          output.push(segment);
+        }
+      }
+      if (trailingDirectory && output[output.length - 1] !== "..") {
+        output.push("");
+      }
+      if (output.length === 0 || output[0] === "" || output[0].includes(":")) {
+        output.unshift(".");
+      }
+      return output.join("/");
+    }
     var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
     var HOST_DELIM_RE = /[@/?#:]/g;
     var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
@@ -62252,6 +62691,7 @@ var require_utils = __commonJS({
       encodeFragment,
       escapePreservingEscapes,
       removeDotSegments,
+      removeDotSegmentsRelative,
       isIPv4,
       isUUID,
       normalizeIPv6,
@@ -62475,16 +62915,18 @@ var require_schemes = __commonJS({
 var require_fast_uri = __commonJS({
   "node_modules/fast-uri/index.js"(exports, module) {
     "use strict";
-    var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, serializePathEncoding, normalizeQueryFragmentEncoding, encodeQuery, encodeFragment, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
+    var { normalizeIPv6, removeDotSegments, removeDotSegmentsRelative, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, serializePathEncoding, normalizeQueryFragmentEncoding, encodeQuery, encodeFragment, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
     var { SCHEMES, getSchemeHandler } = require_schemes();
     var VALID_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*$/u;
     var MALFORMED_SCHEME_ERROR = "URI scheme is malformed.";
-    function decodeValidScheme(scheme) {
-      const decodedScheme = unescape(String(scheme));
-      if (!VALID_SCHEME.test(decodedScheme)) {
+    var MALFORMED_HOST_ERROR = "URI host is malformed.";
+    var FORBIDDEN_DOMAIN_HOST_CHARACTER = /[\0-\x20"#/:<>?@[\\\]^`{|}\x7F]/u;
+    function validateScheme(scheme) {
+      const stringScheme = String(scheme);
+      if (!VALID_SCHEME.test(stringScheme)) {
         throw new TypeError(MALFORMED_SCHEME_ERROR);
       }
-      return decodedScheme;
+      return stringScheme;
     }
     function normalize2(uri, options) {
       if (typeof uri === "string") {
@@ -62521,6 +62963,9 @@ var require_fast_uri = __commonJS({
       const resolvedSchemeHandler = getSchemeHandler(options && options.scheme || resolved.scheme);
       const resolvedHost = resolved.host;
       const resolvedHostIsIP = resolvedHost !== void 0 && resolvedHost !== "" && (isIPv4(resolvedHost) || normalizeIPv6(resolvedHost).isIPV6);
+      if (hasForbiddenDomainHost(resolved, options || {}, resolvedSchemeHandler, resolvedHostIsIP)) {
+        throw new Error(MALFORMED_HOST_ERROR);
+      }
       canonicalizeHost(resolved, options || {}, resolvedSchemeHandler, resolvedHostIsIP);
       const encodedASCIIHost = resolvedHost && resolvedHost.indexOf("%") !== -1 && !new RegExp("\\P{ASCII}", "u").test(resolvedHost);
       if (resolved.error && !encodedASCIIHost) {
@@ -62562,14 +63007,15 @@ var require_fast_uri = __commonJS({
             if (relative38.path[0] === "/") {
               target.path = removeDotSegments(relative38.path);
             } else {
-              if ((base2.userinfo !== void 0 || base2.host !== void 0 || base2.port !== void 0) && !base2.path) {
+              const baseHasAuthority = base2.userinfo !== void 0 || base2.host !== void 0 || base2.port !== void 0;
+              if (baseHasAuthority && !base2.path) {
                 target.path = "/" + relative38.path;
               } else if (!base2.path) {
                 target.path = relative38.path;
               } else {
                 target.path = base2.path.slice(0, base2.path.lastIndexOf("/") + 1) + relative38.path;
               }
-              target.path = removeDotSegments(target.path);
+              target.path = base2.scheme === void 0 && !baseHasAuthority && target.path[0] !== "/" ? removeDotSegmentsRelative(target.path) : removeDotSegments(target.path);
             }
             target.query = relative38.query;
           }
@@ -62607,12 +63053,13 @@ var require_fast_uri = __commonJS({
       const options = Object.assign({}, opts);
       const uriTokens = [];
       if (component.scheme) {
-        component.scheme = decodeValidScheme(component.scheme);
+        component.scheme = validateScheme(component.scheme);
       }
       const schemeHandler = getSchemeHandler(options.scheme || component.scheme);
       if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(component, options);
       const hasAuthority = component.userinfo !== void 0 || component.host !== void 0 || component.port !== void 0;
-      const pathNoScheme = !options.skipEscape && component.scheme === void 0 && !hasAuthority;
+      const schemelessReference = (component.scheme === void 0 || options.reference === "suffix") && !hasAuthority;
+      const pathNoScheme = !options.skipEscape && schemelessReference;
       if (component.path !== void 0) {
         if (!options.skipEscape) {
           component.path = serializePathEncoding(component.path, pathNoScheme);
@@ -62621,7 +63068,7 @@ var require_fast_uri = __commonJS({
         }
       }
       if (options.reference !== "suffix" && component.scheme) {
-        component.scheme = decodeValidScheme(component.scheme);
+        component.scheme = validateScheme(component.scheme);
         uriTokens.push(component.scheme, ":");
       }
       const authority = recomposeAuthority(component);
@@ -62637,9 +63084,9 @@ var require_fast_uri = __commonJS({
       if (component.path !== void 0) {
         let s = component.path;
         if (!options.absolutePath && (!schemeHandler || !schemeHandler.absolutePath)) {
-          s = removeDotSegments(s);
+          s = schemelessReference && s[0] !== "/" ? removeDotSegmentsRelative(s) : removeDotSegments(s);
         }
-        if (pathNoScheme) {
+        if (schemelessReference) {
           s = serializePathEncoding(s, true);
         }
         if (authority === void 0 && s[0] === "/" && s[1] === "/") {
@@ -62686,15 +63133,33 @@ var require_fast_uri = __commonJS({
       return hasMalformedPercentEncoding(matches3[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches3[6]) || hasMalformedPercentEncoding(matches3[7]) || hasMalformedPercentEncoding(matches3[8]);
     }
     function canonicalizeHost(parsed, options, schemeHandler, isIP) {
+      if (hasForbiddenDomainHost(parsed, options, schemeHandler, isIP)) {
+        parsed.error = parsed.error || MALFORMED_HOST_ERROR;
+        return true;
+      }
       if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
+        let url2;
         try {
-          parsed.host = new URL("http://" + parsed.host).hostname;
+          url2 = new URL("http://" + parsed.host);
         } catch (e) {
           parsed.error = parsed.error || "Host's domain name can not be converted to ASCII: " + e;
           return true;
         }
+        if (!isHostOnlyURL(url2)) {
+          parsed.error = parsed.error || MALFORMED_HOST_ERROR;
+          return true;
+        }
+        parsed.host = url2.hostname;
       }
       return false;
+    }
+    function hasForbiddenDomainHost(parsed, options, schemeHandler, isIP) {
+      return Boolean(
+        parsed.host && isIP === false && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && FORBIDDEN_DOMAIN_HOST_CHARACTER.test(parsed.host)
+      );
+    }
+    function isHostOnlyURL(url2) {
+      return url2.username === "" && url2.password === "" && url2.port === "" && url2.pathname === "/" && url2.search === "" && url2.hash === "" && url2.hostname !== "";
     }
     function parseWithStatus(uri, opts) {
       const options = Object.assign({}, opts);
@@ -62750,9 +63215,8 @@ var require_fast_uri = __commonJS({
         parsed.query = matches3[7];
         parsed.fragment = matches3[8];
         if (parsed.scheme !== void 0) {
-          const decodedScheme = unescape(parsed.scheme);
-          if (VALID_SCHEME.test(decodedScheme)) {
-            parsed.scheme = decodedScheme.toLowerCase();
+          if (VALID_SCHEME.test(parsed.scheme)) {
+            parsed.scheme = parsed.scheme.toLowerCase();
           } else {
             parsed.error = parsed.error || MALFORMED_SCHEME_ERROR;
             malformedScheme = true;
@@ -62780,7 +63244,7 @@ var require_fast_uri = __commonJS({
             malformedIPLiteral = hasIPLiteralBracket && (!bracketedIPLiteral || ipv6result.error === true);
             parsed.host = isIP ? ipv6result.host : ipv6result.host.toLowerCase();
             if (malformedIPLiteral) {
-              parsed.error = parsed.error || "URI host is malformed.";
+              parsed.error = parsed.error || MALFORMED_HOST_ERROR;
               malformedAuthorityOrPort = true;
             }
           } else {
@@ -62808,7 +63272,7 @@ var require_fast_uri = __commonJS({
           if (!isIP) {
             host = normalizePercentEncoding(host.toLowerCase());
           }
-          parsed.host = reescapeHostDelimiters(host, isIP);
+          parsed.host = isIP || options.scheme !== "null" ? reescapeHostDelimiters(host, isIP) : host;
         }
         if (!schemeHandler || schemeHandler && !schemeHandler.skipNormalize) {
           if (parsed.path) {

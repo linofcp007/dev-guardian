@@ -1,0 +1,52 @@
+{
+	"Golang errors": {
+		"/w/dep/app/main.go": [
+			{
+				"line": 6,
+				"column": 2,
+				"error": "could not import github.com/google/uuid (invalid package name: \"\")"
+			}
+		]
+	},
+	"Issues": [
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "328",
+				"url": "https://cwe.mitre.org/data/definitions/328.html"
+			},
+			"rule_id": "G401",
+			"details": "Use of weak cryptographic primitive",
+			"file": "/w/dep/app/main.go",
+			"code": "8: \n9: func main() { fmt.Println(uuid.New(), md5.Sum(nil)) }\n",
+			"line": "9",
+			"column": "39",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "327",
+				"url": "https://cwe.mitre.org/data/definitions/327.html"
+			},
+			"rule_id": "G501",
+			"details": "Blocklisted import crypto/md5: weak cryptographic primitive",
+			"file": "/w/dep/app/main.go",
+			"code": "3: import (\n4: \t\"crypto/md5\"\n5: \t\"fmt\"\n",
+			"line": "4",
+			"column": "2",
+			"nosec": false,
+			"suppressions": null
+		}
+	],
+	"Stats": {
+		"files": 1,
+		"lines": 9,
+		"nosec": 0,
+		"found": 2
+	},
+	"GosecVersion": "2.30.0"
+}

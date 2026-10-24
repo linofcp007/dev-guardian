@@ -120,10 +120,10 @@ has semgrep && g "✓ Semgrep $(SEMGREP_ENABLE_VERSION_CHECK=0 semgrep --version
 # repositório apt da Aqua serve sempre a mais recente.
 b "=== Trivy ==="
 if ! has trivy; then
-  instala_fixado trivy "https://github.com/aquasecurity/trivy/releases/download/v0.74.0" \
-    trivy_0.74.0_Linux-64bit.tar.gz 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a \
-    trivy_0.74.0_Linux-ARM64.tar.gz b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5 \
-    || r "Falhou Trivy — instala a v0.74.0 à mão (https://github.com/aquasecurity/trivy/releases/tag/v0.74.0)"
+  instala_fixado trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1" \
+    trivy_0.76.1_Linux-64bit.tar.gz c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0 \
+    trivy_0.76.1_Linux-ARM64.tar.gz e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f \
+    || r "Falhou Trivy — instala a v0.76.1 à mão (https://github.com/aquasecurity/trivy/releases/tag/v0.76.1)"
 fi
 has trivy && g "✓ Trivy $(TRIVY_SKIP_VERSION_CHECK=true TRIVY_DISABLE_TELEMETRY=true trivy --version 2>/dev/null | head -1)"
 
@@ -160,10 +160,10 @@ has bandit && g "✓ bandit"
 # Syft (SBOM) — a release fixada, nunca o install.sh do ramo principal.
 b "=== Syft (SBOM) ==="
 if ! has syft; then
-  instala_fixado syft "https://github.com/anchore/syft/releases/download/v1.52.0" \
-    syft_1.52.0_linux_amd64.tar.gz caeedb81fb0491615f1ebd1761e4145d41ee86dd2cc7bf80669f9f5ad9d6133d \
-    syft_1.52.0_linux_arm64.tar.gz c46d5e4c28e12aa4c5becfaa343ef1c7f89045b6b895f2c21d471c62db09c706 \
-    || r "Falhou Syft — instala a v1.52.0 à mão (https://github.com/anchore/syft/releases/tag/v1.52.0)"
+  instala_fixado syft "https://github.com/anchore/syft/releases/download/v1.55.0" \
+    syft_1.55.0_linux_amd64.tar.gz bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d \
+    syft_1.55.0_linux_arm64.tar.gz 929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304 \
+    || r "Falhou Syft — instala a v1.55.0 à mão (https://github.com/anchore/syft/releases/tag/v1.55.0)"
 fi
 has syft && g "✓ Syft"
 

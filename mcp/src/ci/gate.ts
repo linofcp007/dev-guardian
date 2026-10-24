@@ -507,6 +507,10 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
   }
   switch (kind) {
     case 'missing_tool': {
+      // The Go toolchain gosec loads packages through: never installed for you (installCatalog.ts MANUAL_ONLY_TOOLS).
+      if (scanner === 'go') {
+        return 'Install the Go toolchain your go.mod names (https://go.dev/doc/install; on GitHub Actions, actions/setup-go) and put it on PATH, then rerun the scan — install_toolchain never installs it.';
+      }
       const hint = INSTALL_HINT[scanner];
       return hint !== undefined
         ? `Install ${scanner} (\`${hint}\`) and put it on PATH, then rerun the scan.`
@@ -546,6 +550,9 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
       if (/target limit|size limit/i.test(detail)) return "Split the files over Semgrep's 1 MB target limit, or list them in .guardianignore after review.";
       if (/submodule/i.test(detail)) return 'Scan each submodule as a project of its own, or list it in .guardianignore after review.';
       if (/did not load/i.test(detail)) return 'Fix or remove the rule the detail names, then rerun the scan.';
+      if (/\b(Type error|Package not loaded) on /.test(detail)) {
+        return "Make each named Go package build where the scan runs — the Go version go.mod names, its modules downloaded (`go mod download`) — then rerun: gosec skipped the SSA and taint rules of every package that does not type-check.";
+      }
       return 'Read the detail; docs/ci.md says what each gap means and what clears it.';
   }
 }

@@ -103,6 +103,8 @@ function bookkeepingNames(): string[] {
     ...collect(/judgeTrivyConfig\(\{\s*name:\s*'([^']+)'/g),
     // gitleaks' passes.
     ...collect(/export const GITLEAKS_[A-Z_]+\s*=\s*'([^']+)'/g),
+    // gosec's pass and the Go toolchain's gap (runners/gosecRun.ts).
+    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN)\s*=\s*'([^']+)'/g),
     // judgeTrivyFs' walk gap: `export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk'`.
     ...collect(/export const TRIVY_[A-Z_]+_GAP\s*=\s*'([^']+)'/g),
     // audit_executive: one entry per sub-tool.
@@ -156,6 +158,9 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/gitleaksScan.ts:name': 'a parameter only ever given a GITLEAKS_* constant',
   'runners/gitleaksScan.ts:entry.name': "noteSubmodules: the name of one of this scan's own passes (GITLEAKS_*)",
   'runners/fileBatchScan.ts:opts.name': "semgrepOnFiles' and banditOnFiles' `name: '…'`",
+  'runners/gosecRun.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
+  'tools/reviewPr.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
+  'tools/reviewPr.ts:name': "runners/gosecRun.ts#gosecOnPackages' `missing`: GOSEC or GO_TOOLCHAIN",
   'tools/depsAudit.ts:opts.command': "tryNativeAudit's `command: '…'`",
   'tools/qualityCheck.ts:name': "notInstalled's and record's name argument",
   'tools/qualityCheck.ts:opts.name': "runOnFileBatches' `name: '…'` (ruff, radon, eslint)",
@@ -285,7 +290,8 @@ describe('runNames: the pairs that do not share a name', () => {
     ['hadolint', ['hadolint']],
     ['docker-compose', ['docker-compose']],
     ['budgets', ['budgets']],
-    ['scan_sast', ['semgrep', 'bandit', 'security-code-scan', 'dotnet-analyzers']],
+    ['scan_sast', ['semgrep', 'bandit', 'gosec', 'security-code-scan', 'dotnet-analyzers']],
+    ['go', ['gosec']],
     ['scan_iac', [TRIVY_CONFIG, 'zizmor', 'actionlint']],
     ['zizmor', ['zizmor']],
     ['actionlint', ['actionlint']],

@@ -1,5 +1,5 @@
 /**
- * Real SARIF logs from Semgrep, CodeQL, Trivy and gitleaks through
+ * Real SARIF logs from Semgrep, CodeQL, Trivy, gitleaks and Brakeman through
  * `import_sarif` — the `sarif-import` feature's test plan T-21 (SC-001).
  *
  * The logs in `test/fixtures/sarif/real/` were produced by the tools
@@ -14,7 +14,9 @@
  *   - gitleaks with `--no-git`: every `partialFingerprints` value is "";
  *   - Trivy: `ROOTPATH` names a CI checkout that is not this project;
  *   - CodeQL: two runs in one log, `%SRCROOT%` with no base defined, a
- *     file-level result with no region, and an empty `partialFingerprints`.
+ *     file-level result with no region, and an empty `partialFingerprints`;
+ *   - Brakeman: no `partialFingerprints`, `%SRCROOT%` declared without a URI,
+ *     and a result on `Gemfile.lock` beside the controller's.
  *
  * SC-001: each imports with 0 skipped, and every result that points into the
  * project is stored with its file — and its line, when it has one. Results are
@@ -62,11 +64,11 @@ function expectedKeys(results: readonly RawResult[]): string[] {
   return [...new Set(keys)].sort();
 }
 
-describe('T-21 real logs of Semgrep, CodeQL, Trivy and gitleaks (SC-001)', () => {
-  it('T-21 the fixtures hold a log of each of the four tools', () => {
+describe('T-21 real logs of Semgrep, CodeQL, Trivy, gitleaks and Brakeman (SC-001)', () => {
+  it('T-21 the fixtures hold a log of each of the five tools', () => {
     const tools = LOGS.map((f) => (JSON.parse(readFileSync(join(REAL, f), 'utf8')) as RawLog).runs.map((run) => run.tool.driver.name).join(','));
     const all = tools.join(',');
-    for (const name of [/semgrep/i, /codeql|lgtm/i, /trivy/i, /gitleaks/i]) expect(all).toMatch(name);
+    for (const name of [/semgrep/i, /codeql|lgtm/i, /trivy/i, /gitleaks/i, /brakeman/i]) expect(all).toMatch(name);
   });
 
   it.each(LOGS)('T-21 %s: 0 skipped, and every result in the project stored with its file and line', async (name) => {

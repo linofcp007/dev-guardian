@@ -214,10 +214,13 @@ describe('check_toolchain', () => {
     expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
     // 20, not 18: Task 21 added zizmor and actionlint (scan_iac's GitHub
     // Actions workflow scanners) to the catalogue; 21 with cosign
-    // (scan_containers' image signature and provenance check).
-    expect(r.summary.total_catalogued).toBe(21);
-    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(21);
+    // (scan_containers' image signature and provenance check); 23 with gosec
+    // and the Go toolchain it loads packages through (scan_sast on Go).
+    expect(r.summary.total_catalogued).toBe(23);
+    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(23);
     expect(commands.has('cosign')).toBe(true);
+    expect(commands.has('gosec')).toBe(true);
+    expect(commands.has('go')).toBe(true);
   });
 
   it('reads each version correctly, including the outputs that broke the bash probe', async () => {
@@ -327,7 +330,7 @@ describe('check_toolchain', () => {
     expect(r.tools.find((t) => t.name === 'docker')).toMatchObject({ installed: true, version: '29.8.0' });
     // Informational entries never count toward the catalogue summary.
     // 21, not 18 — see the comment on the other total_catalogued assertion above.
-    expect(r.summary.installed + r.summary.missing).toBe(21);
+    expect(r.summary.installed + r.summary.missing).toBe(23);
   });
 });
 

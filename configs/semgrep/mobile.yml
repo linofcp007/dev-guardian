@@ -1,0 +1,211 @@
+# dev-guardian Semgrep config mobile.
+# Configuração de apps Android e iOS que o registo da Semgrep não vê: o
+# manifesto Android, a network security config e o Info.plist (medido em
+# 2026-10-24 com --config auto: do registo só dispara
+# `java.android.security.exported_activity`, por isso as activities
+# exportadas ficam com essa regra e este pack trata dos services, receivers e
+# providers). Corre dentro do `scan_sast` como o `llm.yml` e o `web-js.yml`
+# (ficheiro do plugin, também no `local_only`).
+#
+#   | regra                              | CWE      | ficheiro                         |
+#   | ---------------------------------- | -------- | -------------------------------- |
+#   | mobile-android-debuggable          | CWE-489  | AndroidManifest.xml              |
+#   | mobile-android-allow-backup        | CWE-530  | AndroidManifest.xml              |
+#   | mobile-android-cleartext-traffic   | CWE-319  | AndroidManifest.xml              |
+#   | mobile-android-exported-component  | CWE-926  | AndroidManifest.xml              |
+#   | mobile-android-nsc-cleartext       | CWE-319  | res/xml/*.xml (network security) |
+#   | mobile-android-nsc-user-ca         | CWE-295  | res/xml/*.xml (network security) |
+#   | mobile-ios-ats-arbitrary-loads     | CWE-319  | Info.plist                       |
+#   | mobile-ios-ats-insecure-exception  | CWE-319  | Info.plist                       |
+#
+# Todas as regras são `generic` com `paths.include`, de propósito: uma regra
+# `xml` faria a Semgrep analisar todos os `.xml` do projeto (pom.xml,
+# layouts, .csproj), e um ficheiro que ela não consiga ler é cobertura
+# parcial no `scan_sast` (exit 2 no CI). Em modo generic só os ficheiros
+# incluídos são lidos, e nunca falham a análise.
+#
+# O QUE O PACK NAO VÊ (lacunas conhecidas):
+#   - O texto e lido como texto: um atributo dentro de um comentário XML
+#     (`<!-- android:debuggable="true" -->`) dispara. O manifesto final que o
+#     Gradle junta (bibliotecas, `buildTypes`, `manifestPlaceholders`) não é
+#     lido: `android:debuggable="${debug}"` não dispara, nem o debuggable que o
+#     build `debug` liga por omissão (esse nunca vai para a loja).
+#   - `allowBackup` ausente vale `true` no Android, mas so o valor escrito
+#     dispara (a ausência daria um achado em quase todas as apps).
+#   - Um componente sem `android:exported` (o valor por omissão antes do
+#     Android 12, com intent-filter) não dispara; a partir do Android 12
+#     (API 31) o atributo e obrigatório.
+#   - Um `android:permission` no `<application>` protege todos os
+#     componentes que não tenham a sua: aqui o componente exportado sem
+#     permissão própria dispara mesmo assim (falso positivo conhecido).
+#   - Um provider com `readPermission` E `writePermission` não dispara; com
+#     so uma das duas, sim (a outra direção fica aberta).
+#   - A network security config e lida em qualquer `res/xml/*.xml`: o nome
+#     vem do manifesto (`android:networkSecurityConfig`), que não é seguido.
+#     `<certificates src="user">` dentro de `<debug-overrides>` (so builds
+#     debuggable) não dispara.
+#   - Um Info.plist binário (compilado) não é texto e não é lido; o pack lê
+#     `Info.plist` e `<Alvo>-Info.plist` em XML, a forma do repositório.
+
+rules:
+  - id: mobile-android-debuggable
+    metadata:
+      cwe:
+        - "CWE-489: Active Debug Code"
+      owasp:
+        - "A02:2025 - Security Misconfiguration"
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "**/AndroidManifest.xml"
+    message: >-
+      `android:debuggable="true"` no manifesto: qualquer pessoa com o
+      aparelho pode ligar um depurador a app, ler a memória e correr código
+      no processo dela (CWE-489). Retirar o atributo — o build `debug` do
+      Gradle já liga a depuração so nesse build.
+    pattern-regex: android:debuggable\s*=\s*["']true["']
+
+  - id: mobile-android-allow-backup
+    metadata:
+      cwe:
+        - "CWE-530: Exposure of Backup File to an Unauthorized Control Sphere"
+    languages: [generic]
+    severity: INFO
+    paths:
+      include:
+        - "**/AndroidManifest.xml"
+    message: >-
+      `android:allowBackup="true"`: os dados privados da app entram nas
+      cópias de segurança (na nuvem e entre aparelhos) e saem do controlo da
+      app (CWE-530). Se a app guarda tokens ou dados pessoais, pôr
+      `android:allowBackup="false"` ou excluí-los com
+      `android:dataExtractionRules` / `android:fullBackupContent`.
+    pattern-regex: android:allowBackup\s*=\s*["']true["']
+
+  - id: mobile-android-cleartext-traffic
+    metadata:
+      cwe:
+        - "CWE-319: Cleartext Transmission of Sensitive Information"
+      owasp:
+        - "A04:2025 - Cryptographic Failures"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/AndroidManifest.xml"
+    message: >-
+      `android:usesCleartextTraffic="true"`: a app aceita HTTP sem TLS em
+      todos os domínios, e quem estiver na mesma rede lê e altera o tráfego
+      (CWE-319). Usar HTTPS; se um domínio precisa mesmo de HTTP, abri-lo so a
+      ele numa network security config (`<domain-config
+      cleartextTrafficPermitted="true">`).
+    pattern-regex: android:usesCleartextTraffic\s*=\s*["']true["']
+
+  - id: mobile-android-exported-component
+    metadata:
+      cwe:
+        - "CWE-926: Improper Export of Android Application Components"
+      owasp:
+        - "A08:2025 - Software or Data Integrity Failures"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/AndroidManifest.xml"
+    message: >-
+      Service, receiver ou provider com `android:exported="true"` e sem
+      `android:permission`: qualquer app do aparelho o pode iniciar, enviar-lhe
+      broadcasts ou ler e escrever os dados do provider (CWE-926). Pôr
+      `android:exported="false"` se so a própria app o usa; senão exigir uma
+      permissão (`android:permission`, com `protectionLevel="signature"` para
+      apps do mesmo autor).
+    # Do `<` do elemento ao seu `>` (`[^>]*`): exportado e sem permissão
+    # própria. Um provider com readPermission E writePermission fica de fora;
+    # com so uma, não (lookaheads, PCRE).
+    pattern-regex: >-
+      <(?:service|receiver|provider)\b(?![^>]*\bandroid:permission\s*=)(?!(?=[^>]*\bandroid:readPermission\s*=)(?=[^>]*\bandroid:writePermission\s*=))[^>]*\bandroid:exported\s*=\s*["']true["']
+
+  - id: mobile-android-nsc-cleartext
+    metadata:
+      cwe:
+        - "CWE-319: Cleartext Transmission of Sensitive Information"
+      owasp:
+        - "A04:2025 - Cryptographic Failures"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/res/xml/*.xml"
+    message: >-
+      A network security config permite HTTP sem TLS
+      (`cleartextTrafficPermitted="true"`): quem estiver na mesma rede lê e
+      altera esse tráfego (CWE-319). Usar HTTPS; um `<domain-config>` aberto
+      deve nomear so os domínios que não têm TLS (nunca na `<base-config>`).
+    pattern-regex: \bcleartextTrafficPermitted\s*=\s*["']true["']
+
+  - id: mobile-android-nsc-user-ca
+    metadata:
+      cwe:
+        - "CWE-295: Improper Certificate Validation"
+      owasp:
+        - "A07:2025 - Authentication Failures"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/res/xml/*.xml"
+    message: >-
+      A network security config confia nas autoridades de certificação que o
+      utilizador instalou (`<certificates src="user">`): um CA instalado no
+      aparelho (por um proxy, um MDM ou malware) intercepta o TLS da app
+      (CWE-295). Confiar so nas do sistema; para testar com um proxy, pôr esta
+      linha dentro de `<debug-overrides>`.
+    patterns:
+      - pattern-regex: <certificates\s+[^>]*\bsrc\s*=\s*["']user["']
+      # So nos builds debuggable: o Android ignora `<debug-overrides>` nos outros.
+      # O `...` do padrão generic casa também zero atributos: `<debug-overrides>`
+      # sem nada cabe aqui (a ablação mostrou um segundo padrão sem `...`
+      # redundante com este, e foi apagado).
+      - pattern-not-inside: |
+          <debug-overrides ...>
+          ...
+          </debug-overrides>
+
+  - id: mobile-ios-ats-arbitrary-loads
+    metadata:
+      cwe:
+        - "CWE-319: Cleartext Transmission of Sensitive Information"
+      owasp:
+        - "A04:2025 - Cryptographic Failures"
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "**/Info.plist"
+        - "**/*-Info.plist"
+    message: >-
+      O App Transport Security está desligado (`NSAllowsArbitraryLoads`,
+      `...InWebContent` ou `...ForMedia` a `true`): a app aceita HTTP sem TLS
+      e certificados fracos em todos os domínios (CWE-319). Usar HTTPS; se um
+      domínio precisa mesmo de HTTP, abri-lo so a ele em `NSExceptionDomains`.
+    pattern-regex: <key>\s*NSAllowsArbitraryLoads(?:InWebContent|ForMedia)?\s*</key>\s*<true\s*/>
+
+  - id: mobile-ios-ats-insecure-exception
+    metadata:
+      cwe:
+        - "CWE-319: Cleartext Transmission of Sensitive Information"
+      owasp:
+        - "A04:2025 - Cryptographic Failures"
+    languages: [generic]
+    severity: INFO
+    paths:
+      include:
+        - "**/Info.plist"
+        - "**/*-Info.plist"
+    message: >-
+      Um domínio de `NSExceptionDomains` aceita HTTP sem TLS
+      (`NSExceptionAllowsInsecureHTTPLoads` a `true`): esse tráfego pode ser
+      lido e alterado na rede (CWE-319). Confirmar que o domínio não leva
+      dados de utilizadores, ou servi-lo por HTTPS.
+    pattern-regex: <key>\s*NS(?:Temporary)?ExceptionAllowsInsecureHTTPLoads\s*</key>\s*<true\s*/>

@@ -220,6 +220,24 @@ const BANDIT_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A10:2025': rules({ python: cell(3, 'CWE-703') }),
 };
 
+/**
+ * gosec 2.30.0 (`issue/issue.go` `ruleToCWE`: 62 rules, each one CWE),
+ * counted with {@link countRuleReach} as one Go rule per entry, measured
+ * 2026-10-24. Go only.
+ */
+const GOSEC_RULES: Partial<Record<Owasp2025Id, Reach>> = {
+  'A01:2025': rules({ go: cell(15, 6) }),
+  'A02:2025': rules({ go: cell(1, 'CWE-614') }),
+  'A04:2025': rules({ go: cell(12, 4) }),
+  'A05:2025': rules({ go: cell(10, 6) }),
+  'A06:2025': rules({ go: cell(2, 2) }),
+  'A07:2025': rules({ go: cell(5, 4) }),
+  'A08:2025': rules({ go: cell(1, 'CWE-502') }),
+  'A09:2025': rules({ go: cell(1, 'CWE-117') }),
+  // G104 (unchecked errors), CWE-703 — a class MITRE discourages for mapping.
+  'A10:2025': rules({ go: cell(1, 'CWE-703') }),
+};
+
 /** configs/semgrep/bugfix-*.yml, recounted by packTaxonomy.test.ts. */
 const BUGFIX_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A06:2025': rules({ javascript: cell(1, 'CWE-362'), typescript: cell(1, 'CWE-362') }),
@@ -269,6 +287,15 @@ export const OWASP_DETECTORS: readonly OwaspDetector[] = [
     reach: BANDIT_RULES,
     basis: "Bandit's own CWE assignments across its plugins and blacklists, mapped with OWASP's CWE list.",
     measured: 'Bandit 1.9.4, 2026-09-28',
+  },
+  {
+    id: 'gosec',
+    label: 'gosec (scan_sast, Go)',
+    runs: ['gosec'],
+    scanTypes: ['sast', 'security_full', 'review_pr'],
+    reach: GOSEC_RULES,
+    basis: "gosec's own rule-to-CWE table (one CWE per rule), mapped with OWASP's CWE list.",
+    measured: 'gosec 2.30.0, 2026-10-24',
   },
   {
     id: 'bugfix-packs',

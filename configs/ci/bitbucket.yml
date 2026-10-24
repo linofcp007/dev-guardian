@@ -35,11 +35,14 @@
 #      gate `hasRootDotnetSignal` applies on the GitHub template — a root
 #      .csproj/.fsproj/.sln/.slnx); this template does NOT install it
 #      (Microsoft's own dotnet-install.sh has no per-release checksum this
-#      task could verify the way it did for the three Go binaries below) —
+#      task could verify the way it did for the Go binaries below) —
 #      a .NET project needs `dotnet` on the image or PATH already, or
 #      `dev-guardian scan` will report `dotnet-sdk` as a named gap and the
 #      pipeline's own gate will exit 2 (incomplete scan, never a silent
-#      pass) until it does.
+#      pass) until it does. A Go project likewise needs the Go
+#      toolchain gosec loads its packages through (`go` on PATH, at the
+#      version its go.mod names — Debian's own `golang` is too old for
+#      most), or `dev-guardian scan` reports `go` as a named gap and exits 2.
 #   3. Clones dev-guardian itself at a pinned release tag, resolved to its
 #      exact commit SHA when this pipeline was GENERATED (ci-init: `git
 #      ls-remote`/a local tag lookup) and verified again with `git
@@ -58,16 +61,17 @@
 #      distribution) but its RUNTIME dependencies (execa, zod, yaml, the
 #      MCP SDK) still need installing once per run.
 #   5. Installs the scanner binaries `dev-guardian scan` drives — Trivy,
-#      gitleaks and actionlint — each pinned by exact version and verified
+#      gitleaks, actionlint and gosec — each pinned by exact version and verified
 #      against a sha256 fetched from that tool's own GitHub release (never
 #      "latest"), downloaded and extracted into a SCRATCH directory under
 #      `/tmp`, never into this checkout (an earlier version wrote the
 #      downloaded tarballs and extracted binaries straight into the working
 #      directory, which gitleaks' own working-tree pass then saw as
 #      untracked files well over its size limit — a self-inflicted coverage
-#      gap on every run). bandit is installed unconditionally too (cheap;
-#      scan_sast only attempts it at all on a repo with Python files, but a
-#      template cannot know that in advance). Semgrep and zizmor are
+#      gap on every run). gosec too, the same way, and bandit by version —
+#      both unconditionally (cheap; scan_sast only attempts each on a repo
+#      with Go or Python files, but a template cannot know that in
+#      advance). Semgrep and zizmor are
 #      Python-distributed (pipx); pip verifies each downloaded wheel's hash
 #      against what PyPI's own index recorded for that exact version — real
 #      integrity, weaker than `--require-hashes` against a pinned
@@ -135,6 +139,7 @@ definitions:
             install_checked trivy "{{TRIVY_URL}}" "{{TRIVY_SHA256}}" "{{TRIVY_MEMBER}}"
             install_checked gitleaks "{{GITLEAKS_URL}}" "{{GITLEAKS_SHA256}}" "{{GITLEAKS_MEMBER}}"
             install_checked actionlint "{{ACTIONLINT_URL}}" "{{ACTIONLINT_SHA256}}" "{{ACTIONLINT_MEMBER}}"
+            install_checked gosec "{{GOSEC_URL}}" "{{GOSEC_SHA256}}" "{{GOSEC_MEMBER}}"
           - pipx install "bandit[toml]=={{BANDIT_VERSION}}"
           - pipx install "semgrep=={{SEMGREP_VERSION}}"
           - pipx install "zizmor=={{ZIZMOR_VERSION}}"

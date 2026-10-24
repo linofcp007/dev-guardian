@@ -438,14 +438,14 @@ describe('compliance_evidence', () => {
     expect(section(csf, EVIDENCED('NIST CSF 2.0'))).toMatch(/- PR\.DS \(Data Security\): via A04:2025 \(tested\)/);
   });
 
-  it('a Go project whose only scan is compliance_check: the RGPD pack has no Go rule, so A01 and A09 are NOT COVERED', async () => {
+  it('a Rust project whose only scan is compliance_check: the RGPD pack has no Rust rule, so A01 and A09 are NOT COVERED', async () => {
     const plugin = makePlugin();
-    const project = tempProject({ 'go.mod': 'module x\n', 'main.go': 'log.Printf("%s", user.Email)\n', 'web/index.html': '<p/>' });
+    const project = tempProject({ 'Cargo.toml': '[package]\nname = "x"\n', 'src/main.rs': 'log::info!("{}", user.email);\n', 'web/index.html': '<p/>' });
     seedScan(plugin, { id: 'G-COMP', type: 'compliance', project, tools_run: [{ name: 'semgrep-rgpd', status: 'ok' }, { name: 'trivy', status: 'ok' }] });
     const md = await evidence(plugin, project, 'owasp-top10-2025');
     const missing = section(md, MISSING('OWASP Top 10:2025'));
     expect(missing).toMatch(/- A01:2025 /);
-    expect(missing).toMatch(/- A09:2025 [^\n]*no scanner dev-guardian runs has rules for go/);
+    expect(missing).toMatch(/- A09:2025 [^\n]*no scanner dev-guardian runs has rules for rust/);
     expect(section(md, EVIDENCED('OWASP Top 10:2025'))).toContain('(none');
   });
 
