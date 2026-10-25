@@ -48,13 +48,13 @@ import { existsSync } from 'node:fs';
 import { listProjectDir, projectPathKind } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import { resolveConfigsDir } from '../platform/configsDir.js';
-import { semgrepExcludeArgs } from '../platform/guardianIgnore.js';
+import { semgrepExcludeArgs, trivySkipArgs, type ProjectExclusions } from '../platform/guardianIgnore.js';
 import { checkSemgrepReport } from '../runners/semgrepReport.js';
 import { runSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { runTrivy, trivyFailureReason, withHonoured } from '../runners/trivyRun.js';
+import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { Force, ProjectPath } from '../schemas.js';
 import {
   asArray,
@@ -321,7 +321,15 @@ interface LicenseSummaryEntry {
   risk: 'high' | 'medium' | 'low';
 }
 
-function summariseLicenses(raw: string): {
+/**
+ * Each licence and its packages. A licence found in a file `.guardianignore`
+ * excludes is left out, as its finding is (the factory's result filter): the
+ * summary used to name the licences of a manifest whose findings were dropped.
+ */
+function summariseLicenses(
+  raw: string,
+  exclusions: Pick<ProjectExclusions, 'ignores'> | null,
+): {
   licenses_summary: LicenseSummaryEntry[];
   risky_licenses: LicenseSummaryEntry[];
 } {
@@ -337,6 +345,8 @@ function summariseLicenses(raw: string): {
       const name = getString(lic, 'Name');
       const pkg = getString(lic, 'PkgName') ?? '(unknown)';
       if (!name) continue;
+      const file = getString(lic, 'FilePath') ?? getString(result, 'Target');
+      if (exclusions !== null && file !== undefined && exclusions.ignores(file.replace(/\\/g, '/'))) continue;
       let pkgs = byLicense.get(name);
       if (!pkgs) {
         pkgs = new Set();
@@ -401,12 +411,14 @@ registerToolModule(
         risky_licenses: [],
       };
 
+      let manifestGaps: TrivyFsJudgement['gaps'] = [];
       const trivyBin = await scannerAvailable('trivy');
       if (trivyBin) {
         const outFile = join(reportDir, 'licenses.json');
         // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
+        // `.guardianignore`'s plain paths skipped natively, as scan_deps does.
         const result = await runTrivy({
-          args: ['fs', '--scanners', 'license', '--format', 'json', '--output', outFile, '--quiet'],
+          args: ['fs', '--scanners', 'license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
           target: ctx.projectPath,
           workDir: reportDir,
           ignoreFrom: ctx.projectPath,
@@ -417,16 +429,17 @@ registerToolModule(
         const raw = readJsonSafe(outFile);
         if (raw) {
           parser_inputs.push({ parser: trivyParser, input: raw });
-          licensesSummary = summariseLicenses(raw);
+          licensesSummary = summariseLicenses(raw, ctx.exclusions);
         }
-        tools_run.push(
-          withHonoured(
-            result.outcome === 'completed'
-              ? { name: 'trivy', status: 'ok' }
-              : { name: 'trivy', status: 'failed', reason: trivyFailureReason(result) },
-            result,
-          ),
-        );
+        // scan_deps' judgement (review I2): Trivy's JSON lists each lock it
+        // read as a `lang-pkgs` Result under `--scanners license` too (0.74.0,
+        // measured), and a package.json with no lock as nothing at all — so
+        // an exit 0 alone read `risky_licenses: []`, coverage full, over a
+        // tree scan_deps calls a named gap.
+        const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+        tools_run.push(judged.toolRun);
+        missing_tools.push(...judged.missing);
+        manifestGaps = judged.gaps;
       } else {
         tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('trivy');
@@ -447,6 +460,7 @@ registerToolModule(
           licenses_summary: licensesSummary.licenses_summary,
           risky_licenses: licensesSummary.risky_licenses,
           policy_documents_found,
+          ...(manifestGaps.length > 0 ? { manifest_coverage_gaps: manifestGaps } : {}),
         },
       };
     },

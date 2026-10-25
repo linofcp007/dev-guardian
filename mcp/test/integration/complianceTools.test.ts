@@ -143,6 +143,64 @@ describe('compliance_check', () => {
     expect(r.risky_licenses.some((e) => /AGPL/i.test(e.license))).toBe(true);
   });
 
+  /** Trivy on PATH, nothing else, writing `report` wherever it is told; returns each call's argv. */
+  function trivyWrites(report: unknown): string[][] {
+    const calls: string[][] = [];
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'trivy' ? '/fake/bin/trivy' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const args = opts.args ?? [];
+      calls.push([...args]);
+      const out = args[args.indexOf('--output') + 1];
+      if (args.includes('--output') && out !== undefined) writeFileSync(out, JSON.stringify(report), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    return calls;
+  }
+
+  // Trivy 0.74.0, measured: `fs --scanners license` over a package.json with
+  // no lock exits 0 with no `Results` at all. Judged by its exit alone, that
+  // was `ok`, `risky_licenses: []`, coverage full — where scan_deps calls the
+  // same tree a named gap.
+  it('a manifest Trivy read nothing for is a named gap, never a clean licence result', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"y","dependencies":{"left-pad":"1.3.0"}}\n', 'utf8');
+    trivyWrites({ SchemaVersion: 2, ArtifactType: 'filesystem' });
+    const r = okResult<{ tools_run: ToolRun[]; missing_tools: string[]; coverage: string; risky_licenses: unknown[] }>(
+      await getTool('compliance_check').handler({ project_path: project }, makePlugin(project)),
+    );
+    expect(r.tools_run.find((t) => t.name === 'trivy')).toMatchObject({ status: 'skipped', reason: 'no_supported_manifest' });
+    expect(r.missing_tools).toContain('trivy');
+    expect(r.coverage).not.toBe('full');
+  });
+
+  // The findings of a `.guardianignore`d manifest were dropped, while its
+  // licences still reached licenses_summary / risky_licenses — and Trivy was
+  // never told to skip it.
+  it("leaves a .guardianignore'd manifest out of Trivy's run and of the licence summary", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}\n', 'utf8');
+    writeFileSync(join(project, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}\n', 'utf8');
+    mkdirSync(join(project, 'vendored'));
+    writeFileSync(join(project, 'vendored', 'composer.json'), '{}\n', 'utf8');
+    writeFileSync(join(project, 'vendored', 'composer.lock'), '{"packages":[]}\n', 'utf8');
+    writeFileSync(join(project, '.guardianignore'), 'vendored/\n', 'utf8');
+    const lic = (target: string, type: string, pkg: string, name: string) => [
+      { Target: target, Class: 'lang-pkgs', Type: type, Packages: [{ Name: pkg, Version: '1.0.0', Licenses: [name] }] },
+      { Target: target, Class: 'license', Licenses: [{ Severity: 'LOW', PkgName: pkg, FilePath: target, Name: name }] },
+    ];
+    const calls = trivyWrites({
+      SchemaVersion: 2,
+      Results: [...lic('package-lock.json', 'npm', 'left-pad', 'MIT'), ...lic('vendored/composer.lock', 'composer', 'gpl/lib', 'GPL-3.0-only')],
+    });
+    const r = okResult<{ licenses_summary: Array<{ license: string }>; risky_licenses: unknown[]; coverage: string }>(
+      await getTool('compliance_check').handler({ project_path: project }, makePlugin(project)),
+    );
+    const trivy = calls.find((a) => a.includes('license'));
+    expect(trivy?.join(' ')).toContain('--skip-dirs vendored');
+    expect(r.licenses_summary.map((e) => e.license)).toEqual(['MIT']);
+    expect(r.risky_licenses).toEqual([]);
+  });
+
   it('detects PRIVACY.md, TERMS.md, and SECURITY.md at the project root', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'PRIVACY.md'), '# Privacy', 'utf8');
