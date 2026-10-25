@@ -8,6 +8,8 @@ version bump.
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-10-25
+
 `scan_sast` runs its scanners side by side and adds SpotBugs with FindSecBugs over compiled Java and Kotlin;
 `quality_check` adds detekt for Kotlin and RuboCop for Ruby. Bandit now reads Python files at paths too long for
 Windows, the GitLab and Bitbucket templates move to Debian trixie with cppcheck, and `install_toolchain`'s Windows
