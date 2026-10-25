@@ -11,7 +11,8 @@
  *     to read the single latest completed scan in the WHOLE database, so an
  *     SBOM generated after a SAST scan scored the project as clean, and any
  *     other project's scan answered for this one;
- *   - the newest usable deps-flavoured scan's active CVEs, weighted by CISA
+ *   - the newest usable deps-flavoured scan's active CVEs (a suppressed
+ *     one's out, `openSet.ts#unsuppressedCves`), weighted by CISA
  *     KEV / FIRST EPSS (Task 19, `intel/enrich.ts`) — cached 24h, timeout-
  *     bounded, `GUARDIAN_OFFLINE=1` skips it. A CVE the network could not
  *     measure this call contributes NO exploitability bonus (never a
@@ -33,7 +34,7 @@
 
 import type { PluginContext } from '../context.js';
 import { scoreRisk } from '../dashboard/risk.js';
-import { findLatestUsable, openSetForProject } from '../history/openSet.js';
+import { findLatestUsable, openSetForProject, unsuppressedCves } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
 import { isUncorrelatedFinding } from '../intel/rank.js';
 import type { CveIntelResult } from '../intel/types.js';
@@ -73,7 +74,8 @@ async function handler(
   // CVEs — the newest deps-flavoured scan that actually measured dependencies
   // (a security_full run is judged on its trivy half only).
   const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' });
-  const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
+  // Suppressions out, as from the findings: a VEX not_affected CVE is not active.
+  const cves = cveSource.scan ? unsuppressedCves(storage, projectPath, cveSource.scan.scan_id, now) : [];
   const cveIntel = await enrichCveIntel(storage, cves.map((c) => c.cve_id));
   const cveIntelCoverage = summariseCveIntel(cves, cveIntel, open.findings);
 

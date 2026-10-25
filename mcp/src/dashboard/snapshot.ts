@@ -49,6 +49,7 @@ import {
   latestStateScan,
   openSetForProject,
   suppressionMatcher,
+  unsuppressedCves,
   type OpenSet,
 } from '../history/openSet.js';
 import { classifyDiff, compareScansFor } from '../history/runCompare.js';
@@ -128,7 +129,8 @@ export function buildSnapshot(
 
   const findings = buildFindingsSummary(openFindings, truncation, owasp);
 
-  const cveItems: Cve[] = cveSourceScan ? storage.cves.listActive(cveSourceScan.scan_id) : [];
+  // Suppressions out, as from the findings: a VEX not_affected CVE is not active.
+  const cveItems: Cve[] = cveSourceScan ? unsuppressedCves(storage, projectPath, cveSourceScan.scan_id, now) : [];
   const cves = buildCveSummary(cveItems);
 
   const allSuppressions = storage.suppressions.listAll();

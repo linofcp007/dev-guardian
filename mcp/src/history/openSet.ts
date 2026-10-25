@@ -74,7 +74,7 @@
  * rows it skips; nothing here searches a fixed window of recent scans.
  */
 
-import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { dependencyCoordinates, indexFindings } from '../fingerprint/findingIdentity.js';
 import type { LlmMarker } from '../llmscan/types.js';
 import { llmMarkerOf, llmVerdictIdentityOf } from '../llmscan/submission.js';
 import type { Storage } from '../storage/index.js';
@@ -82,6 +82,7 @@ import { futureDatedNote } from '../storage/scanClock.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import {
   SEVERITY_ORDER,
+  type Cve,
   type Finding,
   type ScanCoverage,
   type ScanRecord,
@@ -515,6 +516,35 @@ export function partitionSuppressed<F extends Pick<Finding, 'fingerprint' | 'ide
   const suppressed: F[] = [];
   for (const f of findings) (isSuppressed(f) ? suppressed : visible).push(f);
   return { visible, suppressed };
+}
+
+/**
+ * The CVEs scan `scanId` saw (`scan_cves`) minus those a suppression of
+ * `projectPath` active at `now` takes out: a CVE row a suppressed finding of
+ * that scan names (its id and package, `dependencyCoordinates`) and no
+ * visible one does — the rule `scanToolFactory.ts#cvesStillFound` applies to
+ * `.guardianignore`. A row no finding names is kept. `risk_score` and the
+ * dashboard counted a VEX `not_affected` CVE's row while the open set had
+ * hidden its finding: up to 12 points and "Address active CVEs".
+ */
+export function unsuppressedCves(storage: Storage, projectPath: string, scanId: string, now: number = Date.now()): Cve[] {
+  const cves = storage.cves.listActive(scanId);
+  if (cves.length === 0) return cves;
+  const { visible, suppressed } = partitionSuppressed(storage, projectPath, storage.findings.listByScan(scanId), now);
+  const keys = (list: readonly Finding[]): Set<string> => {
+    const out = new Set<string>();
+    for (const f of list) {
+      const coords = dependencyCoordinates(f);
+      if (coords !== null && f.rule_id !== undefined) out.add(`${f.rule_id}\0${coords.name}`);
+    }
+    return out;
+  };
+  const shown = keys(visible);
+  const hidden = keys(suppressed);
+  return cves.filter((c) => {
+    const key = `${c.cve_id}\0${c.package_name}`;
+    return shown.has(key) || !hidden.has(key);
+  });
 }
 
 /**

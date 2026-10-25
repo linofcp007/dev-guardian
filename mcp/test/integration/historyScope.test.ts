@@ -295,6 +295,44 @@ describe('risk_score reports its real coverage', () => {
   });
 });
 
+describe('risk_score leaves out the CVEs a suppression takes out', () => {
+  // A VEX not_affected suppression hid the CVE's finding, while its
+  // `scan_cves` row still added up to 12 points and "Address active CVEs".
+  function seedCve(s: Seeded, project: string): void {
+    seedScan(s, {
+      id: 'deps', type: 'deps', project,
+      tools_run: [{ name: 'trivy', status: 'ok' }],
+      findings: [{
+        fp: 'f'.repeat(64), tool: 'trivy', rule_id: 'CVE-2024-0001', severity: 'high', subcategory: 'cve',
+        file: 'package-lock.json', snippet: 'lodash@4.17.15->4.17.21',
+      }],
+    });
+    // A dependency finding has no line: clear the one the seeder gives every finding.
+    s.db.prepare('UPDATE findings SET line_start = NULL, line_end = NULL WHERE scan_id = ?').run('deps');
+    s.storage.cves.upsert({
+      cve_id: 'CVE-2024-0001', package_name: 'lodash', installed_version: '4.17.15', fixed_version: '4.17.21',
+      severity: 'high', scan_id: 'deps',
+    });
+  }
+  type Risk = { components: { cves: { active_cves: number; score: number } }; recommended_next_action: string };
+
+  it('counts an active CVE, and none once its finding is suppressed', async () => {
+    const s = freshPlugin();
+    const a = projectDir();
+    seedCve(s, a);
+    const before = okResult<Risk>(await tool('risk_score').handler({ project_path: a }, s.plugin));
+    expect(before.components.cves.active_cves).toBe(1);
+
+    s.storage.suppressions.insert({
+      finding_fingerprint: 'f'.repeat(64), reason: 'not reachable', project_path: a,
+      vex_status: 'not_affected', vex_justification: 'vulnerable_code_not_in_execute_path',
+    });
+    const after = okResult<Risk>(await tool('risk_score').handler({ project_path: a }, s.plugin));
+    expect(after.components.cves).toEqual({ score: 0, active_cves: 0 });
+    expect(after.recommended_next_action).not.toContain('active CVEs');
+  });
+});
+
 describe('report_export', () => {
   it("exports this project's latest state scan by default, not another project's or an SBOM", async () => {
     const s = freshPlugin();
