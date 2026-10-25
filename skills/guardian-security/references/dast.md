@@ -24,4 +24,5 @@ starts, builds or stops it.
 
 Safety envelope (never work around it): read-only methods (GET / HEAD / OPTIONS) unless `allow_write_methods`
 is on, and then with an empty body — plus the optional `probe_rate_limit` burst, the one exception, which sends
-POST to exactly one route. Redirects are never followed.
+POST to exactly one route. Redirects are never followed — by nuclei either (`-disable-redirects`), which also
+runs HTTP templates only (`-type http`), so it probes no other port or host than the URL.
