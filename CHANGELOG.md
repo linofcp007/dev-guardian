@@ -95,9 +95,11 @@ and an unread file, an unanswered query or a skipped pass is a named gap, never 
   `scan_deps`; `deps_audit` drops an npm advisory only when it is the one Trivy reported; a running scan's report
   directory is never pruned; a subdirectory project's gitleaks history holds only its own secrets.
 - **Runners and parsers**: a failed Trivy run says Trivy's own error, and `generate_sbom` tells a failure from a
-  missing scanner; Bandit's exclusion list no longer drops a handed file in silence; the long-path Semgrep runs keep
-  their taint timeouts and judge every file Semgrep reads; a git query that could not answer is a named gap; the
-  scan limiter admits no more than its limit; Python manifests are judged per file; a file Ruff, PHPCS or cppcheck
+  missing scanner; Bandit's exclusion list (`CVS`, `.tox`, `.eggs`, … tested as substrings) no longer drops a
+  handed file — `scan_sast`'s neutral ini replaces it with one no path holds, and a file still left out is named;
+  the long-path Semgrep runs keep their taint timeouts and judge every file Semgrep reads; a git query that could
+  not answer is a named gap; the scan limiter admits no more than its limit, and a scan cancelled while it waits
+  for a slot returns at once; Python manifests are judged per file; a file Ruff, PHPCS or cppcheck
   did not process is `partially_parsed`; Syft leaves out the root `.guardian`'s output; shellcheck gets a copy of
   the root `.shellcheckrc` without `external-sources`; the `go version` probe reads; a header-only C/C++ tree is
   named.
