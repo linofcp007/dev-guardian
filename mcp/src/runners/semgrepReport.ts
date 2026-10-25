@@ -69,11 +69,13 @@
  * the function's line in `location`). Measured: present on 1.170.1 and
  * 1.176.1 in every JSON report, with or without `--time` (an empty list on
  * a clean run); absent on 1.86.0, 1.95.0, 1.99.0 and 1.120.1 even with it.
- * `--time` is never needed, and never passed: it adds per-target profiling
- * (LibreChat: 94 MB against 1.7 MB). 644 of them on LibreChat and 77 on this
- * repo's own `mcp/src` under `p/default` + the plugin's packs, and a true
- * positive of the LLM pack dropped out of 3 scans in 17, each with a
- * fixpoint timeout on its function.
+ * `--time` is not needed for them, and a scan passes it only for what else
+ * it reports — it adds per-target profiling (LibreChat: 94 MB against
+ * 1.7 MB): compliance_check's RGPD run alone does, for `time.rules`, the
+ * rules that loaded (`tools/complianceCheck.ts`). Fixpoint timeouts: 644 on
+ * LibreChat and 77 on this repo's own `mcp/src` under `p/default` + the
+ * plugin's packs, and a true positive of the LLM pack dropped out of 3 scans
+ * in 17, each with a fixpoint timeout on its function.
  *
  * A file named there was not fully analysed — the same class as a per-rule
  * `Timeout` in `errors[]` — so it joins the per-file problems: an otherwise

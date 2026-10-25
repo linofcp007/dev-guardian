@@ -11,6 +11,7 @@ import {
   type ScannerInvocation,
 } from '../../../src/tools/scanToolFactory.js';
 import { DEFAULT_KEPT_REPORTS, ensureReportDir } from '../../../src/tools/scanHelpers.js';
+import { getScanLimiter } from '../../../src/runners/concurrencyLimiter.js';
 import type { ShellChoice } from '../../../src/platform/shellProbe.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { Storage } from '../../../src/storage/index.js';
@@ -325,6 +326,45 @@ describe('makeScanTool', () => {
     if (!r.ok) expect(r.error.code).toBe('cancelled');
     const history = plugin.storage.scans.listHistory(10);
     expect(history[0]?.status).toBe('cancelled');
+  });
+
+  it('a host that cancels while the scan waits for a slot gets cancelled back at once, and no scanner runs', async () => {
+    let invoked = 0;
+    const tool = makeScanTool({
+      name: 'queued_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => {
+        invoked += 1;
+        return { outcome: 'completed', tools_run: [], missing_tools: [], parser_inputs: [], report_paths: [] };
+      },
+    });
+    // Take every slot; the one acquire that has to wait is cancelled, so it never takes one later.
+    const limiter = getScanLimiter();
+    const fill = new AbortController();
+    let held = 0;
+    for (;;) {
+      const got = limiter.acquire(fill.signal).then(() => true, () => false);
+      if (!(await Promise.race([got, new Promise<boolean>((r) => setTimeout(() => r(false), 20))]))) break;
+      held += 1;
+    }
+    fill.abort();
+    expect(limiter.queued).toBe(0);
+    try {
+      const controller = new AbortController();
+      const pending = tool.handler({ project_path: projectPath, force: true }, plugin, { signal: controller.signal });
+      await new Promise((r) => setTimeout(r, 30));
+      controller.abort();
+      const r = (await pending) as { ok: false; error: { code: string } };
+      expect(r.ok).toBe(false);
+      expect(r.error.code).toBe('cancelled');
+      expect(invoked).toBe(0);
+      expect(plugin.storage.scans.listHistory(10)[0]?.status).toBe('cancelled');
+    } finally {
+      for (let i = 0; i < held; i += 1) limiter.release();
+    }
   });
 
   it('scans on a host with no bash shell — no factory tool runs a shell script any more', async () => {

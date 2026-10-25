@@ -102,7 +102,9 @@ async function fake(opts: ProcessRunOptions): Promise<ProcessRunResult> {
     return done(1);
   }
   if (opts.command === 'bandit') {
-    writeFileSync(after(a, '-o'), JSON.stringify({ results: [], errors: [], metrics: {} }));
+    // As Bandit writes it: one `metrics` entry per file it analysed.
+    const metrics = Object.fromEntries(a.slice(a.indexOf('--') + 1).map((f) => [f, { loc: 1 }]));
+    writeFileSync(after(a, '-o'), JSON.stringify({ results: [], errors: [], metrics }));
     return done(0);
   }
   if (opts.command === 'gitleaks') {

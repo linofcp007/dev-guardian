@@ -38,13 +38,13 @@ import { basename } from 'node:path';
 import { findOnPath, isBareName } from '../platform/binaryPath.js';
 import { applyGitSafety, gitSafetyFor, withoutHooksPath } from '../platform/gitSafety.js';
 import { readText, startChild, stopTree } from './childProcess.js';
+import { effectiveTimeoutMs } from './processTimeout.js';
 
 const FIVE_MB = 5 * 1024 * 1024;
 const KILL_GRACE_MS = 5_000;
 /** After SIGKILL, how long to keep waiting for the pipes before abandoning
  *  them. Only reached when something outside the tree still holds them. */
 const PIPE_ABANDON_MS = 1_000;
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 /** `setTimeout`'s ceiling; a larger delay fires after 1 ms instead. */
 const MAX_TIMER_MS = 2_147_483_647;
 
@@ -128,9 +128,7 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
   // The timeout covers the whole call — the git configuration read below
   // included — so a caller's budget is the time it waits.
   const started = Date.now();
-  const timeoutMs =
-    options.timeoutMs ??
-    (Number(process.env['GUARDIAN_SCAN_TIMEOUT_MS']) || DEFAULT_TIMEOUT_MS);
+  const timeoutMs = effectiveTimeoutMs(options.timeoutMs);
   const cap = options.stdoutCapBytes ?? FIVE_MB;
 
   let stdoutBuf = '';

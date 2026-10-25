@@ -158,13 +158,43 @@ export async function shallowBoundary(cwd: string): Promise<string[] | null> {
 /** A shallow file lists one commit per line: 16 MiB is some 250 000 boundary commits. */
 const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 
+const UNANSWERED_PREFIX = '(git could not answer: ';
+
+/**
+ * The answer of a coverage query git could not give (review 3.6.1, finding
+ * 6): {@link initialisedSubmodules}, {@link gitlinksAmong} and
+ * {@link trackedGuardianOutput} answered `[]` on any failure — a timeout
+ * (124) or an index listing past the output cap included — and `[]` reads as
+ * "none": no submodule gap, no `.guardian/` gap. They answer this one entry
+ * instead, which every reader names as a gap (`describeSubmodules`, the
+ * Semgrep and gitleaks coverage gaps) and `.guardianignore` never excludes.
+ * Only "not a git repository" and a missing git are none: outside a
+ * repository git hides nothing from a scanner.
+ */
+function unanswered(r: GitResult): string[] | null {
+  if (r.exitCode === 0) return null;
+  if (r.exitCode === 127 || /not a git repository/i.test(r.stderr)) return [];
+  return [gitUnanswered(firstLine(r.stderr) || `exit ${String(r.exitCode)}`)];
+}
+
+/** The {@link isGitUnanswered} entry for a query that failed with `why`. */
+export function gitUnanswered(why: string): string {
+  return `${UNANSWERED_PREFIX}${why})`;
+}
+
+/** Whether an entry of those answers is {@link unanswered}'s, not a path. */
+export function isGitUnanswered(entry: string): boolean {
+  return entry.startsWith(UNANSWERED_PREFIX);
+}
+
 /**
  * The submodules under `cwd` that are initialised and hold content — the
  * index's gitlinks (mode 160000, one per `.gitmodules` entry that was
  * added) whose checkout directory is not empty (an uninitialised submodule
  * is an empty directory) — as `/`-separated paths relative to `cwd`,
  * sorted. Their files are in no listing a scanner of the superproject uses
- * (review M2). Empty outside a repository.
+ * (review M2). Empty outside a repository; one {@link isGitUnanswered} entry
+ * when git could not list the index.
  *
  * Read from `git ls-files --stage` (~30 ms) rather than `git submodule
  * status`, which spawns a shell and took ~770 ms per call on Windows
@@ -172,7 +202,8 @@ const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
  */
 export async function initialisedSubmodules(cwd: string): Promise<string[]> {
   const r = await git(cwd, ['ls-files', '-z', '--stage', '--', '.']);
-  if (r.exitCode !== 0) return [];
+  const failed = unanswered(r);
+  if (failed !== null) return failed;
   const out = new Set<string>();
   for (const entry of splitNul(r.stdout)) {
     // `<mode> <object> <stage>\t<path>`.
@@ -190,12 +221,13 @@ export async function initialisedSubmodules(cwd: string): Promise<string[]> {
  * The submodules (gitlinks, mode 160000) among `paths` in the tree of `rev`,
  * relative to `cwd` — what a review's diff bumped: those commits' files are
  * in no range of the superproject, whether or not anything is checked out.
- * Empty when git cannot answer.
+ * One {@link isGitUnanswered} entry when git cannot answer.
  */
 export async function gitlinksAmong(cwd: string, rev: string, paths: readonly string[]): Promise<string[]> {
   if (paths.length === 0) return [];
   const r = await git(cwd, ['ls-tree', '-r', '-z', rev, '--', '.']);
-  if (r.exitCode !== 0) return [];
+  const failed = unanswered(r);
+  if (failed !== null) return failed;
   const wanted = new Set(paths.map((p) => p.split('\\').join('/')));
   const out: string[] = [];
   for (const entry of splitNul(r.stdout)) {
@@ -213,18 +245,30 @@ export async function gitlinksAmong(cwd: string, rev: string, paths: readonly st
  * (`platform/guardianOutput.ts`) of `cwd` — relative to it, sorted. None is
  * ever written there by dev-guardian alone (that output is git-ignored), and
  * a scan of the project's directory leaves those paths out (review 10,
- * finding 1). Empty outside a repository, or when git cannot answer.
+ * finding 1). Empty outside a repository; one {@link isGitUnanswered} entry
+ * when git cannot answer.
  */
 export async function trackedGuardianOutput(cwd: string): Promise<string[]> {
   const r = await git(cwd, ['ls-files', '-z', '--cached', '--', ...ROOT_OUTPUT_PATHS.map((p) => `:(literal)${p}`)]);
-  if (r.exitCode !== 0) return [];
+  const failed = unanswered(r);
+  if (failed !== null) return failed;
   return [...new Set(splitNul(r.stdout).map((p) => p.split('\\').join('/')))].sort();
 }
 
-/** `submodule contents not scanned: a, b` — the first few, then "and N more". */
+/**
+ * `submodule contents not scanned: a, b` — the first few, then "and N more";
+ * an {@link isGitUnanswered} entry as what it is.
+ */
 export function describeSubmodules(paths: readonly string[]): string {
-  const shown = paths.slice(0, 5).join(', ');
-  return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ''}`;
+  const unknown = paths.find(isGitUnanswered);
+  const named = paths.filter((p) => !isGitUnanswered(p));
+  const parts: string[] = [];
+  if (unknown !== undefined) parts.push(`git could not say which submodules hold content ${unknown} — their files would not have been scanned`);
+  if (named.length > 0) {
+    const shown = named.slice(0, 5).join(', ');
+    parts.push(`submodule contents not scanned: ${shown}${named.length > 5 ? ` and ${named.length - 5} more` : ''}`);
+  }
+  return parts.join('; ');
 }
 
 /** The full commit id `ref` names, or null when it names no commit. */

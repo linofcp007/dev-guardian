@@ -67,6 +67,34 @@ describe('checkBanditReport', () => {
   });
 });
 
+/**
+ * Review 3.6.1, finding 4: Bandit applies its own exclusion list
+ * (`.svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg`) as a SUBSTRING test
+ * to files handed by name too. Measured on Bandit 1.9.4: `src/CVSImport.py`,
+ * `lib/x.tox_util.py`, `pkg/my.eggs_helper.py`, `a/.hg_tools.py` — and,
+ * with no `.git` in the working directory, `.github/…` and `.gitlab/…` — were
+ * left out of `metrics` with no error, and the batch read complete.
+ */
+describe('checkBanditReport: every file handed to it', () => {
+  const raw = report();
+  it('a handed file the report neither analysed nor named is a partial gap, named', () => {
+    const r = checkBanditReport({ raw, exitCode: 1, outcome: 'failed', handed: ['app/a.py', 'src/CVSImport.py', './test/files/decrypt.py'] });
+    expect(r.ok).toBe(true);
+    expect(r.partial).toEqual([expect.objectContaining({ file: 'src/CVSImport.py', type: 'Not analysed' })]);
+    expect(r.partial?.[0]?.message).toMatch(/Bandit left it out/);
+  });
+
+  it('none of them analysed: the batch failed, never "scanned"', () => {
+    const r = checkBanditReport({ raw: report({ metrics: { _totals: {} } }), exitCode: 0, outcome: 'completed', handed: ['src/CVSImport.py'] });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/^bandit analysed none of the 1 file\(s\) it was handed: src\/CVSImport\.py/);
+  });
+
+  it('every one analysed, or named by an error: as before', () => {
+    expect(checkBanditReport({ raw, exitCode: 1, outcome: 'failed', handed: ['app/a.py', 'test/files/decrypt.py'] })).toEqual({ ok: true, scanned: 2 });
+  });
+});
+
 describe('rewriteBanditReportPaths', () => {
   it("the results' and errors' filename and the metrics keys rewritten, _totals kept; one the map does not know kept", () => {
     const L = '\\\\?\\C:\\p\\deep\\a.py';

@@ -33,6 +33,7 @@ import {
   describeNoRuleLoaded,
   describePartialParse,
   describeRulesNotLoaded,
+  nameAFew,
   pythonUtf8Env,
   withPluginPackFixpoint,
   type PluginPackFixpoint,
@@ -40,6 +41,7 @@ import {
 import { localRuleIdNormalizer, noRuleLoaded, type RuleIdContext } from './semgrepRuleIds.js';
 import { extendedLengthPath, rewriteReportPaths, tooLongForWindows, windowsBase, windowsPathKey } from './semgrepLongDirs.js';
 import { toRelativeIfPossible } from './scannerParsers/index.js';
+import { PATH_TOO_LONG_TYPE } from './semgrepCoverageGaps.js';
 
 interface BatchCheck {
   ok: boolean;
@@ -75,8 +77,14 @@ interface FileBatchScanOptions {
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   onLog?: (line: string) => void;
-  /** Did this batch's run count? */
-  check: (args: { raw: string | null; exitCode: number | null; outcome: ProcessOutcome; targets: number }) => BatchCheck;
+  /** Did this batch's run count? `files`: the batch, as handed to the scanner. */
+  check: (args: {
+    raw: string | null;
+    exitCode: number | null;
+    outcome: ProcessOutcome;
+    targets: number;
+    files: readonly string[];
+  }) => BatchCheck;
   /**
    * Judge "scanned something" over the whole run rather than per batch: a
    * batch of files no rule applies to scans 0 on its own, which proves
@@ -173,6 +181,7 @@ async function runBatches(opts: FileBatchScanOptions, batches: readonly string[]
       outcome: run.outcome,
       // With requireScanned the count is judged below, over every batch.
       targets: opts.requireScanned === true ? 0 : batch.length,
+      files: batch,
     });
     t.scanned += verdict.scanned ?? 0;
     for (const p of verdict.partial ?? []) {
@@ -424,6 +433,17 @@ export function rewriteBanditReportPaths(raw: unknown, rewrite: (path: string) =
  * 1.9.4 (Python 3.12, `LongPathsEnabled=0`): a `deep.py` at 301 characters
  * was missing from a `-r` walk's `metrics`, with no error, and read when
  * given as `\\?\C:\…`.
+ *
+ * Bandit tests its exclusion list as a SUBSTRING of every path, a file
+ * handed by name included — measured on 1.9.4 (review 3.6.1, finding 4): its
+ * built-in `.svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg` left out
+ * `src/CVSImport.py`, `lib/x.tox_util.py`, `pkg/my.eggs_helper.py` and, with
+ * no `.git` in the working directory, `.github/…` and `.gitlab/…`, in
+ * silence. With no ini, `-x` replaces that list with {@link NO_BANDIT_EXCLUSION},
+ * which no path holds; an ini's `exclude` (or, without one, the built-in list
+ * again — a command-line `-x` would override what the project's file says)
+ * is left to Bandit, and every file handed that the report neither analysed
+ * nor named is a `Not analysed` gap ({@link checkBanditReport}).
  */
 export function banditOnFiles(args: {
   files: readonly string[];
@@ -438,10 +458,13 @@ export function banditOnFiles(args: {
   reportPrefix?: string;
 }): Promise<FileBatchScanResult> {
   const long = extendedTargets(args.files, args.cwd, rewriteBanditReportPaths);
+  // The report names a file as the caller did (`mapReport`): so is each handed one judged.
+  const asGiven = new Map(long.files.map((handed, i) => [handed, args.files[i] ?? handed]));
+  const extended = new Set(args.files.filter((f, i) => long.files[i] !== f));
   return scanFileBatches({
     name: 'bandit',
     command: 'bandit',
-    args: ['-f', 'json', '-q', ...(args.ini !== undefined ? ['--ini', args.ini] : [])],
+    args: ['-f', 'json', '-q', ...(args.ini !== undefined ? ['--ini', args.ini] : ['-x', NO_BANDIT_EXCLUSION])],
     reportArgs: (f) => ['-o', f],
     files: long.files,
     ...(long.mapReport !== undefined ? { mapReport: long.mapReport } : {}),
@@ -451,9 +474,24 @@ export function banditOnFiles(args: {
     env: pythonUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),
-    check: checkBanditReport,
+    check: (c) => checkBanditReport({ ...c, handed: c.files.map((f) => asGiven.get(f) ?? f), longPaths: extended }),
   });
 }
+
+/**
+ * An exclusion no path holds, for Bandit's `-x`: a relative or absolute path
+ * never has `//` in it, and its glob reading has no wildcard. An empty `-x`
+ * would exclude every file (`'' in path`).
+ */
+const NO_BANDIT_EXCLUSION = '//guardian-no-exclusion//';
+
+/** `./a/b.py`, `a\b.py` and `a/b.py` alike. */
+const banditKey = (p: string): string => p.split('\\').join('/').replace(/^(\.\/)+/, '');
+
+/** What a `Not analysed` entry says. */
+const NOT_ANALYSED =
+  'Bandit left it out: its exclusion list (by default .svn, CVS, .bzr, .hg, .git, __pycache__, .tox, .eggs, *.egg) ' +
+  'is tested as a substring of every path, a file handed by name included';
 
 /**
  * Bandit exits 0 (clean) or 1 (issues); its report lists files it could not
@@ -466,11 +504,20 @@ export function banditOnFiles(args: {
  * fixtures with syntax errors made the whole run `failed`, and scan_sast
  * reported coverage `none`. An error naming no file, a run that analysed
  * nothing, an unclean exit or no report stays a failure.
+ *
+ * With `handed` (the files the batch was given, as the report names them),
+ * each one the report neither analysed (`metrics`) nor named under `errors`
+ * is a partial gap of type `Not analysed` — Bandit's exclusion list left it
+ * out ({@link banditOnFiles}) — or, one of `longPaths` (handed as an
+ * extended-length path), `Path too long`, as the long-path gap names it; and
+ * a batch that analysed none of them failed.
  */
 export function checkBanditReport(args: {
   raw: string | null;
   exitCode: number | null;
   outcome: ProcessOutcome;
+  handed?: readonly string[];
+  longPaths?: ReadonlySet<string>;
 }): BatchCheck {
   if (args.outcome === 'cancelled' || args.outcome === 'timed_out' || args.outcome === 'output_too_large') {
     return { ok: false, reason: `bandit did not finish (${args.outcome})` };
@@ -479,10 +526,20 @@ export function checkBanditReport(args: {
   const root = args.raw === null ? null : parseInputAsJson(args.raw);
   if (root === null || typeof root !== 'object') return { ok: false, reason: 'bandit wrote no JSON report' };
   const metrics = getProp(root, 'metrics');
-  const scanned =
-    metrics !== null && typeof metrics === 'object' ? Object.keys(metrics).filter((k) => k !== '_totals').length : 0;
+  const analysed = metrics !== null && typeof metrics === 'object' ? Object.keys(metrics).filter((k) => k !== '_totals') : [];
+  const scanned = analysed.length;
   const entries = asArray(getProp(root, 'errors'));
-  if (entries.length === 0) return { ok: true, scanned };
+  const seen = new Set([...analysed, ...entries.map((e) => getString(e, 'filename') ?? '')].map(banditKey));
+  const left = (args.handed ?? []).filter((f) => !seen.has(banditKey(f)));
+  if (left.length > 0 && left.length === args.handed?.length && entries.length === 0) {
+    return { ok: false, scanned, reason: `bandit analysed none of the ${String(left.length)} file(s) it was handed: ${nameAFew(left)}` };
+  }
+  const notAnalysed: PartialParse[] = left.map((file) =>
+    args.longPaths?.has(file) === true
+      ? { file, type: PATH_TOO_LONG_TYPE, message: 'the path is 260 characters or longer, and Bandit did not analyse the file, even as an extended-length path' }
+      : { file, type: 'Not analysed', message: NOT_ANALYSED },
+  );
+  if (entries.length === 0) return notAnalysed.length > 0 ? { ok: true, scanned, partial: notAnalysed } : { ok: true, scanned };
   const everyErrorNamesAFile = entries.every((e) => (getString(e, 'filename') ?? '').length > 0);
   if (scanned === 0 || !everyErrorNamesAFile) {
     const errors = entries.map((e) => `${getString(e, 'filename') ?? '?'}: ${getString(e, 'reason') ?? 'error'}`);
@@ -495,5 +552,5 @@ export function checkBanditReport(args: {
     const type = /syntax error/i.test(reason) ? 'Syntax error' : 'Bandit error';
     if (!partial.some((p) => p.file === file && p.type === type)) partial.push({ file, type, message: reason });
   }
-  return { ok: true, scanned, partial };
+  return { ok: true, scanned, partial: [...partial, ...notAnalysed] };
 }

@@ -795,7 +795,15 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   const limiter = config.orchestrator === true ? null : getScanLimiter();
   if (limiter) {
     report('waiting for a scanner slot');
-    await limiter.acquire();
+    try {
+      // A host that cancels while this scan waits for a slot gets it back at
+      // once, and takes none (runners/concurrencyLimiter.ts).
+      await limiter.acquire(ctx.signal);
+    } catch (e) {
+      if (!(e instanceof Error && e.name === 'AbortError')) throw e;
+      plugin.storage.scans.finalize({ scan_id: scanId, status: 'cancelled', tools_run: [], missing_tools: [] });
+      return failDomain('cancelled', 'Scan was cancelled by the host.');
+    }
   }
   let invocation: ScannerInvocation;
   try {

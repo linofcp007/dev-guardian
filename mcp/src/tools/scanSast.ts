@@ -855,8 +855,18 @@ function ignoreFrom(ctx: InvokeContext): { guardianIgnoreFrom?: string } {
   return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
 }
 
-/** An empty `[bandit]` section: Bandit reads it and nothing else. */
+/** A `[bandit]` section with only an exclusion no path holds: Bandit reads it and nothing else. */
 export const NEUTRAL_BANDIT_INI = 'bandit-neutral.ini';
+
+/**
+ * The neutral ini's text. Its `exclude` replaces Bandit's built-in list
+ * (`.svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg`, tested as a
+ * substring of every path, a file handed by name included) with one no path
+ * holds — the same as fileBatchScan's `-x` when there is no ini. Measured on
+ * Bandit 1.9.4 (review of 3.6.0): with an empty `[bandit]`, `src/CVSImport.py`
+ * and `src/x.tox_util.py` were left out, 1 file of 3 analysed; with this, 3.
+ */
+export const NEUTRAL_BANDIT_INI_TEXT = '[bandit]\nexclude = //guardian-no-exclusion//\n';
 
 /**
  * The `--ini` of every Bandit run scan_sast makes, whole-project and scoped
@@ -878,7 +888,7 @@ function banditIni(projectPath: string, reportDir: string): { path: string; hono
   }
   const neutral = join(reportDir, NEUTRAL_BANDIT_INI);
   try {
-    writeFileSync(neutral, '[bandit]\n', 'utf8');
+    writeFileSync(neutral, NEUTRAL_BANDIT_INI_TEXT, 'utf8');
   } catch (e) {
     return { error: `could not write the neutral Bandit configuration ${neutral}: ${e instanceof Error ? e.message : String(e)}` };
   }

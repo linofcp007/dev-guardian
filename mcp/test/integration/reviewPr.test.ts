@@ -102,6 +102,12 @@ function fakeSemgrep(opts: Call): ProcessRunResult {
   return ok(1);
 }
 
+/** A clean Bandit report as Bandit writes it: one `metrics` entry per file handed after `--`. */
+function banditReport(args: readonly string[]): string {
+  const metrics = Object.fromEntries(args.slice(args.indexOf('--') + 1).map((f) => [f, { loc: 1 }]));
+  return JSON.stringify({ errors: [], results: [], metrics });
+}
+
 function fakeGitleaks(opts: Call): ProcessRunResult {
   const report = opts.args.find((a) => a.startsWith('--report-path='));
   if (report) writeFileSync(report.slice('--report-path='.length), '[]');
@@ -404,7 +410,7 @@ describe('review_pr — which tree is scanned', () => {
       }
       if (opts.command === 'gitleaks') return fakeGitleaks(call);
       if (opts.command === 'bandit') {
-        writeFileSync(call.args[call.args.indexOf('-o') + 1] ?? '', JSON.stringify({ errors: [], results: [] }));
+        writeFileSync(call.args[call.args.indexOf('-o') + 1] ?? '', banditReport(call.args));
         return ok(0);
       }
       return ok();
@@ -539,7 +545,7 @@ describe('review_pr — secrets, Python, dependencies', () => {
       if (opts.command === 'gitleaks') return fakeGitleaks(call);
       if (opts.command === 'bandit') {
         const out = call.args[call.args.indexOf('-o') + 1] ?? '';
-        writeFileSync(out, JSON.stringify({ errors: [], results: [] }));
+        writeFileSync(out, banditReport(call.args));
         return ok(0);
       }
       return ok();

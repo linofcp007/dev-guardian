@@ -84,7 +84,7 @@ import { join, win32 } from 'node:path';
 import { execGitSync } from '../platform/gitSafety.js';
 import { compileIgnore, GUARDIAN_IGNORE_FILE, type IgnoreMatcher } from '../platform/guardianIgnore.js';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
-import { tooLongForWindows, windowsBase, WINDOWS_MAX_PATH } from '../runners/semgrepLongDirs.js';
+import { semgrepReadsFile, tooLongForWindows, windowsBase, WINDOWS_MAX_PATH } from '../runners/semgrepLongDirs.js';
 import { git, splitNul } from '../runners/git.js';
 import { OWASP_SCAN_TYPES } from './coverage.js';
 import { canonicalLanguage, languageOfFile, SOURCE_LANGUAGES, type SourceLanguage } from './languages.js';
@@ -544,8 +544,9 @@ interface OversizedFiles {
   /** Why the listing may have missed some. Absent: it did not. */
   incomplete?: string;
   /**
-   * Windows only: the same listing's files whose absolute path is
-   * {@link WINDOWS_MAX_PATH} characters or longer, or whose directory's is
+   * Windows only: the same listing's files Semgrep reads (its markup,
+   * configuration and shell too) whose absolute path is {@link WINDOWS_MAX_PATH}
+   * characters or longer, or whose directory's is
    * `runners/semgrepLongDirs.ts#WINDOWS_DIR_MAX` (project-relative,
    * `/`-separated) — candidates a scanner may not have opened
    * (`runners/semgrepCoverageGaps.ts`). Absent: none, or not Windows.
@@ -575,14 +576,27 @@ export function longPathsOf(
   return rels.filter((rel) => tooLongForWindows(base, rel)).sort();
 }
 
-/** Whether `rel` is a file the scanners read with a source language — see the module comment. */
-function isScannedSource(rel: string, exclusions: Exclusions): boolean {
-  if (languageOfFile(rel) === null && !/\.h$/i.test(rel)) return false;
+/** Whether the scanners' exclusions leave `rel` in — see the module comment. */
+function notExcluded(rel: string, exclusions: Exclusions): boolean {
   const segments = rel.split('/');
   for (let i = 1; i < segments.length; i++) {
     if (exclusions.layer(segments.slice(0, i).join('/'), true) !== null) return false;
   }
   return exclusions.layer(rel) === null;
+}
+
+/** Whether `rel` is a file the scanners read with a source language — see the module comment. */
+function isScannedSource(rel: string, exclusions: Exclusions): boolean {
+  return (languageOfFile(rel) !== null || /\.h$/i.test(rel)) && notExcluded(rel, exclusions);
+}
+
+/**
+ * Whether `rel` is a file Semgrep reads at all — its markup, configuration
+ * and shell too (`runners/semgrepLongDirs.ts#semgrepReadsFile`) — and the
+ * scanners do not leave out: what a path too long for Windows is judged by.
+ */
+function isScannedTarget(rel: string, exclusions: Exclusions): boolean {
+  return semgrepReadsFile(rel) && notExcluded(rel, exclusions);
 }
 
 async function sizesOver(root: string, rels: readonly string[], limit: number): Promise<OversizedFile[]> {
@@ -618,17 +632,25 @@ async function sizesOver(root: string, rels: readonly string[], limit: number): 
  */
 export async function oversizedSourceFilesAsync(
   root: string,
-  opts: { limit?: number; only?: readonly string[]; guardianIgnoreFrom?: string } = {},
+  opts: {
+    limit?: number;
+    only?: readonly string[];
+    guardianIgnoreFrom?: string;
+    /** Test seam: whose path rules decide `longPaths` (default: this host's). */
+    platform?: NodeJS.Platform;
+  } = {},
 ): Promise<OversizedFiles> {
   const limit = opts.limit ?? SEMGREP_MAX_TARGET_BYTES;
   const exclusions = scannerExclusions(await ignoreTextsAsync(root, opts.guardianIgnoreFrom));
+  // Long paths: of every file Semgrep reads, not of the source files alone.
   const withLongPaths = (out: OversizedFiles, rels: readonly string[]): OversizedFiles => {
-    const long = longPathsOf(root, rels);
+    const long = longPathsOf(root, rels.filter((rel) => isScannedTarget(rel, exclusions)), opts.platform);
     return long.length > 0 ? { ...out, longPaths: long } : out;
   };
   if (opts.only !== undefined) {
-    const rels = opts.only.map((p) => p.split('\\').join('/')).filter((rel) => isScannedSource(rel, exclusions));
-    return withLongPaths({ files: await sizesOver(root, rels, limit) }, rels);
+    const given = opts.only.map((p) => p.split('\\').join('/'));
+    const rels = given.filter((rel) => isScannedSource(rel, exclusions));
+    return withLongPaths({ files: await sizesOver(root, rels, limit) }, given);
   }
   const listed = await gitListAsync(root);
   const walked = listed === null ? await walkAsync(root, exclusions, {}) : null;
@@ -636,7 +658,7 @@ export async function oversizedSourceFilesAsync(
   const sources = files.filter((rel) => isScannedSource(rel, exclusions));
   const out: OversizedFiles = { files: await sizesOver(root, sources, limit) };
   if (walked?.incomplete !== undefined) out.incomplete = walked.incomplete;
-  return withLongPaths(out, sources);
+  return withLongPaths(out, files);
 }
 
 /** `src/big.py (1.2 MB)`, the first few, then "and N more". */

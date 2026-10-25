@@ -21,6 +21,7 @@ import {
   trivySkipArgs,
 } from '../../../src/platform/guardianIgnore.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { expectNearReference } from '../../helpers/timing.js';
 
 /** Real `git` processes: a file-level ceiling for a loaded full-suite run (see vitest.config.ts). */
 vi.setConfig({ testTimeout: 60_000 });
@@ -154,6 +155,140 @@ describe('compileIgnore — gitignore syntax', () => {
     // A differential test over a set nobody excluded proves nothing.
     expect(gitIgnored.size).toBeGreaterThan(8);
     expect(paths.length - gitIgnored.size).toBeGreaterThan(5);
+  });
+
+  // Where 3.6.0's RegExp translation and git parted (measured with git
+  // 2.51): a class matched `/` (`a[!b]c` excluded `a/c`), an unterminated
+  // `[` was a literal one (git matches nothing), `***/` was a plain `*/`
+  // (git: `**/`), `**\/` one directory (git: one or more), `[[:digit:]]` and
+  // `\-` inside a class meant something else, and a reversed range (`[z-a]`)
+  // threw from compileIgnore. Paths need not exist for `check-ignore --no-index`.
+  it('agrees with `git check-ignore` on the edge cases of the syntax', async () => {
+    const patterns = [
+      'foo[bar',
+      'a[!b]c',
+      '***/x3',
+      '[[:digit:]]x',
+      'r[a\\-z]',
+      'z[z-a]',
+      'q[[:foo:]]',
+      'm[/]n',
+      '**\\/k',
+      't[]]u',
+      'w[!]]v',
+      'h[[:alpha]',
+      '**/**/**/deep',
+      'a*a*a*b',
+      'lib/*/gen',
+      'c?t',
+      'g/**',
+      '!g/back',
+    ].join('\n');
+    const paths = [
+      'foo[bar', 'a/c', 'axc', 'p/q/x3', 'x3', '1x', 'ax', 'r-', 'rm', 'zm', 'zz', 'qa', 'm/n', 'k', 'p/k', 'p/q/k',
+      't]u', 'w]v', 'wav', 'h[', 'ha', 'h]', 'deep', 'x/y/deep', 'x/deep/in', 'aaab', 'ab', 'aXaYaZb', 'x/aaab',
+      'aab', 'lib/x/gen', 'lib/x/y/gen', 'lib/gen', 'c/t', 'cat', 'g', 'g/x', 'g/back', 'g/x/y',
+    ];
+    const root = makeTempDir('ignore-diff-edge-');
+    await execa('git', ['init', '-q'], { cwd: root });
+    writeFileSync(join(root, '.gitignore'), `${patterns}\n`);
+    const checked = await execa('git', ['check-ignore', '--no-index', '--stdin', '-z'], {
+      cwd: root,
+      input: paths.join('\0'),
+      reject: false,
+    });
+    const gitIgnored = new Set(checked.stdout.split('\0').filter((s) => s.length > 0));
+    const m = compileIgnore(patterns);
+    expect(paths.filter((p) => m.ignores(p)).sort()).toEqual([...gitIgnored].sort());
+    expect(gitIgnored.size).toBeGreaterThan(15);
+    expect(paths.length - gitIgnored.size).toBeGreaterThan(15);
+  });
+
+  it('a trailing backslash, like an unterminated class, matches nothing (git aborts on both)', () => {
+    const m = compileIgnore('e\\\nfoo[bar\n');
+    expect(m.patterns).toBe(2);
+    expect(m.ignores('e\\')).toBe(false);
+    expect(m.ignores('e')).toBe(false);
+    expect(m.ignores('foo[bar')).toBe(false);
+  });
+});
+
+/**
+ * Review 3.6.1, finding 1: each pattern was a RegExp (`**` + `/` became
+ * `(?:.*\/)?`, `*` became `[^/]*`), and a `.semgrepignore` or
+ * `.guardianignore` is the scanned repository's to write. Measured on 3.6.0:
+ * `**` + `/` twelve times then `zz` took 123 ms to test one path twelve
+ * directories deep, ~4x more for every two more (7 s at nineteen);
+ * `a*` eight times then `b`, 122 ms against a 30-character name (7-300 s at
+ * twelve stars) — on the server's only thread, on every Semgrep coverage
+ * computation and before every scan's cache check.
+ */
+describe('compileIgnore — no pattern can make a test backtrack', () => {
+  const deep = `${Array.from({ length: 12 }, (_, i) => `d${String(i)}`).join('/')}/file.js`;
+
+  it('`**/` repeated costs what one `**/` does', () => {
+    const hostile = compileIgnore(`${'**/'.repeat(12)}zz`);
+    const reference = compileIgnore(`**/${'z'.repeat(35)}`);
+    expectNearReference('**/ x12', () => hostile.ignores(deep), () => reference.ignores(deep), { maxRatio: 8 });
+  });
+
+  it('`*` repeated in one name costs what one `*` does', () => {
+    const name = `x/${'a'.repeat(30)}`;
+    const hostile = compileIgnore(`${'a*'.repeat(8)}b`);
+    const reference = compileIgnore(`${'a'.repeat(15)}*b`);
+    expectNearReference('a* x8', () => hostile.ignores(name), () => reference.ignores(name), { maxRatio: 8 });
+  });
+
+  // Matching costs at most pattern x path length; patterns crafted to use
+  // all of it (a long run after a `*`, against a long name of that run) took
+  // 47 ms a path at 64 KiB of them. Past a path's step budget it is "kept".
+  const crafted = (n: number, run = 200): string =>
+    Array.from({ length: n }, (_, i) => `*${'a'.repeat(run)}b${String(i)}*`).join('\n');
+
+  it('a path whose test passes its step budget is kept, and counted — the same answer every time', () => {
+    const m = compileIgnore(`${crafted(50)}\n*.log\n`);
+    const long = `x/${'a'.repeat(250)}`;
+    expect(m.ignores(long)).toBe(false);
+    expect(m.ignores(long)).toBe(false);
+    expect(m.overBudget).toBe(2);
+    expect(m.ignores('x/app.log')).toBe(true);
+    expect(m.overBudget).toBe(2);
+  });
+
+  it('crafted patterns cost what plain ones of the same count do', () => {
+    const long = `x/${'a'.repeat(250)}`;
+    const hostile = compileIgnore(crafted(50, 100));
+    const reference = compileIgnore(Array.from({ length: 50 }, (_, i) => `*${'c'.repeat(100)}b${String(i)}*`).join('\n'));
+    // The reference's `*` tries every position once (~250 steps a pattern);
+    // the hostile one re-reads its run from each (~15 000) until the budget
+    // stops it — ~60x the reference without one, under 1x with it.
+    expectNearReference('crafted x50', () => hostile.ignores(long), () => reference.ignores(long), { maxRatio: 8 });
+  });
+
+  it('an ignore file past the caps is not applied at all, and says why', () => {
+    const big = compileIgnore(`${'a\n'.repeat(40_000)}`);
+    expect(big.refused).toMatch(/^it holds 80000 characters, more than the 65536/);
+    expect(big.patterns).toBe(0);
+    expect(big.ignores('a')).toBe(false);
+    expect(compileIgnore(Array.from({ length: 2001 }, (_, i) => `p${String(i)}`).join('\n')).refused).toMatch(/more than the 2000 patterns/);
+    expect(compileIgnore(`ok\n${'x'.repeat(4097)}\n`).refused).toMatch(/^line 2 holds 4097 characters/);
+    expect(compileIgnore('a\n'.repeat(2000)).refused).toBeUndefined();
+  });
+
+  it('loadProjectExclusions names an ignore file it does not apply — never "nothing matched"', async () => {
+    const root = makeTempDir('ignore-refused-');
+    // A name longer than the run (the test only backtracks then), short enough for Windows.
+    write(root, GUARDIAN_IGNORE_FILE, `${crafted(50, 60)}\n*.log\n`);
+    write(root, `x/${'a'.repeat(120)}`);
+    write(root, 'app.log');
+    const budget = await loadProjectExclusions(root);
+    expect(budget).toEqual({
+      file: join(root, GUARDIAN_IGNORE_FILE),
+      error: 'not applied: testing 1 path(s) against its 51 patterns took more steps than a path is allowed',
+    });
+    write(root, GUARDIAN_IGNORE_FILE, 'x'.repeat(70_000));
+    const big = await loadProjectExclusions(root);
+    expect(big !== null && 'error' in big ? big.error : '').toMatch(/^not applied: it holds 70000 characters/);
   });
 });
 
