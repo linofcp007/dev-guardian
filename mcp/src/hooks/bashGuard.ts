@@ -756,6 +756,8 @@ interface DeleteContext {
   bareDriveRoot?: boolean | undefined;
   /** What the pipe hands a PowerShell delete with no path of its own. */
   piped?: string | undefined;
+  /** The listing that hands it over walked the whole tree (`gci ~ -Recurse`): the delete needs no `-Recurse` of its own. */
+  pipedRecursive?: boolean | undefined;
 }
 
 /** `$PWD`, `${PWD}`, `$env:PWD`, `$(pwd)`, `` `pwd` `` at the start of a target. */
@@ -914,10 +916,14 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
   // Recursion decides, not force (review 8, item 1): the Bash and PowerShell
   // tools have no terminal to ask on, so `rm -r ~` and `Remove-Item ~ -Recurse`
   // delete as much as their forced forms — measured: both removed a whole tree.
-  if (!(recursive || noPreserve)) return null;
+  // A delete handed every item of a recursive listing (`gci ~ -Recurse -File |
+  // ri -Force`) deletes the tree item by item, with no `-Recurse` of its own
+  // (review of 3.6.0, finding 10).
+  const fromPipe = targets.length === 0 && ctx.piped !== undefined;
+  if (!(recursive || noPreserve || (fromPipe && ctx.pipedRecursive === true))) return null;
 
   // A PowerShell delete with no path of its own deletes what the pipe hands it.
-  if (targets.length === 0 && ctx.piped !== undefined) targets.push(ctx.piped);
+  if (fromPipe && ctx.piped !== undefined) targets.push(ctx.piped);
   if (
     noPreserve ||
     (ctx.bareDriveRoot === true && targets.some(isBareDrive)) ||
@@ -957,6 +963,25 @@ function pipedItems(words: readonly ShellWord[]): string | undefined {
   }
   if (name === 'get-item' || name === 'gi') return path ?? '.';
   return `${(path ?? '.').replace(/[\\/]+$/, '')}/*`;
+}
+
+/**
+ * Whether a `Get-ChildItem` (`gci`, `ls`, `dir`) walks the whole tree: `-Recurse`
+ * by any prefix PowerShell binds to it alone (`-rec` on — `-r` and `-re` are
+ * `-ReadOnly` too), not `:$false`, or a `-Depth`. What it lists is then every
+ * item below its path, and a delete it pipes them to deletes them all.
+ */
+function listsRecursively(words: readonly ShellWord[]): boolean {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? '');
+  if (!LISTERS.has(name) || name === 'get-item' || name === 'gi') return false;
+  return withoutRedirections(words.slice(at + 1)).some((a) => {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+    if (m === null) return false;
+    const p = (m[1] ?? '').toLowerCase();
+    const off = m[2] !== undefined && /^\$?(?:false|0)$/i.test(m[2]);
+    return !off && ((p.length >= 3 && 'recurse'.startsWith(p)) || (p.length >= 2 && 'depth'.startsWith(p)));
+  });
 }
 
 const RULE_RM_ROOT: MatchedRule = {
@@ -1046,6 +1071,30 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
     return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
+  return null;
+}
+
+/**
+ * `find … | xargs rm` (review of 3.6.0, finding 10): xargs hands the deleter
+ * every path find lists, exactly as `find … -exec rm` does, so the pipeline is
+ * judged as that — by find's start paths and its tests ({@link assessFind}).
+ * The deleter needs no recursive flag of its own: find already walked the
+ * tree (`find ~ -type f | xargs rm -f` was ok while `-exec rm` blocked).
+ * Member `c` is xargs running a deleter; the nearest `find` before it lists.
+ */
+function findPipedIntoDeleter(commands: readonly ShellWord[][], c: number, home: HomeDir | undefined, tildeUsers: boolean, ctx: DeleteContext): MatchedRule | null {
+  const words = commands[c];
+  if (words === undefined || c === 0) return null;
+  const at = resolveCommand(words).index;
+  if (!words.slice(0, at).some((w) => commandName(w.value) === 'xargs')) return null;
+  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ''))) return null;
+  for (let p = c - 1; p >= 0; p -= 1) {
+    const prev = commands[p] ?? [];
+    const f = resolveCommand(prev).index;
+    if (commandName(prev[f]?.value ?? '') === 'find') {
+      return assessFind([...prev, { value: '-delete', quoted: false }], f, home, tildeUsers, { ...ctx, piped: undefined, pipedRecursive: undefined });
+    }
+  }
   return null;
 }
 
@@ -4578,11 +4627,15 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         vars: scope.vars,
         bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true,
         piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : undefined,
+        pipedRecursive: scope.powershell === true && c > 0 ? listsRecursively(statement.commands[c - 1] ?? []) : undefined,
       };
       const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (del !== null) out.push(del);
       const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (find !== null) out.push(find);
+      // `find ~ -type f | xargs rm -f`: judged as `find … -exec rm` (finding 10).
+      const findXargs = findPipedIntoDeleter(statement.commands, c, scope.home, scope.tildeUsers !== false, deleting);
+      if (findXargs !== null) out.push(findXargs);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       // `bash <<< 'rm -rf /'`, `sh <<< "$(echo … | base64 -d)"`: the here-string is the script (review 8, item 8).
       const hereText = hereStringText(words);

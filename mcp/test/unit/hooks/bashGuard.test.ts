@@ -4566,3 +4566,34 @@ describe('assessBashCommand — review of 3.6.0: ANSI-C quoting and parameter de
     expect(assessBashCommand(command, linux).level).toBe(level);
   });
 });
+
+// Review of 3.6.0, finding 10: a mass deletion through a pipe whose deleter has
+// no recursive flag — find's walk or a recursive listing does the recursing.
+describe('assessBashCommand — review of 3.6.0: a mass deletion handed over a pipe (finding 10)', () => {
+  const win = { homeDir: 'C:\\Users\\Administrator', platform: 'win32' as const, cwd: 'C:\\Users\\Administrator\\proj' };
+
+  it.each([
+    ['find ~ -type f | xargs rm -f', 'bash', 'find-delete-root'],
+    ['find ~ -type f -print0 | xargs -0 rm -f', 'bash', 'find-delete-root'],
+    ['find / -type f | xargs rm', 'bash', 'find-delete-root'],
+    ['gci ~ -Recurse -File | ri -Force', 'powershell', 'rm-rf-root'],
+    ['Get-ChildItem C:\\ -Recurse | Remove-Item -Force', 'powershell', 'rm-rf-root'],
+    ['gci ~ -Depth 3 | ri', 'powershell', 'rm-rf-root'],
+  ] as const)('%s (%s) is denied as %s', (command, shell, rule) => {
+    expect(assessBashCommand(command, { shell, ...win }).rules).toContain(rule);
+  });
+
+  it.each([
+    ["find ~ -name '*.pyc' | xargs rm -f", 'bash', 'warn'],
+    ["find . -name '*.o' | xargs rm -f", 'bash', 'ok'],
+    ['find ./build -type f | xargs rm', 'bash', 'ok'],
+    ['find . -type f | xargs grep foo', 'bash', 'ok'],
+    ['find ~ -type f | xargs ls -l', 'bash', 'ok'],
+    ['gci ~ -File | ri -Force', 'powershell', 'ok'],
+    ['gci .\\build -Recurse | ri -Force', 'powershell', 'warn'],
+    ['gci ~ -Recurse -Filter *.tmp | ri -Force', 'powershell', 'ok'],
+    ['gci ~ -Recurse:$false | ri -Force', 'powershell', 'ok'],
+  ] as const)('%s (%s) keeps the verdict -exec / -Recurse would get: %s', (command, shell, level) => {
+    expect(assessBashCommand(command, { shell, ...win }).level).toBe(level);
+  });
+});
