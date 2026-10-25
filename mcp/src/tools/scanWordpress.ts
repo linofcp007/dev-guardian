@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { historyState } from '../runners/git.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
-import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
+import { phpcsParser, phpcsUnprocessed } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
@@ -262,11 +262,20 @@ registerToolModule(
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: phpcsParser, input: raw });
             const ok = r.outcome === 'completed' || r.exitCode === 1 || r.exitCode === 2;
+            // A file PHPCS did not process (a sniff threw, the tokenizer refused it, no PHP code):
+            // named, and the pass missing too — never findings of an `ok` pass (3.6.1).
+            const partial = ok && raw ? phpcsUnprocessed(raw, ctx.projectPath) : [];
             tools_run.push({
               name: 'phpcs-wpcs',
               status: ok ? 'ok' : 'failed',
-              reason: ok ? undefined : `phpcs exit ${r.exitCode}`,
+              reason: ok
+                ? partial.length > 0
+                  ? describePartialParse(partial, 'their WordPress coding-standard findings may be missing')
+                  : undefined
+                : `phpcs exit ${r.exitCode}`,
+              ...(partial.length > 0 ? { partially_parsed: partial } : {}),
             } as ToolRun);
+            if (partial.length > 0) missing_tools.push('phpcs-wpcs');
           })(),
         );
       } else {
