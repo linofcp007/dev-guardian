@@ -41,6 +41,7 @@ import {
   severityBar,
   severityChip,
 } from '../report/htmlTheme.js';
+import { mdCell, mdCode, mdCodeCell, mdInline } from '../report/markdownText.js';
 import { owaspCoverageHtml, owaspCoverageMarkdown, taxonomyCell } from '../report/owaspCoverage.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
@@ -379,25 +380,6 @@ function splitByIndependence(llm: LlmReportData, findings: readonly Finding[]): 
   return `subagent ${n.subagent} · sampling ${n.sampling} · same_context ${n.same_context}`;
 }
 
-/** Longest model-written text one report line carries. */
-const MD_INLINE_MAX = 2_000;
-
-/**
- * Model-written text (a verdict's decisive line and reasoning, a hunt
- * finding's title) as inline markdown: one line, and no markup a viewer
- * would act on. The repository under scan can steer the model's words, so a
- * newline must not open a heading or a list item, and an image, a link, raw
- * HTML or emphasis must print as the characters they are.
- */
-export function mdInline(s: string): string {
-  const one = s.replace(/\s+/g, ' ').trim();
-  const cut = one.length > MD_INLINE_MAX ? `${one.slice(0, MD_INLINE_MAX)}…` : one;
-  return cut.replace(/[\\`*_[\]<>|!~#&]/g, (c) => `\\${c}`);
-}
-
-/** A location as an inline code span: one line, and no backtick to close the span early. */
-const mdCode = (s: string): string => `\`${s.replace(/\s+/g, ' ').replace(/`/g, "'")}\``;
-
 function llmMarkdown(findings: readonly Finding[], llm: LlmReportData): string[] {
   const judged = entriesOf(findings, llm.markers);
   const lines: string[] = [];
@@ -459,7 +441,7 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
   lines.push(`- **Type:** ${scan.scan_type}`);
   lines.push(`- **Status:** ${scan.status}`);
   lines.push(`- **Started:** ${scan.started_at}`);
-  lines.push(`- **Project:** \`${scan.project_path}\``);
+  lines.push(`- **Project:** ${mdCode(scan.project_path)}`);
   lines.push('');
   lines.push(
     `**Severity:** critical ${counts.critical} · high ${counts.high} · medium ${counts.medium} · low ${counts.low} · info ${counts.info}`,
@@ -472,10 +454,11 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
   } else {
     lines.push('| Sev | Tool | Rule | Title | Location | CWE / OWASP 2025 |');
     lines.push('| --- | --- | --- | --- | --- | --- |');
+    // Every cell but the severity is the repository's text (report/markdownText.ts).
     for (const f of [...findings].sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))) {
-      const loc = f.file_path ? `\`${f.file_path}${f.line_start ? `:${f.line_start}` : ''}\`` : '';
       lines.push(
-        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ''}\` | ${mdEscape(f.title)} | ${loc} | ${taxonomyCell(f)} |`,
+        `| ${f.severity} | ${mdCell(f.tool)} | ${mdCodeCell(f.rule_id ?? '')} | ${mdCell(f.title)} | ` +
+          `${mdCodeCell(locationOf(f))} | ${mdCell(taxonomyCell(f))} |`,
       );
     }
   }
@@ -490,7 +473,8 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
     lines.push('| --- | --- | --- | --- | --- |');
     for (const c of cves) {
       lines.push(
-        `| ${c.cve_id} | ${c.severity} | ${c.package_name} | ${c.installed_version ?? ''} | ${c.fixed_version ?? ''} |`,
+        `| ${mdCell(c.cve_id)} | ${c.severity} | ${mdCell(c.package_name)} | ${mdCell(c.installed_version ?? '')} | ` +
+          `${mdCell(c.fixed_version ?? '')} |`,
       );
     }
   }
@@ -500,10 +484,6 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
       "Semgrep's registry mode sends metrics — pass `local_only: true` to avoid it._",
   );
   return lines.join('\n');
-}
-
-function mdEscape(s: string): string {
-  return s.replace(/\|/g, '\\|');
 }
 
 const SCAN_TITLE: Record<Lang, string> = {
@@ -551,7 +531,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
   const cveRows = cves
     .map(
       (c) => `<tr>
-  <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(c.cve_id)}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
+  <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(c.cve_id))}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
   <td>${severityChip(c.severity)}</td>
   <td>${escapeHtml(c.package_name)}</td>
   <td><code>${escapeHtml(c.installed_version ?? '')}</code></td>

@@ -18,6 +18,7 @@
 import type { OwaspCategoryCoverage, OwaspCoverage, OwaspTestedBy } from '../frameworks/coverage.js';
 import type { Finding } from '../types.js';
 import { escapeHtml } from './htmlTheme.js';
+import { mdCell } from './markdownText.js';
 
 /** `CWE-89 · A05:2025` — or `—` when the finding's taxonomy is unknown. */
 export function taxonomyCell(f: Pick<Finding, 'cwe' | 'owasp'>): string {
@@ -104,12 +105,14 @@ export function owaspCoverageMarkdown(cov: OwaspCoverage): string[] {
   lines.push('');
   lines.push('| Category | Coverage | Tested by | Findings |');
   lines.push('| --- | --- | --- | --- |');
+  // A run's tool name can be the repository's (an imported SARIF log names its
+  // own driver), and the reasons name the runs (report/markdownText.ts).
   for (const c of cov.categories) {
-    lines.push(`| ${c.id} ${c.title} | ${statusLabel(c)} | ${testedByText(c.tested_by)} | ${c.findings} |`);
+    lines.push(`| ${c.id} ${c.title} | ${statusLabel(c)} | ${mdCell(testedByText(c.tested_by))} | ${c.findings} |`);
   }
   lines.push('');
   for (const c of cov.categories) {
-    if (c.status === 'partial') lines.push(`- ${c.id} partial: ${c.reasons.join('; ')}.`);
+    if (c.status === 'partial') lines.push(`- ${c.id} partial: ${mdCell(c.reasons.join('; '))}.`);
   }
   for (const c of cov.categories) {
     if (c.status === 'not_tested') lines.push(`- ${c.id}: ${untestedHint(c, cov)}.`);

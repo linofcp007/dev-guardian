@@ -17,7 +17,7 @@ import { toFindingValidation } from '../../src/llmscan/submission.js';
 import type { Independence, LlmVerdict } from '../../src/llmscan/types.js';
 import { RESOURCES } from '../../src/resources/index.js';
 import type { Storage } from '../../src/storage/index.js';
-import { mdInline } from '../../src/tools/reportExport.js';
+import { mdInline } from '../../src/report/markdownText.js';
 import { callTool, harness, seedScan, type Harness, type SeedSpec } from '../helpers/llmScanHarness.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
 import { okResult } from '../helpers/toolResult.js';
