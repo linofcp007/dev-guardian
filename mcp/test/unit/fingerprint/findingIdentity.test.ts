@@ -350,6 +350,40 @@ describe('assignIdentities — credential findings are never keyed on their line
     expect(new Set(out.map((f) => f.identity)).size).toBe(2);
   });
 
+  // The value is not in the identity, so the occurrence alone tells two
+  // secrets of one rule in one file apart. Counted by line alone, a real key
+  // added ABOVE a suppressed fixture key took occurrence 0 — the identity the
+  // suppression named — and was hidden, the suppression moving onto it.
+  it('a secret added above another of its rule in its file never takes that one\'s identity', () => {
+    const dir = project({ '.env': 'A=1\nFAKE=x\n' });
+    const secret = (line: number): Finding => makeFinding({
+      tool: 'trivy', rule_id: 'generic-password', severity: 'high', category: 'security',
+      subcategory: 'secret', title: 's', file_path: '.env', line_start: line, line_end: line,
+    });
+    const suppressed = only(identify(dir, [secret(2)]));
+    writeFiles(dir, { '.env': '# header\nA=1\nFAKE=x\n' });
+    // Alone, it keeps its identity when it moves.
+    expect(only(identify(dir, [secret(3)])).identity).toBe(suppressed.identity);
+    writeFiles(dir, { '.env': 'REAL=y\nA=1\nFAKE=x\n' });
+    const [real, fake] = identify(dir, [secret(1), secret(3)]);
+    expect(real?.identity).not.toBe(suppressed.identity);
+    expect(fake?.identity).not.toBe(suppressed.identity);
+    expect(real?.identity).not.toBe(fake?.identity);
+  });
+
+  it('keeps the identities of the secrets one commit holds: no secret can join that commit later', () => {
+    const dir = project({});
+    const locator = 'rule=generic-api-key;commit=0123456789abcdef0123456789abcdef01234567';
+    const leak = (line: number): Finding => makeFinding({
+      tool: 'gitleaks', rule_id: 'generic-api-key', severity: 'high', category: 'security',
+      subcategory: 'secret', title: 's', file_path: '.env', line_start: line, line_end: line, snippet: locator,
+    });
+    const contentKey = sha(`secret\ngeneric-api-key\n${locator}`);
+    const recipe = (occurrence: number): string =>
+      sha(JSON.stringify([1, 'gitleaks', 'generic-api-key', '.env', contentKey, occurrence]));
+    expect(identify(dir, [leak(1), leak(2)]).map((f) => f.identity)).toEqual([recipe(0), recipe(1)]);
+  });
+
   it('recognises credential rules by name, and not rules that merely mention a token', () => {
     for (const f of [
       { subcategory: 'secret' },
