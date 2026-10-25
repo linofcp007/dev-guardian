@@ -41,6 +41,7 @@ import { listProjectDirOrNull, realpathInProject } from '../platform/projectFs.j
 import { ensureUserBinOnPath, spotbugsHome, spotbugsJar } from '../platform/userBin.js';
 import { scannerAvailable } from '../tools/scanHelpers.js';
 import type { PartialParse, ToolRun } from '../types.js';
+import { javaUtf8Env } from './detektRun.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { asArray, getProp, getString, parseInputAsJson, toPosixPath, toRelativeIfPossible } from './scannerParsers/index.js';
 
@@ -342,7 +343,8 @@ export async function spotbugsClasses(args: {
       ...found.dirs.map(abs),
     ],
     cwd: args.projectPath,
-    env: args.env,
+    // File names in UTF-8 on Linux with no locale (`runners/detektRun.ts#javaUtf8Env`).
+    env: javaUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),
     timeoutMs: SPOTBUGS_TIMEOUT_MS,

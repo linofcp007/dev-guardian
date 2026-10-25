@@ -89,6 +89,22 @@ export const DETEKT_BASE_CONFIG = [
   '',
 ].join('\n');
 
+/**
+ * The environment a Java scanner (detekt, SpotBugs) runs in: on Linux with no
+ * UTF-8 locale (`LC_ALL`, `LC_CTYPE`, `LANG` — none set in a container),
+ * `LC_ALL=C.UTF-8`. Java takes the encoding of file names from the locale, and
+ * without one it was ASCII: measured in `node:22-trixie`, detekt's walk stopped
+ * at a `日本.kt` ("Malformed input or input contains unmappable characters")
+ * and the run failed; with `C.UTF-8` it read it. macOS and Windows name files
+ * their own way.
+ */
+export function javaUtf8Env(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (platform !== 'linux') return env;
+  const merged = { ...base, ...env };
+  const locale = merged['LC_ALL'] || merged['LC_CTYPE'] || merged['LANG'] || '';
+  return /utf-?8/i.test(locale) ? env : { ...env, LC_ALL: 'C.UTF-8' };
+}
+
 /** The project's Kotlin among `files` (project-relative): `.kt` and `.kts`. */
 export function kotlinSources(files: readonly string[]): string[] {
   return files.map(toPosixPath).filter((f) => /\.kts?$/i.test(f)).sort();
@@ -239,7 +255,7 @@ export async function detektFiles(args: {
       '--parallel',
     ],
     cwd: args.projectPath,
-    env: args.env,
+    env: javaUtf8Env(args.env),
     signal: args.signal,
     ...(args.onLog ? { onLog: args.onLog } : {}),
   });

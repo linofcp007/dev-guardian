@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { DETEKT_BASE_CONFIG, DETEKT_EXCLUDES, judgeDetekt, keepListed, kotlinSources } from '../../../src/runners/detektRun.js';
+import { DETEKT_BASE_CONFIG, DETEKT_EXCLUDES, javaUtf8Env, judgeDetekt, keepListed, kotlinSources } from '../../../src/runners/detektRun.js';
 import { detektParser } from '../../../src/runners/scannerParsers/detekt.js';
 
 const ROOT = resolve('fixture-project');
@@ -74,6 +74,17 @@ describe('keepListed and the walk', () => {
 
   it('the walk leaves out build output, tools and dependencies', () => {
     for (const d of ['build', 'target', '.gradle', '.git', '.guardian', 'node_modules', 'vendor']) expect(DETEKT_EXCLUDES).toContain(`**/${d}/**`);
+  });
+});
+
+describe('javaUtf8Env', () => {
+  it('Linux with no UTF-8 locale: LC_ALL=C.UTF-8; a UTF-8 one kept; other systems as they are', () => {
+    expect(javaUtf8Env({ A: '1' }, 'linux', {})).toEqual({ A: '1', LC_ALL: 'C.UTF-8' });
+    expect(javaUtf8Env({}, 'linux', { LANG: 'C' })).toEqual({ LC_ALL: 'C.UTF-8' });
+    expect(javaUtf8Env({}, 'linux', { LANG: 'pt_PT.UTF-8' })).toEqual({});
+    expect(javaUtf8Env({ LC_ALL: 'en_US.utf8' }, 'linux', {})).toEqual({ LC_ALL: 'en_US.utf8' });
+    expect(javaUtf8Env({}, 'darwin', {})).toEqual({});
+    expect(javaUtf8Env({}, 'win32', {})).toEqual({});
   });
 });
 
