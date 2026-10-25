@@ -11,14 +11,18 @@ r() { printf '\033[31m%s\033[0m\n' "$*"; }
 b() { printf '\033[34m%s\033[0m\n' "$*"; }
 has() { command -v "$1" > /dev/null 2>&1; }
 
-# Garante Homebrew
+# Homebrew tem de existir antes. Este script corria o instalador do Homebrew a
+# partir do HEAD de uma branch (`curl … | bash`), sem versão nem soma — o
+# contrário da regra de todos os outros instaladores daqui (revisão 3.6.1).
+# Instalá-lo é uma decisão do utilizador, com o comando que o Homebrew publica.
+if ! has brew && [ -x /opt/homebrew/bin/brew ]; then
+  # Apple Silicon: instalado, mas fora do PATH desta shell.
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+fi
 if ! has brew; then
-  b "Instalando Homebrew..."
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  # Apple Silicon
-  if [ -d /opt/homebrew/bin ]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-  fi
+  r "✗ Homebrew não está instalado."
+  y "  Instala-o com o comando de https://brew.sh (lê-o antes de o correr) e volta a correr este script."
+  exit 1
 fi
 g "✓ Homebrew"
 
