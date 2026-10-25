@@ -18,9 +18,19 @@
  * request having failed.
  */
 
+import { mebibytes, readJsonCapped } from '../platform/httpBody.js';
+
 const EPSS_URL = 'https://api.first.org/data/v1/epss';
 const DEFAULT_TIMEOUT_MS = 6000;
 const CHUNK = 100;
+/**
+ * Batches in flight at once. They went one after the other, 6 s each: past
+ * ~1000 CVEs a call ran beyond the host's 60 s budget (review of 3.6.0).
+ * `enrich.ts` sends at most 1000 per call, so ten batches, three rounds.
+ */
+const IN_FLIGHT = 4;
+/** A batch answers in a few KB; past this it is not read. */
+const MAX_BATCH_BYTES = 4 * 1024 * 1024;
 
 interface EpssEntry {
   score: number;
@@ -47,15 +57,24 @@ export async function queryEpss(
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === 'function' ? fetch : undefined);
   if (fetchImpl === undefined) return { ok: false, reason: 'no fetch implementation available' };
 
-  const scores = new Map<string, EpssEntry>();
+  const urls: string[] = [];
   for (let i = 0; i < ids.length; i += CHUNK) {
-    const chunk = ids.slice(i, i + CHUNK);
-    const url = `${EPSS_URL}?cve=${chunk.map(encodeURIComponent).join(',')}`;
-    const result = await fetchOneBatch(url, fetchImpl, opts);
-    if (!result.ok) return result;
-    for (const [cveId, entry] of result.scores) scores.set(cveId, entry);
+    urls.push(`${EPSS_URL}?cve=${ids.slice(i, i + CHUNK).map(encodeURIComponent).join(',')}`);
   }
-  return { ok: true, scores };
+  const scores = new Map<string, EpssEntry>();
+  let failure: EpssQueryResult | null = null;
+  let next = 0;
+  const work = async (): Promise<void> => {
+    // A failed batch fails the whole query (the caller's contract), so the
+    // other lanes stop taking batches once one has.
+    for (let i = next++; i < urls.length && failure === null; i = next++) {
+      const result = await fetchOneBatch(urls[i] ?? '', fetchImpl, opts);
+      if (!result.ok) failure ??= result;
+      else for (const [cveId, entry] of result.scores) scores.set(cveId, entry);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(IN_FLIGHT, urls.length) }, work));
+  return failure ?? { ok: true, scores };
 }
 
 async function fetchOneBatch(
@@ -72,7 +91,9 @@ async function fetchOneBatch(
   try {
     const res = await fetchImpl(url, { signal: controller.signal });
     if (!res.ok) return { ok: false, reason: `FIRST EPSS returned http ${res.status}` };
-    const json = (await res.json()) as { data?: unknown };
+    const read = await readJsonCapped(res, MAX_BATCH_BYTES);
+    if (read === null) return { ok: false, reason: `FIRST EPSS answer is over ${mebibytes(MAX_BATCH_BYTES)}, not read` };
+    const json = (read.json ?? {}) as { data?: unknown };
     return { ok: true, scores: parseEntries(json.data) };
   } catch (e) {
     return { ok: false, reason: describeFetchError(e) };
