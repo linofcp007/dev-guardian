@@ -51,9 +51,10 @@ const tool = defineTool({
   title: 'Audit the agent workspace configuration',
   description:
     "Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, " +
-    'plugin.json; user-level ones with include_user_config): unpinned npx/uvx servers, plain-http remote ' +
-    'servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach ' +
-    'the network, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. ' +
+    'plugin.json, hooks/hooks.json; user-level ones with include_user_config): unpinned npx/uvx servers, ' +
+    'plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, ' +
+    'hooks that reach the network or run what scan_skill flags, ${VAR} placeholders Claude Code does not ' +
+    'expand, entries changed since the last audit. ' +
     'Reads only; audit_mcp_tools inspects what servers serve.',
   inputSchema,
   handler: (input, ctx) => handler(input, ctx),
