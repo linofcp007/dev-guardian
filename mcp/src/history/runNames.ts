@@ -281,6 +281,13 @@ export const RUN_NAMES = {
   // compliance_check: its policy-document walk, and the RGPD Semgrep pack
   // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
   'policy-docs': scanner(),
+
+  // A `diff.staged` scope whose files changed again since `git add`
+  // (`platform/scope.ts#STAGED_CONTENT_GAP`): the scanners read those files'
+  // working-tree content, so what they report was measured — only not on the
+  // content the commit carries. A coverage gap, no finding of its own; the
+  // scan is scoped, so it never feeds the open set.
+  'staged-content': scanner(),
   'semgrep-rgpd': scanner('semgrep'),
 
   // scan_skill.

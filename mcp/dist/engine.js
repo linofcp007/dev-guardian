@@ -37813,6 +37813,7 @@ async function resolveScope(projectPath, scope, opts) {
   let touched = null;
   let history = null;
   let contentFiles;
+  let notAsStaged = [];
   const meta = {};
   if (diff !== void 0 || since !== void 0) {
     const change = diff !== void 0 ? await resolveDiff(projectPath, diff) : await resolveSince(projectPath, since ?? "");
@@ -37820,6 +37821,7 @@ async function resolveScope(projectPath, scope, opts) {
     const inPaths = (p) => pathPart === null || pathPart.member(p);
     files = change.files.filter(inPaths);
     contentFiles = change.contentFiles.filter(inPaths);
+    notAsStaged = (change.notAsStaged ?? []).filter(inPaths);
     touched = new Set([...change.touched, ...change.files].filter(inPaths));
     history = change.history;
     Object.assign(meta, change.meta);
@@ -37833,6 +37835,7 @@ async function resolveScope(projectPath, scope, opts) {
   const before = files.length;
   files = files.filter((p) => !ignored(p));
   contentFiles = contentFiles.filter((p) => !ignored(p));
+  notAsStaged = notAsStaged.filter((p) => !ignored(p));
   const excludedByIgnore = before - files.length;
   const fileSet = new Set(files);
   const touchedSet = touched;
@@ -37849,10 +37852,22 @@ async function resolveScope(projectPath, scope, opts) {
     files: files.length,
     ...excludedByIgnore > 0 ? { files_excluded_by_guardianignore: excludedByIgnore } : {}
   };
+  const content = createHash9("sha256");
+  for (const rel2 of [.../* @__PURE__ */ new Set([...files, ...contentFiles])].sort()) {
+    content.update(`${rel2}:${await hashProjectFile(projectPath, rel2)}
+`);
+  }
   const cacheState = {
-    scope: createHash9("sha256").update(JSON.stringify({ files, touched: touched === null ? null : [...touched].sort(), history })).digest("hex")
+    scope: createHash9("sha256").update(
+      JSON.stringify({
+        files,
+        touched: touched === null ? null : [...touched].sort(),
+        history,
+        content: content.digest("hex")
+      })
+    ).digest("hex")
   };
-  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore };
+  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore, notAsStaged };
 }
 function resolvePaths(projectPath, entries2) {
   const root = realOrSelf(projectPath);
@@ -38065,8 +38080,13 @@ async function resolveDiff(projectPath, diff) {
   }
   const includeUntracked = diff.include_untracked ?? diff.staged !== true;
   let tracked;
+  let notAsStaged = [];
   if (diff.staged === true) {
     tracked = hasCommits ? await listZ(projectPath, ["diff", "-z", "--name-only", "--relative", "--cached", "--diff-filter=ACMR", "--no-renames", "HEAD", "--"]) : await listZ(projectPath, ["ls-files", "-z", "--cached"]);
+    const unstaged = new Set(
+      await listZ(projectPath, ["diff", "-z", "--name-only", "--relative", "--no-renames", "--ignore-submodules=dirty", "--"])
+    );
+    notAsStaged = tracked.filter((f) => unstaged.has(f)).sort();
   } else {
     tracked = hasCommits ? await listZ(projectPath, [
       "diff",
@@ -38087,6 +38107,7 @@ async function resolveDiff(projectPath, diff) {
     touched: [],
     contentFiles: files,
     history: null,
+    notAsStaged,
     meta: { diff: { staged: diff.staged === true, include_untracked: includeUntracked } }
   };
 }
@@ -38140,7 +38161,7 @@ async function resolveSince(projectPath, since) {
     meta: { since, since_date: date4, head_sha: headSha }
   };
 }
-var ScanScopeInput, ScopeError, UNTRACKED_LINK_HINT, ISO_DATE, RELATIVE_DATE;
+var ScanScopeInput, ScopeError, STAGED_CONTENT_GAP, UNTRACKED_LINK_HINT, ISO_DATE, RELATIVE_DATE;
 var init_scope = __esm({
   "src/platform/scope.ts"() {
     "use strict";
@@ -38172,9 +38193,128 @@ var init_scope = __esm({
       }
       code;
     };
+    STAGED_CONTENT_GAP = "staged-content";
     UNTRACKED_LINK_HINT = " (an untracked path: add it to .gitignore, or pass scope.diff.include_untracked: false)";
     ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2})?)?$/;
     RELATIVE_DATE = /^(\d{1,4})[ .](second|minute|hour|day|week|month|year)s?[ .]ago$/i;
+  }
+});
+
+// src/budgets/budgets.ts
+import { join as join36 } from "node:path";
+function loadBudgets(projectPath) {
+  const path3 = join36(projectPath, ...BUDGETS_RELATIVE_PATH.split("/"));
+  const read3 = readProjectText(projectPath, path3, 1024 * 1024);
+  if (read3.status === "absent") return { kind: "none" };
+  if (read3.status === "refused") {
+    return { kind: "invalid", path: path3, error: `the file was not read: ${describeReadRefusal(read3.reason)}` };
+  }
+  const parsed2 = parseYamlBounded(read3.text);
+  if (!parsed2.ok) {
+    return {
+      kind: "invalid",
+      path: path3,
+      error: parsed2.reason === "invalid" ? `invalid YAML: ${parsed2.detail ?? "unparsable"}` : `the file was not read: ${describeYamlRefusal(parsed2)}`
+    };
+  }
+  const doc = parsed2.value;
+  if (!isRecord3(doc)) {
+    return { kind: "invalid", path: path3, error: "the document must be a mapping with perf: and/or quality: keys" };
+  }
+  const knownTopLevel = /* @__PURE__ */ new Set(["perf", "quality"]);
+  for (const key of Object.keys(doc)) {
+    if (!knownTopLevel.has(key)) {
+      return { kind: "invalid", path: path3, error: `unrecognised top-level key "${key}" (only perf, quality)` };
+    }
+  }
+  const budgets = {};
+  if ("perf" in doc) {
+    const parsed3 = parseSection(doc["perf"], PERF_FIELDS, "perf");
+    if (typeof parsed3 === "string") return { kind: "invalid", path: path3, error: parsed3 };
+    budgets.perf = parsed3;
+  }
+  if ("quality" in doc) {
+    const parsed3 = parseSection(doc["quality"], QUALITY_FIELDS, "quality");
+    if (typeof parsed3 === "string") return { kind: "invalid", path: path3, error: parsed3 };
+    budgets.quality = parsed3;
+  }
+  return { kind: "loaded", path: path3, budgets };
+}
+function parseSection(raw, fields, sectionName) {
+  if (!isRecord3(raw)) return `"${sectionName}:" must be a mapping of budget name to number`;
+  const known = new Set(fields);
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!known.has(key)) return `unrecognised ${sectionName} budget "${key}" (known: ${fields.join(", ")})`;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return `${sectionName}.${key} must be a number, got ${JSON.stringify(value)}`;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+function evaluatePerfBudgets(measured, budgets) {
+  if (!budgets) return [];
+  const violations = [];
+  for (const key of PERF_FIELDS) {
+    const limit = budgets[key];
+    const value = measured[key];
+    if (limit === void 0 || value === void 0 || value === null) continue;
+    if (value > limit) violations.push({ budget: `perf.${key}`, measured: value, limit, unit: PERF_UNITS[key] });
+  }
+  return violations;
+}
+function evaluateQualityBudgets(measured, budgets) {
+  if (!budgets) return [];
+  const violations = [];
+  for (const key of QUALITY_FIELDS) {
+    const limit = budgets[key];
+    const value = measured[key];
+    if (limit === void 0 || value === void 0 || value === null) continue;
+    if (value > limit) violations.push({ budget: `quality.${key}`, measured: value, limit, unit: QUALITY_UNITS[key] });
+  }
+  return violations;
+}
+function budgetViolationFindings(violations, filePath) {
+  return violations.map((v) => {
+    const category = v.budget.startsWith("perf.") ? "performance" : "quality";
+    return makeFinding({
+      tool: "budgets",
+      rule_id: v.budget,
+      severity: "medium",
+      category,
+      subcategory: "budget",
+      title: `${v.budget} over budget: ${v.measured}${v.unit} > ${v.limit}${v.unit}`,
+      message: `${v.budget} measured ${v.measured}${v.unit}, over the ${v.limit}${v.unit} budget set in ${filePath}. Either bring it back under budget or, if the budget itself is wrong, edit that file \u2014 it is the single source of truth perf_check and quality_check both read.`,
+      file_path: filePath,
+      fix_available: false
+    });
+  });
+}
+function isRecord3(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+var BUDGETS_RELATIVE_PATH, PERF_FIELDS, QUALITY_FIELDS, PERF_UNITS, QUALITY_UNITS;
+var init_budgets = __esm({
+  "src/budgets/budgets.ts"() {
+    "use strict";
+    init_projectFs();
+    init_boundedParse();
+    init_scannerParsers();
+    BUDGETS_RELATIVE_PATH = ".guardian/budgets.yml";
+    PERF_FIELDS = ["lcp_ms", "inp_ms", "cls", "tbt_ms", "bundle_size_kb"];
+    QUALITY_FIELDS = ["duplication_pct", "complexity"];
+    PERF_UNITS = {
+      lcp_ms: "ms",
+      inp_ms: "ms",
+      cls: "",
+      tbt_ms: "ms",
+      bundle_size_kb: "KB"
+    };
+    QUALITY_UNITS = {
+      duplication_pct: "%",
+      complexity: ""
+    };
   }
 });
 
@@ -38378,7 +38518,7 @@ var init_filter = __esm({
 // src/treeHash/cacheKey.ts
 import { createHash as createHash10 } from "node:crypto";
 import { readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
-import { join as join36, relative as relative11, sep as sep9 } from "node:path";
+import { join as join37, relative as relative11, sep as sep9 } from "node:path";
 function sha2563(text2) {
   return createHash10("sha256").update(text2).digest("hex");
 }
@@ -38406,7 +38546,7 @@ function listFilesRecursive(dir) {
       return;
     }
     for (const entry of entries2) {
-      const abs = join36(current, entry.name);
+      const abs = join37(current, entry.name);
       if (entry.isDirectory()) walk5(abs);
       else if (entry.isFile()) out.push(relative11(dir, abs).split(sep9).join("/"));
     }
@@ -38427,7 +38567,7 @@ function describePack(entry) {
     return `file:${entry}:${hashRegularFileSync(entry) ?? "unreadable"}`;
   }
   if (isDir) {
-    const parts = listFilesRecursive(entry).map((rel2) => `${rel2}:${hashRegularFileSync(join36(entry, rel2)) ?? "unreadable"}`);
+    const parts = listFilesRecursive(entry).map((rel2) => `${rel2}:${hashRegularFileSync(join37(entry, rel2)) ?? "unreadable"}`);
     return `dir:${entry}:${sha2563(parts.join("\n"))}`;
   }
   return `ref:${entry}`;
@@ -38495,6 +38635,148 @@ var init_gitState = __esm({
     "use strict";
     init_gitSafety();
     init_gitExec();
+  }
+});
+
+// src/tools/scanHelpers.ts
+import { createHash as createHash11 } from "node:crypto";
+import { lstatSync as lstatSync10, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
+import { homedir as homedir6, tmpdir as tmpdir3, userInfo } from "node:os";
+import { dirname as dirname15, join as join38 } from "node:path";
+async function scannerAvailable(name) {
+  const hit = scannerPathCache.get(name);
+  if (hit && (hit.path !== null || Date.now() - hit.at < NEGATIVE_SCANNER_CACHE_TTL_MS)) {
+    return hit.path;
+  }
+  ensureUserBinOnPath();
+  const resolved = await resolveBinary(name);
+  scannerPathCache.set(name, { path: resolved, at: Date.now() });
+  return resolved;
+}
+function resetScannerCache() {
+  scannerPathCache.clear();
+  resetTrivyVersionCache();
+}
+function ensureReportDir(projectPath, scanId, prefix) {
+  const short2 = scanId.slice(0, 8);
+  const made = makeProjectDir(projectPath, join38(".guardian", "reports", `${prefix}-${short2}`));
+  if (made !== null) {
+    if (heldScans.has(scanId)) heldDirs.set(made, scanId);
+    pruneReports(dirname15(made), prefix, made);
+    return made;
+  }
+  process.stderr.write(
+    `[dev-guardian] ${join38(projectPath, ".guardian", "reports")} is a link or not a directory; this scan's reports go to the temp directory instead
+`
+  );
+  const fallback = mkdtempSync2(join38(tmpdir3(), `${TEMP_REPORTS_PREFIX}${prefix}-`));
+  try {
+    writeFileSync6(join38(fallback, OWNER_MARKER), accountToken(), { flag: "wx" });
+  } catch {
+  }
+  if (heldScans.has(scanId)) heldDirs.set(fallback, scanId);
+  pruneReports(tmpdir3(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`, { markedOnly: true });
+  return fallback;
+}
+function holdReportDirs(scanId) {
+  heldScans.set(scanId, (heldScans.get(scanId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (heldScans.get(scanId) ?? 1) - 1;
+    if (left > 0) {
+      heldScans.set(scanId, left);
+      return;
+    }
+    heldScans.delete(scanId);
+    for (const [dir, id] of heldDirs) if (id === scanId) heldDirs.delete(dir);
+  };
+}
+function accountToken() {
+  let user = "";
+  try {
+    user = userInfo().username;
+  } catch {
+  }
+  return createHash11("sha256").update(`dev-guardian-owner
+${user}
+${homedir6()}`).digest("hex");
+}
+function markedByThisAccount(dir) {
+  return readSmallTextFile(join38(dir, OWNER_MARKER), 256)?.trim() === accountToken();
+}
+function keptReports() {
+  const n = Number(process.env["GUARDIAN_KEEP_REPORTS"]);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_KEPT_REPORTS;
+}
+function pruneReports(reportsDir, prefix, current, name = prefix, opts = {}) {
+  if (!PRUNED_REPORT_PREFIXES.has(prefix)) return;
+  let entries2;
+  try {
+    entries2 = readdirSync11(reportsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const uid = process.getuid?.();
+  const others = [];
+  for (const e of entries2) {
+    if (!e.isDirectory() || !e.name.startsWith(`${name}-`)) continue;
+    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(name.length + 1))) continue;
+    const path3 = join38(reportsDir, e.name);
+    if (path3 === current || heldDirs.has(path3)) continue;
+    try {
+      const st = lstatSync10(path3);
+      if (!st.isDirectory() || st.isSymbolicLink() || uid !== void 0 && st.uid !== uid) continue;
+      if (opts.markedOnly !== true || markedByThisAccount(path3)) {
+        others.push({ path: path3, mtime: st.mtimeMs });
+      }
+    } catch {
+    }
+  }
+  others.sort((a, b) => b.mtime - a.mtime);
+  for (const d of others.slice(Math.max(0, keptReports() - 1))) {
+    try {
+      rmSync4(d.path, { recursive: true, force: true });
+    } catch {
+    }
+  }
+}
+function readJsonSafe(path3) {
+  return readSmallTextFile(path3, MAX_REPORT_BYTES2) ?? null;
+}
+var NEGATIVE_SCANNER_CACHE_TTL_MS, scannerPathCache, heldScans, heldDirs, TEMP_REPORTS_PREFIX, OWNER_MARKER, DEFAULT_KEPT_REPORTS, PRUNED_REPORT_PREFIXES, MAX_REPORT_BYTES2;
+var init_scanHelpers = __esm({
+  "src/tools/scanHelpers.ts"() {
+    "use strict";
+    init_configFile();
+    init_pkgManagerDetect();
+    init_projectFs();
+    init_userBin();
+    init_trivyRun();
+    NEGATIVE_SCANNER_CACHE_TTL_MS = 6e4;
+    scannerPathCache = /* @__PURE__ */ new Map();
+    heldScans = /* @__PURE__ */ new Map();
+    heldDirs = /* @__PURE__ */ new Map();
+    TEMP_REPORTS_PREFIX = "guardian-reports-";
+    OWNER_MARKER = ".dev-guardian-owner";
+    DEFAULT_KEPT_REPORTS = 3;
+    PRUNED_REPORT_PREFIXES = /* @__PURE__ */ new Set([
+      "sast",
+      "bugs",
+      "compliance",
+      "depsaudit",
+      "deps",
+      "iac",
+      "secrets",
+      "surface",
+      "review",
+      "containers",
+      "quality",
+      "wordpress",
+      "init-secrets"
+    ]);
+    MAX_REPORT_BYTES2 = 512 * 1024 * 1024;
   }
 });
 
@@ -38602,6 +38884,8 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   }
   if (scope !== null) cacheState = { ...cacheState, scope: scope.cacheState["scope"] ?? "" };
   if (exclusions !== null) cacheState = { ...cacheState, guardianignore: exclusions.hash };
+  const settings = await guardianSettingsState(projectPath, configRoot);
+  if (settings !== null) cacheState = { ...cacheState, guardian_settings: settings };
   const cacheKey = buildCacheKey(config2, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
   if (config2.configWarnings) {
     try {
@@ -38611,7 +38895,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
   }
   const ttl = config2.cacheTtlMs ?? FIVE_MINUTES_MS;
   const fresh = new Date(Date.now() - ttl).toISOString();
-  if (input.force !== true) {
+  if (input.force !== true && input.auto_fix !== true) {
     const cached2 = plugin.storage.scans.findCacheHit({
       cache_key: cacheKey,
       freshThreshold: fresh
@@ -38658,6 +38942,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
     token: callMeta?.progressToken,
     notifier: plugin.progressNotifier
   });
+  const releaseReports = holdReportDirs(scanId);
   try {
     return await runScanBody({
       config: config2,
@@ -38684,6 +38969,7 @@ async function runScanPipeline(config2, input, plugin, callMeta) {
       ...parentScanId !== void 0 ? { parentScanId } : {}
     });
   } finally {
+    releaseReports();
     progress.dispose();
   }
 }
@@ -38722,6 +39008,15 @@ function scopeWarnings(scopeMeta) {
     warnings.push(`${ignored} file(s) in the scope are excluded by ${GUARDIAN_IGNORE_FILE} and were not scanned.`);
   }
   return warnings;
+}
+function stagedContentGap(notAsStaged) {
+  if (notAsStaged.length === 0) return null;
+  const named2 = `${notAsStaged.slice(0, 5).join(", ")}${notAsStaged.length > 5 ? ", \u2026" : ""}`;
+  return {
+    name: STAGED_CONTENT_GAP,
+    status: "failed",
+    reason: `${notAsStaged.length} staged file(s) changed again in the working tree since git add (${named2}): the scanners read the working tree, not the staged content the commit carries \u2014 stage or stash the rest (git stash --keep-index) and re-scan`
+  };
 }
 function describeScope(block) {
   const diff = block["diff"];
@@ -38830,6 +39125,14 @@ async function runScanBody(args) {
     invocation = {
       ...invocation,
       tools_run: invocation.tools_run.map((run2) => run2.status === "skipped" ? run2 : withProjectConfig(run2, ignore))
+    };
+  }
+  const stagedGap = args.scope !== null ? stagedContentGap(args.scope.notAsStaged) : null;
+  if (stagedGap !== null) {
+    invocation = {
+      ...invocation,
+      tools_run: [...invocation.tools_run, stagedGap],
+      missing_tools: [...invocation.missing_tools, STAGED_CONTENT_GAP]
     };
   }
   let findings = [];
@@ -38966,6 +39269,12 @@ async function runScanBody(args) {
     ...exclusionReport !== null ? { exclusions: exclusionReport } : {}
   };
   return { ok: true, ...payload };
+}
+async function guardianSettingsState(projectPath, configRoot) {
+  const scan2 = await hashProjectFile(configRoot, SCAN_SETTINGS_RELATIVE_PATH);
+  const budgets = await hashProjectFile(projectPath, BUDGETS_RELATIVE_PATH);
+  if (scan2 === "missing" && budgets === "missing") return null;
+  return `scan.yml:${scan2};budgets.yml:${budgets}`;
 }
 function buildCacheKey(config2, input, packCtx, treeHash, cacheState) {
   const { projectPath } = packCtx;
@@ -39105,6 +39414,9 @@ var init_scanToolFactory = __esm({
     init_guardianIgnore();
     init_scope();
     init_version();
+    init_projectFs();
+    init_scanSettings();
+    init_budgets();
     init_progressEmitter();
     init_concurrencyLimiter();
     init_breakdown();
@@ -39113,6 +39425,7 @@ var init_scanToolFactory = __esm({
     init_computeTreeHash();
     init_projectPath();
     init_gitState();
+    init_scanHelpers();
     init_scanCoverage();
     init_repoConfig();
     init_counts();
@@ -39130,11 +39443,11 @@ var init_scanToolFactory = __esm({
 
 // src/deps/dotnetRestore.ts
 import { unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename5, dirname as dirname15, extname as extname2, isAbsolute as isAbsolute12, join as join37, relative as relative12, resolve as resolve16 } from "node:path";
+import { basename as basename5, dirname as dirname16, extname as extname2, isAbsolute as isAbsolute12, join as join39, relative as relative12, resolve as resolve16 } from "node:path";
 function findDotnetTargets(projectPath) {
   const rootEntries = listProjectDir(projectPath, projectPath).filter((e) => e.kind === "file").map((e) => e.name).sort();
   const sln = rootEntries.find((n) => n.toLowerCase().endsWith(".sln")) ?? rootEntries.find((n) => n.toLowerCase().endsWith(".slnx"));
-  if (sln) return [join37(projectPath, sln)];
+  if (sln) return [join39(projectPath, sln)];
   return findProjectFiles(projectPath);
 }
 function findProjectFiles(projectPath) {
@@ -39144,7 +39457,7 @@ function findProjectFiles(projectPath) {
     const entries2 = listProjectDir(projectPath, dir).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries2) {
       if (SKIP_DIRS2.has(entry.name)) continue;
-      const abs = join37(dir, entry.name);
+      const abs = join39(dir, entry.name);
       if (entry.kind === "directory") walk5(abs, depth + 1);
       else if (entry.kind === "file" && PROJECT_EXTENSIONS.has(extname2(entry.name).toLowerCase())) out.push(abs);
     }
@@ -39154,7 +39467,7 @@ function findProjectFiles(projectPath) {
 }
 function resolveFromFile(file, written) {
   const normalised2 = written.trim().replace(/\\/g, "/");
-  return isAbsolute12(normalised2) ? resolve16(normalised2) : resolve16(dirname15(file), normalised2);
+  return isAbsolute12(normalised2) ? resolve16(normalised2) : resolve16(dirname16(file), normalised2);
 }
 function readText4(path3) {
   if (entryKindAnywhere(path3) === "remote") return "";
@@ -39201,18 +39514,18 @@ function projectsForTarget(target) {
   return out;
 }
 function lockFileCandidates(project) {
-  const dir = dirname15(project);
+  const dir = dirname16(project);
   const name = basename5(project, extname2(project));
   const names = /* @__PURE__ */ new Set(["packages.lock.json", `packages.${name}.lock.json`, `packages.${name.replace(/ /g, "_")}.lock.json`]);
-  return [...names].map((n) => join37(dir, n));
+  return [...names].map((n) => join39(dir, n));
 }
 function optsIntoLockFile(project, root) {
   const optIn = /<RestorePackagesWithLockFile>\s*true\s*<\/RestorePackagesWithLockFile>/i;
   if (optIn.test(readText4(project))) return true;
   const stop = resolve16(root);
-  for (let dir = dirname15(resolve16(project)); ; dir = dirname15(dir)) {
-    if (optIn.test(readText4(join37(dir, "Directory.Build.props")))) return true;
-    if (dir === stop || dirname15(dir) === dir || relative12(stop, dir).startsWith("..")) return false;
+  for (let dir = dirname16(resolve16(project)); ; dir = dirname16(dir)) {
+    if (optIn.test(readText4(join39(dir, "Directory.Build.props")))) return true;
+    if (dir === stop || dirname16(dir) === dir || relative12(stop, dir).startsWith("..")) return false;
   }
 }
 function planDotnetRestore(root, target) {
@@ -39306,129 +39619,6 @@ var init_dotnetRestore = __esm({
       NU1301: "feed_unreachable",
       NU1302: "feed_unreachable"
     };
-  }
-});
-
-// src/tools/scanHelpers.ts
-import { createHash as createHash11 } from "node:crypto";
-import { lstatSync as lstatSync10, mkdtempSync as mkdtempSync2, readdirSync as readdirSync11, rmSync as rmSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { homedir as homedir6, tmpdir as tmpdir3, userInfo } from "node:os";
-import { dirname as dirname16, join as join38 } from "node:path";
-async function scannerAvailable(name) {
-  const hit = scannerPathCache.get(name);
-  if (hit && (hit.path !== null || Date.now() - hit.at < NEGATIVE_SCANNER_CACHE_TTL_MS)) {
-    return hit.path;
-  }
-  ensureUserBinOnPath();
-  const resolved = await resolveBinary(name);
-  scannerPathCache.set(name, { path: resolved, at: Date.now() });
-  return resolved;
-}
-function resetScannerCache() {
-  scannerPathCache.clear();
-  resetTrivyVersionCache();
-}
-function ensureReportDir(projectPath, scanId, prefix) {
-  const short2 = scanId.slice(0, 8);
-  const made = makeProjectDir(projectPath, join38(".guardian", "reports", `${prefix}-${short2}`));
-  if (made !== null) {
-    pruneReports(dirname16(made), prefix, made);
-    return made;
-  }
-  process.stderr.write(
-    `[dev-guardian] ${join38(projectPath, ".guardian", "reports")} is a link or not a directory; this scan's reports go to the temp directory instead
-`
-  );
-  const fallback = mkdtempSync2(join38(tmpdir3(), `${TEMP_REPORTS_PREFIX}${prefix}-`));
-  try {
-    writeFileSync6(join38(fallback, OWNER_MARKER), accountToken(), { flag: "wx" });
-  } catch {
-  }
-  pruneReports(tmpdir3(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`, { markedOnly: true });
-  return fallback;
-}
-function accountToken() {
-  let user = "";
-  try {
-    user = userInfo().username;
-  } catch {
-  }
-  return createHash11("sha256").update(`dev-guardian-owner
-${user}
-${homedir6()}`).digest("hex");
-}
-function markedByThisAccount(dir) {
-  return readSmallTextFile(join38(dir, OWNER_MARKER), 256)?.trim() === accountToken();
-}
-function keptReports() {
-  const n = Number(process.env["GUARDIAN_KEEP_REPORTS"]);
-  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_KEPT_REPORTS;
-}
-function pruneReports(reportsDir, prefix, current, name = prefix, opts = {}) {
-  if (!PRUNED_REPORT_PREFIXES.has(prefix)) return;
-  let entries2;
-  try {
-    entries2 = readdirSync11(reportsDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  const uid = process.getuid?.();
-  const others = [];
-  for (const e of entries2) {
-    if (!e.isDirectory() || !e.name.startsWith(`${name}-`)) continue;
-    if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(name.length + 1))) continue;
-    const path3 = join38(reportsDir, e.name);
-    if (path3 === current) continue;
-    try {
-      const st = lstatSync10(path3);
-      if (!st.isDirectory() || st.isSymbolicLink() || uid !== void 0 && st.uid !== uid) continue;
-      if (opts.markedOnly !== true || markedByThisAccount(path3)) {
-        others.push({ path: path3, mtime: st.mtimeMs });
-      }
-    } catch {
-    }
-  }
-  others.sort((a, b) => b.mtime - a.mtime);
-  for (const d of others.slice(Math.max(0, keptReports() - 1))) {
-    try {
-      rmSync4(d.path, { recursive: true, force: true });
-    } catch {
-    }
-  }
-}
-function readJsonSafe(path3) {
-  return readSmallTextFile(path3, MAX_REPORT_BYTES2) ?? null;
-}
-var NEGATIVE_SCANNER_CACHE_TTL_MS, scannerPathCache, TEMP_REPORTS_PREFIX, OWNER_MARKER, DEFAULT_KEPT_REPORTS, PRUNED_REPORT_PREFIXES, MAX_REPORT_BYTES2;
-var init_scanHelpers = __esm({
-  "src/tools/scanHelpers.ts"() {
-    "use strict";
-    init_configFile();
-    init_pkgManagerDetect();
-    init_projectFs();
-    init_userBin();
-    init_trivyRun();
-    NEGATIVE_SCANNER_CACHE_TTL_MS = 6e4;
-    scannerPathCache = /* @__PURE__ */ new Map();
-    TEMP_REPORTS_PREFIX = "guardian-reports-";
-    OWNER_MARKER = ".dev-guardian-owner";
-    DEFAULT_KEPT_REPORTS = 3;
-    PRUNED_REPORT_PREFIXES = /* @__PURE__ */ new Set([
-      "sast",
-      "bugs",
-      "compliance",
-      "depsaudit",
-      "deps",
-      "iac",
-      "secrets",
-      "surface",
-      "review",
-      "containers",
-      "quality",
-      "wordpress",
-      "init-secrets"
-    ]);
-    MAX_REPORT_BYTES2 = 512 * 1024 * 1024;
   }
 });
 
@@ -39651,7 +39841,7 @@ var init_semgrepRun = __esm({
 
 // src/runners/fileBatchScan.ts
 import { rmSync as rmSync6 } from "node:fs";
-import { join as join39, win32 as win324 } from "node:path";
+import { join as join40, win32 as win324 } from "node:path";
 async function runBatches(opts, batches) {
   const t = {
     reports: [],
@@ -39670,7 +39860,7 @@ async function runBatches(opts, batches) {
       t.cancelled = true;
       break;
     }
-    const reportFile = join39(opts.reportDir, `${opts.reportPrefix}-${String(i + 1).padStart(3, "0")}.json`);
+    const reportFile = join40(opts.reportDir, `${opts.reportPrefix}-${String(i + 1).padStart(3, "0")}.json`);
     rmSync6(reportFile, { force: true });
     const run2 = await runProcess({
       command: opts.command,
@@ -39714,7 +39904,7 @@ async function runBatches(opts, batches) {
   return t;
 }
 async function scanFileBatches(opts) {
-  const probeReport = join39(opts.reportDir, `${opts.reportPrefix}-000.json`);
+  const probeReport = join40(opts.reportDir, `${opts.reportPrefix}-000.json`);
   const batches = batchArgs(opts.files, {
     command: opts.command,
     fixedArgs: [...opts.args, ...opts.reportArgs(probeReport), "--"]
@@ -40126,7 +40316,7 @@ var init_gosecRun = __esm({
 
 // src/runners/cppcheckRun.ts
 import { availableParallelism } from "node:os";
-import { join as join40 } from "node:path";
+import { join as join41 } from "node:path";
 import { mkdirSync as mkdirSync7, readFileSync as readFileSync6, writeFileSync as writeFileSync8 } from "node:fs";
 function cppSources(files) {
   return files.map(toPosixPath).filter((f) => TRANSLATION_UNIT.test(f)).sort();
@@ -40280,7 +40470,7 @@ ${probe2.stderr}`);
   const judged = [];
   let rest = sources;
   if (useDatabase) {
-    const db = await cppcheckOnce(args, "cppcheck", `--project=${join40(args.projectPath, ...database.split("/"))}`);
+    const db = await cppcheckOnce(args, "cppcheck", `--project=${join41(args.projectPath, ...database.split("/"))}`);
     runs.push(db);
     judged.push(judgeCppcheck({ ...db, requested: null, projectPath: args.projectPath }));
     const inDatabase = new Set([...filesRead(db.filesTxt ?? "")].map((f) => toRelativeIfPossible(f, args.projectPath)));
@@ -40288,7 +40478,7 @@ ${probe2.stderr}`);
   }
   if (rest.length > 0 && judged.every((j) => j.ok)) {
     const name = useDatabase ? "cppcheck-rest" : "cppcheck";
-    const list2 = join40(args.reportDir, `${name}-files.txt`);
+    const list2 = join41(args.reportDir, `${name}-files.txt`);
     writeFileSync8(list2, `${rest.join("\n")}
 `, "utf8");
     const listed2 = await cppcheckOnce(args, name, `--file-list=${list2}`);
@@ -40320,9 +40510,9 @@ ${probe2.stderr}`);
   };
 }
 async function cppcheckOnce(args, name, target) {
-  const buildDir = join40(args.reportDir, `${name}-build`);
+  const buildDir = join41(args.reportDir, `${name}-build`);
   mkdirSync7(buildDir, { recursive: true });
-  const out = join40(args.reportDir, `${name}.xml`);
+  const out = join41(args.reportDir, `${name}.xml`);
   const run2 = await runProcess({
     command: "cppcheck",
     args: [
@@ -40351,7 +40541,7 @@ async function cppcheckOnce(args, name, target) {
       return null;
     }
   };
-  return { run: run2, xml: read3(out), filesTxt: read3(join40(buildDir, "files.txt")) };
+  return { run: run2, xml: read3(out), filesTxt: read3(join41(buildDir, "files.txt")) };
 }
 var CPPCHECK, TRANSLATION_UNIT, CPPCHECK_TIMEOUT_MS, CPPCHECK_MIN_VERSION, COMPILE_DATABASES, CPPCHECK_COVERAGE_IDS, ENTITIES;
 var init_cppcheckRun = __esm({
@@ -40441,7 +40631,7 @@ var init_cppcheck = __esm({
 
 // src/runners/psalmRun.ts
 import { availableParallelism as availableParallelism2, tmpdir as tmpdir4 } from "node:os";
-import { join as join41 } from "node:path";
+import { join as join42 } from "node:path";
 import { mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync3, readFileSync as readFileSync7, rmSync as rmSync7, writeFileSync as writeFileSync9 } from "node:fs";
 function phpSources(files) {
   return files.map(toPosixPath).filter((f) => PHP_SOURCE.test(f) && !DEPENDENCY_DIR.test(f)).sort();
@@ -40450,7 +40640,7 @@ function hasPhpSource(files) {
   return phpSources(files).some((f) => /\.(php|phtml)$/i.test(f));
 }
 function wordpressTaintStub() {
-  return join41(resolveConfigsDir(), "psalm", "wordpress-taint.phpstub");
+  return join42(resolveConfigsDir(), "psalm", "wordpress-taint.phpstub");
 }
 function xmlAttr(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
@@ -40544,14 +40734,14 @@ ${versionRun.stderr}`;
     const found2 = version2 === null ? `its version could not be read (${psalm})` : `it is ${version2.join(".")}`;
     return skipped2(`Psalm ${PSALM_MIN_MAJOR} or newer is needed and ${found2}`, PSALM);
   }
-  const work = mkdtempSync3(join41(tmpdir4(), "guardian-psalm-"));
+  const work = mkdtempSync3(join42(tmpdir4(), "guardian-psalm-"));
   try {
-    const root = join41(work, "a", "root");
+    const root = join42(work, "a", "root");
     mkdirSync8(root, { recursive: true });
-    const config2 = join41(work, "psalm.xml");
+    const config2 = join42(work, "psalm.xml");
     const stub = args.wordpress ? wordpressTaintStub() : null;
-    writeFileSync9(config2, psalmConfigXml(analysed.map((f) => join41(args.projectPath, ...f.split("/"))), stub), "utf8");
-    const out = join41(args.reportDir, "psalm.json");
+    writeFileSync9(config2, psalmConfigXml(analysed.map((f) => join42(args.projectPath, ...f.split("/"))), stub), "utf8");
+    const out = join42(args.reportDir, "psalm.json");
     rmSync7(out, { force: true });
     const run2 = await runProcess({
       command: "php",
@@ -40887,7 +41077,7 @@ var init_spotbugs = __esm({
 
 // src/runners/detektRun.ts
 import { readFileSync as readFileSync8, writeFileSync as writeFileSync10 } from "node:fs";
-import { isAbsolute as isAbsolute13, join as join42, relative as relative13 } from "node:path";
+import { isAbsolute as isAbsolute13, join as join43, relative as relative13 } from "node:path";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 function javaUtf8Env(env, platform = process.platform, base2 = process.env) {
   if (platform !== "linux") return env;
@@ -40971,10 +41161,10 @@ async function detektFiles(args) {
   const jar = findDetekt();
   if (jar === null) return skipped2("not_installed", DETEKT);
   if (!await scannerAvailable(JAVA_RUNTIME)) return skipped2("java is not installed: detekt runs on Java 11 or newer", JAVA_RUNTIME);
-  const base2 = join42(args.reportDir, "detekt-base.yml");
+  const base2 = join43(args.reportDir, "detekt-base.yml");
   writeFileSync10(base2, DETEKT_BASE_CONFIG, "utf8");
   const own = DETEKT_PROJECT_CONFIGS.find((c) => presentInProject(args.projectPath, c) && realpathInProject(args.projectPath, c) !== null);
-  const out = join42(args.reportDir, "detekt.sarif");
+  const out = join43(args.reportDir, "detekt.sarif");
   const run2 = await runProcess({
     command: "java",
     args: [
@@ -41057,7 +41247,7 @@ var init_detektRun = __esm({
 
 // src/runners/spotbugsRun.ts
 import { readdirSync as readdirSync12, readFileSync as readFileSync9, statSync as statSync9, writeFileSync as writeFileSync11 } from "node:fs";
-import { delimiter as delimiter2, join as join43 } from "node:path";
+import { delimiter as delimiter2, join as join44 } from "node:path";
 function hasJvmSource(files) {
   return files.some((f) => JVM_SOURCE.test(f));
 }
@@ -41115,7 +41305,18 @@ function classDirs(projectPath) {
   return out;
 }
 function newestClass(projectPath, dirs) {
-  let newest = null;
+  return classStats(projectPath, dirs).newest;
+}
+function classDirsState(projectPath) {
+  const { dirs } = classDirs(projectPath);
+  if (dirs.length === 0) return null;
+  return dirs.map((d) => {
+    const s = classStats(projectPath, [d]);
+    return `${d}:${s.count}:${s.bytes}:${s.newest ?? ""}`;
+  }).join(";");
+}
+function classStats(projectPath, dirs) {
+  const stats = { newest: null, count: 0, bytes: 0 };
   let seen = 0;
   const stack = dirs.map((d) => realpathInProject(projectPath, d)).filter((d) => d !== null);
   while (stack.length > 0 && seen < 2e5) {
@@ -41128,18 +41329,20 @@ function newestClass(projectPath, dirs) {
     }
     for (const e of entries2) {
       seen++;
-      const path3 = join43(dir, e.name);
+      const path3 = join44(dir, e.name);
       if (e.isDirectory()) stack.push(path3);
       else if (e.isFile() && e.name.endsWith(".class")) {
         try {
-          const t = statSync9(path3).mtimeMs;
-          if (newest === null || t > newest) newest = t;
+          const st = statSync9(path3);
+          if (stats.newest === null || st.mtimeMs > stats.newest) stats.newest = st.mtimeMs;
+          stats.count++;
+          stats.bytes += st.size;
         } catch {
         }
       }
     }
   }
-  return newest;
+  return stats;
 }
 function sourcesNewerThan(projectPath, files, roots, since) {
   const newer = [];
@@ -41156,7 +41359,7 @@ function sourcesNewerThan(projectPath, files, roots, since) {
 }
 function notifiedClass(text2) {
   const resource = / in (.+):([^:]+\.class)$/.exec(text2);
-  if (resource !== null) return join43(resource[1] ?? "", resource[2] ?? "");
+  if (resource !== null) return join44(resource[1] ?? "", resource[2] ?? "");
   const named2 = /([\w$/.-]+\.class|[\w$]+(?:\/[\w$]+)+)/.exec(text2);
   return named2?.[1] ?? text2.slice(0, 120);
 }
@@ -41200,8 +41403,8 @@ ${run2.stdout}`.split(/\r?\n/).map((l) => l.trim()).find((l) => /Exception|Error
 }
 function findSecBugsPlugin(home) {
   try {
-    const jar = readdirSync12(join43(home, "plugin")).find((n) => /^findsecbugs-plugin.*\.jar$/i.test(n));
-    return jar === void 0 ? null : join43(home, "plugin", jar);
+    const jar = readdirSync12(join44(home, "plugin")).find((n) => /^findsecbugs-plugin.*\.jar$/i.test(n));
+    return jar === void 0 ? null : join44(home, "plugin", jar);
   } catch {
     return null;
   }
@@ -41235,10 +41438,10 @@ async function spotbugsClasses(args) {
   if (jar === null || home === null) return skipped2("not_installed", SPOTBUGS);
   if (!await scannerAvailable(JAVA_RUNTIME2)) return skipped2("java is not installed: SpotBugs runs on Java 11 or newer", JAVA_RUNTIME2);
   const plugin = findSecBugsPlugin(home);
-  const filter = join43(args.reportDir, "spotbugs-security.xml");
+  const filter = join44(args.reportDir, "spotbugs-security.xml");
   writeFileSync11(filter, SECURITY_FILTER, "utf8");
-  const out = join43(args.reportDir, "spotbugs.sarif");
-  const abs = (rel2) => join43(args.projectPath, ...rel2.split("/"));
+  const out = join44(args.reportDir, "spotbugs.sarif");
+  const abs = (rel2) => join44(args.projectPath, ...rel2.split("/"));
   const run2 = await runProcess({
     command: "java",
     args: [
@@ -41279,7 +41482,7 @@ async function spotbugsClasses(args) {
   const stale = newest === null ? [] : sourcesNewerThan(args.projectPath, args.files.map(toPosixPath), found2.sourceRoots, newest);
   const reason = [
     `${found2.dirs.length} class director${found2.dirs.length === 1 ? "y" : "ies"} read (${found2.dirs.slice(0, 3).join(", ")}${found2.dirs.length > 3 ? ", \u2026" : ""}), security patterns only`,
-    ...plugin === null ? [`FindSecBugs is not in ${join43(home, "plugin")}: only SpotBugs' own security patterns ran \u2014 install_toolchain installs both`] : [],
+    ...plugin === null ? [`FindSecBugs is not in ${join44(home, "plugin")}: only SpotBugs' own security patterns ran \u2014 install_toolchain installs both`] : [],
     ...judged.notes,
     ...stale.length > 0 ? [`${stale.length} source file(s) changed after the last build (${stale.slice(0, 3).join(", ")}${stale.length > 3 ? ", \u2026" : ""}): rebuild for SpotBugs to read them`] : [],
     ...partial3.length > 0 ? [`partial: ${partial3.length} class(es) SpotBugs could not analyse (${partial3.slice(0, 3).map((p) => p.file).join(", ")}${partial3.length > 3 ? ", \u2026" : ""})`] : []
@@ -41324,7 +41527,7 @@ var init_spotbugsRun = __esm({
 
 // src/runners/stackDetect.ts
 import { existsSync as existsSync12 } from "node:fs";
-import { join as join44, relative as relative14, sep as sep10 } from "node:path";
+import { join as join45, relative as relative14, sep as sep10 } from "node:path";
 function detectStack(projectPath) {
   const io = {
     root: projectPath,
@@ -41377,7 +41580,7 @@ function detectStack(projectPath) {
     has_terraform: hasTerraform,
     has_kubernetes: hasKubernetes,
     has_ansible: hasAnsible,
-    has_github_actions: has(join44(".github", "workflows")),
+    has_github_actions: has(join45(".github", "workflows")),
     has_gitlab_ci: has(".gitlab-ci.yml"),
     has_iac: hasTerraform || hasKubernetes || hasAnsible,
     projects
@@ -41465,7 +41668,7 @@ function walkManifestDirs(io) {
     for (const e of entries2) {
       if (e.kind !== "directory" && e.kind !== "link") continue;
       if (PROJECT_WALK_EXCLUDE.has(e.name) || e.name.startsWith(".")) continue;
-      const abs = join44(cur.abs, e.name);
+      const abs = join45(cur.abs, e.name);
       if (e.kind === "link") {
         const out = linkNotFollowed(io.root, abs);
         if (out !== null) {
@@ -41482,10 +41685,10 @@ function detectManifestsIn(io, dir) {
   const languages = [];
   const packageManagers = [];
   const frameworks = [];
-  const has = (rel2) => presentInProject(io.root, join44(dir, rel2));
+  const has = (rel2) => presentInProject(io.root, join45(dir, rel2));
   const entries2 = listDir(io, dir);
   if (has("package.json")) {
-    const pkgJsonText = readText5(io, join44(dir, "package.json"));
+    const pkgJsonText = readText5(io, join45(dir, "package.json"));
     languages.push("javascript");
     if (has("tsconfig.json") || hasTopLevelExtension(entries2, ".ts")) languages.push("typescript");
     if (has("pnpm-lock.yaml")) packageManagers.push("pnpm");
@@ -41509,16 +41712,16 @@ function detectManifestsIn(io, dir) {
       for (const [re, framework] of PY_FRAMEWORK_MARKERS) if (re.test(text2)) seen.add(framework);
     };
     if (has("pyproject.toml")) {
-      pyprojectText = readText5(io, join44(dir, "pyproject.toml"));
+      pyprojectText = readText5(io, join45(dir, "pyproject.toml"));
       look(pyprojectText);
     }
     for (const e of entries2) {
-      if (fileLike(e) && /^requirements.*\.txt$/i.test(e.name)) look(readText5(io, join44(dir, e.name)));
+      if (fileLike(e) && /^requirements.*\.txt$/i.test(e.name)) look(readText5(io, join45(dir, e.name)));
     }
     frameworks.push(...PY_FRAMEWORK_MARKERS.map(([, f]) => f).filter((f) => seen.has(f)));
   }
   if (has("composer.json")) {
-    const composerText = readText5(io, join44(dir, "composer.json"));
+    const composerText = readText5(io, join45(dir, "composer.json"));
     languages.push("php");
     packageManagers.push("composer");
     if (composerText?.includes("laravel/framework") === true) frameworks.push("laravel");
@@ -41568,15 +41771,15 @@ function isWordPressProject(projectPath) {
   return detectWordPress(io, projectPath).isWordPress;
 }
 function detectWordPress(io, dir) {
-  const has = (rel2) => presentInProject(io.root, join44(dir, rel2));
+  const has = (rel2) => presentInProject(io.root, join45(dir, rel2));
   let isWordPress = has("wp-config.php") || has("wp-config-sample.php") || has("wp-content");
-  const styleCss = has("style.css") ? readText5(io, join44(dir, "style.css"), HEADER_BYTES) : null;
+  const styleCss = has("style.css") ? readText5(io, join45(dir, "style.css"), HEADER_BYTES) : null;
   if (styleCss !== null && /^\s*(?:\*\s*)?Theme Name:/im.test(styleCss)) isWordPress = true;
   const pluginHeader = firstTopLevelPluginHeaderText(io, dir);
   if (pluginHeader !== null) isWordPress = true;
-  const isKadence = has(join44("wp-content", "themes", "kadence")) || has(join44("wp-content", "plugins", "kadence-blocks"));
-  const composer = has("composer.json") ? readText5(io, join44(dir, "composer.json")) : null;
-  const isWooCommerce = has(join44("wp-content", "plugins", "woocommerce")) || (composer?.includes("woocommerce/woocommerce") ?? false) || /requires plugins:.*woocommerce|wc requires at least/i.test(`${styleCss ?? ""}
+  const isKadence = has(join45("wp-content", "themes", "kadence")) || has(join45("wp-content", "plugins", "kadence-blocks"));
+  const composer = has("composer.json") ? readText5(io, join45(dir, "composer.json")) : null;
+  const isWooCommerce = has(join45("wp-content", "plugins", "woocommerce")) || (composer?.includes("woocommerce/woocommerce") ?? false) || /requires plugins:.*woocommerce|wc requires at least/i.test(`${styleCss ?? ""}
 ${pluginHeader ?? ""}`);
   const frameworks = [];
   if (isWordPress || isWooCommerce) frameworks.push("wordpress");
@@ -41587,7 +41790,7 @@ ${pluginHeader ?? ""}`);
 function firstTopLevelPluginHeaderText(io, dir) {
   for (const e of listDir(io, dir)) {
     if (!fileLike(e) || !e.name.toLowerCase().endsWith(".php")) continue;
-    const text2 = readText5(io, join44(dir, e.name), HEADER_BYTES);
+    const text2 = readText5(io, join45(dir, e.name), HEADER_BYTES);
     if (text2 !== null && /^\s*(?:\*|\/\/)?\s*Plugin Name:/im.test(text2)) return text2;
   }
   return null;
@@ -41596,23 +41799,23 @@ function hasGlob(io, dir, pattern) {
   return listDir(io, dir).some((e) => fileLike(e) && pattern.test(e.name));
 }
 function detectKubernetes(io, dir) {
-  if (presentInProject(io.root, join44(dir, "k8s")) || presentInProject(io.root, join44(dir, "kubernetes"))) return true;
+  if (presentInProject(io.root, join45(dir, "k8s")) || presentInProject(io.root, join45(dir, "kubernetes"))) return true;
   for (const e of listDir(io, dir)) {
     if (!fileLike(e) || !/\.ya?ml$/i.test(e.name)) continue;
-    const text2 = readText5(io, join44(dir, e.name), YAML_SNIFF_BYTES);
+    const text2 = readText5(io, join45(dir, e.name), YAML_SNIFF_BYTES);
     if (text2 !== null && /apiVersion:\s/.test(text2)) return true;
   }
   return false;
 }
 function detectExistingTools(io, dir, pyprojectText) {
-  const has = (rel2) => presentInProject(io.root, join44(dir, rel2));
+  const has = (rel2) => presentInProject(io.root, join45(dir, rel2));
   const inPyproject = (needle) => (pyprojectText ?? "").includes(needle);
   const tools = [];
-  if (has(".semgrep.yml") || has(join44(".semgrep", "semgrep.yml"))) tools.push("semgrep");
+  if (has(".semgrep.yml") || has(join45(".semgrep", "semgrep.yml"))) tools.push("semgrep");
   if (has(".gitleaks.toml")) tools.push("gitleaks");
   if (has(".trivyignore")) tools.push("trivy");
   if (has("renovate.json") || has(".renovaterc") || has(".renovaterc.json")) tools.push("renovate");
-  if (has(join44(".github", "dependabot.yml"))) tools.push("dependabot");
+  if (has(join45(".github", "dependabot.yml"))) tools.push("dependabot");
   if (has(".pre-commit-config.yaml")) tools.push("pre-commit");
   if (has(".eslintrc") || has(".eslintrc.json") || has("eslint.config.js")) tools.push("eslint");
   if (has(".prettierrc") || has(".prettierrc.json")) tools.push("prettier");
@@ -41923,7 +42126,7 @@ var init_dotnetSarif = __esm({
 });
 
 // src/runners/dockerScanner.ts
-import { join as join45 } from "node:path";
+import { join as join46 } from "node:path";
 function buildSemgrepDockerArgs(opts) {
   const image = opts.image ?? DEFAULT_SEMGREP_IMAGE;
   const containerOut = toContainerPath(opts.projectPath, opts.outFileHost);
@@ -41956,7 +42159,7 @@ function fromContainerPath(projectPath, containerPath) {
   const prefix = `${CONTAINER_PROJECT_ROOT}/`;
   if (containerPath === CONTAINER_PROJECT_ROOT) return projectPath;
   if (!containerPath.startsWith(prefix)) return containerPath;
-  return join45(projectPath, ...containerPath.slice(prefix.length).split("/"));
+  return join46(projectPath, ...containerPath.slice(prefix.length).split("/"));
 }
 function toContainerPathImpl(projectPath, outFileHost) {
   const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -42100,10 +42303,10 @@ var init_semgrep = __esm({
 // src/tools/scanSast.ts
 import { lstatSync as lstatSync11, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync4, readdirSync as readdirSync13, readFileSync as readFileSync10, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
-import { basename as basename6, dirname as dirname17, join as join46, relative as relative15, resolve as resolve17, sep as sep11 } from "node:path";
+import { basename as basename6, dirname as dirname17, join as join47, relative as relative15, resolve as resolve17, sep as sep11 } from "node:path";
 async function runSemgrep2(args) {
   const { ctx, reportDir, autoFix, localOnly, tools_run, missing_tools, parser_inputs } = args;
-  const outFile = join46(reportDir, "sast.json");
+  const outFile = join47(reportDir, "sast.json");
   const plan = planSemgrepConfigs(ctx.rulesProjectPath, ctx.plugin, localOnly, ctx.projectPath);
   if (plan.nothingToRun) {
     tools_run.push({
@@ -42166,6 +42369,17 @@ async function runSemgrep2(args) {
   for (const cfg of inspectProjectSemgrepConfigs(ctx.projectPath).usable) {
     dockerConfigs.push(toContainerPath(ctx.projectPath, cfg.path));
   }
+  const unseen = [];
+  for (const cfg of plan.ruleConfigs.filter((c) => !plan.registry.includes(c) && !plan.projectConfigs.includes(c))) {
+    const inMount = realpathInProject(ctx.projectPath, cfg) !== null ? toContainerPath(ctx.projectPath, cfg) : null;
+    if (inMount === null) unseen.push(cfg);
+    else if (!dockerConfigs.includes(inMount)) dockerConfigs.push(inMount);
+  }
+  if (unseen.length > 0) {
+    notes.push(
+      `${unseen.length} registered rule file(s) outside the project did not run \u2014 the Docker fallback sees the project only (${unseen.join(", ")}): install semgrep to run them`
+    );
+  }
   if (dockerConfigs.length === 0) {
     tools_run.push({
       name: "semgrep",
@@ -42187,7 +42401,13 @@ async function runSemgrep2(args) {
       image,
       configs: [...dockerConfigs, ...packConfigs],
       metricsOff: localOnly,
-      extraArgs: flags.args,
+      // `.guardianignore`'s excludes too — without them `--autofix` rewrote
+      // files in the directories the project leaves out. Anchored at the
+      // mount: /src is the container's git root, or no work tree at all.
+      extraArgs: [
+        ...flags.args,
+        ...semgrepExcludeArgs(ctx.exclusions !== null ? { ...ctx.exclusions, semgrepAnchor: "" } : null)
+      ],
       ...packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {},
       git: await gitSafetyFor([ctx.projectPath])
     }),
@@ -42214,6 +42434,7 @@ async function runSemgrep2(args) {
     missing_tools,
     parser_inputs
   });
+  if (unseen.length > 0) markMissing(missing_tools, "semgrep");
 }
 function recordSemgrepRun(args) {
   judgeSemgrepRun(args);
@@ -42236,7 +42457,7 @@ function judgeSemgrepRun(args) {
   const readAt = (config2) => {
     if (via === null) return config2;
     if (packsHostDir !== void 0 && config2.startsWith(`${CONTAINER_PACKS_ROOT}/`)) {
-      return join46(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
+      return join47(packsHostDir, ...config2.slice(CONTAINER_PACKS_ROOT.length + 1).split("/"));
     }
     return fromContainerPath(ctx.projectPath, config2);
   };
@@ -42361,7 +42582,7 @@ async function runBandit(args) {
     tools_run.push({ name: "bandit", status: "failed", reason: ini.error });
     return;
   }
-  const outFile = join46(reportDir, "bandit.json");
+  const outFile = join47(reportDir, "bandit.json");
   const result = await runProcess({
     command: "bandit",
     args: [
@@ -42437,12 +42658,12 @@ function ignoreFrom(ctx) {
   return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
 }
 function banditIni(projectPath, reportDir) {
-  const own = join46(projectPath, ".bandit");
+  const own = join47(projectPath, ".bandit");
   try {
     if (lstatSync11(own).isFile()) return { path: own, honoured: true };
   } catch {
   }
-  const neutral = join46(reportDir, NEUTRAL_BANDIT_INI);
+  const neutral = join47(reportDir, NEUTRAL_BANDIT_INI);
   try {
     writeFileSync12(neutral, "[bandit]\n", "utf8");
   } catch (e) {
@@ -42519,7 +42740,7 @@ async function runBanditOnScope(args) {
     missing_tools.push("bandit");
     return;
   }
-  const ini = banditIni(ctx.projectPath, reportDir);
+  const ini = banditIni(ctx.configRoot, reportDir);
   if ("error" in ini) {
     tools_run.push({ name: "bandit", status: "failed", reason: ini.error });
     return;
@@ -42534,7 +42755,7 @@ async function runBanditOnScope(args) {
     ...ctx.onLog ? { onLog: ctx.onLog } : {}
   });
   for (const raw of run2.reports) parser_inputs.push({ parser: banditParser, input: raw });
-  tools_run.push(ini.honoured ? await nameRepoConfig(run2.toolRun, ctx.projectPath, "bandit") : run2.toolRun);
+  tools_run.push(ini.honoured ? await nameRepoConfig(run2.toolRun, ctx.configRoot, "bandit") : run2.toolRun);
 }
 async function runCppcheck(args) {
   const { ctx, reportDir, files, scoped, tools_run, missing_tools, parser_inputs } = args;
@@ -42622,10 +42843,10 @@ async function runDotnetAnalyzers(args) {
     missing_tools.push("dotnet-sdk");
     return;
   }
-  const work = mkdtempSync4(join46(tmpdir5(), "guardian-sast-dotnet-"));
-  const sarifDir = join46(work, "sarif");
+  const work = mkdtempSync4(join47(tmpdir5(), "guardian-sast-dotnet-"));
+  const sarifDir = join47(work, "sarif");
   mkdirSync9(sarifDir);
-  const targetsFile = join46(work, "dev-guardian-sarif.targets");
+  const targetsFile = join47(work, "dev-guardian-sarif.targets");
   writeFileSync12(targetsFile, SARIF_TARGETS, "utf8");
   const failures = [];
   const sarifs = [];
@@ -42683,7 +42904,7 @@ async function runDotnetAnalyzers(args) {
       for (const name of listSarif(sarifDir).filter((n) => !before.has(n))) {
         let raw;
         try {
-          raw = readFileSync10(join46(sarifDir, name), "utf8");
+          raw = readFileSync10(join47(sarifDir, name), "utf8");
         } catch {
           failures.push(`${rel2}: SARIF ${name} unreadable`);
           continue;
@@ -42726,8 +42947,8 @@ function customAfterTargetsSetters(projectPath) {
     for (const project of projectsForTarget(target)) {
       check2(project);
       for (let dir = dirname17(resolve17(project)); ; dir = dirname17(dir)) {
-        check2(join46(dir, "Directory.Build.props"));
-        check2(join46(dir, "Directory.Build.targets"));
+        check2(join47(dir, "Directory.Build.props"));
+        check2(join47(dir, "Directory.Build.targets"));
         if (dir === root || dirname17(dir) === dir || relative15(root, dir).startsWith("..")) break;
       }
     }
@@ -42825,10 +43046,13 @@ var init_scanSast = __esm({
         // `rulesProjectPath` is the scanned path, except when create_fix_pr
         // re-scans a worktree and needs the original project's rules.
         rulePacks: (input, { rulesProjectPath, plugin, projectPath }) => planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
-        // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds.
+        // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds (the
+        // factory keys that file for every tool); the class directories SpotBugs
+        // reads are under `target/` and `build/`, which the tree hash leaves out.
         cacheState: async (_input, { plugin, projectPath }) => {
           const flags = semgrepScanFlags(plugin.repoConfigFromRef?.root ?? projectPath);
-          return { semgrep_flags: flags.args.join(" ") };
+          const classes = classDirsState(projectPath);
+          return { semgrep_flags: flags.args.join(" "), ...classes !== null ? { class_dirs: classes } : {} };
         },
         // 2.0.x custom rules outside the project are not run any more: say so on
         // every response, cached or not, not only in tools_run.
@@ -42948,15 +43172,15 @@ var init_scanSast = __esm({
 // src/secrets/verify/rawReport.ts
 import { chmodSync as chmodSync2, closeSync as closeSync5, lstatSync as lstatSync12, mkdtempSync as mkdtempSync5, openSync as openSync5, readdirSync as readdirSync14, rmSync as rmSync9 } from "node:fs";
 import { tmpdir as tmpdir6 } from "node:os";
-import { join as join47 } from "node:path";
+import { join as join48 } from "node:path";
 function openPrivateReportDir() {
   sweepStaleReportDirs();
-  const dir = mkdtempSync5(join47(tmpdir6(), PREFIX2));
+  const dir = mkdtempSync5(join48(tmpdir6(), PREFIX2));
   if (POSIX) chmodSync2(dir, 448);
   return {
     dir,
     pathFor(name) {
-      const path3 = join47(dir, name);
+      const path3 = join48(dir, name);
       closeSync5(openSync5(path3, "w", 384));
       if (POSIX) chmodSync2(path3, 384);
       return path3;
@@ -42984,7 +43208,7 @@ function sweepStaleReportDirs(root = tmpdir6(), now = Date.now()) {
   for (const name of names) {
     if (!name.startsWith(PREFIX2)) continue;
     try {
-      const path3 = join47(root, name);
+      const path3 = join48(root, name);
       const st = lstatSync12(path3);
       if (st.isSymbolicLink() || !st.isDirectory()) continue;
       if (uid !== null && st.uid !== uid) continue;
@@ -43070,7 +43294,7 @@ function sanitizeGitleaksReport(text2, keep) {
     return clean2;
   };
   const clean = items.map((item, n) => {
-    if (!isRecord3(item)) return item;
+    if (!isRecord4(item)) return item;
     const c = { ...item };
     const value = own[n] ?? null;
     const key = `${stringField(item, "File") ?? ""}\0${stringField(item, "Commit") ?? ""}`;
@@ -43222,16 +43446,16 @@ function endsBefore(a, b) {
 function endsLater(a, b) {
   return a.endLine > b.endLine || a.endLine === b.endLine && a.endCol > b.endCol;
 }
-function isRecord3(v) {
+function isRecord4(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function stringField(v, key) {
-  if (!isRecord3(v)) return null;
+  if (!isRecord4(v)) return null;
   const x = v[key];
   return typeof x === "string" ? x : null;
 }
 function numberField(v, key) {
-  if (!isRecord3(v)) return null;
+  if (!isRecord4(v)) return null;
   const x = v[key];
   return typeof x === "number" && Number.isFinite(x) ? x : null;
 }
@@ -43297,7 +43521,7 @@ var init_gitleaks = __esm({
 // src/runners/gitleaksScan.ts
 import { lstatSync as lstatSync13, mkdirSync as mkdirSync10, mkdtempSync as mkdtempSync6, rmSync as rmSync10, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
-import { basename as basename7, dirname as dirname18, join as join48, relative as relative16, resolve as resolve18 } from "node:path";
+import { basename as basename7, dirname as dirname18, join as join49, relative as relative16, resolve as resolve18 } from "node:path";
 async function runGitleaksScan(opts) {
   const result = { tools_run: [], missing_tools: [], parser_inputs: [], cancelled: false };
   let raw = null;
@@ -43446,7 +43670,7 @@ async function countCommitsSince(cwd, logOpts) {
   return n;
 }
 async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix) {
-  const outFile = join48(opts.reportDir, "secrets-history.json");
+  const outFile = join49(opts.reportDir, "secrets-history.json");
   rmSync10(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const args = [
@@ -43537,7 +43761,7 @@ function copyForScan(opts, candidates2, tmp, limits) {
   let overTotal = 0;
   let total = 0;
   for (const rel2 of candidates2) {
-    const from = join48(opts.projectPath, rel2);
+    const from = join49(opts.projectPath, rel2);
     let size;
     try {
       const st = lstatSync13(from);
@@ -43562,7 +43786,7 @@ function copyForScan(opts, candidates2, tmp, limits) {
       continue;
     }
     try {
-      const to = join48(tmp, rel2);
+      const to = join49(tmp, rel2);
       mkdirSync10(dirname18(to), { recursive: true });
       writeFileSync13(to, read3.bytes);
       copied += 1;
@@ -43580,7 +43804,7 @@ function copyForScan(opts, candidates2, tmp, limits) {
   return { copied, gaps };
 }
 async function scanCopy(opts, result, tmp, okReason, gaps) {
-  const outFile = join48(opts.reportDir, "secrets-working-tree.json");
+  const outFile = join49(opts.reportDir, "secrets-working-tree.json");
   rmSync10(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const args = [
@@ -43594,7 +43818,7 @@ async function scanCopy(opts, result, tmp, okReason, gaps) {
     ".",
     `--gitleaks-ignore-path=${opts.projectPath}`
   ];
-  const projectConfig = join48(opts.projectPath, ".gitleaks.toml");
+  const projectConfig = join49(opts.projectPath, ".gitleaks.toml");
   if (presentInProject(opts.projectPath, ".gitleaks.toml")) args.push(`--config=${projectConfig}`);
   const run2 = await runProcess({ command: "gitleaks", args, cwd: tmp, env: opts.env, signal: opts.signal, onLog: opts.onLog });
   if (run2.outcome === "cancelled") result.cancelled = true;
@@ -43615,7 +43839,7 @@ async function filesPass(opts, result, files, labels = {
   const maxTotal = opts.limits?.maxTotalBytes ?? MAX_TOTAL_BYTES;
   let tmp;
   try {
-    tmp = mkdtempSync6(join48(tmpdir7(), "guardian-gitleaks-"));
+    tmp = mkdtempSync6(join49(tmpdir7(), "guardian-gitleaks-"));
   } catch (e) {
     result.tools_run.push({ name, status: "failed", reason: `working tree: no temporary directory: ${message(e)}` });
     return;
@@ -43645,13 +43869,13 @@ async function directoryPass(opts, result, name) {
   const prefix = "not a git repository \u2014 scanned the directory in place";
   let config2;
   try {
-    config2 = join48(opts.reportDir, "gitleaks-directory.toml");
+    config2 = join49(opts.reportDir, "gitleaks-directory.toml");
     writeFileSync13(config2, directoryConfig(opts.projectPath));
   } catch (e) {
     result.tools_run.push({ name, status: "failed", reason: `${prefix}: could not write its config: ${message(e)}` });
     return;
   }
-  const outFile = join48(opts.reportDir, "secrets.json");
+  const outFile = join49(opts.reportDir, "secrets.json");
   rmSync10(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const run2 = await runProcess({
@@ -43685,7 +43909,7 @@ async function directoryPass(opts, result, name) {
   recordFilesRun(result, name, run2, report, "directory", `${prefix}${scanned}, excluding ${excluded}`, [], []);
 }
 function directoryConfig(projectPath) {
-  const own = join48(projectPath, ".gitleaks.toml");
+  const own = join49(projectPath, ".gitleaks.toml");
   const escape3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const names = EXCLUDED_DIRS.map(escape3).join("|");
   const output = ROOT_OUTPUT_PATHS.map((p) => `${escape3(p)}(?:/|$)`).join("|");
@@ -43794,11 +44018,12 @@ function short(sha) {
   return sha.slice(0, 12);
 }
 function locatedParser(location, projectPrefix) {
+  const inProject = (f) => location !== "history" || projectPrefix === "" || f.file_path === void 0 || f.file_path === "" || f.file_path.replace(/\\/g, "/").startsWith(`${projectPrefix}/`);
   return {
     name: gitleaksParser.name,
     parse(input, ctx) {
       const out = gitleaksParser.parse(input, ctx);
-      return { findings: out.findings.map((f) => locate4(f, location, projectPrefix)), cves: out.cves };
+      return { findings: out.findings.filter(inProject).map((f) => locate4(f, location, projectPrefix)), cves: out.cves };
     }
   };
 }
@@ -43931,11 +44156,11 @@ var init_apply = __esm({
 function hostOf(endpoint) {
   return new URL(endpoint).host;
 }
-function isRecord4(v) {
+function isRecord5(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function field(body, key) {
-  return isRecord4(body) ? body[key] : void 0;
+  return isRecord5(body) ? body[key] : void 0;
 }
 function live(host, status, note = "") {
   return { verdict: "live", reason: `${host} accepted it (HTTP ${status}${note})` };
@@ -44618,7 +44843,7 @@ var init_scanSecrets = __esm({
 });
 
 // src/tools/scanDeps.ts
-import { join as join49 } from "node:path";
+import { join as join50 } from "node:path";
 function packageOfFinding(f) {
   const coords = dependencyCoordinates(f);
   if (coords !== null) return coords.name;
@@ -44705,7 +44930,7 @@ var init_scanDeps = __esm({
               report_paths: [reportDir]
             };
           }
-          const outFile = join49(reportDir, "deps.json");
+          const outFile = join50(reportDir, "deps.json");
           const result = await runTrivy({
             args: ["fs", "--scanners", "vuln,license", "--format", "json", "--output", outFile, "--quiet", ...trivySkipArgs(ctx.exclusions)],
             target: ctx.projectPath,
@@ -44859,7 +45084,7 @@ var init_zizmor = __esm({
 });
 
 // src/runners/trivyConfig.ts
-import { join as join50 } from "node:path";
+import { join as join51 } from "node:path";
 function logFields(text2) {
   const out = /* @__PURE__ */ new Map();
   for (const m of text2.matchAll(/([A-Za-z_]+)=(?:"((?:[^"\\]|\\.)*)"|(\S+))/g)) {
@@ -44948,7 +45173,7 @@ function iacLookingFiles(projectPath, exclusions) {
       break;
     }
     visited += 1;
-    const abs = rel2 === "" ? projectPath : join50(projectPath, ...rel2.split("/"));
+    const abs = rel2 === "" ? projectPath : join51(projectPath, ...rel2.split("/"));
     const entries2 = listProjectDirOrNull(projectPath, abs);
     if (entries2 === null) {
       unlisted.push(rel2 === "" ? "." : `${rel2}/`);
@@ -44974,14 +45199,14 @@ function iacLookingFiles(projectPath, exclusions) {
       }
       const sniffable = /\.(ya?ml|json|template)$/.test(lower) && lower !== "package.json" && !lower.startsWith("docker-compose");
       if (!sniffable) {
-        const out = e.kind === "link" ? linkNotFollowed(projectPath, join50(abs, e.name)) : null;
+        const out = e.kind === "link" ? linkNotFollowed(projectPath, join51(abs, e.name)) : null;
         if (out !== null) linksOut.push(`${child}${out.kind === "directory" ? "/" : ""} (${out.says})`);
         continue;
       }
       const isJson = lower.endsWith(".json");
       let read3;
       if (isJson && jsonParsed >= IAC_JSON_PARSE_BUDGET) read3 = { status: "refused", reason: "read-budget" };
-      else read3 = isJson ? budget.readText(projectPath, join50(abs, e.name), MAX_JSON_BYTES) : budget.readHead(projectPath, join50(abs, e.name), SNIFF_BYTES);
+      else read3 = isJson ? budget.readText(projectPath, join51(abs, e.name), MAX_JSON_BYTES) : budget.readHead(projectPath, join51(abs, e.name), SNIFF_BYTES);
       if (read3.status === "refused") {
         if (read3.reason !== "too-large") unread.push(`${child} (${describeReadRefusal(read3.reason)})`);
         continue;
@@ -45093,13 +45318,13 @@ var init_trivyConfig = __esm({
 
 // src/tools/scanIac.ts
 import { writeFileSync as writeFileSync14 } from "node:fs";
-import { join as join51, relative as relative17 } from "node:path";
+import { join as join52, relative as relative17 } from "node:path";
 function listWorkflowFiles(projectPath, exclusions) {
-  const dir = join51(projectPath, WORKFLOWS_DIR);
+  const dir = join52(projectPath, WORKFLOWS_DIR);
   const abs = [];
   for (const e of listProjectDir(projectPath, dir)) {
     if (!WORKFLOW_EXTENSIONS.some((ext) => e.name.toLowerCase().endsWith(ext))) continue;
-    const candidate = join51(dir, e.name);
+    const candidate = join52(dir, e.name);
     if (e.kind === "file") {
       abs.push(candidate);
     } else if (e.kind === "link" && projectPathKind(projectPath, candidate) === "file") {
@@ -45128,7 +45353,7 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
   });
   if (result.stdout.length > 0) {
     try {
-      writeFileSync14(join51(reportDir, `${spec.name}.json`), result.stdout, "utf8");
+      writeFileSync14(join52(reportDir, `${spec.name}.json`), result.stdout, "utf8");
     } catch {
     }
   }
@@ -45202,7 +45427,7 @@ var init_scanIac = __esm({
             tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
             missing_tools.push("trivy");
           } else {
-            const outFile = join51(reportDir, "iac.json");
+            const outFile = join52(reportDir, "iac.json");
             const result = await runTrivy({
               args: ["config", "--format", "json", "--output", outFile, ...trivySkipArgs(ctx.exclusions)],
               target: ctx.projectPath,
@@ -45458,7 +45683,7 @@ function checkComposeValue(doc, filePath) {
   return findings;
 }
 function checkService(name, service, filePath) {
-  if (!isRecord5(service)) return [];
+  if (!isRecord6(service)) return [];
   const findings = [];
   if (service["privileged"] === true) {
     findings.push(
@@ -45508,16 +45733,16 @@ function checkService(name, service, filePath) {
   return findings;
 }
 function getServices(doc) {
-  if (!isRecord5(doc)) return null;
+  if (!isRecord6(doc)) return null;
   const services = doc["services"];
-  if (!isRecord5(services)) return null;
+  if (!isRecord6(services)) return null;
   return Object.entries(services);
 }
 function mountsDockerSock(volumes) {
   if (!Array.isArray(volumes)) return false;
   return volumes.some((v) => {
     if (typeof v === "string") return v.split(":").some((part) => part.trim() === "/var/run/docker.sock");
-    if (isRecord5(v)) {
+    if (isRecord6(v)) {
       return v["source"] === "/var/run/docker.sock" || v["target"] === "/var/run/docker.sock";
     }
     return false;
@@ -45530,7 +45755,7 @@ function isUnpinnedTag(image) {
   if (colon === -1) return true;
   return lastSegment2.slice(colon + 1) === "latest";
 }
-function isRecord5(v) {
+function isRecord6(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function finding(opts) {
@@ -45717,17 +45942,17 @@ function referrerIndex(apis, tags) {
 }
 function readIndex(body, fromTag) {
   const index = body === null ? void 0 : firstJsonObject(body);
-  const manifests = isRecord6(index) ? goField(index, "manifests") : void 0;
+  const manifests = isRecord7(index) ? goField(index, "manifests") : void 0;
   if (!Array.isArray(manifests)) return null;
   const out = [];
   for (const entry of manifests) {
-    if (!isRecord6(entry)) continue;
+    if (!isRecord7(entry)) continue;
     const digest = goField(entry, "digest");
     if (typeof digest !== "string") continue;
     const type = goField(entry, "artifacttype");
     const artifactType = typeof type === "string" ? type : "";
     const annotations = goField(entry, "annotations");
-    const predicate = isRecord6(annotations) ? annotations[PREDICATE_ANNOTATION] : void 0;
+    const predicate = isRecord7(annotations) ? annotations[PREDICATE_ANNOTATION] : void 0;
     out.push({
       digest,
       artifactType,
@@ -45748,8 +45973,8 @@ function goFold(key) {
 }
 function layersOf(body) {
   const manifest = body === null ? void 0 : firstJsonObject(body);
-  if (!isRecord6(manifest) || !Array.isArray(manifest["layers"])) return [];
-  return manifest["layers"].flatMap((l) => isRecord6(l) && typeof l["digest"] === "string" ? [l["digest"]] : []);
+  if (!isRecord7(manifest) || !Array.isArray(manifest["layers"])) return [];
+  return manifest["layers"].flatMap((l) => isRecord7(l) && typeof l["digest"] === "string" ? [l["digest"]] : []);
 }
 function dumpedBody(record8) {
   const gap = /\r?\n\r?\n/.exec(record8);
@@ -45871,7 +46096,7 @@ function classifySignatureDownload(r) {
       if (r.outcome === "output_too_large") continue;
       return none;
     }
-    if (!isRecord6(item)) return none;
+    if (!isRecord7(item)) return none;
     if (typeof item["Base64Signature"] === "string") {
       signature = true;
       continue;
@@ -45894,10 +46119,10 @@ function classifySignatureDownload(r) {
   return none;
 }
 function dssePredicateType(envelope) {
-  if (!isRecord6(envelope) || typeof envelope["payload"] !== "string") return null;
+  if (!isRecord7(envelope) || typeof envelope["payload"] !== "string") return null;
   try {
     const statement = JSON.parse(Buffer.from(envelope["payload"], "base64").toString("utf8"));
-    return isRecord6(statement) && typeof statement["predicateType"] === "string" ? statement["predicateType"] : null;
+    return isRecord7(statement) && typeof statement["predicateType"] === "string" ? statement["predicateType"] : null;
   } catch {
     return null;
   }
@@ -45953,17 +46178,17 @@ function verifiedPayloads(stdout) {
   }
   if (!Array.isArray(parsed2)) return { types };
   for (const item of parsed2) {
-    const critical = isRecord6(item) && isRecord6(item["critical"]) ? item["critical"] : null;
+    const critical = isRecord7(item) && isRecord7(item["critical"]) ? item["critical"] : null;
     if (critical === null) continue;
     const type = critical["type"];
     if (typeof type === "string" && !types.includes(say(type))) types.push(say(type));
     const image = critical["image"];
-    const d = isRecord6(image) ? image["docker-manifest-digest"] : void 0;
+    const d = isRecord7(image) ? image["docker-manifest-digest"] : void 0;
     if (typeof d === "string" && digest === void 0) digest = say(d);
   }
   return digest !== void 0 ? { types, digest } : { types };
 }
-function isRecord6(v) {
+function isRecord7(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function verifyArgs(ref, policy) {
@@ -46509,10 +46734,10 @@ var init_hadolint = __esm({
 });
 
 // src/tools/scanContainers.ts
-import { isAbsolute as isAbsolute14, join as join52, relative as relative18, resolve as resolve19, sep as sep12 } from "node:path";
+import { isAbsolute as isAbsolute14, join as join53, relative as relative18, resolve as resolve19, sep as sep12 } from "node:path";
 function findComposeFile(projectPath) {
   for (const name of COMPOSE_FILE_NAMES) {
-    if (presentInProject(projectPath, name)) return join52(projectPath, name);
+    if (presentInProject(projectPath, name)) return join53(projectPath, name);
   }
   return null;
 }
@@ -46645,7 +46870,7 @@ var init_scanContainers = __esm({
         let imageSignature;
         const invalid2 = invalidInput(ctx.projectPath, inp);
         if (invalid2) throw new Error(invalid2);
-        const dockerfile = inp.dockerfile_path !== void 0 ? resolve19(ctx.projectPath, inp.dockerfile_path) : presentInProject(ctx.projectPath, "Dockerfile") ? join52(ctx.projectPath, "Dockerfile") : void 0;
+        const dockerfile = inp.dockerfile_path !== void 0 ? resolve19(ctx.projectPath, inp.dockerfile_path) : presentInProject(ctx.projectPath, "Dockerfile") ? join53(ctx.projectPath, "Dockerfile") : void 0;
         if (dockerfile !== void 0 || inp.image !== void 0) {
           const trivyBin = await scannerAvailable("trivy");
           if (!trivyBin) {
@@ -46653,7 +46878,7 @@ var init_scanContainers = __esm({
             missing_tools.push("trivy");
           } else {
             if (dockerfile !== void 0) {
-              const outFile = join52(reportDir, "dockerfile.json");
+              const outFile = join53(reportDir, "dockerfile.json");
               const result = await runTrivy({
                 args: ["config", "--format", "json", "--output", outFile],
                 target: dockerfile,
@@ -46677,7 +46902,7 @@ var init_scanContainers = __esm({
               if (result.outcome !== "completed") anyOutcome = result.outcome;
             }
             if (inp.image) {
-              const outFile = join52(reportDir, "image.json");
+              const outFile = join53(reportDir, "image.json");
               const result = await runTrivy({
                 args: [
                   "image",
@@ -46758,7 +46983,7 @@ var init_scanContainers = __esm({
             missing_tools.push("hadolint");
           } else {
             const hadolintConfig = honouredRootFiles(ctx.projectPath, "hadolint").slice(0, 1);
-            const configArgs = hadolintConfig.flatMap((f) => ["--config", join52(ctx.projectPath, f.path)]);
+            const configArgs = hadolintConfig.flatMap((f) => ["--config", join53(ctx.projectPath, f.path)]);
             const result = await runProcess({
               command: "hadolint",
               args: ["--format", "json", ...configArgs, dockerfile],
@@ -46893,7 +47118,7 @@ var init_semgrepConfigFailure = __esm({
 });
 
 // src/tools/bugHunt.ts
-import { join as join53 } from "node:path";
+import { join as join54 } from "node:path";
 function languagePacksFor(languages) {
   const packs = [];
   for (const [language, pack] of LANGUAGE_PACKS) {
@@ -47061,7 +47286,7 @@ async function invokeBugHunt(input, ctx) {
   if (ctx.scope !== null) {
     return invokeBugHuntOnScope({ input, ctx, reportDir, packs: configuredPacks, files: ctx.scope.files });
   }
-  const outFile = join53(reportDir, "bugs.json");
+  const outFile = join54(reportDir, "bugs.json");
   const runWithPacks = (packs) => {
     const args = packs.map((pack) => `--config=${pack}`);
     args.push(...semgrepScanFlags(ctx.configRoot).args);
@@ -47401,123 +47626,6 @@ var init_bugHunt = __esm({
         invoke: async (input, ctx) => reportUncoveredLanguages(ctx, recordPackChoice(input, await withSemgrepGaps(ctx, await invokeBugHunt(input, ctx))))
       })
     );
-  }
-});
-
-// src/budgets/budgets.ts
-import { join as join54 } from "node:path";
-function loadBudgets(projectPath) {
-  const path3 = join54(projectPath, ".guardian", "budgets.yml");
-  const read3 = readProjectText(projectPath, path3, 1024 * 1024);
-  if (read3.status === "absent") return { kind: "none" };
-  if (read3.status === "refused") {
-    return { kind: "invalid", path: path3, error: `the file was not read: ${describeReadRefusal(read3.reason)}` };
-  }
-  const parsed2 = parseYamlBounded(read3.text);
-  if (!parsed2.ok) {
-    return {
-      kind: "invalid",
-      path: path3,
-      error: parsed2.reason === "invalid" ? `invalid YAML: ${parsed2.detail ?? "unparsable"}` : `the file was not read: ${describeYamlRefusal(parsed2)}`
-    };
-  }
-  const doc = parsed2.value;
-  if (!isRecord7(doc)) {
-    return { kind: "invalid", path: path3, error: "the document must be a mapping with perf: and/or quality: keys" };
-  }
-  const knownTopLevel = /* @__PURE__ */ new Set(["perf", "quality"]);
-  for (const key of Object.keys(doc)) {
-    if (!knownTopLevel.has(key)) {
-      return { kind: "invalid", path: path3, error: `unrecognised top-level key "${key}" (only perf, quality)` };
-    }
-  }
-  const budgets = {};
-  if ("perf" in doc) {
-    const parsed3 = parseSection(doc["perf"], PERF_FIELDS, "perf");
-    if (typeof parsed3 === "string") return { kind: "invalid", path: path3, error: parsed3 };
-    budgets.perf = parsed3;
-  }
-  if ("quality" in doc) {
-    const parsed3 = parseSection(doc["quality"], QUALITY_FIELDS, "quality");
-    if (typeof parsed3 === "string") return { kind: "invalid", path: path3, error: parsed3 };
-    budgets.quality = parsed3;
-  }
-  return { kind: "loaded", path: path3, budgets };
-}
-function parseSection(raw, fields, sectionName) {
-  if (!isRecord7(raw)) return `"${sectionName}:" must be a mapping of budget name to number`;
-  const known = new Set(fields);
-  const out = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (!known.has(key)) return `unrecognised ${sectionName} budget "${key}" (known: ${fields.join(", ")})`;
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      return `${sectionName}.${key} must be a number, got ${JSON.stringify(value)}`;
-    }
-    out[key] = value;
-  }
-  return out;
-}
-function evaluatePerfBudgets(measured, budgets) {
-  if (!budgets) return [];
-  const violations = [];
-  for (const key of PERF_FIELDS) {
-    const limit = budgets[key];
-    const value = measured[key];
-    if (limit === void 0 || value === void 0 || value === null) continue;
-    if (value > limit) violations.push({ budget: `perf.${key}`, measured: value, limit, unit: PERF_UNITS[key] });
-  }
-  return violations;
-}
-function evaluateQualityBudgets(measured, budgets) {
-  if (!budgets) return [];
-  const violations = [];
-  for (const key of QUALITY_FIELDS) {
-    const limit = budgets[key];
-    const value = measured[key];
-    if (limit === void 0 || value === void 0 || value === null) continue;
-    if (value > limit) violations.push({ budget: `quality.${key}`, measured: value, limit, unit: QUALITY_UNITS[key] });
-  }
-  return violations;
-}
-function budgetViolationFindings(violations, filePath) {
-  return violations.map((v) => {
-    const category = v.budget.startsWith("perf.") ? "performance" : "quality";
-    return makeFinding({
-      tool: "budgets",
-      rule_id: v.budget,
-      severity: "medium",
-      category,
-      subcategory: "budget",
-      title: `${v.budget} over budget: ${v.measured}${v.unit} > ${v.limit}${v.unit}`,
-      message: `${v.budget} measured ${v.measured}${v.unit}, over the ${v.limit}${v.unit} budget set in ${filePath}. Either bring it back under budget or, if the budget itself is wrong, edit that file \u2014 it is the single source of truth perf_check and quality_check both read.`,
-      file_path: filePath,
-      fix_available: false
-    });
-  });
-}
-function isRecord7(v) {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-var PERF_FIELDS, QUALITY_FIELDS, PERF_UNITS, QUALITY_UNITS;
-var init_budgets = __esm({
-  "src/budgets/budgets.ts"() {
-    "use strict";
-    init_projectFs();
-    init_boundedParse();
-    init_scannerParsers();
-    PERF_FIELDS = ["lcp_ms", "inp_ms", "cls", "tbt_ms", "bundle_size_kb"];
-    QUALITY_FIELDS = ["duplication_pct", "complexity"];
-    PERF_UNITS = {
-      lcp_ms: "ms",
-      inp_ms: "ms",
-      cls: "",
-      tbt_ms: "ms",
-      bundle_size_kb: "KB"
-    };
-    QUALITY_UNITS = {
-      duplication_pct: "%",
-      complexity: ""
-    };
   }
 });
 
@@ -50977,19 +51085,25 @@ function packageFromSnippet(snippet) {
   return snippet.slice(0, at).trim().toLowerCase() || null;
 }
 function dropNpmDuplicatesOfTrivy(findings) {
-  const trivyPackages = /* @__PURE__ */ new Set();
-  for (const f of findings) {
-    if (f.tool === TRIVY_TOOL_NAME && f.subcategory === "cve") {
-      const pkg = packageFromSnippet(f.snippet);
-      if (pkg) trivyPackages.add(pkg);
-    }
-  }
-  if (trivyPackages.size === 0) return findings;
+  const trivy = findings.filter((f) => f.tool === TRIVY_TOOL_NAME && f.subcategory === "cve").map((f) => ({
+    pkg: packageFromSnippet(f.snippet),
+    dir: manifestDir(f.file_path),
+    ids: new Set(findingVulnIds(f).map(vulnIdKey))
+  }));
+  if (trivy.length === 0) return findings;
   return findings.filter((f) => {
     if (f.tool !== NPM_AUDIT_TOOL_NAME) return true;
     const pkg = packageFromSnippet(f.snippet);
-    return !(pkg !== null && trivyPackages.has(pkg));
+    if (pkg === null) return true;
+    const ids2 = findingVulnIds(f).map(vulnIdKey);
+    const dir = manifestDir(f.file_path);
+    return !trivy.some((t) => t.pkg === pkg && t.dir === dir && ids2.some((id) => t.ids.has(id)));
   });
+}
+function manifestDir(path3) {
+  const p = (path3 ?? "").replace(/\\/g, "/");
+  const slash = p.lastIndexOf("/");
+  return slash < 0 ? "" : p.slice(0, slash);
 }
 function withTrivySeverity(findings) {
   const severityById = /* @__PURE__ */ new Map();
@@ -51318,6 +51432,7 @@ var init_depsAudit = __esm({
     init_govulncheck();
     init_govulncheckRun();
     init_guardianIgnore();
+    init_vulnIds();
     init_npmAudit();
     init_pipAudit();
     init_trivy();
@@ -51930,6 +52045,12 @@ var init_runNames = __esm({
       // compliance_check: its policy-document walk, and the RGPD Semgrep pack
       // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
       "policy-docs": scanner(),
+      // A `diff.staged` scope whose files changed again since `git add`
+      // (`platform/scope.ts#STAGED_CONTENT_GAP`): the scanners read those files'
+      // working-tree content, so what they report was measured — only not on the
+      // content the commit carries. A coverage gap, no finding of its own; the
+      // scan is scoped, so it never feeds the open set.
+      "staged-content": scanner(),
       "semgrep-rgpd": scanner("semgrep"),
       // scan_skill.
       "guardian-scanskill:patterns": scanner(SKILL_TOOL),
@@ -54508,7 +54629,7 @@ function walk3(root, dir, depth, maxDepth, out) {
     }
   }
 }
-function summariseLicenses(raw) {
+function summariseLicenses(raw, exclusions) {
   let root;
   try {
     root = JSON.parse(raw);
@@ -54521,6 +54642,8 @@ function summariseLicenses(raw) {
       const name = getString(lic, "Name");
       const pkg = getString(lic, "PkgName") ?? "(unknown)";
       if (!name) continue;
+      const file = getString(lic, "FilePath") ?? getString(result, "Target");
+      if (exclusions !== null && file !== void 0 && exclusions.ignores(file.replace(/\\/g, "/"))) continue;
       let pkgs = byLicense.get(name);
       if (!pkgs) {
         pkgs = /* @__PURE__ */ new Set();
@@ -54620,11 +54743,12 @@ var init_complianceCheck = __esm({
             licenses_summary: [],
             risky_licenses: []
           };
+          let manifestGaps = [];
           const trivyBin = await scannerAvailable("trivy");
           if (trivyBin) {
             const outFile = join66(reportDir, "licenses.json");
             const result = await runTrivy({
-              args: ["fs", "--scanners", "license", "--format", "json", "--output", outFile, "--quiet"],
+              args: ["fs", "--scanners", "license", "--format", "json", "--output", outFile, "--quiet", ...trivySkipArgs(ctx.exclusions)],
               target: ctx.projectPath,
               workDir: reportDir,
               ignoreFrom: ctx.projectPath,
@@ -54635,14 +54759,12 @@ var init_complianceCheck = __esm({
             const raw = readJsonSafe(outFile);
             if (raw) {
               parser_inputs.push({ parser: trivyParser, input: raw });
-              licensesSummary = summariseLicenses(raw);
+              licensesSummary = summariseLicenses(raw, ctx.exclusions);
             }
-            tools_run.push(
-              withHonoured(
-                result.outcome === "completed" ? { name: "trivy", status: "ok" } : { name: "trivy", status: "failed", reason: trivyFailureReason(result) },
-                result
-              )
-            );
+            const judged = judgeTrivyFs({ projectPath: ctx.projectPath, raw, run: result, exclusions: ctx.exclusions });
+            tools_run.push(judged.toolRun);
+            missing_tools.push(...judged.missing);
+            manifestGaps = judged.gaps;
           } else {
             tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
             missing_tools.push("trivy");
@@ -54659,7 +54781,8 @@ var init_complianceCheck = __esm({
             extras: {
               licenses_summary: licensesSummary.licenses_summary,
               risky_licenses: licensesSummary.risky_licenses,
-              policy_documents_found
+              policy_documents_found,
+              ...manifestGaps.length > 0 ? { manifest_coverage_gaps: manifestGaps } : {}
             }
           };
         }
@@ -55369,7 +55492,11 @@ async function handler4(inp, ctx) {
   const adopted = apply && !refresh && skipped2.length > 0 ? adoptIdenticalConfigs({ projectPath, configsDir, currentVersion: version2, files: proposals }) : [];
   const stackSnapshot = readLatestStackSnapshot(ctx, projectPath);
   let initialStateLines = [];
-  if (apply && ctx.shell) {
+  if (apply && ctx.shell?.needs_wsl_path_translate === true) {
+    initialStateLines = [
+      "  Initial scan not run: the only shell is WSL, which dev-guardian's git hardening does not reach (install Git for Windows for this summary) \u2014 corre /guardian-scan"
+    ];
+  } else if (apply && ctx.shell) {
     const scriptPath = join71(ctx.scriptsDir, "scan", "initial-scan.sh");
     if (existsSync16(scriptPath)) {
       const r = await runShellScript({
@@ -55425,9 +55552,17 @@ async function computeSecretsStatusLine(projectPath) {
       const reasons = failed.map((t) => t.reason ?? t.status).join("; ");
       return `  Secrets: failed (${reasons}) \u2014 corre /guardian-scan`;
     }
+    const why = (runs) => runs.map((t) => t.reason ?? t.status).join("; ");
+    if (!scan2.tools_run.some((t) => t.status === "ok")) {
+      return `  Secrets: not scanned (${why(scan2.tools_run) || "no gitleaks pass ran"}) \u2014 corre /guardian-scan`;
+    }
     let total = 0;
     for (const { parser: parser4, input } of scan2.parser_inputs) {
       total += parser4.parse(input, { project_path: projectPath }).findings.length;
+    }
+    if (computeCoverage(scan2.tools_run, scan2.missing_tools) !== "full") {
+      const gaps = scan2.tools_run.filter((t) => scan2.missing_tools.includes(t.name));
+      return `  Secrets: ${total} findings, partial (${why(gaps) || scan2.missing_tools.join(", ")}) \u2014 corre /guardian-scan`;
     }
     return `  Secrets: ${total} findings`;
   } catch {
@@ -55448,6 +55583,7 @@ var init_initProject = __esm({
     init_gitleaksScan();
     init_shellRunner();
     init_schemas4();
+    init_scanCoverage();
     init_scanHelpers();
     init_tools();
     init_projectArg();
@@ -58292,11 +58428,13 @@ async function handler10(inp, ctx, callMeta) {
       "The audit was cancelled by the host; its sub-scans were stopped and nothing was aggregated."
     );
   }
+  const childFindings = [];
   for (const summary2 of Object.values(subResults)) {
     if (summary2.ok && summary2.scan_id) {
-      aggregateFindings.push(...ctx.storage.findings.listByScan(summary2.scan_id));
+      childFindings.push(...ctx.storage.findings.listByScan(summary2.scan_id));
     }
   }
+  aggregateFindings.push(...dedupeFindings(childFindings));
   const filteredAggregate = filterFindings(aggregateFindings, inp.severity_min);
   const aggregate_counts = countBySeverity(filteredAggregate);
   const top_findings = topFindings(filteredAggregate, 10);
@@ -58478,6 +58616,7 @@ var init_auditExecutive = __esm({
     "use strict";
     init_zod();
     init_schemas4();
+    init_findingMerge();
     init_filter();
     init_computeTreeHash();
     init_fold();
@@ -61363,6 +61502,47 @@ var init_regressionAlert = __esm({
   }
 });
 
+// src/redaction/scrubSecrets.ts
+function isKeyBodyLine(line) {
+  if (/^\s*(Proc-Type|DEK-Info):/.test(line)) return true;
+  const content = line.replace(/\\[rn]/g, "").replace(/^[\s'"`]+|[\s'"`,+]+$/g, "");
+  return /^[A-Za-z0-9+/=]{8,}$/.test(content);
+}
+function scrubSecrets(text2, firstLine11 = 1) {
+  const hits = scanForSecrets(text2, { skipPlaceholders: false });
+  if (hits.length === 0) return text2;
+  const lines = text2.split(/\r?\n/);
+  const rulesByLine = /* @__PURE__ */ new Map();
+  const keyBody = /* @__PURE__ */ new Set();
+  for (const h of hits) {
+    const at = h.line - 1;
+    rulesByLine.set(at, [...rulesByLine.get(at) ?? [], h.ruleId]);
+    if (h.ruleId !== "private-key-block") continue;
+    if ((lines[at] ?? "").includes("-----END")) continue;
+    for (let i = at + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? "";
+      if (line.includes("-----END")) {
+        keyBody.add(i);
+        break;
+      }
+      if (!isKeyBodyLine(line)) break;
+      keyBody.add(i);
+    }
+  }
+  return lines.map((line, i) => {
+    const rules2 = rulesByLine.get(i);
+    if (rules2 === void 0) return keyBody.has(i) ? "\u2039private key body removed\u203A" : line;
+    const indent = /^\s*/.exec(line)?.[0] ?? "";
+    return `${indent}\u2039${rules2.join(", ")} line ${String(firstLine11 + i)}\u203A`;
+  }).join("\n");
+}
+var init_scrubSecrets = __esm({
+  "src/redaction/scrubSecrets.ts"() {
+    "use strict";
+    init_secretScan();
+  }
+});
+
 // src/tools/suggestFix.ts
 async function handler17(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
@@ -61380,6 +61560,7 @@ async function handler17(inp, ctx) {
   let surrounding_source = null;
   let source_start_line = 0;
   let source_end_line = 0;
+  const redactedLines = [];
   if (!credential && finding4.file_path) {
     const raw = readProjectTextOrUndefined(projectPath, finding4.file_path);
     if (raw !== void 0) {
@@ -61390,10 +61571,15 @@ async function handler17(inp, ctx) {
         source_start_line = start + 1;
         source_end_line = end;
         const slice = lines.slice(start, end);
+        const flagged = credentialLines(ctx, projectPath, finding4.file_path, located.scan_id, start + 1, end);
+        const scrubbed = scrubSecrets(slice.join("\n"), start + 1).split("\n");
         surrounding_source = slice.map((l, i) => {
           const lineNo = start + 1 + i;
           const marker = lineNo >= (finding4.line_start ?? -1) && lineNo <= (finding4.line_end ?? -1) ? ">>" : "  ";
-          return `${marker} ${String(lineNo).padStart(5)}: ${l}`;
+          const rule = flagged.get(lineNo);
+          const shown = rule !== void 0 ? `${/^\s*/.exec(l)?.[0] ?? ""}\u2039redacted: a credential finding (${rule}) is on this line\u203A` : scrubbed[i] ?? l;
+          if (shown !== l) redactedLines.push(lineNo);
+          return `${marker} ${String(lineNo).padStart(5)}: ${shown}`;
         }).join("\n");
       } catch {
       }
@@ -61420,6 +61606,7 @@ async function handler17(inp, ctx) {
     surrounding_source,
     source_start_line,
     source_end_line,
+    redacted_lines: redactedLines,
     rotation_guidance: credential ? ROTATION_GUIDANCE : null,
     prior_related_suppressions: priorSuppressions.map((s) => ({
       reason: s.reason,
@@ -61427,8 +61614,23 @@ async function handler17(inp, ctx) {
       ...s.expires_at !== void 0 ? { expires_at: s.expires_at } : {}
     })),
     docs_hint: "If the rule_id or message references CWE/OWASP, link to the official write-up in the proposed fix.",
-    instructions_for_model: credential ? "Do not propose a patch that echoes, logs or re-derives the credential value \u2014 none was given here on purpose. Recommend removing the hardcoded value, referencing a secret store or an environment variable instead, and rotating the credential at its source; see rotation_guidance." : "Propose a unified-diff patch (or describe the minimal edit) that addresses this finding without changing unrelated behaviour. Reference the line range, explain the fix, and call out any side effects the maintainer should review."
+    instructions_for_model: credential ? "Do not propose a patch that echoes, logs or re-derives the credential value \u2014 none was given here on purpose. Recommend removing the hardcoded value, referencing a secret store or an environment variable instead, and rotating the credential at its source; see rotation_guidance." : "Propose a unified-diff patch (or describe the minimal edit) that addresses this finding without changing unrelated behaviour. Reference the line range, explain the fix, and call out any side effects the maintainer should review." + (redactedLines.length > 0 ? " The lines in redacted_lines hold a credential and were withheld: leave them out of the patch, and never ask for their content." : "")
   };
+}
+function credentialLines(ctx, projectPath, file, foundIn, first, last) {
+  const norm = (p) => p.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+  const want = norm(file);
+  const scanIds = /* @__PURE__ */ new Set([foundIn, ...openSetForProject(ctx.storage, projectPath).scans.map((s) => s.scan_id)]);
+  const out = /* @__PURE__ */ new Map();
+  for (const id of scanIds) {
+    for (const f of ctx.storage.findings.listByScan(id)) {
+      if (f.file_path === void 0 || f.line_start === void 0 || norm(f.file_path) !== want) continue;
+      if (!isCredentialFinding(f)) continue;
+      const to = Math.min(last, Math.max(f.line_start, f.line_end ?? f.line_start));
+      for (let n = Math.max(first, f.line_start); n <= to; n += 1) if (!out.has(n)) out.set(n, f.rule_id ?? f.tool);
+    }
+  }
+  return out;
 }
 function failDomain8(code, message2) {
   return { ok: false, error: { code, message: message2 } };
@@ -61440,6 +61642,8 @@ var init_suggestFix = __esm({
     init_zod();
     init_projectFs();
     init_findingIdentity();
+    init_openSet();
+    init_scrubSecrets();
     init_schemas4();
     init_tools();
     init_projectArg();
@@ -61452,7 +61656,7 @@ var init_suggestFix = __esm({
     tool20 = defineTool({
       name: "suggest_fix",
       title: "Gather fix context",
-      description: "Gather a finding's context \u2014 the source around it, rule metadata, earlier suppressions of the same rule \u2014 from project_path's newest scan that reported it, so you can write the patch. Calls no LLM.",
+      description: "Gather a finding's context \u2014 the source around it, rule metadata, earlier suppressions of the same rule \u2014 from project_path's newest scan that reported it, so you can write the patch. Calls no LLM. A line that holds a secret (a credential finding, or the secret detector) is withheld and named in redacted_lines.",
       inputSchema: inputSchema19,
       handler: async (input, ctx) => handler17(input, ctx)
     });
@@ -72611,6 +72815,32 @@ var init_htmlTheme = __esm({
   }
 });
 
+// src/report/markdownText.ts
+function mdInline(s) {
+  return oneLine(s).replace(/[\\`*_[\]<>|!~#&]/g, (c) => `\\${c}`);
+}
+function mdCell(s) {
+  return oneLine(s).replace(/[\\`|<>[\]!]/g, (c) => `\\${c}`);
+}
+function mdCode(s) {
+  return `\`${oneLine(s).replace(/`/g, "'")}\``;
+}
+function mdCodeCell(s) {
+  const one = oneLine(s);
+  return one === "" ? "" : `\`${one.replace(/`/g, "'").replace(/\|/g, "\\|")}\``;
+}
+var MD_INLINE_MAX, oneLine;
+var init_markdownText = __esm({
+  "src/report/markdownText.ts"() {
+    "use strict";
+    MD_INLINE_MAX = 2e3;
+    oneLine = (s) => {
+      const one = s.replace(/\s+/g, " ").trim();
+      return one.length > MD_INLINE_MAX ? `${one.slice(0, MD_INLINE_MAX)}\u2026` : one;
+    };
+  }
+});
+
 // src/report/owaspCoverage.ts
 function taxonomyCell(f) {
   const parts = [...f.cwe ?? [], ...f.owasp ?? []];
@@ -72661,11 +72891,11 @@ function owaspCoverageMarkdown(cov) {
   lines.push("| Category | Coverage | Tested by | Findings |");
   lines.push("| --- | --- | --- | --- |");
   for (const c of cov.categories) {
-    lines.push(`| ${c.id} ${c.title} | ${statusLabel(c)} | ${testedByText(c.tested_by)} | ${c.findings} |`);
+    lines.push(`| ${c.id} ${c.title} | ${statusLabel(c)} | ${mdCell(testedByText(c.tested_by))} | ${c.findings} |`);
   }
   lines.push("");
   for (const c of cov.categories) {
-    if (c.status === "partial") lines.push(`- ${c.id} partial: ${c.reasons.join("; ")}.`);
+    if (c.status === "partial") lines.push(`- ${c.id} partial: ${mdCell(c.reasons.join("; "))}.`);
   }
   for (const c of cov.categories) {
     if (c.status === "not_tested") lines.push(`- ${c.id}: ${untestedHint(c, cov)}.`);
@@ -72695,6 +72925,7 @@ var init_owaspCoverage = __esm({
   "src/report/owaspCoverage.ts"() {
     "use strict";
     init_htmlTheme();
+    init_markdownText();
     COVERAGE_RULE = 'A category counts as tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it in that language, naming at least two distinct CWEs. A scanner that sees only a slice of a category, whatever the language \u2014 gitleaks (hard-coded credentials) for A07, Trivy and the dependency auditors (known-vulnerable components, not build and distribution integrity) for A03 \u2014 makes it partial at most. "not tested" is not a clean result: nothing looked. A finding can map to more than one category; a vulnerable dependency counts under A03 only \u2014 the CWEs of the flaw inside it are listed, not counted.';
     STATUS_LABEL = {
       tested: "tested",
@@ -72876,11 +73107,6 @@ function splitByIndependence(llm, findings) {
   }
   return `subagent ${n.subagent} \xB7 sampling ${n.sampling} \xB7 same_context ${n.same_context}`;
 }
-function mdInline(s) {
-  const one = s.replace(/\s+/g, " ").trim();
-  const cut = one.length > MD_INLINE_MAX ? `${one.slice(0, MD_INLINE_MAX)}\u2026` : one;
-  return cut.replace(/[\\`*_[\]<>|!~#&]/g, (c) => `\\${c}`);
-}
 function llmMarkdown(findings, llm) {
   const judged = entriesOf(findings, llm.markers);
   const lines = [];
@@ -72935,7 +73161,7 @@ function renderMarkdown(scan2, findings, cves, owasp, llm) {
   lines.push(`- **Type:** ${scan2.scan_type}`);
   lines.push(`- **Status:** ${scan2.status}`);
   lines.push(`- **Started:** ${scan2.started_at}`);
-  lines.push(`- **Project:** \`${scan2.project_path}\``);
+  lines.push(`- **Project:** ${mdCode(scan2.project_path)}`);
   lines.push("");
   lines.push(
     `**Severity:** critical ${counts.critical} \xB7 high ${counts.high} \xB7 medium ${counts.medium} \xB7 low ${counts.low} \xB7 info ${counts.info}`
@@ -72949,9 +73175,8 @@ function renderMarkdown(scan2, findings, cves, owasp, llm) {
     lines.push("| Sev | Tool | Rule | Title | Location | CWE / OWASP 2025 |");
     lines.push("| --- | --- | --- | --- | --- | --- |");
     for (const f of [...findings].sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))) {
-      const loc = f.file_path ? `\`${f.file_path}${f.line_start ? `:${f.line_start}` : ""}\`` : "";
       lines.push(
-        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ""}\` | ${mdEscape(f.title)} | ${loc} | ${taxonomyCell(f)} |`
+        `| ${f.severity} | ${mdCell(f.tool)} | ${mdCodeCell(f.rule_id ?? "")} | ${mdCell(f.title)} | ${mdCodeCell(locationOf(f))} | ${mdCell(taxonomyCell(f))} |`
       );
     }
   }
@@ -72966,7 +73191,7 @@ function renderMarkdown(scan2, findings, cves, owasp, llm) {
     lines.push("| --- | --- | --- | --- | --- |");
     for (const c of cves) {
       lines.push(
-        `| ${c.cve_id} | ${c.severity} | ${c.package_name} | ${c.installed_version ?? ""} | ${c.fixed_version ?? ""} |`
+        `| ${mdCell(c.cve_id)} | ${c.severity} | ${mdCell(c.package_name)} | ${mdCell(c.installed_version ?? "")} | ${mdCell(c.fixed_version ?? "")} |`
       );
     }
   }
@@ -72975,9 +73200,6 @@ function renderMarkdown(scan2, findings, cves, owasp, llm) {
     "_Generated by dev-guardian \u2014 open-source. dev-guardian sends no telemetry of its own; Semgrep's registry mode sends metrics \u2014 pass `local_only: true` to avoid it._"
   );
   return lines.join("\n");
-}
-function mdEscape(s) {
-  return s.replace(/\|/g, "\\|");
 }
 function renderHtml(scan2, findings, cves, lang, owasp, llm) {
   const counts = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
@@ -73006,7 +73228,7 @@ function renderHtml(scan2, findings, cves, lang, owasp, llm) {
 ` + (findings.length === 0 ? '<p class="pdk-empty">No findings.</p>' : `<table><thead><tr><th>Sev</th><th>Tool</th><th>Rule</th><th>Title</th><th>Location</th><th>CWE / OWASP 2025</th></tr></thead><tbody>${findingRows}</tbody></table>`);
   const cveRows = cves.map(
     (c) => `<tr>
-  <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(c.cve_id)}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
+  <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(c.cve_id))}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
   <td>${severityChip(c.severity)}</td>
   <td>${escapeHtml(c.package_name)}</td>
   <td><code>${escapeHtml(c.installed_version ?? "")}</code></td>
@@ -73031,7 +73253,7 @@ function slugify(s) {
 function failDomain10(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var inputSchema24, tool25, locationOf, MD_INLINE_MAX, mdCode, SCAN_TITLE;
+var inputSchema24, tool25, locationOf, SCAN_TITLE;
 var init_reportExport = __esm({
   "src/tools/reportExport.ts"() {
     "use strict";
@@ -73043,6 +73265,7 @@ var init_reportExport = __esm({
     init_scanRoles();
     init_secretFindingRedaction();
     init_htmlTheme();
+    init_markdownText();
     init_owaspCoverage();
     init_sarif();
     init_schemas4();
@@ -73075,8 +73298,6 @@ var init_reportExport = __esm({
     });
     registerToolModule(tool25);
     locationOf = (f) => f.file_path ? `${f.file_path}${f.line_start ? `:${f.line_start}` : ""}` : "";
-    MD_INLINE_MAX = 2e3;
-    mdCode = (s) => `\`${s.replace(/\s+/g, " ").replace(/`/g, "'")}\``;
     SCAN_TITLE = {
       en: "Security Report",
       pt: "Relat\xF3rio de Seguran\xE7a",
@@ -74543,47 +74764,49 @@ var init_scanWordpress = __esm({
           const tasks = [];
           let manifestGaps = [];
           if (semgrepBin) {
-            tasks.push(
-              (async () => {
-                const outFile = join80(reportDir, "sast.json");
-                const args = [
-                  "--config=p/php",
-                  "--config=p/wordpress",
-                  // The plugin's own: an esc_sql value outside quotes (configs/semgrep/wordpress.yml).
-                  `--config=${pluginPackPath(WORDPRESS_RULES_FILE)}`,
-                  ...semgrepScanFlags(ctx.configRoot).args,
-                  "--json",
-                  "--quiet",
-                  "--output",
-                  outFile
-                ];
-                if (inp.auto_fix === true) args.push("--autofix");
-                args.push(ctx.projectPath);
-                const r = await runSemgrep({
-                  args,
-                  cwd: ctx.projectPath,
-                  env: ctx.scriptEnv,
-                  signal: ctx.signal,
-                  onLog: ctx.onLog
+            const semgrepPass = async () => {
+              const outFile = join80(reportDir, "sast.json");
+              const args = [
+                "--config=p/php",
+                "--config=p/wordpress",
+                // The plugin's own: an esc_sql value outside quotes (configs/semgrep/wordpress.yml).
+                `--config=${pluginPackPath(WORDPRESS_RULES_FILE)}`,
+                ...semgrepScanFlags(ctx.configRoot).args,
+                // `.guardianignore` — with auto_fix, what keeps `--autofix` out of the directories it leaves out.
+                ...semgrepExcludeArgs(ctx.exclusions),
+                "--json",
+                "--quiet",
+                "--output",
+                outFile
+              ];
+              if (inp.auto_fix === true) args.push("--autofix");
+              args.push(ctx.projectPath);
+              const r = await runSemgrep({
+                args,
+                cwd: ctx.projectPath,
+                env: ctx.scriptEnv,
+                signal: ctx.signal,
+                onLog: ctx.onLog
+              });
+              const raw = readJsonSafe(outFile);
+              if (raw) parser_inputs.push({ parser: semgrepParserFor([pluginPackPath(WORDPRESS_RULES_FILE)]), input: raw });
+              recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
+              const at = tools_run.findIndex((t) => t.name === "semgrep-wp");
+              const entry = tools_run[at];
+              if (entry !== void 0) {
+                const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
+                  scannedNothing: entry.status === "skipped",
+                  reports: raw !== null ? [raw] : []
                 });
-                const raw = readJsonSafe(outFile);
-                if (raw) parser_inputs.push({ parser: semgrepParserFor([pluginPackPath(WORDPRESS_RULES_FILE)]), input: raw });
-                recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
-                const at = tools_run.findIndex((t) => t.name === "semgrep-wp");
-                const entry = tools_run[at];
-                if (entry !== void 0) {
-                  const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
-                    scannedNothing: entry.status === "skipped",
-                    reports: raw !== null ? [raw] : []
-                  });
-                  tools_run[at] = applied.toolRun;
-                  const longDirs = longDirsNote(r);
-                  const named2 = tools_run[at];
-                  if (longDirs !== null && named2 !== void 0) named2.reason = [named2.reason, longDirs].filter(Boolean).join("; ");
-                  if (applied.missing) markMissing(missing_tools, "semgrep-wp");
-                }
-              })()
-            );
+                tools_run[at] = applied.toolRun;
+                const longDirs = longDirsNote(r);
+                const named2 = tools_run[at];
+                if (longDirs !== null && named2 !== void 0) named2.reason = [named2.reason, longDirs].filter(Boolean).join("; ");
+                if (applied.missing) markMissing(missing_tools, "semgrep-wp");
+              }
+            };
+            if (inp.auto_fix === true) await semgrepPass();
+            else tasks.push(semgrepPass());
           } else {
             tools_run.push({ name: "semgrep-wp", status: "skipped", reason: "not_installed" });
             missing_tools.push("semgrep");
@@ -74706,6 +74929,74 @@ var init_scanWordpress = __esm({
   }
 });
 
+// src/wordpress/wpCli.ts
+import { mkdtempSync as mkdtempSync8, rmSync as rmSync12, writeFileSync as writeFileSync20 } from "node:fs";
+import { tmpdir as tmpdir9 } from "node:os";
+import { join as join81 } from "node:path";
+function wpCliEnv(source = process.env) {
+  const out = testCommandEnv(source);
+  for (const [name, value] of Object.entries(source)) {
+    if (value === void 0) continue;
+    const upper = name.toUpperCase();
+    if (CREDENTIAL2.test(upper)) continue;
+    if (WP_CLI_ENV_EXACT.has(upper) || WP_CLI_ENV_PREFIXES.some((p) => upper.startsWith(p))) out[name] = value;
+  }
+  return out;
+}
+async function withWpCli(installPath, fn) {
+  let dir = null;
+  let problem = "";
+  try {
+    dir = mkdtempSync8(join81(tmpdir9(), "dg-wpcli-"));
+    writeFileSync20(join81(dir, "wp-cli.yml"), NEUTRAL_CONFIG, { flag: "wx" });
+  } catch (e) {
+    problem = `dev-guardian did not run WP-CLI: its working directory could not be prepared (${e.message})`;
+  }
+  const cwd = problem === "" ? dir : null;
+  const env = wpCliEnv();
+  const notRun2 = {
+    outcome: "failed",
+    exitCode: null,
+    stdout: "",
+    stderr: `${problem}
+`,
+    truncated: false,
+    notRun: { code: "wp_cli_dir", message: problem }
+  };
+  const wp = async (args, timeoutMs) => cwd === null ? notRun2 : runProcess({
+    command: "wp",
+    args: [...args, `--path=${installPath}`, ...WP_CLI_SKIP_ARGS],
+    cwd,
+    env,
+    extendEnv: false,
+    gitRepos: [installPath],
+    timeoutMs
+  });
+  try {
+    return await fn(wp);
+  } finally {
+    if (dir !== null) {
+      try {
+        rmSync12(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+      }
+    }
+  }
+}
+var WP_CLI_SKIP_ARGS, WP_CLI_ENV_PREFIXES, WP_CLI_ENV_EXACT, CREDENTIAL2, NEUTRAL_CONFIG;
+var init_wpCli = __esm({
+  "src/wordpress/wpCli.ts"() {
+    "use strict";
+    init_testCommandEnv();
+    init_processRunner();
+    WP_CLI_SKIP_ARGS = ["--skip-plugins", "--skip-themes"];
+    WP_CLI_ENV_PREFIXES = ["WP_CLI_"];
+    WP_CLI_ENV_EXACT = /* @__PURE__ */ new Set(["PHPRC", "PHP_INI_SCAN_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"]);
+    CREDENTIAL2 = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|API_?KEY|PRIVATE_?KEY|SESSION|COOKIE/i;
+    NEUTRAL_CONFIG = "# dev-guardian: an empty project configuration, so WP-CLI reads no wp-cli.yml of the site\n";
+  }
+});
+
 // src/tools/wpAudit.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
 async function handler26(inp, ctx) {
@@ -74752,7 +75043,7 @@ async function handler26(inp, ctx) {
   };
   const gaps = [];
   const configFlags = includeOptions ? ["DISALLOW_FILE_EDIT", "WP_DEBUG", "WP_DEBUG_LOG", "FORCE_SSL_ADMIN"] : [];
-  const answers2 = await askWpCli(installPath, ctx, includeUsers, configFlags);
+  const answers2 = await withWpCli(installPath, (wp) => askWpCli(wp, includeUsers, configFlags));
   readAnswers(answers2, { includeUsers, riskyLogins, configFlags }, meta, gaps);
   const { version: version2, coreVerify, pluginVerify, pluginList, config: config2 } = answers2;
   const answered2 = [version2, coreVerify, pluginVerify, pluginList, ...config2].some((r) => r.ok);
@@ -74783,55 +75074,14 @@ async function handler26(inp, ctx) {
     ...meta
   };
 }
-async function askWpCli(installPath, ctx, includeUsers, configFlags) {
+async function askWpCli(wp, includeUsers, configFlags) {
   const [version2, coreVerify, pluginVerify, admins, pluginList, ...config2] = await Promise.all([
-    retry(() => wpCall(["core", "version", `--path=${installPath}`], installPath, ctx)),
-    retry(
-      () => wpCall(
-        ["core", "verify-checksums", `--path=${installPath}`, "--format=json"],
-        installPath,
-        ctx,
-        { rowsOnExit1: true }
-      )
-    ),
-    retry(
-      () => wpCall(
-        ["plugin", "verify-checksums", "--all", `--path=${installPath}`, "--format=json"],
-        installPath,
-        ctx,
-        { rowsOnExit1: true }
-      )
-    ),
-    includeUsers ? retry(
-      () => wpCall(
-        [
-          "user",
-          "list",
-          "--role=administrator",
-          `--path=${installPath}`,
-          "--fields=user_login,user_email",
-          "--format=json"
-        ],
-        installPath,
-        ctx
-      )
-    ) : Promise.resolve({ ok: true, stdout: "[]", stderr: "", reason: "" }),
-    retry(
-      () => wpCall(
-        [
-          "plugin",
-          "list",
-          `--path=${installPath}`,
-          "--fields=name,auto_update",
-          "--format=json"
-        ],
-        installPath,
-        ctx
-      )
-    ),
-    ...configFlags.map(
-      (flag) => retry(() => wpCall(["config", "get", flag, `--path=${installPath}`], installPath, ctx))
-    )
+    retry(() => wpCall(wp, ["core", "version"])),
+    retry(() => wpCall(wp, ["core", "verify-checksums", "--format=json"], { rowsOnExit1: true })),
+    retry(() => wpCall(wp, ["plugin", "verify-checksums", "--all", "--format=json"], { rowsOnExit1: true })),
+    includeUsers ? retry(() => wpCall(wp, ["user", "list", "--role=administrator", "--fields=user_login,user_email", "--format=json"])) : Promise.resolve({ ok: true, stdout: "[]", stderr: "", reason: "" }),
+    retry(() => wpCall(wp, ["plugin", "list", "--fields=name,auto_update", "--format=json"])),
+    ...configFlags.map((flag) => retry(() => wpCall(wp, ["config", "get", flag])))
   ]);
   return { version: version2, coreVerify, pluginVerify, admins, pluginList, config: config2 };
 }
@@ -74903,14 +75153,8 @@ function readAnswers(a, opts, meta, gaps) {
     }
   });
 }
-async function wpCall(args, cwd, ctx, opts = {}) {
-  const r = await runProcess({
-    command: "wp",
-    args,
-    cwd,
-    env: process.env,
-    timeoutMs: 6e4
-  });
+async function wpCall(wp, args, opts = {}) {
+  const r = await wp(args, 6e4);
   const reported = opts.rowsOnExit1 === true && r.exitCode === 1 && checksumRows(r.stdout) !== null;
   const ok = r.outcome === "completed" || reported;
   return {
@@ -74919,7 +75163,6 @@ async function wpCall(args, cwd, ctx, opts = {}) {
     stderr: r.stderr,
     reason: ok ? "" : `exit ${r.exitCode ?? "?"} (${r.outcome}); ${r.stderr.split(/\r?\n/)[0] ?? ""}`
   };
-  void ctx;
 }
 async function retry(call) {
   let last = await call();
@@ -75003,9 +75246,9 @@ var init_wpAudit = __esm({
     init_projectFs();
     init_zod();
     init_projectPath();
-    init_processRunner();
     init_scanCoverage();
     init_scanHelpers();
+    init_wpCli();
     init_tools();
     RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
     DEFAULT_RISKY_LOGINS = ["admin", "administrator", "root", "wpadmin"];
@@ -75023,7 +75266,7 @@ var init_wpAudit = __esm({
     tool29 = defineTool({
       name: "wp_audit",
       title: "Live WordPress install audit",
-      description: "Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none for themes: reported not checked), admin user list, dangerous config flags, plugins with auto_update on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.",
+      description: "Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none for themes: reported not checked), admin user list, dangerous config flags, plugins with auto_update on. WP-CLI boots the site with its plugins and theme skipped; wp-config.php, core files and must-use plugins still run. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.",
       inputSchema: inputSchema28,
       handler: async (input, ctx) => handler26(input, ctx)
     });
@@ -75488,10 +75731,10 @@ var init_siteKeys = __esm({
 });
 
 // src/wordpress/vulnFeed.ts
-import { mkdirSync as mkdirSync12, renameSync as renameSync3, writeFileSync as writeFileSync20 } from "node:fs";
+import { mkdirSync as mkdirSync12, renameSync as renameSync3, writeFileSync as writeFileSync21 } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir as homedir8 } from "node:os";
-import { join as join81 } from "node:path";
+import { join as join82 } from "node:path";
 import { randomUUID as randomUUID9 } from "node:crypto";
 function comparePhpVersions(a, b) {
   const ca = splitVersion(a);
@@ -75576,21 +75819,21 @@ function defaultWordfenceCacheDir(env = process.env) {
   const override = env["GUARDIAN_CACHE_DIR"];
   if (override !== void 0 && override.length > 0) return override;
   if (process.platform === "win32") {
-    const base3 = env["LOCALAPPDATA"] ?? join81(homedir8(), "AppData", "Local");
-    return join81(base3, "dev-guardian", "cache");
+    const base3 = env["LOCALAPPDATA"] ?? join82(homedir8(), "AppData", "Local");
+    return join82(base3, "dev-guardian", "cache");
   }
   if (process.platform === "darwin") {
-    const base3 = env["XDG_CACHE_HOME"] ?? join81(homedir8(), "Library", "Caches");
-    return join81(base3, "dev-guardian");
+    const base3 = env["XDG_CACHE_HOME"] ?? join82(homedir8(), "Library", "Caches");
+    return join82(base3, "dev-guardian");
   }
-  const base2 = env["XDG_CACHE_HOME"] ?? join81(homedir8(), ".cache");
-  return join81(base2, "dev-guardian");
+  const base2 = env["XDG_CACHE_HOME"] ?? join82(homedir8(), ".cache");
+  return join82(base2, "dev-guardian");
 }
 async function getWordfenceFeed(opts = {}) {
   const now = opts.now ?? Date.now();
   const env = opts.env ?? process.env;
   const cacheDir = opts.cacheDir ?? defaultWordfenceCacheDir(env);
-  const cachePath = join81(cacheDir, CACHE_FILE_NAME);
+  const cachePath = join82(cacheDir, CACHE_FILE_NAME);
   const cached2 = await readCachedFeed(cachePath);
   const cachedFresh = cached2 !== null && now - Date.parse(cached2.fetched_at) < WORDFENCE_FEED_TTL_MS;
   if (cachedFresh && cached2 !== null) {
@@ -75640,9 +75883,9 @@ async function readCachedFeed(cachePath) {
   }
 }
 async function writeCachedFeed(cachePath, payload) {
-  mkdirSync12(join81(cachePath, ".."), { recursive: true });
+  mkdirSync12(join82(cachePath, ".."), { recursive: true });
   const tmpPath = `${cachePath}.${randomUUID9()}.tmp`;
-  writeFileSync20(tmpPath, JSON.stringify(payload), "utf8");
+  writeFileSync21(tmpPath, JSON.stringify(payload), "utf8");
   renameSync3(tmpPath, cachePath);
 }
 function allComponents(inventory) {
@@ -75756,9 +75999,9 @@ var init_vulnFeed = __esm({
 });
 
 // src/tools/wpVulnCheck.ts
-import { existsSync as existsSync21, mkdirSync as mkdirSync13, readdirSync as readdirSync15, readFileSync as readFileSync14, rmSync as rmSync12, writeFileSync as writeFileSync21 } from "node:fs";
+import { existsSync as existsSync21, mkdirSync as mkdirSync13, readdirSync as readdirSync15, readFileSync as readFileSync14, rmSync as rmSync13, writeFileSync as writeFileSync22 } from "node:fs";
 import { createHash as createHash13, randomUUID as randomUUID10 } from "node:crypto";
-import { dirname as dirname24, join as join82 } from "node:path";
+import { dirname as dirname24, join as join83 } from "node:path";
 async function handler27(inp, ctx) {
   if (!inp.target_url && !inp.wp_install_path) {
     return failDomain13(
@@ -75776,7 +76019,7 @@ async function handler27(inp, ctx) {
       'wpscan CLI is not installed. Run install_toolchain with tools=["wpscan"].'
     );
   }
-  const resolved = await resolveScanUrl(inp, localInstall);
+  const resolved = await resolveScanUrl(inp);
   if (!resolved.ok) return resolved;
   const { url: url2, scanUrl } = resolved;
   const token = inp.api_token ?? process.env["WPSCAN_API_TOKEN"] ?? "";
@@ -75787,10 +76030,10 @@ async function handler27(inp, ctx) {
     );
   }
   const scanId = randomUUID10();
-  const reportDir = localInstall !== void 0 ? join82(localInstall, ".guardian", "reports", `wpvuln-${scanId.slice(0, 8)}`) : join82(urlReportsDir(url2), `wpvuln-${String(Date.now()).padStart(13, "0")}-${scanId.slice(0, 8)}`);
+  const reportDir = localInstall !== void 0 ? join83(localInstall, ".guardian", "reports", `wpvuln-${scanId.slice(0, 8)}`) : join83(urlReportsDir(url2), `wpvuln-${String(Date.now()).padStart(13, "0")}-${scanId.slice(0, 8)}`);
   mkdirSync13(reportDir, { recursive: true });
   if (localInstall === void 0) pruneUrlReports(dirname24(reportDir), reportDir);
-  const outFile = join82(reportDir, "wpscan.json");
+  const outFile = join83(reportDir, "wpscan.json");
   ctx.storage.scans.insert({
     scan_id: scanId,
     scan_type: "wp_vuln_check",
@@ -75804,7 +76047,7 @@ async function handler27(inp, ctx) {
   const args = ["--no-update", "--no-banner", "--format", "json", "--output", outFile, "--enumerate", "vp,vt", "--url", scanUrl];
   if (token) args.push("--api-token", token);
   const scan2 = async () => {
-    rmSync12(outFile, { force: true });
+    rmSync13(outFile, { force: true });
     const run2 = await runProcess({ command: "wpscan", args, cwd: reportDir, timeoutMs: 5 * 6e4 });
     const raw = readReport2(outFile, run2.stdout);
     return { run: run2, raw, report: readWpscanReport(raw) };
@@ -75865,7 +76108,7 @@ async function handler27(inp, ctx) {
     warnings
   };
 }
-async function resolveScanUrl(inp, localInstall) {
+async function resolveScanUrl(inp) {
   let url2 = inp.target_url;
   if (!url2 && inp.wp_install_path) {
     const wpBin = await scannerAvailable("wp");
@@ -75875,12 +76118,7 @@ async function resolveScanUrl(inp, localInstall) {
         "wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url."
       );
     }
-    const r = await runProcess({
-      command: "wp",
-      args: ["option", "get", "home", `--path=${inp.wp_install_path}`],
-      cwd: localInstall ?? process.cwd(),
-      timeoutMs: 3e4
-    });
+    const r = await withWpCli(inp.wp_install_path, (wp) => wp(["option", "get", "home"], 3e4));
     if (r.outcome === "completed") {
       url2 = r.stdout.trim();
     } else {
@@ -75934,7 +76172,7 @@ function urlReportsDir(url2) {
   } catch {
   }
   const hash = createHash13("sha256").update(key).digest("hex").slice(0, 12);
-  return join82(defaultWordfenceCacheDir(), "wp-vuln-check", `${host}-${hash}`);
+  return join83(defaultWordfenceCacheDir(), "wp-vuln-check", `${host}-${hash}`);
 }
 function pruneUrlReports(siteDir, current) {
   const { keep } = resolveRetentionLimit(process.env["GUARDIAN_RETENTION_SCANS"]);
@@ -75947,10 +76185,10 @@ function pruneUrlReports(siteDir, current) {
   }
   const stale = names.sort().reverse().slice(Math.max(keep, 1));
   for (const name of stale) {
-    const dir = join82(siteDir, name);
+    const dir = join83(siteDir, name);
     if (dir === current) continue;
     try {
-      rmSync12(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      rmSync13(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     } catch {
     }
   }
@@ -75965,7 +76203,7 @@ function readReport2(outFile, stdout) {
   }
   if (stdout.trim().startsWith("{")) {
     try {
-      writeFileSync21(outFile, stdout, "utf8");
+      writeFileSync22(outFile, stdout, "utf8");
     } catch {
     }
     return stdout;
@@ -76064,6 +76302,7 @@ var init_wpVulnCheck = __esm({
     init_scanHelpers();
     init_siteKeys();
     init_vulnFeed();
+    init_wpCli();
     init_tools();
     inputSchema29 = {
       wp_install_path: external_exports.string().optional().describe(
@@ -76075,7 +76314,7 @@ var init_wpVulnCheck = __esm({
     tool30 = defineTool({
       name: "wp_vuln_check",
       title: "WordPress vuln-DB lookup (WPScan)",
-      description: "Run WPScan against a target URL (or against the URL inferred from a local install_path) and return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.",
+      description: "Run WPScan against a target URL (or against the URL a local install_path names, read by WP-CLI, which boots the site with its plugins and theme skipped \u2014 wp-config.php, core and must-use plugins still run) and return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.",
       inputSchema: inputSchema29,
       handler: async (input, ctx) => handler27(input, ctx)
     });
@@ -76087,7 +76326,7 @@ var init_wpVulnCheck = __esm({
 });
 
 // src/wordpress/sourceInventory.ts
-import { join as join83, relative as relative26, sep as sep16 } from "node:path";
+import { join as join84, relative as relative26, sep as sep16 } from "node:path";
 function relOf2(src, abs) {
   return relative26(src.root, abs).split(sep16).join("/");
 }
@@ -76152,16 +76391,16 @@ function warnUnversioned(warnings, label, stableTag) {
   warnings.push(`${label}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
 }
 function readCoreVersion(src) {
-  const text2 = read(src, join83(src.root, "wp-includes", "version.php"), MAX_VERSION_PHP_BYTES);
+  const text2 = read(src, join84(src.root, "wp-includes", "version.php"), MAX_VERSION_PHP_BYTES);
   if (text2 === null) return null;
   const m = /\$wp_version\s*=\s*'([^']+)'/.exec(text2);
   return m?.[1] ?? null;
 }
 function inventoryPlugins(src, warnings) {
-  const pluginsDir = join83(src.root, "wp-content", "plugins");
+  const pluginsDir = join84(src.root, "wp-content", "plugins");
   const out = [];
   for (const entry of listDir2(src, pluginsDir) ?? []) {
-    const abs = join83(pluginsDir, entry.name);
+    const abs = join84(pluginsDir, entry.name);
     const kind = kindOf(src, abs, entry);
     if (kind === "directory") {
       const main2 = findMainFile(src, abs, entry.name, "Plugin Name");
@@ -76170,7 +76409,7 @@ function inventoryPlugins(src, warnings) {
         continue;
       }
       const text2 = read(src, main2, MAX_HEADER_BYTES) ?? "";
-      const stableTag = readStableTag(src, join83(abs, "readme.txt"));
+      const stableTag = readStableTag(src, join84(abs, "readme.txt"));
       const headerVersion = extractHeader(text2, "Version");
       const version2 = headerVersion ?? usableVersion(stableTag);
       const component = {
@@ -76200,17 +76439,17 @@ function inventoryPlugins(src, warnings) {
   return out;
 }
 function inventoryThemes(src, warnings) {
-  const themesDir = join83(src.root, "wp-content", "themes");
+  const themesDir = join84(src.root, "wp-content", "themes");
   const out = [];
   for (const entry of listDir2(src, themesDir) ?? []) {
-    const abs = join83(themesDir, entry.name);
+    const abs = join84(themesDir, entry.name);
     const kind = kindOf(src, abs, entry);
     if (kind === "unreachable") {
       noteUnread2(src, abs, "a link out of the install, to a network or device path, or not a regular file or directory \u2014 not inventoried");
       continue;
     }
     if (kind !== "directory") continue;
-    const styleCssPath = join83(abs, "style.css");
+    const styleCssPath = join84(abs, "style.css");
     const text2 = read(src, styleCssPath, MAX_HEADER_BYTES);
     if (text2 === null || !hasHeader(text2, "Theme Name")) {
       warnings.push(`wp-content/themes/${entry.name}: no readable style.css with a "Theme Name:" header \u2014 skipped.`);
@@ -76228,11 +76467,11 @@ function inventoryThemes(src, warnings) {
   return out;
 }
 function inventoryMuPlugins(src, warnings) {
-  const muDir = join83(src.root, "wp-content", "mu-plugins");
+  const muDir = join84(src.root, "wp-content", "mu-plugins");
   const out = [];
   for (const entry of listDir2(src, muDir) ?? []) {
     if (!entry.name.toLowerCase().endsWith(".php") || entry.kind === "directory") continue;
-    const filePath = join83(muDir, entry.name);
+    const filePath = join84(muDir, entry.name);
     const text2 = read(src, filePath, MAX_HEADER_BYTES);
     if (text2 === null) continue;
     if (hasHeader(text2, "Plugin Name")) {
@@ -76251,7 +76490,7 @@ function inventoryMuPlugins(src, warnings) {
       const subDir = match[1];
       const subFile = match[2];
       if (subDir === void 0 || subFile === void 0) continue;
-      const targetPath = join83(muDir, subDir, subFile);
+      const targetPath = join84(muDir, subDir, subFile);
       const targetText = read(src, targetPath, MAX_HEADER_BYTES);
       if (targetText === null || !hasHeader(targetText, "Plugin Name")) continue;
       const version2 = extractHeader(targetText, "Version");
@@ -76272,7 +76511,7 @@ function findMainFile(src, dir, dirName, nameHeader) {
   const preferred = candidates2.find((e) => e.name.toLowerCase() === preferredName);
   const ordered = preferred ? [preferred, ...candidates2.filter((e) => e !== preferred)] : candidates2;
   for (const entry of ordered) {
-    const path3 = join83(dir, entry.name);
+    const path3 = join84(dir, entry.name);
     const text2 = read(src, path3, MAX_HEADER_BYTES);
     if (text2 !== null && hasHeader(text2, nameHeader)) return path3;
   }
@@ -76704,11 +76943,10 @@ async function handler28(inp, ctx) {
       'WP-CLI (`wp`) is required for wp_audit {mode: "cron"}. Run install_toolchain with tools=["wp-cli"].'
     );
   }
-  const cronResult = await runProcess({
-    command: "wp",
-    args: ["cron", "event", "list", `--path=${installPath}`, "--format=json"],
-    cwd: installPath,
-    timeoutMs: 6e4
+  const [cronResult, pluginList] = await withWpCli(installPath, async (wp) => {
+    const cron = await wp(["cron", "event", "list", "--format=json"], 6e4);
+    if (cron.outcome !== "completed") return [cron, null];
+    return [cron, await wp(["plugin", "list", "--fields=name,status", "--format=json"], 3e4)];
   });
   if (cronResult.outcome !== "completed") {
     return failDomain14(
@@ -76721,15 +76959,9 @@ async function handler28(inp, ctx) {
     events = JSON.parse(cronResult.stdout);
   } catch {
   }
-  const pluginList = await runProcess({
-    command: "wp",
-    args: ["plugin", "list", `--path=${installPath}`, "--fields=name,status", "--format=json"],
-    cwd: installPath,
-    timeoutMs: 3e4
-  });
   const activePlugins = /* @__PURE__ */ new Set();
   const inactivePlugins = /* @__PURE__ */ new Set();
-  if (pluginList.outcome === "completed") {
+  if (pluginList?.outcome === "completed") {
     try {
       const parsed2 = JSON.parse(pluginList.stdout);
       for (const p of parsed2) {
@@ -76811,8 +77043,8 @@ var init_wpCronAudit = __esm({
     init_projectFs();
     init_zod();
     init_projectPath();
-    init_processRunner();
     init_scanHelpers();
+    init_wpCli();
     init_tools();
     inputSchema30 = {
       wp_install_path: external_exports.string().min(1).describe("Path to the directory containing wp-config.php.")
@@ -76841,7 +77073,7 @@ var init_wpCronAudit = __esm({
     tool31 = defineTool({
       name: "wp_cron_audit",
       title: "WordPress cron audit (suspicious scheduled events)",
-      description: "List WP scheduled cron events and flag suspicious ones: unknown hook namespaces, base64-looking args, events from inactive plugins. Persistent backdoors on compromised WP sites almost always live here.",
+      description: "List WP scheduled cron events and flag suspicious ones: unknown hook namespaces, base64-looking args, events from inactive plugins. Persistent backdoors on compromised WP sites almost always live here. WP-CLI boots the site with its plugins and theme skipped; wp-config.php, core files and must-use plugins still run.",
       inputSchema: inputSchema30,
       handler: async (input, ctx) => handler28(input, ctx)
     });
@@ -77116,12 +77348,10 @@ async function probeInstalled(probePath, slug) {
       'WP-CLI (`wp`) is not installed, so the install was not probed (install_toolchain with tools=["wp-cli"]).'
     );
   }
-  const r = await runProcess({
-    command: "wp",
-    args: ["plugin", "list", `--path=${probePath}`, `--name=${slug}`, "--fields=name,status,version", "--format=json"],
-    cwd: probePath,
-    timeoutMs: 3e4
-  });
+  const r = await withWpCli(
+    probePath,
+    (wp) => wp(["plugin", "list", `--name=${slug}`, "--fields=name,status,version", "--format=json"], 3e4)
+  );
   const failed = (reason) => unknown4(
     { name: "wp-cli", status: "failed", reason },
     `The WP-CLI probe of ${probePath} failed: ${reason}${/[.!?]$/.test(reason) ? "" : "."}`
@@ -77172,13 +77402,13 @@ var init_wpPluginCheck = __esm({
     init_zod();
     init_projectPath();
     init_paging();
-    init_processRunner();
     init_schemas4();
     init_toolArgs();
     init_scanHelpers();
     init_types2();
     init_scanCoverage();
     init_siteKeys();
+    init_wpCli();
     init_tools();
     init_projectArg();
     inputSchema32 = {
@@ -77196,7 +77426,7 @@ var init_wpPluginCheck = __esm({
     tool33 = defineTool({
       name: "wp_plugin_check",
       title: "WordPress plugin check (1 plugin)",
-      description: `What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp_vuln_check (live) and newest wp_vuln_check (source). It makes no network call \u2014 no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) or wp_vuln_check {mode: "source"} (plugin sources) first. With a local wp_install_path, WP-CLI reports the installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.`,
+      description: `What dev-guardian has already recorded about one WordPress plugin slug: the active CVEs from this project's newest dependency scan, newest wp_vuln_check (live) and newest wp_vuln_check (source). It makes no network call \u2014 no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) or wp_vuln_check {mode: "source"} (plugin sources) first. With a local wp_install_path, WP-CLI reports the installed version and whether the plugin is active (it boots the site with its plugins and theme skipped; wp-config.php, core files and must-use plugins still run); WP-CLI missing, failing or printing nothing is a warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.`,
       inputSchema: inputSchema32,
       handler: async (input, ctx) => handler30(input, ctx)
     });
@@ -77335,11 +77565,16 @@ async function handler32(inp, ctx) {
   }
   await Promise.all(workers);
   results.sort((a, b) => a.wp_install_path.localeCompare(b.wp_install_path));
-  const sitesWithIssues = results.filter((s) => (s.flagged_count ?? 0) > 0 || !s.ok);
+  const full = (s) => s.ok && s.coverage === "full";
+  const sitesWithIssues = results.filter((s) => (s.flagged_count ?? 0) > 0 || !full(s));
+  const coverage = results.every(full) ? "full" : results.some((s) => s.ok && s.coverage !== "none") ? "partial" : "none";
   return {
     ok: true,
     total_sites: inp.wp_install_paths.length,
-    successful: results.filter((s) => s.ok).length,
+    coverage,
+    missing_tools: [...new Set(results.flatMap((s) => s.missing_tools))].sort(),
+    successful: results.filter(full).length,
+    partial: results.filter((s) => s.ok && !full(s)).length,
     failed: results.filter((s) => !s.ok).length,
     sites_with_issues: sitesWithIssues.length,
     sites: results
@@ -77350,17 +77585,26 @@ function summarise(path3, result) {
     return {
       wp_install_path: path3,
       ok: false,
+      coverage: "none",
+      missing_tools: result.error.code === "missing_scanner" ? ["wp-cli"] : [],
       error: result.error
     };
   }
   const r = result;
   const cm = r.checksum_mismatches ?? {};
   const flagged = (cm.core?.length ?? 0) + Object.values(cm.plugins ?? {}).reduce((a, b) => a + (b?.length ?? 0), 0);
+  const coverage = r.coverage ?? "partial";
   const summary2 = {
     wp_install_path: path3,
     ok: true,
-    flagged_count: flagged
+    flagged_count: flagged,
+    coverage,
+    missing_tools: r.missing_tools ?? []
   };
+  if (coverage !== "full") {
+    const why = (r.tools_run ?? []).map((t) => t.reason).filter((x) => x !== void 0 && x !== "");
+    summary2.not_checked = why.length > 0 ? why.join("; ") : "the audit did not say what it left out";
+  }
   if (r.scan_id !== void 0) summary2.scan_id = r.scan_id;
   if (r.wp_version !== void 0) summary2.wp_version = r.wp_version;
   return summary2;
@@ -77378,7 +77622,7 @@ var init_bulkAuditWordpressSites = __esm({
     tool35 = defineTool({
       name: "bulk_audit_wordpress_sites",
       title: "Bulk wp_audit across many sites",
-      description: "Run wp_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp_version, audit scan_id, and a flagged_count (checksum_mismatches.core + plugins; theme files are not checked: WP-CLI has no theme checksums).",
+      description: "Run wp_audit on N WP installs in parallel (default concurrency 4). Returns one row per site with the wp_version, audit scan_id, and a flagged_count (checksum_mismatches.core + plugins; theme files are not checked: WP-CLI has no theme checksums), plus its coverage, missing_tools and what was not_checked: a partially audited site is partial and an issue, never a clean success.",
       inputSchema: inputSchema34,
       handler: async (input, ctx) => handler32(input, ctx)
     });
@@ -77493,7 +77737,30 @@ var init_wpDescribeSetup = __esm({
 
 // src/tools/scanDotnetSecrets.ts
 import { randomUUID as randomUUID14 } from "node:crypto";
-import { join as join84, relative as relative27 } from "node:path";
+import { join as join85, relative as relative27 } from "node:path";
+function connectionString(key, then) {
+  return (_line, pieces) => {
+    let opened = false;
+    for (const p of pieces) {
+      if (opened && then.test(p.text)) return true;
+      if (!opened && p.end === ";" && key.test(p.text)) opened = true;
+    }
+    return false;
+  };
+}
+function linePieces(line) {
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (c === ";" || c === '"' || c === "'") {
+      out.push({ text: line.slice(start, i), end: c });
+      start = i + 1;
+    }
+  }
+  out.push({ text: line.slice(start), end: "" });
+  return out;
+}
 async function handler34(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
@@ -77521,8 +77788,9 @@ async function handler34(inp, ctx) {
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       if (line === void 0) continue;
+      const pieces = linePieces(line);
       for (const rule of PATTERNS) {
-        if (rule.regex.test(line)) {
+        if (rule.matches(line, pieces)) {
           findings.push(
             makeFinding({
               tool: "scan_dotnet_secrets",
@@ -77587,7 +77855,7 @@ function collectConfigFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP_DIRS3.has(name)) continue;
-      const abs = join84(dir, name);
+      const abs = join85(dir, name);
       if (kind === "directory") {
         walk5(abs, depth + 1);
       } else if ((kind === "file" || kind === "link") && TARGET_FILES.some((re) => re.test(name))) {
@@ -77598,7 +77866,7 @@ function collectConfigFiles(root, maxDepth) {
   walk5(root, 0);
   return out;
 }
-var PATTERNS, TARGET_FILES, SKIP_DIRS3, inputSchema36, tool37, MAX_FILE_BYTES3;
+var onLine, SERVER_KEY, HOST_KEY, PASSWORD_KEY, INTEGRATED_SECURITY, PATTERNS, TARGET_FILES, SKIP_DIRS3, inputSchema36, tool37, MAX_FILE_BYTES3;
 var init_scanDotnetSecrets = __esm({
   "src/tools/scanDotnetSecrets.ts"() {
     "use strict";
@@ -77609,42 +77877,47 @@ var init_scanDotnetSecrets = __esm({
     init_tools();
     init_projectArg();
     init_scanCoverage();
+    onLine = (regex) => (line) => regex.test(line);
+    SERVER_KEY = /(?:Server|Data\s*Source)=[\s\S]/i;
+    HOST_KEY = /Host=[\s\S]/i;
+    PASSWORD_KEY = /(?:Password|Pwd)=[\s\S]/i;
+    INTEGRATED_SECURITY = /Integrated\s*Security=(?:SSPI|true)/i;
     PATTERNS = [
       {
         id: "dotnet-sql-server-conn",
         description: "SQL Server connection string with password",
         severity: "critical",
-        regex: /(Server|Data\s*Source)=[^;"']+;.*?(Password|Pwd)=[^;"']+/i
+        matches: connectionString(SERVER_KEY, PASSWORD_KEY)
       },
       {
         id: "dotnet-trusted-conn",
         description: "SQL Server connection string with Integrated Security and dev credentials",
         severity: "medium",
-        regex: /(Server|Data\s*Source)=[^;"']+;.*?Integrated\s*Security=(SSPI|true)/i
+        matches: connectionString(SERVER_KEY, INTEGRATED_SECURITY)
       },
       {
         id: "dotnet-postgres-conn",
         description: "PostgreSQL connection string with password",
         severity: "critical",
-        regex: /Host=[^;"']+;.*?(Password|Pwd)=[^;"']+/i
+        matches: connectionString(HOST_KEY, PASSWORD_KEY)
       },
       {
         id: "dotnet-azure-storage-key",
         description: "Azure Storage account key in connection string",
         severity: "critical",
-        regex: /AccountKey=[A-Za-z0-9+/=]{60,}/
+        matches: onLine(/AccountKey=[A-Za-z0-9+/=]{60,}/)
       },
       {
         id: "dotnet-azure-servicebus",
         description: "Azure Service Bus shared access key",
         severity: "critical",
-        regex: /SharedAccessKey=[A-Za-z0-9+/=]{40,}/
+        matches: onLine(/SharedAccessKey=[A-Za-z0-9+/=]{40,}/)
       },
       {
         id: "dotnet-aws-key-config",
         description: "AWS access key in appsettings/config",
         severity: "critical",
-        regex: /AKIA[0-9A-Z]{16}/
+        matches: onLine(/AKIA[0-9A-Z]{16}/)
       },
       {
         id: "dotnet-jwt-secret",
@@ -77653,25 +77926,25 @@ var init_scanDotnetSecrets = __esm({
         // The key may be quoted itself: appsettings.json writes `"JwtSecret": "…"`,
         // with a quote between the key and the colon, which the pattern used to
         // refuse — every JSON signing key went unreported (review M4).
-        regex: /(JwtSecret|JWT_SECRET|SigningKey)["']?\s*[:=]\s*["'][^"']{16,}["']/i
+        matches: onLine(/(JwtSecret|JWT_SECRET|SigningKey)["']?\s*[:=]\s*["'][^"']{16,}["']/i)
       },
       {
         id: "dotnet-nuget-feed-cred",
         description: "NuGet feed credentials in nuget.config (plaintext clear password)",
         severity: "critical",
-        regex: /<add\s+key="ClearTextPassword"\s+value="[^"]+"/i
+        matches: onLine(/<add\s+key="ClearTextPassword"\s+value="[^"]+"/i)
       },
       {
         id: "dotnet-appinsights-key",
         description: "Application Insights instrumentation key",
         severity: "medium",
-        regex: /InstrumentationKey=[a-f0-9-]{36}/i
+        matches: onLine(/InstrumentationKey=[a-f0-9-]{36}/i)
       },
       {
         id: "dotnet-sendgrid-key",
         description: "SendGrid API key (SG. prefix)",
         severity: "critical",
-        regex: /SG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{40,}/
+        matches: onLine(/SG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{40,}/)
       }
     ];
     TARGET_FILES = [
@@ -77711,7 +77984,7 @@ var init_scanDotnetSecrets = __esm({
 
 // src/tools/dotnetTargetFrameworkCheck.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
-import { join as join85, relative as relative28 } from "node:path";
+import { join as join86, relative as relative28 } from "node:path";
 async function handler35(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
@@ -77791,7 +78064,7 @@ function collectCsprojFiles(root, maxDepth) {
     if (depth > maxDepth) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP_DIRS4.has(name)) continue;
-      const abs = join85(dir, name);
+      const abs = join86(dir, name);
       if (kind === "directory") walk5(abs, depth + 1);
       else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
     }
@@ -77839,7 +78112,7 @@ var init_dotnetTargetFrameworkCheck = __esm({
 
 // src/tools/dotnetEfcoreAudit.ts
 import { randomUUID as randomUUID16 } from "node:crypto";
-import { join as join86, relative as relative29 } from "node:path";
+import { join as join87, relative as relative29 } from "node:path";
 async function handler36(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
@@ -77848,7 +78121,7 @@ async function handler36(inp, ctx) {
   for (const dir of migrationDirs) {
     const files = listProjectDir(projectPath, dir).map((e) => e.name).filter((n) => n.endsWith(".cs"));
     for (const fname of files) {
-      const abs = join86(dir, fname);
+      const abs = join87(dir, fname);
       const content = readProjectTextOrUndefined(projectPath, abs);
       if (content === void 0) continue;
       const lines = content.split(/\r?\n/);
@@ -77916,7 +78189,7 @@ function findMigrationsDirs(root) {
     if (depth > 6) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP.has(name)) continue;
-      const abs = join86(dir, name);
+      const abs = join87(dir, name);
       if (kind !== "directory") continue;
       if (name === "Migrations") {
         out.push(abs);
@@ -78186,7 +78459,7 @@ var init_ssvc = __esm({
 });
 
 // src/validate/npmResolve.ts
-import { join as join87 } from "node:path";
+import { join as join88 } from "node:path";
 function makeNpmResolver(projectPath) {
   const locks = /* @__PURE__ */ new Map();
   const lockOf = (rootDir) => {
@@ -78226,7 +78499,7 @@ function makeNpmResolver(projectPath) {
 function readLock(projectPath, rootDir) {
   for (const candidate of LOCKFILES) {
     const file = rootDir === "" ? candidate : `${rootDir}/${candidate}`;
-    const parsed2 = readJson(projectPath, join87(projectPath, rootDir, candidate), MAX_LOCKFILE_BYTES);
+    const parsed2 = readJson(projectPath, join88(projectPath, rootDir, candidate), MAX_LOCKFILE_BYTES);
     if (parsed2 === void 0) continue;
     if (parsed2 === null) return { kind: "unreadable", file };
     const versions = /* @__PURE__ */ new Map();
@@ -78255,7 +78528,7 @@ function walkV1(deps, prefix, out) {
   }
 }
 function readInstalled(projectPath, dir, name) {
-  const parsed2 = readJson(projectPath, join87(projectPath, dir, "node_modules", ...name.split("/"), "package.json"), MAX_PACKAGE_JSON_BYTES);
+  const parsed2 = readJson(projectPath, join88(projectPath, dir, "node_modules", ...name.split("/"), "package.json"), MAX_PACKAGE_JSON_BYTES);
   const version2 = parsed2?.["version"];
   if (typeof version2 !== "string") return null;
   return { version: version2, source: `${dir === "" ? "" : `${dir}/`}node_modules/${name}/package.json` };
@@ -78294,7 +78567,7 @@ var init_npmResolve = __esm({
 });
 
 // src/validate/pypiPins.ts
-import { join as join88 } from "node:path";
+import { join as join89 } from "node:path";
 function isPypiPinFile(path3) {
   const lower = path3.toLowerCase();
   const base2 = lower.split("/").pop() ?? "";
@@ -78313,7 +78586,7 @@ function makePypiPinResolver(projectPath) {
 function readAllPins(projectPath) {
   const byName = /* @__PURE__ */ new Map();
   for (const manifest of listProjectFiles(projectPath).filter(isPypiPinFile)) {
-    const text2 = readText6(projectPath, join88(projectPath, ...manifest.split("/")));
+    const text2 = readText6(projectPath, join89(projectPath, ...manifest.split("/")));
     if (text2 === null) return null;
     const pins = pinsOf(manifest, text2);
     if (pins === null) return null;
@@ -80741,16 +81014,16 @@ var init_analyze = __esm({
 import {
   existsSync as existsSync22,
   lstatSync as lstatSync16,
-  mkdtempSync as mkdtempSync8,
+  mkdtempSync as mkdtempSync9,
   readdirSync as readdirSync16,
   readlinkSync as readlinkSync2,
   realpathSync as realpathSync5,
-  rmSync as rmSync13,
+  rmSync as rmSync14,
   statSync as statSync13,
-  writeFileSync as writeFileSync22
+  writeFileSync as writeFileSync23
 } from "node:fs";
-import { tmpdir as tmpdir9 } from "node:os";
-import { basename as basename10, dirname as dirname25, isAbsolute as isAbsolute19, join as join89, relative as relative30, resolve as resolve26 } from "node:path";
+import { tmpdir as tmpdir10 } from "node:os";
+import { basename as basename10, dirname as dirname25, isAbsolute as isAbsolute19, join as join90, relative as relative30, resolve as resolve26 } from "node:path";
 function extOf(name) {
   const dot = name.lastIndexOf(".");
   return dot === -1 ? "" : name.slice(dot).toLowerCase();
@@ -80773,11 +81046,11 @@ function fileUrlPath(target) {
   return /^\/[a-z]:/i.test(rest) ? rest.slice(1) : rest;
 }
 function objectsDirsOf(dir) {
-  const out = [join89(dir, "objects"), join89(dir, ".git", "objects")];
-  const gitFile = readSmallText(join89(dir, ".git"), 4096, dir);
+  const out = [join90(dir, "objects"), join90(dir, ".git", "objects")];
+  const gitFile = readSmallText(join90(dir, ".git"), 4096, dir);
   if (gitFile.status === "ok") {
     const m = /^gitdir:\s*(.+?)\s*$/m.exec(gitFile.text);
-    if (m?.[1] !== void 0) out.push(join89(resolve26(dir, m[1]), "objects"));
+    if (m?.[1] !== void 0) out.push(join90(resolve26(dir, m[1]), "objects"));
   }
   return out;
 }
@@ -80785,14 +81058,14 @@ function alternatesProblem(dir, depth = 0) {
   if (depth > 5) return null;
   for (const objects of objectsDirsOf(dir)) {
     if (networkPathOf(objects) !== null) return `the repository's objects are on a network path (${objects})`;
-    const alternates = readSmallText(join89(objects, "info", "alternates"), 64 * 1024, dirname25(objects));
+    const alternates = readSmallText(join90(objects, "info", "alternates"), 64 * 1024, dirname25(objects));
     if (alternates.status !== "ok") continue;
     for (const raw of alternates.text.split(/\r?\n/)) {
       const line = raw.trim();
       if (line === "" || line.startsWith("#")) continue;
       const alternate = resolve26(objects, line);
       if (networkPathOf(line) !== null || networkPathOf(alternate) !== null) {
-        return `the repository borrows objects from a network path (${line}, in ${join89(objects, "info", "alternates")})`;
+        return `the repository borrows objects from a network path (${line}, in ${join90(objects, "info", "alternates")})`;
       }
       const deeper = alternatesProblem(dirname25(alternate), depth + 1);
       if (deeper !== null) return deeper;
@@ -80869,7 +81142,7 @@ function looksLikeGitHost(url2) {
   return /(github\.com|gitlab\.com|bitbucket\.org)\/[^/]+\/[^/]+\/?$/.test(url2);
 }
 async function ingestGit(url2) {
-  const dir = mkdtempSync8(join89(tmpdir9(), "guardian-scanskill-git-"));
+  const dir = mkdtempSync9(join90(tmpdir10(), "guardian-scanskill-git-"));
   const r = await execGit(dir, ["clone", "--depth", "1", "--quiet", "--", url2, dir], { timeoutMs: 12e4 });
   if (r.failure !== null || r.status !== 0) {
     safeRm(dir);
@@ -80893,10 +81166,10 @@ async function ingestUrl(url2) {
   if (typeof fetch !== "function") {
     return { ok: false, code: "unsupported_target", message: "No fetch available to download URL." };
   }
-  const dir = mkdtempSync8(join89(tmpdir9(), "guardian-scanskill-url-"));
+  const dir = mkdtempSync9(join90(tmpdir10(), "guardian-scanskill-url-"));
   const isZip = /\.zip($|\?)/i.test(url2);
   const fileName = isZip ? "download.zip" : basename10(url2.split("?")[0] ?? "download") || "download";
-  const dest = join89(dir, fileName);
+  const dest = join90(dir, fileName);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6e4);
@@ -80904,7 +81177,7 @@ async function ingestUrl(url2) {
       const res = await fetch(url2, { signal: controller.signal });
       if (!res.ok) throw new Error(`http ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      writeFileSync22(dest, buf);
+      writeFileSync23(dest, buf);
     } finally {
       clearTimeout(timeout);
     }
@@ -80938,7 +81211,7 @@ async function ingestUrl(url2) {
   };
 }
 async function ingestZip(zipPath, ownsParent, parentDir) {
-  const extractDir = mkdtempSync8(join89(tmpdir9(), "guardian-scanskill-zip-"));
+  const extractDir = mkdtempSync9(join90(tmpdir10(), "guardian-scanskill-zip-"));
   const extracted = await tryExtract(zipPath, extractDir);
   if (!extracted) {
     safeRm(extractDir);
@@ -81003,7 +81276,7 @@ function collectDir(root) {
         truncated = true;
         break;
       }
-      const abs = join89(dir, entry);
+      const abs = join90(dir, entry);
       let s;
       try {
         s = lstatSync16(abs);
@@ -81114,7 +81387,7 @@ function looksBinary(buf) {
 }
 function safeRm(dir) {
   try {
-    rmSync13(dir, { recursive: true, force: true });
+    rmSync14(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -81237,8 +81510,8 @@ var init_ingest = __esm({
 
 // src/tools/scanSkill.ts
 import { createHash as createHash14, randomUUID as randomUUID17 } from "node:crypto";
-import { writeFileSync as writeFileSync23 } from "node:fs";
-import { join as join90 } from "node:path";
+import { writeFileSync as writeFileSync24 } from "node:fs";
+import { join as join91 } from "node:path";
 async function handler39(inp, ctx, callMeta) {
   let basePath;
   try {
@@ -81278,10 +81551,10 @@ async function handler39(inp, ctx, callMeta) {
     if (inp.write_reports !== false) {
       try {
         const outDir = ensureReportDir(basePath, scanId, "skill-audit");
-        const sarifPath = join90(outDir, "report.sarif");
-        const jsonPath = join90(outDir, "report.json");
-        writeFileSync23(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
-        writeFileSync23(
+        const sarifPath = join91(outDir, "report.sarif");
+        const jsonPath = join91(outDir, "report.json");
+        writeFileSync24(sarifPath, toSarif(findings, { toolName: "guardian-scanskill" }), "utf8");
+        writeFileSync24(
           jsonPath,
           JSON.stringify(
             {
@@ -81468,7 +81741,7 @@ var init_envVars = __esm({
 
 // src/surface/collectors/ports.ts
 import { realpathSync as realpathSync6 } from "node:fs";
-import { basename as basename11, join as join91 } from "node:path";
+import { basename as basename11, join as join92 } from "node:path";
 function collectPorts(projectPath) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
@@ -81481,7 +81754,7 @@ function collectPorts(projectPath) {
   };
   const seenDockerfiles = /* @__PURE__ */ new Set();
   for (const name of DOCKERFILES) {
-    const path3 = join91(projectPath, name);
+    const path3 = join92(projectPath, name);
     const canonical2 = canonicalPath2(projectPath, path3);
     if (canonical2 === void 0) continue;
     if (seenDockerfiles.has(canonical2)) continue;
@@ -82154,7 +82427,7 @@ var init_wordpress = __esm({
 
 // src/surface/scanSemgrep.ts
 import { copyFileSync, lstatSync as lstatSync17 } from "node:fs";
-import { join as join92 } from "node:path";
+import { join as join93 } from "node:path";
 async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
   const semgrepBin = await scannerAvailable("semgrep");
@@ -82172,7 +82445,7 @@ async function invokeSemgrep(options) {
   const via = `docker (${image})`;
   let containerRules;
   try {
-    const stagedRules = join92(reportDir, "routes.yml");
+    const stagedRules = join93(reportDir, "routes.yml");
     copyFileSync(rulesPath, stagedRules);
     containerRules = toContainerPath(projectPath, stagedRules);
   } catch (e) {
@@ -82242,7 +82515,7 @@ function countListedRouteTargets(projectPath, files, ownIgnore) {
     if (segments.some((dir) => skipDirs.has(dir) || dir.startsWith("."))) continue;
     if (!ownIgnore && SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue;
     try {
-      if (!lstatSync17(join92(projectPath, file)).isFile()) continue;
+      if (!lstatSync17(join93(projectPath, file)).isFile()) continue;
     } catch {
       continue;
     }
@@ -82316,7 +82589,7 @@ var init_scanSemgrep = __esm({
 
 // src/surface/specDiscover.ts
 import { readdirSync as readdirSync17 } from "node:fs";
-import { join as join93, relative as relative31, resolve as resolve27, sep as sep17 } from "node:path";
+import { join as join94, relative as relative31, resolve as resolve27, sep as sep17 } from "node:path";
 function discoverSpecs(projectPath, explicit) {
   const root = resolve27(projectPath);
   const isExplicit = explicit !== void 0 && explicit.length > 0;
@@ -82362,12 +82635,12 @@ function walk4(root, dir) {
   for (const entry of entries2) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      const sub = walk4(root, join93(dir, entry.name));
+      const sub = walk4(root, join94(dir, entry.name));
       out.exact.push(...sub.exact);
       out.widened.push(...sub.widened);
     } else if (entry.isFile()) {
       const tier = specCandidateTier(root, dir, entry.name);
-      if (tier !== null) out[tier].push(join93(dir, entry.name));
+      if (tier !== null) out[tier].push(join94(dir, entry.name));
     }
   }
   return out;
@@ -82761,13 +83034,13 @@ var init_specImport = __esm({
 });
 
 // src/tools/mapAttackSurface.ts
-import { isAbsolute as isAbsolute20, join as join94, resolve as resolve28 } from "node:path";
+import { isAbsolute as isAbsolute20, join as join95, resolve as resolve28 } from "node:path";
 async function handler40(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
   const treeHash = await computeTreeHash(projectPath);
   const includeEnvVars = inp.include_env_vars !== false;
-  const rulesPath = join94(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
+  const rulesPath = join95(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
   const cacheKey = surfaceCacheKey({
     projectPath,
     treeHash,
@@ -82803,7 +83076,7 @@ async function handler40(inp, ctx) {
     return persistAndSummarize(snapshot2, toolsRun2);
   }
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
-  const outFile = join94(reportDir, "surface.json");
+  const outFile = join95(reportDir, "surface.json");
   const extraArgs = semgrepScanFlags(ctx.repoConfigFromRef?.root ?? projectPath).args;
   const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir, extraArgs });
   if (invocation === null) {
@@ -82929,7 +83202,7 @@ async function handler40(inp, ctx) {
 function readSources(parsed2, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path3 of collectAllFiles(parsed2)) {
-    const read3 = readProjectBytes(projectPath, isAbsolute20(path3) ? path3 : join94(projectPath, path3));
+    const read3 = readProjectBytes(projectPath, isAbsolute20(path3) ? path3 : join95(projectPath, path3));
     if (read3.status !== "ok") continue;
     const buffer = read3.bytes;
     const text2 = buffer.toString("utf8");
@@ -83089,7 +83362,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path3) {
-  return resolve28(isAbsolute20(path3) ? path3 : join94(projectPath, path3));
+  return resolve28(isAbsolute20(path3) ? path3 : join95(projectPath, path3));
 }
 function resultsArrayOf(parsed2) {
   const results = parsed2.results;
@@ -83970,8 +84243,8 @@ var init_deadline = __esm({
 });
 
 // src/dast/evidence.ts
-import { writeFileSync as writeFileSync24 } from "node:fs";
-import { join as join95 } from "node:path";
+import { writeFileSync as writeFileSync25 } from "node:fs";
+import { join as join96 } from "node:path";
 function toExchange(result) {
   return { ...requestPart(result.request), response: responsePart(result) };
 }
@@ -84045,8 +84318,8 @@ function writeEvidenceFiles(dir, records2, redact2) {
       continue;
     }
     try {
-      writeFileSync24(
-        join95(dir, `${record8.fingerprint}.json`),
+      writeFileSync25(
+        join96(dir, `${record8.fingerprint}.json`),
         redact2(JSON.stringify(record8, null, 2)),
         "utf8"
       );
@@ -84521,7 +84794,7 @@ var init_rateLimitFinding = __esm({
 });
 
 // src/dast/passes.ts
-import { join as join96 } from "node:path";
+import { join as join97 } from "node:path";
 async function runRateLimitBurst(opts) {
   const empty = {
     outcome: "not_requested",
@@ -84617,7 +84890,7 @@ async function runNuclei(opts) {
       missing: true
     };
   }
-  const outputPath = join96(opts.outputDir, "nuclei.jsonl");
+  const outputPath = join97(opts.outputDir, "nuclei.jsonl");
   const run2 = await invokeNuclei({
     binaryPath: opts.binaryPath,
     targetUrl: opts.origin,
@@ -84790,7 +85063,7 @@ var init_target = __esm({
 
 // src/tools/scanDast.ts
 import { randomUUID as randomUUID18 } from "node:crypto";
-import { join as join97 } from "node:path";
+import { join as join98 } from "node:path";
 function fail2(code, message2, retryWith) {
   return {
     ok: false,
@@ -85189,7 +85462,7 @@ function toInsertInput(finding4, scanId, evidenceDir) {
     raw: {
       check: check2,
       evidence_id,
-      evidence_file: evidenceDir === null ? null : join97(evidenceDir, `${finding4.fingerprint}.json`)
+      evidence_file: evidenceDir === null ? null : join98(evidenceDir, `${finding4.fingerprint}.json`)
     }
   };
 }
@@ -85630,8 +85903,8 @@ var init_validateFinding = __esm({
 });
 
 // src/fixpr/apply.ts
-import { rmSync as rmSync14 } from "node:fs";
-import { isAbsolute as isAbsolute21, join as join98, relative as relative32, resolve as resolve29, sep as sep18 } from "node:path";
+import { rmSync as rmSync15 } from "node:fs";
+import { isAbsolute as isAbsolute21, join as join99, relative as relative32, resolve as resolve29, sep as sep18 } from "node:path";
 async function applyGroup(opts) {
   const run2 = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -85664,13 +85937,13 @@ async function applySemgrepPass(run2, worktreePath, timeoutMs, plan) {
   const fixed = ["--metrics=off", ...plan.configs.map((c) => `--config=${c}`), "--autofix", "--json", "--quiet"];
   const batches = batchArgs(plan.files, {
     command: SEMGREP_COMMAND,
-    fixedArgs: [...fixed, "--output", join98(plan.dir, "fix-000.json"), "--"]
+    fixedArgs: [...fixed, "--output", join99(plan.dir, "fix-000.json"), "--"]
   });
   const commands = [];
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i] ?? [];
-    const report = join98(plan.dir, `fix-${String(i).padStart(3, "0")}.json`);
-    rmSync14(report, { force: true });
+    const report = join99(plan.dir, `fix-${String(i).padStart(3, "0")}.json`);
+    rmSync15(report, { force: true });
     const result = await runSemgrep(
       {
         args: [...fixed, "--output", report, "--", ...batch],
@@ -86348,9 +86621,9 @@ var init_pr = __esm({
 });
 
 // src/fixpr/semgrepFix.ts
-import { mkdirSync as mkdirSync14, mkdtempSync as mkdtempSync9, rmSync as rmSync15, statSync as statSync14, writeFileSync as writeFileSync25 } from "node:fs";
-import { tmpdir as tmpdir10 } from "node:os";
-import { basename as basename12, dirname as dirname27, join as join99 } from "node:path";
+import { mkdirSync as mkdirSync14, mkdtempSync as mkdtempSync10, rmSync as rmSync16, statSync as statSync14, writeFileSync as writeFileSync26 } from "node:fs";
+import { tmpdir as tmpdir11 } from "node:os";
+import { basename as basename12, dirname as dirname27, join as join100 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
@@ -86358,7 +86631,7 @@ function checkIdMatches(checkId, ruleFile, id) {
   const tail2 = basename12(dirname27(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
   return tail2.length > 0 && (prefix === tail2 || prefix.endsWith(`.${tail2}`));
 }
-function planSemgrepFix(sources, tmpRoot = tmpdir10()) {
+function planSemgrepFix(sources, tmpRoot = tmpdir11()) {
   const byFile = /* @__PURE__ */ new Map();
   const registry2 = /* @__PURE__ */ new Set();
   const files = /* @__PURE__ */ new Set();
@@ -86390,15 +86663,15 @@ function planSemgrepFix(sources, tmpRoot = tmpdir10()) {
       reason: `rule(s) ${[...new Set(unresolved)].join(", ")} are in no local rule file the originating scan loaded, and that scan did not use the Semgrep registry \u2014 refusing to guess where the fix comes from`
     };
   }
-  const dir = mkdtempSync9(join99(tmpRoot, "guardian-fixpr-sg-"));
+  const dir = mkdtempSync10(join100(tmpRoot, "guardian-fixpr-sg-"));
   const configs = [];
   const configLabels = [];
   let n = 0;
   for (const [file, picked] of byFile) {
-    const sub = join99(dir, `rules-${String(n++).padStart(3, "0")}`);
+    const sub = join100(dir, `rules-${String(n++).padStart(3, "0")}`);
     mkdirSync14(sub);
-    const copy = join99(sub, basename12(file));
-    writeFileSync25(copy, (0, import_yaml3.stringify)({ rules: [...picked.values()] }), "utf8");
+    const copy = join100(sub, basename12(file));
+    writeFileSync26(copy, (0, import_yaml3.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
     configLabels.push(`${[...picked.keys()].join(", ")} from ${basename12(file)}`);
   }
@@ -86410,7 +86683,7 @@ function planSemgrepFix(sources, tmpRoot = tmpdir10()) {
 }
 function disposeSemgrepFixPlan(plan) {
   try {
-    rmSync15(plan.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    rmSync16(plan.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   } catch {
   }
 }
@@ -86542,8 +86815,8 @@ var init_testEnv = __esm({
 });
 
 // src/fixpr/repoPackageConfig.ts
-import { mkdtempSync as mkdtempSync10, renameSync as renameSync4, rmSync as rmSync16 } from "node:fs";
-import { dirname as dirname28, join as join100, relative as relative33, resolve as resolve31, sep as sep19 } from "node:path";
+import { mkdtempSync as mkdtempSync11, renameSync as renameSync4, rmSync as rmSync17 } from "node:fs";
+import { dirname as dirname28, join as join101, relative as relative33, resolve as resolve31, sep as sep19 } from "node:path";
 function dirsUpToRoot(root, projectDir) {
   const out = [];
   const top = resolve31(root);
@@ -86558,11 +86831,11 @@ function repoPackageConfigPaths(root, projectDir) {
   for (const dir of dirsUpToRoot(root, projectDir)) {
     for (const entry of listProjectDir(root, dir)) {
       const lower = entry.name.toLowerCase();
-      if (TOP_LEVEL.has(lower)) out.push(join100(dir, entry.name));
+      if (TOP_LEVEL.has(lower)) out.push(join101(dir, entry.name));
       const nested = NESTED[lower];
       if (nested !== void 0 && entry.kind === "directory") {
-        for (const inner of listProjectDir(root, join100(dir, entry.name))) {
-          if (nested.has(inner.name.toLowerCase())) out.push(join100(dir, entry.name, inner.name));
+        for (const inner of listProjectDir(root, join101(dir, entry.name))) {
+          if (nested.has(inner.name.toLowerCase())) out.push(join101(dir, entry.name, inner.name));
         }
       }
     }
@@ -86571,18 +86844,18 @@ function repoPackageConfigPaths(root, projectDir) {
 }
 function setAsidePackageConfig(root, projectDir) {
   const paths = repoPackageConfigPaths(root, projectDir);
-  const holding = paths.length > 0 ? mkdtempSync10(join100(dirname28(resolve31(root)), ".guardian-fixpr-config-")) : null;
+  const holding = paths.length > 0 ? mkdtempSync11(join101(dirname28(resolve31(root)), ".guardian-fixpr-config-")) : null;
   const moves = [];
   try {
     paths.forEach((from, i) => {
       if (holding === null) return;
-      const to = join100(holding, String(i));
+      const to = join101(holding, String(i));
       renameSync4(from, to);
       moves.push({ from, to });
     });
   } catch (e) {
     for (const m of moves.reverse()) renameSync4(m.to, m.from);
-    if (holding !== null) rmSync16(holding, { recursive: true, force: true });
+    if (holding !== null) rmSync17(holding, { recursive: true, force: true });
     throw e;
   }
   let restored = false;
@@ -86594,7 +86867,7 @@ function setAsidePackageConfig(root, projectDir) {
       for (const m of [...moves].reverse()) renameSync4(m.to, m.from);
     },
     dispose: () => {
-      if (holding !== null) rmSync16(holding, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      if (holding !== null) rmSync17(holding, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     }
   };
 }
@@ -86724,7 +86997,7 @@ function workspaceMembers(projectDir, checkoutRoot, patterns) {
       if (e.kind === "link" && matched) unchecked.push(`${rel2} (a link a workspace pattern matches, not followed)`);
       if (e.kind !== "directory") continue;
       if (matched) members.push(rel2);
-      if (cur.depth + 1 < MAX_WORKSPACE_DEPTH) stack.push({ abs: join100(cur.abs, e.name), rel: rel2, depth: cur.depth + 1 });
+      if (cur.depth + 1 < MAX_WORKSPACE_DEPTH) stack.push({ abs: join101(cur.abs, e.name), rel: rel2, depth: cur.depth + 1 });
       else if (patterns.some((p) => p.includes("**"))) unchecked.push(`workspace members below ${rel2} (deeper than ${MAX_WORKSPACE_DEPTH} directories)`);
     }
   }
@@ -86734,7 +87007,7 @@ function checkNpmSources(projectDir, checkoutRoot = projectDir) {
   const network = [];
   const unchecked = [];
   const manifest = (rel2) => {
-    const r = readJsonObject(checkoutRoot, join100(projectDir, rel2), PROJECT_FILE_MAX_BYTES);
+    const r = readJsonObject(checkoutRoot, join101(projectDir, rel2), PROJECT_FILE_MAX_BYTES);
     if (r.status === "unchecked") unchecked.push(`${rel2} (${r.why})`);
     if (r.status !== "ok") return;
     for (const field2 of NPM_SPEC_FIELDS) if (r.value[field2] !== void 0) scanNetwork(rel2, r.value[field2], field2, network);
@@ -86747,7 +87020,7 @@ function checkNpmSources(projectDir, checkoutRoot = projectDir) {
     const ws = workspaceMembers(projectDir, checkoutRoot, patterns);
     unchecked.push(...ws.unchecked);
     for (const member of ws.members) {
-      const m = readJsonObject(checkoutRoot, join100(projectDir, ...member.split("/"), "package.json"), PROJECT_FILE_MAX_BYTES);
+      const m = readJsonObject(checkoutRoot, join101(projectDir, ...member.split("/"), "package.json"), PROJECT_FILE_MAX_BYTES);
       if (m.status === "unchecked") unchecked.push(`${member}/package.json (${m.why})`);
       if (m.status === "ok") {
         for (const field2 of NPM_SPEC_FIELDS) if (m.value[field2] !== void 0) scanNetwork(`${member}/package.json`, m.value[field2], field2, network);
@@ -86756,11 +87029,11 @@ function checkNpmSources(projectDir, checkoutRoot = projectDir) {
   };
   manifest("package.json");
   for (const lock of ["package-lock.json", "npm-shrinkwrap.json"]) {
-    const r = readJsonObject(checkoutRoot, join100(projectDir, lock), PROJECT_LOCKFILE_MAX_BYTES);
+    const r = readJsonObject(checkoutRoot, join101(projectDir, lock), PROJECT_LOCKFILE_MAX_BYTES);
     if (r.status === "unchecked") unchecked.push(`${lock} (${r.why})`);
     if (r.status === "ok") scanNetwork(lock, r.value, "", network);
   }
-  const yarn = readProjectText(checkoutRoot, join100(projectDir, "yarn.lock"), PROJECT_LOCKFILE_MAX_BYTES);
+  const yarn = readProjectText(checkoutRoot, join101(projectDir, "yarn.lock"), PROJECT_LOCKFILE_MAX_BYTES);
   if (yarn.status === "refused") unchecked.push(`yarn.lock (${describeReadRefusal(yarn.reason)})`);
   if (yarn.status === "ok") scanTextLock("yarn.lock", yarn.text, network);
   return { network, unchecked };
@@ -87049,13 +87322,13 @@ var init_verify3 = __esm({
 });
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync23, mkdtempSync as mkdtempSync11, realpathSync as realpathSync7, rmSync as rmSync17 } from "node:fs";
-import { tmpdir as tmpdir11 } from "node:os";
-import { join as join101, resolve as resolve32 } from "node:path";
+import { existsSync as existsSync23, mkdtempSync as mkdtempSync12, realpathSync as realpathSync7, rmSync as rmSync18 } from "node:fs";
+import { tmpdir as tmpdir12 } from "node:os";
+import { join as join102, resolve as resolve32 } from "node:path";
 async function createWorktree(opts) {
   let dir;
   try {
-    dir = mkdtempSync11(join101(tmpdir11(), WORKTREE_DIR_PREFIX));
+    dir = mkdtempSync12(join102(tmpdir12(), WORKTREE_DIR_PREFIX));
   } catch (e) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage3(e)}` };
   }
@@ -87203,7 +87476,7 @@ function firstNonEmptyLine2(text2) {
 }
 function safeRmDir(dir) {
   try {
-    rmSync17(dir, { recursive: true, force: true });
+    rmSync18(dir, { recursive: true, force: true });
   } catch {
   }
 }
@@ -87221,8 +87494,8 @@ var init_worktree = __esm({
 });
 
 // src/tools/createFixPr.ts
-import { rmSync as rmSync18 } from "node:fs";
-import { isAbsolute as isAbsolute22, join as join102, relative as relative34 } from "node:path";
+import { rmSync as rmSync19 } from "node:fs";
+import { isAbsolute as isAbsolute22, join as join103, relative as relative34 } from "node:path";
 async function handler43(inp, ctx, callMeta) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
@@ -87364,12 +87637,12 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
     const composerRefused = composerChoosesRepository(planDir);
     const planFailures = [];
     if (composerRefused !== null) {
-      rmSync18(join102(planDir, "composer.json"), { force: true });
+      rmSync19(join103(planDir, "composer.json"), { force: true });
       planFailures.push({ ecosystem: "composer", code: "repository_chosen_by_project", reason: composerRefused });
     }
     const npmRefused = npmSourcesRefusal(checkNpmSources(planDir, created.worktree.path));
     if (npmRefused !== null) {
-      rmSync18(join102(planDir, "package.json"), { force: true });
+      rmSync19(join103(planDir, "package.json"), { force: true });
       planFailures.push({ ecosystem: "npm", code: "network_path_chosen_by_project", reason: npmRefused });
     }
     const result = await withPackageManagerEnv(
@@ -87399,7 +87672,7 @@ function isRunnerFailure(v) {
   return typeof o["ecosystem"] === "string" && typeof o["code"] === "string" && typeof o["reason"] === "string";
 }
 function inWorktree(root, prefix) {
-  return join102(root, ...prefix.split("/").filter((segment) => segment.length > 0));
+  return join103(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
   const rel2 = isAbsolute22(filePath) ? relative34(projectPath, filePath) : filePath;
@@ -88570,7 +88843,7 @@ var init_jsonc = __esm({
 
 // src/agentaudit/configSources.ts
 import { homedir as homedir9 } from "node:os";
-import { dirname as dirname29, isAbsolute as isAbsolute23, join as join103, relative as relative35 } from "node:path";
+import { dirname as dirname29, isAbsolute as isAbsolute23, join as join104, relative as relative35 } from "node:path";
 function hostPathEnv() {
   return { os: detectOs(), home: homedir9(), appData: process.env["APPDATA"], projectPath: "" };
 }
@@ -88585,7 +88858,7 @@ function claudeCodeDescriptors() {
       label: custom3 ? "$CLAUDE_CONFIG_DIR/.claude.json" : "~/.claude.json",
       kind: "user",
       mcpServersField: "mcpServers",
-      resolve: () => custom3 ? join103(dir, ".claude.json") : join103(homedir9(), ".claude.json"),
+      resolve: () => custom3 ? join104(dir, ".claude.json") : join104(homedir9(), ".claude.json"),
       maxBytes: MAX_CLAUDE_JSON_BYTES,
       nestedProjects: true
     },
@@ -88593,7 +88866,7 @@ function claudeCodeDescriptors() {
       label: custom3 ? "$CLAUDE_CONFIG_DIR/settings.json" : "~/.claude/settings.json",
       kind: "user",
       mcpServersField: null,
-      resolve: () => custom3 ? join103(dir, "settings.json") : join103(homedir9(), ".claude", "settings.json")
+      resolve: () => custom3 ? join104(dir, "settings.json") : join104(homedir9(), ".claude", "settings.json")
     }
   ];
 }
@@ -88664,36 +88937,36 @@ var init_configSources = __esm({
     init_osDetect();
     init_jsonc();
     PROJECT_DESCRIPTORS = [
-      { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join103(p, ".mcp.json") },
+      { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join104(p, ".mcp.json") },
       {
         label: ".claude/settings.json",
         kind: "project",
         mcpServersField: null,
-        resolve: (p) => join103(p, ".claude", "settings.json")
+        resolve: (p) => join104(p, ".claude", "settings.json")
       },
       {
         label: ".claude/settings.local.json",
         kind: "project",
         mcpServersField: null,
-        resolve: (p) => join103(p, ".claude", "settings.local.json")
+        resolve: (p) => join104(p, ".claude", "settings.local.json")
       },
       {
         label: ".cursor/mcp.json",
         kind: "project",
         mcpServersField: "mcpServers",
-        resolve: (p) => join103(p, ".cursor", "mcp.json")
+        resolve: (p) => join104(p, ".cursor", "mcp.json")
       },
       {
         label: ".vscode/mcp.json",
         kind: "project",
         mcpServersField: "servers",
-        resolve: (p) => join103(p, ".vscode", "mcp.json")
+        resolve: (p) => join104(p, ".vscode", "mcp.json")
       },
       {
         label: ".gemini/settings.json",
         kind: "project",
         mcpServersField: "mcpServers",
-        resolve: (p) => join103(p, ".gemini", "settings.json")
+        resolve: (p) => join104(p, ".gemini", "settings.json")
       },
       // A Claude Code plugin declares its own servers here, launched with
       // `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's root (this directory).
@@ -88701,7 +88974,7 @@ var init_configSources = __esm({
         label: ".claude-plugin/plugin.json",
         kind: "project",
         mcpServersField: "mcpServers",
-        resolve: (p) => join103(p, ".claude-plugin", "plugin.json")
+        resolve: (p) => join104(p, ".claude-plugin", "plugin.json")
       }
     ];
     OTHER_USER_DESCRIPTORS = [
@@ -95332,15 +95605,15 @@ var init_typosquat = __esm({
 
 // src/pkgvet/popular.ts
 import { readFileSync as readFileSync15 } from "node:fs";
-import { join as join104 } from "node:path";
+import { join as join105 } from "node:path";
 function defaultPopularDir() {
-  return join104(resolveConfigsDir(), "popular-packages");
+  return join105(resolveConfigsDir(), "popular-packages");
 }
 function parsePopularList(text2) {
   return text2.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 }
 function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
-  const path3 = join104(dir, `${ecosystem}.txt`);
+  const path3 = join105(dir, `${ecosystem}.txt`);
   const hit = cache.get(path3);
   if (hit !== void 0) return hit;
   let index = null;
@@ -95366,7 +95639,7 @@ var init_popular = __esm({
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync18, readdirSync as readdirSync18 } from "node:fs";
 import { homedir as homedir10 } from "node:os";
-import { dirname as dirname30, isAbsolute as isAbsolute25, join as join105, parse as parse10, relative as relative36, resolve as resolve34 } from "node:path";
+import { dirname as dirname30, isAbsolute as isAbsolute25, join as join106, parse as parse10, relative as relative36, resolve as resolve34 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -95452,7 +95725,7 @@ function ancestors(ctx) {
   for (let i = 0; i < 16; i += 1) {
     if (stops.some((s) => samePath3(s, dir))) break;
     out.push(dir);
-    if (present4(join105(dir, ".git"))) break;
+    if (present4(join106(dir, ".git"))) break;
     const parent = dirname30(dir);
     if (parent === dir) break;
     dir = parent;
@@ -95552,35 +95825,35 @@ function npmConfigFiles(ctx) {
   const near = ancestors(ctx);
   for (const dir of near) {
     files.push(
-      { path: join105(dir, ".npmrc"), parse: fromNpmrc },
-      { path: join105(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
-      { path: join105(dir, ".yarnrc"), parse: fromYarnrc },
-      { path: join105(dir, "bunfig.toml"), parse: fromBunfig }
+      { path: join106(dir, ".npmrc"), parse: fromNpmrc },
+      { path: join106(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
+      { path: join106(dir, ".yarnrc"), parse: fromYarnrc },
+      { path: join106(dir, "bunfig.toml"), parse: fromBunfig }
     );
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
     for (let dir = dirname30(top), i = 0; i < 64; dir = dirname30(dir), i += 1) {
-      files.push({ path: join105(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      files.push({ path: join106(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
       if (dirname30(dir) === dir) break;
     }
   }
-  const xdg = envValue4(env, "XDG_CONFIG_HOME") ?? join105(home, ".config");
-  const localAppData = envValue4(env, "LOCALAPPDATA") ?? join105(home, "AppData", "Local");
+  const xdg = envValue4(env, "XDG_CONFIG_HOME") ?? join106(home, ".config");
+  const localAppData = envValue4(env, "LOCALAPPDATA") ?? join106(home, "AppData", "Local");
   files.push(
-    { path: envValue4(env, "NPM_CONFIG_USERCONFIG") ?? join105(home, ".npmrc"), parse: fromNpmrc },
-    { path: join105(home, ".yarnrc.yml"), parse: fromYarnrcYml },
-    { path: join105(home, ".yarnrc"), parse: fromYarnrc },
-    { path: join105(home, ".bunfig.toml"), parse: fromBunfig },
-    { path: join105(xdg, ".bunfig.toml"), parse: fromBunfig },
-    { path: join105(xdg, "pnpm", "rc"), parse: fromNpmrc },
-    { path: join105(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
-    { path: join105(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+    { path: envValue4(env, "NPM_CONFIG_USERCONFIG") ?? join106(home, ".npmrc"), parse: fromNpmrc },
+    { path: join106(home, ".yarnrc.yml"), parse: fromYarnrcYml },
+    { path: join106(home, ".yarnrc"), parse: fromYarnrc },
+    { path: join106(home, ".bunfig.toml"), parse: fromBunfig },
+    { path: join106(xdg, ".bunfig.toml"), parse: fromBunfig },
+    { path: join106(xdg, "pnpm", "rc"), parse: fromNpmrc },
+    { path: join106(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
+    { path: join106(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
   );
   const globalConfig2 = envValue4(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue4(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join105(envValue4(env, "APPDATA") ?? join105(home, "AppData", "Roaming"), "npm") : dirname30(dirname30(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join105(prefix, "etc", "npmrc"), parse: fromNpmrc });
+  const prefix = envValue4(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join106(envValue4(env, "APPDATA") ?? join106(home, "AppData", "Roaming"), "npm") : dirname30(dirname30(ctx.nodeExecPath ?? process.execPath)));
+  files.push({ path: join106(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
 function envRegistry(ecosystem, ctx) {
@@ -95630,7 +95903,7 @@ function workspaceIndex(root, file, nameOf2, ctx) {
     }
     const next = queue[at];
     if (next === void 0) break;
-    const manifest = join105(next.dir, file);
+    const manifest = join106(next.dir, file);
     const r = readSmallText(manifest, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(manifest, ctx, root));
     if (r.status === "refused") index.unread = index.unread ?? { path: manifest, what: "workspace manifest" };
     else if (r.status === "ok") {
@@ -95644,7 +95917,7 @@ function workspaceIndex(root, file, nameOf2, ctx) {
     } catch {
       continue;
     }
-    for (const e of entries2) queue.push({ dir: join105(next.dir, e), depth: next.depth + 1 });
+    for (const e of entries2) queue.push({ dir: join106(next.dir, e), depth: next.depth + 1 });
   }
   ctx.cache?.workspaces.set(key, index);
   return index;
@@ -95682,7 +95955,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors(ctx)) {
-    const isRoot = hasWorkspaces(read2(join105(dir, "package.json"), ctx, void 0, "workspace manifest")) || present4(join105(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read2(join106(dir, "package.json"), ctx, void 0, "workspace manifest")) || present4(join106(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", npmManifestName, name, ctx);
     if (hit !== void 0) return hit;
@@ -95692,7 +95965,7 @@ function npmWorkspacePackage(name, ctx) {
 function uvWorkspacePackage(name, ctx) {
   const wanted = pep503(name);
   for (const dir of ancestors(ctx)) {
-    const path3 = join105(dir, "pyproject.toml");
+    const path3 = join106(dir, "pyproject.toml");
     const text2 = read2(path3, ctx);
     if (text2 === void 0) continue;
     const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text2)?.[1] ?? "";
@@ -95739,22 +96012,22 @@ function pypiRegistry(name, ctx) {
   const confs = [];
   const explicit = envValue4(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
-  const xdg = envValue4(env, "XDG_CONFIG_HOME") ?? join105(home, ".config");
+  const xdg = envValue4(env, "XDG_CONFIG_HOME") ?? join106(home, ".config");
   confs.push(
-    join105(xdg, "pip", "pip.conf"),
-    join105(home, ".pip", "pip.conf"),
-    join105(home, "Library", "Application Support", "pip", "pip.conf")
+    join106(xdg, "pip", "pip.conf"),
+    join106(home, ".pip", "pip.conf"),
+    join106(home, "Library", "Application Support", "pip", "pip.conf")
   );
-  const appdata = envValue4(env, "APPDATA") ?? join105(home, "AppData", "Roaming");
-  confs.push(join105(appdata, "pip", "pip.ini"), join105(home, "pip", "pip.ini"));
+  const appdata = envValue4(env, "APPDATA") ?? join106(home, "AppData", "Roaming");
+  confs.push(join106(appdata, "pip", "pip.ini"), join106(home, "pip", "pip.ini"));
   for (const prefix of [envValue4(env, "VIRTUAL_ENV"), envValue4(env, "CONDA_PREFIX")]) {
-    if (prefix !== void 0) confs.push(join105(prefix, "pip.conf"), join105(prefix, "pip.ini"));
+    if (prefix !== void 0) confs.push(join106(prefix, "pip.conf"), join106(prefix, "pip.ini"));
   }
-  confs.push(join105(etc, "pip.conf"), join105(etc, "xdg", "pip", "pip.conf"));
-  confs.push(join105(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
-  for (const d of (envValue4(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join105(d, "pip", "pip.conf"));
+  confs.push(join106(etc, "pip.conf"), join106(etc, "xdg", "pip", "pip.conf"));
+  confs.push(join106(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
+  for (const d of (envValue4(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join106(d, "pip", "pip.conf"));
   const programData = envValue4(env, "ProgramData") ?? envValue4(env, "PROGRAMDATA");
-  if (programData !== void 0) confs.push(join105(programData, "pip", "pip.ini"));
+  if (programData !== void 0) confs.push(join106(programData, "pip", "pip.ini"));
   for (const path3 of confs) {
     const text2 = read2(path3, ctx);
     const url2 = text2 === void 0 ? void 0 : fromPipConf(text2);
@@ -95763,18 +96036,18 @@ function pypiRegistry(name, ctx) {
   const uvConfs = [];
   const uvExplicit = envValue4(env, "UV_CONFIG_FILE");
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
-  uvConfs.push(join105(xdg, "uv", "uv.toml"), join105(appdata, "uv", "uv.toml"), join105(etc, "uv", "uv.toml"));
+  uvConfs.push(join106(xdg, "uv", "uv.toml"), join106(appdata, "uv", "uv.toml"), join106(etc, "uv", "uv.toml"));
   for (const path3 of uvConfs) {
     const text2 = read2(path3, ctx);
     const url2 = text2 === void 0 ? void 0 : fromUvToml(text2);
     if (url2 !== void 0) return { kind: "registry", source: path3, url: url2 };
   }
   for (const dir of ancestors(ctx)) {
-    const uvToml = join105(dir, "uv.toml");
+    const uvToml = join106(dir, "uv.toml");
     const uvText = read2(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
     if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
-    const pyproject = join105(dir, "pyproject.toml");
+    const pyproject = join106(dir, "pyproject.toml");
     const text2 = read2(pyproject, ctx);
     if (text2 === void 0) continue;
     const url2 = fromPyproject(text2);
@@ -95797,7 +96070,7 @@ function hasRepositories(text2) {
 }
 function composerRegistry(ctx) {
   for (const dir of ancestors(ctx)) {
-    const path3 = join105(dir, "composer.json");
+    const path3 = join106(dir, "composer.json");
     const text2 = read2(path3, ctx);
     if (text2 === void 0) continue;
     if (hasRepositories(text2)) return { kind: "registry", source: path3 };
@@ -95806,13 +96079,13 @@ function composerRegistry(ctx) {
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const composerHome = envValue4(env, "COMPOSER_HOME");
-  const globals = composerHome !== void 0 ? [join105(composerHome, "config.json")] : [join105(home, ".composer", "config.json"), join105(home, ".config", "composer", "config.json"), join105(envValue4(env, "APPDATA") ?? join105(home, "AppData", "Roaming"), "Composer", "config.json")];
+  const globals = composerHome !== void 0 ? [join106(composerHome, "config.json")] : [join106(home, ".composer", "config.json"), join106(home, ".config", "composer", "config.json"), join106(envValue4(env, "APPDATA") ?? join106(home, "AppData", "Roaming"), "Composer", "config.json")];
   for (const path3 of globals) if (hasRepositories(read2(path3, ctx))) return { kind: "registry", source: path3 };
   return null;
 }
 function nugetConfigIn(dir, ctx) {
   const hit = listDir3(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
-  return hit === void 0 ? void 0 : join105(dir, hit);
+  return hit === void 0 ? void 0 : join106(dir, hit);
 }
 function customNugetSources(text2) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text2)?.[1] ?? "";
@@ -95863,23 +96136,23 @@ function nugetRegistry(name, ctx) {
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const appdata = envValue4(env, "APPDATA") ?? join105(home, "AppData", "Roaming");
-  for (const dir of [join105(appdata, "NuGet"), join105(home, ".nuget", "NuGet"), join105(home, ".config", "NuGet")]) {
+  const appdata = envValue4(env, "APPDATA") ?? join106(home, "AppData", "Roaming");
+  for (const dir of [join106(appdata, "NuGet"), join106(home, ".nuget", "NuGet"), join106(home, ".config", "NuGet")]) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
   }
-  const userDirs = [join105(appdata, "NuGet", "config"), join105(home, ".nuget", "config"), join105(home, ".config", "NuGet", "config")];
+  const userDirs = [join106(appdata, "NuGet", "config"), join106(home, ".nuget", "config"), join106(home, ".config", "NuGet", "config")];
   const machineDirs = [
-    join105(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
-    join105(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
+    join106(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
+    join106(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
   ];
   const programFilesX86 = envValue4(env, "ProgramFiles(x86)");
-  if (programFilesX86 !== void 0) machineDirs.push(join105(programFilesX86, "NuGet", "Config"));
+  if (programFilesX86 !== void 0) machineDirs.push(join106(programFilesX86, "NuGet", "Config"));
   const machineWide = /* @__PURE__ */ new Set();
   for (const dir of [...userDirs, ...machineDirs]) {
     for (const f of listDir3(dir, ctx).filter((e) => /\.config$/i.test(e)).sort()) {
-      files.push(join105(dir, f));
-      if (machineDirs.includes(dir)) machineWide.add(join105(dir, f));
+      files.push(join106(dir, f));
+      if (machineDirs.includes(dir)) machineWide.add(join106(dir, f));
     }
   }
   for (const path3 of files) {
@@ -96671,8 +96944,8 @@ var init_render = __esm({
 
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
-import { existsSync as existsSync24, readFileSync as readFileSync16, writeFileSync as writeFileSync26 } from "node:fs";
-import { basename as basename13, join as join106, posix as posix4, win32 as win325 } from "node:path";
+import { existsSync as existsSync24, readFileSync as readFileSync16, writeFileSync as writeFileSync27 } from "node:fs";
+import { basename as basename13, join as join107, posix as posix4, win32 as win325 } from "node:path";
 async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
   const projectPath = toolProjectPath(inp.project_path);
@@ -96740,8 +97013,8 @@ async function handler47(inp, ctx) {
   };
   const document = format === "openvex" ? renderOpenVex(statements, meta) : renderCycloneDxVex(statements, meta);
   const dir = ensureReportDir(projectPath, documentId, "vex");
-  const filePath = join106(dir, format === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
-  writeFileSync26(filePath, `${JSON.stringify(document, null, 2)}
+  const filePath = join107(dir, format === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
+  writeFileSync27(filePath, `${JSON.stringify(document, null, 2)}
 `, "utf8");
   return {
     ok: true,
@@ -97064,7 +97337,7 @@ var init_plan2 = __esm({
 
 // src/llmscan/briefs.ts
 import { randomBytes as randomBytes5 } from "node:crypto";
-import { join as join107 } from "node:path";
+import { join as join108 } from "node:path";
 function randomBoundary() {
   return `BOUNDARY-${randomBytes5(12).toString("hex")}`;
 }
@@ -97079,44 +97352,11 @@ function loadTemplate(version2, name) {
   const cached2 = templateCache.get(key);
   if (cached2 !== void 0) return cached2;
   if (!/^v[0-9]+$/.test(version2)) throw new Error("llm-scan prompt version is not of the form vN");
-  const read3 = readSmallText(join107(resolveConfigsDir(), "llm-scan", "prompts", version2, `${name}.md`), 256 * 1024);
+  const read3 = readSmallText(join108(resolveConfigsDir(), "llm-scan", "prompts", version2, `${name}.md`), 256 * 1024);
   if (read3.status !== "ok") throw new Error(`llm-scan prompt template ${key}.md is not available (${read3.status}); the plugin install is incomplete`);
   const text2 = read3.text.replace(/^<!--[^\n]*-->\r?\n+/, "");
   templateCache.set(key, text2);
   return text2;
-}
-function isKeyBodyLine(line) {
-  if (/^\s*(Proc-Type|DEK-Info):/.test(line)) return true;
-  const content = line.replace(/\\[rn]/g, "").replace(/^[\s'"`]+|[\s'"`,+]+$/g, "");
-  return /^[A-Za-z0-9+/=]{8,}$/.test(content);
-}
-function scrubSecrets(text2, firstLine11 = 1) {
-  const hits = scanForSecrets(text2, { skipPlaceholders: false });
-  if (hits.length === 0) return text2;
-  const lines = text2.split(/\r?\n/);
-  const rulesByLine = /* @__PURE__ */ new Map();
-  const keyBody = /* @__PURE__ */ new Set();
-  for (const h of hits) {
-    const at = h.line - 1;
-    rulesByLine.set(at, [...rulesByLine.get(at) ?? [], h.ruleId]);
-    if (h.ruleId !== "private-key-block") continue;
-    if ((lines[at] ?? "").includes("-----END")) continue;
-    for (let i = at + 1; i < lines.length; i += 1) {
-      const line = lines[i] ?? "";
-      if (line.includes("-----END")) {
-        keyBody.add(i);
-        break;
-      }
-      if (!isKeyBodyLine(line)) break;
-      keyBody.add(i);
-    }
-  }
-  return lines.map((line, i) => {
-    const rules2 = rulesByLine.get(i);
-    if (rules2 === void 0) return keyBody.has(i) ? "\u2039private key body removed\u203A" : line;
-    const indent = /^\s*/.exec(line)?.[0] ?? "";
-    return `${indent}\u2039${rules2.join(", ")} line ${String(firstLine11 + i)}\u203A`;
-  }).join("\n");
 }
 function startsFunction(line) {
   const t = line.trim();
@@ -97270,8 +97510,8 @@ var init_briefs = __esm({
   "src/llmscan/briefs.ts"() {
     "use strict";
     init_configFile();
-    init_secretScan();
     init_configsDir();
+    init_scrubSecrets();
     init_classes();
     init_plan2();
     init_submission();
@@ -98319,7 +98559,7 @@ var init_folds = __esm({
     registerFold({
       name: "wp_audit",
       title: "WordPress install audit (WP-CLI)",
-      description: "Audit a WordPress install with WP-CLI, changing nothing. mode install (default): core and plugin checksums (themes: not checked), administrators with risky logins, DISALLOW_FILE_EDIT / WP_DEBUG / FORCE_SSL_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin \u2014 where backdoors persist. mode bulk: the install audit of up to 50 installs. Needs WP-CLI; checksums come from api.wordpress.org.",
+      description: "Audit a WordPress install with WP-CLI, changing nothing. mode install (default): core and plugin checksums (themes: not checked), administrators with risky logins, DISALLOW_FILE_EDIT / WP_DEBUG / FORCE_SSL_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin \u2014 where backdoors persist. mode bulk: the install audit of up to 50 installs. Needs WP-CLI; checksums come from api.wordpress.org. WP-CLI boots the site with its plugins and theme skipped; wp-config.php, core files and must-use plugins still run.",
       modeKey: "mode",
       modeDescription: "install (default), cron or bulk.",
       defaultMode: "install",
@@ -98350,7 +98590,7 @@ var init_folds = __esm({
     registerFold({
       name: "wp_report",
       title: "WordPress recorded state",
-      description: "What dev-guardian recorded about one WordPress install (project_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI, which boots the site (its PHP, its database). Run wp_audit or wp_vuln_check first for fresh data.",
+      description: "What dev-guardian recorded about one WordPress install (project_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI, which boots the site (its database; its PHP minus plugins and theme). Run wp_audit or wp_vuln_check first for fresh data.",
       modeKey: "kind",
       modeDescription: "setup, hardening or plugin.",
       modes: { setup: "wp_describe_setup", hardening: "wp_recommend_hardening", plugin: "wp_plugin_check" },
@@ -98962,12 +99202,12 @@ __export(runScans_exports, {
   runScans: () => runScans
 });
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir as tmpdir12 } from "node:os";
-import { join as join108 } from "node:path";
+import { tmpdir as tmpdir13 } from "node:os";
+import { join as join109 } from "node:path";
 async function runScans(opts) {
-  const tmpDir = await mkdtemp(join108(tmpdir12(), TEMP_DIR_PREFIX));
+  const tmpDir = await mkdtemp(join109(tmpdir13(), TEMP_DIR_PREFIX));
   try {
-    const db = new GuardianDatabase(join108(tmpDir, "guardian.db"));
+    const db = new GuardianDatabase(join109(tmpDir, "guardian.db"));
     try {
       runMigrations(db);
       const storage = new Storage(db);
@@ -98984,7 +99224,7 @@ async function runScans(opts) {
       let rulesSource = { from: "tree" };
       const at = opts.rulesRef;
       if (at !== void 0) {
-        const copy = await copyConfigFromRef(opts.projectPath, at, join108(tmpDir, "config-from-ref"));
+        const copy = await copyConfigFromRef(opts.projectPath, at, join109(tmpDir, "config-from-ref"));
         ctx.repoConfigFromRef = { root: copy.root, ref: at.ref, commit: at.commit };
         rulesSource = {
           from: "ref",

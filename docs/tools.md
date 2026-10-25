@@ -578,7 +578,7 @@ Mark a scan as its project's baseline for its type — by default the newest usa
 
 ### `suggest_fix`
 
-Gather a finding's context — the source around it, rule metadata, earlier suppressions of the same rule — from project\_path's newest scan that reported it, so you can write the patch. Calls no LLM.
+Gather a finding's context — the source around it, rule metadata, earlier suppressions of the same rule — from project\_path's newest scan that reported it, so you can write the patch. Calls no LLM. A line that holds a secret (a credential finding, or the secret detector) is withheld and named in redacted\_lines.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -623,7 +623,7 @@ Check packages before installing them, against the registry and OSV: the name ex
 
 ### `wp_audit`
 
-Audit a WordPress install with WP-CLI, changing nothing. mode install (default): core and plugin checksums (themes: not checked), administrators with risky logins, DISALLOW\_FILE\_EDIT / WP\_DEBUG / FORCE\_SSL\_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin — where backdoors persist. mode bulk: the install audit of up to 50 installs. Needs WP-CLI; checksums come from api.wordpress.org.
+Audit a WordPress install with WP-CLI, changing nothing. mode install (default): core and plugin checksums (themes: not checked), administrators with risky logins, DISALLOW\_FILE\_EDIT / WP\_DEBUG / FORCE\_SSL\_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin — where backdoors persist. mode bulk: the install audit of up to 50 installs. Needs WP-CLI; checksums come from api.wordpress.org. WP-CLI boots the site with its plugins and theme skipped; wp-config.php, core files and must-use plugins still run.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -637,7 +637,7 @@ Audit a WordPress install with WP-CLI, changing nothing. mode install (default):
 
 ### `wp_report`
 
-What dev-guardian recorded about one WordPress install (project\_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target\_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp\_install\_path, its version and state from WP-CLI, which boots the site (its PHP, its database). Run wp\_audit or wp\_vuln\_check first for fresh data.
+What dev-guardian recorded about one WordPress install (project\_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target\_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp\_install\_path, its version and state from WP-CLI, which boots the site (its database; its PHP minus plugins and theme). Run wp\_audit or wp\_vuln\_check first for fresh data.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
