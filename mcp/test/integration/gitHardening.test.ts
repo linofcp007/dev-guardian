@@ -253,7 +253,7 @@ describe('dev-guardian on the same repository runs none of them', () => {
       expect(readFileSync(join(worktree.path, 'b.dat'), 'utf8')).toBe('data\n');
       expect(worktree.notApplied).toEqual(expect.arrayContaining(['filter.evil.smudge', 'core.fsmonitor']));
       writeFileSync(join(worktree.path, 'a.js'), 'console.log("fixed");\n');
-      const pr = await openPr({ projectPath: repo.root, worktreePath: worktree.path, branch, title: 'fix', body: 'b', run: fakeGh });
+      const pr = await openPr({ projectPath: repo.root, worktreePath: worktree.path, branch, title: 'fix', body: 'b', scope: { allows: (p) => p === 'a.js' }, run: fakeGh });
       expect(pr.status).toBe('created');
       expect(pr.git_config_not_applied).toEqual(expect.arrayContaining(['remote.origin.receivepack', 'filter.evil.clean']));
       expect(repo.plainGit(['--git-dir', dest, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`], repo.base).status).toBe(0);
@@ -277,7 +277,7 @@ describe('dev-guardian on the same repository runs none of them', () => {
     if (!created.ok) throw new Error(created.reason);
     try {
       writeFileSync(join(created.worktree.path, 'a.js'), 'console.log("fixed");\n');
-      const pr = await openPr({ projectPath: ssh.root, worktreePath: created.worktree.path, branch, title: 'fix', body: 'b', run: fakeGh });
+      const pr = await openPr({ projectPath: ssh.root, worktreePath: created.worktree.path, branch, title: 'fix', body: 'b', scope: { allows: (p) => p === 'a.js' }, run: fakeGh });
       expect(pr.status).toBe('push_failed');
       expect(pr.detail).toMatch(/not applied for .*core\.sshcommand/);
       expect(ssh.markersWritten()).toEqual([]);
@@ -643,7 +643,7 @@ describe('the repository cannot route, inspect or redirect the credentials a git
       if (!created.ok) throw new Error(created.reason);
       try {
         writeFileSync(join(created.worktree.path, 'a.js'), 'console.log("fixed");\n');
-        const pr = await openPr({ projectPath: repo.root, worktreePath: created.worktree.path, branch, title: 'fix', body: 'b', run: fakeGh });
+        const pr = await openPr({ projectPath: repo.root, worktreePath: created.worktree.path, branch, title: 'fix', body: 'b', scope: { allows: (p) => p === 'a.js' }, run: fakeGh });
         expect(pr.status).toBe('push_failed');
         expect(pr.detail).toMatch(/url\.http:\/\/127\.0\.0\.1:\d+\/\.insteadof = http:\/\/127\.0\.0\.1:\d+\/ turns/);
         expect(reached()).toEqual([]);

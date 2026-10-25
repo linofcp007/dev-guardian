@@ -140,6 +140,7 @@ import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists, type Pr
 import { disposeSemgrepFixPlan, planSemgrepFix, type SemgrepFixPlan, type SemgrepFixSource } from '../fixpr/semgrepFix.js';
 import { deriveTestCommand, TEST_MANIFESTS, type DerivedTestCommand } from '../fixpr/testCommand.js';
 import { prepareTestEnvironment } from '../fixpr/testEnv.js';
+import { commitScopeFor } from '../fixpr/commitScope.js';
 import { withPackageManagerEnv } from '../fixpr/childEnv.js';
 import {
   composerChoosesRepository,
@@ -867,7 +868,7 @@ async function processGroup(opts: {
     setAside.restore();
     const title = buildPrTitle(group, targets.length);
     const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
-    const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
+    const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body, scope: commitScopeFor(group, prefix) });
     keepBranch = KEEPS_BRANCH.has(pr.status);
     return {
       ...base,
