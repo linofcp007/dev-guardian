@@ -166,6 +166,12 @@ export interface ScannerInvocation {
    * structured data (e.g. `deps_audit` returning `bot_configured`).
    */
   extras?: Record<string, unknown>;
+  /**
+   * Where the identities read the findings' lines from, when the scanned
+   * files were not the project's working tree (review_pr's head checkout);
+   * the working tree otherwise.
+   */
+  readSource?: (filePath: string) => string | null;
 }
 
 export interface InvokeContext extends ToolContext {
@@ -849,7 +855,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // returned, which is what keeps a secret finding's line out of the database.
   findings = assignIdentities(findings, {
     projectPath,
-    readSource: makeSourceReader(projectPath),
+    readSource: invocation.readSource ?? makeSourceReader(projectPath),
   });
 
   // Every finding that flags a credential (subcategory 'secret', Bandit's
