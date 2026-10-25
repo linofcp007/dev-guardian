@@ -18,8 +18,9 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { latestStateScan } from '../history/openSet.js';
 import { notMeasured as notMeasuredBy } from '../history/runCompare.js';
-import { isScopedScan } from '../history/scanRoles.js';
+import { isScopedScan, SCAN_TYPE_ROLE } from '../history/scanRoles.js';
 import { ProjectPath } from '../schemas.js';
+import { computeCoverage } from './scanCoverage.js';
 import { chooseSourceTool, SOURCE_TOOL_WITH_SCAN_ID, SourceToolInput } from './sourceToolArg.js';
 import { SCAN_TYPES, type DomainError, type ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
@@ -80,6 +81,25 @@ async function handler(
         'unsupported_target',
         `Scan '${inp.scan_id}' is a scoped scan (meta.scope) — it measured part of the project only, so it ` +
           'cannot be a baseline. Baseline a whole-project scan of the same type.',
+      );
+    }
+    // Held to what the default path picks (`latestStateScan`): a type that
+    // describes the project's findings, and a run that measured something.
+    // Named, an SBOM, a stack detection or a run whose every scanner was
+    // missing became the untyped baseline risk_score's freshness check and
+    // guardian://baseline read — the description's "never an SBOM…" said otherwise.
+    if (SCAN_TYPE_ROLE[scan.scan_type] !== 'state') {
+      return failDomain(
+        'unsupported_target',
+        `Scan '${inp.scan_id}' is a ${scan.scan_type} scan, which records no findings to compare against, so it ` +
+          'cannot be a baseline. Baseline a scan of a finding-producing type.',
+      );
+    }
+    if (computeCoverage(scan.tools_run, scan.missing_tools) === 'none') {
+      return failDomain(
+        'unsupported_target',
+        `Scan '${inp.scan_id}' measured nothing (coverage none: its scanners did not run), so it cannot be a ` +
+          'baseline. Re-run the scan once its scanners work, and baseline that.',
       );
     }
     targetScanId = inp.scan_id;

@@ -207,6 +207,28 @@ describe('baselines are per project, and record the scan type', () => {
     expect(r.project_path).toBe(a);
   });
 
+  // The default path never picks one of these; a named scan_id was held to
+  // "completed and not scoped" only, so an SBOM, a stack detection or a run
+  // that measured nothing became the untyped baseline — which risk_score's
+  // freshness check and guardian://baseline then read.
+  it.each([
+    ['an SBOM', { type: 'sbom' as const }],
+    ['a stack detection', { type: 'detect_stack' as const }],
+    ['a scan that measured nothing', {
+      type: 'sast' as const,
+      tools_run: [{ name: 'semgrep', status: 'skipped' as const, reason: 'not_installed' }],
+      missing_tools: ['semgrep'],
+    }],
+  ])('set_baseline refuses a named scan_id that is %s', async (_label, spec) => {
+    const s = freshPlugin();
+    const a = projectDir('hist-a-');
+    const id = '00000000-0000-4000-8000-000000000001';
+    seedScan(s, { id, project: a, ...spec });
+    const r = await tool('set_baseline').handler({ project_path: a, scan_id: id }, s.plugin);
+    expect(r.ok).toBe(false);
+    expect(s.storage.baselines.getActiveForProject(a)).toBeNull();
+  });
+
   it('regression_alert compares same-type scans of this project only', async () => {
     const s = freshPlugin();
     const a = projectDir('hist-a-');
