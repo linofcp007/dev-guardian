@@ -219,6 +219,11 @@ const ALLOWED: Record<string, Allowed> = {
       "a Semgrep run's --output report, read for its error messages and its scanned paths and written back with the " +
       "findings of the files too long for Windows read on their own: the caller's own report directory",
   },
+  'src/runners/shellcheckRun.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "the filtered copy of the project's root .shellcheckrc (read through projectFs), into a temp directory it created",
+  },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },
