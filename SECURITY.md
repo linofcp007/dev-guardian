@@ -71,7 +71,10 @@ their respective projects.
 - **Secrets stay redacted.** gitleaks runs with `--redact`; a credential
   finding's snippet is cleared before it is stored, and cleared again before an
   exported report, a GitHub issue or the dashboard shows it. `suggest_fix`
-  never reads a credential finding's file back. The one exception is opt-in:
+  never reads a credential finding's file back, and in the source it quotes
+  around any other finding it withholds every line a credential finding of
+  the project points at and every line the hooks' secret detector finds one
+  on (`redacted_lines`), as the LLM scan's briefs do. The one exception is opt-in:
   `verify_live` (below) reads the value from a private temporary report, sends
   it only to its own provider, and deletes the report.
 - **A project cannot switch the protective hooks off.** In a project's

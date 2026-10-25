@@ -7,7 +7,8 @@
  * structured context it needs to write a good fix:
  *
  *   - the finding itself (rule, severity, message, snippet)
- *   - the surrounding source code (±20 lines around the finding)
+ *   - the surrounding source code (±20 lines around the finding), with every
+ *     line that holds a secret withheld (see `credentialLines`)
  *   - any prior fixes for the same rule_id, derived from suppressions
  *     metadata and history
  *   - links to docs (OWASP / CWE when in the rule metadata)
@@ -27,6 +28,8 @@ import { z } from 'zod';
 import { readProjectTextOrUndefined } from '../platform/projectFs.js';
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
+import { openSetForProject } from '../history/openSet.js';
+import { scrubSecrets } from '../redaction/scrubSecrets.js';
 import { ProjectPath } from '../schemas.js';
 import type { DomainError, ToolResult } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
@@ -59,7 +62,8 @@ const tool = defineTool({
   title: 'Gather fix context',
   description:
     "Gather a finding's context — the source around it, rule metadata, earlier suppressions of the same " +
-    "rule — from project_path's newest scan that reported it, so you can write the patch. Calls no LLM.",
+    "rule — from project_path's newest scan that reported it, so you can write the patch. Calls no LLM. A line " +
+    'that holds a secret (a credential finding, or the secret detector) is withheld and named in redacted_lines.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 });
@@ -93,6 +97,7 @@ async function handler(
   let surrounding_source: string | null = null;
   let source_start_line = 0;
   let source_end_line = 0;
+  const redactedLines: number[] = [];
   if (!credential && finding.file_path) {
     // Echoed into the response, so read through `platform/projectFs.ts`: a
     // finding path that climbs out of the project, or a file that links out
@@ -107,6 +112,13 @@ async function handler(
         source_start_line = start + 1;
         source_end_line = end;
         const slice = lines.slice(start, end);
+        // Up to ±200 lines of the file, so a secret NEAR the finding was
+        // quoted back raw (review 3.6.1, finding 7). Withheld: every line a
+        // credential finding of this project points at, and every line the
+        // hooks' secret detector finds one on — `scrubSecrets` keeps the
+        // line count, so a changed line is a withheld one.
+        const flagged = credentialLines(ctx, projectPath, finding.file_path, located.scan_id, start + 1, end);
+        const scrubbed = scrubSecrets(slice.join('\n'), start + 1).split('\n');
         surrounding_source = slice
           .map((l, i) => {
             const lineNo = start + 1 + i;
@@ -114,7 +126,13 @@ async function handler(
               lineNo >= (finding.line_start ?? -1) && lineNo <= (finding.line_end ?? -1)
                 ? '>>'
                 : '  ';
-            return `${marker} ${String(lineNo).padStart(5)}: ${l}`;
+            const rule = flagged.get(lineNo);
+            const shown =
+              rule !== undefined
+                ? `${/^\s*/.exec(l)?.[0] ?? ''}‹redacted: a credential finding (${rule}) is on this line›`
+                : (scrubbed[i] ?? l);
+            if (shown !== l) redactedLines.push(lineNo);
+            return `${marker} ${String(lineNo).padStart(5)}: ${shown}`;
           })
           .join('\n');
       } catch {
@@ -159,6 +177,7 @@ async function handler(
     surrounding_source,
     source_start_line,
     source_end_line,
+    redacted_lines: redactedLines,
     rotation_guidance: credential ? ROTATION_GUIDANCE : null,
     prior_related_suppressions: priorSuppressions.map((s) => ({
       reason: s.reason,
@@ -173,8 +192,44 @@ async function handler(
         'environment variable instead, and rotating the credential at its source; see rotation_guidance.'
       : 'Propose a unified-diff patch (or describe the minimal edit) that addresses this finding ' +
         'without changing unrelated behaviour. Reference the line range, explain the fix, and call out ' +
-        'any side effects the maintainer should review.',
+        'any side effects the maintainer should review.' +
+        (redactedLines.length > 0
+          ? ' The lines in redacted_lines hold a credential and were withheld: leave them out of the patch, ' +
+            'and never ask for their content.'
+          : ''),
   };
+}
+
+/**
+ * The lines from `first` to `last` of `file` that a credential finding of
+ * this project points at, each with its rule: from every scan the open set
+ * considers (the newest secrets scan among them) and the scan the finding was
+ * found in — suppressed findings too, since suppressing one does not make
+ * its value safe to quote. A gitleaks finding from history names the line in
+ * its commit, which may have moved since: that over-withholds a line, and the
+ * detector pass covers the secret where it is now.
+ */
+function credentialLines(
+  ctx: PluginContext,
+  projectPath: string,
+  file: string,
+  foundIn: string,
+  first: number,
+  last: number,
+): Map<number, string> {
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+  const want = norm(file);
+  const scanIds = new Set([foundIn, ...openSetForProject(ctx.storage, projectPath).scans.map((s) => s.scan_id)]);
+  const out = new Map<number, string>();
+  for (const id of scanIds) {
+    for (const f of ctx.storage.findings.listByScan(id)) {
+      if (f.file_path === undefined || f.line_start === undefined || norm(f.file_path) !== want) continue;
+      if (!isCredentialFinding(f)) continue;
+      const to = Math.min(last, Math.max(f.line_start, f.line_end ?? f.line_start));
+      for (let n = Math.max(first, f.line_start); n <= to; n += 1) if (!out.has(n)) out.set(n, f.rule_id ?? f.tool);
+    }
+  }
+  return out;
 }
 
 function failDomain(
