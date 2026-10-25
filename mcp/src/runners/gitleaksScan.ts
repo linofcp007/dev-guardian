@@ -93,6 +93,7 @@ import {
   describeSubmodules,
   git,
   gitlinksAmong,
+  gitUnanswered,
   initialisedSubmodules,
   repoState,
   resolveCommit,
@@ -310,13 +311,11 @@ async function noteSubmodules(
   if (range === undefined) {
     submodules = await initialisedSubmodules(projectPath);
   } else {
-    let changed: string[];
-    try {
-      changed = await changedFiles(projectPath, range.base, range.head);
-    } catch {
-      changed = [];
-    }
-    submodules = await gitlinksAmong(projectPath, range.head, changed);
+    // A diff git could not give says nothing about the submodules it bumped: named, never none.
+    submodules = await changedFiles(projectPath, range.base, range.head).then(
+      (changed) => gitlinksAmong(projectPath, range.head, changed),
+      (e: unknown) => [gitUnanswered(e instanceof Error ? e.message : String(e))],
+    );
   }
   // One the project's .guardianignore excludes is not its to scan (round 4, item 6).
   submodules = submodulesNotIgnored(projectPath, submodules, guardianIgnoreFrom);

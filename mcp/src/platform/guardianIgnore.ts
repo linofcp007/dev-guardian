@@ -46,7 +46,7 @@
 
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve, sep } from 'node:path';
-import { git, splitNul } from '../runners/git.js';
+import { git, isGitUnanswered, splitNul } from '../runners/git.js';
 import { listProjectFiles, SCANNED_WALK_EXCLUDE } from '../runners/projectFiles.js';
 import { isGuardianOutput } from './guardianOutput.js';
 import { describeReadRefusal, presentInProject, projectEntryKind, readProjectText, readProjectTextOrUndefined } from './projectFs.js';
@@ -604,7 +604,10 @@ export function submodulesNotIgnored(
   const text = readProjectTextOrUndefined(configRoot, GUARDIAN_IGNORE_FILE, MAX_GUARDIAN_IGNORE_BYTES);
   if (text === undefined) return [...submodules];
   const matcher = compileIgnore(text);
-  return submodules.filter((sub) => !matcher.ignores(sub, true) && !matcher.ignores(`${sub}/${PROBE_CHILD}`, false));
+  // git's "could not answer" is no path: no pattern (`*`) may drop it.
+  return submodules.filter(
+    (sub) => isGitUnanswered(sub) || (!matcher.ignores(sub, true) && !matcher.ignores(`${sub}/${PROBE_CHILD}`, false)),
+  );
 }
 
 /**
