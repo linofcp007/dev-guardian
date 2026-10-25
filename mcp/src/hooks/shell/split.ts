@@ -297,7 +297,7 @@ function skipHeredocBodies(source: string, from: number, pending: PendingHeredoc
  * one the rules see. Never `for`/`case`/`select`: the words after those are a
  * variable name and a word list, not a command.
  */
-const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'esac', '{', '}', '!']);
+const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'esac', '{', '}', '!', 'coproc']);
 
 /**
  * Segments a command into statements and their pipeline members. Quote-,

@@ -4496,3 +4496,40 @@ describe('assessBashCommand — review of 3.6.0: a substitution inside double qu
     expectLinear('quoted $() scan', (n) => assessBashCommand('echo "$(echo hi)"; '.repeat(Math.max(1, Math.floor(n / 20)))), 20_000);
   }, 120_000);
 });
+
+// Review of 3.6.0, finding 7: carriers that run another command — as a runner,
+// a reserved word, or a `-c` / first-operand script — hid a catastrophic delete.
+describe('assessBashCommand — review of 3.6.0: nested-script carriers (finding 7)', () => {
+  it.each([
+    "trap 'rm -rf ~' EXIT",
+    "flock /tmp/lock -c 'rm -rf ~'",
+    'flock /tmp/lock rm -rf ~',
+    'flock -w 5 /tmp/lock -c "rm -rf ~"',
+    "script -qc 'rm -rf ~' /dev/null",
+    "script -q -c 'rm -rf ~' /dev/null",
+    'runuser -u bob -- rm -rf ~',
+    "runuser -u bob -c 'rm -rf ~'",
+    'busybox rm -rf ~',
+    'coproc rm -rf ~',
+    'parallel rm -rf ::: ~',
+    'ionice -c3 rm -rf ~',
+    'ionice -c 2 -n 0 rm -rf ~',
+    'unbuffer rm -rf ~',
+  ])('%s is denied', (command) => {
+    expect(assessBashCommand(command, { homeDir: '/home/alice', platform: 'linux' }).rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    "trap 'echo bye' EXIT",
+    'trap - EXIT',
+    'trap cleanup EXIT',
+    "flock /tmp/lock -c 'make build'",
+    'busybox ls -la',
+    'parallel echo ::: a b c',
+    'script -q /tmp/typescript',
+    'runuser -u bob -- ls',
+    'ionice -c3 cat big.log',
+  ])('%s stays ok', (command) => {
+    expect(assessBashCommand(command, { homeDir: '/home/alice', platform: 'linux' }).level).toBe('ok');
+  });
+});

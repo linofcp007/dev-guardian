@@ -33,6 +33,13 @@ const RUNNERS = new Set([
   'stdbuf',
   'xargs',
   'watch',
+  // More wrappers that run the command after their own options (review of
+  // 3.6.0, finding 7): BusyBox's applet, `ionice -c3 CMD`, `unbuffer CMD`,
+  // GNU `parallel CMD ::: args`.
+  'busybox',
+  'ionice',
+  'unbuffer',
+  'parallel',
   // cmd's `start [/b] ["title"] PROGRAM` (fix round 2).
   'start',
 ]);
@@ -64,6 +71,10 @@ const RUNNER_VALUED: Readonly<Record<string, { short: string; long: ReadonlySet<
     long: new Set(['arg-file', 'delimiter', 'max-args', 'max-procs', 'max-chars', 'process-slot-var']),
   },
   watch: { short: 'nq', long: new Set(['interval', 'equexit']) },
+  // `ionice -c class -n num -p pid CMD` (review of 3.6.0, finding 7).
+  ionice: { short: 'cnp', long: new Set(['class', 'classdata', 'pid']) },
+  // GNU `parallel`'s commonest valued options; its command template follows them.
+  parallel: { short: 'jPNnLSX', long: new Set(['jobs', 'max-args', 'max-replace-args', 'max-lines', 'sshlogin', 'results', 'colsep', 'retries']) },
 };
 
 /** How many words a runner's option takes: 1 for a switch or an attached value, 2 when the value is the next word. */

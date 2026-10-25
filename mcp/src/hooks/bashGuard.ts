@@ -2262,6 +2262,68 @@ function shellScript(text: string): NestedScript {
 }
 const DASH_C = /^-[A-Za-z]*c$/;
 
+/** flock's options that take the next word as their value (`-w SECS`, `-E CODE`). */
+const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
+
+/**
+ * The script a nested-script carrier runs (review of 3.6.0, finding 7), or
+ * `null` when `name` is not one. The carriers run their payload through a
+ * shell, so each is assessed as a shell script — a catastrophic delete wrapped
+ * in one used to be invisible:
+ *
+ *   - `trap 'SCRIPT' SIGSPEC` — the first operand, run on the signal (a lone
+ *     operand with no sigspec is `trap SCRIPT` querying/printing, not running);
+ *   - `flock FILE -c 'SCRIPT'`, or `flock [opts] FILE CMD …` run directly;
+ *   - `script [-q] -c 'SCRIPT' FILE` (also `-qc`, `--command`);
+ *   - `runuser … -c 'SCRIPT'`, or `runuser … -- CMD …` run as the user.
+ */
+function carrierScript(name: string, words: readonly ShellWord[], start: number): string | undefined | null {
+  const rest = words.slice(start + 1);
+  /** A `-c`/`--command`/`--command=` script at `rest[i]`, or `undefined` when there is none. */
+  const dashC = (w: ShellWord | undefined, nextWord: ShellWord | undefined): string | undefined => {
+    if (w === undefined) return undefined;
+    if (w.value.startsWith('--command=')) return w.value.slice('--command='.length);
+    return !w.quoted && (DASH_C.test(w.value) || w.value === '--command') ? (nextWord?.value ?? '') : undefined;
+  };
+  const argv = (from: number): string | undefined => rest.slice(from).map((x) => x.value).join(' ') || undefined;
+  if (name === 'trap') {
+    let i = 0;
+    while (i < rest.length && (rest[i]?.value ?? '').startsWith('-') && rest[i]?.value !== '--') i += 1;
+    if (rest[i]?.value === '--') i += 1;
+    const arg = rest[i]?.value;
+    // A command to run needs a signal after it; `-`/`` reset it.
+    return arg !== undefined && arg !== '-' && arg !== '' && rest.length > i + 1 ? arg : undefined;
+  }
+  if (name === 'script') {
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== undefined) return c;
+    }
+    return undefined;
+  }
+  if (name === 'runuser') {
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== undefined) return c;
+      if (rest[i]?.value === '--') return argv(i + 1);
+    }
+    return undefined;
+  }
+  if (name === 'flock') {
+    // flock's own options precede the lock FILE; `-c` may follow it (`flock
+    // FILE -c '…'`), else the command runs directly (`flock FILE CMD …`).
+    let i = 0;
+    while (i < rest.length && (rest[i]?.value ?? '').startsWith('-')) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== undefined) return c;
+      i += FLOCK_VALUED.test(rest[i]?.value ?? '') ? 2 : 1;
+    }
+    const c = dashC(rest[i + 1], rest[i + 2]);
+    return c !== undefined ? c : argv(i + 1);
+  }
+  return null;
+}
+
 /**
  * Scripts this command hands to a shell — `sh -c '…'`, `bash -lc '…'`,
  * `docker exec box bash -c '…'`, `su -s /bin/sh www-data -c '…'`, `eval …`,
@@ -2274,6 +2336,13 @@ const DASH_C = /^-[A-Za-z]*c$/;
  */
 function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
   const head = words[start];
+  const name = head === undefined ? '' : basename(head.value).toLowerCase();
+  // Carriers that run a script they are handed (review of 3.6.0, finding 7):
+  // `trap 'SCRIPT' SIGSPEC`, `flock FILE -c 'SCRIPT'` / `flock FILE CMD …`,
+  // `script [-q] -c 'SCRIPT' FILE`, `runuser … -c 'SCRIPT'` / `runuser … --
+  // CMD …`. Each runs its payload through a shell, so it is assessed as one.
+  const carried = carrierScript(name, words, start);
+  if (carried !== null) return carried === undefined ? [] : [shellScript(carried)];
   // `npx -c "…"` / `npm exec -c "…"` runs its argument in a shell (fix round 2).
   const launcher = head === undefined ? '' : commandName(head.value);
   if (launcher === 'npx' || launcher === 'pnpx' || (launcher === 'npm' && words[firstNonFlag(words, start + 1)]?.value === 'exec')) {
